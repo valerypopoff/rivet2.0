@@ -9,6 +9,7 @@ import {
   type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
+import { signGoogleXmlPrecondition } from '../../../../../studio-server-shared/gcs-xml-signing.js';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 import { createManagedObjectStorageHttpHandlerOptions } from '../../../managed-health.js';
@@ -95,10 +96,14 @@ type ManagedWorkflowObjectStorageConfig = Pick<
 >;
 
 class StoredObjectHttpHandler extends NodeHttpHandler {
+  constructor(options: ConstructorParameters<typeof NodeHttpHandler>[0], private readonly googleSecret?: string) {
+    super(options);
+  }
   override handle(
     request: Parameters<NodeHttpHandler['handle']>[0],
     options?: Parameters<NodeHttpHandler['handle']>[1],
   ): ReturnType<NodeHttpHandler['handle']> {
+    if (this.googleSecret) signGoogleXmlPrecondition(request, this.googleSecret);
     // The SDK serializes the operation in x-id. Other GETs (e.g. listings)
     // return protocol XML, which must not opt into compressed responses.
     if (request.method === 'GET' && request.query?.['x-id'] === 'GetObject') {
@@ -115,7 +120,9 @@ export function createManagedWorkflowS3ClientConfig(config: ManagedWorkflowObjec
   const clientConfig: S3ClientConfig = {
     region: config.objectStorageRegion,
     forcePathStyle: config.objectStorageForcePathStyle,
-    requestHandler: new StoredObjectHttpHandler(createManagedObjectStorageHttpHandlerOptions()),
+    requestHandler: new StoredObjectHttpHandler(createManagedObjectStorageHttpHandlerOptions(),
+      config.objectStorageEndpoint && /(^|\.)storage\.googleapis\.com$/.test(new URL(config.objectStorageEndpoint).hostname)
+        ? config.objectStorageSecretAccessKey : undefined),
     credentials: {
       accessKeyId: config.objectStorageAccessKeyId,
       secretAccessKey: config.objectStorageSecretAccessKey,

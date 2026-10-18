@@ -142,6 +142,10 @@ for (const executor of ['browser', 'nodejs'] as const) {
         { executor, recordExecutions },
       );
       await mockHostedEditorBootstrap(page);
+      // Node cases use the real server transport, including its HA owner
+      // incarnation. The browser-only bootstrap's /internal URL is not an HA
+      // execution configuration and must not replace the server response.
+      if (executor === 'nodejs') await page.route('**/api/config', (route) => route.continue());
       await page.route('**/api/**', async (route) => {
         const request = route.request();
         const path = new URL(request.url()).pathname;

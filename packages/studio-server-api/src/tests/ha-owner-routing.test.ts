@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { once } from 'node:events';
 import {
   executorOwnerPath,
@@ -102,4 +102,41 @@ test('owner upgrade requires fresh UI authentication and reaches only the unchan
   const stale = executorOwnerPath({ ...owner, incarnation: randomUUID() });
   assert.equal((await expectWebSocketConnectionFailure(`${address}${stale}`, { headers })).statusCode, 409);
   assert.equal(upgrades, 1);
+});
+
+test('disposing an owner relay closes an accepted socket and its pending upstream handshake', { timeout: 10_000 }, async (t) => {
+  const savedKey = process.env.RIVET_KEY, savedMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
+  process.env.RIVET_KEY = config.key;
+  process.env.RIVET_SERVER_UI_AUTH_MODE = 'key';
+  t.after(() => {
+    if (savedKey == null) delete process.env.RIVET_KEY; else process.env.RIVET_KEY = savedKey;
+    if (savedMode == null) delete process.env.RIVET_SERVER_UI_AUTH_MODE; else process.env.RIVET_SERVER_UI_AUTH_MODE = savedMode;
+  });
+  const upstreamHttp = createServer(), apiHttp = createServer();
+  const upstreamAddress = await listenTestServer(upstreamHttp), apiAddress = await listenTestServer(apiHttp);
+  const owner = { ...config, apiPort: apiAddress.port, executorPort: upstreamAddress.port };
+  const dispose = installExecutorOwnerRouting(apiHttp, owner);
+  t.after(async () => { dispose(); await apiAddress.close(); await upstreamAddress.close(); });
+  const upgrade = new Promise<() => Promise<void>>(resolve => upstreamHttp.once('upgrade', (_req, socket) => {
+    // Deliberately never send the upstream handshake acknowledgement.
+    t.after(() => socket.destroy());
+    const closed = new Promise<void>(done => socket.once('close', done));
+    socket.once('end', () => socket.end());
+    socket.resume();
+    resolve(() => closed);
+  }));
+  const client = new WebSocket(`${apiAddress.baseUrl.replace('http:', 'ws:')}${executorOwnerPath(owner)}`, {
+    headers: { 'X-Rivet-Proxy-Auth': getExpectedProxyAuthToken(), cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` },
+  });
+  t.after(() => client.terminate());
+  client.on('error', () => {});
+  let opened = false;
+  client.once('open', () => { opened = true; });
+  const closed = new Promise<void>(resolve => client.once('close', () => resolve()));
+  const upstreamClosed = await upgrade;
+  const started = Date.now();
+  dispose(); dispose();
+  await Promise.all([closed, upstreamClosed()]);
+  assert.ok(Date.now() - started < 3000, 'disposal must not wait for the 5-second handshake deadline');
+  assert.equal(opened, false);
 });

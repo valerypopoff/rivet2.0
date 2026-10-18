@@ -161,6 +161,17 @@ vault.hashicorp.com/agent-inject-template-{{ .Values.vault.dotenvFileName }}: |
 {{- end }}
 {{- end -}}
 
+{{- define "rivet.vaultWebAnnotations" -}}
+{{- include "rivet.vaultBaseAnnotations" . }}
+{{- if and .Values.vault.enabled .Values.vault.secretPath }}
+vault.hashicorp.com/agent-inject-template-{{ .Values.vault.dotenvFileName }}: |
+  {{ printf "{{- with secret %q -}}" .Values.vault.secretPath }}
+  RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID={{ "{{ .Data.data.RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY_ID | toJSON }}" }}
+  RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY={{ "{{ .Data.data.RIVET_DEPLOYMENT_STORAGE_ACCESS_KEY | toJSON }}" }}
+  {{ "{{- end }}" }}
+{{- end }}
+{{- end -}}
+
 {{- define "rivet.vaultProxyAnnotations" -}}
 {{- include "rivet.vaultBaseAnnotations" . }}
 {{- if and .Values.vault.enabled .Values.vault.secretPath }}

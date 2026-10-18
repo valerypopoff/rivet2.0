@@ -9,6 +9,11 @@ import {
 } from '../kubernetes-hosted-evaluation-gate.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export function haProofTimeoutMs({ deploymentTimeoutSeconds = 600 }) {
+  assert.ok(Number.isSafeInteger(deploymentTimeoutSeconds) && deploymentTimeoutSeconds > 0 &&
+    Number.isSafeInteger(deploymentTimeoutSeconds * 1000), 'HA proof requires a positive whole-second deployment timeout');
+  return deploymentTimeoutSeconds * 1000;
+}
 async function until(description, check, timeout = 180_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -39,6 +44,7 @@ export class HaReleaseProbes {
     return this.gate.kubectl(['-n', this.gate.config.namespace, ...args], { capture: true, ...extra });
   }
   async sql(query) {
+    if (this.gate.readProofSql) return this.gate.readProofSql(query);
     const result = await this.kube([
       'exec',
       'deployment/release-gate-postgres',
@@ -250,6 +256,8 @@ export class HaReleaseProbes {
     }
     if (/-maintenance-backend-0$/.test(pod.name)) {
       const response = await fetch(`${this.baseUrl}/api/workflows/project-bundles/${this.bundle.id}/download`, {
+        headers: this.gate.probeHeaders,
+        redirect: 'manual',
         signal: AbortSignal.timeout(30_000),
       });
       assert.equal(response.status, 200);

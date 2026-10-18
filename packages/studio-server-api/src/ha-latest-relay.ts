@@ -95,7 +95,11 @@ export class LatestDebuggerRelay {
         streamIncarnation = incarnation;
         const cursor = this.#peerCursors.get(pod);
         if (cursor?.incarnation === incarnation && sequence <= cursor.sequence) return;
-        if (sequence !== (cursor?.incarnation === incarnation ? cursor.sequence + 1 : 1)) this.#truncated = true;
+        if (sequence !== (cursor?.incarnation === incarnation ? cursor.sequence + 1 : 1)) {
+          this.#truncated = true;
+          const warning = JSON.stringify({ message: 'error', data: { error: 'Latest debugger history has a gap. Earlier diagnostics may be unavailable; executions were not replayed.' } });
+          for (const observer of this.server.clients) if (!this.#inbound.has(observer)) this.#send(observer, warning);
+        }
         this.#peerCursors.set(pod, { incarnation, sequence });
         this.#remember(pod, payload);
         for (const observer of this.server.clients) if (!this.#inbound.has(observer)) this.#send(observer, payload);

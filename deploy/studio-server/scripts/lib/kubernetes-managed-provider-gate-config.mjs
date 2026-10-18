@@ -156,7 +156,7 @@ function buildImages(env, gatewayMode) {
   }
   return images;
 }
-export function buildManagedProviderGateConfig({ rootDir, env = process.env } = {}) {
+export function buildManagedProviderGateConfig({ rootDir, env = process.env, registryRequired = true } = {}) {
   if (!rootDir) throw new Error('[kubernetes-managed-provider-gate] rootDir is required');
   if (String(env.RIVET_K8S_PROVIDER_GATE_CONFIRM ?? '') !== 'deploy-staging') {
     throw new Error('[kubernetes-managed-provider-gate] RIVET_K8S_PROVIDER_GATE_CONFIRM must equal deploy-staging');
@@ -253,15 +253,17 @@ export function buildManagedProviderGateConfig({ rootDir, env = process.env } = 
     configFile,
     valuesFile,
     images: buildImages(env, gatewayMode),
-    registry: {
-      server: optionalString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER', 'ghcr.io'),
-      username: requireString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME'),
-      password: requireString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD'),
-      secretName: assertDnsLabel(
-        optionalString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_SECRET_NAME', 'rivet-managed-provider-gate-registry'),
-        'RIVET_K8S_PROVIDER_GATE_REGISTRY_SECRET_NAME',
-      ),
-    },
+    registry: registryRequired
+      ? {
+          server: optionalString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_SERVER', 'ghcr.io'),
+          username: requireString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME'),
+          password: requireString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD'),
+          secretName: assertDnsLabel(
+            optionalString(env, 'RIVET_K8S_PROVIDER_GATE_REGISTRY_SECRET_NAME', 'rivet-managed-provider-gate-registry'),
+            'RIVET_K8S_PROVIDER_GATE_REGISTRY_SECRET_NAME',
+          ),
+        }
+      : undefined,
     requestHeaders,
     workflowProbe: normalizeProbe(rawConfig.workflowProbe, 'provider gate workflowProbe', {
       baseUrl,

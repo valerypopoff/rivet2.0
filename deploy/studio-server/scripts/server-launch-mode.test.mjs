@@ -216,6 +216,36 @@ test('mode commands reject invalid input before running tools or exposing secret
   }
 });
 
+test('multi-pod web and proxy stabilization is configurable without changing owner retirement', () => {
+  const helm = resolveHelmBinOrThrow(process.cwd(), { env: process.env });
+  const args = [
+    'template', 'test', 'deploy/studio-server/helm',
+    '-f', 'deploy/studio-server/helm/overlays/local-kubernetes.yaml',
+    '-f', 'deploy/studio-server/scripts/fixtures/kubernetes-environment.values.yaml',
+  ];
+  for (const seconds of [0, 120]) {
+    const rendered = spawnSync(helm, [...args, '--set', `rollout.minReadySeconds=${seconds}`], {
+      encoding: 'utf8', windowsHide: true,
+    });
+    assert.equal(rendered.status, 0, rendered.stderr);
+    const deployments = yaml.parseAllDocuments(rendered.stdout).map((doc) => doc.toJS()).filter((doc) =>
+      doc?.kind === 'Deployment' && ['web', 'proxy'].includes(doc.metadata.labels['app.kubernetes.io/component']));
+    assert.equal(deployments.length, 2);
+    for (const deployment of deployments) {
+      assert.equal(deployment.spec.minReadySeconds, seconds);
+      assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
+      assert.equal(deployment.spec.strategy.rollingUpdate.maxSurge, 1);
+    }
+  }
+  for (const invalid of ['-1', '1.5', 'not-seconds']) {
+    const rendered = spawnSync(helm, [...args, '--set', `rollout.minReadySeconds=${invalid}`], {
+      encoding: 'utf8', windowsHide: true,
+    });
+    assert.notEqual(rendered.status, 0);
+    assert.match(rendered.stderr, /rollout.minReadySeconds must be a non-negative whole number/);
+  }
+});
+
 test('one-pod chart preserves roles, distinct ports, private caches, restore reachability and gateway readiness', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-vm-render-'));
   try {

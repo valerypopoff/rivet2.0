@@ -4,6 +4,7 @@ import type {
   GraphOutputs,
   GraphProgress,
   RemoteRunRequestId,
+  SocketRecordingChannel,
 } from '@valerypopoff/rivet2-core';
 import { logRuntimeDebug } from '@valerypopoff/rivet2-core';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
@@ -116,7 +117,7 @@ export type ExecutorSessionRuntime = {
   isReady(): boolean;
   rejectPendingGraphExecution(requestId: RemoteRunRequestId | undefined, reason: unknown): void;
   reportPendingGraphProgress(requestId: RemoteRunRequestId | undefined, progress: GraphProgress): void;
-  recordSocketEvents(recordSocket: (socket: WebSocket) => Promise<void>): Promise<void> | undefined;
+  recordSocketEvents(recordSocket: (socket: SocketRecordingChannel) => Promise<void>): Promise<void> | undefined;
   resolvePendingGraphExecution(requestId: RemoteRunRequestId | undefined, outputs: GraphOutputs): void;
   sendMessage<T extends keyof OutgoingMessageMap>(type: T, data: OutgoingMessageMap[T]): boolean;
   sendRaw(data: string): boolean;
@@ -143,9 +144,57 @@ export function createExecutorSessionRuntime(options: {
   let resumeCapability: string | undefined;
   let resumeSequence = 0;
   let latestObservation = false;
-  let idleHandoff: Promise<void> | undefined;
+  // The first ready may arrive on a replacement transport after identity replay.
+  let connectionNotified = false;
+  let idleHandoff: symbol | undefined;
   const latestEventCursors = new Map<string, number>();
   let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
+  let recordingChannel: (EventTarget & { readyState: number }) | undefined;
+  // Retain completed dataset responses across transport gaps, never requests,
+  // run commands or controls. The logical capability fences late completions.
+  const datasetResponses: string[] = [];
+  let datasetResponseBytes = 0;
+
+  function flushDatasetResponses() {
+    if (currentStatus !== 'ready' || currentSocket?.readyState !== WebSocket.OPEN) return;
+    const responses = datasetResponses.splice(0);
+    datasetResponseBytes = 0;
+    for (const response of responses) {
+      if (!safeSendExecutorSocket(currentSocket, response, 'Failed to send resumed dataset response', {})) {
+        failResume();
+        return;
+      }
+    }
+  }
+
+  function retainDatasetResponse(capability: string, requestId: string, payload: unknown) {
+    if (resumeCapability !== capability) return; // A replaced logical session cannot receive this result.
+    const response = serializeExecutorSessionMessage('datasets:response', { requestId, payload });
+    if (currentStatus === 'ready' && currentSocket?.readyState === WebSocket.OPEN) {
+      if (!safeSendExecutorSocket(currentSocket, response, 'Failed to send resumed dataset response', {})) failResume();
+      return;
+    }
+    const bytes = new TextEncoder().encode(response).byteLength;
+    if (datasetResponses.length >= 64 || datasetResponseBytes + bytes > 8 * 1024 * 1024) {
+      failResume();
+      return;
+    }
+    datasetResponses.push(response);
+    datasetResponseBytes += bytes;
+  }
+
+  function closeRecordingChannel() {
+    const channel = recordingChannel;
+    recordingChannel = undefined;
+    if (channel) {
+      channel.readyState = WebSocket.CLOSED;
+      channel.dispatchEvent(new Event('close'));
+    }
+  }
+
+  function isResumableTarget(target: ExecutorSessionTarget | null) {
+    return target?.type === 'internal-hosted' && /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(target.url);
+  }
 
   function clearResumeTimeout() {
     if (resumeTimeout) clearTimeout(resumeTimeout);
@@ -233,7 +282,6 @@ export function createExecutorSessionRuntime(options: {
   }
 
   async function connectToTarget(nextTarget: ExecutorSessionTarget) {
-    retryDelay = 0;
     clearReconnectTimeout();
 
     if (currentSocket || (currentTarget && currentStatus !== 'idle')) {
@@ -247,7 +295,8 @@ export function createExecutorSessionRuntime(options: {
           socketReadyState: currentSocket.readyState,
           target: getExecutorSessionTargetLabel(nextTarget),
         });
-        setConnectionStatus(currentSocket.readyState === WebSocket.OPEN ? 'ready' : 'connecting');
+        // An open socket may still be replaying diagnostics or discovering a
+        // retiring owner's replacement. Reuse cannot acknowledge either step.
         notifySessionStateChanged();
         return;
       }
@@ -268,8 +317,7 @@ export function createExecutorSessionRuntime(options: {
     });
 
     let socket: WebSocket;
-    const resumableTarget =
-      nextTarget.type === 'internal-hosted' && /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(nextTarget.url);
+    const resumableTarget = isResumableTarget(nextTarget);
     try {
       socket = new WebSocket(
         nextTarget.url,
@@ -289,23 +337,13 @@ export function createExecutorSessionRuntime(options: {
 
     const socketGeneration = ++currentSocketGeneration;
     const socketTarget = nextTarget;
+    let sessionAcknowledged = false;
     currentSocket = socket;
     setConnectionStatus('connecting');
 
-    socket.onopen = () => {
-      if (socketGeneration !== currentSocketGeneration || currentSocket !== socket) {
-        return;
-      }
-
-      retryDelay = 0;
-      currentTarget = socketTarget;
-      // A resuming connection becomes interactive only after ordered diagnostic replay.
-      if (resumeCapability || latestObservation) return;
-      logRuntimeDebug('Executor websocket opened.', {
-        target: getExecutorSessionTargetLabel(socketTarget),
-      });
-      setConnectionStatus('ready');
-      notifySessionStateChanged();
+    const notifySocketConnected = () => {
+      if (connectionNotified || currentSocket !== socket || currentStatus !== 'ready') return;
+      connectionNotified = true;
       notifyConnect({
         isInternalExecutor: isInternalExecutorTarget(socketTarget),
         reason: 'connected',
@@ -316,6 +354,28 @@ export function createExecutorSessionRuntime(options: {
       });
     };
 
+    socket.onopen = () => {
+      if (socketGeneration !== currentSocketGeneration || currentSocket !== socket) {
+        return;
+      }
+
+      retryDelay = 0;
+      currentTarget = socketTarget;
+      // Every owned connection, including the first, must finish the handshake.
+      // Keep one deadline even if the transport drops before the first ready.
+      if (resumableTarget) {
+        resumeTimeout ??= setTimeout(failResume, 60_000);
+        return;
+      }
+      if (latestObservation) return;
+      logRuntimeDebug('Executor websocket opened.', {
+        target: getExecutorSessionTargetLabel(socketTarget),
+      });
+      setConnectionStatus('ready');
+      notifySessionStateChanged();
+      notifySocketConnected();
+    };
+
     socket.onclose = (event) => {
       if (socketGeneration !== currentSocketGeneration) {
         return;
@@ -323,6 +383,7 @@ export function createExecutorSessionRuntime(options: {
 
       const closedTarget = socketTarget;
       currentSocket = null;
+      idleHandoff = undefined;
       if (resumeCapability && event?.code === 4409) {
         failResume();
         return;
@@ -337,6 +398,8 @@ export function createExecutorSessionRuntime(options: {
       });
 
       if (!canResume) {
+        connectionNotified = false;
+        closeRecordingChannel();
         resumeCapability = undefined;
         resumeSequence = 0;
         pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
@@ -430,19 +493,24 @@ export function createExecutorSessionRuntime(options: {
             latestEventCursors.set(origin, sequence);
             if (latestEventCursors.size > 256) latestEventCursors.delete(latestEventCursors.keys().next().value!);
           }
-          if (
-            resumableTarget &&
-            envelope.message === 'executor-session' &&
-            envelope.data?.protocol === 1 &&
-            /^[A-Za-z0-9_-]{43}$/.test(envelope.data.capability ?? '')
-          ) {
+          if (resumableTarget && envelope.message === 'executor-session') {
+            if (envelope.data?.protocol !== 1 || typeof envelope.data.capability !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(envelope.data.capability) ||
+                (resumeCapability && envelope.data.capability !== resumeCapability)) {
+              failResume();
+              return false;
+            }
             resumeCapability = envelope.data.capability;
+            sessionAcknowledged = true;
             return false;
           }
-          if (resumableTarget && envelope.message === 'executor-session-ready' && envelope.data?.protocol === 1) {
+          if (resumableTarget && !sessionAcknowledged) { failResume(); return false; }
+          if (resumableTarget && envelope.message === 'executor-session-ready') {
+            if (envelope.data?.protocol !== 1) { failResume(); return false; }
             clearResumeTimeout();
             setConnectionStatus('ready');
+            flushDatasetResponses();
             notifySessionStateChanged();
+            notifySocketConnected();
             return false;
           }
           if (resumeCapability && envelope.rivetSequence != null) {
@@ -457,12 +525,19 @@ export function createExecutorSessionRuntime(options: {
             // Accepted or uncertain runs always remain pinned to the old one.
             if (!activeGraphRunRequestId && !pendingGraphExecutions.hasPendingExecutions() && options.resolveInternalHostedExecutorUrl && !idleHandoff) {
               const generation = currentSocketGeneration;
+              const handoff = Symbol('executor-owner-handoff');
+              idleHandoff = handoff;
               setConnectionStatus('reconnecting');
-              idleHandoff = (async () => {
+              void (async () => {
                 const deadline = Date.now() + 60_000;
-                while (Date.now() < deadline) {
-                  if (generation !== currentSocketGeneration || currentTarget?.type !== 'internal-hosted' || activeGraphRunRequestId || pendingGraphExecutions.hasPendingExecutions()) return;
+                const canHandoff = () => idleHandoff === handoff && Date.now() < deadline && generation === currentSocketGeneration &&
+                  currentSocket === socket && currentTarget?.type === 'internal-hosted' &&
+                  !activeGraphRunRequestId && !pendingGraphExecutions.hasPendingExecutions();
+                while (canHandoff()) {
                   const url = await options.resolveInternalHostedExecutorUrl!().catch(() => undefined);
+                  // Discovery does not own the session. A disconnect, explicit
+                  // replacement or newly accepted run can win while it awaits.
+                  if (!canHandoff()) return;
                   if (url && url !== socketTarget.url) {
                     const old = new URL(socketTarget.url), next = new URL(url);
                     if (old.origin !== next.origin || !next.pathname.startsWith('/ws/executor/owner/')) throw new Error('Fresh executor owner is invalid.');
@@ -474,8 +549,8 @@ export function createExecutorSessionRuntime(options: {
                 throw new Error('Fresh executor owner is unavailable.');
               })().catch(() => {
                 // No run was replayed. Keep the old owner/cursor for explicit recovery.
-                if (generation === currentSocketGeneration) setConnectionStatus('reconnecting');
-              }).finally(() => { idleHandoff = undefined; });
+                if (idleHandoff === handoff && generation === currentSocketGeneration) setConnectionStatus('reconnecting');
+              }).finally(() => { if (idleHandoff === handoff) idleHandoff = undefined; });
             }
             return false;
           }
@@ -493,12 +568,14 @@ export function createExecutorSessionRuntime(options: {
       }
 
       if (incoming.kind === 'dataset-request') {
+        const capability = resumableTarget ? resumeCapability : undefined;
         handleExecutorDatasetRequest({
           data: incoming.data,
           datasetProvider: currentDatasetProvider,
           message: incoming.message,
           socket,
           target: socketTarget,
+          ...(capability ? { sendResponse: (requestId: string, payload: unknown) => retainDatasetResponse(capability, requestId, payload) } : {}),
         });
         return;
       }
@@ -516,11 +593,20 @@ export function createExecutorSessionRuntime(options: {
             },
           );
         }
+        // Capture only admitted events, after terminal handlers update their
+        // owners. A transport reconnect must neither end nor duplicate capture.
+        if (resumableTarget) recordingChannel?.dispatchEvent(new MessageEvent('message', { data: event.data }));
       }
     };
   }
 
   function replaceCurrentSession(nextTarget: ExecutorSessionTarget) {
+    connectionNotified = false;
+    retryDelay = 0;
+    idleHandoff = undefined;
+    datasetResponses.length = 0;
+    datasetResponseBytes = 0;
+    closeRecordingChannel();
     latestObservation = false; latestEventCursors.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
@@ -563,6 +649,11 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function disconnect(options: ExecutorSessionDisconnectOptions = {}) {
+    connectionNotified = false;
+    idleHandoff = undefined;
+    datasetResponses.length = 0;
+    datasetResponseBytes = 0;
+    closeRecordingChannel();
     latestObservation = false; latestEventCursors.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
@@ -677,7 +768,9 @@ export function createExecutorSessionRuntime(options: {
         return undefined;
       }
 
-      return recordSocket(currentSocket);
+      if (!isResumableTarget(currentTarget)) return recordSocket(currentSocket);
+      recordingChannel ??= Object.assign(new EventTarget(), { readyState: WebSocket.OPEN });
+      return recordSocket(recordingChannel);
     },
     resolvePendingGraphExecution(requestId, outputs) {
       pendingGraphExecutions.resolvePendingGraphExecution(requestId, outputs);

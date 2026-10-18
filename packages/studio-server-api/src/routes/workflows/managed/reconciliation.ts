@@ -519,7 +519,11 @@ async function runObjectBackedDomain(input: {
         object.lastModified != null &&
         new Date(object.lastModified).getTime() <= nowMs - MIN_UNREFERENCED_OBJECT_AGE_MS,
     )
-    .map((object) => object.key);
+    .map((object) => object.key)
+    // This immutable release history has a separate owner and intentionally
+    // has no workflow SQL reference. Keep its inventory bytes, not false orphan
+    // findings. Malformed/lookalike keys remain visible to the operator.
+    .filter(key => input.domain !== 'workflows' || !/^web-assets\/[a-f0-9]{64}\/[a-f0-9]{64}\.gz$/.test(key));
   const client = await input.pool.connect();
   let referenced = new Set<string>();
   try {

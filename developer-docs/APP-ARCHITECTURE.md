@@ -1475,6 +1475,36 @@ Current architectural detail:
 Session disposal owns recording finalization as well as processor/request
 cleanup. Terminal transport callbacks observe cleanup failures instead of leaving
 unhandled promises. A recorder failure cannot prevent the other cleanup actions.
+For resumable hosted executors, `executorSession` owns a recording event channel
+across physical WebSocket replacements. It forwards only admitted sequence events,
+after display/terminal subscribers run, so replay duplicates are not recorded and
+the terminal owner is updated before capture finalizes. Only logical disconnect,
+replacement or unrecoverable resume closes that channel. Non-resumable sockets
+keep their existing direct recording behavior.
+Idle hosted-owner discovery is observational until its lookup returns. Recheck
+the original socket/generation, idle run state and deadline after that await;
+manual disconnect, explicit executor selection and accepted work take precedence
+over a stale answer. Keep this fence inside the existing project session owner.
+Each attempt has a session-local token; transport loss and explicit replacement
+invalidate it, and an old completion cannot clear a newer attempt. Reusing an
+open socket must preserve replay/discovery state, not infer readiness from TCP.
+Resumable dataset completions use that same logical session's response path:
+retain only completed responses (up to 64 / 8 MiB while disconnected), flush
+after replay-ready, and discard on logical replacement or expiry. Never repeat
+the underlying dataset operation to recover a lost physical socket. Connected
+large responses and legacy physical-socket bridges keep their existing behavior.
+Each owned transport must acknowledge the logical capability and protocol before
+any replay/dataset event is admitted or retained result is sent; resumes must
+retain the original capability. A new HA session, like a resume, enables commands
+and recording only after `executor-session-ready`, not the WebSocket open event.
+The first ready notification is logical-session scoped, so a transport loss
+between identity and readiness neither loses nor duplicates it. Initial HA
+negotiation shares the existing 60-second deadline across transport replacements;
+success clears it, and expiry stops recovery without replaying work. Legacy
+hosted, desktop and external debugger connections retain readiness on open.
+Invalid or missing acknowledgements fail closed without adopting another run.
+Failed reconnects preserve the bounded backoff; only transport success or an
+explicit session replacement resets it.
 Evaluation graph-input conversion is shared in `preparedEditorRun`, so Browser
 and Node apply the same target-port types and unknown-input validation.
 Authored capture is one detached project snapshot, not a clone of the entire

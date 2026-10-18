@@ -433,6 +433,7 @@ function releaseValuesFor({ manifest, chart, images, compatibility, migrationJob
         enabled: true,
         manifestDigest: getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }),
         sourceSha: manifest.source.sha,
+        ...(manifest.evidence.ha?.protocol === 3 ? { browserContract: manifest.evidence.ha.browserContract } : {}),
         verification: {
           workflow: manifest.evidence.promotion.workflow,
           runId: manifest.evidence.promotion.runId,

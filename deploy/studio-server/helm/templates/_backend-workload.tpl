@@ -3,6 +3,11 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: {{ include "rivet.backendName" . }}
+  {{- if .Values.ha.enabled }}
+  {{- with index .Values.ha.rolloutResourceVersions (include "rivet.backendName" .) }}
+  resourceVersion: {{ . | quote }}
+  {{- end }}
+  {{- end }}
   labels:
     {{- include "rivet.labels" . | nindent 4 }}
     app.kubernetes.io/component: {{ ternary "maintenance" "backend" (default false .haMaintenance) }}

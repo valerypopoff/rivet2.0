@@ -1027,6 +1027,15 @@ test('provider staging gate is explicitly confirmed, HTTPS-only, and scoped to a
       env: createProviderEnvironment(configFile, valuesFile),
     });
     assert.equal(providerConfig.namespace, 'rivet-staging-release');
+    const noRegistry = createProviderEnvironment(configFile, valuesFile, {
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_USERNAME: '',
+      RIVET_K8S_PROVIDER_GATE_REGISTRY_PASSWORD: '',
+    });
+    assert.throws(() => buildManagedProviderGateConfig({ rootDir, env: noRegistry }), /REGISTRY_USERNAME/);
+    assert.equal(
+      buildManagedProviderGateConfig({ rootDir, env: noRegistry, registryRequired: false }).registry,
+      undefined,
+    );
     assert.equal(providerConfig.gatewayMode, 'external');
     assert.deepEqual(Object.keys(providerConfig.images).sort(), ['api', 'executor', 'web']);
     const externalManifest = `image: ${imageReference(providerConfig.images.api)}\nimage: ${imageReference(providerConfig.images.web)}`;

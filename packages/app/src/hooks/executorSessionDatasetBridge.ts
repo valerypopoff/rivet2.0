@@ -10,6 +10,7 @@ export function handleExecutorDatasetRequest(options: {
   message: keyof DatasetRequestMap;
   socket: WebSocket;
   target: ExecutorSessionTarget;
+  sendResponse?: (requestId: string, payload: unknown) => void;
 }): void {
   const { data, datasetProvider, message, socket, target } = options;
   if (!datasetProvider) {
@@ -22,6 +23,7 @@ export function handleExecutorDatasetRequest(options: {
     message,
     socket,
     target,
+    sendResponse: options.sendResponse,
   }).catch((error) => {
     handleError(error, 'Failed to handle executor dataset request', {
       metadata: {
@@ -41,10 +43,13 @@ export async function processExecutorDatasetRequest(options: {
   message: keyof DatasetRequestMap;
   socket: WebSocket;
   target: ExecutorSessionTarget;
+  sendResponse?: (requestId: string, payload: unknown) => void;
 }): Promise<void> {
   const { data, datasetProvider, message, socket, target } = options;
   const { payload, requestId } = data as DatasetRequestPayload<any>;
-  const sendResponse = (response: unknown) => sendExecutorDatasetResponse(socket, requestId, response, target);
+  const sendResponse = (response: unknown) => options.sendResponse
+    ? options.sendResponse(requestId, response)
+    : sendExecutorDatasetResponse(socket, requestId, response, target);
 
   switch (message) {
     case 'datasets:get-metadata':

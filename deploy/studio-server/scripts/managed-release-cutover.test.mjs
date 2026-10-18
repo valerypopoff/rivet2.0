@@ -5,7 +5,13 @@ import {
   assertOrdinaryReleaseAllowed,
   requiresMaintenanceCutover,
   runManagedReleaseCutover,
+  maintenanceValidationValues,
 } from './lib/managed-release-cutover.mjs';
+
+test('validation cannot recreate any autoscaler after closing maintenance admission', () => {
+  for (const role of ['proxy', 'web', 'backend', 'execution'])
+    assert.equal(maintenanceValidationValues.autoscaling[role].enabled, false, role);
+});
 function fixture(failure) {
   let journal;
   let time = 1000;

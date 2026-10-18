@@ -8,6 +8,7 @@ const local = `http://127.0.0.1:${process.env.PORT}`;
 const peer = `http://${neighbor}.${process.env.RIVET_HA_HEADLESS_SERVICE}:${process.env.PORT}`;
 const headers = {
   'x-rivet-proxy-auth': createHash('sha256').update(`${process.env.RIVET_KEY}:proxy-auth`).digest('hex'),
+  cookie: `rivet_ui_token=${createHash('sha256').update(`${process.env.RIVET_KEY}:ui-session`).digest('hex')}`,
 };
 async function until(check) {
   const deadline = Date.now() + 15_000;

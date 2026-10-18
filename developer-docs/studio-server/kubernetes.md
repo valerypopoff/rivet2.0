@@ -43,6 +43,16 @@ custom endpoint inputs. Local MinIO/release-gate overlays are deliberate disposa
 fixtures, not universal cloud defaults, and retain their explicit local settings.
 
 Backend HA is opt-in and requires immutable release evidence described in the
+[browser-aware HA contract](./ha-rolling-upgrades.md#production-browser-version-continuity).
+HA web pods use the configured object-storage Secret references to retain
+compressed immutable frontend files across pod replacement. No database or UI
+key is projected into web pods. Keep `web-assets/` outside object-expiration
+rules; no application restore or retention job deletes that release history.
+Browser-continuous upgrades require v3 evidence; legacy v1/v2 HA first needs an
+explicit maintenance conversion. Brief restore/bundle-preparation interruption
+while their singleton owner is replaced is expected.
+
+The broader availability guarantees are described in the
 [HA rolling-upgrade contract and acceptance gates](./ha-rolling-upgrades.md).
 The default remains a singleton. First conversion uses an explicitly owned
 maintenance cutover; subsequent HA upgrades require the exact installed
@@ -75,7 +85,7 @@ proxy for existing installations and disposable local/release-gate tests. Do
 not switch an existing release to `external` until its replacement gateway is
 ready: Helm will remove the embedded proxy and Ingress during the upgrade.
 
-The cluster profile uses separate workloads:
+The default (non-HA) cluster profile uses separate workloads:
 
 - `web`: fixed at `1` in the current endpoint-heavy recommended shape
 - `backend`: singleton with one application container supervising the control API and hosted editor executor as separate Node processes
@@ -229,7 +239,7 @@ summary, not its root cause.
 
 ## Topology ownership
 
-That split is intentional. The singleton `backend` owns:
+That split is intentional. The control-plane `backend` owns:
 
 - `/api/*`
 - `/ui-auth`
@@ -248,7 +258,10 @@ An internal-only workflow remains on the private `/internal/workflows/:published
 
 Wait for the Helm upgrade to complete before switching an endpoint to internal-only. During a rolling execution Deployment update, an old image may still serve public traffic and does not know about the new access setting. Once all execution Pods run the new image, every public request reads the current access policy from PostgreSQL before admission; already-admitted requests may still finish. Do not rely on the switch as a rollout-time security barrier.
 
-Do not scale `backend` horizontally in the current chart shape. Latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` are still process-local control-plane features.
+Do not manually scale a default singleton backend. The opt-in HA composition
+adds signed owner routing and bounded debugger relays while keeping each accepted
+execution process-local. Enable it only through the guarded release command and
+its certified [HA contract](./ha-rolling-upgrades.md), not a raw Helm upgrade.
 
 Publication commands use the project identity and publication version from the
 single Project Settings read; commands that publish or restore executable draft
@@ -268,7 +281,20 @@ the draft precondition itself to test a genuine stale-command 409, then checks
 unchanged history and concurrent publication updates against PostgreSQL through the deployed
 proxy/API before exercising workflow execution.
 
-The chart enforces `backend=1` and disables backend autoscaling. The backend is a StatefulSet, so Kubernetes does not offer the Deployment-only `Recreate` strategy named in some deployment guidance. Its `OrderedReady` plus single-ordinal `RollingUpdate` is the equivalent single-writer replacement here: ordinal `0` is terminated before its replacement is created, accepting a short control-plane interruption and preventing an old and new backend from serving together. Execution replicas remain independently scalable.
+Without HA, the chart enforces `backend=1`. Backend autoscaling remains disabled
+in both compositions. The singleton's `OrderedReady` plus single-ordinal
+`RollingUpdate` terminates ordinal `0` before replacement, accepting a short
+control-plane interruption. Certified HA instead uses `Parallel`/`OnDelete`,
+explicit retirement and a ready surge. Its release helper preserves observed
+capacity with API-server resource-version guards, including the final autoscaler
+restoration; concurrent scaling blocks a stale Helm write rather than deleting
+an unretired owner. Do not set the helper-owned `ha.rolloutResourceVersions` map
+in environment values.
+An ordinary HA upgrade also preserves existing Service routes and Vault/auth
+identity. Changing ports/selectors or credential injection requires maintenance;
+an image compatibility certificate cannot make those old/new contracts agree.
+The controller journals StatefulSet UIDs, uses resource-version guarded scaling,
+and rechecks all completed owners before recording a successful rollout.
 
 The supported chart currently requires managed workflow and runtime-library storage, so canonical workflow bytes are transactional in PostgreSQL/object storage and do not use the filesystem save journal. Filesystem deployments still use the same API image and startup recovery code in local Docker and single-host installations. A downstream Kubernetes shape that re-enables filesystem workflow storage must keep the backend singleton, mount project files, dataset sidecars, and `.rivet-transactions` from one PVC at the same workflow-root mount, and retain serial pod replacement. Prefer `ReadWriteOncePod` when the CSI driver supports it. `ReadWriteOnce` alone may allow multiple pods on one node and is not a single-writer guarantee. Scaling a filesystem-backed control plane above one replica is unsupported; high availability requires shared locking or the managed transactional backend.
 
@@ -281,7 +307,7 @@ Scaling in this chart is per Deployment or StatefulSet, not in fixed pod pairs.
 - a new `execution` pod is only another execution-plane API pod
 - in embedded compatibility mode, a new `proxy` pod is only another nginx proxy pod
 - a new `web` pod is only another dashboard shell pod
-- the `backend` StatefulSet stays at one pod because the current control-plane and latest-debugger behavior is still process-local
+- the default `backend` StatefulSet stays at one pod; certified HA explicitly supports 2-8 backends with owner routing and controlled retirement
 
 That means rising endpoint demand should usually add `execution` pods first. In external mode, gateway capacity is owned and scaled by DevOps, outside this chart.
 
@@ -290,7 +316,7 @@ Recommended operator mental model:
 - scale `execution` for workflow endpoint throughput
 - keep the external gateway redundant so ingress and websocket termination do not become a single bottleneck
 - keep `web=1` when the dashboard is only used by one operator and temporary UI hiccups are acceptable
-- keep `backend=1` until the process-local control-plane constraints are removed architecturally
+- keep `backend=1` unless deliberately enabling the certified HA composition
 
 Typical endpoint-heavy production shape:
 
@@ -1492,8 +1518,10 @@ Set `RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` through chart `env` to tune
 headroom (1 MiB to 1 GiB), and keep the volume and Pod limits consistent with budgets.
 Vault dotenv cannot redirect the configured export root; chart `env` cannot
 override it. Whole-Pod ephemeral-storage limits must also cover this volume.
-Exports survive container restart but not Pod replacement; prepare them again
-after replacement. See [project bundles](project-bundles.md#deployment-scratch-capacity).
+In the default non-HA profile, exports survive container restart but not Pod
+replacement; prepare them again after replacement. HA publishes completed
+exports to shared object storage, so those downloads survive owner replacement.
+See [project bundles](project-bundles.md#deployment-scratch-capacity).
 
 ### Gateway and public routes
 
@@ -1502,6 +1530,7 @@ In external mode, the cluster-owned gateway implements the [external gateway con
 | Public path                                | Internal target                                       |
 | ------------------------------------------ | ----------------------------------------------------- |
 | `/`                                        | `web`                                                 |
+| `/__rivet_web/*`                           | `web` (immutable HA frontend builds)                  |
 | `/api/*` and `/ui-auth`                    | singleton `backend` API                               |
 | `/workflows/*`                             | scalable `execution` API                              |
 | `/workflows-latest/*`                      | singleton `backend` API                               |
@@ -1513,6 +1542,12 @@ In external mode, the cluster-owned gateway implements the [external gateway con
 | `/ws/executor/internal` and `/ws/executor` | executor process in the singleton `backend` container |
 
 Keep gateway body-size limits high enough for project import/export and keep websocket timeouts long. The tracked nginx overlay examples use `100m` body size and `86400` second read/send timeouts. In external mode, the gateway must replace the embedded proxy's authentication and trusted-header boundary before routing `/workflows` to `execution`; merely forwarding HTTP to the Service is unsafe.
+
+For HA, external gateways must forward `/__rivet_web/*` without stripping its
+build/path segments and preserve the editor's `webBuild` query parameter. The
+same UI authentication boundary applies to these assets as to other frontend
+files. Review this route in the actual provider gateway before activation;
+local embedded-proxy verification is not provider-ingress certification.
 
 ### Published execution admission
 
@@ -1617,7 +1652,7 @@ lifecycle:
 
 Keep `staleAfterSeconds` greater than `refreshSeconds + checkTimeoutSeconds`. Short values can flap readiness during normal provider latency. The provider transport bounds are deliberately independent from the shorter readiness wait: a dependency implementation that ignores cancellation remains deduplicated until its bounded transport operation settles instead of accumulating retries. A provider-wide outage may make every execution pod unready because PostgreSQL/object storage are required to execute published work; liveness deliberately stays healthy so Kubernetes does not create a restart storm.
 
-The rendered probe contract is:
+The non-HA composition's rendered probe contract is:
 
 | Workload               | Container | Startup                  | Liveness                | Readiness                |
 | ---------------------- | --------- | ------------------------ | ----------------------- | ------------------------ |
@@ -1643,7 +1678,20 @@ Tune shutdown and pod termination values together. Longer drain windows improve 
 
 Every workload has an explicit rolling strategy and preferred topology spread plus pod anti-affinity. Execution defaults to `maxUnavailable: 0` and `maxSurge: 1`; the embedded proxy uses the same strategy when present. PodDisruptionBudgets are emitted only when a tier's effective minimum replica count is greater than one; production external mode protects execution, while embedded mode can also protect proxy. The singleton backend intentionally has no PDB, because a one-pod PDB would block voluntary disruption without creating high availability. Placement defaults are preferred rather than required so Minikube and small clusters remain schedulable.
 
-The backend remains a validated singleton. Managed web-app action run history/replay/cancellation is replica-safe, and execution replicas scale normally. The remaining control-plane blockers are process-local latest-debugger ownership and the co-located editor executor: their related Services could choose different backend pods if backend replicas were increased. Do not disable the singleton validation until those sessions have distributed ownership or stable fenced routing and are tested with owner loss.
+`rollout.minReadySeconds` controls how long replacement web/proxy Deployment
+pods must remain ready before becoming available to the rolling controller. Its
+default is `0` for compatibility. Provider health-check/NEG programming can lag
+Pod readiness; the isolated GKE rehearsal uses `120` seconds alongside its
+separate pre-stop/drain settings. Tune and qualify both windows through the real
+edge, rather than treating Kubernetes readiness alone as load-balancer health.
+
+The non-HA backend remains a validated singleton. Do not raise that composition's
+backend replica count or bypass its validation. The opt-in `ha.enabled` composition
+uses separate OnDelete owners, signed incarnation-fenced editor routing and shared
+coordination; see [HA rolling upgrades](ha-rolling-upgrades.md). It requires its
+guarded release path and qualification, not simply more replicas on the singleton
+Service. Existing singleton-to-HA conversion still needs a separately reviewed
+maintenance transition.
 
 ### Vault dotenv contract
 

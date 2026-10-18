@@ -52,6 +52,13 @@ export type ManagedProviderGateConfig = {
 export function buildManagedProviderGateConfig(options: {
   rootDir: string;
   env?: NodeJS.ProcessEnv;
+  registryRequired?: true;
 }): ManagedProviderGateConfig;
+
+export function buildManagedProviderGateConfig(options: {
+  rootDir: string;
+  env?: NodeJS.ProcessEnv;
+  registryRequired: false;
+}): Omit<ManagedProviderGateConfig, 'registry'> & { registry?: undefined };
 
 export function imageReference(image: ManagedProviderGateImage): string;

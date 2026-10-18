@@ -52,6 +52,18 @@ test('HA latest observation is global, reconnect deduplicates identity, controls
     const replay: string[] = []; resumed.on('message', raw => replay.push(raw.toString()));
     await waitFor(() => replay.some(x => x === event));
     assert.equal(JSON.parse(replay.find(x => x === event)!).rivetEventId, JSON.parse(event).rivetEventId);
+    // Model a reconnect whose earliest retained peer event is already past the
+    // receiver's cursor. Existing observers need the same explicit warning as
+    // observers connecting after truncation; no event or control is replayed.
+    relays[1]!.transformBroadcast(JSON.stringify({ message: 'start', data: { runId: 'unavailable-history' } }));
+    const afterGap = relays[1]!.transformBroadcast(JSON.stringify({ message: 'done', data: { runId: 'after-gap' } }));
+    for (const client of sockets[1]!.clients) client.send(afterGap);
+    await waitFor(() => replay.some(x => x.includes('history has a gap')) && replay.some(x => x.includes('after-gap')));
+    assert.equal(replay.filter(x => x.includes('history has a gap')).length, 1);
+    for (const client of sockets[1]!.clients) client.send(afterGap);
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(replay.filter(x => x.includes('after-gap')).length, 1);
+    assert.equal(replay.filter(x => x.includes('history has a gap')).length, 1);
     const foreign = new WebSocket(`ws://127.0.0.1:${ports[0]}/internal/ha/latest`, { headers: { origin: 'https://public.invalid' } });
     observers.push(foreign);
     foreign.on('error', () => {});

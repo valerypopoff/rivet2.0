@@ -5,6 +5,8 @@ import {
   assertHaUpgradeEvidence,
   createHaReleaseEvidence,
   HA_REQUIRED_CHECKS,
+  HA_BROWSER_CONTRACT,
+  selectHaBrowserContract,
 } from './lib/ha-release-evidence.mjs';
 const images = (x) =>
   Object.fromEntries(
@@ -21,7 +23,8 @@ function fixture() {
     lineage: { predecessor: { sourceSha: 'a'.repeat(40), images: images('a') } },
   };
   const evidence = {
-    protocol: 1,
+    protocol: 3,
+    browserContract: { protocol: HA_BROWSER_CONTRACT, baseline: { sourceSha: 'a'.repeat(40), image: images('a').web } },
     mode: 'mixed',
     candidateSourceSha: release.source.sha,
     candidateImages: release.images,
@@ -37,7 +40,9 @@ function fixture() {
     evidence,
     installed: {
       ha: { enabled: true },
-      release: { production: { sourceSha: release.lineage.predecessor.sourceSha } },
+      release: {
+        production: { sourceSha: release.lineage.predecessor.sourceSha, browserContract: evidence.browserContract },
+      },
       images: images('a'),
     },
   };
@@ -71,11 +76,41 @@ test('bootstrap evidence never authorizes an uncertified rolling conversion or m
   assert.throws(() => assertHaUpgradeEvidence(f.release, f.installed), /No mixed-version certificate/);
 });
 
+test('historical HA evidence remains readable but cannot authorize browser-continuous deployment', () => {
+  const f = fixture();
+  const legacy = {
+    ...f.evidence,
+    protocol: 1,
+    checks: f.evidence.checks.filter(
+      (check) =>
+        !['browser-version-continuity', 'retained-browser-workflow', 'oldest-browser-compatibility'].includes(check),
+    ),
+  };
+  assert.equal(assertHaReleaseEvidence(legacy, f.release).protocol, 1);
+  assert.throws(
+    () => assertHaUpgradeEvidence({ ...f.release, evidence: { ha: legacy } }, f.installed),
+    /v3 release certificate/,
+  );
+  assert.throws(() => assertHaReleaseEvidence({ ...legacy, protocol: 3 }, f.release), /incomplete/);
+  const v2 = {
+    ...f.evidence,
+    protocol: 2,
+    checks: f.evidence.checks.filter(
+      (check) => !['retained-browser-workflow', 'oldest-browser-compatibility'].includes(check),
+    ),
+  };
+  assert.equal(assertHaReleaseEvidence(v2, f.release).protocol, 2);
+  assert.throws(
+    () => assertHaUpgradeEvidence({ ...f.release, evidence: { ha: v2 } }, f.installed),
+    /v3 release certificate/,
+  );
+});
+
 test('same-source HA reconfiguration still requires the exact certified image set', () => {
   const f = fixture();
   const installed = {
     ha: { enabled: true },
-    release: { production: { sourceSha: f.release.source.sha } },
+    release: { production: { sourceSha: f.release.source.sha, browserContract: f.evidence.browserContract } },
     images: f.release.images,
   };
   assert.doesNotThrow(() => assertHaUpgradeEvidence(f.release, installed));
@@ -113,7 +148,19 @@ test('certificate production requires actual workload receipts, readiness and ex
       ],
     },
   }));
+  before.push({
+    metadata: { name: 'web', uid: 'old-web', labels: { 'app.kubernetes.io/component': 'web' } },
+    spec: {
+      containers: [
+        {
+          name: 'web',
+          image: `${f.release.lineage.predecessor.images.web.repository}@${f.release.lineage.predecessor.images.web.digest}`,
+        },
+      ],
+    },
+  });
   const report = {
+    browserContract: f.evidence.browserContract,
     samples: 150,
     failures: [],
     readiness: [{ ready: 2 }, { ready: 3 }],
@@ -129,10 +176,29 @@ test('certificate production requires actual workload receipts, readiness and ex
       metadata: { ...p.metadata, uid: `new-${i}` },
       status: { conditions: [{ type: 'Ready', status: 'True' }] },
       spec: {
-        containers: [{ name: 'backend', image: `${f.release.images.api.repository}@${f.release.images.api.digest}` }],
+        containers:
+          p.metadata.name === 'web'
+            ? [{ name: 'web', image: `${f.release.images.web.repository}@${f.release.images.web.digest}` }]
+            : [{ name: 'backend', image: `${f.release.images.api.repository}@${f.release.images.api.digest}` }],
       },
     })),
     workloads: {
+      browser: {
+        passed: true,
+        originalBuild: 'a'.repeat(64),
+        candidateBuild: 'b'.repeat(64),
+        reloads: 0,
+        iframeReloads: 0,
+        lazyScreen: true,
+        pinnedEditor: true,
+        oldWebPodsRemoved: true,
+        unsavedEdit: true,
+        savedByCandidate: true,
+        newRun: true,
+        outputs: true,
+        recordingOpened: true,
+        recordingIds: ['one', 'two'],
+      },
       bundleVerified: true,
       folderNotifications: {
         directions: ['local-to-peer', 'peer-to-local'].map((direction) => ({
@@ -179,11 +245,45 @@ test('certificate production requires actual workload receipts, readiness and ex
         recordingId: `recording-${i}`,
         correlationId: `correlation-${i}`,
       })),
-      withdrawn: before.map((p) => ({ pod: p.metadata.name, uid: p.metadata.uid })),
+      withdrawn: before
+        .filter((p) => p.metadata.name !== 'web')
+        .map((p) => ({ pod: p.metadata.name, uid: p.metadata.uid })),
     },
   };
+  report.workloads.oldestBrowser = { ...report.workloads.browser, image: f.evidence.browserContract.baseline.image };
   assert.equal(createHaReleaseEvidence(report, f.release, 'mixed').mode, 'mixed');
+  const monotonic = structuredClone(report);
+  monotonic.workloads.editors[0].receipt.heldMs = Math.floor(25_085.306396);
+  assert.equal(createHaReleaseEvidence(monotonic, f.release, 'mixed').mode, 'mixed',
+    'monotonic observations must retain the existing whole-millisecond evidence format');
   for (const corrupt of [
+    (r) => {
+      r.after.find((p) => p.metadata.name === 'web').spec.containers[0].image = 'wrong@sha256:' + 'c'.repeat(64);
+    },
+    (r) => {
+      delete r.workloads.browser;
+    },
+    (r) => {
+      r.workloads.browser.reloads = 1;
+    },
+    (r) => {
+      r.workloads.browser.oldWebPodsRemoved = false;
+    },
+    ...['unsavedEdit', 'savedByCandidate', 'newRun', 'outputs', 'recordingOpened'].map((key) => (r) => {
+      r.workloads.browser[key] = false;
+    }),
+    (r) => {
+      r.workloads.browser.recordingIds = ['one', 'one'];
+    },
+    (r) => {
+      delete r.workloads.oldestBrowser;
+    },
+    (r) => {
+      r.workloads.oldestBrowser.savedByCandidate = false;
+    },
+    (r) => {
+      r.workloads.oldestBrowser.image = images('c').web;
+    },
     (r) => {
       r.readiness[0].ready = 1;
     },
@@ -207,6 +307,9 @@ test('certificate production requires actual workload receipts, readiness and ex
     },
     (r) => {
       r.workloads.editors[0].receipt.heldMs = NaN;
+    },
+    (r) => {
+      r.workloads.editors[0].receipt.heldMs = 25_085.306396;
     },
     (r) => {
       r.workloads.evaluations[0].preserved = 'false';
@@ -246,4 +349,50 @@ test('certificate production requires actual workload receipts, readiness and ex
     corrupt(invalid);
     assert.throws(() => createHaReleaseEvidence(invalid, f.release, 'mixed'), /no certificate/);
   }
+});
+
+test('browser support baseline is sticky across multiple releases and may only change through maintenance', () => {
+  const f = fixture();
+  const next = { ...f.release, source: { sha: 'c'.repeat(40) }, images: images('c') };
+  const selected = selectHaBrowserContract(next, f.release);
+  assert.deepEqual(selected, f.evidence.browserContract);
+  assert.notDeepEqual(selected.baseline.image, f.release.images.web);
+  assert.throws(
+    () =>
+      assertHaUpgradeEvidence(f.release, {
+        ...f.installed,
+        release: {
+          production: {
+            ...f.installed.release.production,
+            browserContract: { ...selected, baseline: { sourceSha: next.source.sha, image: next.images.web } },
+          },
+        },
+      }),
+    /baseline requires maintenance/,
+  );
+  assert.throws(
+    () =>
+      assertHaUpgradeEvidence(f.release, {
+        ...f.installed,
+        release: { production: { sourceSha: f.installed.release.production.sourceSha } },
+      }),
+    /baseline requires maintenance/,
+  );
+  assert.deepEqual(selectHaBrowserContract(next, null).baseline, {
+    sourceSha: next.source.sha,
+    image: next.images.web,
+  });
+});
+
+test('pre-recording-continuity browsers cannot become the supported rolling baseline', () => {
+  const f = fixture();
+  const previous = structuredClone(f.release);
+  previous.evidence.ha.browserContract.protocol = 1;
+  const selected = selectHaBrowserContract(f.release, previous);
+  assert.equal(selected.protocol, 2);
+  assert.deepEqual(selected.baseline, { sourceSha: f.release.source.sha, image: f.release.images.web });
+  assert.throws(() => assertHaUpgradeEvidence(f.release, {
+    ...f.installed,
+    release: { production: { ...f.installed.release.production, browserContract: previous.evidence.ha.browserContract } },
+  }), /browser|maintenance/i);
 });

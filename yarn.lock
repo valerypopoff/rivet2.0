@@ -9878,6 +9878,7 @@ __metadata:
     "@atlaskit/theme": "npm:^12.6.2"
     "@atlaskit/toggle": "npm:^12.6.11"
     "@atlaskit/tokens": "npm:^1.28.0"
+    "@aws-sdk/client-s3": "npm:^3.901.0"
     "@cspell/dict-companies": "npm:^3.2.11"
     "@cspell/dict-software-terms": "npm:^5.2.2"
     "@dnd-kit/core": "npm:^6.0.8"

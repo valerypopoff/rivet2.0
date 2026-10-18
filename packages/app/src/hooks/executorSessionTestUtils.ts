@@ -2,7 +2,7 @@ import test from 'node:test';
 import type { GraphOutputs } from '@valerypopoff/rivet2-core';
 import { createExecutorSessionRuntime, type ExecutorSessionRuntime } from './executorSession';
 
-export class FakeWebSocket {
+export class FakeWebSocket extends EventTarget {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
@@ -19,6 +19,7 @@ export class FakeWebSocket {
   sent: string[] = [];
 
   constructor(url: string, protocols?: string | string[]) {
+    super();
     this.url = url;
     this.protocols = protocols;
     FakeWebSocket.instances.push(this);
@@ -40,14 +41,17 @@ export class FakeWebSocket {
   emitClose(code = 1006) {
     this.readyState = FakeWebSocket.CLOSED;
     (this.onclose as ((event: { code: number }) => void) | null)?.({ code });
+    this.dispatchEvent(new Event('close'));
   }
 
   emitMessage(data: unknown) {
     this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent<string>);
+    this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(data) }));
   }
 
   emitRawMessage(data: string) {
     this.onmessage?.({ data } as MessageEvent<string>);
+    this.dispatchEvent(new MessageEvent('message', { data }));
   }
 
   emitError() {

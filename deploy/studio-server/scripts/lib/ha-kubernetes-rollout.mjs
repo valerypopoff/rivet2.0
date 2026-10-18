@@ -1,17 +1,63 @@
 import { runHaRollingUpgrade } from './ha-rolling-upgrade.mjs';
 import { releaseOperationJournalName, journalForReleaseOperation } from './release-operation-journal.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
+
+const ownerEnvNames = new Set([
+  'PORT', 'RIVET_KEY', 'RIVET_API_PROFILE', 'RIVET_REQUIRE_UI_GATE_KEY',
+  'RIVET_BACKEND_API_PORT', 'RIVET_BACKEND_EXECUTOR_PORT', 'RIVET_BACKEND_HEALTH_PORT',
+  'RIVET_EXECUTOR_RUNTIME_CONFIG_URL', 'RIVET_LEGACY_RESTORE_INSTALLATION',
+]);
+const ownerEnvPrefixes = [
+  'RIVET_APP_SETTINGS_', 'RIVET_SERVER_UI_', 'RIVET_DEPLOYMENT_STORAGE',
+  'RIVET_DEPLOYMENT_DATABASE', 'RIVET_HA_', 'RIVET_ROLLING_RETIREMENT_',
+  'RIVET_LATEST_WORKFLOWS_', 'RIVET_LATEST_APPS_',
+  'RIVET_PUBLISHED_WORKFLOWS_', 'RIVET_PUBLISHED_APPS_',
+];
+
+/** Recovery must use the same rendered configuration, not just the same images.
+ * Object key/resource order is immaterial; ordered command/env arrays are not. */
+export function getHaConfigurationDigest(resources) {
+  const canonical = (value) => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === 'object'
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const ordered = resources.map(value => JSON.stringify(canonical(value))).sort();
+  return `sha256:${createHash('sha256').update(JSON.stringify(ordered)).digest('hex')}`;
+}
 
 export function hasSameHaOwnerIdentity(current, candidate) {
-  const identityEnv = (container) =>
-    (container?.env ?? [])
-      .filter((e) =>
-        /^(RIVET_KEY|RIVET_APP_SETTINGS_ENCRYPTION_KEY|RIVET_API_PROFILE|RIVET_SERVER_UI_AUTH_MODE|RIVET_REQUIRE_UI_GATE_KEY|RIVET_DEPLOYMENT_(STORAGE|DATABASE)|RIVET_HA_|RIVET_ROLLING_RETIREMENT_PROTOCOL)/.test(
-          e.name,
-        ),
-      )
-      .sort((a, b) => a.name.localeCompare(b.name));
-  return isDeepStrictEqual(identityEnv(current), identityEnv(candidate));
+  const identity = (template) => {
+    const container = template?.spec?.containers?.find(c => ['backend', 'api'].includes(c.name));
+    if (!container) return null;
+    return {
+      env: (container.env ?? []).filter(e => ownerEnvNames.has(e.name) ||
+        ownerEnvPrefixes.some(prefix => e.name.startsWith(prefix)))
+        // The API omits empty literal values; an absent EnvVar or valueFrom
+        // remains distinct because it can resolve a different runtime value.
+        .map(e => e.valueFrom ? e : { ...e, value: e.value ?? '' })
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      envFrom: container.envFrom ?? [],
+      serviceAccountName: template.spec.serviceAccountName ?? 'default',
+      vault: Object.fromEntries(Object.entries(template.metadata?.annotations ?? {}).filter(([key]) =>
+        key.startsWith('vault.hashicorp.com/') && !/^vault\.hashicorp\.com\/agent-(requests|limits)-/.test(key))),
+    };
+  };
+  const before = identity(current), after = identity(candidate);
+  return before !== null && after !== null && isDeepStrictEqual(before, after);
+}
+
+export function hasSameHaServiceRouting(current, candidate) {
+  const routing = ({ spec }) => ({
+    type: spec.type ?? 'ClusterIP',
+    selector: spec.selector ?? {},
+    publishNotReadyAddresses: spec.publishNotReadyAddresses ?? false,
+    headless: spec.clusterIP === 'None',
+    ports: (spec.ports ?? []).map(port => ({
+      name: port.name, port: port.port, targetPort: port.targetPort ?? port.port,
+      protocol: port.protocol ?? 'TCP',
+    })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+  });
+  return isDeepStrictEqual(routing(current), routing(candidate));
 }
 
 export function resolveHaWorkloadCapacity(candidate, existing, journal, resumeToken) {
@@ -62,6 +108,12 @@ export async function runHaKubernetesRollout({
     resources.filter((r) => r.kind === 'Service' && !r.spec.publishNotReadyAddresses).map((r) => r.metadata.name),
   );
   const inventory = JSON.parse((await kube(['get', 'statefulset', '-l', selector, '-o', 'json'])).stdout).items;
+  const services = JSON.parse((await kube(['get', 'service', '-l', selector, '-o', 'json'])).stdout).items;
+  for (const current of services) {
+    const candidate = resources.find(r => r.kind === 'Service' && r.metadata.name === current.metadata.name);
+    if (!candidate || !hasSameHaServiceRouting(current, candidate))
+      throw new Error('HA Service routing changed. Use a maintenance cutover; no templates were applied.');
+  }
   const workloads = resources
     .filter((r) => r.kind === 'StatefulSet')
     .map((candidate) => {
@@ -69,16 +121,14 @@ export async function runHaKubernetesRollout({
       const existing = inventory.find((w) => w.metadata.name === candidate.metadata.name);
       if (!existing || existing.spec.updateStrategy.type !== 'OnDelete')
         throw new Error('First HA conversion requires an explicit maintenance cutover.');
-      const currentContainer = existing.spec.template.spec.containers.find((c) => ['backend', 'api'].includes(c.name));
-      const candidateContainer = candidate.spec.template.spec.containers.find((c) =>
-        ['backend', 'api'].includes(c.name),
-      );
-      if (!hasSameHaOwnerIdentity(currentContainer, candidateContainer))
+      if (!existing.metadata.uid) throw new Error('HA StatefulSet identity is unavailable.');
+      if (!hasSameHaOwnerIdentity(existing.spec.template, candidate.spec.template))
         throw new Error(
           'HA storage/authentication/owner configuration changed. Use a separate maintenance operation; no templates were applied.',
         );
       return {
         name: candidate.metadata.name,
+        uid: existing.metadata.uid,
         role,
         replicas: resolveHaWorkloadCapacity(candidate, existing, initialJournal, resumeToken),
         updateStrategy: candidate.spec.updateStrategy.type,
@@ -94,6 +144,8 @@ export async function runHaKubernetesRollout({
   };
   const desiredRevision = async (workloadName) => {
     const workload = JSON.parse((await kube(['get', 'statefulset', workloadName, '-o', 'json'])).stdout);
+    if (workload.metadata.uid !== workloads.find(w => w.name === workloadName)?.uid)
+      throw new Error('HA StatefulSet identity changed.');
     return workload.status.observedGeneration >= workload.metadata.generation ? workload.status.updateRevision : null;
   };
   const observePod = async (podName) => {
@@ -130,8 +182,24 @@ export async function runHaKubernetesRollout({
           s.endpoints?.some((e) => e.targetRef?.uid === pod.uid && e.conditions?.ready !== false),
       );
     }, `endpoint withdrawal for ${pod.name}`);
+  const guardedTemplateValues = async () => {
+    const versions = {};
+    for (const w of workloads) {
+      const current = JSON.parse((await kube(['get', 'statefulset', w.name, '-o', 'json'])).stdout);
+      if (current.metadata.uid !== w.uid) throw new Error('HA StatefulSet identity changed.');
+      if (current.spec.replicas !== w.replicas || !current.metadata.resourceVersion)
+        throw new Error('HA capacity changed before template update; no templates were applied.');
+      versions[w.name] = current.metadata.resourceVersion;
+    }
+    // Helm's patch must carry this resourceVersion. A scale/status change after
+    // the read conflicts at the API server rather than overwriting new owners.
+    return {
+      replicaCount: Object.fromEntries(workloads.filter(w => w.role !== 'maintenance').map(w => [w.role, w.replicas])),
+      ha: { rolloutResourceVersions: versions },
+    };
+  };
   const result = await runHaRollingUpgrade({
-    identity: { release, namespace, manifestDigest },
+    identity: { release, namespace, manifestDigest, configurationDigest: getHaConfigurationDigest(resources) },
     workloads,
     resumeToken,
     timeoutMs,
@@ -165,8 +233,10 @@ export async function runHaKubernetesRollout({
     },
     observePod,
     status: (pod) => exec(pod),
-    isCurrentPod: async (pod, workload) =>
-      pod.image === workload.image && pod.revision === (await desiredRevision(workload.name)),
+    isCurrentPod: async (pod, workload) => {
+      const revision = await desiredRevision(workload.name);
+      return !!revision && pod.image === workload.image && pod.revision === revision;
+    },
     prepareRetirement: beforeRetirement,
     withdraw: (pod, op, inc) => exec(pod, [op, inc, '--withdraw-only']),
     begin: (pod, op, inc) => exec(pod, [op, inc, '--begin-only']),
@@ -180,6 +250,8 @@ export async function runHaKubernetesRollout({
     },
     scale: async (workload, replicas, expectedReplicas, owner) => {
       const current = JSON.parse((await kube(['get', 'statefulset', workload, '-o', 'json'])).stdout);
+      if (current.metadata.uid !== workloads.find(w => w.name === workload)?.uid || !current.metadata.resourceVersion)
+        throw new Error('HA StatefulSet identity is unconfirmed before scaling.');
       if (current.spec.replicas === replicas) return;
       if (current.spec.replicas !== expectedReplicas) throw new Error('HA capacity changed before scaling.');
       if (owner && (await observePod(owner.name))?.uid !== owner.uid)
@@ -189,19 +261,21 @@ export async function runHaKubernetesRollout({
         `statefulset/${workload}`,
         `--replicas=${replicas}`,
         `--current-replicas=${expectedReplicas}`,
+        `--resource-version=${current.metadata.resourceVersion}`,
       ]);
     },
     waitForScaleDown: (workload, owner) =>
       deadlineWait(async () => {
         const current = JSON.parse((await kube(['get', 'statefulset', workload.name, '-o', 'json'])).stdout);
+        if (current.metadata.uid !== workload.uid) throw new Error('HA StatefulSet identity changed.');
         if (current.spec.replicas !== workload.replicas)
           throw new Error('HA surge scale-down is unconfirmed; inspect the recorded operation before recovery.');
         const pod = await observePod(owner.name);
         if (pod && pod.uid !== owner.uid) throw new Error('HA surge was replaced during scale-down.');
         return !pod;
       }, `surge removal for ${owner.name}`),
-    applyTemplates: () => applyTemplates(workloads),
-    restoreAutoscalers: () => restoreAutoscalers(workloads),
+    applyTemplates: async () => applyTemplates(workloads, await guardedTemplateValues()),
+    restoreAutoscalers: async () => restoreAutoscalers(workloads, await guardedTemplateValues()),
     waitForReady: (podName, image) =>
       deadlineWait(async () => {
         const pod = await observePod(podName);
