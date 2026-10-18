@@ -15,6 +15,8 @@ import {
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manifest-images.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
+import { verifyGkeFrontendEvictions, waitForGkeFrontendAvailability } from './lib/ha-gke-availability.mjs';
+import { startHaWebAppTraffic } from './lib/ha-workflow-traffic.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
@@ -57,6 +59,14 @@ export function assertProviderHaPair(baseline, candidate) {
     false,
     'provider HA requires distinct immutable images',
   );
+}
+
+export function assertProviderHaFrontendPolicy(values, identity) {
+  assert.ok(['gke', 'other'].includes(identity?.provider), 'haProof.provider must explicitly be gke or other');
+  if (new URL(identity.clusterServer).hostname.endsWith('.gke.goog'))
+    assert.equal(identity.provider, 'gke', 'a GKE endpoint cannot skip the GKE frontend proof');
+  if (identity.provider === 'gke')
+    assert.equal(values.availability?.gkeGateway, true, 'GKE HA qualification requires the guarded GKE availability profile');
 }
 
 export class ProviderHaReleaseGate extends ManagedReleaseGate {
@@ -272,8 +282,10 @@ async function main() {
     assertReleaseManifestMatchesCurrentSource(candidate, sha);
     await run('git', ['diff', '--quiet', 'HEAD', '--']);
   }
+  const values = parse(await fs.readFile(config.valuesFile, 'utf8'));
+  assertProviderHaFrontendPolicy(values, raw.haProof);
   const gate = new ProviderHaReleaseGate(config, process.env.KUBECTL_BIN || 'kubectl', resolveHelmBinOrThrow(rootDir), {
-    values: parse(await fs.readFile(config.valuesFile, 'utf8')),
+    values,
     identity: raw.haProof,
   });
   try {
@@ -309,13 +321,29 @@ async function main() {
         Object.fromEntries(Object.keys(config.images).map((component) => [component, baseline.images[component]])),
         'provider HA baseline',
       );
-      const report = await runHaReleaseRollout(
-        gate,
-        config.baseUrl,
-        candidate.images,
-        baseline.evidence.ha.browserContract,
-      );
-      report.recovery = await verifyHaReleaseRecovery(gate, config.baseUrl, rootDir);
+      await gate.loadWorkflowKey();
+      let phase = 'preflight';
+      const web = startHaWebAppTraffic(gate, config.baseUrl, () => phase);
+      let report;
+      try {
+        if (gate.providerValues.availability?.gkeGateway)
+          await gate.artifact('provider-frontend-preflight.json', JSON.stringify(await waitForGkeFrontendAvailability(gate), null, 2));
+        phase = 'rollout';
+        report = await runHaReleaseRollout(gate, config.baseUrl, candidate.images, baseline.evidence.ha.browserContract);
+        assert.equal(web.report.failures.length, 0, 'provider public web-app availability failed during rollout');
+        phase = 'recovery';
+        report.recovery = await verifyHaReleaseRecovery(gate, config.baseUrl, rootDir);
+        assert.equal(web.report.failures.length, 0, 'provider public web-app availability failed during recovery');
+        phase = 'frontend-evictions';
+        if (gate.providerValues.availability?.gkeGateway)
+          report.frontendEvictions = await verifyGkeFrontendEvictions(gate, config.baseUrl);
+      } finally {
+        await web.stop();
+        await gate.artifact('provider-webapp-traffic.json', JSON.stringify(web.report, null, 2));
+      }
+      assert.ok(web.report.samples > 0, 'provider proof requires public web-app observations');
+      assert.equal(web.report.failures.length, 0, 'provider public web-app availability failed');
+      report.webApp = web.report;
       await gate.artifact('provider-ha-report.json', JSON.stringify({ baseline, candidate, report }, null, 2));
     }
   } catch (error) {

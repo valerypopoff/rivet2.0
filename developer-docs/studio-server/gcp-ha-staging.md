@@ -1,6 +1,137 @@
 # Isolated GCP HA qualification plan
 
-## Current qualification result (2026-10-17)
+## Final main-image rehearsal (2026-10-18): not qualified
+
+The exact promoted main release `59dd224f41f590fc8a8d37e92a6d219544e734ca`
+was tested against baseline `d9ea8dd17092fad93460404795a439cc4fa381a4` in
+the newly approved isolated operation `rivet-ha-final-20261018-5bd9465`.
+The local exact-image proof passed with 1,738 primary and 1,769 recovery
+workflow successes and no failed requests. Main's image workflow `39108140262`
+also passed. These are not substitutes for the provider result below.
+
+The real GKE/PostgreSQL/GCS/trusted-HTTPS primary upgrade passed with 5,753
+workflow successes, no failed requests and at least two ready ordinary backends.
+Both retained-browser journeys passed, including saved edits, new executions,
+outputs and recording playback across distinct original/candidate browser builds.
+Both controller-recovery scenarios also passed their fencing assertions: lost
+begin acknowledgement, a real API-server CAS conflict and one original begin
+command per scenario. However, recovery traffic recorded **34 HTTP 503 failures**
+alongside 8,110 successful workflow requests. The independent web-app stream
+recorded **3 HTTP 503 failures** alongside 5,316 successes. Therefore the complete
+provider qualification failed; this main release is **not approved for a live
+zero-downtime upgrade** by these receipts.
+
+All failures occurred in the same 2026-10-18 10:12 UTC node-consolidation window.
+GKE evicted both co-located proxy replicas. Audit events show that the PDB first
+blocked the second eviction, then accepted it after the first replacement was
+marked `LoadBalancerNegWithoutHealthCheck` in a newly populated zone. Its NEG
+was not yet attached to a health-checked backend. This sequence is consistent
+with Google's documented [NEG readiness race](https://docs.cloud.google.com/kubernetes-engine/networking/docs/known-issues).
+The exact response-producing hop is not proven because response bodies were
+not retained; do not invent that detail, discard the failed requests, or call
+the incident harmless network noise. Deployment `minReadySeconds` and a long
+pre-stop delay alone did not protect this provider-driven eviction path.
+
+Before production, repair and regression-test load-balancer-aware proxy
+availability during provider-driven replacement, including placement and
+premature-ready cases. Preserve the failed attempt and repeat a source-bound,
+exact-image provider rehearsal. Do not weaken the zero-failed-request criterion,
+disable normal provider disruption merely to pass, or silently change the
+configuration of a running proof.
+
+Private receipts are under `artifacts/gcp-ha-final-5bd9465/`, including the
+sanitized `qualification-summary.json`, `availability-failure-evidence.json`
+and hash-bound stopped-test `operation-finished.json`. Cleanup is admitted for
+failed as well as successful qualification only after diagnostics are exported
+and every original test/monitor process has stopped. It remains exact-inventory
+and UID/immutable-identity fenced; production and pre-existing resources are
+outside the operation. Cleanup verification is recorded separately from test
+qualification, never inferred from a failed or successful test process exit.
+
+Teardown verification completed at 2026-10-18 11:15 UTC: zero remaining
+rehearsal-created billable resources, all ten recorded load-balancer children
+and all three Service-owned NEGs absent, the CSI disk reclaimed, and all 23,230
+frozen bucket-object generations and their bucket deleted. The original cluster
+and SQL delete operations completed without errors. New credentials/identities,
+the address, certificate, router, NAT and subnet were removed. Existing networks,
+accounts, public key identities, IAM members/conditions and the billing
+association were checked and preserved. Production was neither accessed nor
+changed. The expiry safeguard was paused only after this verification.
+
+Only the new non-billable VPC `rivet-ha-final-20261018`, its private-service
+connection and internal range `rivet-ha-final-psa-1018` remain. Google's normal
+connection deletion returned `FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION`:
+Cloud SQL retains producer resources for four days after instance deletion.
+The exact identities, original failed operation and required next action are in
+`artifacts/gcp-ha-final-5bd9465/retained-networking.json`. Revisit no earlier than
+2026-10-22 12:00 UTC; inspect the failed operation and revalidate ownership before
+a newly reviewed cleanup attempt. Never force peering removal. The older
+`rivet-ha-20261017` network/range remain protected by their separate inventory.
+The deleted managed DNS service also has Google's normal 30-day soft-delete
+tombstone; its original deletion and DNS-update steps completed successfully.
+
+Cleanup exposed a private operator-helper locking defect: PowerShell's default
+non-terminating error behavior allowed one helper to continue after lock
+acquisition failed. Both cloud targets remained exact owned staging resources,
+but local receipt writes overlapped. All eight cleanup entry points now set
+`$ErrorActionPreference = 'Stop'` before opening the lock. Fresh-process held-lock
+negative checks reject every entry point and preserve the inventory hash.
+The affected subnet/DNS receipts were reconciled from actual absence and their
+original successful operation, without replaying deletion. Serialize mutation
+helpers and await their process exit; a yielded process is still running.
+
+Autopilot does not expose its underlying node VMs or boot disks through the
+customer Compute API. Record actual Kubernetes node UIDs and the provider-managed
+mode, then verify the exact owned GKE delete operation completed and the cluster
+is absent. Verify the visible CSI disk independently; do not invent managed
+boot-disk IDs or claim they were individually inspected. Also retain actual NEG
+IDs from the new Service UID/network binding and check their absence after
+controller cleanup. See [GKE node visibility](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture).
+Namespace-filtered CPU, memory, connection and historical storage observations
+are supporting telemetry, not a production capacity certificate.
+
+## Next qualification: frontend placement and provider eviction
+
+The source-owned `deploy/studio-server/helm/overlays/gke-ha.yaml` profile is
+prepared for the next isolated operation; it has **not** passed a new GCP
+rehearsal. Its six proxies, hard three-zone spread and required per-component
+hostname separation replace the failed attempt's two co-located proxies. Do not
+reuse the closed operation, mutate its receipts, or provision under its old
+allowance. Obtain fresh budget/expiry approval and record new exact identities.
+
+Merge the GKE profile before new installation values. Retain its
+`availability.gkeGateway=true` marker so Helm validation and the provider runner's
+frontend eviction check cannot be accidentally omitted. Review the requirement
+for six separate proxy hosts, three eligible zones, surge capacity and extra
+cost before provisioning. Set the operator-created Gateway backend policy's
+connection drain to the rehearsed 60 seconds. Keep real HTTPS, authenticated
+requests and the ordinary provider disruption behavior; do not pin an artificial
+quiet cluster to avoid the observed failure.
+The new operation's provider configuration must declare `haProof.provider: gke`.
+The runner validates this before cluster access and refuses a GKE operation
+without the guarded profile. Non-GKE provider proofs explicitly declare `other`;
+a GKE DNS endpoint cannot use that declaration to skip the frontend proof.
+
+Before mutation, verify operator permissions for node metadata reads and
+namespace-scoped policy/v1 pod evictions, while preserving denial of writes in
+other namespaces. The runner's new check uses only UID-preconditioned frontend
+evictions on two distinct nodes, never a shared-node drain. It waits for positive
+NEG health observations rather than accepting the no-health-check Ready reason.
+Keep a real provider consolidation/replacement observation as a separate required
+part of the rehearsal: a successful voluntary frontend eviction is not proof that
+GKE safely moves every workload on a node.
+
+Public web-app observation is now owned by the provider runner through primary
+rollout, controller recovery and frontend evictions. Both workflow and web-app
+streams must finish and report zero failures. Preserve
+`provider-webapp-traffic.json` and `provider-frontend-evictions.json` together
+with the existing exact-image/browser/recovery receipts. An exclusive eviction
+start receipt forbids replay after an uncertain command; reconcile the recorded
+UIDs and outcome rather than rerunning the phase. Export sanitized HTTP failure
+fingerprints and provider events if anything fails. Follow the unchanged
+exact-inventory cleanup rules on both success and failure.
+
+## Earlier qualification result (2026-10-17)
 
 Candidate `d9ea8dd17` completed image workflow `39049988451` successfully;
 its exact promoted manifest was validated and saved before continuing. The

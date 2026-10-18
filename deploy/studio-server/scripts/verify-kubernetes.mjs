@@ -151,6 +151,14 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
       '--set',
       'autoscaling.execution.enabled=false',
     ]);
+    console.log(`[${launcherName}] Linting the opt-in regional GKE HA availability profile...`);
+    await spawnProgram(helmBin, [
+      'lint', './deploy/studio-server/helm',
+      '-f', './deploy/studio-server/helm/overlays/prod.yaml',
+      ...profileArgs,
+      '-f', './deploy/studio-server/helm/overlays/gke-ha.yaml',
+      ...prodImageArgs,
+    ]);
   }
 }
 
@@ -166,6 +174,7 @@ async function main() {
       'deploy/studio-server/scripts/managed-release-cutover.test.mjs',
       'deploy/studio-server/scripts/ha-release-evidence.test.mjs',
       'deploy/studio-server/scripts/ha-release-gate.test.mjs',
+      'deploy/studio-server/scripts/ha-gke-availability.test.mjs',
       'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
       'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',
       'deploy/studio-server/scripts/server-launch-mode.test.mjs',

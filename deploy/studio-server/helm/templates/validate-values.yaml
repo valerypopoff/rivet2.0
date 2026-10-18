@@ -693,6 +693,13 @@
 {{- end -}}
 {{- end -}}
 {{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "availability.topologySpread.maxSkew" "value" .Values.availability.topologySpread.maxSkew) -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "availability.topologySpread.minDomains" "value" .Values.availability.topologySpread.minDomains) -}}
+{{- if not (kindIs "bool" .Values.availability.gkeGateway) -}}
+{{- fail "availability.gkeGateway must be a boolean" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.availability.podAntiAffinity.required) -}}
+{{- fail "availability.podAntiAffinity.required must be a boolean" -}}
+{{- end -}}
 {{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "availability.disruptionBudget.maxUnavailable" "value" .Values.availability.disruptionBudget.maxUnavailable) -}}
 {{- if .Values.availability.topologySpread.enabled -}}
 {{- if not (has .Values.availability.topologySpread.whenUnsatisfiable (list "ScheduleAnyway" "DoNotSchedule")) -}}
@@ -704,9 +711,42 @@
 {{- if empty .Values.availability.topologySpread.topologyKey -}}
 {{- fail "availability.topologySpread.topologyKey is required" -}}
 {{- end -}}
+{{- if or (lt (int .Values.availability.topologySpread.minDomains) 1) (and (gt (int .Values.availability.topologySpread.minDomains) 1) (ne .Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule")) -}}
+{{- fail "availability.topologySpread.minDomains must be positive; more than one domain requires DoNotSchedule" -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.availability.podAntiAffinity.enabled (empty .Values.availability.podAntiAffinity.topologyKey) -}}
 {{- fail "availability.podAntiAffinity.topologyKey is required" -}}
+{{- end -}}
+{{- if and .Values.availability.podAntiAffinity.required (not .Values.availability.podAntiAffinity.enabled) -}}
+{{- fail "required pod anti-affinity must be enabled" -}}
+{{- end -}}
+{{- if .Values.availability.gkeGateway -}}
+{{- if or (not .Values.ha.enabled) (ne .Values.gateway.mode "embedded") (ne .Values.deploymentProfile "cluster") -}}
+{{- fail "availability.gkeGateway requires cluster HA with the embedded proxy" -}}
+{{- end -}}
+{{- if or (not .Values.availability.topologySpread.enabled) (ne .Values.availability.topologySpread.topologyKey "topology.kubernetes.io/zone") (ne .Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule") (ne (int .Values.availability.topologySpread.maxSkew) 1) (ne (int .Values.availability.topologySpread.minDomains) 3) -}}
+{{- fail "availability.gkeGateway requires hard zone spread, maxSkew=1 and minDomains=3" -}}
+{{- end -}}
+{{- if or (not .Values.availability.podAntiAffinity.enabled) (not .Values.availability.podAntiAffinity.required) (ne .Values.availability.podAntiAffinity.topologyKey "kubernetes.io/hostname") -}}
+{{- fail "availability.gkeGateway requires hard hostname anti-affinity" -}}
+{{- end -}}
+{{- if or (not .Values.availability.disruptionBudget.enabled) (ne (int .Values.availability.disruptionBudget.maxUnavailable) 1) -}}
+{{- fail "availability.gkeGateway requires a disruption budget with maxUnavailable=1" -}}
+{{- end -}}
+{{- if or (ne (int .Values.rollout.maxUnavailable) 0) (ne (int .Values.rollout.maxSurge) 1) -}}
+{{- fail "availability.gkeGateway requires rollout.maxUnavailable=0 and rollout.maxSurge=1" -}}
+{{- end -}}
+{{- if not .Values.workflowSchema.maintenanceValidation -}}
+{{- range $component := list "proxy" "web" -}}
+{{- $autoscaling := index $.Values.autoscaling $component -}}
+{{- $minimum := ternary (int $autoscaling.minReplicas) (int (index $.Values.replicaCount $component)) $autoscaling.enabled -}}
+{{- $floor := ternary 6 2 (eq $component "proxy") -}}
+{{- if or (lt $minimum $floor) (lt (int (index $.Values.replicaCount $component)) $floor) -}}
+{{- fail (printf "availability.gkeGateway requires an effective minimum of %d %s replicas, including the initial count" $floor $component) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if .Values.availability.disruptionBudget.enabled -}}
 {{- if lt (int .Values.availability.disruptionBudget.maxUnavailable) 1 -}}

@@ -1,0 +1,43 @@
+# Regional GKE Gateway availability policy. Merge BEFORE installation values;
+# use only with three eligible zones and enough capacity for six distinct proxy
+# nodes plus rollout surge. This mitigates the NEG-ready false-positive race;
+# it is not a certificate. Qualify the actual edge and eviction path on GKE.
+gateway:
+  mode: embedded
+ha:
+  enabled: true
+replicaCount:
+  proxy: 6
+  web: 2
+  backend: 2
+autoscaling:
+  proxy:
+    minReplicas: 6
+    maxReplicas: 12
+  web:
+    minReplicas: 2
+    maxReplicas: 4
+availability:
+  gkeGateway: true
+  disruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  topologySpread:
+    enabled: true
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    maxSkew: 1
+    minDomains: 3
+  podAntiAffinity:
+    enabled: true
+    required: true
+    topologyKey: kubernetes.io/hostname
+# Preserve serving endpoints during NEG withdrawal and the backend's 60-second
+# connection drain, with propagation allowance. These windows do not make a
+# premature-ready replacement healthy and do not stabilize PDB admission.
+lifecycle:
+  preStopDelaySeconds: 120
+  shutdownGraceSeconds: 120
+  terminationGracePeriodSeconds: 270
+rollout:
+  minReadySeconds: 120

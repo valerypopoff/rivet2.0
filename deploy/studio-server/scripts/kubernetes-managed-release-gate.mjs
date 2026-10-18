@@ -431,6 +431,14 @@ async function requestJson(baseUrl, route, options = {}) {
       `${options.method ?? 'GET'} ${route} returned ${response.status}: ${typeof body === 'string' ? body.slice(0, 300) : JSON.stringify(body)}`,
     );
     error.status = response.status;
+    const server = response.headers.get('server') ?? '';
+    const contentType = response.headers.get('content-type') ?? '';
+    error.httpEvidence = {
+      server: /nginx/i.test(server) ? 'nginx' : /google|gfe/i.test(server) ? 'google' : 'other',
+      format: /html/i.test(contentType) ? 'html' : /json/i.test(contentType) ? 'json' : 'other',
+      bodyBytes: Buffer.byteLength(text),
+      bodySha256: createHash('sha256').update(text).digest('hex'),
+    };
     throw error;
   }
   return body;

@@ -54,6 +54,15 @@ while their singleton owner is replaced is expected.
 
 The broader availability guarantees are described in the
 [HA rolling-upgrade contract and acceptance gates](./ha-rolling-upgrades.md).
+Regional GKE Gateway installations have an opt-in
+`helm/overlays/gke-ha.yaml` frontend policy: six proxy replicas, hard three-zone
+spread and required hostname separation. Its higher placement/capacity requirement
+is deliberate; see the [GKE policy and qualification boundary](./ha-rolling-upgrades.md#regional-gke-frontend-availability-policy-awaiting-provider-qualification).
+This policy is awaiting provider qualification, not a recommendation to change a
+live installation or a substitute for the first maintenance conversion.
+The release command still accepts one installation `--values` file. Incorporate
+the profile fields into that reviewed file before using the command; do not pass
+repeated `--values` flags or bypass the release owner with raw Helm.
 The default remains a singleton. First conversion uses an explicitly owned
 maintenance cutover; subsequent HA upgrades require the exact installed
 predecessor image/source certificate. Never replace OnDelete owners with a raw

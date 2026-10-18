@@ -134,6 +134,9 @@ topologySpreadConstraints:
   - maxSkew: {{ $root.Values.availability.topologySpread.maxSkew }}
     topologyKey: {{ $root.Values.availability.topologySpread.topologyKey | quote }}
     whenUnsatisfiable: {{ $root.Values.availability.topologySpread.whenUnsatisfiable }}
+    {{- if eq $root.Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule" }}
+    minDomains: {{ $root.Values.availability.topologySpread.minDomains }}
+    {{- end }}
     labelSelector:
       matchLabels:
         {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 8 }}
@@ -141,6 +144,13 @@ topologySpreadConstraints:
 {{- if $root.Values.availability.podAntiAffinity.enabled }}
 affinity:
   podAntiAffinity:
+    {{- if $root.Values.availability.podAntiAffinity.required }}
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: {{ $root.Values.availability.podAntiAffinity.topologyKey | quote }}
+        labelSelector:
+          matchLabels:
+            {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 12 }}
+    {{- else }}
     preferredDuringSchedulingIgnoredDuringExecution:
       - weight: 100
         podAffinityTerm:
@@ -148,6 +158,7 @@ affinity:
           labelSelector:
             matchLabels:
               {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 14 }}
+    {{- end }}
 {{- end }}
 {{- end -}}
 

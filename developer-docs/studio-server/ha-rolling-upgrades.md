@@ -187,6 +187,81 @@ including the longer GKE edge propagation and drain windows.
 
 ## Implemented prerequisites
 
+### Regional GKE frontend availability policy (awaiting provider qualification)
+
+`helm/overlays/gke-ha.yaml` is an opt-in policy for an embedded Rivet proxy
+behind a regional GKE Gateway. It does not replace installation values, enable
+Ingress, change Secrets or activate HA in an existing release by itself. Merge
+it before the installation configuration. Generic production, Docker and local
+single-node defaults remain unchanged.
+
+The policy uses native Kubernetes scheduling rather than a new runtime owner:
+six proxies, hard zone spread (`maxSkew=1`, `minDomains=3`) and required hostname
+anti-affinity for each component. Two healthy proxy endpoints per zone reduce
+exposure to GKE's documented NEG-readiness false-positive race; different
+hostnames prevent one node consolidation from removing all replicas of a tier.
+The chart rejects weakened spread, missing anti-affinity/PDBs, fewer than six
+effective proxy replicas or fewer than two effective web replicas, including
+autoscaler minima. Explicit maintenance validation may still stop these tiers.
+Insufficient capacity leaves replacements Pending rather than silently
+co-locating them. This requires exactly three eligible zones, six distinct proxy
+nodes and capacity for a seventh during proxy rollout. It costs more than the
+two-proxy configuration and must be reviewed against actual scheduling/capacity.
+
+The profile retains zero-unavailable/one-surge Deployment rollout, PDB
+`maxUnavailable=1`, a 120-second pre-stop, 120-second application shutdown and
+270-second termination grace. The provider backend policy must separately supply
+the rehearsed 60-second connection drain. `minReadySeconds=120` is a Deployment
+stabilization window, **not** protection against premature PDB eviction admission.
+Neither scheduling nor extra replicas constitute positive load-balancer health
+evidence, and no zero-downtime provider certificate is claimed by this change.
+
+The provider runner keeps a non-retrying public web-app observer alive throughout
+the rollout, recovery and frontend-eviction proof. A web-only availability failure
+now fails the run without depending on a separately launched operator script.
+The operation declares `haProof.provider` (`gke` or `other`) before cluster access;
+a GKE operation requires the guarded profile and cannot silently skip this check.
+With `availability.gkeGateway=true`, it additionally evicts only the exact
+release's recorded proxy/web UIDs on two distinct nodes using policy/v1 Eviction.
+It never drains/cordons a shared node or directly deletes pods. Each step requires
+separated, Ready frontends with at least two proxy endpoints in each of three
+zones, an injected NEG gate and positive `LoadBalancerNegReady` observations.
+`LoadBalancerNegWithoutHealthCheck`, timeouts and bare Pod Ready bits are not
+accepted. Replacement health and old-UID disappearance are rechecked between
+steps while workflow POSTs and web-app GETs continue without retries.
+
+Intent is exported before each single eviction attempt. A durable exclusive
+start receipt prevents replaying the phase after any uncertain result; a refused
+PDB eviction or lost acknowledgement fails, with no force-deletion fallback.
+The proof is namespace/cluster/expiry fenced and requires read-only node metadata
+and namespace-scoped `create pods/eviction` in the isolated operator RBAC. Its
+receipt is `provider-frontend-evictions.json`. This is a controlled frontend
+eviction check, not proof of an entire provider node upgrade: the final GCP
+rehearsal must also observe normal provider-driven consolidation/replacement.
+
+Sanitized traffic receipts retain fixed HTTP server/content classes, byte length
+and a SHA-256 body fingerprint on HTTP failures. Raw response bodies, arbitrary
+server headers, cookies and authorization are not exported. A server header is
+diagnostic evidence, not conclusive proof of which hop produced a response.
+Run the full exact-image provider qualification again after normal CI publication;
+the failed 2026-10-18 receipt remains failed and unchanged.
+
+Local preparation verification passed 95 focused HA tests (including 16 new GKE
+policy/evidence/eviction regressions), the offline Kubernetes lane and ten
+headless hosted-origin checks on a task-owned loopback preview. The offline lane
+retains its explicit opt-in real-Docker partial-startup skip; it is not counted
+as passed. The real local Kubernetes 1.35 API also accepted the GKE profile with
+server-side dry-run; no objects were created. Documentation links, test style,
+repository structure and the migration ledger pass. The ordinary authenticated
+local stack was not changed; an initial browser run against that stack reached
+its access-key prompt instead of the isolated fixture and was replaced by the
+loopback-preview check. These are preparation checks, not a full mixed-version
+qualification of the changed source or proof of GKE scheduling/NEG behavior.
+Commit/publish the reviewed candidate, repeat local exact-image qualification,
+then request a new isolated provider allowance before creating cloud resources.
+
+### Shared application prerequisites
+
 - An opt-in hosted executor session now has one process-local logical owner,
   independent of the current WebSocket. A separate 256-bit resume capability is
   sent only over the freshly authorized socket and presented in WebSocket
@@ -929,5 +1004,16 @@ Elapsed holds are rounded down to whole milliseconds only after the monotonic
 minimum-duration check; the evidence schema still rejects fractional values.
 Public requests continue during both fault/recovery sequences. Their receipts
 and zero-failure traffic report are required before certificate generation.
+Passing individual fencing or begin-once assertions does not waive failed
+public traffic. The final 2026-10-18 main-image GCP attempt passed its primary
+upgrade, retained browsers and both recovery mechanisms, but failed availability
+during provider node consolidation. It therefore remains unqualified; see the
+[source-bound provider result](gcp-ha-staging.md#final-main-image-rehearsal-2026-10-18-not-qualified).
+Provider-driven evictions must be distinguished from Deployment rolling updates:
+`minReadySeconds` does not add a stabilization window to PDB eviction admission.
+A provider NEG readiness false positive can permit another eviction while the
+replacement is not yet serving public traffic. Keep that failure evidence and
+qualify the actual placement/health/drain configuration, not just replica counts
+and a successful Helm rollout.
 The standalone `recovery` phase can exercise these faults after a successful
 local `roll`, without calling the destructive fixture preparation path again.
