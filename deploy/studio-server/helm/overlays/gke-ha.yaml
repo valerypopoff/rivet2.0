@@ -28,6 +28,8 @@ availability:
     whenUnsatisfiable: DoNotSchedule
     maxSkew: 1
     minDomains: 3
+    # Exclude untolerated, draining nodes from autoscaler spread simulation.
+    nodeTaintsPolicy: Honor
   podAntiAffinity:
     enabled: true
     required: true

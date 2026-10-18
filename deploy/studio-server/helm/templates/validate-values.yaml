@@ -694,6 +694,9 @@
 {{- end -}}
 {{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "availability.topologySpread.maxSkew" "value" .Values.availability.topologySpread.maxSkew) -}}
 {{- include "rivet.assertNonNegativeWholeNumber" (dict "path" "availability.topologySpread.minDomains" "value" .Values.availability.topologySpread.minDomains) -}}
+{{- if not (has .Values.availability.topologySpread.nodeTaintsPolicy (list "" "Honor" "Ignore")) -}}
+{{- fail "availability.topologySpread.nodeTaintsPolicy must be empty, Honor or Ignore" -}}
+{{- end -}}
 {{- if not (kindIs "bool" .Values.availability.gkeGateway) -}}
 {{- fail "availability.gkeGateway must be a boolean" -}}
 {{- end -}}
@@ -727,6 +730,9 @@
 {{- end -}}
 {{- if or (not .Values.availability.topologySpread.enabled) (ne .Values.availability.topologySpread.topologyKey "topology.kubernetes.io/zone") (ne .Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule") (ne (int .Values.availability.topologySpread.maxSkew) 1) (ne (int .Values.availability.topologySpread.minDomains) 3) -}}
 {{- fail "availability.gkeGateway requires hard zone spread, maxSkew=1 and minDomains=3" -}}
+{{- end -}}
+{{- if ne .Values.availability.topologySpread.nodeTaintsPolicy "Honor" -}}
+{{- fail "availability.gkeGateway requires topologySpread.nodeTaintsPolicy=Honor for autoscaler placement" -}}
 {{- end -}}
 {{- if or (not .Values.availability.podAntiAffinity.enabled) (not .Values.availability.podAntiAffinity.required) (ne .Values.availability.podAntiAffinity.topologyKey "kubernetes.io/hostname") -}}
 {{- fail "availability.gkeGateway requires hard hostname anti-affinity" -}}

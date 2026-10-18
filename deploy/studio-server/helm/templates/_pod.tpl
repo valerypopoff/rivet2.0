@@ -137,6 +137,9 @@ topologySpreadConstraints:
     {{- if eq $root.Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule" }}
     minDomains: {{ $root.Values.availability.topologySpread.minDomains }}
     {{- end }}
+    {{- with $root.Values.availability.topologySpread.nodeTaintsPolicy }}
+    nodeTaintsPolicy: {{ . }}
+    {{- end }}
     labelSelector:
       matchLabels:
         {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 8 }}

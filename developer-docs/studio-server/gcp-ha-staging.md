@@ -1,5 +1,110 @@
 # Isolated GCP HA qualification plan
 
+## Taint-aware placement correction (2026-10-18): provider proof pending
+
+The next candidate retains the six-proxy, three-zone, separate-host policy and
+adds the missing native `nodeTaintsPolicy: Honor`. Helm rejects disabling it in
+the guarded GKE profile, and provider preflight checks the actual frontend Pod
+specifications, not only submitted values. Generic chart defaults still omit
+the field. No new placement controller, zonal deployment split or looser
+availability criterion was introduced.
+
+The real local kube-scheduler regression passed all six cases: an untolerated
+empty domain blocks `Ignore` but not an `Honor` mixed-revision surge; losing a
+required zone still leaves replacement Pending; a tolerated taint makes its
+domain eligible. It also checks three-zone surge placement when old pods on
+untolerated draining hosts inflate the counts. The runner refuses reschedulable local
+application workloads before creating synthetic Nodes; this refusal was verified
+without mutation. Exact fixture Node/namespace UIDs are removed afterward.
+The 96 focused HA tests and Kubernetes local/production render lane passed.
+These checks establish native placement behavior, not that Autopilot's previous
+20-minute rollout failure is fixed.
+
+The full local prepublication upgrade passed with the changed chart and existing
+immutable main images (`59dd224f4` to `1a00f3293`): 1,519 primary workflow,
+1,740 recovery and 1,121 web-app successes, zero failures, both retained-browser
+journeys and both recovery scenarios. The repository headless executor/origin
+Playwright suite also passed all ten cases. This is not a certificate for rebuilt
+images: normal exact main-image CI and a new provider rehearsal are still
+required. Private local evidence is under `artifacts/ha-honor-prepublication/`.
+
+The user approved this correction, publication after local qualification and a
+new isolated operation **within the same existing USD 50 allowance and original
+deadline**. Do not reopen the closed failed operation below, restart its clock,
+reuse its retained network, or extend its budget. Protect every prior inventory
+as pre-existing; review cumulative spend/remaining cost and arm the exact new
+inventory expiry guard before provisioning anything billable. Production remains
+out of scope.
+
+## GKE frontend-profile rehearsal (2026-10-18): not qualified
+
+The promoted main release `1a00f32935e54eee7c6fee4f948383dbd5d09278`
+passed its exact-image main CI and local qualification, but did not complete the
+new isolated provider operation `rivet-ha-gke-20261018-1a00f3293`. Do not deploy
+this profile as a qualified GKE zero-downtime configuration on that evidence.
+
+The baseline reached six positively health-checked proxies on separate hosts,
+two per zone, and two web replicas. Initial pods created before Gateway health
+check attachment retained `LoadBalancerNegWithoutHealthCheck`; preparation
+replaced only those exact initial proxy UIDs, serially through policy/v1 Eviction,
+after independently confirming all six actual backend endpoints were healthy.
+The strict preflight subsequently passed. Pod status was never patched and the
+health criterion was not relaxed. Keep this bootstrap preparation separate from
+upgrade qualification, and never apply it as an unreviewed production restart.
+
+Candidate frontend replacement then exceeded Helm's 1,200-second deadline. A
+proxy remained unschedulable after autoscaling added a node; scheduling events
+reported topology-spread and memory-fit failures. Google's
+[Standard autoscaler guide warns about strict topology spreading](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-autoscaler).
+The more specific [Autopilot guidance](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview#pod_topology_spread_constraints)
+recommends `nodeTaintsPolicy: Honor` to prevent scale-down/scale-up loops; that
+setting is missing from this profile. It also recommends `ScheduleAnyway` to
+avoid unschedulability during temporary imbalance. These are provider-specific
+design constraints, not proof of the exact cause of every pending-pod event.
+Test the missing taint policy and rollout interactions first. Consider explicit
+zonal placement only if necessary to retain the availability contract without
+unsupported assumptions; do not immediately replace the deployments with a
+larger topology framework. Increasing a timeout alone is not sufficient
+qualification. Do not infer precise per-node memory rejection from an aggregated
+scheduler message. Require actual provider convergence and zero failed requests.
+
+The primary stream recorded 2,868 successful workflow requests and zero failures;
+the source-owned web stream recorded 1,805 successes and zero failures. API and
+execution retirement, retained-browser completion, controller recovery and the
+final eviction proof were not reached. These successful requests are not a
+completed mixed-version HA certificate.
+
+The first independent observer stopped after an unclassified observation error,
+with 2,823 workflow and 1,048 web successes and no public failures. Its original
+catch omitted the message, so its precise cause is unknown. A separate second
+window retained error stage/message and completed with 1,886 workflow and 715 web
+successes, no failures and no observer errors. Preserve both windows; never claim
+they form uninterrupted independent observation or silently discard the first.
+
+Private receipts are under `artifacts/gcp-ha-gke-1a00f3293/`. All original test
+processes stopped before the hash-bound failed `operation-finished.json` was
+exported. Exact-inventory teardown verification completed at 14:45 UTC: zero
+rehearsal-created billable resources remain. All 14,430 frozen object generations,
+their bucket, ten Gateway children, three Service-owned NEGs and the CSI disk are
+gone; original GKE and SQL deletion operations completed without errors. New
+credentials/identities, address, certificate, NAT, router and subnet were removed.
+Pre-existing networks, accounts/keys, IAM members/conditions and billing were
+verified preserved. The expiry safeguard was paused only after verification.
+Production was not accessed or changed. The approved staging-only
+SSD quota increase to 1,500 GiB allocates no disks and does not extend the USD 50
+or 24-hour allowance.
+
+Only free VPC `rivet-ha-gke-20261018`, its private connection and internal range
+`rivet-ha-gke-psa-1018` remain. The normal connection-delete operation returned
+`FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION`, consistent with Google's
+[four-day Cloud SQL producer retention](https://docs.cloud.google.com/vpc/docs/configure-private-services-access).
+The exact IDs, original rejected operation and next action are recorded in
+`retained-networking.json`; review no earlier than 2026-10-22 16:00 UTC and never
+force peering removal. Managed DNS deletion and its DNS-update step completed;
+Google's normal 30-day service soft-delete retention is not an active endpoint.
+A post-delete 403 was not treated as an absence check. The newly approved quota
+preference/API setting is non-billable and retained separately from resources.
+
 ## Final main-image rehearsal (2026-10-18): not qualified
 
 The exact promoted main release `59dd224f41f590fc8a8d37e92a6d219544e734ca`
@@ -90,11 +195,11 @@ controller cleanup. See [GKE node visibility](https://docs.cloud.google.com/kube
 Namespace-filtered CPU, memory, connection and historical storage observations
 are supporting telemetry, not a production capacity certificate.
 
-## Next qualification: frontend placement and provider eviction
+## Superseded hard-spread candidate: frontend placement and provider eviction
 
 The source-owned `deploy/studio-server/helm/overlays/gke-ha.yaml` profile is
-prepared for the next isolated operation; it has **not** passed a new GCP
-rehearsal. Its six proxies, hard three-zone spread and required per-component
+tested in the failed operation above; it has **not** passed a GCP rehearsal.
+Its six proxies, hard three-zone spread and required per-component
 hostname separation replace the failed attempt's two co-located proxies. Do not
 reuse the closed operation, mutate its receipts, or provision under its old
 allowance. Obtain fresh budget/expiry approval and record new exact identities.

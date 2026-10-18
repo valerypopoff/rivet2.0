@@ -556,6 +556,12 @@ jobs:
           kind create cluster --name rivet-managed-release --config deploy/studio-server/scripts/kind-managed-release-cluster.yaml
           kubectl --context kind-rivet-managed-release cluster-info
 
+      - name: Verify hard-spread scheduling with tainted nodes
+        env:
+          RIVET_HA_SCHEDULING_CONTEXT: kind-rivet-managed-release
+          RIVET_HA_SCHEDULING_ARTIFACTS: artifacts/ha-scheduling
+        run: yarn node deploy/studio-server/scripts/verify-ha-scheduling.mjs
+
       - name: Run Managed Kubernetes Gate
         shell: bash
         env:
@@ -616,6 +622,7 @@ jobs:
           path: |
             artifacts/kubernetes-managed-release-gate
             artifacts/kubernetes-ha-release-gate
+            artifacts/ha-scheduling
           if-no-files-found: warn
           retention-days: 14
 

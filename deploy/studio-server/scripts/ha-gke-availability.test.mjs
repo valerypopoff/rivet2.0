@@ -39,17 +39,19 @@ function fixture() {
   const pod = (role, i) => ({
     metadata: { name: `${role}-${i}`, uid: `${role}-uid-${i}`, namespace,
       labels: { 'app.kubernetes.io/component': role, 'app.kubernetes.io/instance': release } },
-    spec: { nodeName: `node-${i}`, readinessGates: role === 'proxy' ? [{ conditionType: neg }] : [] },
+    spec: { nodeName: `node-${i}`, readinessGates: role === 'proxy' ? [{ conditionType: neg }] : [],
+      topologySpreadConstraints: [{ topologyKey: 'topology.kubernetes.io/zone', nodeTaintsPolicy: 'Honor',
+        whenUnsatisfiable: 'DoNotSchedule', minDomains: 3, maxSkew: 1 }] },
     status: { conditions: [{ type: 'Ready', status: 'True' }, ...(role === 'proxy'
       ? [{ type: neg, status: 'True', reason: 'LoadBalancerNegReady' }] : [])] },
   });
   return { nodes, pods: [...nodes.map((_, i) => pod('proxy', i)), pod('web', 0), pod('web', 1)] };
 }
 
-function render(overrides = []) {
+function render(overrides = [], gke = true) {
   return execFileSync(resolveHelmBinOrThrow(rootDir), ['template', release, 'deploy/studio-server/helm',
     '-f', 'deploy/studio-server/helm/overlays/local-kubernetes.yaml',
-    '-f', 'deploy/studio-server/helm/overlays/gke-ha.yaml',
+    ...(gke ? ['-f', 'deploy/studio-server/helm/overlays/gke-ha.yaml'] : []),
     '--set', 'objectStorage.bucket=fixture', '--set', 'postgres.maxConnections=250',
     ...overrides.flatMap(value => ['--set', value])], { cwd: rootDir, encoding: 'utf8', stdio: 'pipe' });
 }
@@ -72,6 +74,7 @@ test('GKE profile enforces six separated proxies, hard three-zone spread, PDB an
     assert.equal(spread.minDomains, 3);
     assert.equal(spread.maxSkew, 1);
     assert.equal(spread.topologyKey, 'topology.kubernetes.io/zone');
+    assert.equal(spread.nodeTaintsPolicy, 'Honor');
     const affinity = spec.affinity.podAntiAffinity;
     assert.equal(affinity.preferredDuringSchedulingIgnoredDuringExecution, undefined);
     assert.equal(affinity.requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey, 'kubernetes.io/hostname');
@@ -91,6 +94,8 @@ test('GKE policy cannot silently lose replicas, spread, isolation or PDB protect
     [['autoscaling.web.enabled=true', 'replicaCount.web=1'], /minimum of 2/],
     [['availability.topologySpread.minDomains=2'], /hard zone spread/],
     [['availability.topologySpread.enabled=false'], /hard zone spread/],
+    [['availability.topologySpread.nodeTaintsPolicy=Ignore'], /nodeTaintsPolicy=Honor/],
+    [['availability.topologySpread.nodeTaintsPolicy='], /nodeTaintsPolicy=Honor/],
     [['availability.topologySpread.whenUnsatisfiable=ScheduleAnyway'], /requires DoNotSchedule/],
     [['availability.podAntiAffinity.required=false'], /hard hostname/],
     [['availability.podAntiAffinity.enabled=false'], /anti-affinity must be enabled/],
@@ -116,6 +121,17 @@ test('GKE policy preserves explicit maintenance validation with public tiers sto
 test('native placement options reject fractional domains and string booleans', () => {
   for (const value of ['0', '1.5']) assert.throws(() => render([`availability.topologySpread.minDomains=${value}`]));
   assert.throws(() => render(['availability.podAntiAffinity.required=not-a-boolean']), /must be a boolean/);
+  for (const value of ['false', 'null', 'invalid'])
+    assert.throws(() => render([`availability.topologySpread.nodeTaintsPolicy=${value}`]), /must be empty, Honor or Ignore/);
+});
+
+test('generic placement retains the omitted taint policy and permits explicit native policies', () => {
+  for (const policy of [undefined, 'Ignore', 'Honor']) {
+    const resources = parseAllDocuments(render(policy ?
+      [`availability.topologySpread.nodeTaintsPolicy=${policy}`] : [], false)).map(doc => doc.toJS());
+    for (const r of resources.filter(r => ['Deployment', 'StatefulSet'].includes(r.kind)))
+      assert.equal(r.spec.template.spec.topologySpreadConstraints[0].nodeTaintsPolicy, policy);
+  }
 });
 
 test('positive GKE observation has six actually health-checked proxy endpoints, never just six Ready bits', () => {
@@ -131,6 +147,9 @@ test('GKE preflight rejects premature readiness, co-location, missing identities
     s => { s.pods[0].status.conditions[1].reason = 'LoadBalancerNegTimeout'; },
     s => { s.pods[0].status.conditions[1].status = 'False'; },
     s => { s.pods[0].spec.readinessGates = []; },
+    s => { delete s.pods[0].spec.topologySpreadConstraints[0].nodeTaintsPolicy; },
+    s => { s.pods[0].spec.topologySpreadConstraints[0].nodeTaintsPolicy = 'Ignore'; },
+    s => { s.pods[0].spec.topologySpreadConstraints[0].whenUnsatisfiable = 'ScheduleAnyway'; },
     s => { s.pods[0].status.conditions[0].status = 'False'; },
     s => { s.pods[0].metadata.deletionTimestamp = '2026-10-18T00:00:00Z'; },
     s => { s.pods[0].spec.nodeName = s.pods[1].spec.nodeName; },

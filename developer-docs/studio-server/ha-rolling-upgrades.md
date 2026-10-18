@@ -196,7 +196,8 @@ it before the installation configuration. Generic production, Docker and local
 single-node defaults remain unchanged.
 
 The policy uses native Kubernetes scheduling rather than a new runtime owner:
-six proxies, hard zone spread (`maxSkew=1`, `minDomains=3`) and required hostname
+six proxies, hard zone spread (`maxSkew=1`, `minDomains=3`,
+`nodeTaintsPolicy=Honor`) and required hostname
 anti-affinity for each component. Two healthy proxy endpoints per zone reduce
 exposure to GKE's documented NEG-readiness false-positive race; different
 hostnames prevent one node consolidation from removing all replicas of a tier.
@@ -207,6 +208,29 @@ Insufficient capacity leaves replacements Pending rather than silently
 co-locating them. This requires exactly three eligible zones, six distinct proxy
 nodes and capacity for a seventh during proxy rollout. It costs more than the
 two-proxy configuration and must be reviewed against actual scheduling/capacity.
+
+The GKE profile explicitly honors untolerated node taints during topology
+calculation, following [Autopilot autoscaling guidance](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview#pod_topology_spread_constraints).
+This avoids counting ineligible draining nodes as usable spread capacity; it
+does not guarantee autoscaler convergence or turn a failed provider rehearsal
+into a pass. If fewer than three zones remain eligible, hard `minDomains=3`
+still intentionally leaves unsafe replacements Pending. Restore eligible zonal
+capacity rather than weakening placement during an upgrade. Kubernetes 1.26+
+must enable `NodeInclusionPolicyInPodTopologySpread` (GA in 1.33); the generic
+chart leaves this optional field omitted, preserving older/default behavior.
+
+The normal image CI runs `verify-ha-scheduling.mjs` against its disposable Kind
+cluster. It uses identity-owned synthetic Nodes and the actual kube-scheduler
+with the rendered proxy placement: ignored versus honored untolerated taints,
+mixed-revision surge, loss of a required zone, tolerated taints, and inflated
+three-zone counts while old hosts drain. These Nodes
+have no kubelets: this proves scheduling decisions, not running workloads,
+Autopilot scale-down behavior, or GKE load-balancer health. It refuses non-local
+servers and active reschedulable non-system workloads, and removes only its exact recorded
+fixture UIDs. Run it before application tests, not alongside an active local HA
+rehearsal: synthetic Nodes must not attract real workloads. Already node-bound,
+standalone fixtures can remain; their UIDs and node bindings are checked unchanged.
+The separate local mixed-image/browser and real provider rehearsals remain mandatory.
 
 The profile retains zero-unavailable/one-surge Deployment rollout, PDB
 `maxUnavailable=1`, a 120-second pre-stop, 120-second application shutdown and

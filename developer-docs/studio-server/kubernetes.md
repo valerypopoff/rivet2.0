@@ -56,7 +56,11 @@ The broader availability guarantees are described in the
 [HA rolling-upgrade contract and acceptance gates](./ha-rolling-upgrades.md).
 Regional GKE Gateway installations have an opt-in
 `helm/overlays/gke-ha.yaml` frontend policy: six proxy replicas, hard three-zone
-spread and required hostname separation. Its higher placement/capacity requirement
+spread, `nodeTaintsPolicy: Honor` and required hostname separation. The optional
+`availability.topologySpread.nodeTaintsPolicy` accepts empty (omitted), `Honor`
+or `Ignore`; the GKE guard requires `Honor`, while generic profiles retain the
+omitted default. Honor needs Kubernetes 1.26+ with the topology node-inclusion
+feature enabled (GA in 1.33). Its higher placement/capacity requirement
 is deliberate; see the [GKE policy and qualification boundary](./ha-rolling-upgrades.md#regional-gke-frontend-availability-policy-awaiting-provider-qualification).
 This policy is awaiting provider qualification, not a recommendation to change a
 live installation or a substitute for the first maintenance conversion.

@@ -307,6 +307,9 @@ availability:
     topologyKey: kubernetes.io/hostname
     whenUnsatisfiable: ScheduleAnyway
     minDomains: 1
+    # Empty preserves Kubernetes' existing default. Honor requires Kubernetes
+    # 1.26+ with NodeInclusionPolicyInPodTopologySpread (GA in 1.33).
+    nodeTaintsPolicy: ''
   podAntiAffinity:
     enabled: true
     topologyKey: kubernetes.io/hostname

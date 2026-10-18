@@ -22,6 +22,10 @@ export function assertGkeFrontendAvailability(pods, nodes, release) {
     const hosts = new Set();
     for (const pod of role) {
       assert.ok(pod.metadata.uid && ready(pod), 'frontend is missing identity or not ready');
+      const spread = pod.spec?.topologySpreadConstraints?.find(c => c.topologyKey === 'topology.kubernetes.io/zone');
+      assert.ok(spread?.nodeTaintsPolicy === 'Honor' && spread.whenUnsatisfiable === 'DoNotSchedule' &&
+        spread.minDomains === 3 && spread.maxSkew === 1,
+        'GKE frontend must retain hard three-zone spread with nodeTaintsPolicy=Honor');
       const node = nodes.find(n => n.metadata.name === pod.spec?.nodeName);
       const host = node?.metadata.labels?.['kubernetes.io/hostname'];
       const zone = node?.metadata.labels?.['topology.kubernetes.io/zone'];
