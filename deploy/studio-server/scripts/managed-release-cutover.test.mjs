@@ -12,6 +12,18 @@ test('validation cannot recreate any autoscaler after closing maintenance admiss
   for (const role of ['proxy', 'web', 'backend', 'execution'])
     assert.equal(maintenanceValidationValues.autoscaling[role].enabled, false, role);
 });
+test('temporary singleton validation does not claim the final GKE HA profile', () => {
+  assert.equal(maintenanceValidationValues.workflowSchema.maintenanceValidation, true);
+  assert.equal(maintenanceValidationValues.availability.gkeGateway, false);
+  assert.equal(maintenanceValidationValues.replicaCount.proxy, 0);
+  assert.equal(maintenanceValidationValues.replicaCount.web, 0);
+  // Do not mutate the installation values: only the validation overlay changes.
+  const installed = { availability: { gkeGateway: true }, ha: { enabled: true } };
+  const validation = { ...installed, ...maintenanceValidationValues, ha: { enabled: false } };
+  assert.equal(validation.availability.gkeGateway, false);
+  assert.equal(installed.availability.gkeGateway, true);
+  assert.equal(installed.ha.enabled, true);
+});
 function fixture(failure) {
   let journal;
   let time = 1000;

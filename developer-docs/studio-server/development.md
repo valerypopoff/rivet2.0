@@ -1421,14 +1421,14 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.27.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.28.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release includes cross-project deletion-reference checks and root-family
-recording pagination/discovery, alongside recording start-time, playback and
-PostgreSQL query-performance fixes. Bump all five manifests together even when
+This minor release adds explicit bundle containers, safe duplication and portable
+round trips, bundle-scoped Subgraph access/debugging and the deployment launcher's
+fenced-singleton GKE validation fix. Bump all five manifests together even when
 only one workspace has runtime changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-19) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-20) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -1436,6 +1436,14 @@ container selectors. Studio Server images are built together from one Git
 commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
+
+The explicit-bundle runtime already advances managed storage to schema16. Keep
+the chart's ordinary `workflowSchema.compatibility` defaults at16/16 to match
+that build, independently of package versioning. The promoted release launcher
+still derives exact migration and allowed reader windows from the immutable
+manifest; predecessor compatibility remains a separate contract, not permission
+to leave new-build chart defaults at15. The Kubernetes contract tests exercise
+both an ordinary exact-version migration and a lower serving-only rollback floor.
 
 ## Main commands
 

@@ -1712,7 +1712,27 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
-### Prepared release versions (2026-10-19)
+### Prepared release versions (2026-10-20)
+
+All tracks' latest actual version changes are in `c2e1c3bc3`. The subsequent
+explicit-bundle change (`2d39d63ad`) and guarded singleton-validation launcher
+correction prepare these compatible minor releases:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.27.0` → `2.28.0` | Explicit bundle scope, desktop round trips and bundle-only debugger sessions. |
+| Public Core/Node/Evaluations/CLI | `2.20.0` → `2.21.0` | Optional explicit workspace manifest/loader4 and Subgraph scope contract; required family companions. |
+| App executor | `2.13.0` → `2.14.0` | Source-bundled runtime companion; no separate package-local feature. |
+| Documentation | `2.20.0` → `2.21.0` | Explicit bundle lifecycle and portable editing guidance. |
+| Five private Studio Server packages | `1.27.0` → `1.28.0` | Explicit bundle storage/duplication/import/export/access/debugging and deployment validation fixes. |
+
+Sync desktop metadata and the CLI Docker fallback; do not change dependency
+ranges, Helm metadata or the already implemented schema16 contract just for
+versioning. The [package inventory](PACKAGES.md) distinguishes changed workspaces
+from release companions. Develop publication/CI is not a GCP deployment or proof
+of a mixed-version production upgrade for these new schema16 images.
+
+### Previous prepared release versions (2026-10-19)
 
 Versions below cover committed and pending changes since each track's last
 version bump. These are release preparation, not evidence of publication or deployment.

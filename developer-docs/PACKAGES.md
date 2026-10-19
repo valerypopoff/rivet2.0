@@ -2,6 +2,29 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-20 — explicit bundles and guarded deployment
+
+Every package track was last bumped in `c2e1c3bc3`. This update covers the
+subsequent explicit-bundle implementation in `2d39d63ad` and the deployment-client
+temporary-validation correction included in this release. Earlier graph deletion,
+recording and implicit debugger-session work was already covered by that baseline.
+
+| Packages | Version | Changes since that track's last bump |
+| --- | --- | --- |
+| App | `2.27.0` → `2.28.0` | Explicit bundle membership in Subgraph selection, bundle-only shared remote debugging, editable desktop bundle round trips and scope-aware project/tab metadata. |
+| Core, Node, CLI, Evaluations | `2.20.0` → `2.21.0` | Core adds optional explicit workspace/member metadata and loader-version-4 validation plus same-bundle target-scope propagation. Node's existing loader consumes that contract with new round-trip coverage; CLI and Evaluations are required public-family companions, not separate feature implementations. |
+| App Executor | `2.13.0` → `2.14.0` | Source-bundled runtime companion for the new Core bundle manifest/target-scope contract; no package-local implementation changes. |
+| All five Studio Server packages | `1.27.0` → `1.28.0` | Adds real bundle containers, guarded folder conversion, atomic duplication/remapping, bundle export/import with preserved external snapshots, bundle-isolated Subgraph access and debugger membership. Includes tree/modal interactions, migration-writer configuration and the GKE singleton-validation launcher fix. API/Web/Shared/Executor changed; Bootstrap is a lockstep companion. |
+| Docs | `2.20.0` → `2.21.0` | User-facing explicit-bundle authoring, boundaries, duplication, desktop editing and server round-trip guidance. |
+
+These are compatible feature releases, so use minor increments. Keep the four
+public npm packages and five private Studio Server workspaces lockstep within
+their separate families. Tauri/Cargo follows App; the CLI Docker fallback follows
+the public family. Workspace ranges and third-party dependencies are unchanged;
+no Yarn lockfile change is needed. This version bump does not change the existing
+managed schema16 contract or Helm metadata. Publication/CI and production
+deployment are separate steps: pushing develop does not upgrade GCP.
+
 ## Version update: 2026-10-13 — backup restore, bundle upload and managed deployment
 
 The last coordinated version bump is `27af6beb5`. This update covers the four

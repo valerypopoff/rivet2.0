@@ -22,6 +22,10 @@ function checkedInventory(resources) {
 }
 export const maintenanceValidationValues = {
   workflowSchema: { maintenanceValidation: true },
+  // HA adoption validates a fenced singleton before restoring the full HA
+  // profile. The GKE HA-only guard cannot apply to that temporary singleton;
+  // the ordinary lint/render and resumed installation retain the real flag.
+  availability: { gkeGateway: false },
   replicaCount: { proxy: 0, web: 0, evaluation: 0 },
   autoscaling: {
     proxy: { enabled: false }, web: { enabled: false },
