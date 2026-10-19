@@ -1,6 +1,7 @@
 import type { LocalExecutionRecordingPersistenceProvider } from '../../app/src/providers/ProvidersContext';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import { parseJsonResponse } from './apiRequest';
+import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../studio-server-shared/workflow-recording-time';
 
 function endpoint(path = ''): string {
   return `${RIVET_API_BASE_URL}/workflows/local-editor-recordings${path}`;
@@ -50,11 +51,15 @@ export function createHostedLocalExecutionRecordingPersistence(): LocalExecution
       await reportPersistenceFailure(correlationId);
     },
     async persist(input) {
+      const { createdAt, ...body } = input;
       const response = await fetch(endpoint(), {
         method: 'POST',
         signal: AbortSignal.timeout(60_000),
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(createdAt ? { [WORKFLOW_RECORDING_CREATED_AT_HEADER]: createdAt } : {}),
+        },
+        body: JSON.stringify(body),
       });
       await parseJsonResponse<{ availability: 'available' | 'disabled'; recordingId?: string }>(response);
     },

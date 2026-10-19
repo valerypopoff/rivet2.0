@@ -14,7 +14,11 @@ import type {
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { normalizeRivetCorrelationId } from '../../request-correlation.js';
-import { recordingWorkflowScopeClause, type RecordingRunScope } from './recording-workflow-scope.js';
+import {
+  recordingHasSubRunsSql,
+  recordingWorkflowScopeClause,
+  type RecordingRunScope,
+} from './recording-workflow-scope.js';
 
 export type WorkflowRecordingWorkflowRow = {
   workflowId: string;
@@ -26,6 +30,7 @@ export type WorkflowRecordingWorkflowRow = {
 };
 
 export type WorkflowRecordingRunRow = {
+  hasSubRuns?: boolean;
   id: string;
   workflowId: string;
   sourceProjectName?: string;
@@ -590,7 +595,7 @@ function buildRecordingWindowQuery(
   parameters.push(Math.max(1, Math.floor(options.limit)), Math.max(0, Math.floor(options.offset)));
   const sql = `
     SELECT
-      ${RECORDING_RUN_COLUMNS}
+      ${RECORDING_RUN_COLUMNS}, ${recordingHasSubRunsSql('filesystem')} AS hasSubRuns
     FROM recording_runs
     ${whereClause}
     ${afterClause}
@@ -859,6 +864,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
   }
 
   return {
+    hasSubRuns: row.hasSubRuns == null ? undefined : Boolean(row.hasSubRuns),
     id: String(row.id ?? ''),
     workflowId: String(row.workflowId ?? ''),
     sourceProjectName: toOptionalString(row.sourceProjectName),

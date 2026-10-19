@@ -1215,6 +1215,7 @@ export function createExecutionSubgraphProjectLoader() {
 }
 
 export async function persistWorkflowExecutionRecordingWithBackend(options: {
+  createdAt?: string;
   sourceProject: Project;
   sourceProjectPath: string;
   executedProject: Project;

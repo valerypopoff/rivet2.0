@@ -12,6 +12,37 @@ export type RecordingRunScope =
   | 'family-children'
   | 'project-family-children';
 
+/** Mirrors primary-owned child discovery, independently of page/status/input filters. */
+export function recordingHasSubRunsSql(
+  storage: 'filesystem' | 'sqlite' | 'managed',
+  pageTable?: 'recording_page',
+): string {
+  const table =
+    storage === 'filesystem' ? 'recording_runs' : storage === 'sqlite' ? 'recordings' : 'workflow_recordings';
+  const field = (alias: string, name: 'surface' | 'correlationId') =>
+    storage === 'sqlite'
+      ? `json_extract(${alias}.metadata_json, '$.executionIdentity.${name}')`
+      : `${alias}.${name === 'surface' ? 'execution_surface' : 'correlation_id'}`;
+  const source = pageTable ?? table;
+  const key = field(source, 'correlationId');
+  const candidateKeys = pageTable
+    ? `WHERE ${field('member', 'correlationId')} IN (
+        SELECT ${field(pageTable, 'correlationId')} FROM ${pageTable}
+        WHERE COALESCE(${field(pageTable, 'surface')}, '') <> 'subgraph_project'
+          AND TRIM(COALESCE(${field(pageTable, 'correlationId')}, '')) <> '')`
+    : '';
+  // One metadata aggregation per window, not a correlated full-history scan
+  // for each visible row (the legacy SQLite catalog has no correlation index).
+  return `(CASE WHEN COALESCE(${field(source, 'surface')}, '') <> 'subgraph_project'
+    AND TRIM(COALESCE(${key}, '')) <> ''
+    THEN ${key} IN (SELECT ${field('member', 'correlationId')} FROM ${table} AS member
+      ${candidateKeys}
+      GROUP BY ${field('member', 'correlationId')}
+      HAVING SUM(CASE WHEN COALESCE(${field('member', 'surface')}, '') <> 'subgraph_project' THEN 1 ELSE 0 END) = 1
+        AND SUM(CASE WHEN ${field('member', 'surface')} = 'subgraph_project' THEN 1 ELSE 0 END) > 0)
+    ELSE FALSE END)`;
+}
+
 export function recordingWorkflowScopeClause(
   workflowId: string,
   includeSubgraphRuns: boolean,

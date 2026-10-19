@@ -85,6 +85,7 @@ import { getFilesystemRecordingInputCacheKey, workflowRecordingInputCache } from
 import { buildWorkflowRunStatistics, buildWorkflowRunStatisticsCatalog } from './recording-statistics.js';
 
 type PersistWorkflowExecutionRecordingOptions = {
+  createdAt?: string;
   workflowsRoot: string;
   sourceProject: Project;
   sourceProjectPath: string;
@@ -170,6 +171,7 @@ export function getWorkflowExecutionRecordingPersistenceMetrics() {
 
 function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRecordingRunSummary {
   return {
+    hasSubRuns: row.hasSubRuns,
     id: row.id,
     workflowId: row.workflowId,
     sourceProjectName: row.sourceProjectName,
@@ -725,7 +727,8 @@ export async function persistWorkflowExecutionRecording(
   const bundlePath = getWorkflowRecordingBundlePath(recordingsRoot, workflowId, recordingId);
   const sourceProjectName = path.basename(options.sourceProjectPath, PROJECT_EXTENSION);
   const sourceProjectRelativePath = path.relative(options.workflowsRoot, options.sourceProjectPath).replace(/\\/g, '/');
-  const createdAt = new Date().toISOString();
+  const persistedAt = new Date().toISOString();
+  const createdAt = options.createdAt ?? persistedAt;
   const replayProject: Project = {
     ...options.executedProject,
     metadata: {
@@ -812,7 +815,7 @@ export async function persistWorkflowExecutionRecording(
         sourceProjectPath: options.sourceProjectPath,
         sourceProjectRelativePath,
         sourceProjectName,
-        updatedAt: createdAt,
+        updatedAt: persistedAt,
       },
       {
         id: recordingId,

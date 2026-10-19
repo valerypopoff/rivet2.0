@@ -24,6 +24,8 @@ export type ResolvedSubgraphProject = {
 };
 
 export type SubgraphProjectRun = {
+  /** Logical run creation time, captured before execution; optional for older hosts. */
+  createdAt?: string;
   target: SubgraphProjectTarget;
   resolved: ResolvedSubgraphProject;
   graphId: GraphId;

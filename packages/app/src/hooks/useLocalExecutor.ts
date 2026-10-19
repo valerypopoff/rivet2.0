@@ -579,6 +579,7 @@ export function useLocalExecutor() {
         ? `rvt-local-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
         : undefined;
       const localRecordingStartedAt = shouldRecordExecution ? performance.now() : undefined;
+      const localRecordingCreatedAt = shouldRecordExecution ? new Date().toISOString() : undefined;
 
       const recorder = shouldRecordExecution ? new ExecutionRecorder() : undefined;
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
@@ -646,6 +647,7 @@ export function useLocalExecutor() {
             const projectContents = serializeProject(tempProject) as string;
             const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(runProjectId));
             await localRecordingProvider.persist({
+              createdAt: localRecordingCreatedAt,
               projectId: runProjectId,
               projectPath: localRecordingProjectPath,
               projectContents,

@@ -96,6 +96,7 @@ export type FolderMoveRow = {
 };
 
 export type RecordingRow = {
+  has_sub_runs?: boolean;
   recording_id: string;
   workflow_id: string;
   source_project_name: string;

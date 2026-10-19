@@ -72,6 +72,8 @@ export type WorkflowExecutionDefinition = {
 };
 export type WorkflowWebAppPolicy = { appId: string; relativePath: string; uiGraphId: string; allowedEmails: string[] };
 export type PersistWorkflowExecutionRecordingOptions = {
+  /** Logical run creation/start time; omitted by older producers. Never a storage key. */
+  createdAt?: string;
   sourceProject: Project;
   sourceProjectPath: string;
   executedProject: Project;

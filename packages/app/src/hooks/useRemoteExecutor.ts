@@ -124,6 +124,7 @@ type RemoteLocalExecutionRecordingCapture = {
   recorder: ExecutionRecorder;
   recorderAbortController: AbortController;
   startedAt: number;
+  createdAt: string;
   status: 'succeeded' | 'failed' | 'suspicious';
 };
 
@@ -269,6 +270,7 @@ export function useRemoteExecutor() {
       const recordingSerialized = capture.recorder.serialize();
       const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(capture.projectId));
       await capture.provider.persist({
+        createdAt: capture.createdAt,
         projectId: capture.projectId,
         projectPath: capture.projectPath,
         projectContents,
@@ -764,6 +766,7 @@ export function useRemoteExecutor() {
           recorder: new ExecutionRecorder(),
           recorderAbortController: new AbortController(),
           startedAt: performance.now(),
+          createdAt: new Date().toISOString(),
           status: 'succeeded',
         };
         const recorderPromise = executorSession.recordSocketEvents((socket) =>

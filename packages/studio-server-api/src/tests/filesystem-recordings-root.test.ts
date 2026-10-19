@@ -75,6 +75,38 @@ test('workflow and recordings roots initialize separately', async () => {
   assert.equal(await workflowFs.pathExists(recordingsRoot), true);
 });
 
+test('filesystem recordings keep logical start time even when the earlier run completes last', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'StartTime');
+  const [project, attached] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  const starts = [new Date(Date.now() - 20_000).toISOString(), new Date(Date.now() - 40_000).toISOString()];
+  const ids: string[] = [];
+  for (const [index, status] of (['failed', 'succeeded'] as const).entries()) {
+    ids.push(
+      (await workflowRecordings.persistWorkflowExecutionRecording({
+        createdAt: starts[index],
+        workflowsRoot,
+        sourceProject: project,
+        sourceProjectPath: created.absolutePath,
+        executedProject: project,
+        executedAttachedData: attached,
+        executedDatasets: [],
+        endpointName: 'start-time',
+        recordingSerialized: '{}',
+        runKind: 'latest',
+        status,
+        durationMs: 1,
+      }))!,
+    );
+  }
+  await workflowRecordings.flushWorkflowExecutionRecordingPersistence();
+  assert.equal((await workflowRecordingDb.getWorkflowRecordingRunRow(ids[0]!))!.createdAt, starts[0]);
+  assert.equal((await workflowRecordingDb.getWorkflowRecordingRunRow(ids[1]!))!.createdAt, starts[1]);
+  assert.ok(
+    Number(ids[1]!.split('-')[0]) > Date.parse(starts[1]!),
+    'storage identity still belongs to persistence time',
+  );
+});
+
 test('deleting a recording checks remaining history without materializing row arrays', async (t) => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'BoundedDelete');
   const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);

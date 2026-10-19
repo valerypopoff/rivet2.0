@@ -1078,6 +1078,15 @@ neither requires manual rewiring for an ordinary rename of the same node.
 
 Cross-project Subgraph replay persistence is part of the child node's completion boundary for hosted Browser and Node editor runs: the caller does not report a terminal result until the child upload completes. This prevents closing a tab immediately after completion from discarding its called-project replay. Those local uploads have a 60-second deadline so a stalled API cannot hold graph completion indefinitely. API-hosted runs only enqueue onto the existing drained persistence queue, without waiting for storage I/O. Persistence errors remain best-effort and do not change graph outputs. Re-selecting the same target in the canvas must still apply an updated authored boundary; compare the complete node data, not just project, graph, and version IDs.
 
+Recording `createdAt` is logical run creation/start for new captures, not the time
+an upload or background persistence finishes. `ExecutionSession` and the optional
+Core `SubgraphProjectRun.createdAt` carry a captured wall-clock timestamp through
+success and failure; editor captures do the same. Stores reuse their existing
+timestamp field and SQL insert path without schema changes. Historical/imported
+timestamps remain untouched; omitted timestamps retain the old save-time fallback.
+See [recording families](./development.md#collapsible-recording-families) for upload
+compatibility, sorting and retention semantics.
+
 Playing a child recording from Run recordings is a new editor display session,
 not a new stored run. The local playback acceptance boundary clears the owning
 tab's previous graph/node histories and page selections even when the artifact

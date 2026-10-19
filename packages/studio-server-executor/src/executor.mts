@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  getWorkflowRecordingCreatedAt,
+  WORKFLOW_RECORDING_CREATED_AT_HEADER,
+} from '../../studio-server-shared/workflow-recording-time.js';
 import { CatalogNativeApi } from '../../studio-server-shared/catalogNativeApi.js';
 import {
   NodeDatasetProvider,
@@ -132,7 +136,11 @@ async function persistSubgraphRun(run: SubgraphProjectRun): Promise<void> {
     {
       method: 'POST',
       signal: AbortSignal.timeout(60_000),
-      headers: { ...createProxyAuthenticationHeaders(), 'content-type': 'application/json' },
+      headers: {
+        ...createProxyAuthenticationHeaders(),
+        'content-type': 'application/json',
+        [WORKFLOW_RECORDING_CREATED_AT_HEADER]: run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events),
+      },
       body: JSON.stringify({
         projectId: run.target.projectId,
         projectContents: run.resolved.projectContents,

@@ -12,6 +12,10 @@ import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
 import { rememberSubgraphPreviewStreamingOutputs } from '../../app/src/utils/subgraphPreviewStreaming';
 import type { WorkflowProjectReferencesResponse } from '../../studio-server-shared/workflow-types';
+import {
+  getWorkflowRecordingCreatedAt,
+  WORKFLOW_RECORDING_CREATED_AT_HEADER,
+} from '../../studio-server-shared/workflow-recording-time';
 
 function targetUrl(target: SubgraphProjectTarget, operation: 'preview' | 'execution'): string {
   return `${RIVET_API_BASE_URL}/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/${operation}?version=${target.version}`;
@@ -134,7 +138,10 @@ export async function persistHostedSubgraphProjectRun(run: SubgraphProjectRun): 
   const response = await fetch(`${RIVET_API_BASE_URL}/workflows/local-editor-recordings/subgraph-run`, {
     method: 'POST',
     signal: AbortSignal.timeout(60_000),
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      [WORKFLOW_RECORDING_CREATED_AT_HEADER]: run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events),
+    },
     body: JSON.stringify({
       projectId: run.target.projectId,
       projectContents: run.resolved.projectContents,

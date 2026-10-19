@@ -13,6 +13,76 @@ import type {
 import type { RecordingInsertRowData, RecordingRow, TransactionHooks } from '../routes/workflows/managed/types.js';
 import { prepareManagedTextArtifact } from '../routes/workflows/managed/artifact-descriptor.js';
 import { workflowRecordingInputCache } from '../routes/workflows/recording-input-cache.js';
+import { getWorkflowRecordingCreatedAt } from '../../../studio-server-shared/workflow-recording-time.js';
+import { getManagedWorkflowProjectVirtualPath } from '../routes/workflows/virtual-paths.js';
+import type { Project } from '@valerypopoff/rivet2-node';
+
+test('recording creation time uses the first start lifecycle, including child and delayed failure events', () => {
+  const start = Date.parse('2026-10-19T10:00:00.000Z');
+  for (const type of ['start', 'graphStart']) {
+    assert.equal(
+      getWorkflowRecordingCreatedAt([
+        { type: 'trace', ts: start - 1 },
+        { type, ts: start + 5000, occurredAt: start },
+        { type: 'error', ts: start + 10_000 },
+      ]),
+      new Date(start).toISOString(),
+    );
+  }
+  assert.equal(getWorkflowRecordingCreatedAt([{ type: 'error', ts: start }]), new Date(start).toISOString());
+  assert.equal(getWorkflowRecordingCreatedAt([{ type: 'start', ts: 0 }], start), new Date(start).toISOString());
+  assert.equal(getWorkflowRecordingCreatedAt([], start), new Date(start).toISOString());
+});
+
+test('managed persistence supplies the captured start to the existing timestamp column, preserving legacy callers', async () => {
+  const writes: Array<Parameters<ManagedWorkflowContext['revisions']['insertRecordingRow']>[2]> = [];
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    revisions: {
+      uploadRecordingBlobs: async () => ({
+        recordingBlobKey: 'recording',
+        replayProjectBlobKey: 'project',
+        replayDatasetBlobKey: null,
+      }),
+      insertRecordingRow: async (_pool: unknown, _row: unknown, options: (typeof writes)[number]) => {
+        writes.push(options);
+      },
+    },
+    db: {},
+    mappers: {},
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({ context });
+  const project: Project = {
+    metadata: { id: 'workflow-a' as Project['metadata']['id'], title: 'A', description: '' },
+    graphs: {},
+    plugins: [],
+  };
+  const input = {
+    sourceProject: project,
+    executedProject: project,
+    executedAttachedData: {},
+    executedDatasets: [],
+    sourceProjectPath: getManagedWorkflowProjectVirtualPath('A.rivet-project'),
+    endpointName: 'flow',
+    recordingSerialized: '{}',
+    runKind: 'latest' as const,
+    durationMs: 10,
+  };
+  const createdAt = '2026-10-19T10:00:00.000Z';
+  for (const status of ['succeeded', 'failed', 'suspicious'] as const)
+    await service.persistWorkflowExecutionRecording({ ...input, createdAt, status });
+  await service.persistWorkflowExecutionRecording({ ...input, status: 'succeeded' });
+  assert.deepEqual(
+    writes.map(({ timestampMode, createdAt }) => [timestampMode, createdAt]),
+    [
+      ['provided', createdAt],
+      ['provided', createdAt],
+      ['provided', createdAt],
+      ['now', undefined],
+    ],
+  );
+});
 
 function createRecordingRow(
   recordingId: string,
@@ -122,6 +192,7 @@ test('managed per-endpoint retention does not combine projects that reused the s
 test('managed recording statistics preserve web-app action identity and run-kind filtering', async () => {
   const webAppRow: RecordingRow = {
     ...createRecordingRow('web-app', '/apps/report', '2026-08-04T12:00:00.000Z'),
+    has_sub_runs: true,
     run_kind: 'published',
     execution_surface: 'web_app_action',
     ui_graph_id_at_execution: 'ui-report',
@@ -133,6 +204,7 @@ test('managed recording statistics preserve web-app action identity and run-kind
   };
   const childRow: RecordingRow = {
     ...createRecordingRow('child', 'Subgraph: Extract', '2026-08-04T12:00:01.000Z'),
+    has_sub_runs: false,
     execution_surface: 'subgraph_project',
     graph_id_at_execution: 'extract',
   };
@@ -190,6 +262,8 @@ test('managed recording statistics preserve web-app action identity and run-kind
   assert.equal(page.runs.length, 2);
   assert.equal(page.runs[0]?.executionIdentity?.correlationId, 'rvt-managed-recording-12345');
   assert.equal(page.runs[1]?.executionIdentity?.surface, 'subgraph_project');
+  assert.equal(page.runs[0]?.hasSubRuns, true);
+  assert.equal(page.runs[1]?.hasSubRuns, false);
 });
 
 test('managed Any scope applies status, pagination and input continuations without a workflow restriction', async () => {

@@ -5,6 +5,7 @@ import {
   type ProjectId,
 } from '@valerypopoff/rivet2-node';
 import type { ScheduledOccurrence } from '../../../studio-server-shared/scheduled-run-types.js';
+import { getWorkflowRecordingCreatedAt } from '../../../studio-server-shared/workflow-recording-time.js';
 import {
   createExecutionSubgraphProjectLoader,
   persistWorkflowExecutionRecordingWithBackend,
@@ -65,6 +66,7 @@ export async function runScheduledGraph(
     (late) => late.dispose(),
   );
   let recorder: ExecutionRecorder | null = null;
+  let createdAt: string | undefined;
   const controller = new AbortController();
   const started = performance.now();
   let status: ScheduledOccurrence['status'] = 'succeeded';
@@ -88,6 +90,7 @@ export async function runScheduledGraph(
     signal.throwIfAborted();
     invoked = true;
     const outcome = await session.run();
+    createdAt = outcome.createdAt;
     if (outcome.failure) throw outcome.failure.error;
     if (controller.signal.aborted) throw new Error('Interactive input is not supported for scheduled runs.');
   } catch (error) {
@@ -109,6 +112,7 @@ export async function runScheduledGraph(
     try {
       const [project, attached] = loadProjectAndAttachedDataFromString(resolved.projectContents);
       recordingId = await persistWorkflowExecutionRecordingWithBackend({
+        createdAt: createdAt ?? getWorkflowRecordingCreatedAt(recorder.events),
         sourceProject: project,
         sourceProjectPath: resolved.sourceProjectPath,
         executedProject: project,

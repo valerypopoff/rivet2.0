@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { ExecutionRecorder, type NodeCreatedProcessor, type DataValue } from '@valerypopoff/rivet2-node';
 
 export type ExecutionSessionResult = {
+  createdAt: string;
   recorder: ExecutionRecorder | null;
   outputs?: Record<string, DataValue>;
   status: 'succeeded' | 'failed' | 'suspicious';
@@ -55,7 +56,12 @@ export class ExecutionSession {
     if (this.#started) throw new Error('An execution session can run only once.');
     this.#started = true;
     const startedAt = performance.now();
-    const result: ExecutionSessionResult = { recorder: this.recorder, status: 'succeeded', durationMs: 0 };
+    const result: ExecutionSessionResult = {
+      createdAt: new Date().toISOString(),
+      recorder: this.recorder,
+      status: 'succeeded',
+      durationMs: 0,
+    };
     try {
       const foreground = await this.processor.run();
       try {

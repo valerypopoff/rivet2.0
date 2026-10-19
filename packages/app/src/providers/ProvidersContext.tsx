@@ -173,6 +173,8 @@ export type LocalExecutionRecordingPersistenceProvider = {
   /** Marks health evidence unavailable when a terminal replay cannot be captured. */
   markUnavailable(correlationId: string): Promise<void>;
   persist(input: {
+    /** Logical run creation time, captured before asynchronous persistence. */
+    createdAt?: string;
     projectId: ProjectId;
     projectPath: string;
     projectContents: string;

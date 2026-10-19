@@ -71,12 +71,15 @@ export type WorkflowRecordingInputFilter = {
 export type WorkflowRecordingBlobEncoding = 'identity' | 'gzip';
 
 export type WorkflowRecordingRunSummary = {
+  /** Browse-only retained child presence; omitted by older servers. Never persisted. */
+  hasSubRuns?: boolean;
   /** Browse-only context representative, not a claimed parent. Never persisted. */
   familyContext?: true;
   id: string;
   workflowId: string;
   sourceProjectName?: string;
   sourceProjectRelativePath?: string;
+  /** Logical run creation/start for new captures; legacy/imported rows may retain save time. */
   createdAt: string;
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;

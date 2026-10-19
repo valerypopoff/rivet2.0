@@ -2,11 +2,31 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { familyRows, verifyFamilyQueries } from './helpers/recording-family-fixture.js';
-import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
+import { recordingHasSubRunsSql, recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
 import {
   createWorkflowRecordingInputAfter,
   parseWorkflowRecordingInputAfter,
 } from '../routes/workflows/recording-input-filter.js';
+
+test('SQLite child-only presence does not inspect unrelated history', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('CREATE TABLE recordings(recording_id TEXT PRIMARY KEY, metadata_json TEXT)');
+    const insert = db.prepare('INSERT INTO recordings VALUES (?, ?)');
+    insert.run('child', JSON.stringify({ executionIdentity: { surface: 'subgraph_project', correlationId: 'key' } }));
+    insert.run('unlinked', JSON.stringify({ executionIdentity: { surface: 'editor_local' } }));
+    // An unrelated damaged row must not be read merely to prove that a child
+    // cannot itself own sub-runs, or that an unlinked root has no family key.
+    insert.run('unrelated', 'not-json');
+    const statement = db.prepare(
+      `SELECT ${recordingHasSubRunsSql('sqlite')} AS present FROM recordings WHERE recording_id = ?`,
+    );
+    assert.equal(statement.get('child')?.present, 0);
+    assert.equal(statement.get('unlinked')?.present, 0);
+  } finally {
+    db.close();
+  }
+});
 
 for (const storage of ['filesystem', 'sqlite', 'managed'] as const) {
   test(`${storage} family pagination counts primaries, not descendants`, async () => {
@@ -203,10 +223,20 @@ for (const storage of ['filesystem', 'sqlite', 'managed'] as const) {
       assert.deepEqual(ids('root', 'children'), ['child', 'nested']);
       assert.deepEqual(ids('child', 'children'), []);
       assert.deepEqual(ids('missing', 'children'), []);
+      const hasSubRuns = (id: string) =>
+        Boolean(
+          db.prepare(`SELECT ${recordingHasSubRunsSql(storage)} AS present FROM ${table} WHERE id = ?`).get(id)
+            ?.present,
+        );
+      assert.equal(hasSubRuns('root'), true, 'foreign-project children are discoverable');
+      assert.equal(hasSubRuns('other'), false, 'a correlation key alone is not child evidence');
+      assert.equal(hasSubRuns('child'), false, 'a child is not a primary');
+      assert.equal(hasSubRuns('unlinked'), false);
       db.prepare(
         `INSERT INTO ${table} SELECT 'duplicate', 'duplicate', workflow_id, execution_surface, correlation_id, metadata_json FROM ${table} WHERE id = 'root'`,
       ).run();
       assert.deepEqual(ids('root', 'children'), [], 'ambiguous keys must not invent a parent');
+      assert.equal(hasSubRuns('root'), false, 'presence must match primary-owned discovery');
       db.prepare(`DELETE FROM ${table} WHERE id IN ('root', 'duplicate')`).run();
       assert.deepEqual(ids('root', 'children'), []);
     } finally {

@@ -528,6 +528,46 @@ at 55 seconds. Single-phase runtime fixtures retain their shorter limits.
 `recording-run-hierarchy.ts` groups the current recording results by exact
 `executionIdentity.correlationId`. A unique non-Subgraph row is the primary;
 children start folded and expand into individually virtualized, indented rows.
+Sub-runs within every family are displayed oldest-to-newest by the shown
+`createdAt` timestamp, with recording ID ascending as the deterministic tie-breaker.
+Success, failure and suspicious status never influence this order. Sort the
+combined family after all child pages arrive, not each newest-first API page
+individually. The same rule applies to input-search and Related sub-runs groups;
+the top-level family/page order remains unchanged (newest-first in normal browsing).
+For new recordings, `createdAt` means logical run creation/start, captured before
+execution and before completion/upload/queue delays. Hosted execution sessions
+and Core Subgraph invocations capture it on entry; Browser/Node editor captures
+keep the same wall-clock value through their eventual upload. Older producer
+adapters can recover a start/graphStart occurrence timestamp from the in-memory
+recorder, falling back to its first event or capture time if no start exists.
+This does not assert causal ordering of simultaneous executions or precision
+beyond the timestamp and recording-ID tie-breaker.
+
+Persistence reuses the existing `createdAt`/`created_at` storage field, including
+PostgreSQL's existing provided-timestamp insert path. There is no schema/version
+migration, new column, S3 sidecar, payload rewrite or artifact read on listing.
+IDs, storage keys and workflow catalog update timestamps retain their existing
+persistence-time behavior. Imports/restores preserve their supplied timestamps;
+existing records are not rewritten or backfilled and may retain save-time
+timestamps. Older producers that omit the optional capture timestamp keep the
+previous persistence-time fallback. Mixed old/new rows therefore remain readable,
+but exact start ordering is available only where the start was captured.
+
+Editor uploads carry the optional ISO timestamp in
+`x-rivet-recording-created-at`, not a new JSON field: older API replicas ignore
+the header while continuing to accept their unchanged strict request body.
+New APIs validate/normalize it and pass it into persistence. New APIs also accept
+old uploads with no header. An old API may still record save time until it is
+upgraded; this is a compatible semantic fallback, not a guarantee of new timing
+on old replicas. The header is authenticated caller-supplied display/retention
+metadata, not an authorization or cross-host clock-synchronization mechanism.
+
+All uses of the existing timestamp now naturally follow logical creation for
+new records: list order, keyset pagination, statistics buckets and age/count/byte
+retention selection. Retention algorithms and suspension holds are unchanged;
+a long-running run can already be old when its recording is finally persisted.
+Do not estimate old starts by subtracting duration from save time, fetch replay
+artifacts to sort the list, or infer start time from persistence-generated IDs.
 Do not group by project/graph name or infer immediate nesting from the root key.
 Missing or ambiguous primaries get an explicit context group, never a synthetic
 recording. Ordinary modal browsing requests `groupByRoot=true`: SQL selects one
@@ -548,8 +588,30 @@ rows without surface metadata). It never promotes a child-only match into a root
 Expanding a root fetches all linked child metadata through the authenticated
 `GET /api/workflows/recordings/:recordingId/sub-runs` path, in pages of at most 100.
 These children bypass both input and status predicates and do not inflate match
-counts or search progress. Loading/failed disclosure controls provide feedback and
-retry; complete families are published only after all pages load. View replacement
+counts or search progress. List responses include a browse-only `hasSubRuns`
+presence flag computed from retained metadata across projects, independent of
+status/input filters.
+Roots with no discoverable children have no disclosure button; loaded empty
+families also lose the button. Unknown presence from older API replicas retains
+lazy discovery for compatibility. Already loaded children remain accessible even
+if a stale presence snapshot says false. The flag is not persisted, requires no
+schema migration, and does not fetch replay artifacts or issue per-root HTTP calls.
+SQLite catalog callers opt into this UI projection only when listing run pages;
+internal point lookups, migration and retention do not aggregate child presence.
+The presence expression short-circuits for child and unlinked rows. Do not add a
+full-history presence aggregation to each selected retention/deletion lookup.
+PostgreSQL materializes the bounded metadata page before projecting presence.
+Its aggregation includes only keys from that page, but counts all retained
+primaries/children for those keys across projects and statuses. This preserves
+global ambiguity detection and avoids grouping unrelated recording history or
+repeating a full-history scan for each visible root. The selected page and
+presence share one SQL statement snapshot; keyset timestamps retain PostgreSQL
+microseconds and outer ordering remains newest-first. No index/schema migration
+or additional database/HTTP round trip is required. Without a correlation index,
+PostgreSQL may still scan metadata to find matching keys; this is not a claim of
+constant-time listing or a rewrite of the existing family-pagination query.
+Loading/failed disclosure controls provide feedback and retry; complete families
+are published only after all pages load. View replacement
 aborts pending child reads and discards late replies. An absent or ambiguous primary
 key cannot manufacture ancestry. Changing workflow/page/filter resets expansion;
 appending root matches preserves expanded correlation keys. Context disclosures
@@ -572,6 +634,13 @@ Regression coverage includes 25 roots/151 descendants, 20/10-page limits, contex
 scope, ambiguity, blank keys, deletion and stale replies in the existing SQL,
 SQLite backend, hierarchy and Run recordings browser suites. The existing
 `test:statistics-managed` command also executes family queries on disposable PostgreSQL.
+The managed deployment-contract CI lane runs this command, including actual
+recording-service presence queries on the production migration schema. It checks
+cross-project/failed children, legacy and ambiguous roots, deletion, input-search
+continuations and a 50,000-row history with low `work_mem`. `EXPLAIN ANALYZE`
+asserts that presence aggregation is bounded by visible-page keys, rather than
+setting an arbitrary wall-clock performance threshold. Timings are diagnostic;
+the test never uses GCP or a configured external database.
 
 Each page must identify the requested primary/page, contain only linked Subgraph
 rows, make unique-ID progress and retain a consistent total. Final unique-ID count
@@ -1326,11 +1395,15 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.26.1`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.27.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This patch includes resumable hosted-editor recording capture. Bump all five
-manifests together even when only one workspace has runtime changes; run the
-repository-structure check before building a release candidate.
+This minor release includes cross-project deletion-reference checks and root-family
+recording pagination/discovery, alongside recording start-time, playback and
+PostgreSQL query-performance fixes. Bump all five manifests together even when
+only one workspace has runtime changes; run the repository-structure check before
+building a release candidate. See the prepared release matrix in
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-19) for the
+separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
 container selectors. Studio Server images are built together from one Git

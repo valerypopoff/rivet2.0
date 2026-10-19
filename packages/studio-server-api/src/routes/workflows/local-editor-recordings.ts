@@ -22,10 +22,22 @@ import {
 import { isWorkflowRecordingEnabled } from './recordings-config.js';
 import { MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES } from './local-editor-recording-limits.js';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../../../../studio-server-shared/workflow-types.js';
+import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../../../studio-server-shared/workflow-recording-time.js';
 
 export const localEditorRecordingsRouter = Router();
 const outcomeJsonBody = createControlPlaneJsonBodyParser();
 const recordingJsonBody = createJsonBodyParser(() => MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES);
+const recordingCreatedAtSchema = z
+  .string()
+  .datetime({ offset: true })
+  .transform((value) => new Date(value).toISOString())
+  .optional();
+
+function parseRecordingCreatedAt(value: string | undefined): string | undefined {
+  const result = recordingCreatedAtSchema.safeParse(value);
+  if (!result.success) throw badRequest('Invalid recording creation timestamp.');
+  return result.data;
+}
 
 localEditorRecordingsRouter.get('/capability', (_req, res) => {
   // Route presence is the compatibility contract. Recording configuration is
@@ -244,6 +256,7 @@ localEditorRecordingsRouter.post(
   validateBody(localEditorRecordingSchema),
   asyncHandler(async (req, res) => {
     const body = req.body as z.infer<typeof localEditorRecordingSchema>;
+    const createdAt = parseRecordingCreatedAt(req.get(WORKFLOW_RECORDING_CREATED_AT_HEADER));
 
     if (!isWorkflowRecordingEnabled()) {
       await reportOutcomeBestEffort(body.executionIdentity.correlationId, 'disabled');
@@ -272,6 +285,7 @@ localEditorRecordingsRouter.post(
       }
 
       const recordingId = await persistWorkflowExecutionRecordingWithBackend({
+        createdAt,
         sourceProject,
         sourceProjectPath: sourcePath,
         executedProject,
@@ -312,6 +326,7 @@ localEditorRecordingsRouter.post(
   validateBody(subgraphEditorRecordingSchema),
   asyncHandler(async (req, res) => {
     const body = req.body as z.infer<typeof subgraphEditorRecordingSchema>;
+    const createdAt = parseRecordingCreatedAt(req.get(WORKFLOW_RECORDING_CREATED_AT_HEADER));
     if (!isWorkflowRecordingEnabled()) {
       res.json({ availability: 'disabled' });
       return;
@@ -336,6 +351,7 @@ localEditorRecordingsRouter.post(
       }
     }
     const recordingId = await persistWorkflowExecutionRecordingWithBackend({
+      createdAt,
       sourceProject,
       sourceProjectPath: sourcePath,
       executedProject,

@@ -1131,7 +1131,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
           workflowId: saved.sourceProject.metadata.id,
           sourceProjectRelativePath: this.#parseAbsolute(saved.sourceProjectPath),
           sourceProjectName: saved.sourceProject.metadata.title,
-          createdAt: new Date().toISOString(),
+          createdAt: saved.createdAt ?? new Date().toISOString(),
           runKind: saved.runKind,
           status: saved.status,
           durationMs: saved.durationMs,
@@ -1194,6 +1194,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
 
   #recordingSummary(row: LocalRecordingMetadata): WorkflowRecordingRunSummary {
     return {
+      hasSubRuns: row.hasSubRuns,
       id: row.recordingId,
       workflowId: row.workflowId,
       sourceProjectName: row.sourceProjectName,
@@ -1251,6 +1252,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       this.#catalog.listRecordingMetadata({
         workflowId,
         includeSubgraphRuns,
+        includeSubRunPresence: true,
         runScope,
         failedOnly: statusFilter === 'failed',
         limit,

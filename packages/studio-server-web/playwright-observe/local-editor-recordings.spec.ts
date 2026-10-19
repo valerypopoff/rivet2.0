@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { deserializeProject, ExecutionRecorder, getGraphBoundary, serializeProject } from '@valerypopoff/rivet2-core';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem } from '../dashboard/types';
+import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../studio-server-shared/workflow-recording-time';
 
 type RecordingUpload = {
   projectId: string;
@@ -132,7 +133,7 @@ for (const executor of ['browser', 'nodejs'] as const) {
         updatedAt: '2026-10-03T00:00:00.000Z',
         settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
       };
-      const uploads: Array<{ path: string; body: RecordingUpload }> = [];
+      const uploads: Array<{ path: string; body: RecordingUpload; createdAt?: string }> = [];
       const unavailableCorrelations: string[] = [];
       const unexpectedMutations: string[] = [];
       await page.addInitScript(
@@ -172,7 +173,11 @@ for (const executor of ['browser', 'nodejs'] as const) {
             path,
           )
         ) {
-          uploads.push({ path, body: request.postDataJSON() });
+          uploads.push({
+            path,
+            body: request.postDataJSON(),
+            createdAt: request.headers()[WORKFLOW_RECORDING_CREATED_AT_HEADER],
+          });
           if (scenario === 'upload-failure' && path === '/api/workflows/local-editor-recordings') {
             await route.fulfill({ status: 500, json: { error: 'Fixture recording storage unavailable' } });
             return;
@@ -203,6 +208,12 @@ for (const executor of ['browser', 'nodejs'] as const) {
       if (recordExecutions) {
         await expect.poll(() => uploads.length).toBe(crossProject ? 2 : 1);
         const root = uploads.find((upload) => upload.path === '/api/workflows/local-editor-recordings')!.body;
+        for (const upload of uploads) {
+          expect(Number.isFinite(Date.parse(upload.createdAt!))).toBe(true);
+          const events = ExecutionRecorder.deserializeFromString(upload.body.recordingSerialized).events;
+          expect(Date.parse(upload.createdAt!)).toBeLessThanOrEqual(events[events.length - 1]!.ts);
+          expect(upload.body).not.toHaveProperty('createdAt');
+        }
         expect(root.projectId).toBe(parentId);
         expect(root.status).toBe(scenario === 'failed-root' ? 'failed' : 'succeeded');
         const recorder = ExecutionRecorder.deserializeFromString(root.recordingSerialized);

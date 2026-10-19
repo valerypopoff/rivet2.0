@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { getExpectedProxyAuthToken } from '../auth.js';
+import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../../studio-server-shared/workflow-recording-time.js';
 import type { ChartNode, GraphId, NodeConnection, PortId, ProcessEvents } from '@valerypopoff/rivet2-node';
 import { writeWorkflowProjectStatsCacheFromContents } from '../routes/workflows/project-stats.js';
 import {
@@ -1453,6 +1454,56 @@ test('editor parent and Subgraph uploads retain replay evidence with oversized d
   });
 });
 
+test('editor and Subgraph uploads accept start-time headers while legacy bodies and invalid-header rejection remain safe', async () => {
+  const item = await workflowMutations.createWorkflowProjectItem('', 'UploadTiming');
+  const [project, attached] = await rivetNode.loadProjectAndAttachedDataFromFile(item.absolutePath);
+  await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {
+    const ids: string[] = [];
+    const starts = [new Date(Date.now() - 20_000).toISOString(), new Date(Date.now() - 40_000).toISOString()];
+    for (const child of [false, true]) {
+      const url = `${apiBaseUrl}/local-editor-recordings${child ? '/subgraph-run' : ''}`;
+      const body = {
+        projectId: project.metadata.id,
+        projectContents: rivetNode.serializeProject(project, attached),
+        recordingSerialized: '{}',
+        durationMs: 1,
+        status: child ? 'succeeded' : 'failed',
+        ...(child
+          ? { graphId: project.metadata.mainGraphId }
+          : {
+              projectPath: item.absolutePath,
+              executionIdentity: { correlationId: 'rvt-local-start-time-test-12345' },
+            }),
+      };
+      const invalid = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', [WORKFLOW_RECORDING_CREATED_AT_HEADER]: 'not-a-time' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(invalid.status, 400);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', [WORKFLOW_RECORDING_CREATED_AT_HEADER]: starts[Number(child)]! },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 201);
+      ids.push((await readJson<{ recordingId: string }>(response)).recordingId);
+    }
+    const response = await readJson<{ runs: Array<{ id: string; createdAt: string }> }>(
+      await fetch(
+        `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(project.metadata.id)}/runs?page=1&pageSize=20&status=all`,
+      ),
+    );
+    assert.deepEqual(
+      response.runs.map((run) => [run.id, run.createdAt]),
+      [
+        [ids[0], starts[0]],
+        [ids[1], starts[1]],
+      ],
+    );
+  });
+});
+
 test('hosted editor parent and Subgraph runs share discoverable recordings without LLM health evidence', async () => {
   const caller = await workflowMutations.createWorkflowProjectItem('', 'CallerReplay');
   const callerProject = await rivetNode.loadProjectFromFile(caller.absolutePath);
@@ -1570,7 +1621,8 @@ test('hosted editor parent and Subgraph runs share discoverable recordings witho
     assert.equal(parentResponse.status, 201);
     const parentId = (await readJson<{ recordingId: string }>(parentResponse)).recordingId;
     const callerRunsUrl = `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(callerProject.metadata.id)}/runs`;
-    const parentOnly = await readJson<{ runs: Array<{ id: string }> }>(await fetch(callerRunsUrl));
+    const parentOnly = await readJson<{ runs: Array<{ id: string; hasSubRuns: boolean }> }>(await fetch(callerRunsUrl));
+    assert.equal(parentOnly.runs[0]?.hasSubRuns, true);
     assert.deepEqual(
       parentOnly.runs.map((run) => run.id),
       [parentId],

@@ -24,6 +24,7 @@ import {
   readWebAppOAuthSession,
 } from '../../web-app-oauth.js';
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
+import { getWorkflowRecordingCreatedAt } from '../../../../studio-server-shared/workflow-recording-time.js';
 import { trackLLMProfileHealthRecordingOutcome } from '../../llm-profile-health/recording-outcomes.js';
 import {
   getLLMProfileHealthStore,
@@ -203,6 +204,7 @@ export function resolveWebAppUiGraph(executionProject: WorkflowExecutionProject)
 }
 
 export type WorkflowExecutionRecordingSnapshot = {
+  createdAt?: string;
   recorder: ExecutionRecorder | null;
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
@@ -447,6 +449,7 @@ export function enqueueExecutionRecording(
     return;
   }
 
+  const createdAt = recording.createdAt ?? getWorkflowRecordingCreatedAt(recorder.events);
   const accepted = enqueueWorkflowExecutionRecordingPersistence(async () => {
     try {
       const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
@@ -456,6 +459,7 @@ export function enqueueExecutionRecording(
           })
         : [];
       const recordingId = await persistWorkflowExecutionRecordingWithBackend({
+        createdAt,
         sourceProject: project,
         sourceProjectPath: projectVirtualPath,
         executedProject: project,

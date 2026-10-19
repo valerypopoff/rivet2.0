@@ -17,7 +17,11 @@ import type {
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
-import { recordingWorkflowScopeClause, type RecordingRunScope } from '../recording-workflow-scope.js';
+import {
+  recordingHasSubRunsSql,
+  recordingWorkflowScopeClause,
+  type RecordingRunScope,
+} from '../recording-workflow-scope.js';
 import {
   getLLMProfileHealthHeldRecordingIds,
   normalizeStoredLLMProfileHealthEntry,
@@ -629,16 +633,23 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           : [workflowId, queryLimit, queryOffset];
         const limitParameter = boundary ? '$4' : '$2';
         const offsetParameter = boundary ? '$5' : '$3';
+        // Select the bounded window once before computing child presence.
+        // Count ownership globally for its keys, never group unrelated history.
         return deps.queryRows<RecordingRow>(
           deps.pool,
           `
-          SELECT ${deps.recordingColumns},
-                 TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-                   AS recording_cursor_created_at
-          FROM workflow_recordings
-          WHERE ${workflowClause} ${filterClause} ${inputAfterClause}
+          WITH recording_page AS MATERIALIZED (
+            SELECT ${deps.recordingColumns},
+                   TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                     AS recording_cursor_created_at
+            FROM workflow_recordings
+            WHERE ${workflowClause} ${filterClause} ${inputAfterClause}
+            ORDER BY created_at DESC, recording_id DESC
+            LIMIT ${limitParameter} OFFSET ${offsetParameter}
+          )
+          SELECT recording_page.*, ${recordingHasSubRunsSql('managed', 'recording_page')} AS has_sub_runs
+          FROM recording_page
           ORDER BY created_at DESC, recording_id DESC
-          LIMIT ${limitParameter} OFFSET ${offsetParameter}
         `,
           queryParameters,
         );
@@ -667,6 +678,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           : countRow?.total_runs ?? 0;
 
       const runs: WorkflowRecordingRunSummary[] = pageRows.map((row) => ({
+        hasSubRuns: row.has_sub_runs,
         id: row.recording_id,
         workflowId: row.workflow_id,
         sourceProjectName: row.source_project_name,
@@ -845,7 +857,8 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           datasetUncompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
         },
         {
-          timestampMode: 'now',
+          timestampMode: options.createdAt ? 'provided' : 'now',
+          createdAt: options.createdAt,
           onConflict: 'fail',
           cleanupContext: 'recording persistence failure',
         },

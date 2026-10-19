@@ -1439,6 +1439,69 @@ test.describe('Run recordings modal', () => {
     expect(requests[0]!.searchParams.get('context')).toBe('all');
   });
 
+  for (const hasSubRuns of [false, true, undefined]) {
+    test(`root disclosure respects retained child presence: ${String(hasSubRuns)}`, async ({ page }) => {
+      const { runFetches, recordingFetches } = await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
+      const fixture = createRunRecordingsFixture();
+      const root = fixture.runsByWorkflow.get('workflow-a')![0]!;
+      await page.route('**/api/workflows/recordings/workflows/workflow-a/runs?*', (route) =>
+        route.fulfill({
+          json: {
+            workflowId: 'workflow-a',
+            page: 1,
+            pageSize: 20,
+            totalRuns: 1,
+            hasMore: false,
+            statusFilter: 'all',
+            runs: [
+              {
+                ...root,
+                hasSubRuns,
+                executionIdentity: { surface: 'workflow_endpoint', correlationId: 'rvt-root-caller-12345' },
+              },
+            ],
+          },
+        }),
+      );
+      const modal = await openLatestFlowRecordings(page);
+      await selectPublishedFlow(page, modal);
+      const row = modal.locator('[data-recording-id="recording-a-1"]');
+      await expect(row).toBeVisible();
+      const toggle = row.getByRole('button', { name: 'Show sub-runs', exact: true });
+      if (hasSubRuns === false) {
+        await expect(toggle).toHaveCount(0);
+        expect(runFetches.filter((url) => url.includes('/sub-runs?'))).toEqual([]);
+      } else {
+        await toggle.click();
+        await expect(row.getByRole('button', { name: 'Hide 1 sub-run', exact: true })).toBeVisible();
+      }
+      expect(recordingFetches).toEqual([]);
+    });
+  }
+
+  test('an empty lazy discovery removes the root disclosure on older servers', async ({ page }) => {
+    await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
+    await page.route('**/api/workflows/recordings/recording-a-1/sub-runs?*', (route) =>
+      route.fulfill({
+        json: {
+          workflowId: 'recording-a-1',
+          page: 1,
+          pageSize: 100,
+          totalRuns: 0,
+          hasMore: false,
+          statusFilter: 'all',
+          runs: [],
+        },
+      }),
+    );
+    const modal = await openLatestFlowRecordings(page);
+    await selectPublishedFlow(page, modal);
+    const root = modal.locator('[data-recording-id="recording-a-1"]');
+    await root.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+    await expect(root.locator('.run-recordings-family-toggle')).toHaveCount(0);
+    await expect(root.locator('.run-recordings-run-open-button')).toBeEnabled();
+  });
+
   test('root recordings unfold indented sub-runs without opening the primary replay', async ({ page }) => {
     const { recordingFetches } = await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
     const modal = await openLatestFlowRecordings(page);
@@ -1479,6 +1542,69 @@ test.describe('Run recordings modal', () => {
     await expect(root.getByRole('button', { name: 'Show sub-runs' })).toHaveAttribute('aria-expanded', 'false');
     await expect(child).toHaveCount(0);
   });
+
+  for (const badOnly of [false, true]) {
+    test(`sub-runs are oldest-first across pages with interleaved failures${badOnly ? ' under bad-only input search' : ''}`, async ({
+      page,
+    }) => {
+      const { runFetches, recordingFetches } = await installRunRecordingRoutes(page, {
+        relatedSubgraphRuns: true,
+        relatedSubgraphRunCount: 103,
+        transformSubRunPage: (response) => ({
+          ...response,
+          // Simulate newest-first API pages. The oldest three rows are on the
+          // second page, and a failed row belongs between two successful rows.
+          runs: response.runs.map((run) => {
+            const index = run.id === 'recording-b-1' ? 0 : Number(run.id.replace('related-child-', ''));
+            return {
+              ...run,
+              createdAt: new Date(Date.UTC(2026, 9, 19, 10, 0, 103 - index)).toISOString(),
+              status: index % 2 ? 'failed' : 'succeeded',
+            };
+          }),
+        }),
+      });
+      const modal = await openLatestFlowRecordings(page);
+      await selectPublishedFlow(page, modal);
+      if (badOnly) {
+        await modal.getByRole('button', { name: /^Bad only/ }).click();
+        await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+        await modal.getByRole('combobox', { name: 'Input JSON path' }).fill('$.foo');
+        await modal.getByLabel('Value', { exact: true }).fill('bar');
+        await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+        await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+          'Search complete, 1 match found',
+        );
+      }
+      await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+      await expect(modal.getByRole('button', { name: 'Hide 103 sub-runs', exact: true })).toBeVisible();
+      const children = modal.locator('.run-recordings-sub-run');
+      await expect
+        .poll(async () =>
+          (await children.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-recording-id')))).slice(0, 3),
+        )
+        .toEqual(['related-child-102', 'related-child-101', 'related-child-100']);
+      await expect(children.nth(0)).toContainText('Succeeded');
+      await expect(children.nth(1)).toContainText('Failed');
+      await expect(children.nth(2)).toContainText('Succeeded');
+      const childRequests = runFetches.filter((url) => url.includes('/sub-runs?'));
+      expect(childRequests).toHaveLength(2);
+      expect(childRequests.every((url) => !new URL(url).searchParams.has('statusFilter'))).toBe(true);
+      expect(recordingFetches).toEqual([]);
+      // Unmeasured virtual rows use estimates; newly mounted wrapped rows
+      // change the total height. Follow the moving bottom until the final
+      // recording is visible rather than assuming one jump measures the list.
+      await expect
+        .poll(async () => {
+          await modal.locator('.run-recordings-list').evaluate((viewport) => {
+            viewport.scrollTop = viewport.scrollHeight;
+          });
+          return modal.locator('[data-recording-id="recording-b-1"]').isVisible();
+        })
+        .toBe(true);
+      await expect(children.last()).toHaveAttribute('data-recording-id', 'recording-b-1');
+    });
+  }
 
   test('root input matches load every child page regardless of input and bad-only status', async ({ page }) => {
     const { runFetches } = await installRunRecordingRoutes(page, {
@@ -1775,6 +1901,7 @@ test.describe('Run recordings modal', () => {
     await expect(modal.getByRole('button', { name: 'Bad only (1)', exact: true })).toBeVisible();
     await expect(child).toHaveCount(0);
     await expect(modal.locator('.run-recordings-input-search-status')).toContainText('Search complete, 1 match found');
+    await expect(modal.locator('[data-recording-id="recording-a-1"] .run-recordings-family-toggle')).toHaveCount(0);
     await modal.getByRole('button', { name: 'Clear', exact: true }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
   });
