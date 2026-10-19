@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { cleanupProxyDnsFixture } from './fixtures/proxy-dns-cleanup.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const fixture = await mkdtemp(path.join(os.tmpdir(), 'rivet-proxy-dns-'));
 const network = `rivet-proxy-dns-${process.pid}-${Date.now()}`;
 const containers = new Set();
+let networkId;
+let failure;
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', timeout: 60000 }).trim();
 const createDockerNetwork = (subnet, gateway) => {
   const result = spawnSync(
@@ -47,6 +50,39 @@ async function until(label, check, timeout = 45000) {
   throw new Error(`${label} timed out: ${last ?? 'condition not met'}`);
 }
 
+async function verifyUpgrades(base, identity) {
+  for (const [route, upstreamPath] of [
+    ['/ws/latest-debugger', '/ws/latest-debugger'],
+    ['/ws/executor', '/'],
+    ['/ws/executor/internal', '/internal'],
+  ]) {
+    const response = await new Promise((resolve, reject) => {
+      const req = http.get(`${base}${route}`, {
+        headers: {
+          Cookie: 'fixture-auth=yes',
+          Connection: 'Upgrade',
+          Upgrade: 'websocket',
+          'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'Sec-WebSocket-Version': '13',
+        },
+      });
+      req.setTimeout(2500, () => req.destroy(new Error('Upgrade timeout')));
+      req.on('error', reject);
+      req.on('response', (res) => {
+        res.resume();
+        reject(new Error(`Upgrade failed: ${res.statusCode}`));
+      });
+      req.on('upgrade', (res, socket) => {
+        socket.destroy();
+        resolve(res);
+      });
+    });
+    assert.equal(response.statusCode, 101);
+    assert.equal(response.headers['x-fixture-path'], upstreamPath, `${route} must retain its upstream path`);
+    assert.equal(response.headers['x-fixture-identity'], identity, `${route} must reach the current backend`);
+  }
+}
+
 function fixtureSubnetCandidates() {
   // Docker only accepts `--ip` on a network whose IPAM configuration declares
   // a subnet. Spread attempts across the private 172.16.0.0/12 range so an
@@ -64,7 +100,7 @@ function createFixtureNetwork() {
     const prefix = subnet.slice(0, -5);
     const gateway = `${prefix}.1`;
     try {
-      createDockerNetwork(subnet, gateway);
+      networkId = createDockerNetwork(subnet, gateway);
       const [details] = JSON.parse(docker('network', 'inspect', network));
       assert.equal(details.IPAM.Config.length, 1, 'Fixture network must have one IPAM configuration.');
       assert.equal(details.IPAM.Config[0].Subnet, subnet, 'Fixture network must retain its explicit subnet.');
@@ -119,7 +155,15 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
   // replacement, instead of accidentally succeeding through a fresh worker.
   await writeFile(
     path.join(fixture, 'nginx.conf'),
-    'worker_processes 1;\nerror_log /dev/stderr notice;\nevents {}\nhttp { include /etc/nginx/conf.d/default.conf; }\n',
+    `worker_processes 1;
+error_log /dev/stderr notice;
+events {}
+http {
+    log_format fixture 'fixture-worker=$pid status=$status path=$uri';
+    access_log /dev/stdout fixture;
+    include /etc/nginx/conf.d/default.conf;
+}
+`,
   );
   await writeFile(
     path.join(fixture, 'mock.mjs'),
@@ -404,30 +448,7 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
       assert.match(new TextDecoder().decode((await buildReader.read()).value), /data: web-1/);
       await buildReader.cancel();
     }
-    for (const route of ['/ws/latest-debugger', '/ws/executor', '/ws/executor/internal']) {
-      await new Promise((resolve, reject) => {
-        const req = http.get(`${base}${route}`, {
-          headers: {
-            Cookie: 'fixture-auth=yes',
-            Connection: 'Upgrade',
-            Upgrade: 'websocket',
-            'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
-            'Sec-WebSocket-Version': '13',
-          },
-        });
-        req.setTimeout(2500, () => req.destroy(new Error('Upgrade timeout')));
-        req.on('error', reject);
-        req.on('response', (res) => {
-          res.resume();
-          reject(new Error(`Upgrade failed: ${res.statusCode}`));
-        });
-        req.on('upgrade', (res, socket) => {
-          socket.destroy();
-          assert.equal(res.statusCode, 101);
-          resolve();
-        });
-      });
-    }
+    await verifyUpgrades(base, 'api-1');
     // This is a DNS outage, not a backend outage. Keep known API/web addresses
     // alive and exceed the real 30-second resolver validity without retrying a
     // single failed request. Include a negative control with the old routing.
@@ -510,6 +531,10 @@ proxy_set_header X-Rivet-Proxy-Auth fixture-secret; } } }`,
           await response.body.cancel();
           // Startup/route refresh may reload nginx. Its resolved peer set must
           // survive that reload, not turn a warm proxy into a cold one.
+          const beforeReload = spawnSync('docker', ['logs', reloadProxy], { encoding: 'utf8', timeout: 10000 });
+          assert.equal(beforeReload.status, 0);
+          const oldWorker = /start worker process (\d+)/.exec(beforeReload.stderr)?.[1];
+          assert.ok(oldWorker, 'reload fixture must record its original worker');
           docker('kill', '--signal=HUP', reloadProxy);
           for (let sample = 0; sample < 10; sample++) {
             const ready = await fetch(`${reloadBase}/readyz`, { signal: AbortSignal.timeout(2500) });
@@ -520,6 +545,13 @@ proxy_set_header X-Rivet-Proxy-Auth fixture-secret; } } }`,
           const reloadLogs = spawnSync('docker', ['logs', reloadProxy], { encoding: 'utf8', timeout: 10000 });
           assert.equal(reloadLogs.status, 0);
           assert.match(reloadLogs.stdout + reloadLogs.stderr, /reconfiguring/);
+          const newWorker = [...reloadLogs.stderr.matchAll(/start worker process (\d+)/g)].at(-1)?.[1];
+          assert.ok(newWorker && newWorker !== oldWorker, 'reload must start a new worker');
+          assert.match(
+            reloadLogs.stdout,
+            new RegExp(`fixture-worker=${newWorker} status=200 path=/readyz`),
+            'a new worker, not just the draining old one, must serve readiness during the DNS outage',
+          );
           remove(reloadProxy);
           const cold = `${network}-cold`;
           const coldBase = startProxy(cold);
@@ -596,6 +628,10 @@ proxy_set_header X-Rivet-Proxy-Auth fixture-secret; } } }`,
     );
     await until(`${variant} API health recovery`, () => health() === 'healthy');
     assert.equal((await (await request('/readyz', { headers: {} })).json()).identity, 'api-2');
+    await until(`${variant} debugger and executor address recovery`, async () => {
+      await verifyUpgrades(base, 'api-2');
+      return true;
+    });
     if (execution) {
       remove(execution);
       execution = startMock('execution', 2, 212);
@@ -623,14 +659,8 @@ proxy_set_header X-Rivet-Proxy-Auth fixture-secret; } } }`,
     for (const name of [proxy, api, web, dnsName, execution].filter(Boolean)) remove(name);
     console.log(`${variant}: routing, auth, streams, upgrades and DNS recovery passed`);
   }
+} catch (error) {
+  failure = error instanceof Error ? error : new Error('DNS verification failed', { cause: error });
 } finally {
-  for (const name of containers) {
-    try {
-      remove(name);
-    } catch {}
-  }
-  try {
-    docker('network', 'rm', network);
-  } catch {}
-  await rm(fixture, { recursive: true, force: true });
+  await cleanupProxyDnsFixture({ containers, networkId, fixture, docker, failure });
 }

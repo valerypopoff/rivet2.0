@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 
+import { cleanupProxyDnsFixture } from '../../../../deploy/studio-server/scripts/fixtures/proxy-dns-cleanup.mjs';
 import { extractBracedBlock, readRepoFile, readRepoJson, repoRoot } from './helpers/repo-contract-helpers.js';
 
 const proxyTemplatePaths = [
@@ -17,6 +18,114 @@ const proxyTemplatePaths = [
 function readProxyTemplates(): string[] {
   return proxyTemplatePaths.map((templatePath) => readRepoFile(templatePath));
 }
+
+test('DNS fixture cleanup uses only recorded resources and releases its directory', async () => {
+  const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
+  const containers = new Set(['owned-container']);
+  const calls: string[][] = [];
+  try {
+    await cleanupProxyDnsFixture({
+      containers,
+      networkId: 'owned-network-id',
+      fixture,
+      docker: (...args: string[]) => calls.push(args),
+    });
+    assert.deepEqual(calls, [
+      ['rm', '-f', 'owned-container'],
+      ['network', 'rm', 'owned-network-id'],
+    ]);
+    assert.equal(containers.size, 0);
+    assert.equal(existsSync(fixture), false);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('DNS fixture cleanup failures cannot pass or erase the original failure', async () => {
+  for (const originalFailure of [undefined, new Error('original routing failure')]) {
+    const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
+    const containers = new Set(['first-owned-container', 'second-owned-container']);
+    const calls: string[][] = [];
+    const removalFailure = new Error('Docker removal failed');
+    try {
+      await assert.rejects(
+        cleanupProxyDnsFixture({
+          containers,
+          networkId: 'owned-network-id',
+          fixture,
+          failure: originalFailure,
+          docker: (...args: string[]) => {
+            calls.push(args);
+            if (args.at(-1) !== 'second-owned-container') throw removalFailure;
+          },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof AggregateError);
+          assert.equal(error.errors.length, originalFailure ? 3 : 2);
+          if (originalFailure) assert.equal(error.errors[0], originalFailure);
+          for (const cleanupError of error.errors.slice(originalFailure ? 1 : 0)) {
+            assert.equal(cleanupError.cause, removalFailure);
+          }
+          return true;
+        },
+      );
+      assert.deepEqual(calls, [
+        ['rm', '-f', 'first-owned-container'],
+        ['rm', '-f', 'second-owned-container'],
+        ['network', 'rm', 'owned-network-id'],
+      ]);
+      assert.deepEqual([...containers], ['first-owned-container']);
+      assert.equal(existsSync(fixture), false, 'a failed Docker cleanup must still release temporary files');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }
+});
+
+test('DNS fixture finalization preserves a test failure when no Docker resource was created', async () => {
+  const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
+  const originalFailure = new Error('Docker startup unavailable');
+  try {
+    await assert.rejects(
+      cleanupProxyDnsFixture({
+        containers: new Set(),
+        fixture,
+        failure: originalFailure,
+        docker: () => assert.fail('No uncreated network may be removed'),
+      }),
+      (error: unknown) => error === originalFailure,
+    );
+    assert.equal(existsSync(fixture), false);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('a network removal failure alone fails otherwise successful DNS verification', async () => {
+  const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
+  const removalFailure = new Error('network is still in use');
+  try {
+    await assert.rejects(
+      cleanupProxyDnsFixture({
+        containers: new Set(),
+        networkId: 'owned-network-id',
+        fixture,
+        docker: () => {
+          throw removalFailure;
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /owned-network-id/);
+        assert.equal(error.cause, removalFailure);
+        return true;
+      },
+    );
+    assert.equal(existsSync(fixture), false);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
 
 test('proxy DNS refresh keeps shared upstream peers independently of request-time resolution', () => {
   assert.match(readRepoFile('deploy/studio-server/images/proxy/Dockerfile'), /FROM nginx:1\.27\.5-alpine/);

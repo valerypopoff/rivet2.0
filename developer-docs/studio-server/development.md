@@ -1530,7 +1530,17 @@ faces SERVFAIL and silent timeouts. Every availability sample must succeed witho
 client retries; the separate execution mock counts accepted POSTs to detect
 replays. An old request-time-resolution negative control must fail the same outage.
 Warm reload, cold-start failure/recovery and NXDOMAIN removal/recovery are separate
-checks. The fixture removes only its own local containers and network.
+checks. Reload verification records worker IDs and requires a successful readiness
+response from the new worker during the outage; success from the draining worker
+alone is insufficient. Debugger and executor upgrades verify the upstream path
+and backend identity both before and after IP replacement, not just HTTP 101.
+The fixture removes only its recorded local containers and the network ID returned
+by its successful creation command; a network that was never created is not
+removed. Cleanup attempts every remaining resource even if one removal fails.
+Removal failures fail verification, retain resource identifiers in diagnostics,
+and preserve any original test failure rather than masking it. The focused proxy
+contract tests exercise cleanup success, partial failure and failed startup without
+Docker or a cloud account.
 
 The image outage also runs `yarn studio-server:ui:observe proxy-dns-availability.spec.ts`
 with `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0` and a loopback-only fixture URL

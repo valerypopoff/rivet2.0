@@ -1221,6 +1221,31 @@ constraint, scope, mitigation, owner, and re-review date, and is not expired.
 It also audits the same lockfile without those ignores before the normal audit,
 so a temporary Rust exception that no longer matches an advisory fails CI and
 must be removed. Remove it as soon as a compatible fix is available.
+
+The October 2026 ZIP review is deliberately limited to registry `zip 0.6.6`
+with registry `tauri 1.8.3` as its sole consumer. The exception checker pins both
+crate checksums, rejects extra consumers/versions in the generated Cargo lockfile,
+and requires the unfiltered audit's ZIP version to match. These are temporary
+reachability exceptions until **2026-11-01**, not patched dependencies or blanket
+permission to extract untrusted archives. Do not disable the audit, broaden the
+version pins or remove the updater merely to make CI green.
+
+RustSec [0367](https://rustsec.org/advisories/RUSTSEC-2026-0367.html),
+[0368](https://rustsec.org/advisories/RUSTSEC-2026-0368.html) and
+[0369](https://rustsec.org/advisories/RUSTSEC-2026-0369.html) mark only `zip >=9`
+patched; Tauri 1 requires `zip ^0.6`. In the reviewed Tauri source, the updater
+verifies its signature before extraction and uses ZIP only on Windows; Linux and
+macOS use tar. Tauri's own ZIP loop copies entries into regular files/directories,
+does not create archive symlinks or call ZIP's bulk/stream extraction APIs, and
+its Unix permission code is not compiled on Windows. Rivet exposes no native ZIP
+extraction command; Settings > Updates uses the Pages download flow instead.
+This does not certify Tauri's general archive API as safe for untrusted input.
+The signed legacy updater remains enabled for existing tagged-release behavior.
+Before changing updater calls, archive formats or adding another ZIP consumer,
+redo the reachability review and upgrade/replace the dependency if that scope no
+longer holds. A compatible upstream fix or the separately planned Tauri migration
+must retire these exceptions; the existing h2 exception is independent.
+
 Informational RustSec reports (currently Tauri 1's Linux GTK stack and build-time
 dependency chain) remain visible rather than being suppressed; every
 vulnerability not explicitly listed in the temporary policy fails the job.
