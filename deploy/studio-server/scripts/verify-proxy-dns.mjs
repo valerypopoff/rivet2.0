@@ -91,6 +91,14 @@ try {
   const { prefix, subnet } = createFixtureNetwork();
   console.log(`Using isolated Docker subnet ${subnet}.`);
   await writeFile(path.join(fixture, 'empty.inc'), '');
+  await writeFile(
+    path.join(fixture, 'public-routes.inc'),
+    `location /workflows/fixture {
+    proxy_pass $execution_upstream;
+    proxy_set_header X-Rivet-Proxy-Auth fixture-secret;
+    proxy_set_header Host $rivet_request_host;
+}`,
+  );
   // The production bootstrap generates this include before nginx renders a
   // template. The DNS fixture bypasses that bootstrap, but templates still
   // require its variables even when no forwarding peers are configured.
@@ -118,6 +126,10 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     await readFile(path.join(root, 'deploy/studio-server/scripts/fixtures/proxy-dns-upstream.mjs')),
   );
   await writeFile(
+    path.join(fixture, 'dns.mjs'),
+    await readFile(path.join(root, 'deploy/studio-server/scripts/fixtures/proxy-dns-resolver.mjs')),
+  );
+  await writeFile(
     path.join(fixture, 'health.sh'),
     (await readFile(path.join(root, 'deploy/studio-server/images/proxy/healthcheck-dev.sh'), 'utf8')).replaceAll(
       '\r\n',
@@ -125,28 +137,66 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     ),
   );
   for (const [variant, template, proxyPort, webPort] of templates) {
+    const dnsName = `${network}-dns`;
+    containers.add(dnsName);
+    docker(
+      'run',
+      '-d',
+      '--name',
+      dnsName,
+      '--network',
+      network,
+      '--ip',
+      `${prefix}.53`,
+      '-p',
+      '127.0.0.1::8053',
+      '-v',
+      `${fixture}:/fixture:ro`,
+      '-e',
+      `DNS_API_IP=${prefix}.200`,
+      '-e',
+      `DNS_WEB_IP=${prefix}.201`,
+      '-e',
+      `DNS_EXECUTION_IP=${prefix}.202`,
+      'node:20-alpine',
+      'node',
+      '/fixture/dns.mjs',
+    );
+    const dnsUrl = `http://${docker('port', dnsName, '8053').split('\n')[0]}`;
+    const dnsControl = async (mode, addresses) => {
+      const response = await fetch(dnsUrl, {
+        method: 'POST',
+        body: JSON.stringify({ mode, addresses }),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(response.status, 200);
+      return response.json();
+    };
+    await until(`${variant} fixture DNS startup`, async () => (await dnsControl('healthy')).mode === 'healthy');
     const values = {
-      RIVET_PROXY_RESOLVER: '127.0.0.11',
+      RIVET_PROXY_RESOLVER: `${prefix}.53`,
       RIVET_PROXY_INTERNAL_LISTEN: String(proxyPort),
       RIVET_TRUST_INCOMING_FORWARDED_HEADERS: '0',
       RIVET_PROXY_AUTH_TOKEN: 'fixture-secret',
       RIVET_TRUSTED_HOSTS_INCLUDE_FILE: '/fixture/empty.inc',
       RIVET_CLIENT_ADDRESS_INCLUDE_FILE: '/fixture/client-address.inc',
       RIVET_PROXY_TIMEOUT_INCLUDE_FILE: '/fixture/empty.inc',
-      RIVET_PUBLIC_ROUTES_INCLUDE_FILE: '/fixture/empty.inc',
+      RIVET_PUBLIC_ROUTES_INCLUDE_FILE: '/fixture/public-routes.inc',
       RIVET_API_UPSTREAM_HOST: 'api',
       RIVET_API_UPSTREAM_PORT: '80',
-      RIVET_EXECUTION_UPSTREAM_HOST: 'api',
+      RIVET_EXECUTION_UPSTREAM_HOST: 'execution',
       RIVET_EXECUTION_UPSTREAM_PORT: '80',
       RIVET_WEB_UPSTREAM_HOST: 'web',
       RIVET_WEB_UPSTREAM_PORT: String(webPort),
       RIVET_EXECUTOR_UPSTREAM_HOST: 'api',
       RIVET_EXECUTOR_UPSTREAM_PORT: '21889',
     };
-    const rendered = (await readFile(path.join(root, template), 'utf8')).replace(/\$\{(RIVET_[A-Z_]+)\}/g, (_, key) => {
-      assert.ok(key in values, `Unresolved ${key}`);
-      return values[key];
-    });
+    const rendered = (await readFile(path.join(root, template), 'utf8'))
+      .replace(/\$\{(RIVET_[A-Z_]+)\}/g, (_, key) => {
+        assert.ok(key in values, `Unresolved ${key}`);
+        return values[key];
+      })
+      .replace('resolver 127.0.0.11 ', `resolver ${prefix}.53 `);
     await writeFile(path.join(fixture, 'default.conf'), rendered);
     const startMock = (role, generation, host) => {
       const name = `${network}-${role}-${generation}`;
@@ -165,11 +215,11 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
         '-v',
         `${fixture}:/fixture:ro`,
         '-e',
-        `ROLE=${role}`,
+        `ROLE=${role === 'execution' ? 'api' : role}`,
         '-e',
         `IDENTITY=${role}-${generation}`,
         '-e',
-        `PORT=${role === 'api' ? 80 : webPort}`,
+        `PORT=${role === 'web' ? webPort : 80}`,
         ...(role === 'api' ? ['-e', 'SECONDARY_PORT=21889'] : []),
         'node:20-alpine',
         'node',
@@ -179,44 +229,48 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     };
     let api = startMock('api', 1, 200);
     let web = startMock('web', 1, 201);
+    let execution = variant === 'image' ? startMock('execution', 1, 202) : null;
+    let executionPosts = 0;
     const proxy = `${network}-proxy`;
-    containers.add(proxy);
-    docker(
-      'run',
-      '-d',
-      '--name',
-      proxy,
-      '--network',
-      network,
-      '-p',
-      `127.0.0.1::${proxyPort}`,
-      '--entrypoint',
-      'nginx',
-      '-v',
-      `${fixture}:/fixture:ro`,
-      '-v',
-      `${path.join(fixture, 'default.conf')}:/etc/nginx/conf.d/default.conf:ro`,
-      '-e',
-      `RIVET_HEALTH_PROXY_URL=http://127.0.0.1:${proxyPort}/`,
-      '-e',
-      `RIVET_HEALTH_WEB_URL=http://web:${webPort}/`,
-      '--health-cmd',
-      'sh /fixture/health.sh',
-      '--health-interval',
-      '2s',
-      '--health-timeout',
-      '12s',
-      '--health-retries',
-      '2',
-      // Match the production proxy Dockerfile, not the floating compatibility base.
-      variant === 'image' ? 'nginx:1.27-alpine' : 'nginx:alpine',
-      '-c',
-      '/fixture/nginx.conf',
-      '-g',
-      'daemon off;',
-    );
-    const binding = docker('port', proxy, String(proxyPort)).split('\n')[0];
-    const base = `http://${binding}`;
+    const startProxy = (name) => {
+      containers.add(name);
+      docker(
+        'run',
+        '-d',
+        '--name',
+        name,
+        '--network',
+        network,
+        '-p',
+        `127.0.0.1::${proxyPort}`,
+        '--entrypoint',
+        'nginx',
+        '-v',
+        `${fixture}:/fixture:ro`,
+        '-v',
+        `${path.join(fixture, 'default.conf')}:/etc/nginx/conf.d/default.conf:ro`,
+        '-e',
+        `RIVET_HEALTH_PROXY_URL=http://127.0.0.1:${proxyPort}/`,
+        '-e',
+        `RIVET_HEALTH_WEB_URL=http://web:${webPort}/`,
+        '--health-cmd',
+        'sh /fixture/health.sh',
+        '--health-interval',
+        '2s',
+        '--health-timeout',
+        '12s',
+        '--health-retries',
+        '2',
+        // Match the pinned production and compatibility proxy version.
+        'nginx:1.27.5-alpine',
+        '-c',
+        '/fixture/nginx.conf',
+        '-g',
+        'daemon off;',
+      );
+      return `http://${docker('port', name, String(proxyPort)).split('\n')[0]}`;
+    };
+    const base = startProxy(proxy);
     const request = (route, options = {}) =>
       fetch(`${base}${route}`, {
         headers: { cookie: 'fixture-auth=yes' },
@@ -374,6 +428,156 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
         });
       });
     }
+    // This is a DNS outage, not a backend outage. Keep known API/web addresses
+    // alive and exceed the real 30-second resolver validity without retrying a
+    // single failed request. Include a negative control with the old routing.
+    let legacy;
+    let legacyBase;
+    let reloadProxy;
+    let reloadBase;
+    if (variant === 'image') {
+      reloadProxy = `${network}-reload`;
+      reloadBase = startProxy(reloadProxy);
+      await until('reload proxy warmup', async () => (await fetch(`${reloadBase}/readyz`)).status === 200);
+      await writeFile(
+        path.join(fixture, 'legacy.conf'),
+        `worker_processes 1;
+events {} http { resolver ${prefix}.53 valid=1s ipv6=off; resolver_timeout 1s;
+server { listen 8080; location / { set $target http://api:80; proxy_pass $target;
+proxy_set_header X-Rivet-Proxy-Auth fixture-secret; } } }`,
+      );
+      legacy = `${network}-legacy`;
+      containers.add(legacy);
+      docker(
+        'run',
+        '-d',
+        '--name',
+        legacy,
+        '--network',
+        network,
+        '-p',
+        '127.0.0.1::8080',
+        '-v',
+        `${fixture}:/fixture:ro`,
+        '--entrypoint',
+        'nginx',
+        'nginx:1.27.5-alpine',
+        '-c',
+        '/fixture/legacy.conf',
+        '-g',
+        'daemon off;',
+      );
+      legacyBase = `http://${docker('port', legacy, '8080').split('\n')[0]}`;
+      await until(
+        'legacy DNS negative control warmup',
+        async () => (await fetch(`${legacyBase}/api/echo`)).status === 200,
+      );
+    }
+    for (const mode of variant === 'image' ? ['refused', 'servfail', 'drop'] : ['refused']) {
+      const before = await dnsControl(mode);
+      const end = Date.now() + 35_000;
+      let samples = 0;
+      try {
+        while (Date.now() < end) {
+          const echo = await request('/api/echo?dns=outage', { method: 'POST', body: 'one unchanged POST' });
+          assert.equal(echo.status, 200, `${variant} ${mode}: API failed during DNS outage`);
+          const payload = await echo.json();
+          assert.equal(payload.body, 'one unchanged POST');
+          assert.equal(payload.identity, 'api-1');
+          const ready = await request('/readyz', { headers: {} });
+          assert.equal(ready.status, 200, `${variant} ${mode}: readiness lost on DNS outage`);
+          await ready.body.cancel();
+          const web = await request('/');
+          assert.equal(web.status, 200, `${variant} ${mode}: web failed during DNS outage`);
+          assert.equal((await web.json()).identity, 'web-1');
+          if (execution) {
+            const response = await request('/workflows/fixture?query=unchanged', {
+              method: 'POST',
+              body: 'accepted once',
+            });
+            assert.equal(response.status, 200);
+            const result = await response.json();
+            assert.equal(result.identity, 'execution-1');
+            assert.equal(result.body, 'accepted once');
+            assert.equal(result.acceptedPosts, ++executionPosts, 'accepted workflow POST must not be replayed');
+          }
+          samples++;
+          await delay(500);
+        }
+        if (mode === 'refused' && legacyBase) {
+          const response = await fetch(`${legacyBase}/api/echo`, { signal: AbortSignal.timeout(5000) });
+          assert.equal(response.status, 502, 'old request-time DNS routing must fail the same outage');
+          await response.body.cancel();
+          // Startup/route refresh may reload nginx. Its resolved peer set must
+          // survive that reload, not turn a warm proxy into a cold one.
+          docker('kill', '--signal=HUP', reloadProxy);
+          for (let sample = 0; sample < 10; sample++) {
+            const ready = await fetch(`${reloadBase}/readyz`, { signal: AbortSignal.timeout(2500) });
+            assert.equal(ready.status, 200, 'reload must retain known peers during DNS outage');
+            await ready.body.cancel();
+            await delay(500);
+          }
+          const reloadLogs = spawnSync('docker', ['logs', reloadProxy], { encoding: 'utf8', timeout: 10000 });
+          assert.equal(reloadLogs.status, 0);
+          assert.match(reloadLogs.stdout + reloadLogs.stderr, /reconfiguring/);
+          remove(reloadProxy);
+          const cold = `${network}-cold`;
+          const coldBase = startProxy(cold);
+          await until('cold proxy cannot claim readiness without a DNS answer', async () => {
+            const response = await fetch(`${coldBase}/readyz`, { signal: AbortSignal.timeout(2500) });
+            await response.body.cancel();
+            return response.status === 502;
+          });
+          // The browser starts only after DNS has been unavailable beyond TTL.
+          execFileSync(
+            process.execPath,
+            [
+              path.join(root, '.yarn/releases/yarn-4.17.1.cjs'),
+              'studio-server:ui:observe',
+              'proxy-dns-availability.spec.ts',
+            ],
+            {
+              cwd: root,
+              stdio: 'inherit',
+              timeout: 180_000,
+              env: {
+                ...process.env,
+                PLAYWRIGHT_HEADLESS: '1',
+                PLAYWRIGHT_SLOW_MO: '0',
+                PLAYWRIGHT_BASE_URL: base,
+                RIVET_PROXY_DNS_FIXTURE: '1',
+              },
+            },
+          );
+          await dnsControl('healthy');
+          await until(
+            'cold proxy recovers without restart',
+            async () => (await fetch(`${coldBase}/readyz`)).status === 200,
+          );
+          assert.equal(JSON.parse(docker('inspect', cold))[0].RestartCount, 0);
+          remove(cold);
+        }
+        const after = await (await fetch(dnsUrl)).json();
+        if (mode !== 'refused') assert.ok(after.failures > before.failures, 'DNS failures must actually be exercised');
+        console.log(`${variant}: ${mode} DNS outage exceeded TTL; ${samples} rounds, zero failed requests`);
+      } finally {
+        await dnsControl('healthy');
+      }
+    }
+    if (legacy) remove(legacy);
+    if (variant === 'image') {
+      await dnsControl('nxdomain');
+      await until('authoritative NXDOMAIN removes obsolete addresses', async () => {
+        const response = await request('/readyz', { headers: {} });
+        await response.body.cancel();
+        return response.status === 502;
+      });
+      await dnsControl('healthy');
+      await until(
+        'DNS records recover after NXDOMAIN',
+        async () => (await request('/readyz', { headers: {} })).status === 200,
+      );
+    }
     remove(api);
     await until(`${variant} API outage health`, () => health() === 'unhealthy');
     // Allow nginx's five-second upstream connect deadline to produce its error
@@ -385,17 +589,28 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
       `${variant} must not serve SPA success while the API is down`,
     );
     api = startMock('api', 2, 210);
+    await dnsControl('healthy', { api: `${prefix}.210` });
     await until(
       `${variant} API address recovery`,
       async () => (await (await request('/api/echo')).json()).identity === 'api-2',
     );
     await until(`${variant} API health recovery`, () => health() === 'healthy');
     assert.equal((await (await request('/readyz', { headers: {} })).json()).identity, 'api-2');
+    if (execution) {
+      remove(execution);
+      execution = startMock('execution', 2, 212);
+      await dnsControl('healthy', { execution: `${prefix}.212` });
+      await until(
+        'published execution address recovery',
+        async () => (await (await request('/workflows/fixture')).json()).identity === 'execution-2',
+      );
+    }
     // Warm the web cache immediately before replacing that address too.
     assert.equal((await (await request('/')).json()).identity, 'web-1');
     remove(web);
     await until(`${variant} web outage health (login still available)`, () => health() === 'unhealthy');
     web = startMock('web', 2, 211);
+    await dnsControl('healthy', { web: `${prefix}.211` });
     await until(
       `${variant} web address recovery`,
       async () => (await (await request('/')).json()).identity === 'web-2',
@@ -405,7 +620,7 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
     const logs = spawnSync('docker', ['logs', proxy], { encoding: 'utf8', timeout: 10000 });
     assert.equal(logs.status, 0);
     assert.doesNotMatch(logs.stdout + logs.stderr, /reconfiguring/);
-    for (const name of [proxy, api, web]) remove(name);
+    for (const name of [proxy, api, web, dnsName, execution].filter(Boolean)) remove(name);
     console.log(`${variant}: routing, auth, streams, upgrades and DNS recovery passed`);
   }
 } finally {

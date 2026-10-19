@@ -9,7 +9,54 @@ uncertain execution. A long-running or paused execution may block retirement.
 This is not a guarantee against simultaneous provider failure or arbitrary pod
 termination. Legacy restore remains an explicitly destructive maintenance task.
 
-### Latest exact-pair qualification
+### Latest regional follow-up: DNS gap fixed locally, provider proof unchanged
+
+The same published pair's regional Gateway primary upgrade passed with 7,809
+requests/zero failures and both retained-browser journeys passing. The recovery
+stage did not pass: GKE's autoscaler evicted both DNS replicas, leaving zero
+ready DNS endpoints for about 18 seconds. Proxy resolver errors, the workflow
+and web-app timeouts, and Google health-check aborts align with that window.
+The later runner exit was a separate GKE management-stream timeout. Do not
+dismiss this as solely operator connectivity or reinterpret the earlier global
+proof as a regional recovery pass. DNS disruption resilience is a blocker to
+claiming the target production guarantee, not a demonstrated Rivet graph-engine
+defect or proof that production is currently affected. No production change or
+new rehearsal is authorized by this finding. Billable staging cleanup is verified
+complete; only recorded non-billable producer-held networking remains. See the
+[regional evidence and cleanup](gcp-ha-staging.md#regional-closure-and-dns-failure-analysis-2026-10-19).
+
+The subsequent local fix replaces request-time proxy DNS with native shared
+upstream groups and background refresh. Controlled outages beyond the real TTL
+exercise connection refusal, SERVFAIL and silent timeouts, with no failed request
+or POST replay permitted; cold start, NXDOMAIN, reload, address replacement and a
+headless browser journey are covered separately. See
+[the implementation and local verification contract](development.md#proxy-dns-recovery-and-health).
+This fixes the demonstrated proxy dependency on DNS refresh while known backends
+are healthy, not cluster DNS itself or every downstream DNS dependency. The old
+`35c317ddb` regional images and incomplete recovery receipts remain unchanged;
+local tests do not qualify new images through the GCP Gateway. No paid rehearsal
+or production change is part of this fix.
+
+### Latest passing exact-pair qualification (global edge)
+
+The 2026-10-18 exact promoted `1a00f3293` to `35c317ddb` GKE Autopilot,
+PostgreSQL 18, GCS and trusted-HTTPS qualification passed after normal main
+image CI `39139897889`. Primary workflow traffic: 7,859 requests/zero failures;
+recovery: 9,567/zero; separate public web-app traffic: 6,798/zero. Both retained
+browser workflows passed without reloads; this chart-only pair has identical
+UI content IDs, so no distinct UI-content transition is claimed. Both fault
+recoveries passed with one original command, including a real journal CAS
+conflict and preserved paused editor work. Controlled frontend evictions passed
+on two distinct nodes, and one uninterrupted independent traffic window captured
+six actual serving-frontend node consolidations and subsequent exact-UID absence.
+See [the complete provider result and cleanup status](gcp-ha-staging.md#taint-aware-placement-correction-2026-10-18-qualified-exact-pair).
+Production remains unchanged; its first legacy/singleton conversion is still a
+separate maintenance operation, not a zero-downtime rolling upgrade.
+The passed edge was `gke-l7-global-external-managed`. Read-only production
+inspection found a regional Gateway, which is not the same edge qualification;
+see the [production handoff boundary](gcp-ha-staging.md#production-handoff-boundary-found-by-read-only-inspection).
+
+### Earlier exact-pair qualification
 
 The 2026-10-17 disposable local `0704d0181` to `d9ea8dd17` upgrade passed after
 the candidate's complete image CI (`39049988451`). Primary traffic recorded
@@ -187,7 +234,7 @@ including the longer GKE edge propagation and drain windows.
 
 ## Implemented prerequisites
 
-### Regional GKE frontend availability policy (awaiting provider qualification)
+### GKE frontend availability policy (qualified global-edge pair)
 
 `helm/overlays/gke-ha.yaml` is an opt-in policy for an embedded Rivet proxy
 behind a regional GKE Gateway. It does not replace installation values, enable
@@ -238,7 +285,13 @@ The profile retains zero-unavailable/one-surge Deployment rollout, PDB
 the rehearsed 60-second connection drain. `minReadySeconds=120` is a Deployment
 stabilization window, **not** protection against premature PDB eviction admission.
 Neither scheduling nor extra replicas constitute positive load-balancer health
-evidence, and no zero-downtime provider certificate is claimed by this change.
+evidence. The exact `1a00f3293` to `35c317ddb` provider qualification above
+supplies that evidence for its global Gateway, not the existing production
+regional Gateway; it is not a universal certificate for arbitrary versions,
+providers, resource pressure or simultaneous failures. Plan sufficient capacity
+and use an explicit suitable `--timeout 40m` for this GKE profile. The rehearsed
+frontend phase alone took about 24 minutes; per-phase deadlines are not a bound
+on total upgrade duration, and accepted long/paused work may intentionally wait.
 
 The provider runner keeps a non-retrying public web-app observer alive throughout
 the rollout, recovery and frontend-eviction proof. A web-only availability failure
@@ -267,8 +320,8 @@ Sanitized traffic receipts retain fixed HTTP server/content classes, byte length
 and a SHA-256 body fingerprint on HTTP failures. Raw response bodies, arbitrary
 server headers, cookies and authorization are not exported. A server header is
 diagnostic evidence, not conclusive proof of which hop produced a response.
-Run the full exact-image provider qualification again after normal CI publication;
-the failed 2026-10-18 receipt remains failed and unchanged.
+The subsequent exact-image provider qualification passed after normal CI
+publication; earlier failed 2026-10-18 receipts remain failed and unchanged.
 
 Local preparation verification passed 95 focused HA tests (including 16 new GKE
 policy/evidence/eviction regressions), the offline Kubernetes lane and ten
@@ -281,8 +334,9 @@ local stack was not changed; an initial browser run against that stack reached
 its access-key prompt instead of the isolated fixture and was replaced by the
 loopback-preview check. These are preparation checks, not a full mixed-version
 qualification of the changed source or proof of GKE scheduling/NEG behavior.
-Commit/publish the reviewed candidate, repeat local exact-image qualification,
-then request a new isolated provider allowance before creating cloud resources.
+The later candidate completed normal main CI and actual provider qualification;
+see the exact-pair result above. Future runs still need explicit isolated budget,
+an unexpired window and exact-inventory cleanup authority before paid creation.
 
 ### Shared application prerequisites
 

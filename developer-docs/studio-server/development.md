@@ -1490,13 +1490,25 @@ annotations; see [repository test guardrails](../BUILD-AND-CI.md#yarn-teststyle)
 The companion executor startup configuration exception is also exact `GET` only;
 its loopback, proxy-token and executor-token requirements remain unchanged.
 
-Proxy service destinations use runtime DNS resolution consistently across the
-development, Compose production, and packaged image templates. Do not add literal
-service `proxy_pass` destinations: their startup-resolved upstreams can also shadow
-variable-based destinations and retain an obsolete container IP. The existing
-30-second DNS cache bounds address refresh; a service restart can briefly interrupt
-requests, but recovery must not require a proxy restart. The dev launcher's reload
-after startup remains an additional safeguard.
+Proxy service destinations use four named upstream groups (web, control API,
+execution API and executor) in the development, Compose production and packaged
+image templates. Each group has a shared-memory `zone` and `server ... resolve`.
+Nginx refreshes DNS in the background (`valid=30s`, `resolver_timeout 5s`), retaining
+known peers across transient connection refusal, SERVFAIL or dropped DNS packets.
+Requests do not wait for those refreshes. Do not regress to variable URLs containing
+service hostnames: after their cached answer expires, request-time resolution can
+make healthy backends unavailable during a shared DNS outage. Route variables must
+name the groups, retaining original origins separately for redirect rewriting.
+
+This requires open-source Nginx 1.27.3 or newer; shipped proxy images and local dev
+Compose pin `1.27.5-alpine`. Shared peers survive a configuration reload. An
+authoritative NXDOMAIN removes obsolete peers, and a cold proxy without a resolved
+API stays unready until DNS recovers. Keeping a known address cannot make a dead
+backend healthy, discover a new address while DNS is down, or protect PostgreSQL,
+object-storage or external-provider DNS. No cluster DNS configuration, retries of
+uncertain workflow POSTs, or cached application responses are introduced. A service
+IP replacement may briefly interrupt requests but must recover without a proxy
+restart. These are local proxy guarantees, not a new GCP qualification receipt.
 
 The dev proxy health check exercises `/` through the normal UI authentication gate
 and separately checks the web service. Both must return HTTP 200; a login page is
@@ -1510,13 +1522,41 @@ containers with the real templates. The fixture explicitly allocates and verifie
 a private `/24` subnet before assigning fixed mock addresses; it safely retries
 another private range when an existing Docker network overlaps. This is required
 because Docker rejects `--ip` on its automatically addressed bridge networks.
-It verifies API/web IP replacement without Nginx reload, recovery within 45 seconds,
-health failures/recovery, auth, redirects, POST bodies, SSE, and WebSocket upgrades.
-It removes only its own fixtures. Also
-run the API proxy-image contract tests and `yarn studio-server:ui:observe proxy-routing.spec.ts`
-with `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`; require a fresh report under
-`artifacts/playwright/`, not merely a successful launcher exit.
-The Studio Server deployment-contracts gateway CI lane also runs the isolated DNS fixture.
+It verifies API/web/execution IP replacement without Nginx reload, recovery within
+45 seconds, health failures/recovery, auth, redirects, POST bodies, SSE, and
+WebSocket upgrades. A controlled DNS server induces outages beyond the actual
+30-second TTL: all three templates face connection refusal, and the image also
+faces SERVFAIL and silent timeouts. Every availability sample must succeed without
+client retries; the separate execution mock counts accepted POSTs to detect
+replays. An old request-time-resolution negative control must fail the same outage.
+Warm reload, cold-start failure/recovery and NXDOMAIN removal/recovery are separate
+checks. The fixture removes only its own local containers and network.
+
+The image outage also runs `yarn studio-server:ui:observe proxy-dns-availability.spec.ts`
+with `PLAYWRIGHT_HEADLESS=1`, `PLAYWRIGHT_SLOW_MO=0` and a loopback-only fixture URL
+after the DNS TTL has expired. It checks browser navigation, authenticated POSTs,
+readiness, executor WebSockets and rejected anonymous access. Require a fresh report
+under `artifacts/playwright/`; the spec is skipped outside this fixture. The runner
+uses installed Chromium or installs Playwright's browser; set
+`PLAYWRIGHT_EXECUTABLE_PATH` only to a compatible local browser if needed. Also run
+the API proxy-image contract tests, VM TLS and trusted-client proxy fixtures after
+changing these routes. The existing deployment-contracts gateway CI lane runs the
+expanded DNS fixture, including this headless browser check; no paid cluster is
+required. That lane uploads `proxy-dns-browser-<sha>` diagnostics on success or
+failure (seven-day retention).
+
+Local verification on 2026-10-19 passed: all three proxy templates, five
+35-second outage windows with zero failed availability samples or duplicate
+execution POSTs, the old-routing negative control, reload/cold/NXDOMAIN/address
+recovery checks, and one headless browser journey. The 21 proxy contracts, local
+Kubernetes contracts/renders (318 passed, one platform skip), cutover/executor
+tests (237 passed, seven platform skips), trusted-client proxy and HTTP/TLS
+fixtures also passed. The first sandbox-restricted cutover attempt could not
+start its fixture children; the unchanged suite passed outside that restriction.
+Formatting, test-style, workflow policy, monorepo structure and documentation
+links passed. Test containers/network were removed; no GCP rehearsal or production
+access was used. This is source-level local evidence, not published-image or
+provider qualification.
 
 ## Environment loading
 

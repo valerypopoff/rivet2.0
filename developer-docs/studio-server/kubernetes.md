@@ -61,9 +61,29 @@ spread, `nodeTaintsPolicy: Honor` and required hostname separation. The optional
 or `Ignore`; the GKE guard requires `Honor`, while generic profiles retain the
 omitted default. Honor needs Kubernetes 1.26+ with the topology node-inclusion
 feature enabled (GA in 1.33). Its higher placement/capacity requirement
-is deliberate; see the [GKE policy and qualification boundary](./ha-rolling-upgrades.md#regional-gke-frontend-availability-policy-awaiting-provider-qualification).
-This policy is awaiting provider qualification, not a recommendation to change a
-live installation or a substitute for the first maintenance conversion.
+is deliberate; see the [GKE policy and qualification boundary](./ha-rolling-upgrades.md#gke-frontend-availability-policy-qualified-global-edge-pair).
+The exact promoted `1a00f3293` to `35c317ddb` image pair passed isolated GKE,
+PostgreSQL and GCS qualification through a global GKE Gateway, including real
+serving-node consolidation. That does not qualify the existing regional
+production Gateway's withdrawal behavior; see the [read-only production
+handoff boundary](./gcp-ha-staging.md#production-handoff-boundary-found-by-read-only-inspection).
+The subsequent regional primary/browser upgrade passed, but recovery exposed an
+18-second shared-DNS outage after GKE evicted both DNS replicas. This is a real
+availability gap, separate from the later operator management-stream timeout;
+regional zero-downtime qualification remains blocked. See the
+[regional closure and DNS evidence](./gcp-ha-staging.md#regional-closure-and-dns-failure-analysis-2026-10-19).
+The proxy mitigation is now implemented locally: shared upstream zones retain
+known peers during transient DNS refresh failure instead of resolving on the
+request path. The controlled-DNS Docker regression checks all three shipped
+templates, published execution routing, health, reload and headless browser
+continuity. It does not change GKE DNS or certify new images in the regional
+Gateway; [scope and checks](./development.md#proxy-dns-recovery-and-health).
+No live production change or new paid rehearsal follows automatically.
+That is not permission to change a live installation or a substitute for its
+first maintenance conversion. For this profile, review capacity and use an
+explicit suitable `--timeout 40m`: its frontend phase took about 24 minutes,
+and the full primary upgrade took about 57. Deadlines apply per phase; accepted
+long/paused work can extend overall duration without being killed.
 The release command still accepts one installation `--values` file. Incorporate
 the profile fields into that reviewed file before using the command; do not pass
 repeated `--values` flags or bypass the release owner with raw Helm.
@@ -638,8 +658,11 @@ and compatibility Compose templates. The existing real-NGINX DNS fixture
 CI lane) checks all three templates without an operator session, including API
 503 propagation (including HEAD), method rejection, unchanged operator API
 authentication, non-health path isolation, API outage and address recovery.
-The image-template fixture uses `nginx:1.27-alpine`, matching the production
-proxy Dockerfile rather than testing that template only on a floating NGINX tag.
+All three template fixtures use `nginx:1.27.5-alpine`, matching the production
+proxy Dockerfile and dev Compose rather than relying on a floating Nginx tag.
+The same fixture now covers transient DNS outages beyond TTL, a warm reload,
+cold readiness, authoritative NXDOMAIN and browser continuity; see
+[proxy DNS verification](development.md#proxy-dns-recovery-and-health).
 Release readiness also rejects `restoreMaintenance: true`, including restore
 warmup responses whose process health is ready. This changes only the gate's
 acceptance check, not the runtime health contract used by restore coordination.

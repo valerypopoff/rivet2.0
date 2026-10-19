@@ -3,8 +3,16 @@ import { createHash } from 'node:crypto';
 
 const role = process.env.ROLE;
 const identity = process.env.IDENTITY;
+let acceptedPosts = 0;
 const handleRequest = async (req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (role === 'web' && url.pathname === '/dns-availability') {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(
+      '<!doctype html><title>DNS availability fixture</title><button id="run">Run</button><pre id="output"></pre><script>document.querySelector("#run").onclick=async()=>{const r=await fetch("/api/echo",{method:"POST",body:"browser body"});document.querySelector("#output").textContent=await r.text();};</script>',
+    );
+    return;
+  }
   if (role === 'api' && req.headers['x-rivet-proxy-auth'] !== 'fixture-secret') {
     res.writeHead(403).end();
     return;
@@ -51,8 +59,9 @@ const handleRequest = async (req, res) => {
   }
   let body = '';
   for await (const chunk of req) body += chunk;
+  if (req.method === 'POST') acceptedPosts++;
   res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify({ identity, url: req.url, method: req.method, body, host: req.headers.host }));
+  res.end(JSON.stringify({ identity, url: req.url, method: req.method, body, host: req.headers.host, acceptedPosts }));
 };
 const handleUpgrade = (req, socket) => {
   const accept = createHash('sha1')

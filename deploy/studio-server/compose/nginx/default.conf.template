@@ -1,6 +1,27 @@
 map_hash_bucket_size 128;
 
 resolver 127.0.0.11 valid=30s ipv6=off;
+resolver_timeout 5s;
+
+# Keep resolved peers in shared memory while DNS refreshes in the background.
+# A transient resolver failure must not make healthy, known backends unreachable.
+# Requires nginx >= 1.27.3 (open-source upstream "resolve" support).
+upstream rivet_web {
+    zone rivet_web 64k;
+    server web:3000 resolve;
+}
+upstream rivet_api {
+    zone rivet_api 64k;
+    server api:80 resolve;
+}
+upstream rivet_execution {
+    zone rivet_execution 64k;
+    server api:80 resolve;
+}
+upstream rivet_executor {
+    zone rivet_executor 64k;
+    server api:21889 resolve;
+}
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -34,15 +55,16 @@ server {
 
     client_max_body_size 100m;
 
-    set $web_upstream http://web:3000;
-    set $api_upstream http://api:80;
-    set $execution_upstream http://api:80;
-    set $api_ui_auth_upstream http://api:80/ui-auth;
-    set $api_ui_auth_check_upstream http://api:80/ui-auth/check;
-    set $api_ui_auth_prompt_upstream http://api:80/ui-auth/prompt;
-    set $api_latest_debugger_upstream http://api:80/ws/latest-debugger;
-    set $executor_internal_upstream http://api:21889/internal;
-    set $executor_upstream http://api:21889/;
+    set $web_upstream http://rivet_web;
+    set $api_upstream http://rivet_api;
+    set $execution_upstream http://rivet_execution;
+    set $api_ui_auth_upstream http://rivet_api/ui-auth;
+    set $api_ui_auth_check_upstream http://rivet_api/ui-auth/check;
+    set $api_ui_auth_prompt_upstream http://rivet_api/ui-auth/prompt;
+    set $api_latest_debugger_upstream http://rivet_api/ws/latest-debugger;
+    set $executor_internal_upstream http://rivet_executor/internal;
+    set $executor_upstream http://rivet_executor/;
+    set $api_ui_auth_origin http://api:80/ui-auth;
 
     # Private API routes are reachable through the API service, never the public proxy.
     location = /internal { return 404; }
@@ -124,7 +146,7 @@ server {
     location /__rivet_auth/ {
         rewrite ^/__rivet_auth/(.*)$ /ui-auth/$1 break;
         proxy_pass $api_upstream;
-        proxy_redirect $api_ui_auth_upstream/ /__rivet_auth/;
+        proxy_redirect $api_ui_auth_origin/ /__rivet_auth/;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;

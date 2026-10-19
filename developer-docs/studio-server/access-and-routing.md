@@ -132,10 +132,16 @@ Important local-Docker wiring note:
 
 ## Proxy address recovery and health
 
-For all three shipped proxy templates, service `proxy_pass` destinations use
-runtime DNS with the existing 30-second resolver cache. Container address changes
-must recover without a launcher call; the dev launcher's startup reload is an
-additional safeguard. The `/__rivet_auth/` prefix is explicitly rewritten to
+All three shipped proxy templates route through named, shared-memory upstream
+groups with background DNS refresh (30-second validity, five-second resolver
+timeout). Known healthy peers remain usable through transient DNS outages, even
+after the TTL and across a configuration reload. Cold proxies remain unready until
+an API address resolves; authoritative NXDOMAIN removes obsolete peers. This is not
+response caching or automatic replay of failed workflow requests. Container address
+changes must recover without a launcher call; a dead backend or an unknown address
+during DNS failure is not covered. Open-source Nginx `resolve` requires 1.27.3+;
+the proxy Dockerfile and dev Compose pin 1.27.5. Do not replace group destinations
+with request-time DNS URLs. The `/__rivet_auth/` prefix is explicitly rewritten to
 `/ui-auth/` before variable-based forwarding, with redirect handling retained.
 The dev health check requires HTTP 200 through the normal UI auth route and from
 the web upstream, so a working login page cannot conceal an unavailable dashboard.

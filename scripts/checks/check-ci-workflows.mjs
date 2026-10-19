@@ -337,7 +337,7 @@ for (const [lane, names] of [
   [
     'gateway',
     [
-      'Verify proxy recovery after container address changes',
+      'Verify proxy DNS outages, browser continuity and address recovery',
       'Verify single-VM nginx TLS gateway',
       'Verify trusted-client proxy templates and executor upgrades',
     ],

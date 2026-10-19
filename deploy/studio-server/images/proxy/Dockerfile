@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM nginx:1.27-alpine
+FROM nginx:1.27.5-alpine
 
 RUN apk add --no-cache curl && \
     addgroup -g 10001 -S rivet && \

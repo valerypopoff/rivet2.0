@@ -1,8 +1,333 @@
 # Isolated GCP HA qualification plan
 
-## Taint-aware placement correction (2026-10-18): provider proof pending
+## Regional closure and DNS failure analysis (2026-10-19)
 
-The next candidate retains the six-proxy, three-zone, separate-host policy and
+The existing regional rehearsal is closed, not passed. No replacement rehearsal
+or production change was started. `artifacts/gcp-ha-regional-20261018/` contains
+the original test receipts, `failure-analysis.json`, and hash-bound private
+Cloud Logging evidence collected after cleanup. All times below are UTC.
+
+The primary mixed-image upgrade passed with 7,809 successful requests, zero
+failures and both retained-browser checks passing. Recovery recorded 4,892
+successful workflow requests plus one 15-second timeout; the public web stream
+recorded 4,690 successes plus one 15-second timeout. Recovery did not complete
+either fault scenario and did not reach the final frontend-eviction checks.
+
+There are two distinct failures, not one unproven client-network explanation:
+
+- At 21:53:07.992 and 21:53:08.211 on October 18, audit logs identify
+  `system:cluster-autoscaler` evicting both `kube-dns` replicas. Their EndpointSlice
+  had zero ready endpoints from 21:53:08.724 until 21:53:26.766 (about 18 seconds).
+  Four Rivet proxies logged six resolver connection-refused messages against
+  `10.115.0.10:53`. The two public request deadlines and two Google-originated
+  health-check aborts align with this outage. Access logs omit the probe-ID
+  header, so request association uses paths/timing rather than an exact probe-ID
+  join. This is strong server-side DNS outage evidence, not just the operator PC
+  disconnecting. It occurred during recovery template preparation, before the
+  first owner retirement, not as a successful injected-fault recovery result.
+- At 22:09:49 the runner exited after a `kubectl exec` stream to the GKE management
+  endpoint timed out. That is a separate transport failure; the exact failing
+  network hop is not established. The uncertain command was not replayed.
+
+This blocks claiming the regional zero-downtime guarantee. It does not prove a
+Rivet graph-execution defect or that the live production cluster is currently
+affected; production DNS was not inspected or changed. More Rivet replicas do
+not protect a shared DNS dependency. A future authorized fix must address DNS
+disruption resilience at its owner, with bounded local/owning-seam verification;
+do not silently waive failed requests, blindly replay `exec`, claim NodeLocal
+cache alone guarantees availability, or start another paid rehearsal. Google
+documents that Autopilot already enables NodeLocal DNSCache, while cache misses
+still depend on upstream DNS; do not prescribe an unverified hard-coded resolver
+or unsupported Autopilot DNS scaling change.
+
+The follow-up fix is local only: the three embedded/Compose proxy templates now
+use four shared Nginx upstream groups with background DNS refresh, retaining known
+peers during transient resolver failure. The local regression holds the resolver
+unavailable beyond the real 30-second TTL, checks refused/SERVFAIL/dropped queries,
+published POST acceptance without replay, browser/auth/WebSocket continuity,
+reload retention, cold readiness, NXDOMAIN and changed-address recovery. The old
+request-time-resolution configuration fails the same controlled outage. See
+[proxy DNS development contract](development.md#proxy-dns-recovery-and-health).
+This addresses the demonstrated proxy failure mode without editing managed DNS
+resources. It does not turn the historical regional test into a pass or qualify
+the new source on GCP; no new rehearsal or production operation was started.
+
+Cleanup verified at 22:40:19 on October 18: zero rehearsal billable resources and
+zero Gateway controller children remain. The exact cluster/SQL deletion
+operations are complete; namespace, CSI disk, all 28,740 frozen object
+generations/bucket, regional IP, NAT/router, both subnets, firewall, new HMAC and
+both new service accounts are absent. Pre-existing networks, identities, keys,
+IAM members and billing association passed preservation checks. The app reports
+the old cleanup automation no longer exists; no replacement was created.
+
+Only VPC `rivet-ha-regional-20261018` (ID `612452280623995833`), its private-service
+connection and internal range `rivet-ha-regional-psa-1018` (ID
+`3296213490892053321`) remain non-billable under a producer hold. The original
+normal connection-delete operation ended with
+`FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION`; it was not forced or retried.
+Google documents a four-day Cloud SQL producer-retention period after instance
+deletion. After provider release, a separately reviewed cleanup can re-observe
+these exact identities and remove the connection/range/VPC in dependency order;
+never reuse a failed operation acknowledgement as deletion authority. The
+non-billable quota preference and DNS soft-delete tombstone are retained.
+See [Google's private-connection deletion rules](https://docs.cloud.google.com/vpc/docs/configure-private-services-access#delete-connection)
+and [NodeLocal DNSCache limits](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/nodelocal-dns-cache).
+
+## Regional Gateway follow-up (2026-10-18): isolated provisioning
+
+Historical operation sequence only: this operation has ended and its expiry
+follow-up was removed. The closure, actual failed result and remaining
+non-billable producer hold are recorded above. Do not execute the former
+provisioning/supervision steps below as current instructions.
+
+The user authorized closing the remaining regional-edge gap in isolation using
+the already published exact `1a00f3293` to `35c317ddb` images, without rebuilding
+or changing production. The new operation is `rivet-ha-regional-20261018` in
+`unstructured-448515` (`601520844163`). Every prior inventory, retained VPC/range,
+pre-existing identity and production resource remains protected. The original
+shared USD 50 allowance and original deadlines are unchanged, not restarted.
+
+Read-only quota inspection found five VPCs using all five slots. A separate,
+non-billable quota preference requested only one additional slot and was granted
+six, avoiding deletion or reuse of retained networks. A clean task-owned checkout
+pins the existing published source while preserving pending documentation edits.
+Fresh pre-existing-resource and regional-pricing observations are retained under
+`artifacts/gcp-ha-regional-20261018/`. The fresh regional cluster, private
+PostgreSQL, bucket and NAT have now been dispatched within the same shared
+allowance. Their exact identities are journaled separately from all prior
+inventories. The expiry safeguard is active for this operation. No regional
+qualification pass is claimed until the actual protected provider run completes.
+
+The approved temporary certificate was issued and installed successfully. A
+normal OS-trusted TLS handshake verified its exact SHA-256 fingerprint at the
+new regional address; no permissive TLS callback or production secret was used.
+All five challenge objects and all three recorded zonal NEGs are now absent.
+The baseline is installed; initial GKE NEG-status priming precedes seed/traffic.
+The operation-owned supervisor runs the existing protected rollout and one
+uninterrupted independent observer, stops that observer gracefully, and seals
+qualification only when the complete source-owned evidence validates. It does
+not retry failed traffic, rebuild images, or deploy/clean up production.
+The regional main runner exited unsuccessfully at 22:09:49 UTC on October 18
+after its GKE `kubectl exec` connection timed out during the first recovery
+scenario. The primary upgrade completed with 7,809 requests and zero failures;
+both retained-browser checks passed. The recovery traffic receipt contains 4,892
+successful samples and one 15-second workflow timeout, and the public web receipt
+4,690 successes and one 15-second timeout. Subsequent retained-log analysis
+established the shared DNS outage described above. Neither
+fault-recovery scenario completed, and frontend eviction qualification was not
+reached. Do not label this operation a pass or replay its uncertain operation.
+All test workers settled and sanitized failed diagnostics were exported before
+cleanup admission. Exact controller/storage/NEG identities were refreshed from
+the reviewed clean worktree; preserve this failure alongside the earlier global
+qualification. Cleanup must not start another rehearsal or touch production.
+
+The regional independent observer stopped at 21:05 UTC on October 18 because
+the operator PC could not reach the GKE management endpoint. Its 3,622 workflow
+and 1,316 web-app requests had zero failures, but its single observation error
+means this is not a passing uninterrupted independent trace. Preserve that
+failed receipt separately from the main suite; do not restart the
+observer, merge windows or waive the full-qualification criterion. Finish the
+existing suite and export its actual result and this limitation before cleanup.
+The existing 15-minute completion/expiry follow-up is armed for this closure.
+After the actual roll process and descendants settle, it must inspect the main
+suite's exit/report, export the operation as `failed` (not fully qualified), then
+perform exact-inventory cleanup without provisioning another environment. Local
+follow-up requires the operator computer and desktop app to remain running.
+The existing completion/expiry safeguard checks this exact operation every
+15 minutes, stays quiet while progress is normal, and performs guarded cleanup
+after verified terminal export rather than waiting until expiry. The original
+expiry and shared allowance remain unchanged; this is not a billing cap.
+
+This proof must use `gke-l7-regional-external-managed`, a regional Standard-tier
+IP (matching read-only production metadata), a dedicated `REGIONAL_MANAGED_PROXY`
+subnet and narrowly scoped proxy-to-backend firewall rule. Use a trusted
+certificate through a staging-only Kubernetes TLS Secret, not the global
+Google-managed SSL resource from the previous test, a production private key,
+self-signed trust overrides or a tunnel. The user explicitly approved a free
+temporary Let's Encrypt certificate and its subscriber terms for the new staging
+hostname only. A pinned local Certbot tool uses HTTP-01 through five temporary,
+UID-recorded challenge objects; remove them before baseline preparation. Empty
+controller-owned challenge NEGs can outlive Service deletion, so freeze all
+three zonal identities through the recorded backend before retirement. Baseline
+installation is preparation, not traffic acceptance: it may supply the final
+Service before those empty NEGs are garbage-collected. Require their complete
+absence before seed, browser or upgrade traffic starts. No
+production DNS access, certificate or key is required. Certificate installation
+tests the Gateway UID and resource version; generated regional controller-child
+identities are retained across the HTTP-to-HTTPS transition for exact cleanup.
+Regional cleanup identity guards, cumulative-cost review and the re-armed
+exact-inventory expiry protection passed before billable creation. Eight focused
+operator tests cover foreign-project/scope rejection, address and network
+creation/cleanup agreement, certificate concurrency fences, regional edge
+shape and conditional object-generation cleanup. These are operator safeguards,
+not a replacement for the source-owned mixed-version qualification. The regional
+address defaults to IPv4: do not pass the global-only `--ip-version` option.
+Private operator phase parameters are distinct from the dot-sourced provision
+phase. Edge actions check their exact namespace/Gateway and child identities;
+they do not repeatedly re-observe every unrelated foundation resource. Keep the existing
+protected mixed-version/browser/recovery/eviction runner and zero-failed-request
+criteria; do not add a replacement rollout controller or reset failed traffic.
+
+## Closure plan after qualification
+
+The user explicitly confirmed closure of the current regional operation: finish
+this run, verify its evidence, and clean up its exact resources without changing
+running production applications. Do not start another rehearsal, provision a
+replacement environment or rebuild the candidate merely for additional
+confidence. Reopen work only for a concrete, reproduced production blocker;
+report any remaining evidence limitation explicitly instead of silently repeating
+the experiment or weakening a pass criterion.
+
+For this operation's terminal export, compare local process ownership using the
+same .NET `StartTime` value used in its PID receipt. CIM creation timestamps lose
+sub-microsecond precision and must not be treated as evidence that a still-live
+supervisor has exited. All recorded supervisors and their test workers must have
+actually settled before cleanup admission.
+
+The goal is safe production adoption of HA and continuous request availability
+during subsequent planned upgrades, not an indefinitely expanding rehearsal.
+The earlier global-edge `1a00f3293` to `35c317ddb` provider qualification is
+complete, but the regional follow-up found a real shared-DNS availability gap.
+Freeze the candidate and both operations' evidence; do not rebuild, republish or
+repeat a paid rehearsal merely to finish documentation or reconcile cleanup.
+
+| Step | Status and exit condition |
+| --- | --- |
+| Implementation, regressions, local qualification and normal main image CI | Complete for the qualified source below. |
+| Real mixed-image GKE upgrade, retained browsers and fault recovery | Earlier global-edge proof passed; regional primary/browser proof passed, but DNS outage and runner transport failure prevented regional recovery qualification. |
+| Isolated-resource cleanup | Latest regional operation has zero billables with exact preservation/absence receipt. Non-billable VPC/connection/range await producer release; old automation is absent. |
+| DNS mitigation | Native proxy upstream retention implemented and tested locally; historical regional receipts remain incomplete and new images are not provider-qualified. |
+| Production preparation | Read-only inventory and four-hop pinned release/render plan prepared separately. No production mutation. Do not claim regional availability qualification from the local DNS regression. |
+| First production adoption | Prepare the supported release-command sequence and rollback/stop criteria. Obtain explicit maintenance approval before any singleton/older-contract conversion that can interrupt Rivet; preserve other applications. |
+| Later HA upgrades | Use the qualified policy and supported, source/image-bound release path. Reconnecting sockets are allowed; lost or repeated accepted executions are not. |
+
+Finish in that order. Reopen implementation only for a reproduced defect or an
+unmet deployment prerequisite, with a bounded test at the owning seam. A source
+or chart change affecting the guarantee invalidates qualification of that changed
+candidate; a documentation-only edit does not. Do not introduce another staging
+environment, placement controller or broad audit cycle as closure work. Keep the
+deferred desktop Rust audit separate from server HA acceptance.
+
+The existing six-proxy placement and stabilization/drain windows have a measured
+rollout cost. The qualification also incurred another frontend rollout when
+recovery setup removed a temporary proof annotation. Record that test overhead;
+do not repeat it after a passing proof or shorten safety windows to save time.
+Finite functional traffic is not a production throughput or capacity certificate.
+
+### Production handoff boundary found by read-only inspection
+
+The existing installation is healthy but still singleton (`c9cb0c79f`, Helm
+revision 25). Its canonical manifest chain reaches the qualified source through
+`8f0a87016`, `59dd224f4`, `1a00f3293`, then `35c317ddb`; direct-to-latest would
+correctly fail lineage validation, even with a maintenance flag. Four separate
+promoted manifests and exact archived charts passed local lint/render, preserving
+the existing Secret references, database, bucket/prefix and restore PVC. Keep
+intermediate hops singleton and activate HA only on the final qualified source.
+Never edit lineage or use raw Helm to skip the checks.
+
+Production uses `gke-l7-regional-external-managed`; this operation's successful
+isolated edge used `gke-l7-global-external-managed`. The latter is not a proof
+of actual regional-edge withdrawal. Resolve that specific provider qualification
+limit before claiming the live edge is covered; do not rebuild application images
+or weaken acceptance merely to change a test's Gateway class. Production's
+attached proxy backend policy also lacks the rehearsed 60-second connection
+drain. A proposed patch preserves its existing 3,600-second request timeout and
+exact target/UID; applying it is a production LB change and was not performed.
+
+Read-only SQL observations found max_connections 400, with 46 connections in
+use (34 Rivet); the proposed chart requires 123 including its declared reserve
+and surge. That snapshot does not authorize shared-instance resizing or prove
+future capacity for other apps. Automated SQL backups/PITR are enabled, but
+recovering a shared SQL instance over other apps is prohibited. Prepare a
+Rivet-scoped consistent recovery set at the approved maintenance boundary.
+Private observations and operator-only proposed commands are under
+`artifacts/production-ha-preflight-20261018/`. No production workloads, routing,
+credentials, database contents or policies were changed during this inspection.
+
+## Taint-aware placement correction (2026-10-18): qualified exact pair
+
+The promoted main release `35c317ddb9db6927c42950dc94a7be1583a877a0`
+passed normal main image CI `39139897889` and the isolated GKE Autopilot 1.36.4,
+PostgreSQL 18, GCS S3-API and trusted-HTTPS rehearsal from predecessor
+`1a00f32935e54eee7c6fee4f948383dbd5d09278`. Its promoted manifest digest is
+`sha256:2a52f905c204050c4276bcae149f63998cc68525fbdd65b3f1c84b44c8c49a50`.
+Private hash-bound receipts are under `artifacts/gcp-ha-honor-20261018/`.
+
+The primary upgrade recorded 7,859 workflow requests; both real recovery
+scenarios recorded 9,567; final controlled frontend evictions recorded 636
+workflow and 243 web-app requests. All had zero failures. The separate public
+web observer recorded 6,798 successes. The single uninterrupted independent
+window recorded 19,024 workflow and 7,152 web-app requests, zero failures and
+zero observation errors. Its completed snapshots and actual autoscaler decisions
+prove six serving-frontend node consolidations: each Pod was Ready and not
+terminating before the decision, and its exact old Node UID later disappeared.
+Three acknowledged policy/v1 frontend evictions covered two different nodes;
+they are additional evidence, not substitutes for provider movement.
+
+Both retained-browser workflows passed with no page or iframe reloads. Accepted
+Evaluations settled once on their original workers, early-output runs retained
+their successful full recordings, and the prepared bundle hash survived
+maintenance-owner replacement. Lost-begin-acknowledgement recovery issued one
+original command; lease-loss recovery observed a real API-server CAS conflict,
+preserved paused editor work and likewise issued one original command.
+This chart-only release has identical content-addressed UI IDs across its
+different immutable images. These receipts establish retained-browser behavior,
+not a distinct UI-content transition; keep the earlier different-build receipts
+in [the browser continuity history](ha-rolling-upgrades.md#earlier-exact-pair-qualification).
+
+The frontend template phase took about 24 minutes. The full primary upgrade,
+including accepted-work probes and all owner/surge retirements, took about
+57 minutes. The predeclared provider deployment timeout was 2,400 seconds per
+phase, not a 40-minute end-to-end promise. GKE operators must review capacity
+and pass a suitable explicit `--timeout 40m`; the generic release default stays
+15 minutes. Do not shorten the rehearsed stabilization, drain or grace windows
+to make a qualification finish faster. Recovery setup also removed a temporary
+frontend proof annotation and therefore exercised another frontend rollout;
+that is test overhead, not the normal release's second frontend deployment.
+
+All test supervisors and in-flight traffic stopped before the sanitized,
+hash-bound qualified export. Billable teardown and preservation verification
+completed at 2026-10-18T19:36Z; `cleanup-verified.json` records zero remaining
+billable rehearsal infrastructure, zero Gateway children, both original cluster
+and SQL deletion operations DONE, exact bucket/disk absence and preservation of
+pre-existing networks, identities, keys, IAM and billing. The expiry safeguard
+was then paused through the supported app tool. Only the unused dedicated VPC
+`rivet-ha-honor-20261018`, its private-service connection and internal range
+`rivet-ha-honor-psa-1018` remain under the provider's producer-retention block.
+Their exact identities, original rejected operation and conservative review time
+are in `retained-networking.json`; never force their removal. These are
+network-only residuals, not surviving compute/database/storage/NAT resources.
+
+An operator interruption had stopped conditional object cleanup after 2,407
+confirmed deletions and eight uncertain requests. Complete live-generation
+observations found five absent and three unchanged. A separately journaled,
+bounded continuation deleted the remaining 66,156 recorded generations and
+verified bucket absence; the original frozen inventory and journal were not
+overwritten or blindly replayed. Both newly created service-account deletions
+also needed subsequent immutable-ID absence observations after acknowledgement;
+their deletion requests were not repeated.
+The operation kept the original shared USD 50 allowance
+and original deadline, protected all three earlier inventories, and never
+accessed production. The separate desktop Rust audit remains deferred; no
+exception was added and it is not a server-image failure.
+
+Operator preparation must include every referenced cleanup helper, its offline
+scope/uncertain-outcome tests and the frozen-generation guard before creating
+paid resources. This operation's review caught and supplied a missing local
+conditional-delete wrapper before cleanup. The wrapper requires the exact new
+project, operation, bucket generation, recorded inventory hash/count and prefix;
+foreign identities, duplicate/changed generations and unknown writes fail closed.
+Three offline cleanup tests passed. After the operator interruption, five further
+offline reconciliation cases verified exact-generation continuation and rejection
+of changed/unrecorded objects, repeated requests and unexplained absence. The
+continuation retains the original frozen inventory and journal and writes its
+live-observation receipt and new conditional-delete journal separately; it never
+silently restarts the old cleanup. Seven private export-guard cases allow equal
+valid content hashes without weakening failed-workflow/reload rejection. A
+read-only Logging query also needed explicit UTC/RFC3339 formatting after
+PowerShell materialized JSON dates; DateTime, offset and string cases passed.
+
+The qualified candidate retains the six-proxy, three-zone, separate-host policy and
 adds the missing native `nodeTaintsPolicy: Honor`. Helm rejects disabling it in
 the guarded GKE profile, and provider preflight checks the actual frontend Pod
 specifications, not only submitted values. Generic chart defaults still omit
@@ -17,16 +342,16 @@ untolerated draining hosts inflate the counts. The runner refuses reschedulable 
 application workloads before creating synthetic Nodes; this refusal was verified
 without mutation. Exact fixture Node/namespace UIDs are removed afterward.
 The 96 focused HA tests and Kubernetes local/production render lane passed.
-These checks establish native placement behavior, not that Autopilot's previous
-20-minute rollout failure is fixed.
+These checks establish native placement behavior; only the subsequent actual
+provider result above establishes this exact pair's convergence and continuity.
 
 The full local prepublication upgrade passed with the changed chart and existing
 immutable main images (`59dd224f4` to `1a00f3293`): 1,519 primary workflow,
 1,740 recovery and 1,121 web-app successes, zero failures, both retained-browser
 journeys and both recovery scenarios. The repository headless executor/origin
 Playwright suite also passed all ten cases. This is not a certificate for rebuilt
-images: normal exact main-image CI and a new provider rehearsal are still
-required. Private local evidence is under `artifacts/ha-honor-prepublication/`.
+images: normal exact main-image CI and the provider rehearsal above supplied
+that separate evidence. Private local evidence is under `artifacts/ha-honor-prepublication/`.
 
 The user approved this correction, publication after local qualification and a
 new isolated operation **within the same existing USD 50 allowance and original
@@ -197,8 +522,10 @@ are supporting telemetry, not a production capacity certificate.
 
 ## Superseded hard-spread candidate: frontend placement and provider eviction
 
-The source-owned `deploy/studio-server/helm/overlays/gke-ha.yaml` profile is
-tested in the failed operation above; it has **not** passed a GCP rehearsal.
+The then-current `deploy/studio-server/helm/overlays/gke-ha.yaml` profile,
+without the taint-aware correction, did **not** pass that GCP rehearsal.
+The later exact-pair qualification at the top of this guide supersedes this
+historical candidate, not its failed receipt.
 Its six proxies, hard three-zone spread and required per-component
 hostname separation replace the failed attempt's two co-located proxies. Do not
 reuse the closed operation, mutate its receipts, or provision under its old

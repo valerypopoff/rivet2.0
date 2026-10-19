@@ -18,6 +18,30 @@ function readProxyTemplates(): string[] {
   return proxyTemplatePaths.map((templatePath) => readRepoFile(templatePath));
 }
 
+test('proxy DNS refresh keeps shared upstream peers independently of request-time resolution', () => {
+  assert.match(readRepoFile('deploy/studio-server/images/proxy/Dockerfile'), /FROM nginx:1\.27\.5-alpine/);
+  assert.match(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), /image: nginx:1\.27\.5-alpine/);
+  for (const template of readProxyTemplates()) {
+    assert.match(template, /resolver [^;]+ valid=30s ipv6=off;/);
+    assert.match(template, /resolver_timeout 5s;/);
+    for (const role of ['web', 'api', 'execution', 'executor']) {
+      const group = extractBracedBlock(template, new RegExp(`upstream rivet_${role}\\s*\\{`));
+      assert.match(group, new RegExp(`zone rivet_${role} 64k;`));
+      assert.match(group, /server [^;]+ resolve;/);
+      assert.match(template, new RegExp(`set \\$${role}_upstream http://rivet_${role}/?;`));
+    }
+    assert.match(template, /set \$api_ui_auth_check_upstream http:\/\/rivet_api\/ui-auth\/check;/);
+    // DNS resilience must not permit replaying an accepted mutating request.
+    assert.doesNotMatch(template, /proxy_next_upstream[^;]*non_idempotent/);
+    assert.doesNotMatch(template, /proxy_cache_use_stale/);
+  }
+  for (const index of [0, 1]) {
+    const template = readProxyTemplates()[index]!;
+    assert.match(template, /proxy_redirect \$api_ui_auth_origin\/ \/__rivet_auth\/;/);
+    assert.doesNotMatch(template, /proxy_redirect \$api_ui_auth_upstream/);
+  }
+});
+
 function proxyLocation(template: string, locationPattern: RegExp): string {
   return extractBracedBlock(template, locationPattern);
 }
@@ -206,10 +230,7 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   );
 
   const latestDebuggerLocation = proxyLocation(imageProxyTemplate, /location \/ws\/latest-debugger\s*\{/);
-  assert.match(
-    imageProxyTemplate,
-    /set \$api_latest_debugger_upstream http:\/\/\$\{RIVET_API_UPSTREAM_HOST\}:\$\{RIVET_API_UPSTREAM_PORT\}\/ws\/latest-debugger;/,
-  );
+  assert.match(imageProxyTemplate, /set \$api_latest_debugger_upstream http:\/\/rivet_api\/ws\/latest-debugger;/);
   assert.match(latestDebuggerLocation, /proxy_pass \$api_latest_debugger_upstream;/);
   assert.match(latestDebuggerLocation, /proxy_set_header X-Rivet-Proxy-Auth \$\{RIVET_PROXY_AUTH_TOKEN\};/);
   assert.match(latestDebuggerLocation, /proxy_set_header Upgrade \$http_upgrade;/);
@@ -514,7 +535,7 @@ test('executor image and Compose contracts keep the websocket port independent f
   assert.match(developmentApi, /target: \/home\/rivet\/\.local\/share\/com\.valerypopoff\.rivet2/);
   assert.match(
     readRepoFile('deploy/studio-server/compose/nginx/default.dev.conf.template'),
-    /http:\/\/api:21889\/internal/,
+    /set \$executor_internal_upstream http:\/\/rivet_executor\/internal;/,
   );
   const productionApi = composeServiceBlock(prodCompose, 'api');
   assert.doesNotMatch(prodCompose, /^  executor:/m);
