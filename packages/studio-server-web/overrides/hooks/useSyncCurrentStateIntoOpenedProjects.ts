@@ -15,7 +15,7 @@ import {
   projectsState,
 } from '../../../app/src/state/savedGraphs';
 import { addOpenedProject, resolveSyncedOpenedProjectFsPathOptions } from '../../../app/src/utils/openedProjects.js';
-import { useExecutorSessionState } from '../../../app/src/hooks/useExecutorSession.js';
+import { useOwnExecutorSessionState } from '../../../app/src/hooks/useExecutorSession.js';
 import {
   projectExecutorModesEqual,
   resolveCurrentProjectExecutorMode,
@@ -186,7 +186,7 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
   const loadedProject = useAtomValue(loadedProjectState);
   const currentGraph = useAtomValue(graphState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
-  const executorSession = useExecutorSessionState();
+  const executorSession = useOwnExecutorSessionState();
   const executorTargetType = executorSession.target?.type;
   const executorTargetUrl = executorSession.target?.url;
   const executorTarget = useMemo(

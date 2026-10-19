@@ -1,4 +1,4 @@
-import type { GraphProcessor, NodeId, RemoteRunRequestId } from '@valerypopoff/rivet2-core';
+import type { GraphProcessor, GraphExecutionMetadata, RemoteRunRequestId } from '@valerypopoff/rivet2-core';
 
 export type DebuggerProcessorBroadcast = (
   processor: GraphProcessor,
@@ -29,7 +29,17 @@ export function createDebuggerProcessorAttachments(options: {
         return;
       }
 
-      const lastPartialOutputsTimePerNode: Record<NodeId, number> = {};
+      const partialTimes = new Map<string, number>();
+      let rootExecution: GraphExecutionMetadata | undefined;
+      const invocationKey = (data: { node: { id: string }; processId: string; execution?: GraphExecutionMetadata }) =>
+        JSON.stringify([
+          data.execution?.rootRunId,
+          data.execution?.graphRunId,
+          data.execution?.projectId,
+          data.node.id,
+          data.processId,
+        ]);
+      const identity = () => (rootExecution ? { execution: rootExecution } : {});
       const cleanups: Array<() => void> = [];
       attachedProcessors.push(processor);
       requestIdsByProcessorId.set(processor.id, requestId);
@@ -42,11 +52,13 @@ export function createDebuggerProcessorAttachments(options: {
       );
       cleanups.push(
         processor.on('nodeFinish', (data) => {
+          partialTimes.delete(invocationKey(data));
           options.broadcast(processor, 'nodeFinish', data);
         }),
       );
       cleanups.push(
         processor.on('nodeError', ({ error, ...data }) => {
+          partialTimes.delete(invocationKey(data));
           // Deferred Watch history carries its original occurrence clock.
           // Normalize only Error; preserve the rest of the event envelope.
           options.broadcast(processor, 'nodeError', {
@@ -58,12 +70,18 @@ export function createDebuggerProcessorAttachments(options: {
       cleanups.push(
         processor.on('error', ({ error }) => {
           options.broadcast(processor, 'error', {
+            ...identity(),
             error: typeof error === 'string' ? error : error.toString(),
           });
+          rootExecution = undefined;
+          partialTimes.clear();
         }),
       );
       cleanups.push(
         processor.on('graphError', ({ graph, error, execution }) => {
+          // A reused processor can fail preflight before its next start event.
+          // The exact graph terminal is the authority for that new root.
+          if (!execution.parentGraphRunId) rootExecution = execution;
           options.broadcast(processor, 'graphError', {
             graph,
             error: typeof error === 'string' ? error : error.toString(),
@@ -73,28 +91,31 @@ export function createDebuggerProcessorAttachments(options: {
       );
       cleanups.push(
         processor.on('nodeExcluded', (data) => {
+          partialTimes.delete(invocationKey(data));
           options.broadcast(processor, 'nodeExcluded', data);
         }),
       );
       cleanups.push(
         processor.on('start', (data) => {
+          rootExecution = data.execution;
+          partialTimes.clear();
           options.broadcast(processor, 'start', data);
         }),
       );
       cleanups.push(
         processor.on('done', (data) => {
-          options.broadcast(processor, 'done', data);
+          options.broadcast(processor, 'done', { ...data, ...identity() });
+          rootExecution = undefined;
+          partialTimes.clear();
         }),
       );
       cleanups.push(
         processor.on('partialOutput', (data) => {
           // Throttle the partial outputs because they can get ridiculous on the serdes side
-          if (
-            lastPartialOutputsTimePerNode[data.node.id] == null ||
-            (lastPartialOutputsTimePerNode[data.node.id] ?? 0) + options.throttlePartialOutputs < Date.now()
-          ) {
+          const key = invocationKey(data);
+          if (partialTimes.get(key) == null || partialTimes.get(key)! + options.throttlePartialOutputs < Date.now()) {
             options.broadcast(processor, 'partialOutput', data);
-            lastPartialOutputsTimePerNode[data.node.id] = Date.now();
+            partialTimes.set(key, Date.now());
           }
         }),
       );
@@ -131,6 +152,7 @@ export function createDebuggerProcessorAttachments(options: {
           // from an execution failure. Normalize Error exactly as the other
           // debugger terminals do: JSON would otherwise turn it into `{}`.
           options.broadcast(processor, 'abort', {
+            ...identity(),
             successful: data.successful,
             ...(data.error === undefined
               ? {}
@@ -175,12 +197,12 @@ export function createDebuggerProcessorAttachments(options: {
       );
       cleanups.push(
         processor.on('pause', () => {
-          options.broadcast(processor, 'pause', null);
+          options.broadcast(processor, 'pause', rootExecution ? identity() : null);
         }),
       );
       cleanups.push(
         processor.on('resume', () => {
-          options.broadcast(processor, 'resume', null);
+          options.broadcast(processor, 'resume', rootExecution ? identity() : null);
         }),
       );
       cleanups.push(

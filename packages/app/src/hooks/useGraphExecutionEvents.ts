@@ -1,12 +1,6 @@
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useRef } from 'react';
-import {
-  type GraphId,
-  type GraphRunId,
-  type NodeId,
-  type ProcessEvents,
-  type RootRunId,
-} from '@valerypopoff/rivet2-core';
+import { type NodeId, type ProcessEvents, type RootRunId } from '@valerypopoff/rivet2-core';
 import { useLatest } from 'ahooks';
 import { lastRecordingState } from '../state/execution';
 import {
@@ -24,7 +18,6 @@ import {
 import { userInputModalQuestionsState } from '../state/userInput';
 import { handleError } from '../utils/errorHandling.js';
 import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity';
-import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
 import type { ExecutionDataFlowApi } from './useExecutionDataFlow';
 import { useDataRefs } from '../providers/ProvidersContext.js';
 import {
@@ -35,11 +28,10 @@ import {
 import {
   appendRootRunIdOnce,
   startGraphRunHistory,
-  finishGraphRunHistory,
+  finishGraphRunState,
   interruptRunningProcesses,
   type MissingDebuggerTerminalEvent,
   reconcileRunningProcessesAfterSuccessfulDone,
-  removeRunningGraphEntry,
   updateSelectedGraphRunForGraphStart,
 } from './graphExecutionEventHelpers.js';
 import { removeLLMChatOutputHistorySelectionsForProcess } from '../utils/llmChatOutputHistory.js';
@@ -75,6 +67,7 @@ export function useGraphExecutionEvents(
   >,
   options: GraphExecutionEventsOptions = {},
 ): GraphExecutionEventsApi {
+  const store = useStore();
   const dataRefs = useDataRefs();
   const setLastRecordingState = useSetAtom(lastRecordingState);
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
@@ -143,23 +136,11 @@ export function useGraphExecutionEvents(
   };
 
   const onGraphAbort = (data: ProcessEvents['graphAbort']) => {
-    const graphViewKey = buildGraphViewKeyFromExecution({
-      execution: data.execution,
-      graphIdFallback: data.graph.metadata!.id!,
-    });
-
-    setRunningGraphsState((running) => removeRunningGraphEntry(running, data.graph.metadata!.id!));
-    finishGraphRun(graphViewKey, data.execution?.graphRunId, 'aborted');
+    finishGraphRun(data, 'aborted');
   };
 
   const onGraphError = (data: ProcessEvents['graphError']) => {
-    const graphViewKey = buildGraphViewKeyFromExecution({
-      execution: data.execution,
-      graphIdFallback: data.graph.metadata!.id!,
-    });
-
-    setRunningGraphsState((running) => removeRunningGraphEntry(running, data.graph.metadata!.id!));
-    finishGraphRun(graphViewKey, data.execution?.graphRunId, 'error');
+    finishGraphRun(data, 'error');
   };
 
   const onError = (data: ProcessEvents['error']) => {
@@ -173,12 +154,17 @@ export function useGraphExecutionEvents(
   };
 
   const onGraphStart = (data: ProcessEvents['graphStart']) => {
-    setRunningGraphsState((running) => [...running, data.graph.metadata!.id!]);
-
     const graphViewKey = buildGraphViewKeyFromExecution({
       execution: data.execution,
       graphIdFallback: data.graph.metadata!.id!,
     });
+
+    if (
+      data.execution &&
+      store.get(graphRunHistoryByViewState)[graphViewKey]?.some((run) => run.graphRunId === data.execution.graphRunId)
+    )
+      return;
+    setRunningGraphsState((running) => [...running, data.graph.metadata!.id!]);
 
     if (!data.execution) {
       setSelectedGraphRunByView((prev) => updateSelectedGraphRunForGraphStart(prev, graphViewKey));
@@ -190,21 +176,13 @@ export function useGraphExecutionEvents(
   };
 
   const onGraphFinish = (data: ProcessEvents['graphFinish']) => {
-    if (data.graph.metadata?.id) {
-      setRunningGraphsState((running) => removeRunningGraphEntry(running, data.graph.metadata!.id!));
-    }
-
-    const graphViewKey = buildGraphViewKeyFromExecution({
-      execution: data.execution,
-      graphIdFallback: data.graph.metadata!.id!,
-    });
     if (data.execution && data.execution.parentGraphRunId == null) {
       rootRunIdsForDoneReconciliationRef.current = appendRootRunIdOnce(
         rootRunIdsForDoneReconciliationRef.current,
         data.execution.rootRunId,
       );
     }
-    finishGraphRun(graphViewKey, data.execution?.graphRunId, 'ok');
+    finishGraphRun(data, 'ok');
   };
 
   const onPause = () => {
@@ -216,11 +194,18 @@ export function useGraphExecutionEvents(
   };
 
   const finishGraphRun = (
-    graphViewKey: GraphViewKey,
-    graphRunId: GraphRunId | undefined,
+    data: ProcessEvents['graphFinish'] | ProcessEvents['graphError'] | ProcessEvents['graphAbort'],
     status: GraphRunRecord['status'],
   ) => {
-    setGraphRunHistoryByView((previous) => finishGraphRunHistory(previous, graphViewKey, graphRunId, status));
+    const next = finishGraphRunState(
+      { graphRunHistoryByView: store.get(graphRunHistoryByViewState), runningGraphs: store.get(runningGraphsState) },
+      buildGraphViewKeyFromExecution({ execution: data.execution, graphIdFallback: data.graph.metadata!.id! }),
+      data.graph.metadata!.id!,
+      data.execution?.graphRunId,
+      status,
+    );
+    setGraphRunHistoryByView(next.graphRunHistoryByView);
+    setRunningGraphsState(next.runningGraphs);
   };
 
   const resetLastRunDataForRunStart = (nodeIdsToPreserve: NodeId[] | undefined) => {

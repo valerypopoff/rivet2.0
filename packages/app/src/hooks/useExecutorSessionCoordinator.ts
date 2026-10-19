@@ -1,6 +1,10 @@
 import { useSetAtom } from 'jotai';
 import { useEffect, useRef } from 'react';
-import { useExecutorSessionHostConfig, useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
+import {
+  useExecutorSessionHostConfig,
+  useExecutorSessionRegistry,
+  useExecutorSessionRuntime,
+} from '../providers/ExecutorSessionContext.js';
 import { selectedExecutorState } from '../state/settings.js';
 import { isInTauri } from '../utils/platform/core.js';
 import {
@@ -236,6 +240,7 @@ export function runExecutorSessionStartupAction(options: {
 
 export function useExecutorSessionCoordinator(selectedExecutor: DefaultExecutor) {
   const runtime = useExecutorSessionRuntime();
+  const registry = useExecutorSessionRegistry();
   const hostConfig = useExecutorSessionHostConfig();
   const setSelectedExecutor = useSetAtom(selectedExecutorState);
   const internalExecutorUrlRef = useRef(hostConfig?.internalExecutorUrl);
@@ -246,6 +251,9 @@ export function useExecutorSessionCoordinator(selectedExecutor: DefaultExecutor)
 
   useEffect(() => {
     return runtime.subscribeLifecycle('disconnect', (event) => {
+      // The next render restores this tab's own runtime. Never turn the
+      // disconnected bundle observer into an orphan internal executor.
+      if (registry.isBundleDebuggerRuntime(runtime)) return;
       handleExecutorSessionCoordinatorDisconnect({
         event,
         getInternalExecutorUrl: () => internalExecutorUrlRef.current,
@@ -254,7 +262,7 @@ export function useExecutorSessionCoordinator(selectedExecutor: DefaultExecutor)
         runtime,
       });
     });
-  }, [runtime]);
+  }, [runtime, registry]);
 
   useEffect(() => {
     const startupAction = getExecutorSessionStartupAction({

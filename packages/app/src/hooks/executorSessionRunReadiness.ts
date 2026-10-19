@@ -4,10 +4,11 @@ export const EXECUTOR_SESSION_RUN_READY_TIMEOUT_MS = 30_000;
 
 type ExecutorSessionRuntimeState = ReturnType<ExecutorSessionRuntime['getRuntimeState']>;
 
-/** A run binds to one ready connection, not merely a target URL that can reconnect. */
+/** A run binds to one ready connection and effective owner, not merely a reusable URL. */
 export function bindExecutorSessionRun(
   runtime: Pick<ExecutorSessionRuntime, 'getRuntimeState'>,
   captured = runtime.getRuntimeState(),
+  getCurrentRuntime?: () => Pick<ExecutorSessionRuntime, 'getRuntimeState'>,
 ) {
   const { socket, url } = captured;
   const targetType = captured.target?.type;
@@ -16,6 +17,7 @@ export function bindExecutorSessionRun(
     const current = runtime.getRuntimeState();
     return (
       wasReady &&
+      (!getCurrentRuntime || getCurrentRuntime() === runtime) &&
       socket != null &&
       current.socket === socket &&
       current.target?.type === targetType &&

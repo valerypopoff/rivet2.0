@@ -1,7 +1,34 @@
 import type { ProcessEventMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
-import type { ProjectExecutionSnapshot } from '../state/dataFlow.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import { type createStore } from 'jotai';
+import { projectState, projectsState } from '../state/savedGraphs.js';
+import {
+  projectExecutionSnapshotsState,
+  createEmptyProjectExecutionSnapshot,
+  type ProjectExecutionSnapshot,
+} from '../state/dataFlow.js';
+import {
+  captureProjectExecutionSnapshot,
+  restoreProjectExecutionSnapshot,
+} from './projectExecutionSnapshotBindings.js';
+
+/** One synchronous display boundary: reference effects run once, and closed tabs cannot be recreated. */
+export function updateOpenProjectExecutionSnapshot(
+  store: ReturnType<typeof createStore>,
+  projectId: ProjectId,
+  update: (snapshot: ProjectExecutionSnapshot) => ProjectExecutionSnapshot,
+): void {
+  if (!store.get(projectsState).openedProjects[projectId]) return;
+  const active = store.get(projectState).metadata.id === projectId;
+  const before = active
+    ? captureProjectExecutionSnapshot(store)
+    : store.get(projectExecutionSnapshotsState)[projectId] ?? createEmptyProjectExecutionSnapshot();
+  const after = update(before);
+  if (before === after) return;
+  store.set(projectExecutionSnapshotsState, { ...store.get(projectExecutionSnapshotsState), [projectId]: after });
+  if (active) restoreProjectExecutionSnapshot(store, after, before);
+}
 
 export type ProjectExecutionSnapshots = Record<ProjectId, ProjectExecutionSnapshot | undefined>;
 

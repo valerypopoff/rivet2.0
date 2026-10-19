@@ -117,7 +117,11 @@ describe('executionSelectors', () => {
     const processData = [
       { processId: 'p-root-a', graphRunId: 'graph-run-a' as GraphRunId, data: { status: { type: 'ok' } } },
       { processId: 'p-root-b', graphRunId: 'graph-run-b' as GraphRunId, data: { status: { type: 'running' } } },
-      { processId: 'p-other', graphRunId: 'graph-run-c' as GraphRunId, data: { status: { type: 'error', error: 'boom' } } },
+      {
+        processId: 'p-other',
+        graphRunId: 'graph-run-c' as GraphRunId,
+        data: { status: { type: 'error', error: 'boom' } },
+      },
     ] as ProcessDataForNode[];
 
     const graphRuns = [
@@ -131,7 +135,10 @@ describe('executionSelectors', () => {
       selectedGraphRun: 'graph-run-a' as GraphRunId,
     });
 
-    assert.deepEqual(filtered?.map((process) => process.processId), ['p-root-a']);
+    assert.deepEqual(
+      filtered?.map((process) => process.processId),
+      ['p-root-a'],
+    );
     assert.equal(
       getSelectedProcessData(processData, 'latest', {
         graphRuns,
@@ -471,11 +478,36 @@ describe('executionSelectors', () => {
   test('getGraphRunsForView finds subgraph runs when navigating via root context', () => {
     const graphRunHistoryByView = {
       'root:main-graph': [
-        { graphRunId: 'root-run' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'main-graph' as GraphId, startedAt: 1 },
+        {
+          graphRunId: 'root-run' as GraphRunId,
+          rootRunId: 'root-1' as RootRunId,
+          graphId: 'main-graph' as GraphId,
+          startedAt: 1,
+        },
       ],
       'subgraph:main-graph:node-1:sub-graph': [
-        { graphRunId: 'sub-run-a' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'sub-graph' as GraphId, executor: { parentGraphId: 'main-graph' as GraphId, nodeId: 'node-1' as NodeId, processId: 'p-1' as ProcessId }, startedAt: 2 },
-        { graphRunId: 'sub-run-b' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'sub-graph' as GraphId, executor: { parentGraphId: 'main-graph' as GraphId, nodeId: 'node-1' as NodeId, processId: 'p-1' as ProcessId }, startedAt: 3 },
+        {
+          graphRunId: 'sub-run-a' as GraphRunId,
+          rootRunId: 'root-1' as RootRunId,
+          graphId: 'sub-graph' as GraphId,
+          executor: {
+            parentGraphId: 'main-graph' as GraphId,
+            nodeId: 'node-1' as NodeId,
+            processId: 'p-1' as ProcessId,
+          },
+          startedAt: 2,
+        },
+        {
+          graphRunId: 'sub-run-b' as GraphRunId,
+          rootRunId: 'root-1' as RootRunId,
+          graphId: 'sub-graph' as GraphId,
+          executor: {
+            parentGraphId: 'main-graph' as GraphId,
+            nodeId: 'node-1' as NodeId,
+            processId: 'p-1' as ProcessId,
+          },
+          startedAt: 3,
+        },
       ],
     };
 
@@ -540,7 +572,10 @@ describe('executionSelectors', () => {
 
     const runs = getGraphRunsForView({ currentGraphView: nestedView, graphRunHistoryByView });
 
-    assert.deepEqual(runs.map((run) => run.graphRunId), ['nested-sub-run', 'nested-sub-run-2']);
+    assert.deepEqual(
+      runs.map((run) => run.graphRunId),
+      ['nested-sub-run', 'nested-sub-run-2'],
+    );
   });
 
   test('getGraphRunsForView trusts direct subgraph view key matches before broader fallback', () => {
@@ -686,7 +721,10 @@ describe('executionSelectors', () => {
 
     const runs = getGraphRunsForView({ currentGraphView: subgraphView, graphRunHistoryByView });
 
-    assert.deepEqual(runs.map((run) => run.graphRunId), ['matched-run', 'matched-run-b']);
+    assert.deepEqual(
+      runs.map((run) => run.graphRunId),
+      ['matched-run', 'matched-run-b'],
+    );
   });
 
   test('getGraphRunsForView does not let a single exact subgraph match hide a broader graph history', () => {
@@ -738,11 +776,10 @@ describe('executionSelectors', () => {
 
     const runs = getGraphRunsForView({ currentGraphView: subgraphView, graphRunHistoryByView });
 
-    assert.deepEqual(runs.map((run) => run.graphRunId), [
-      'metadata-missing-run',
-      'matched-run',
-      'other-caller-run',
-    ]);
+    assert.deepEqual(
+      runs.map((run) => run.graphRunId),
+      ['metadata-missing-run', 'matched-run', 'other-caller-run'],
+    );
   });
 
   test('getGraphRunsForView falls back to graph id matches when explicit subgraph metadata has no exact match', () => {
@@ -773,13 +810,21 @@ describe('executionSelectors', () => {
 
     const runs = getGraphRunsForView({ currentGraphView: subgraphView, graphRunHistoryByView });
 
-    assert.deepEqual(runs.map((run) => run.graphRunId), ['other-caller-run']);
+    assert.deepEqual(
+      runs.map((run) => run.graphRunId),
+      ['other-caller-run'],
+    );
   });
 
   test('getGraphRunsForView returns direct matches for root graphs with matching data', () => {
     const graphRunHistoryByView = {
       'root:main-graph': [
-        { graphRunId: 'root-run' as GraphRunId, rootRunId: 'root-1' as RootRunId, graphId: 'main-graph' as GraphId, startedAt: 1 },
+        {
+          graphRunId: 'root-run' as GraphRunId,
+          rootRunId: 'root-1' as RootRunId,
+          graphId: 'main-graph' as GraphId,
+          startedAt: 1,
+        },
       ],
     };
 
@@ -792,8 +837,18 @@ describe('executionSelectors', () => {
 
   test('filterProcessDataForSelection filters by graphRunId only', () => {
     const processData = [
-      { processId: 'p-sub-a', graphRunId: 'sub-run-a' as GraphRunId, graphId: 'sub-graph' as GraphId, data: { status: { type: 'ok' } } },
-      { processId: 'p-sub-b', graphRunId: 'sub-run-b' as GraphRunId, graphId: 'sub-graph' as GraphId, data: { status: { type: 'ok' } } },
+      {
+        processId: 'p-sub-a',
+        graphRunId: 'sub-run-a' as GraphRunId,
+        graphId: 'sub-graph' as GraphId,
+        data: { status: { type: 'ok' } },
+      },
+      {
+        processId: 'p-sub-b',
+        graphRunId: 'sub-run-b' as GraphRunId,
+        graphId: 'sub-graph' as GraphId,
+        data: { status: { type: 'ok' } },
+      },
     ] as ProcessDataForNode[];
 
     const graphRuns = [
@@ -807,7 +862,10 @@ describe('executionSelectors', () => {
       selectedGraphRun: 'sub-run-a' as GraphRunId,
     });
 
-    assert.deepEqual(filtered?.map((p) => p.processId), ['p-sub-a']);
+    assert.deepEqual(
+      filtered?.map((p) => p.processId),
+      ['p-sub-a'],
+    );
   });
 
   test('shows retained same-graph Watch child runs with their owning graph run', () => {
@@ -859,13 +917,21 @@ describe('executionSelectors', () => {
       selectedGraphRun: 'main-run' as GraphRunId,
     });
 
-    assert.deepEqual(filtered?.map((process) => process.processId), ['watch-first', 'watch-latest']);
+    assert.deepEqual(
+      filtered?.map((process) => process.processId),
+      ['watch-first', 'watch-latest'],
+    );
   });
 
   test('filterProcessDataForSelection does not mix untagged process data into graph-run-tagged selections', () => {
     const processData = [
       { processId: 'p-untagged-a', data: { status: { type: 'ok' } } },
-      { processId: 'p-sub-a', graphRunId: 'sub-run-a' as GraphRunId, graphId: 'sub-graph' as GraphId, data: { status: { type: 'ok' } } },
+      {
+        processId: 'p-sub-a',
+        graphRunId: 'sub-run-a' as GraphRunId,
+        graphId: 'sub-graph' as GraphId,
+        data: { status: { type: 'ok' } },
+      },
       { processId: 'p-untagged-b', data: { status: { type: 'ok' } } },
     ] as ProcessDataForNode[];
 
@@ -880,12 +946,20 @@ describe('executionSelectors', () => {
       selectedGraphRun: 'sub-run-a' as GraphRunId,
     });
 
-    assert.deepEqual(filtered?.map((p) => p.processId), ['p-sub-a']);
+    assert.deepEqual(
+      filtered?.map((p) => p.processId),
+      ['p-sub-a'],
+    );
   });
 
   test('filterProcessDataForSelection returns no data when the selected graph run has no node process', () => {
     const processData = [
-      { processId: 'p-sub-a', graphRunId: 'sub-run-a' as GraphRunId, graphId: 'sub-graph' as GraphId, data: { status: { type: 'ok' } } },
+      {
+        processId: 'p-sub-a',
+        graphRunId: 'sub-run-a' as GraphRunId,
+        graphId: 'sub-graph' as GraphId,
+        data: { status: { type: 'ok' } },
+      },
     ] as ProcessDataForNode[];
 
     const graphRuns = [
@@ -989,7 +1063,10 @@ describe('executionSelectors', () => {
       selectedGraphRun: 'sub-run-a' as GraphRunId,
     });
 
-    assert.deepEqual(filtered?.map((p) => p.processId), ['p-untagged-a', 'p-untagged-b']);
+    assert.deepEqual(
+      filtered?.map((p) => p.processId),
+      ['p-untagged-a', 'p-untagged-b'],
+    );
   });
 
   test('remote executor routing only uses remote transport when usable or required', () => {
@@ -1056,6 +1133,24 @@ describe('executionSelectors', () => {
   });
 
   test('editor graph runs are disabled while an external remote debugger is active unless playback is loaded', () => {
+    for (const selectedExecutor of ['browser', 'nodejs'] as const) {
+      assert.equal(
+        canRunGraphFromEditor({
+          observingRemote: true,
+          selectedExecutor,
+          session: { capabilities: readyCapabilities, status: 'ready', target: null },
+        }),
+        false,
+      );
+      assert.equal(
+        canRunGraphFromEditor({
+          observingRemote: false,
+          selectedExecutor,
+          session: { capabilities: readyCapabilities, status: 'ready', target: null },
+        }),
+        true,
+      );
+    }
     assert.equal(
       canRunGraphFromEditor({
         selectedExecutor: 'browser',

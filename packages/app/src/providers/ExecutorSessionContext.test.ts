@@ -4,8 +4,325 @@ import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { createExecutorSessionRegistry } from './ExecutorSessionContext.js';
 import { attachAndStartDesktopSidecarForRuntime } from '../hooks/executorSessionRuntimeResources.js';
 import { FakeWebSocket } from '../hooks/executorSessionTestUtils.js';
+import { bindExecutorSessionRun } from '../hooks/executorSessionRunReadiness.js';
 
 describe('ExecutorSessionRegistry', () => {
+  test('shared debugger attachment invalidates an in-flight local preparation even while its connection stays ready', async () => {
+    const original = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId;
+    try {
+      const own = registry.getRuntime(a);
+      await own.connectInternalHostedExecutor('ws://internal');
+      const internal = FakeWebSocket.instances.at(-1)!;
+      internal.open();
+      const prepared = bindExecutorSessionRun(
+        own,
+        undefined,
+        () => registry.getRemoteDebuggerRuntime(a) ?? registry.getRuntime(a),
+      );
+      prepared.assertCurrent();
+      await registry.connectBundleDebugger(b, [a, b], 'ws://bundle');
+      FakeWebSocket.instances.at(-1)!.open();
+      assert.equal(own.getRuntimeState().capabilities.canSendRun, true, 'the personal connection was not replaced');
+      assert.throws(prepared.assertCurrent, /Executor changed/);
+      assert.equal(prepared.isCurrent(), false, 'stale cancellation must not send commands either');
+      assert.deepEqual(internal.sent, []);
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
+  test('closing and reopening a root tab fences its old source display without dropping dependency events', async () => {
+    const original = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId;
+    try {
+      await registry.connectBundleDebugger(b, [a, b], 'ws://bundle');
+      const socket = FakeWebSocket.instances.at(-1)!;
+      socket.open();
+      const events: Array<{ accepted: boolean; display: boolean }> = [];
+      registry.subscribeMessagesForAllProjects((_id, _runtime, _message, _data, _request, admission) => {
+        events.push({
+          accepted: admission!.decision.shouldDispatch,
+          display: admission?.sourceDisplayAllowed !== false,
+        });
+      });
+      const execution = { rootRunId: 'old-root', graphRunId: 'a-run', graphId: 'main', projectId: a };
+      const start = { message: 'start', data: { project: { metadata: { id: a } }, execution } };
+      socket.emitMessage(start);
+      registry.removeProject(a);
+      socket.emitMessage({ message: 'nodeFinish', data: { execution, node: { id: 'node' }, processId: 'old' } });
+      registry.refreshDebuggerBundles(() => [a, b]);
+      socket.emitMessage(start);
+      socket.emitMessage({ message: 'nodeFinish', data: { execution, node: { id: 'node' }, processId: 'old' } });
+      socket.emitMessage({
+        message: 'nodeFinish',
+        data: {
+          execution: { ...execution, projectId: b, graphRunId: 'b-run', parentGraphRunId: 'a-run' },
+          node: { id: 'node' },
+          processId: 'child',
+        },
+      });
+      socket.emitMessage({
+        ...start,
+        data: { ...start.data, execution: { ...execution, rootRunId: 'new-root', graphRunId: 'new-a' } },
+      });
+      assert.deepEqual(events, [
+        { accepted: true, display: true },
+        { accepted: true, display: false },
+        { accepted: true, display: false },
+        { accepted: true, display: false },
+        { accepted: true, display: false },
+        { accepted: true, display: true },
+      ]);
+      assert.equal(socket.readyState, FakeWebSocket.OPEN);
+      assert.deepEqual(socket.sent, []);
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
+  test('a reopened source cannot reacquire disconnect cleanup through its old run', async () => {
+    const original = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId;
+    try {
+      await registry.connectBundleDebugger(b, [a, b], 'ws://bundle');
+      const socket = FakeWebSocket.instances.at(-1)!;
+      socket.open();
+      const display: boolean[] = [];
+      const disconnects: ProjectId[] = [];
+      registry.subscribeMessagesForAllProjects((_id, _runtime, _message, _data, _request, admission) => {
+        assert.equal(admission!.decision.shouldDispatch, true);
+        display.push(admission!.sourceDisplayAllowed !== false);
+      });
+      registry.subscribeDisconnectsForAllProjects((id) => disconnects.push(id));
+      const execution = { rootRunId: 'root', graphRunId: 'a-run', graphId: 'main', projectId: a };
+      socket.emitMessage({ message: 'start', data: { project: { metadata: { id: a } }, execution } });
+      registry.removeProject(a);
+      registry.refreshDebuggerBundles(() => [a, b]);
+      socket.emitMessage({ message: 'done', data: { execution, results: {} } });
+      registry.getRemoteDebuggerRuntime(b)!.disconnect();
+      assert.deepEqual(display, [true, false]);
+      assert.equal(disconnects.length, 1, 'global observers still receive disconnect cleanup');
+      assert.equal(disconnects.includes(a), false, 'the reopened source must not be finalized by its old socket');
+      assert.equal(disconnects.includes(b), false, 'the initiating tab is not necessarily the source');
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
+  test('a root first seen while its source is closed cannot bind a later tab through a duplicate start', async () => {
+    const original = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId;
+    try {
+      await registry.connectBundleDebugger(b, [b], 'ws://bundle');
+      const socket = FakeWebSocket.instances.at(-1)!;
+      socket.open();
+      const events: Array<{ accepted: boolean; display: boolean }> = [];
+      registry.subscribeMessagesForAllProjects((_id, _runtime, _message, _data, _request, admission) => {
+        events.push({
+          accepted: admission!.decision.shouldDispatch,
+          display: admission!.sourceDisplayAllowed !== false,
+        });
+      });
+      const start = {
+        message: 'start',
+        data: {
+          project: { metadata: { id: a } },
+          execution: { rootRunId: 'old', graphRunId: 'old-a', graphId: 'main', projectId: a },
+        },
+      };
+      socket.emitMessage(start);
+      registry.refreshDebuggerBundles(() => [a, b]);
+      socket.emitMessage(start);
+      socket.emitMessage({
+        ...start,
+        data: { ...start.data, execution: { ...start.data.execution, rootRunId: 'new', graphRunId: 'new-a' } },
+      });
+      assert.deepEqual(events, [
+        { accepted: false, display: false },
+        { accepted: true, display: false },
+        { accepted: true, display: true },
+      ]);
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
+  test('a dependency starts one shared debugger, routes actual roots, and any member can stop it', async () => {
+    const original = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId,
+      c = 'c' as ProjectId,
+      d = 'd' as ProjectId;
+    try {
+      const connecting = registry.connectBundleDebugger(b, [a, b, c], 'ws://bundle');
+      const socket = FakeWebSocket.instances.at(-1)!;
+      socket.open();
+      await connecting;
+      const shared = registry.getRemoteDebuggerRuntime(b)!;
+      assert.equal(registry.getRemoteDebuggerRuntime(a), shared);
+      assert.equal(registry.getRemoteDebuggerRuntime(c), shared);
+      assert.equal(registry.getRemoteDebuggerRuntime(d), undefined);
+      assert.notEqual(registry.getRuntime(b), shared, 'local preferences/runtime remain separate');
+      await registry.connectBundleDebugger(c, [a, b, c], 'ws://bundle');
+      assert.equal(FakeWebSocket.instances.length, 1);
+      const events: Array<{ project: ProjectId | undefined; accepted: boolean }> = [];
+      registry.subscribeMessagesForAllProjects((_id, _runtime, _message, _data, _request, admission) => {
+        events.push({ project: admission?.projectId, accepted: admission!.decision.shouldDispatch });
+      });
+      socket.emitMessage({
+        message: 'start',
+        data: {
+          project: { metadata: { id: a } },
+          execution: { rootRunId: 'root-a', graphRunId: 'a-run', graphId: 'main', projectId: a },
+        },
+      });
+      socket.emitMessage({
+        message: 'graphStart',
+        data: {
+          execution: {
+            rootRunId: 'root-a',
+            graphRunId: 'c-run',
+            graphId: 'main',
+            projectId: c,
+            parentGraphRunId: 'a-run',
+          },
+        },
+      });
+      socket.emitMessage({
+        message: 'done',
+        data: { execution: { rootRunId: 'root-a', graphRunId: 'a-run', graphId: 'main', projectId: a }, results: {} },
+      });
+      socket.emitMessage({
+        message: 'start',
+        data: {
+          project: { metadata: { id: b } },
+          execution: {
+            rootRunId: 'root-b',
+            graphRunId: 'b-run',
+            graphId: 'main',
+            projectId: b,
+          },
+        },
+      });
+      socket.emitMessage({ message: 'trace', data: 'B trace without execution metadata' });
+      socket.emitMessage({
+        message: 'done',
+        data: {
+          results: {},
+          execution: {
+            rootRunId: 'root-b',
+            graphRunId: 'b-run',
+            graphId: 'main',
+            projectId: b,
+          },
+        },
+      });
+      socket.emitMessage({
+        message: 'start',
+        data: {
+          project: { metadata: { id: d } },
+          execution: { rootRunId: 'root-d', graphRunId: 'd-run', graphId: 'main', projectId: d },
+        },
+      });
+      assert.deepEqual(events, [
+        { project: a, accepted: true },
+        { project: a, accepted: true },
+        { project: a, accepted: true },
+        { project: b, accepted: true },
+        { project: b, accepted: true },
+        { project: b, accepted: true },
+        { project: d, accepted: false },
+      ]);
+      registry.removeProject(b);
+      assert.equal(
+        registry.getRemoteDebuggerRuntime(a),
+        shared,
+        'closing the initiating tab must not close the bundle connection',
+      );
+      assert.equal(socket.readyState, FakeWebSocket.OPEN);
+      registry.getRemoteDebuggerRuntime(c)!.disconnect();
+      assert.equal(registry.getRemoteDebuggerRuntime(a), undefined);
+      assert.equal(registry.getRemoteDebuggerRuntime(c), undefined);
+      assert.equal(socket.readyState, FakeWebSocket.CLOSED);
+      assert.deepEqual(socket.sent, [], 'stopping observation must not abort/pause the runtime');
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
+  test('new linked tabs join the bundle and closing its last member releases only that connection', async () => {
+    const original = globalThis.WebSocket;
+    FakeWebSocket.instances = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId,
+      c = 'c' as ProjectId,
+      d = 'd' as ProjectId;
+    try {
+      await registry.connectBundleDebugger(a, [a, b], 'ws://same');
+      const first = FakeWebSocket.instances.at(-1)!;
+      first.open();
+      await registry.connectBundleDebugger(d, [d], 'ws://same');
+      const separate = FakeWebSocket.instances.at(-1)!;
+      separate.open();
+      registry.refreshDebuggerBundles(() => [a, b, c, d]);
+      assert.equal(registry.getRemoteDebuggerRuntime(c), registry.getRemoteDebuggerRuntime(a));
+      assert.notEqual(registry.getRemoteDebuggerRuntime(d), registry.getRemoteDebuggerRuntime(a));
+      await assert.rejects(registry.connectBundleDebugger(c, [a, b, c], 'ws://different'), /Stop the shared/);
+      registry.removeProject(a);
+      registry.removeProject(b);
+      assert.equal(first.readyState, FakeWebSocket.OPEN);
+      registry.removeProject(c);
+      assert.equal(first.readyState, FakeWebSocket.CLOSED);
+      assert.equal(separate.readyState, FakeWebSocket.OPEN);
+      assert.deepEqual(first.sent, []);
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
+  test('failed shared connections remove all membership without replacing local runtimes', async () => {
+    const original = globalThis.WebSocket;
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId;
+    const own = registry.getRuntime(b);
+    globalThis.WebSocket = class {
+      constructor() {
+        throw new Error('socket construction failed');
+      }
+    } as unknown as typeof WebSocket;
+    try {
+      await assert.rejects(registry.connectBundleDebugger(a, [a, b], 'ws://broken'), /socket construction failed/);
+      assert.equal(registry.getRemoteDebuggerRuntime(a), undefined);
+      assert.equal(registry.getRemoteDebuggerRuntime(b), undefined);
+      assert.equal(registry.getRuntime(b), own);
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
   test('keeps independent runtimes for independent project tabs', () => {
     const registry = createExecutorSessionRegistry({ onStateChange: () => {} });
     const firstProjectId = 'project-a' as ProjectId;
@@ -173,5 +490,4 @@ describe('ExecutorSessionRegistry', () => {
       globalThis.WebSocket = originalWebSocket;
     }
   });
-
 });

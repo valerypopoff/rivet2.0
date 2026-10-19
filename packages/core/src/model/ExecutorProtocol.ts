@@ -119,15 +119,15 @@ export type SerializedProcessEventMap = {
     watchNode: ChartNode;
     summary: StreamingOutputWatchHistorySummary;
   }>;
-  error: { error: Error | string } & ReplayEventTiming;
-  done: { results: GraphOutputs } & ReplayEventTiming;
-  abort: { successful: boolean; error?: string | Error } & ReplayEventTiming;
+  error: { error: Error | string; execution?: GraphExecutionMetadata } & ReplayEventTiming;
+  done: { results: GraphOutputs; execution?: GraphExecutionMetadata } & ReplayEventTiming;
+  abort: { successful: boolean; error?: string | Error; execution?: GraphExecutionMetadata } & ReplayEventTiming;
   finish: void;
   trace: string;
-  /** Present only when RecordingPlayer re-emits a historical lifecycle transition. */
-  pause: { isReplay?: true } | undefined;
-  /** Present only when RecordingPlayer re-emits a historical lifecycle transition. */
-  resume: { isReplay?: true } | undefined;
+  /** Replay marker is recording-only; live debuggers may identify the owning root. */
+  pause: { isReplay?: true; execution?: GraphExecutionMetadata } | undefined;
+  /** Replay marker is recording-only; live debuggers may identify the owning root. */
+  resume: { isReplay?: true; execution?: GraphExecutionMetadata } | undefined;
   globalSet: WithExecution<{ id: string; value: ScalarOrArrayDataValue; processId: ProcessId }>;
 };
 

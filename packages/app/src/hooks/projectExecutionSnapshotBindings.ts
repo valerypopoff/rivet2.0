@@ -72,7 +72,14 @@ export function captureProjectExecutionSnapshot(store: Store): ProjectExecutionS
   return snapshot;
 }
 
-export function restoreProjectExecutionSnapshot(store: Store, snapshot: ProjectExecutionSnapshot | undefined): void {
+export function restoreProjectExecutionSnapshot(
+  store: Store,
+  snapshot: ProjectExecutionSnapshot | undefined,
+  previous?: ProjectExecutionSnapshot,
+): void {
   const next = snapshot ?? createEmptyProjectExecutionSnapshot();
-  for (const binding of Object.values(snapshotBindings)) binding.restore(store, next);
+  for (const [key, binding] of Object.entries(snapshotBindings)) {
+    if (!previous || next[key as keyof ProjectExecutionSnapshot] !== previous[key as keyof ProjectExecutionSnapshot])
+      binding.restore(store, next);
+  }
 }

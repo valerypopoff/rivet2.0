@@ -28,6 +28,8 @@ import type { DebuggerPanelAnchor } from '../state/ui.js';
 import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 import { getActionBarRunButtonPresentation } from './actionBarRunButtons.js';
 import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
+import { RemoteObservationBanner } from './RemoteObservationBanner.js';
+import { remoteObservationReadOnlyState } from '../state/remoteObservation.js';
 
 const styles = css`
   --action-bar-height: calc(32px * var(--ui-font-scale));
@@ -183,6 +185,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const [menuIsOpen, toggleMenuIsOpen] = useToggle();
   const selectedExecutor = useAtomValue(selectedExecutorState);
   const activeRecording = recordingsEnabled ? loadedRecording : undefined;
+  const observingRemote = useAtomValue(remoteObservationReadOnlyState) && !activeRecording;
   const recordingPlaybackIsStarting = !!activeRecording && recordingPlaybackStarting && !graphRunning;
 
   const { sessionState: remoteDebugger, disconnect } = useRemoteDebugger();
@@ -195,7 +198,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
     session: remoteDebugger,
   });
   const runButtonsBlocked = !actionBarExecutionState.canRun && !graphRunning;
-  const showPrimaryGraphControlButton = actionBarExecutionState.showRunButton || graphRunning;
+  const showPrimaryGraphControlButton = !observingRemote && (actionBarExecutionState.showRunButton || graphRunning);
   const [addRunInputsToEvaluationModalOpen, toggleAddRunInputsToEvaluationModalOpen] = useToggle();
 
   const plugins = useDependsOnPlugins();
@@ -256,6 +259,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
 
   return (
     <div css={styles} ref={actionBarRef} data-node-editor-action-bar>
+      <RemoteObservationBanner />
       {actionBarExecutionState.remoteDebuggerBanner && (
         <div
           className={clsx('remote-debugger-button active', {
@@ -271,7 +275,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           <button onClick={() => unloadRecording()}>Unload Recording</button>
         </div>
       )}
-      {graphRunning && (
+      {graphRunning && !observingRemote && (
         <div className={clsx('pause-button', { paused: graphPaused })}>
           <button onClick={graphPaused ? onResumeGraph : onPauseGraph}>
             {graphPaused ? (
@@ -320,7 +324,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           </button>
         </div>
       )}
-      {runButtonPresentation.showProjectGraphRunButton && (
+      {runButtonPresentation.showProjectGraphRunButton && !observingRemote && (
         <div className={clsx('run-button', { running: graphRunning })}>
           <button
             disabled={runButtonsBlocked}

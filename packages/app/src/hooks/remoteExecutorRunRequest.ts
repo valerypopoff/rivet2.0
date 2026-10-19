@@ -23,6 +23,7 @@ export type UnscopedRemoteExecutionRoutingState = {
   ignoredRootRunIds: Set<RootRunId>;
   lastRunAccepted: boolean | undefined;
   recentlyCompletedRootRunDecisions: Map<RootRunId, boolean>;
+  rootProjects: Map<RootRunId, { projectId: ProjectId; lifetime?: string }>;
 };
 
 export type RemoteExecutionEventDispatchDecision = {
@@ -36,6 +37,7 @@ export type RemoteExecutionEventDispatchDecision = {
     | 'legacy-unscoped-default-accepted'
     | 'recent-root-accepted'
     | 'recent-root-ignored'
+    | 'unadmitted-project-mismatched'
     | 'unscoped-start-accepted'
     | 'unscoped-start-ignored'
     | 'unscoped-last-decision-accepted'
@@ -61,6 +63,7 @@ export function createUnscopedRemoteExecutionRoutingState(): UnscopedRemoteExecu
     ignoredRootRunIds: new Set(),
     lastRunAccepted: undefined,
     recentlyCompletedRootRunDecisions: new Map(),
+    rootProjects: new Map(),
   };
 }
 
@@ -70,6 +73,7 @@ export function resetUnscopedRemoteExecutionRoutingState(state: UnscopedRemoteEx
   state.ignoredRootRunIds.clear();
   state.lastRunAccepted = undefined;
   state.recentlyCompletedRootRunDecisions.clear();
+  state.rootProjects.clear();
 }
 
 export function shouldDispatchRemoteExecutionEvent<K extends keyof ProcessEventMessageMap>(options: {
@@ -84,6 +88,8 @@ export function shouldDispatchRemoteExecutionEvent<K extends keyof ProcessEventM
 }
 
 export function getRemoteExecutionEventDispatchDecision<K extends keyof ProcessEventMessageMap>(options: {
+  acceptsProject?: (projectId: ProjectId) => boolean;
+  getProjectLifetime?: (projectId: ProjectId) => string | undefined;
   activeRequestId: RemoteRunRequestId | null;
   currentProjectId: ProjectId | undefined;
   data: ProcessEventMessageMap[K];
@@ -102,11 +108,20 @@ export function getRemoteExecutionEventDispatchDecision<K extends keyof ProcessE
   }
 
   if (message === 'start') {
-    const accepted = shouldAcceptUnscopedStartEvent(data as ProcessEventMessageMap['start'], currentProjectId);
-    rememberUnscopedRunDecision(unscopedRoutingState, data as ProcessEventMessageMap['start'], accepted);
+    const accepted = shouldAcceptUnscopedStartEvent(
+      data as ProcessEventMessageMap['start'],
+      currentProjectId,
+      options.acceptsProject,
+    );
+    rememberUnscopedRunDecision(
+      unscopedRoutingState,
+      data as ProcessEventMessageMap['start'],
+      accepted,
+      options.getProjectLifetime,
+    );
     return {
       reason: accepted ? 'unscoped-start-accepted' : 'unscoped-start-ignored',
-      rootRunId: (data as ProcessEventMessageMap['start']).execution?.rootRunId,
+      rootRunId: (data as ProcessEventMessageMap['start'])?.execution?.rootRunId,
       shouldDispatch: accepted,
     };
   }
@@ -115,6 +130,7 @@ export function getRemoteExecutionEventDispatchDecision<K extends keyof ProcessE
   if (rootRunId != null) {
     if (unscopedRoutingState.acceptedRootRunIds.has(rootRunId)) {
       rememberCompletedUnscopedRootRun(unscopedRoutingState, message, data, true);
+      if (message === 'done' || message === 'error') completeIdentifiedRun(unscopedRoutingState, rootRunId, true);
       return {
         reason: 'active-root-accepted',
         rootRunId,
@@ -124,6 +140,7 @@ export function getRemoteExecutionEventDispatchDecision<K extends keyof ProcessE
 
     if (unscopedRoutingState.ignoredRootRunIds.has(rootRunId)) {
       rememberCompletedUnscopedRootRun(unscopedRoutingState, message, data, false);
+      if (message === 'done' || message === 'error') completeIdentifiedRun(unscopedRoutingState, rootRunId, false);
       return {
         reason: 'active-root-ignored',
         rootRunId,
@@ -138,6 +155,22 @@ export function getRemoteExecutionEventDispatchDecision<K extends keyof ProcessE
         rootRunId,
         shouldDispatch: recentDecision,
       };
+    }
+
+    // A processor can fail preparation before emitting start. Do not let a
+    // positively identified foreign run inherit the last admitted run's owner.
+    // Known roots above still admit their cross-project subgraph events.
+    if (
+      hasExecutionMetadata(data) &&
+      typeof data.execution.projectId === 'string' &&
+      currentProjectId != null &&
+      !(
+        options.acceptsProject?.(data.execution.projectId as ProjectId) ?? data.execution.projectId === currentProjectId
+      )
+    ) {
+      rememberCompletedUnscopedRootRun(unscopedRoutingState, message, data, false);
+      if (message === 'done' || message === 'error') completeIdentifiedRun(unscopedRoutingState, rootRunId, false);
+      return { reason: 'unadmitted-project-mismatched', rootRunId, shouldDispatch: false };
     }
   }
 
@@ -282,23 +315,28 @@ export async function sendPendingRemoteGraphRunRequest(options: {
 function shouldAcceptUnscopedStartEvent(
   data: ProcessEventMessageMap['start'],
   currentProjectId: ProjectId | undefined,
+  acceptsProject?: (projectId: ProjectId) => boolean,
 ): boolean {
-  const eventProjectId = data.project?.metadata?.id;
+  const eventProjectId = data?.project?.metadata?.id;
 
   if (!eventProjectId || !currentProjectId) {
     return true;
   }
 
-  return eventProjectId === currentProjectId;
+  return acceptsProject?.(eventProjectId) ?? eventProjectId === currentProjectId;
 }
 
 function rememberUnscopedRunDecision(
   state: UnscopedRemoteExecutionRoutingState,
   data: ProcessEventMessageMap['start'],
   accepted: boolean,
+  getProjectLifetime?: (projectId: ProjectId) => string | undefined,
 ): void {
-  const rootRunId = data.execution?.rootRunId;
+  const rootRunId = data?.execution?.rootRunId;
   if (rootRunId != null) {
+    const projectId = data.project?.metadata?.id ?? data.execution?.projectId;
+    if (projectId && !state.rootProjects.has(rootRunId))
+      state.rootProjects.set(rootRunId, { projectId, lifetime: getProjectLifetime?.(projectId) });
     const targetSet = accepted ? state.acceptedRootRunIds : state.ignoredRootRunIds;
     const otherSet = accepted ? state.ignoredRootRunIds : state.acceptedRootRunIds;
     targetSet.add(rootRunId);
@@ -346,6 +384,7 @@ function rememberCompletedUnscopedRootRun<K extends keyof ProcessEventMessageMap
     for (const removedDecision of removedDecisions) {
       state.acceptedRootRunIds.delete(removedDecision.rootRunId);
       state.ignoredRootRunIds.delete(removedDecision.rootRunId);
+      state.rootProjects.delete(removedDecision.rootRunId);
     }
   }
 }
@@ -381,12 +420,21 @@ function rememberRecentlyCompletedUnscopedRootRun(
       return;
     }
     state.recentlyCompletedRootRunDecisions.delete(oldestRootRunId.value);
+    state.rootProjects.delete(oldestRootRunId.value);
   }
+}
+
+function completeIdentifiedRun(state: UnscopedRemoteExecutionRoutingState, rootRunId: RootRunId, accepted: boolean) {
+  state.acceptedRootRunIds.delete(rootRunId);
+  state.ignoredRootRunIds.delete(rootRunId);
+  state.completedRootRunDecisions = state.completedRootRunDecisions.filter((entry) => entry.rootRunId !== rootRunId);
+  rememberRecentlyCompletedUnscopedRootRun(state, { accepted, rootRunId });
 }
 
 function hasExecutionMetadata(data: unknown): data is {
   execution: {
     parentGraphRunId?: unknown;
+    projectId?: unknown;
     rootRunId: RootRunId;
   };
 } {

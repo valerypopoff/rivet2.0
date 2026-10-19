@@ -108,6 +108,15 @@ foreign-scoped live events. Root recorders exclude those child events because th
 root snapshot cannot replay foreign nodes; a child recorder owns that scope.
 Do not confuse this recording boundary with missing live dataflow across bundle tabs.
 
+## Remote bundle dataflow across tabs
+
+External Remote Debugger has one shared bundle connection, startable/stoppable
+from any open member. Open-project references or an explicit bundle manifest bind
+its controls; runtime identity/ancestry still gates per-project display projection.
+Transient shared sessions never replace persisted local executor preferences. See
+[remote dependency observations](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md#remote-dependency-observations-across-open-tabs)
+for admission, tab lifetimes, control ownership and Run Activity ancestry.
+
 ## Per-Node Run Duration Metadata
 
 Node run duration display is an app preference layered over execution events. The persisted setting lives in [`showNodeRunDurationsState`](../packages/app/src/state/settings.ts) with storage key `showNodeRunDurations` and default `false`. It is not part of core `Settings`, project YAML, node data, output definitions, or DataValue output maps.

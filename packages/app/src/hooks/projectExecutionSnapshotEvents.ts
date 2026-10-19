@@ -24,10 +24,9 @@ import {
 } from '../utils/executionDataStorage.js';
 import {
   startGraphRunHistory,
-  finishGraphRunHistory,
+  finishGraphRunState,
   interruptRunningProcesses,
   reconcileRunningProcessesAfterSuccessfulDone,
-  removeRunningGraphEntry,
   updateSelectedGraphRunForGraphStart,
 } from './graphExecutionEventHelpers.js';
 import {
@@ -55,6 +54,10 @@ export type ProjectExecutionSnapshotEventResult = {
 
 type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap> = {
   data: ProcessEventMessageMap[K];
+  /** Original ancestry for passive copies; false when the source already journals the raw event. */
+  activityData?: ProcessEventMessageMap[K] | false;
+  /** Passive observers retain waits in the journal without creating interactive prompts. */
+  activityOnly?: boolean;
   message: K;
   projectId: ProjectId;
   refStore: DataRefStore;
@@ -82,19 +85,22 @@ export function applyProcessEventToProjectExecutionSnapshot<K extends keyof Proc
     return { changed: false, snapshot: previousSnapshot };
   }
 
-  const result = applyProcessEventToProjectExecutionSnapshotData(options);
+  const result = options.activityOnly
+    ? { changed: false, snapshot: previousSnapshot }
+    : applyProcessEventToProjectExecutionSnapshotData(options);
   let runActivityJournal = previousSnapshot.runActivityJournal ?? createRunActivityJournal();
 
   try {
-    runActivityJournal = applyProcessEventToRunActivityJournal({
-      data: options.data,
-      // Project snapshots created by older app versions do not carry the
-      // additive Run Activity journal. Treat them as an empty journal instead
-      // of making an inactive-project or replay event fail during restoration.
-      journal: runActivityJournal,
-      message: options.message,
-      occurredAt,
-    });
+    if (options.activityData !== false)
+      runActivityJournal = applyProcessEventToRunActivityJournal({
+        data: options.activityData ?? options.data,
+        // Project snapshots created by older app versions do not carry the
+        // additive Run Activity journal. Treat them as an empty journal instead
+        // of making an inactive-project or replay event fail during restoration.
+        journal: runActivityJournal,
+        message: options.message,
+        occurredAt,
+      });
   } catch (error) {
     // This projection is observational. A malformed activity event must not
     // discard the primary execution snapshot for an inactive project.
@@ -449,6 +455,12 @@ function applyGraphStart(
     graphIdFallback: graphId,
   });
 
+  if (
+    data.execution &&
+    snapshot.graphRunHistoryByView[graphViewKey]?.some((run) => run.graphRunId === data.execution.graphRunId)
+  )
+    return snapshot;
+
   return produce(snapshot, (draft) => {
     draft.runningGraphs.push(graphId);
     draft.graphRunHistoryByView = startGraphRunHistory(draft.graphRunHistoryByView, graphViewKey, data.execution);
@@ -468,15 +480,10 @@ function applyGraphFinish(
     graphIdFallback: graphId,
   });
 
-  return produce(snapshot, (draft) => {
-    draft.runningGraphs = removeRunningGraphEntry(draft.runningGraphs, graphId);
-    draft.graphRunHistoryByView = finishGraphRunHistory(
-      draft.graphRunHistoryByView,
-      graphViewKey,
-      data.execution?.graphRunId,
-      status,
-    );
-  });
+  return {
+    ...snapshot,
+    ...finishGraphRunState(snapshot, graphViewKey, graphId, data.execution?.graphRunId, status),
+  };
 }
 
 function setDataForNodeInSnapshot(

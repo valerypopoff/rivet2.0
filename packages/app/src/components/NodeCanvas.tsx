@@ -72,6 +72,7 @@ import {
 import { canvasPreviewConnectionsState } from '../state/selectors/canvasGraphSelectors.js';
 import { definitionValidConnectionsState } from '../state/selectors/ioDefinitions.js';
 import { canRunGraphFromEditor } from '../state/selectors/executionSelectors.js';
+import { remoteObservationReadOnlyState } from '../state/remoteObservation.js';
 import { MouseIcon } from './MouseIcon';
 import { type ContextMenuContext } from './ContextMenu.js';
 import { nodeCanvasStyles } from './nodeCanvas/nodeCanvasStyles.js';
@@ -231,6 +232,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const definitionValidConnections = useAtomValue(definitionValidConnectionsState);
   const project = useAtomValue(projectState);
   const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
+  const observingRemote = useAtomValue(remoteObservationReadOnlyState) && !loadedRecording;
   const referencedProjects = useAtomValue(referencedProjectsState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
   const comparisonInspectorOpen = useAtomValue(viewingProjectComparisonNodeState) != null;
@@ -241,6 +243,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const executorSession = useExecutorSessionState();
   const canStartEditorGraphRun =
     canRunGraphFromEditor({
+      observingRemote,
       hasLoadedRecording: loadedRecording != null,
       selectedExecutor,
       session: executorSession,
@@ -248,7 +251,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
   const freezeUnavailableReason =
     loadedRecording != null
       ? 'Freeze node output is unavailable while viewing a recording.'
-      : executorSession.target?.type === 'external-debugger'
+      : observingRemote || executorSession.target?.type === 'external-debugger'
         ? 'Freeze node output is unavailable while the Remote Debugger is active.'
         : graphRunning
           ? 'Stop the current run before freezing node outputs.'

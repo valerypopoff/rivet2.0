@@ -9,6 +9,7 @@ import { useExecutorSessionState } from './useExecutorSession';
 import { useStableCallback } from './useStableCallback';
 import { clearUserInputSubmitHandler, setUserInputSubmitHandler } from '../state/actions/userInputActions.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
+import { remoteObservationReadOnlyState } from '../state/remoteObservation.js';
 
 export function useGraphExecutor() {
   const selectedExecutor = useAtomValue(selectedExecutorState);
@@ -17,6 +18,7 @@ export function useGraphExecutor() {
   const remoteExecutor = useRemoteExecutor();
   const session = useExecutorSessionState();
   const hasLoadedRecording = !!loadedRecording;
+  const observingRemote = useAtomValue(remoteObservationReadOnlyState) && !hasLoadedRecording;
   const ignoreEditorRun = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
     if (options.throwOnError) {
       throw new Error('The current executor mode cannot run graphs from the editor.');
@@ -24,6 +26,7 @@ export function useGraphExecutor() {
     return undefined;
   });
   const allowEditorGraphRun = canRunGraphFromEditor({
+    observingRemote,
     hasLoadedRecording,
     selectedExecutor,
     session,
@@ -71,10 +74,12 @@ export function useGraphExecutor() {
 
   return {
     tryRunGraph,
-    tryAbortGraph: graphControlExecutor.tryAbortGraph,
-    tryPauseGraph: graphControlExecutor.tryPauseGraph,
-    tryResumeGraph: graphControlExecutor.tryResumeGraph,
-    tryRunEvaluation: liveExecutor.tryRunEvaluation,
-    tryRetryInterruptedEvaluation: remoteExecutor.tryRetryInterruptedEvaluation,
+    tryAbortGraph: observingRemote ? async () => {} : graphControlExecutor.tryAbortGraph,
+    tryPauseGraph: observingRemote ? () => {} : graphControlExecutor.tryPauseGraph,
+    tryResumeGraph: observingRemote ? () => {} : graphControlExecutor.tryResumeGraph,
+    tryRunEvaluation: observingRemote ? async () => undefined : liveExecutor.tryRunEvaluation,
+    tryRetryInterruptedEvaluation: observingRemote
+      ? async () => undefined
+      : remoteExecutor.tryRetryInterruptedEvaluation,
   };
 }

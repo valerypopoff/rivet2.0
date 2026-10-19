@@ -77,9 +77,7 @@ export function getGraphRunsForView(options: {
   // same-graph history; that would make the execution selector disappear when
   // opening the graph through "Go to subgraph" even though the sidebar view can
   // still see multiple invocations of the same graph.
-  return (
-    matchGroupsByPriority.find(hasSwitchableRunHistory) ?? matchGroupsByPriority.find(hasGraphRunHistory) ?? []
-  );
+  return matchGroupsByPriority.find(hasSwitchableRunHistory) ?? matchGroupsByPriority.find(hasGraphRunHistory) ?? [];
 }
 
 function sortGraphRunsByTime(graphRuns: GraphRunRecord[]): GraphRunRecord[] {
@@ -312,7 +310,8 @@ export function getActionBarExecutionState(options: {
   const recordingPlaybackStarting = hasLoadedRecording && recordingPlaybackStartingInput && !graphRunning;
   const canRun = isRunnableExecutorProductState(executorProductState) && !recordingPlaybackStarting;
   const isActuallyRemoteDebugging = isExternalDebuggerProductState(executorProductState);
-  const showRunButton = !isActuallyRemoteDebugging && (selectedExecutor === 'nodejs' || canRun || recordingPlaybackStarting);
+  const showRunButton =
+    !isActuallyRemoteDebugging && (selectedExecutor === 'nodejs' || canRun || recordingPlaybackStarting);
   const remoteDebuggerBanner = getRemoteDebuggerBannerState(executorProductState);
   const showRemoteDebuggerBanner = remoteDebuggerBanner != null;
   const executorLoading =
@@ -408,6 +407,7 @@ export function getRemoteDebuggerBannerState(state: ExecutorProductState): Remot
 }
 
 export function canRunGraphFromEditor(options: {
+  observingRemote?: boolean;
   hasLoadedRecording?: boolean;
   selectedExecutor: DefaultExecutor;
   session: Pick<ExecutorSessionState, 'capabilities' | 'status' | 'target'>;
@@ -418,7 +418,7 @@ export function canRunGraphFromEditor(options: {
     session: options.session,
   });
 
-  return !isExternalDebuggerProductState(executorProductState);
+  return !options.observingRemote && !isExternalDebuggerProductState(executorProductState);
 }
 
 export function shouldUseRemoteExecutor(options: {

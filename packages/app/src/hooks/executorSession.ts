@@ -5,10 +5,18 @@ import type {
   GraphProgress,
   RemoteRunRequestId,
   SocketRecordingChannel,
+  ProjectId,
 } from '@valerypopoff/rivet2-core';
 import { logRuntimeDebug } from '@valerypopoff/rivet2-core';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
 import { handleError } from '../utils/errorHandling.js';
+import {
+  createUnscopedRemoteExecutionRoutingState,
+  getRemoteExecutionEventDispatchDecision,
+  resetUnscopedRemoteExecutionRoutingState,
+  type RemoteExecutionEventDispatchDecision,
+} from './remoteExecutorRunRequest.js';
+import { summarizeRemoteDebuggerRoutingState, type RemoteDebuggerRoutingSummary } from './remoteDebuggerDiagnostics.js';
 import { runExecutorSessionCallback, notifyExecutorSessionCallbacks } from './executorSessionCallbackIsolation.js';
 import { handleExecutorDatasetRequest } from './executorSessionDatasetBridge.js';
 import {
@@ -61,10 +69,21 @@ export type ExecutorSessionState = {
 
 type MaybePromise<T> = T | Promise<T>;
 
+export type RemoteEventAdmission = {
+  /** Actual root project, which need not be the tab that opened a bundle debugger. */
+  projectId?: ProjectId;
+  /** Root events remain admitted for dependencies after its source tab is replaced. */
+  sourceDisplayAllowed?: boolean;
+  decision: RemoteExecutionEventDispatchDecision;
+  before?: RemoteDebuggerRoutingSummary;
+  after?: RemoteDebuggerRoutingSummary;
+};
+
 type DebuggerMessageHandler = <K extends keyof ProcessEventMessageMap>(
   message: K,
   data: ProcessEventMessageMap[K],
   requestId?: RemoteRunRequestId,
+  admission?: RemoteEventAdmission,
 ) => MaybePromise<void>;
 
 export type ExecutorSessionDisconnectReason = 'manual-disconnect' | 'unexpected-disconnect' | 'replaced';
@@ -128,11 +147,15 @@ export type ExecutorSessionRuntime = {
 };
 
 export function createExecutorSessionRuntime(options: {
+  projectId?: ProjectId;
+  acceptsProject?: (projectId: ProjectId) => boolean;
+  getProjectLifetime?: (projectId: ProjectId) => string | undefined;
   datasetProvider?: AppDatasetProvider | null;
   onStateChange: StateChangeCallback;
   resolveInternalHostedExecutorUrl?: () => Promise<string>;
 }): ExecutorSessionRuntime {
   let currentDatasetProvider: AppDatasetProvider | null = options.datasetProvider ?? null;
+  const eventRouting = createUnscopedRemoteExecutionRoutingState();
   let currentRemoteUploadAllowed = false;
   let currentSocket: WebSocket | null = null;
   let currentSocketGeneration = 0;
@@ -483,19 +506,38 @@ export function createExecutorSessionRuntime(options: {
             rivetSequence?: number;
             rivetEventId?: string;
           };
-          if (socketTarget.type === 'external-debugger' && envelope.message === 'latest-session' && envelope.data?.protocol === 1) {
-            latestObservation = true; clearResumeTimeout(); setConnectionStatus('ready'); return false;
+          if (
+            socketTarget.type === 'external-debugger' &&
+            envelope.message === 'latest-session' &&
+            envelope.data?.protocol === 1
+          ) {
+            latestObservation = true;
+            clearResumeTimeout();
+            setConnectionStatus('ready');
+            return false;
           }
           if (latestObservation && typeof envelope.rivetEventId === 'string') {
             const split = envelope.rivetEventId.lastIndexOf(':');
-            const origin = envelope.rivetEventId.slice(0, split), sequence = Number(envelope.rivetEventId.slice(split + 1));
-            if (envelope.rivetEventId.length > 200 || split < 1 || !Number.isSafeInteger(sequence) || sequence < 1 || sequence <= (latestEventCursors.get(origin) ?? 0)) return false;
+            const origin = envelope.rivetEventId.slice(0, split),
+              sequence = Number(envelope.rivetEventId.slice(split + 1));
+            if (
+              envelope.rivetEventId.length > 200 ||
+              split < 1 ||
+              !Number.isSafeInteger(sequence) ||
+              sequence < 1 ||
+              sequence <= (latestEventCursors.get(origin) ?? 0)
+            )
+              return false;
             latestEventCursors.set(origin, sequence);
             if (latestEventCursors.size > 256) latestEventCursors.delete(latestEventCursors.keys().next().value!);
           }
           if (resumableTarget && envelope.message === 'executor-session') {
-            if (envelope.data?.protocol !== 1 || typeof envelope.data.capability !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(envelope.data.capability) ||
-                (resumeCapability && envelope.data.capability !== resumeCapability)) {
+            if (
+              envelope.data?.protocol !== 1 ||
+              typeof envelope.data.capability !== 'string' ||
+              !/^[A-Za-z0-9_-]{43}$/.test(envelope.data.capability) ||
+              (resumeCapability && envelope.data.capability !== resumeCapability)
+            ) {
               failResume();
               return false;
             }
@@ -503,9 +545,15 @@ export function createExecutorSessionRuntime(options: {
             sessionAcknowledged = true;
             return false;
           }
-          if (resumableTarget && !sessionAcknowledged) { failResume(); return false; }
+          if (resumableTarget && !sessionAcknowledged) {
+            failResume();
+            return false;
+          }
           if (resumableTarget && envelope.message === 'executor-session-ready') {
-            if (envelope.data?.protocol !== 1) { failResume(); return false; }
+            if (envelope.data?.protocol !== 1) {
+              failResume();
+              return false;
+            }
             clearResumeTimeout();
             setConnectionStatus('ready');
             flushDatasetResponses();
@@ -516,41 +564,61 @@ export function createExecutorSessionRuntime(options: {
           if (resumeCapability && envelope.rivetSequence != null) {
             if (!Number.isSafeInteger(envelope.rivetSequence) || envelope.rivetSequence <= resumeSequence) return false;
             if (envelope.rivetSequence !== resumeSequence + 1) {
-              failResume(); return false;
+              failResume();
+              return false;
             }
             resumeSequence = envelope.rivetSequence;
           }
           if (resumableTarget && envelope.message === 'executor-owner-retiring' && envelope.data?.protocol === 1) {
             // Only an idle, positively settled session can choose a new owner.
             // Accepted or uncertain runs always remain pinned to the old one.
-            if (!activeGraphRunRequestId && !pendingGraphExecutions.hasPendingExecutions() && options.resolveInternalHostedExecutorUrl && !idleHandoff) {
+            if (
+              !activeGraphRunRequestId &&
+              !pendingGraphExecutions.hasPendingExecutions() &&
+              options.resolveInternalHostedExecutorUrl &&
+              !idleHandoff
+            ) {
               const generation = currentSocketGeneration;
               const handoff = Symbol('executor-owner-handoff');
               idleHandoff = handoff;
               setConnectionStatus('reconnecting');
               void (async () => {
                 const deadline = Date.now() + 60_000;
-                const canHandoff = () => idleHandoff === handoff && Date.now() < deadline && generation === currentSocketGeneration &&
-                  currentSocket === socket && currentTarget?.type === 'internal-hosted' &&
-                  !activeGraphRunRequestId && !pendingGraphExecutions.hasPendingExecutions();
+                const canHandoff = () =>
+                  idleHandoff === handoff &&
+                  Date.now() < deadline &&
+                  generation === currentSocketGeneration &&
+                  currentSocket === socket &&
+                  currentTarget?.type === 'internal-hosted' &&
+                  !activeGraphRunRequestId &&
+                  !pendingGraphExecutions.hasPendingExecutions();
                 while (canHandoff()) {
                   const url = await options.resolveInternalHostedExecutorUrl!().catch(() => undefined);
                   // Discovery does not own the session. A disconnect, explicit
                   // replacement or newly accepted run can win while it awaits.
                   if (!canHandoff()) return;
                   if (url && url !== socketTarget.url) {
-                    const old = new URL(socketTarget.url), next = new URL(url);
-                    if (old.origin !== next.origin || !next.pathname.startsWith('/ws/executor/owner/')) throw new Error('Fresh executor owner is invalid.');
+                    const old = new URL(socketTarget.url),
+                      next = new URL(url);
+                    if (old.origin !== next.origin || !next.pathname.startsWith('/ws/executor/owner/'))
+                      throw new Error('Fresh executor owner is invalid.');
                     const target: ExecutorSessionTarget = { type: 'internal-hosted', url };
-                    replaceCurrentSession(target); await connectToTarget(target); return;
+                    replaceCurrentSession(target);
+                    await connectToTarget(target);
+                    return;
                   }
-                  await new Promise(resolve => setTimeout(resolve, 500));
+                  await new Promise((resolve) => setTimeout(resolve, 500));
                 }
                 throw new Error('Fresh executor owner is unavailable.');
-              })().catch(() => {
-                // No run was replayed. Keep the old owner/cursor for explicit recovery.
-                if (idleHandoff === handoff && generation === currentSocketGeneration) setConnectionStatus('reconnecting');
-              }).finally(() => { if (idleHandoff === handoff) idleHandoff = undefined; });
+              })()
+                .catch(() => {
+                  // No run was replayed. Keep the old owner/cursor for explicit recovery.
+                  if (idleHandoff === handoff && generation === currentSocketGeneration)
+                    setConnectionStatus('reconnecting');
+                })
+                .finally(() => {
+                  if (idleHandoff === handoff) idleHandoff = undefined;
+                });
             }
             return false;
           }
@@ -575,16 +643,68 @@ export function createExecutorSessionRuntime(options: {
           message: incoming.message,
           socket,
           target: socketTarget,
-          ...(capability ? { sendResponse: (requestId: string, payload: unknown) => retainDatasetResponse(capability, requestId, payload) } : {}),
+          ...(capability
+            ? {
+                sendResponse: (requestId: string, payload: unknown) =>
+                  retainDatasetResponse(capability, requestId, payload),
+              }
+            : {}),
         });
         return;
       }
 
       if (incoming.kind === 'process-event') {
         const processEvent = incoming.incoming;
+        const metadata = (
+          processEvent.data as {
+            execution?: {
+              rootRunId?: import('@valerypopoff/rivet2-core').RootRunId;
+              projectId?: ProjectId;
+              parentGraphRunId?: string;
+            };
+          } | null
+        )?.execution;
+        const rootId =
+          metadata?.rootRunId ??
+          (['done', 'error', 'abort'].includes(processEvent.message)
+            ? eventRouting.completedRootRunDecisions[0]?.rootRunId
+            : undefined) ??
+          (eventRouting.lastRunAccepted !== false && eventRouting.acceptedRootRunIds.size === 1
+            ? eventRouting.acceptedRootRunIds.values().next().value
+            : undefined);
+        const rootProjectId =
+          (processEvent.message === 'start'
+            ? (processEvent.data as ProcessEventMessageMap['start']).project?.metadata?.id
+            : rootId && eventRouting.rootProjects.get(rootId)?.projectId) ||
+          (metadata && !metadata.parentGraphRunId ? metadata.projectId : undefined) ||
+          options.projectId;
+        const before =
+          socketTarget.type === 'external-debugger' ? summarizeRemoteDebuggerRoutingState(eventRouting) : undefined;
+        const decision = getRemoteExecutionEventDispatchDecision({
+          activeRequestId: activeGraphRunRequestId,
+          currentProjectId: options.projectId,
+          acceptsProject: socketTarget.type === 'external-debugger' ? options.acceptsProject : undefined,
+          getProjectLifetime: options.getProjectLifetime,
+          data: processEvent.data,
+          message: processEvent.message,
+          requestId: processEvent.requestId,
+          unscopedRoutingState: eventRouting,
+        });
+        const rootProject = rootId == null ? undefined : eventRouting.rootProjects.get(rootId);
+        const currentProjectLifetime = rootProjectId == null ? undefined : options.getProjectLifetime?.(rootProjectId);
+        const admission: RemoteEventAdmission = {
+          projectId: rootProjectId,
+          sourceDisplayAllowed:
+            !options.getProjectLifetime ||
+            (currentProjectLifetime != null &&
+              (rootProject == null || rootProject.lifetime === currentProjectLifetime)),
+          decision,
+          before,
+          after: before ? summarizeRemoteDebuggerRoutingState(eventRouting) : undefined,
+        };
         for (const handler of [...debuggerMessageHandlers]) {
           runExecutorSessionCallback(
-            () => handler(processEvent.message, processEvent.data, processEvent.requestId),
+            () => handler(processEvent.message, processEvent.data, processEvent.requestId, admission),
             'Executor process-message subscriber failed',
             {
               message: processEvent.message,
@@ -601,13 +721,15 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function replaceCurrentSession(nextTarget: ExecutorSessionTarget) {
+    resetUnscopedRemoteExecutionRoutingState(eventRouting);
     connectionNotified = false;
     retryDelay = 0;
     idleHandoff = undefined;
     datasetResponses.length = 0;
     datasetResponseBytes = 0;
     closeRecordingChannel();
-    latestObservation = false; latestEventCursors.clear();
+    latestObservation = false;
+    latestEventCursors.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
     resumeSequence = 0;
@@ -649,12 +771,14 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function disconnect(options: ExecutorSessionDisconnectOptions = {}) {
+    resetUnscopedRemoteExecutionRoutingState(eventRouting);
     connectionNotified = false;
     idleHandoff = undefined;
     datasetResponses.length = 0;
     datasetResponseBytes = 0;
     closeRecordingChannel();
-    latestObservation = false; latestEventCursors.clear();
+    latestObservation = false;
+    latestEventCursors.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
     resumeSequence = 0;
@@ -727,9 +851,13 @@ export function createExecutorSessionRuntime(options: {
       return connectToTarget(createInternalDesktopExecutorTarget());
     },
     connectInternalHostedExecutor(url) {
-      if (currentTarget?.type === 'internal-hosted' && currentStatus === 'ready' &&
-          /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(url) &&
-          new URL(url).origin === new URL(currentTarget.url).origin && currentTarget.url.includes('/ws/executor/owner/'))
+      if (
+        currentTarget?.type === 'internal-hosted' &&
+        currentStatus === 'ready' &&
+        /^wss?:\/\/[^/]+\/ws\/executor\/owner\//.test(url) &&
+        new URL(url).origin === new URL(currentTarget.url).origin &&
+        currentTarget.url.includes('/ws/executor/owner/')
+      )
         return connectToTarget(currentTarget);
       return connectToTarget(createInternalHostedExecutorTarget(url));
     },

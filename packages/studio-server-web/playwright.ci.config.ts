@@ -22,6 +22,7 @@ export default defineConfig({
     'project-tree-activation.spec.ts',
     'port-connection-warnings.spec.ts',
     'cross-project-subgraph-loading.spec.ts',
+    'remote-bundle-observation.spec.ts',
     'graph-deletion-references.spec.ts',
     'node-editor-ownership.spec.ts',
     'node-editor-lifecycle.spec.ts',

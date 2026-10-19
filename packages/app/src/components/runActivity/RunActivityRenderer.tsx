@@ -116,18 +116,22 @@ export const RunActivityRenderer: FC = () => {
 
   const resolveInvocation = useMemo<ResolveRunActivityInvocation>(() => {
     return ({ root, graphRun, invocation }) => {
-      const graph = getCurrentGraphDefinition(project.graphs[invocation.graphId], currentGraph, invocation.graphId);
+      const graph =
+        graphRun?.projectId != null && graphRun.projectId !== project.metadata.id
+          ? undefined
+          : getCurrentGraphDefinition(project.graphs[invocation.graphId], currentGraph, invocation.graphId);
       const sourceNode = graph?.nodes.find((node) => node.id === invocation.nodeId);
       const effectiveNode = sourceNode ? resolveNodePrefabInstance(project, sourceNode) : undefined;
       const executor = graphRun?.executor;
+      const parentGraphRun =
+        graphRun?.parentGraphRunId == null ? undefined : root.graphRunsById[graphRun.parentGraphRunId];
+      const foreignCaller = graphRun?.projectId != null && parentGraphRun?.projectId !== project.metadata.id;
       const parentGraph =
-        executor == null
+        executor == null || foreignCaller
           ? undefined
           : getCurrentGraphDefinition(project.graphs[executor.parentGraphId], currentGraph, executor.parentGraphId);
       const callerNode = executor == null ? undefined : parentGraph?.nodes.find((node) => node.id === executor.nodeId);
       const effectiveCallerNode = callerNode ? resolveNodePrefabInstance(project, callerNode) : undefined;
-      const parentGraphRun =
-        graphRun?.parentGraphRunId == null ? undefined : root.graphRunsById[graphRun.parentGraphRunId];
       const processData = findExactProcessData(runDataByNode, {
         rootRunId: invocation.rootRunId,
         graphRunId: invocation.graphRunId,
@@ -189,10 +193,16 @@ export const RunActivityRenderer: FC = () => {
 
   const selectExactExecutionTarget = useStableCallback((identity: RunActivityInvocationIdentity) => {
     const graphRun = journal.rootsById[identity.rootRunId]?.graphRunsById[identity.graphRunId];
+    if (graphRun?.projectId != null && graphRun.projectId !== project.metadata.id) return false;
     const graph = getCurrentGraphDefinition(project.graphs[identity.graphId], currentGraph, identity.graphId);
     if (!graphRun || !graph?.nodes.some((node) => node.id === identity.nodeId)) return false;
 
-    const graphView = createRunActivityGraphView(identity.graphId, graphRun.executor);
+    const parentGraphRun =
+      graphRun.parentGraphRunId == null
+        ? undefined
+        : journal.rootsById[identity.rootRunId]?.graphRunsById[graphRun.parentGraphRunId];
+    const foreignCaller = graphRun.projectId != null && parentGraphRun?.projectId !== project.metadata.id;
+    const graphView = createRunActivityGraphView(identity.graphId, foreignCaller ? undefined : graphRun.executor);
     const page = findExactProcessPage(runDataByNode, identity);
     setOpenOverlay(undefined);
     setSelectedGraphRunByView((current) => ({

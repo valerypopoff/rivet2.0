@@ -796,6 +796,92 @@ test('does not let an exact root terminal confirmation settle another concurrent
   assert.equal(journal.pendingUnscopedTerminalConfirmations, 0);
 });
 
+test('an identified late cancellation failure never finishes a neighboring active root', () => {
+  const other = { ...execution, rootRunId: 'other' as RootRunId, graphRunId: 'other-run' as GraphRunId };
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('graphStart', { graph, inputs: {}, execution }, 1),
+    event('graphStart', { graph, inputs: {}, execution: other }, 2),
+    event('graphAbort', { graph, successful: false, execution }, 3),
+  ]);
+  journal = apply(journal, 'abort', { successful: false, execution }, 4);
+  journal = apply(journal, 'graphError', { graph, error: 'cleanup failed', execution }, 5);
+  journal = apply(journal, 'error', { error: 'cleanup failed', execution }, 6);
+  assert.equal(journal.rootsById[other.rootRunId]!.status, 'running');
+  assert.equal(journal.pendingUnscopedTerminalConfirmations, 0);
+});
+
+test('identified duplicate confirmations cannot consume another legacy root confirmation', () => {
+  const second = { ...execution, rootRunId: 'second' as RootRunId, graphRunId: 'second-run' as GraphRunId };
+  const active = { ...execution, rootRunId: 'active' as RootRunId, graphRunId: 'active-run' as GraphRunId };
+  let journal = reduceRunActivityEvents(createRunActivityJournal({ completedRootCount: 3 }), [
+    event('graphStart', { graph, inputs: {}, execution }, 1),
+    event('graphStart', { graph, inputs: {}, execution: second }, 2),
+    event('graphStart', { graph, inputs: {}, execution: active }, 3),
+    event('graphFinish', { graph, outputs: {}, execution }, 4),
+    event('graphFinish', { graph, outputs: {}, execution: second }, 5),
+  ]);
+  journal = apply(journal, 'done', { results: {}, execution: second }, 6);
+  journal = apply(journal, 'done', { results: {}, execution: second }, 7);
+  assert.equal(journal.pendingUnscopedTerminalConfirmations, 1);
+  journal = apply(journal, 'done', { results: {} }, 8);
+  assert.equal(journal.pendingUnscopedTerminalConfirmations, 0);
+  assert.equal(journal.rootsById[active.rootRunId]!.status, 'running');
+});
+
+test('identified pause and resume affect only their own root during concurrent execution', () => {
+  const other = { ...execution, rootRunId: 'other' as RootRunId, graphRunId: 'other-run' as GraphRunId };
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('graphStart', { graph, inputs: {}, execution }, 1),
+    event('graphStart', { graph, inputs: {}, execution: other }, 2),
+  ]);
+  journal = apply(journal, 'pause', { execution }, 3);
+  assert.equal(journal.rootsById[rootRunId]!.paused, true);
+  assert.equal(journal.rootsById[other.rootRunId]!.paused, false);
+  journal = apply(journal, 'resume', { execution }, 4);
+  assert.equal(journal.rootsById[rootRunId]!.paused, false);
+});
+
+test('legacy abort cleanup confirmations remain isolated from concurrent roots', () => {
+  const other = { ...execution, rootRunId: 'other' as RootRunId, graphRunId: 'other-run' as GraphRunId };
+  let journal = reduceRunActivityEvents(createRunActivityJournal(), [
+    event('graphStart', { graph, inputs: {}, execution }, 1),
+    event('graphStart', { graph, inputs: {}, execution: other }, 2),
+    event('graphAbort', { graph, successful: false, execution }, 3),
+    event('abort', { successful: false }, 4),
+    event('graphError', { graph, error: 'cleanup failed', execution }, 5),
+    event('error', { error: 'cleanup failed' }, 6),
+  ]);
+  assert.equal(journal.rootsById[other.rootRunId]!.status, 'running');
+  assert.equal(journal.pendingUnscopedTerminalConfirmations, 0);
+  const legacy = { ...journal, pendingUnscopedTerminalConfirmations: 1 };
+  delete legacy.pendingTerminalRootRunIds;
+  journal = apply(legacy, 'done', { results: {} }, 7);
+  assert.equal(journal.rootsById[other.rootRunId]!.status, 'running');
+});
+
+test('pending lifecycle identities stay bounded without letting unknown confirmations finish another root', () => {
+  let journal = createRunActivityJournal();
+  for (let index = 0; index < 40; index++) {
+    const scoped = { ...execution, rootRunId: `root-${index}` as RootRunId, graphRunId: `run-${index}` as GraphRunId };
+    journal = apply(journal, 'graphStart', { graph, inputs: {}, execution: scoped }, index * 2);
+    journal = apply(journal, 'graphFinish', { graph, outputs: {}, execution: scoped }, index * 2 + 1);
+  }
+  assert.equal(journal.pendingTerminalRootRunIds!.length, 32);
+  assert.equal(journal.pendingUnscopedTerminalConfirmations, 40);
+  const other = { ...execution, rootRunId: 'active' as RootRunId, graphRunId: 'active-run' as GraphRunId };
+  journal = apply(journal, 'graphStart', { graph, inputs: {}, execution: other }, 90);
+  journal = apply(
+    journal,
+    'error',
+    { error: 'old failure', execution: { ...execution, rootRunId: 'unknown' as RootRunId } },
+    91,
+  );
+  assert.equal(journal.rootsById[other.rootRunId]!.status, 'running');
+  journal = apply(journal, 'done', { results: {} }, 92);
+  assert.equal(journal.pendingUnscopedTerminalConfirmations, 39);
+  assert.equal(journal.pendingTerminalRootRunIds!.length, 32);
+});
+
 test('marks invocations with missing terminal events truthfully when their root settles', () => {
   let journal = reduceRunActivityEvents(createRunActivityJournal(), [
     event('graphStart', { graph, inputs: {}, execution }, 1),

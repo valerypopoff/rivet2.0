@@ -30,6 +30,37 @@ If you see an output placeholder that says an unserializable value was sent, the
 
 By default, you can both pause and abort the current execution in Rivet, and the execution will be paused or aborted on the remote server. This can be useful if you want to pause the execution to inspect the current state of the graph, or if you want to abort the execution because you detect some incorrect behavior.
 
+## Following calls across project tabs
+
+Open the projects you want to inspect **before** starting the remote run, then
+connect Remote Debugger from **any** open project in the bundle. If A calls B and B calls C,
+switch between those tabs to see their live node inputs, streaming outputs,
+completed results and Run Activity. Projects do not need to be in the same folder.
+Only projects actually executed by the admitted run receive data.
+All open bundle members show the same **Stop Remote Debugger** button immediately.
+For example, you can connect from C, start A in the runtime, and stop the debugger
+from B. One connection serves the bundle; unrelated open projects stay independent.
+Bundle membership follows explicit project references or an opened bundle manifest,
+not simply projects being in the same folder.
+
+Dependency tabs show an **Observing Remote Debugger** banner identifying the
+source project and runtime target version when available. These are view-only
+observations: pause, abort and user-input responses remain in the source project.
+Use **Go to debugger source** to return there. **Stop Remote Debugger** disconnects
+the whole bundle without stopping the remote execution. Each tab returns to its
+previous Browser/Node executor mode. Closing the tab that opened the connection
+does not disconnect the other open bundle members.
+
+A local execution, recording playback or separate debugger connection takes
+priority. The banner explains a conflict, and that tab can join a later run after
+the conflict ends. Tabs opened or reopened during a run can share debugger controls
+immediately, but wait for the next run's execution data.
+The editor never replaces unsaved graph definitions with runtime versions; it
+warns when matching graph/node data cannot be displayed. Older runtimes without
+project ownership metadata retain single-project debugging. Completed output is
+retained after disconnect, but an interrupted observation is not proof that the
+remote execution itself stopped.
+
 ## Supporting Remote Debugging
 
 See the [remote debugging](../api-reference/remote-debugging) section of the API Reference for more information on how to support remote debugging in your application.
