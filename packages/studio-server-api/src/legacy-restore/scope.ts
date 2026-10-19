@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import { HeadObjectCommand, PutObjectCommand, DeleteObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
 import type { ManagedWorkflowStorageConfig } from '../routes/workflows/storage-config.js';
+import { MANAGED_BUNDLE_RESTORE_GUARDS } from '../routes/workflows/managed/bundle-schema.js';
 import {
   createManagedWorkflowS3ClientConfig,
   isManagedWorkflowArtifactObjectKey,
@@ -132,9 +133,21 @@ export async function assertRestoreTableBoundary(client: Pool | PoolClient, tabl
   );
   const triggers = await client.query(
     `SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
-    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal
-    AND n.nspname='public' AND c.relname=ANY($1::text[]) LIMIT 1`,
-    [tables],
+    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid
+    JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace
+    JOIN pg_catalog.pg_language language ON language.oid=p.prolang
+    WHERE NOT t.tgisinternal AND n.nspname='public' AND c.relname=ANY($1::text[])
+    AND NOT EXISTS (
+      SELECT 1 FROM jsonb_to_recordset($2::jsonb)
+        AS owned(name text, table_name text, function_name text, definition text, source text)
+      WHERE t.tgname=owned.name AND c.relname=owned.table_name
+        AND pn.nspname='public' AND p.proname=owned.function_name AND p.prosrc=owned.source
+        AND language.lanname='plpgsql' AND NOT p.prosecdef AND p.proconfig IS NULL
+        AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::regtype
+        AND t.tgenabled='O' AND pg_get_triggerdef(t.oid, true)=owned.definition
+    ) LIMIT 1`,
+    [tables, JSON.stringify(MANAGED_BUNDLE_RESTORE_GUARDS)],
   );
   const policies = await client.query(
     `SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace

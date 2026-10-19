@@ -115,6 +115,17 @@ must not acquire topology after that row lock. The managed integration regressio
 holds a topology lease while both unchanged and edited full-service saves finish;
 checking only the final workflow UPDATE would miss folder-preparation regressions.
 
+Legacy restore recognizes only the four source-owned topology triggers, matching
+their full PostgreSQL trigger definitions and function bodies, public namespace,
+language, invoker security and absence of function-local configuration. A matching
+name is insufficient: custom triggers, altered guards, cross-table dependencies,
+RLS and inheritance still block replacement before deletion. Migration SQL and
+checksums are unchanged; the restore boundary accepts the guards already installed
+by migration16. The disposable PostgreSQL/MinIO migration test covers successful
+restore plus changed bodies, security/configuration, disabled/replaced/custom
+triggers and an unrelated table referencing Rivet. Unrelated SQL/S3 sentinels
+must survive the complete import/verification cycle.
+
 Authenticated POST operations under `/api/workflows/bundles` provide creation
 (`/`), conversion (`/kind`), preview (`/:id/preview`) and duplication
 (`/:id/duplicate`). They require `X-Rivet-Bundle-Intent: 1`, reject cross-site
@@ -173,6 +184,10 @@ old portable-manifest hint; desktop tabs without hosted metadata still use their
 Passive projection also checks membership. Root lifecycle bookkeeping can settle
 eligible children called from outside without painting the outside caller.
 Old browser builds must reload to adopt the policy.
+Shared disconnect hooks use the same callback-isolation helper as ordinary
+executor lifecycle subscriptions, so async consumer failures are reported without
+an unhandled promise rejection. Keep explicit Core type imports in these hooks;
+the App lint gate disallows inline `import()` type annotations.
 
 Optimistic folder move/rename updates reconcile descendant project bundle IDs
 from the resulting hierarchy, not just their paths. This makes newly opened tabs

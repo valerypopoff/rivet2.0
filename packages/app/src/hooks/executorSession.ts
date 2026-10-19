@@ -6,6 +6,7 @@ import type {
   RemoteRunRequestId,
   SocketRecordingChannel,
   ProjectId,
+  RootRunId,
 } from '@valerypopoff/rivet2-core';
 import { logRuntimeDebug } from '@valerypopoff/rivet2-core';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
@@ -658,7 +659,7 @@ export function createExecutorSessionRuntime(options: {
         const metadata = (
           processEvent.data as {
             execution?: {
-              rootRunId?: import('@valerypopoff/rivet2-core').RootRunId;
+              rootRunId?: RootRunId;
               projectId?: ProjectId;
               parentGraphRunId?: string;
             };

@@ -328,6 +328,8 @@ async function openDatabase(): Promise<DatabaseSync> {
     `);
     ensureRecordingRunIdentityColumns(db);
     db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_recording_runs_correlation_surface
+        ON recording_runs(correlation_id, execution_surface);
       CREATE INDEX IF NOT EXISTS idx_recording_runs_statistics_target
         ON recording_runs(
           execution_surface,

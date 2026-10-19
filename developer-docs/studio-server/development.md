@@ -626,6 +626,13 @@ SQLite catalog callers opt into this UI projection only when listing run pages;
 internal point lookups, migration and retention do not aggregate child presence.
 The presence expression short-circuits for child and unlinked rows. Do not add a
 full-history presence aggregation to each selected retention/deletion lookup.
+The filesystem compatibility recording index has real correlation/surface columns:
+its startup adds `idx_recording_runs_correlation_surface` after upgrading legacy
+identity columns. Bounded recording windows use indexed child/primary probes,
+not a global GROUP BY merely to project `hasSubRuns`. The real query-plan regression
+requires both composite timestamp seeks and correlation-index probes, with no
+temporary sort or child/primary table scan. This derived local index does not
+change the managed PostgreSQL schema or the JSON-based legacy SQLite catalog.
 PostgreSQL materializes the bounded metadata page before projecting presence.
 Its aggregation includes only keys from that page, but counts all retained
 primaries/children for those keys across projects and statuses. This preserves

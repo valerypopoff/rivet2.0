@@ -686,6 +686,7 @@ test('managed project rename changes catalog identity without creating a draft r
   });
   let createdRevisionCount = 0;
   let invalidatedWorkflowId: string | null = null;
+  let topologyLocks = 0;
 
   const catalogService = createManagedWorkflowCatalogService({
     context: {
@@ -694,7 +695,12 @@ test('managed project rename changes catalog identity without creating a draft r
       withTransaction: async (run: (client: unknown, hooks: TransactionHooks) => Promise<unknown>) =>
         run(
           {
-            query: async (_sql: string, params: unknown[]) => {
+            query: async (sql: string, params: unknown[] = []) => {
+              if (sql === 'SELECT pg_advisory_xact_lock(8071, 24016)') {
+                topologyLocks++;
+                return { rows: [] };
+              }
+              assert.match(sql, /UPDATE workflows/);
               const [workflowId, name, fileName, relativePath, folderRelativePath] = params as [
                 string,
                 string,
@@ -768,4 +774,5 @@ test('managed project rename changes catalog identity without creating a draft r
 
   assert.equal(moved.project.relativePath, 'Folder/Managed Renamed Name.rivet-project');
   assert.equal(createdRevisionCount, 0);
+  assert.equal(topologyLocks, 2, 'Both rename and move must serialize bundle topology before writing');
 });

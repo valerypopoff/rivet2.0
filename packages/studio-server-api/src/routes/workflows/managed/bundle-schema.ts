@@ -37,3 +37,40 @@ $$;
 CREATE CONSTRAINT TRIGGER workflow_bundle_topology_check AFTER INSERT OR UPDATE ON workflow_folders
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_workflow_bundle_topology();
 `;
+
+/** Exact source-owned DML triggers; restore must still reject every custom trigger. */
+export const MANAGED_BUNDLE_RESTORE_GUARDS = [
+  {
+    name: 'workflow_bundle_topology_lock',
+    table_name: 'workflow_folders',
+    function_name: 'lock_workflow_bundle_topology',
+    definition:
+      'CREATE TRIGGER workflow_bundle_topology_lock BEFORE INSERT OR DELETE OR UPDATE ON workflow_folders FOR EACH STATEMENT EXECUTE FUNCTION lock_workflow_bundle_topology()',
+  },
+  {
+    name: 'workflow_project_topology_lock',
+    table_name: 'workflows',
+    function_name: 'lock_workflow_bundle_topology',
+    definition:
+      'CREATE TRIGGER workflow_project_topology_lock BEFORE INSERT OR DELETE ON workflows FOR EACH STATEMENT EXECUTE FUNCTION lock_workflow_bundle_topology()',
+  },
+  {
+    name: 'workflow_project_move_topology_lock',
+    table_name: 'workflows',
+    function_name: 'lock_workflow_bundle_topology',
+    definition:
+      'CREATE TRIGGER workflow_project_move_topology_lock BEFORE UPDATE OF relative_path, folder_relative_path ON workflows FOR EACH ROW WHEN (old.relative_path IS DISTINCT FROM new.relative_path OR old.folder_relative_path IS DISTINCT FROM new.folder_relative_path) EXECUTE FUNCTION lock_workflow_bundle_topology()',
+  },
+  {
+    name: 'workflow_bundle_topology_check',
+    table_name: 'workflow_folders',
+    function_name: 'check_workflow_bundle_topology',
+    definition:
+      'CREATE CONSTRAINT TRIGGER workflow_bundle_topology_check AFTER INSERT OR UPDATE ON workflow_folders DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_workflow_bundle_topology()',
+  },
+].map((guard) => ({
+  ...guard,
+  source: MANAGED_BUNDLE_SCHEMA_SQL.match(
+    new RegExp(`CREATE FUNCTION ${guard.function_name}\\(\\)[\\s\\S]*?AS \\$\\$([\\s\\S]*?)\\$\\$;`),
+  )![1]!,
+}));

@@ -25,6 +25,17 @@ export function recordingHasSubRunsSql(
       : `${alias}.${name === 'surface' ? 'execution_surface' : 'correlation_id'}`;
   const source = pageTable ?? table;
   const key = field(source, 'correlationId');
+  // This derived SQLite index has real correlation columns. Indexed probes
+  // avoid scanning/grouping every run merely to decorate one bounded page.
+  if (storage === 'filesystem')
+    return `(CASE WHEN COALESCE(${field(source, 'surface')}, '') <> 'subgraph_project'
+      AND TRIM(COALESCE(${key}, '')) <> ''
+      THEN EXISTS (SELECT 1 FROM ${table} AS child
+        WHERE ${field('child', 'correlationId')} = ${key} AND ${field('child', 'surface')} = 'subgraph_project')
+        AND (SELECT COUNT(*) FROM ${table} AS primary_run
+          WHERE ${field('primary_run', 'correlationId')} = ${key}
+            AND COALESCE(${field('primary_run', 'surface')}, '') <> 'subgraph_project') = 1
+      ELSE FALSE END)`;
   const candidateKeys = pageTable
     ? `WHERE ${field('member', 'correlationId')} IN (
         SELECT ${field(pageTable, 'correlationId')} FROM ${pageTable}

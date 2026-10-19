@@ -16,6 +16,7 @@ import {
   type ProjectExecutorMode,
 } from '../utils/projectExecutorMode.js';
 import { type ExecutorSessionLifecycleEvent, type ExecutorSessionState } from './executorSession';
+import { runExecutorSessionCallback } from './executorSessionCallbackIsolation.js';
 
 export function useRemoteDebugger(
   options: {
@@ -67,7 +68,10 @@ export function useRemoteDebugger(
     // socket disconnect alone cannot authorize writes to a replacement tab.
     const unsubscribeDisconnect = registry.isBundleDebuggerRuntime(runtime)
       ? registry.subscribeDisconnectsForAllProjects((id, disconnectedRuntime, event) => {
-          if (id === projectId && disconnectedRuntime === runtime) return handleDisconnect(event);
+          if (id === projectId && disconnectedRuntime === runtime)
+            runExecutorSessionCallback(() => handleDisconnect(event), 'Remote Debugger disconnect callback failed', {
+              projectId,
+            });
         })
       : runtime.subscribeLifecycle('disconnect', handleDisconnect);
 
