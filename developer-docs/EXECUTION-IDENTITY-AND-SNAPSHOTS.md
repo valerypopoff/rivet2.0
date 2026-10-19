@@ -215,9 +215,15 @@ as resolved by [execution state](../packages/app/src/state/execution.ts).
 Project ID alone is insufficient because a virtual recording tab can coexist
 with the source project. Only the owning tab receives playback UI and controls;
 loading/unloading a recording does not rewrite the live Browser/Node choice.
-The app requires the recording's declared root start graph through
+The Evaluation recording loader requires the recording's declared root start graph through
 [`requireRecordingRootGraphId`](../packages/app/src/utils/recordingPlayback.ts).
-Do not substitute the currently visible graph during replay.
+The hosted Run recordings bridge also accepts a child artifact's first
+`graphStart`, because child processors do not emit a top-level `start`. Neither
+loader substitutes the currently visible graph during replay.
+Each accepted playback resets only its owning tab's canvas display before any
+replayed event, including for children without `start`. Graph invocation IDs are
+still fresh on every playback, while the artifact and Run Activity retention
+remain unchanged. See the playback boundary in [Execution Data Flow](./EXECUTION-DATA-FLOW.md#recording-and-replay).
 
 For output-pruned child invocations, unscheduled nodes have no lifecycle events,
 and a caller with no demanded outputs has no child invocation. Selecting that

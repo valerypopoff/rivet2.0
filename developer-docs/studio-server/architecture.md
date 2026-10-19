@@ -1078,6 +1078,32 @@ neither requires manual rewiring for an ordinary rename of the same node.
 
 Cross-project Subgraph replay persistence is part of the child node's completion boundary for hosted Browser and Node editor runs: the caller does not report a terminal result until the child upload completes. This prevents closing a tab immediately after completion from discarding its called-project replay. Those local uploads have a 60-second deadline so a stalled API cannot hold graph completion indefinitely. API-hosted runs only enqueue onto the existing drained persistence queue, without waiting for storage I/O. Persistence errors remain best-effort and do not change graph outputs. Re-selecting the same target in the canvas must still apply an updated authored boundary; compare the complete node data, not just project, graph, and version IDs.
 
+Playing a child recording from Run recordings is a new editor display session,
+not a new stored run. The local playback acceptance boundary clears the owning
+tab's previous graph/node histories and page selections even when the artifact
+has no root `start` event. It preserves the loaded artifact, neighboring tabs,
+frozen outputs and Run Activity retention; repeated Play clicks cannot inflate
+the canvas execution selector. Real repeated invocations within the recording
+remain selectable. The focused headless `recording-playback-history.spec.ts`
+checks this through the recordings modal and is included in the normal web CI lane.
+Playback constructs its processor for the recording entry graph even after the
+user navigates into a nested graph, keeping Abort diagnostics correctly scoped.
+It skips live dataset export and partial-run/preload planning; those are live
+execution policies, not filters on historical evidence.
+If playback is canceled during preparation and its tab becomes inactive, run
+disposal releases only that still-open owner's display reservation. Previous
+results remain intact; no synthetic recording terminal is added to Run Activity.
+Accepted playback event delivery and cleanup remain bound to the loaded recorder,
+not merely a project ID that a reopened tab can reuse. Superseded playback is
+canceled and its queued display events are ignored; an ordinary project-path
+move keeps the same recorder and continues normally.
+Selecting another recording tab is not replacement: the first replay's immutable
+graph-history reference follows its reserved display through synchronous event
+updates and snapshot capture/restore. It can complete while inactive without
+touching the new selection. A selection change before playback acceptance still
+releases the original display reservation, preserving its prior outputs. No new
+session atom, persisted token or copied history is introduced.
+
 - Workflow library management, publication, execution, and recordings live in `packages/studio-server-api/src/routes/workflows/`.
 - Bundle upload reuses Core manifest/dependency validation through `project-bundle-import.ts`; the managed `bundle-import.ts` owns atomic folder/group creation and reference-aware artifact cleanup. The dashboard's `projectBundleUpload.ts` owns bounded ZIP/directory reading, not storage mutation. Fresh project identities and remapped Subgraph/dataset ownership let imported projects move independently. See [project bundles](project-bundles.md) for limits, failure recovery and verification.
 - Hosted cross-project Subgraphs use a dedicated target identity (`project metadata ID` plus `latest` or `published`), not a legacy Project Reference. The browser picker reads the workflow tree and an authenticated boundary-only preview that omits Graph Input defaults; execution resolves the exact saved or published artifact and its dataset sidecar through the active filesystem or managed backend. The Node editor executor uses an authenticated internal API fetch; browser and API-hosted runs use the same Core loader seam. A root run resolves each target once, shares the result with nested child processors, and bypasses reusable execution plans when a target pointer may change. The child processor retains normal graph-output streaming and shares the caller's run-global/stored-value state, while separate project-scoped recording events produce a replay under the called project's ID. Hosted browser/Node editor runs upload that replay only when local execution recording is enabled; API endpoint/web-app runs do not allocate child recorders while server recording is disabled and otherwise apply the server's partial-output/trace policy. The central recording persistence boundary enforces the dataset snapshot setting for all surfaces, including editor uploads and called-project runs. The recording list labels these entries as Subgraph runs and shows the called graph rather than calling it an endpoint. Keep the execution target and recording owner based on immutable project ID, not a stale tree path; reject duplicate filesystem IDs instead of choosing an arbitrary file. An unsupported desktop host shows the target as non-editable and cannot execute it.

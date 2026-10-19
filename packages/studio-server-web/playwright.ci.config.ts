@@ -23,6 +23,7 @@ export default defineConfig({
     'port-connection-warnings.spec.ts',
     'cross-project-subgraph-loading.spec.ts',
     'remote-bundle-observation.spec.ts',
+    'recording-playback-history.spec.ts',
     'graph-deletion-references.spec.ts',
     'node-editor-ownership.spec.ts',
     'node-editor-lifecycle.spec.ts',

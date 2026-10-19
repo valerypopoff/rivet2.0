@@ -1,7 +1,6 @@
-import { useAtomValue, useSetAtom, useStore } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import { useRef } from 'react';
 import { type NodeId, type ProcessEvents, type RootRunId } from '@valerypopoff/rivet2-core';
-import { useLatest } from 'ahooks';
 import { lastRecordingState } from '../state/execution';
 import {
   graphRunHistoryByViewState,
@@ -76,12 +75,10 @@ export function useGraphExecutionEvents(
   const setRunningGraphsState = useSetAtom(runningGraphsState);
   const setRootGraph = useSetAtom(rootGraphState);
   const setLastRunData = useSetAtom(lastRunDataByNodeState);
-  const lastRunData = useAtomValue(lastRunDataByNodeState);
   const setGraphStartTime = useSetAtom(graphStartTimeState);
   const setGraphRunHistoryByView = useSetAtom(graphRunHistoryByViewState);
   const setSelectedGraphRunByView = useSetAtom(selectedGraphRunByViewState);
   const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
-  const lastRunDataLatest = useLatest(lastRunData);
   const rootRunIdsForDoneReconciliationRef = useRef<RootRunId[]>([]);
 
   const stopAll = () => {
@@ -209,7 +206,9 @@ export function useGraphExecutionEvents(
   };
 
   const resetLastRunDataForRunStart = (nodeIdsToPreserve: NodeId[] | undefined) => {
-    const currentLastRunData = lastRunDataLatest.current ?? {};
+    // Playback acceptance can reset this store before React renders again.
+    // Read synchronously so a recorded start cannot release those old refs twice.
+    const currentLastRunData = store.get(lastRunDataByNodeState);
 
     if (!nodeIdsToPreserve?.length) {
       setLastRunData({});

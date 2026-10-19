@@ -2,14 +2,10 @@ import { ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
 import { useSetAtom } from 'jotai';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-import {
-  activateLoadedRecordingState,
-  clearLoadedRecordingForPathState,
-} from '../../app/src/state/execution';
-import {
-  getWorkflowRecordingIdFromVirtualProjectPath,
-} from '../../studio-server-shared/workflow-recording-types';
+import { activateLoadedRecordingState, clearLoadedRecordingForPathState } from '../../app/src/state/execution';
+import { getWorkflowRecordingIdFromVirtualProjectPath } from '../../studio-server-shared/workflow-recording-types';
 import { fetchWorkflowRecordingArtifactText } from './workflowApi';
+import { getRecordingPlaybackGraphId } from '../../app/src/utils/recordingPlayback';
 
 export type LoadedWorkflowRecording = {
   path: string;
@@ -17,17 +13,7 @@ export type LoadedWorkflowRecording = {
 };
 
 export function getRecordingStartGraphId(recorder: ExecutionRecorder): string | undefined {
-  for (const event of recorder.events) {
-    if (event.type === 'start') {
-      return event.data.startGraph;
-    }
-
-    if (event.type === 'graphStart') {
-      return event.data.graphId;
-    }
-  }
-
-  return undefined;
+  return getRecordingPlaybackGraphId(recorder.events);
 }
 
 export async function fetchLoadedWorkflowRecording(recordingId: string): Promise<LoadedWorkflowRecording> {
@@ -50,13 +36,12 @@ export function useWorkflowRecordingBridge({
   const activateLoadedRecording = useSetAtom(activateLoadedRecordingState);
   const clearLoadedRecordingForPath = useSetAtom(clearLoadedRecordingForPathState);
   const recordingByProjectPathRef = useRef(new Map<string, LoadedWorkflowRecording>());
-  const activateWorkflowRecording = useCallback((
-    loadedRecording: LoadedWorkflowRecording,
-    projectId: ProjectId,
-    projectPath: string,
-  ) => {
-    activateLoadedRecording({ ...loadedRecording, projectId, projectPath });
-  }, [activateLoadedRecording]);
+  const activateWorkflowRecording = useCallback(
+    (loadedRecording: LoadedWorkflowRecording, projectId: ProjectId, projectPath: string) => {
+      activateLoadedRecording({ ...loadedRecording, projectId, projectPath });
+    },
+    [activateLoadedRecording],
+  );
 
   useEffect(() => {
     const openPaths = new Set(openedProjectPaths);
@@ -108,8 +93,11 @@ export function useWorkflowRecordingBridge({
     };
   }, [activateWorkflowRecording, clearLoadedRecordingForPath, currentProjectId, loadedProjectPath]);
 
-  return useMemo(() => ({
-    activateWorkflowRecording,
-    recordingByProjectPathRef,
-  }), [activateWorkflowRecording]);
+  return useMemo(
+    () => ({
+      activateWorkflowRecording,
+      recordingByProjectPathRef,
+    }),
+    [activateWorkflowRecording],
+  );
 }
