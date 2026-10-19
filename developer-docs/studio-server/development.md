@@ -1,5 +1,31 @@
 # Development
 
+### Explicit bundle changes
+
+See [project bundles](project-bundles.md) for the managed container/duplication
+contract (migration 16). Run `test:async-managed` for actual SQL/S3 copy, rollback,
+membership, stale-preview and copied execution coverage. Run the schema/remapping
+API tests, App registry/observation tests and the headless `explicit-bundles.spec.ts`
+and `remote-bundle-observation.spec.ts` through the repository UI runner. No cloud
+deployment or Kubernetes rehearsal is needed. The supported Node 24 toolchain is
+required for release qualification; report local alternate-runtime evidence separately.
+
+The bundle move/rename projection also has a fast web regression owner,
+`tests/workflow-tree-ops.test.ts`, enrolled in the web package's normal `test`
+command. It checks membership alongside paths before a background refresh.
+`explicit-bundles.spec.ts` verifies a real drag/drop and project open while the
+follow-up tree endpoint returns 503. Keep this failure case when changing tree
+optimism or editor bundle bindings; a successful-refresh-only test hides stale
+membership bugs. The bundle feature and modal/sidebar checks do not require a
+Kubernetes deployment or a cloud rehearsal.
+
+Streaming UI fixtures open their test-owned project through the mocked server
+tree/load routes and the real dashboard/editor bridge. Do not rely on legacy
+browser-storage seeds or a standalone `?editor` route to mount a server project:
+that can leave the welcome screen visible and fail before the behavior under test.
+`streaming-nodes.spec.ts` shares this setup across its ordinary-node and
+cross-project streaming-port checks, without changing production recovery behavior.
+
 The supported server development command is `yarn studio-server:dev:local-storage`
 (Docker Compose with PostgreSQL/MinIO; Kubernetes is not required). Start with
 [Supported Server Stack](./server-stack.md). Compose/bare-host material below is
@@ -528,20 +554,126 @@ at 55 seconds. Single-phase runtime fixtures retain their shorter limits.
 `recording-run-hierarchy.ts` groups the current recording results by exact
 `executionIdentity.correlationId`. A unique non-Subgraph row is the primary;
 children start folded and expand into individually virtualized, indented rows.
+Sub-runs within every family are displayed oldest-to-newest by the shown
+`createdAt` timestamp, with recording ID ascending as the deterministic tie-breaker.
+Success, failure and suspicious status never influence this order. Sort the
+combined family after all child pages arrive, not each newest-first API page
+individually. The same rule applies to input-search and Related sub-runs groups;
+the top-level family/page order remains unchanged (newest-first in normal browsing).
+For new recordings, `createdAt` means logical run creation/start, captured before
+execution and before completion/upload/queue delays. Hosted execution sessions
+and Core Subgraph invocations capture it on entry; Browser/Node editor captures
+keep the same wall-clock value through their eventual upload. Older producer
+adapters can recover a start/graphStart occurrence timestamp from the in-memory
+recorder, falling back to its first event or capture time if no start exists.
+This does not assert causal ordering of simultaneous executions or precision
+beyond the timestamp and recording-ID tie-breaker.
+
+Persistence reuses the existing `createdAt`/`created_at` storage field, including
+PostgreSQL's existing provided-timestamp insert path. There is no schema/version
+migration, new column, S3 sidecar, payload rewrite or artifact read on listing.
+IDs, storage keys and workflow catalog update timestamps retain their existing
+persistence-time behavior. Imports/restores preserve their supplied timestamps;
+existing records are not rewritten or backfilled and may retain save-time
+timestamps. Older producers that omit the optional capture timestamp keep the
+previous persistence-time fallback. Mixed old/new rows therefore remain readable,
+but exact start ordering is available only where the start was captured.
+
+Editor uploads carry the optional ISO timestamp in
+`x-rivet-recording-created-at`, not a new JSON field: older API replicas ignore
+the header while continuing to accept their unchanged strict request body.
+New APIs validate/normalize it and pass it into persistence. New APIs also accept
+old uploads with no header. An old API may still record save time until it is
+upgraded; this is a compatible semantic fallback, not a guarantee of new timing
+on old replicas. The header is authenticated caller-supplied display/retention
+metadata, not an authorization or cross-host clock-synchronization mechanism.
+
+All uses of the existing timestamp now naturally follow logical creation for
+new records: list order, keyset pagination, statistics buckets and age/count/byte
+retention selection. Retention algorithms and suspension holds are unchanged;
+a long-running run can already be old when its recording is finally persisted.
+Do not estimate old starts by subtracting duration from save time, fetch replay
+artifacts to sort the list, or infer start time from persistence-generated IDs.
 Do not group by project/graph name or infer immediate nesting from the root key.
 Missing or ambiguous primaries get an explicit context group, never a synthetic
-recording. Ordinary pagination and status filtering operate on individual
-recordings; their expand count says `in current results`. **Filter by input**
+recording. Ordinary modal browsing requests `groupByRoot=true`: SQL selects one
+metadata anchor per family before applying LIMIT/OFFSET. Thus 20 per page means
+20 top-level entries even if one has 151 descendants. Children load separately
+through the existing disclosure, in metadata pages of at most 100, and never
+consume ordinary page slots. Status filtering selects eligible anchors; child-only
+matches stay in an explicit Related sub-runs context group instead of becoming a
+false primary. Missing/out-of-project primaries and ambiguous keys likewise keep
+one context entry per execution key. Unlinked legacy rows stay independent.
+The `familyContext` browse-only flag prevents a context anchor from attaching to
+one visible member of an ambiguous primary key after pagination; it is not persisted.
+Child loading also prefers that explicit context anchor over a lone visible primary;
+otherwise a partial page could select the wrong child endpoint and hide descendants.
+**Filter by input**
 searches only primary/root recordings (non-`subgraph_project` rows, including legacy
 rows without surface metadata). It never promotes a child-only match into a root.
-Expanding a matching root fetches all linked child metadata through the authenticated
+Expanding a root fetches all linked child metadata through the authenticated
 `GET /api/workflows/recordings/:recordingId/sub-runs` path, in pages of at most 100.
 These children bypass both input and status predicates and do not inflate match
-counts or search progress. Loading/failed disclosure controls provide feedback and
-retry; complete families are published only after all pages load. View replacement
+counts or search progress. List responses include a browse-only `hasSubRuns`
+presence flag computed from retained metadata across projects, independent of
+status/input filters.
+Roots with no discoverable children have no disclosure button; loaded empty
+families also lose the button. Unknown presence from older API replicas retains
+lazy discovery for compatibility. Already loaded children remain accessible even
+if a stale presence snapshot says false. The flag is not persisted, requires no
+schema migration, and does not fetch replay artifacts or issue per-root HTTP calls.
+SQLite catalog callers opt into this UI projection only when listing run pages;
+internal point lookups, migration and retention do not aggregate child presence.
+The presence expression short-circuits for child and unlinked rows. Do not add a
+full-history presence aggregation to each selected retention/deletion lookup.
+The filesystem compatibility recording index has real correlation/surface columns:
+its startup adds `idx_recording_runs_correlation_surface` after upgrading legacy
+identity columns. Bounded recording windows use indexed child/primary probes,
+not a global GROUP BY merely to project `hasSubRuns`. The real query-plan regression
+requires both composite timestamp seeks and correlation-index probes, with no
+temporary sort or child/primary table scan. This derived local index does not
+change the managed PostgreSQL schema or the JSON-based legacy SQLite catalog.
+PostgreSQL materializes the bounded metadata page before projecting presence.
+Its aggregation includes only keys from that page, but counts all retained
+primaries/children for those keys across projects and statuses. This preserves
+global ambiguity detection and avoids grouping unrelated recording history or
+repeating a full-history scan for each visible root. The selected page and
+presence share one SQL statement snapshot; keyset timestamps retain PostgreSQL
+microseconds and outer ordering remains newest-first. No index/schema migration
+or additional database/HTTP round trip is required. Without a correlation index,
+PostgreSQL may still scan metadata to find matching keys; this is not a claim of
+constant-time listing or a rewrite of the existing family-pagination query.
+Loading/failed disclosure controls provide feedback and retry; complete families
+are published only after all pages load. View replacement
 aborts pending child reads and discards late replies. An absent or ambiguous primary
 key cannot manufacture ancestry. Changing workflow/page/filter resets expansion;
-appending root matches preserves expanded correlation keys.
+appending root matches preserves expanded correlation keys. Context disclosures
+use `context=all` in Any or for a caller's foreign-project anchor, and
+`context=project` for an anchor owned by the selected project. The latter only
+includes other projects' children if the anchor's project also owns a caller
+under that key, matching the normal project browse scope. The ordinary root-owned endpoint still requires a unique retained
+primary. Counts and page bounds come from the family query, not catalog row totals.
+Catalog/status summary counters continue to describe retained recordings, including
+children; deleting a child must not optimistically subtract a family page slot.
+
+`recording-workflow-scope.ts` owns the common metadata-only SQL selection for all
+three backends. Window ranking uses global primary-key cardinality before scope
+and status eligibility, preserving ambiguity across pages/projects. This scans
+metadata to compute exact family anchors; it does not read replay artifacts, add
+a materialized index, or change recording compression/retention. Existing API
+clients without `groupByRoot` retain individual-recording pagination. No schema
+migration is needed. Input search remains root-only with its existing cursor contract.
+Regression coverage includes 25 roots/151 descendants, 20/10-page limits, context
+scope, ambiguity, blank keys, deletion and stale replies in the existing SQL,
+SQLite backend, hierarchy and Run recordings browser suites. The existing
+`test:statistics-managed` command also executes family queries on disposable PostgreSQL.
+The managed deployment-contract CI lane runs this command, including actual
+recording-service presence queries on the production migration schema. It checks
+cross-project/failed children, legacy and ambiguous roots, deletion, input-search
+continuations and a 50,000-row history with low `work_mem`. `EXPLAIN ANALYZE`
+asserts that presence aggregation is bounded by visible-page keys, rather than
+setting an arbitrary wall-clock performance threshold. Timings are diagnostic;
+the test never uses GCP or a configured external database.
 
 Each page must identify the requested primary/page, contain only linked Subgraph
 rows, make unique-ID progress and retain a consistent total. Final unique-ID count
@@ -1296,17 +1428,29 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.26.1`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.28.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This patch includes resumable hosted-editor recording capture. Bump all five
-manifests together even when only one workspace has runtime changes; run the
-repository-structure check before building a release candidate.
+This minor release adds explicit bundle containers, safe duplication and portable
+round trips, bundle-scoped Subgraph access/debugging and the deployment launcher's
+fenced-singleton GKE validation fix. Bump all five manifests together even when
+only one workspace has runtime changes; run the repository-structure check before
+building a release candidate. See the prepared release matrix in
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-20) for the
+separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
 container selectors. Studio Server images are built together from one Git
 commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
+
+The explicit-bundle runtime already advances managed storage to schema16. Keep
+the chart's ordinary `workflowSchema.compatibility` defaults at16/16 to match
+that build, independently of package versioning. The promoted release launcher
+still derives exact migration and allowed reader windows from the immutable
+manifest; predecessor compatibility remains a separate contract, not permission
+to leave new-build chart defaults at15. The Kubernetes contract tests exercise
+both an ordinary exact-version migration and a lower serving-only rollback floor.
 
 ## Main commands
 

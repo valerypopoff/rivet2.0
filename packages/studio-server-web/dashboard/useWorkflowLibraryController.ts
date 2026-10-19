@@ -23,6 +23,7 @@ import { useWorkflowLibraryTree } from './useWorkflowLibraryTree';
 import { useWorkflowLibraryTreeSync } from './useWorkflowLibraryTreeSync';
 import { useWorkflowProjectVersionActions } from './useWorkflowProjectVersionActions';
 import { isPlainF2ShortcutEvent } from './editorBridgeFocus';
+import { requestWorkflowBundle } from './workflowApi';
 
 export const instantWarningToastTransition = cssTransition({
   enter: 'workflow-toast-instant-enter',
@@ -91,6 +92,7 @@ export function useWorkflowLibraryController(options: {
   } = options;
 
   const {
+    explicitBundles,
     allProjects,
     error,
     expandedFolders,
@@ -108,12 +110,53 @@ export function useWorkflowLibraryController(options: {
     syncRef,
   } = useWorkflowLibraryTree(projectSaveSequence);
   const runRecordings = useRunRecordingsModalState();
+  // Local tree mutations are deliberately excluded from the remote event echo.
+  // Reconcile explicit membership on refresh/open too, without replacing content.
+  useEffect(() => {
+    if (!editorReady || loading || error) return;
+    let cancelled = false;
+    void onCaptureProjectReconciliation()
+      .then((context) => {
+        if (!context || cancelled) return;
+        return onReconcileWorkflowProjectBindings(
+          allProjects.flatMap((project) =>
+            project.projectMetadataId
+              ? [
+                  {
+                    projectId: project.projectMetadataId,
+                    path: project.absolutePath,
+                    title: project.name,
+                    revisionId: project.revisionId,
+                    bundleId: project.bundleId ?? null,
+                  },
+                ]
+              : [],
+          ),
+          context,
+        );
+      })
+      .catch((failure) => console.error('Could not reconcile bundle membership', failure));
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    allProjects,
+    editorReady,
+    loading,
+    error,
+    openedProjectPath,
+    reconciliationSequence,
+    onCaptureProjectReconciliation,
+    onReconcileWorkflowProjectBindings,
+  ]);
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
   const [runStatisticsOpen, setRunStatisticsOpen] = useState(false);
   const [publishedItemsOpen, setPublishedItemsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [bundleUploadFolder, setBundleUploadFolder] = useState<WorkflowFolderItem | null>(null);
+  const [bundleDialog, setBundleDialog] = useState<{ source?: WorkflowFolderItem; parent: string } | null>(null);
+  const bundleActionPending = useRef(false);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
   const selection = useWorkflowLibrarySelection({
     error,
@@ -260,13 +303,13 @@ export function useWorkflowLibraryController(options: {
     refresh,
     uploadingFolderPath,
   });
-  const [bundleProject, setBundleProject] = useState<WorkflowProjectItem | null>(null);
+  const [bundleFolder, setBundleFolder] = useState<WorkflowFolderItem | null>(null);
   const [bundleOpen, setBundleOpen] = useState(false);
   const handleDownloadBundle = () => {
-    const project = projectContextMenuState?.project;
-    if (!project) return;
-    closeProjectContextMenu();
-    setBundleProject(project);
+    const folder = folderContextMenuState?.folder;
+    if (!folder?.bundleId) return;
+    closeFolderContextMenu();
+    setBundleFolder(folder);
     setBundleOpen(true);
   };
   const {
@@ -288,7 +331,8 @@ export function useWorkflowLibraryController(options: {
   } = versionActions;
 
   const projectTreeOverlayOpen = Boolean(
-    bundleOpen ||
+    bundleDialog ||
+      bundleOpen ||
       appSettingsOpen ||
       folderContextMenuState ||
       projectContextMenuState ||
@@ -445,11 +489,54 @@ export function useWorkflowLibraryController(options: {
     uploadingFolderPath,
   ]);
 
+  const canUploadBundleToFolder = (target: WorkflowFolderItem) =>
+    !flattenedFolders.some(
+      (folder) =>
+        folder.bundleId &&
+        (target.relativePath === folder.relativePath || target.relativePath.startsWith(`${folder.relativePath}/`)),
+    );
   const handleUploadBundleFromFolder = () => {
     const target = folderContextMenuState?.folder;
-    if (!target || treeMutationPending || uploadingFolderPath) return;
+    if (!target || !canUploadBundleToFolder(target) || treeMutationPending || uploadingFolderPath) return;
     closeFolderContextMenu();
     setBundleUploadFolder(target);
+  };
+  const startBundleCreate = () => {
+    closeFolderContextMenu();
+    setBundleDialog({ parent: '' });
+  };
+  const toggleBundleKind = async () => {
+    const folder = folderContextMenuState?.folder;
+    if (!folder || bundleActionPending.current) return;
+    closeFolderContextMenu();
+    if (
+      !window.confirm(
+        folder.bundleId
+          ? 'Convert to an ordinary folder? Projects and references are preserved. Shared Remote Debugger membership will be removed.'
+          : 'Convert this folder and its projects to a bundle? References and publications are unchanged.',
+      )
+    )
+      return;
+    bundleActionPending.current = true;
+    try {
+      await requestWorkflowBundle('/kind', { relativePath: folder.relativePath, enabled: !folder.bundleId });
+      await refresh(false);
+    } catch (failure) {
+      toast.error(failure instanceof Error ? failure.message : 'Bundle conversion failed.');
+    } finally {
+      bundleActionPending.current = false;
+    }
+  };
+  const duplicateBundle = () => {
+    const source = folderContextMenuState?.folder;
+    if (!source?.bundleId) return;
+    closeFolderContextMenu();
+    setBundleDialog({
+      source,
+      parent: source.relativePath.includes('/')
+        ? source.relativePath.slice(0, source.relativePath.lastIndexOf('/'))
+        : '',
+    });
   };
   const handleBundleImported = (folder: WorkflowFolderItem) => {
     setExpandedFolders((previous) => ({
@@ -654,11 +741,25 @@ export function useWorkflowLibraryController(options: {
   );
 
   return {
+    explicitBundles,
+    bundleDialog,
+    captureBundleEdits: onCaptureProjectReconciliation,
+    closeBundleDialog: () => setBundleDialog(null),
+    handleCreateBundle: startBundleCreate,
+    handleToggleBundleKind: toggleBundleKind,
+    handleDuplicateBundle: duplicateBundle,
+    bundleFolders: flattenedFolders,
+    handleBundleCreated: (folder: WorkflowFolderItem) => {
+      setBundleDialog(null);
+      setExpandedFolders((previous) => ({ ...previous, [folder.id]: true }));
+      void refresh(false);
+    },
     bundleUploadFolder,
     closeBundleUpload: () => setBundleUploadFolder(null),
     handleUploadBundleFromFolder,
+    canUploadBundleToFolder,
     handleBundleImported,
-    bundleProject,
+    bundleFolder,
     bundleOpen,
     handleDownloadBundle,
     closeBundleModal: () => setBundleOpen(false),

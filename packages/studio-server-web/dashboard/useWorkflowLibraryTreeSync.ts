@@ -65,6 +65,7 @@ function getWorkflowProjectEditorBindings(tree: WorkflowTreeResponse): WorkflowP
       ? [
           {
             projectId: project.projectMetadataId,
+            bundleId: project.bundleId ?? null,
             path: project.absolutePath,
             title: project.name,
             revisionId: project.revisionId,
@@ -221,11 +222,7 @@ export function useWorkflowLibraryTreeSync(options: {
               );
             }
             if (openedProjectBeforeRefresh && reconciled.status === 'applied') {
-              showOpenProjectNotice(
-                openedProjectBeforeRefresh,
-                tree,
-                reconciled.changes,
-              );
+              showOpenProjectNotice(openedProjectBeforeRefresh, tree, reconciled.changes);
             }
           })
           .catch((error) => {

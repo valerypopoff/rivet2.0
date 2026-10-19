@@ -3,15 +3,59 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
+import { containerServerConfig, createManagedCompose } from './lib/container-server-config.mjs';
 
 // Use the API's compiled migration owner and dependency scope, just like the
 // migration image. No caller-provided database is accepted by this destructive test.
 const require = createRequire(new URL('../../../packages/studio-server-api/package.json', import.meta.url));
 const { Pool } = require('pg');
-const { migrateManagedWorkflowSchema, verifyManagedWorkflowSchema, CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION } =
-  await import(
-    '../../../packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/schema-migrations.js'
-  );
+const {
+  migrateManagedWorkflowSchema,
+  verifyManagedWorkflowSchema,
+  getManagedWorkflowSchemaCompatibilityWindow,
+  CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+  MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE,
+} = await import(
+  '../../../packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/schema-migrations.js'
+);
+// Exercise the deployment's actual environment projection, not an options
+// argument the migration writer deliberately does not accept as an override.
+// These are fixture values only; never read the operator's .env.
+const config = containerServerConfig(
+  {
+    RIVET_DEV_COMPOSE_PROJECT: 'rivet-schema-fixture',
+    RIVET_KEY: 'schema-fixture-key-'.repeat(3),
+    RIVET_LOCAL_POSTGRES_PASSWORD: 'schema-fixture-postgres',
+    RIVET_LOCAL_S3_SECRET_ACCESS_KEY: 'schema-fixture-minio',
+  },
+  'dev',
+  'local-storage',
+);
+const model = createManagedCompose(config, { api: 'fixture/api', web: 'fixture/web', proxy: 'fixture/proxy' });
+const migrationEnv = model.services.migrate.environment;
+const servingEnv = model.services.backend.environment;
+assert.deepEqual(
+  getManagedWorkflowSchemaCompatibilityWindow(migrationEnv),
+  {
+    minimumVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+    maximumVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+  },
+  'The generated migration environment must match the compiled API schema exactly',
+);
+
+async function withSchemaEnvironment(env, run) {
+  const names = ['RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION', 'RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION'];
+  const original = names.map((name) => process.env[name]);
+  try {
+    for (const name of names) process.env[name] = env[name];
+    return await run();
+  } finally {
+    names.forEach((name, index) => {
+      if (original[index] === undefined) delete process.env[name];
+      else process.env[name] = original[index];
+    });
+  }
+}
 const name = `rivet-schema-check-${randomUUID()}`;
 const docker = (...args) => execFileSync('docker', args, { encoding: 'utf8', timeout: 60_000 }).trim();
 let containerId;
@@ -54,15 +98,24 @@ try {
       await delay(250);
     }
   }
-  const compatibilityWindow = {
-    minimumVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
-    maximumVersion: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
-  };
+  // Reader compatibility is not permission to mutate application DDL. When
+  // this release has a wider reader window, reproduce the startup rejection.
+  if (servingEnv.RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION !== migrationEnv.RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION) {
+    await withSchemaEnvironment(servingEnv, () =>
+      assert.rejects(migrateManagedWorkflowSchema(pool), /migrations require the exact schema version/),
+    );
+    const untouched = await pool.query('SELECT to_regclass($1) AS name', [MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE]);
+    assert.equal(untouched.rows[0].name, null, 'Rejected writer policy must not create even the migration ledger');
+  }
+  const compatibilityWindow = getManagedWorkflowSchemaCompatibilityWindow(servingEnv);
   const options = { compatibilityWindow };
-  const migrated = await migrateManagedWorkflowSchema(pool, options);
+  const migrated = await withSchemaEnvironment(migrationEnv, () => migrateManagedWorkflowSchema(pool));
   assert.equal(migrated.currentVersion, CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION);
   assert.equal((await verifyManagedWorkflowSchema(pool, options)).currentVersion, migrated.currentVersion);
-  assert.deepEqual((await migrateManagedWorkflowSchema(pool, options)).appliedVersions, []);
+  assert.deepEqual(
+    (await withSchemaEnvironment(migrationEnv, () => migrateManagedWorkflowSchema(pool))).appliedVersions,
+    [],
+  );
 
   // Preserve strict validation: accepting real catalog formatting must not
   // accept a same-named index that omits suspicious recordings.
@@ -74,7 +127,7 @@ try {
     /workflow_recordings_workflow_failed_created_at_recording_id_idx/,
   );
   console.log(
-    'Managed schema: fresh migration, verification, idempotence and index-drift rejection passed on PostgreSQL 16.8.',
+    'Managed schema: generated launcher policy, fresh migration, serving verification, idempotence and index-drift rejection passed on PostgreSQL 16.8.',
   );
 } finally {
   try {

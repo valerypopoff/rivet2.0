@@ -17,7 +17,11 @@ import type {
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../../utils/httpError.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
-import { recordingWorkflowScopeClause } from '../recording-workflow-scope.js';
+import {
+  recordingHasSubRunsSql,
+  recordingWorkflowScopeClause,
+  type RecordingRunScope,
+} from '../recording-workflow-scope.js';
 import {
   getLLMProfileHealthHeldRecordingIds,
   normalizeStoredLLMProfileHealthEntry,
@@ -557,7 +561,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       signal?: AbortSignal,
       inputAfter?: string,
       includeSubgraphRuns = false,
-      runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
+      runScope: RecordingRunScope = inputFilter ? 'roots' : 'all',
     ): Promise<WorkflowRecordingRunsPageResponse> {
       await deps.initialize();
       const normalizedPage = Math.max(1, Math.floor(page));
@@ -565,7 +569,18 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       const offset = (normalizedPage - 1) * normalizedPageSize;
       // Empty workflow ID represents the all-workflow scope, never a stored ID.
       // Keep its bound parameter so cursor/limit placeholders use the same positions in both scopes.
-      const workflowClause = recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'managed', 1, runScope);
+      const workflowClause = recordingWorkflowScopeClause(
+        workflowId,
+        includeSubgraphRuns,
+        'managed',
+        1,
+        runScope,
+        statusFilter,
+      );
+      const countsClause =
+        runScope === 'families'
+          ? recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'managed')
+          : workflowClause;
       const scopeCounts =
         (workflowId && includeSubgraphRuns) || runScope === 'roots'
           ? (await deps.queryOne<{
@@ -577,7 +592,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
               `SELECT COUNT(*)::int AS "totalRuns",
         COUNT(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
         COUNT(*) FILTER (WHERE status = 'suspicious')::int AS "suspiciousRuns"
-        FROM workflow_recordings WHERE ${workflowClause}`,
+        FROM workflow_recordings WHERE ${countsClause}`,
               [workflowId],
             )) ?? undefined
           : undefined;
@@ -592,7 +607,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         : undefined;
 
       const countRow =
-        inputFilter || scopeCounts
+        inputFilter || (scopeCounts && runScope !== 'families')
           ? null
           : await deps.queryOne<{ total_runs: number }>(
               deps.pool,
@@ -618,16 +633,23 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           : [workflowId, queryLimit, queryOffset];
         const limitParameter = boundary ? '$4' : '$2';
         const offsetParameter = boundary ? '$5' : '$3';
+        // Select the bounded window once before computing child presence.
+        // Count ownership globally for its keys, never group unrelated history.
         return deps.queryRows<RecordingRow>(
           deps.pool,
           `
-          SELECT ${deps.recordingColumns},
-                 TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-                   AS recording_cursor_created_at
-          FROM workflow_recordings
-          WHERE ${workflowClause} ${filterClause} ${inputAfterClause}
+          WITH recording_page AS MATERIALIZED (
+            SELECT ${deps.recordingColumns},
+                   TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                     AS recording_cursor_created_at
+            FROM workflow_recordings
+            WHERE ${workflowClause} ${filterClause} ${inputAfterClause}
+            ORDER BY created_at DESC, recording_id DESC
+            LIMIT ${limitParameter} OFFSET ${offsetParameter}
+          )
+          SELECT recording_page.*, ${recordingHasSubRunsSql('managed', 'recording_page')} AS has_sub_runs
+          FROM recording_page
           ORDER BY created_at DESC, recording_id DESC
-          LIMIT ${limitParameter} OFFSET ${offsetParameter}
         `,
           queryParameters,
         );
@@ -648,13 +670,15 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           )
         : null;
       const pageRows = filteredPage?.rows ?? (await loadWindow(undefined, offset, normalizedPageSize));
-      const totalRuns = scopeCounts
-        ? statusFilter === 'failed'
-          ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
-          : scopeCounts.totalRuns
-        : countRow?.total_runs ?? 0;
+      const totalRuns =
+        scopeCounts && runScope !== 'families'
+          ? statusFilter === 'failed'
+            ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+            : scopeCounts.totalRuns
+          : countRow?.total_runs ?? 0;
 
       const runs: WorkflowRecordingRunSummary[] = pageRows.map((row) => ({
+        hasSubRuns: row.has_sub_runs,
         id: row.recording_id,
         workflowId: row.workflow_id,
         sourceProjectName: row.source_project_name,
@@ -665,6 +689,9 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         durationMs: row.duration_ms,
         endpointNameAtExecution: row.endpoint_name_at_execution,
         executionIdentity: getExecutionIdentity(row),
+        ...(runScope === 'families' && row.execution_surface === 'subgraph_project'
+          ? { familyContext: true as const }
+          : {}),
         errorMessage: row.error_message ?? undefined,
         hasReplayDataset: row.has_replay_dataset,
         recordingCompressedBytes: row.recording_compressed_bytes,
@@ -830,7 +857,8 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           datasetUncompressedBytes: getUtf8ByteLength(replayDatasetSerialized),
         },
         {
-          timestampMode: 'now',
+          timestampMode: options.createdAt ? 'provided' : 'now',
+          createdAt: options.createdAt,
           onConflict: 'fail',
           cleanupContext: 'recording persistence failure',
         },

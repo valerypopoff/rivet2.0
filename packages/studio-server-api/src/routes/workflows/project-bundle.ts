@@ -14,6 +14,7 @@ import {
   validateProjectBundleManifest,
   validateProjectBundleCall,
   validateProjectBundleProjects,
+  serializeDatasets,
   type ProjectBundleArtifact,
   type ProjectBundleFile,
   type ProjectBundleManifest,
@@ -21,8 +22,13 @@ import {
   type SubgraphProjectTarget,
   type ProjectId,
 } from '@valerypopoff/rivet2-node';
-import { createExecutionSubgraphProjectLoader, readWorkflowProjectDownloadWithBackend } from './storage-backend.js';
+import {
+  createExecutionSubgraphProjectLoader,
+  readWorkflowProjectDownloadWithBackend,
+  getExplicitBundleService,
+} from './storage-backend.js';
 import type { WorkflowProjectDownloadVersion } from '../../../../studio-server-shared/workflow-types.js';
+import { PROJECT_BUNDLE_UPLOAD_MAX_BYTES } from '../../../../studio-server-shared/project-bundle-types.js';
 import { createHttpError } from '../../utils/httpError.js';
 
 export type BundleSnapshot = ResolvedSubgraphProject & {
@@ -31,10 +37,63 @@ export type BundleSnapshot = ResolvedSubgraphProject & {
 };
 export type BundleSource = {
   versionPolicy?: 'latest' | 'published';
+  prepare?(): Promise<void>;
+  workspace?: ProjectBundleManifest['workspace'];
+  additionalRoots?(): AsyncIterable<BundleSnapshot>;
+  verify?(): Promise<void>;
+  validateTarget?(target: SubgraphProjectTarget): Promise<void>;
   root(): Promise<BundleSnapshot>;
   target(target: SubgraphProjectTarget): Promise<BundleSnapshot>;
   reference(projectId: string): Promise<BundleSnapshot>;
 };
+
+/** Reuses the existing closure collector, seeded by every explicit member. */
+export function createExplicitBundleSource(bundleId: string, version: 'latest' | 'published'): BundleSource {
+  let workspace: ProjectBundleManifest['workspace'];
+  const initialize = async () => {
+    const service = await getExplicitBundleService();
+    const snapshot = await service.exportSnapshot(bundleId, version);
+    workspace = { name: snapshot.name, folders: snapshot.folders, members: snapshot.members };
+    const source = createSavedBundleSource(
+      snapshot.firstProjectPath,
+      version === 'latest' ? 'live' : 'published',
+      version,
+    );
+    return { service, snapshot, source };
+  };
+  let preparation: ReturnType<typeof initialize> | undefined;
+  const ready = () => (preparation ??= initialize());
+  return {
+    versionPolicy: version,
+    get workspace() {
+      return workspace;
+    },
+    async prepare() {
+      await ready();
+    },
+    async root() {
+      return (await ready()).source.root();
+    },
+    async target(target) {
+      return (await ready()).source.target(target);
+    },
+    async validateTarget(target) {
+      await (await ready()).source.validateTarget?.(target);
+    },
+    async reference(id) {
+      return (await ready()).source.reference(id);
+    },
+    async *additionalRoots() {
+      const { snapshot, source } = await ready();
+      for (const member of snapshot.members.slice(1)) yield await source.reference(member.projectId);
+    },
+    async verify() {
+      const { service, snapshot } = await ready();
+      if ((await service.exportSnapshot(bundleId, version)).fingerprint !== snapshot.fingerprint)
+        throw new ProjectBundleError('Bundle membership or saved content changed while exporting. Retry the export.');
+    },
+  };
+}
 export const DEFAULT_BUNDLE_MAX_BYTES = 512 * 1024 * 1024;
 // Resolve the installed runtime's metadata, not the checkout's package.json.
 const runtimeEntry = createRequire(import.meta.url).resolve('@valerypopoff/rivet2-node');
@@ -78,6 +137,7 @@ export function createSavedBundleSource(
   };
   return {
     versionPolicy,
+    validateTarget: (target) => loader.validateTarget(target),
     async root() {
       let download = await readWorkflowProjectDownloadWithBackend(relativePath, versionPolicy ? 'live' : version);
       const project = loadProjectFromString(download.contents);
@@ -123,6 +183,8 @@ export async function collectProjectBundle(options: {
   progress(phase: string, projects: number, bytes: number): void;
 }): Promise<{ manifest: ProjectBundleManifest; verify(): Promise<void> }> {
   const { signal } = options;
+  if (options.source.prepare) await abortableRead(() => options.source.prepare!(), signal);
+  signal.throwIfAborted();
   const readSnapshot = async (read: () => Promise<BundleSnapshot>) => {
     const captured = await abortableRead(read, signal);
     // Capture primitive bytes and reparse them; never retain a source/cache-owned mutable Project.
@@ -152,7 +214,8 @@ export async function collectProjectBundle(options: {
   const manifest: ProjectBundleManifest = {
     format: 'rivet-project-bundle',
     schemaVersion: 1,
-    requiredLoaderVersion: options.source.versionPolicy ? 3 : 2,
+    requiredLoaderVersion: options.source.workspace ? 4 : options.source.versionPolicy ? 3 : 2,
+    ...(options.source.workspace ? { workspace: options.source.workspace } : {}),
     ...(options.source.versionPolicy ? { versionPolicy: options.source.versionPolicy } : {}),
     exportingRuntimeVersion,
     rootArtifact: '',
@@ -165,6 +228,7 @@ export async function collectProjectBundle(options: {
   const byProject = new Map<string, ProjectBundleArtifact>();
   const capturedIdentities = new Map<string, string>();
   const checks: { fingerprint: string; read(): Promise<BundleSnapshot> }[] = [];
+  const accessChecks: SubgraphProjectTarget[] = [];
   // Keep graph definitions for closure validation, but release raw project and
   // dataset strings once consumed by the writer. Do not retain every dataset in RAM.
   const snapshots = new Map<string, Pick<BundleSnapshot, 'project' | 'selectedVersion'>>();
@@ -175,7 +239,13 @@ export async function collectProjectBundle(options: {
     signal.throwIfAborted();
     const bytes = Buffer.byteLength(contents);
     totalBytes += bytes;
-    if (bytes > 64 * 1024 * 1024 || totalBytes > (options.maxBytes ?? DEFAULT_BUNDLE_MAX_BYTES))
+    if (
+      bytes > 64 * 1024 * 1024 ||
+      totalBytes >
+        (manifest.workspace
+          ? Math.min(options.maxBytes ?? DEFAULT_BUNDLE_MAX_BYTES, PROJECT_BUNDLE_UPLOAD_MAX_BYTES)
+          : options.maxBytes ?? DEFAULT_BUNDLE_MAX_BYTES)
+    )
       throw new ProjectBundleError('Project bundle exceeds the configured size limit (64 MiB per artifact file).');
     await options.writeFile(location, contents);
     return { path: location };
@@ -205,9 +275,9 @@ export async function collectProjectBundle(options: {
       version,
       revision: snapshot.revisionKey ?? fingerprint,
       project: await file(`projects/${id}.rivet-project`, snapshot.projectContents),
-      ...(snapshot.datasetsContents === undefined
+      ...(snapshot.datasetsContents === undefined && !manifest.workspace
         ? {}
-        : { datasets: await file(`projects/${id}.rivet-data`, snapshot.datasetsContents) }),
+        : { datasets: await file(`projects/${id}.rivet-data`, snapshot.datasetsContents ?? serializeDatasets([])) }),
     };
     manifest.artifacts.push(artifact);
     for (const bindingVersion of manifest.versionPolicy ? (['latest', 'published'] as const) : [version])
@@ -236,15 +306,28 @@ export async function collectProjectBundle(options: {
     references.add(root.project.metadata.id);
     manifest.references.push({ projectId: root.project.metadata.id, artifact: manifest.rootArtifact });
   }
+  if (options.source.additionalRoots) {
+    for await (const additional of options.source.additionalRoots()) {
+      const snapshot = await readSnapshot(async () => additional);
+      const projectId = snapshot.project.metadata.id;
+      await add(snapshot, snapshot.selectedVersion, () => source.reference(projectId));
+    }
+  }
   // Map iteration also visits snapshots captured below, so it owns the traversal queue.
   for (const snapshot of snapshots.values()) {
     signal.throwIfAborted();
     const owner = byTarget.get(projectBundleTargetKey(snapshot.project.metadata.id, snapshot.selectedVersion))!;
     for (const call of listProjectBundleCalls(snapshot.project)) {
+      const requested = {
+        projectId: call.projectId as ProjectId,
+        version: call.version,
+        callerProjectId: snapshot.project.metadata.id,
+      };
+      await options.source.validateTarget?.(requested);
+      accessChecks.push(requested);
       const key = projectBundleTargetKey(call.projectId, call.version);
       let artifact = manifest.versionPolicy ? byProject.get(call.projectId) : byTarget.get(key);
       if (!artifact) {
-        const requested = { projectId: call.projectId as ProjectId, version: call.version };
         try {
           const resolved = await source.target(requested);
           artifact = await add(resolved, resolved.selectedVersion, () => source.target(requested));
@@ -293,11 +376,16 @@ export async function collectProjectBundle(options: {
   return {
     manifest: validated,
     async verify() {
+      for (const target of accessChecks) {
+        signal.throwIfAborted();
+        await options.source.validateTarget?.(target);
+      }
       for (const check of checks) {
         signal.throwIfAborted();
         if (identity(await check.read()) !== check.fingerprint)
           throw new ProjectBundleError('A project or dataset changed while exporting. Retry the export.');
       }
+      await options.source.verify?.();
     },
   };
 }

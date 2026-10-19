@@ -24,7 +24,13 @@ export function useBundleExecutionRouting() {
       if (!execution?.projectId) return;
       const opened = store.get(projectsState).openedProjects;
       const bundle = opened[entryId]?.bundleManifestPath;
-      if (!bundle || opened[execution.projectId]?.bundleManifestPath !== bundle) return;
+      if (
+        !bundle ||
+        opened[execution.projectId]?.bundleManifestPath !== bundle ||
+        opened[entryId]?.bundleMember === false ||
+        opened[execution.projectId]?.bundleMember === false
+      )
+        return;
       let owners = runs.current.get(execution.rootRunId);
       if (!owners) {
         if (runs.current.size >= 32) runs.current.delete(runs.current.keys().next().value!);

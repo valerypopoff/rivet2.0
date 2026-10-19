@@ -52,6 +52,11 @@
   background: transparent;
 }
 
+.dashboard-page .dashboard-sidebar-resizer[aria-disabled='true'] {
+  pointer-events: none;
+  cursor: default;
+}
+
 .dashboard-page .dashboard-sidebar-resizer:hover::after,
 .dashboard-page.dashboard-page-resizing .dashboard-sidebar-resizer::after {
   background: rgba(255, 255, 255, 0.16);

@@ -20,9 +20,20 @@ If you select multiple nodes by holding shift and clicking on them, you can righ
 
 To call a subgraph, add a [Subgraph Node](../node-reference/subgraph) to your graph. Connect any required data to the input ports of the subgraph, and connect any output data of the subgraph to the next nodes in your chain.
 
-In Rivet Studio Server, open the Subgraph node settings and choose **This project** or **Other projects** under **Graph source**. The graph field in both the node body and settings is a searchable dropdown. **This project** lists graphs under folder headings in the same order as the graph panel. For **Other projects**, expand server folders and projects in place, then select a graph from the selected project's graph-folder list. Graphs load when you expand the project. The selector shows **Project name > graph name** for an external target, and the node header's **Go to subgraph** button opens that project and graph.
+In Rivet Studio Server, open the Subgraph node settings and choose a **Graph source**: **This project**, **Same bundle** (when available), or **Other projects**. The graph field in both the node body and settings is a searchable dropdown. **This project** lists graphs under folder headings in the same order as the graph panel. For **Other projects**, expand server folders and projects in place, then select a graph from the selected project's graph-folder list. Graphs load when you expand the project. The selector shows **Project name > graph name** for an external target, and the node header's **Go to subgraph** button opens that project and graph.
 
-For **Other projects**, choose a **Version** below the graph selector:
+If the current project belongs to a bundle, **Graph source** also offers
+**Same bundle**. It lists other member projects, including nested subfolders,
+starting inside the current bundle rather than showing its parent folders or bundle root.
+**Other projects** lists only ordinary projects, not members of any bundle.
+An ordinary project, or a project in another bundle, cannot call into a bundled
+project through Subgraph. Bundle members can still call ordinary projects.
+These rules apply to saved nodes and runtime execution too, not just the picker.
+Moving a target into a different bundle may therefore make an existing call fail;
+Rivet keeps its saved target and connections so you can repair it explicitly.
+Published endpoints can still start any published bundle member directly.
+
+For **Other projects** or **Same bundle**, choose a **Version** below the graph selector:
 
 | Version                    | What each new run uses                                                                                                                             | When future runs can change                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -82,6 +93,27 @@ caller receives the normal excluded outputs and its Error output instead.
 Output chunks through this route: their outputs aggregate or transform
 child-graph results instead of exposing named Graph Output ports directly.
 **Loop Until** can still emit its own per-iteration output updates.
+
+### Deleting a graph used by another project
+
+Before deleting a graph or graph folder, Rivet Server checks saved projects and
+active publications for enabled Subgraph and Referenced Graph Alias calls. The confirmation lists the referring
+project/path, caller graph/node and **Saved latest** or **Published** target choice.
+Unsaved callers in your open editor tabs are included too.
+Library nodes whose definitions are missing are ignored by this check; they do
+not cause an incomplete-check warning. Resolvable Library nodes containing
+Subgraph calls are still checked.
+
+**Saved latest** calls can break once you save the deletion. **Published** calls
+keep the existing published graph until that publication changes. A published
+workflow may still call a Saved-latest target.
+
+Choose **Cancel** to update callers first, or **Delete anyway** to proceed
+deliberately. Failed/incomplete checks are shown explicitly; **Check again**
+retries them. This is a point-in-time warning, not a guarantee: another user's
+unsaved changes cannot be checked. Hosts without server scanning inspect only
+open projects. Existing restrictions for running graphs and references within
+the same project still apply.
 
 ### Rearranging Subgraph ports
 

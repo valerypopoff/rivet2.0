@@ -203,6 +203,57 @@ test('recording imports require canonical UTC dates before writing artifacts', a
   });
 });
 
+test('sub-run presence is browse-only and retention point lookups never aggregate the whole history', async (t) => {
+  await fixture(async (catalog) => {
+    await catalog.importProject(project());
+    const correlationId = 'rvt-presence-retention-12345';
+    await catalog.importRecording(
+      recording({
+        recordingId: 'root',
+        executionIdentity: { surface: 'workflow_endpoint', correlationId },
+      }),
+    );
+    await catalog.importRecording(
+      recording({
+        recordingId: 'child',
+        createdAt: '2026-01-02T00:00:00.000Z',
+        status: 'failed',
+        executionIdentity: { surface: 'subgraph_project', correlationId },
+      }),
+    );
+    const prepare = t.mock.method(DatabaseSync.prototype, 'prepare');
+    const reads = t.mock.method(ImmutableLocalArtifactStore.prototype, 'read');
+    assert.equal(catalog.listRecordingMetadata({ recordingId: 'root', limit: 1 })[0]?.hasSubRuns, undefined);
+    assert.ok(prepare.mock.calls.every((call) => !String(call.arguments[0]).includes('AS has_sub_runs')));
+    const browse = () => catalog.listRecordingMetadata({ includeSubRunPresence: true });
+    assert.deepEqual(
+      browse().map((row) => [row.recordingId, row.hasSubRuns]),
+      [
+        ['root', true],
+        ['child', false],
+      ],
+    );
+    prepare.mock.resetCalls();
+    const deleted = catalog.pruneRecordings({
+      now: Date.parse('2026-01-04T00:00:00.000Z'),
+      retentionDays: 0,
+      maxRunsPerEndpoint: 1,
+      maxTotalBytes: 0,
+      batchSize: 100,
+    });
+    assert.deepEqual(
+      deleted.map((row) => row.recordingId),
+      ['child'],
+    );
+    assert.ok(prepare.mock.calls.every((call) => !String(call.arguments[0]).includes('AS has_sub_runs')));
+    assert.deepEqual(
+      browse().map((row) => [row.recordingId, row.hasSubRuns]),
+      [['root', false]],
+    );
+    assert.equal(reads.mock.callCount(), 0, 'presence and retention must remain metadata-only');
+  });
+});
+
 test('recording picker counts and owner metadata share one snapshot under a competing connection', async (t) => {
   await fixture(async (catalog, root) => {
     catalog.importFolder('folder');

@@ -8,6 +8,7 @@ import { assertGkeFrontendAvailability, verifyGkeFrontendEvictions } from './lib
 import { startHaWebAppTraffic, startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import { ManagedReleaseGate } from './kubernetes-managed-release-gate.mjs';
 import { assertProviderHaFrontendPolicy } from './kubernetes-ha-provider-gate.mjs';
+import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -116,6 +117,25 @@ test('GKE policy preserves explicit maintenance validation with public tiers sto
   const frontend = resources.filter(r => r.kind === 'Deployment');
   assert.ok(frontend.length >= 2);
   for (const resource of frontend) assert.equal(resource.spec.replicas, 0);
+});
+
+test('GKE HA adoption renders the launcher actual singleton validation overlay and keeps the full profile guarded', () => {
+  const flatten = (value, prefix = '') => Object.entries(value).flatMap(([key, item]) => {
+    const field = prefix ? `${prefix}.${key}` : key;
+    return item && typeof item === 'object' ? flatten(item, field) : [`${field}=${item}`];
+  });
+  const resources = parseAllDocuments(render([
+    ...flatten(maintenanceValidationValues), 'ha.enabled=false', 'replicaCount.backend=1',
+  ])).map(doc => doc.toJS());
+  const backend = resources.find(r => r.kind === 'StatefulSet' && r.metadata.labels['app.kubernetes.io/component'] === 'backend');
+  assert.equal(backend.spec.replicas, 1);
+  for (const resource of resources.filter(r => r.kind === 'Deployment' &&
+    ['proxy', 'web', 'evaluation'].includes(r.metadata.labels['app.kubernetes.io/component'])))
+    assert.equal(resource.spec.replicas, 0);
+  assert.equal(resources.some(r => r.kind === 'HorizontalPodAutoscaler'), false);
+  assert.throws(() => render(['ha.enabled=false']), error => /requires cluster HA/.test(String(error.stderr)));
+  const resumed = parseAllDocuments(render()).map(doc => doc.toJS());
+  assert.equal(resumed.find(r => r.kind === 'Deployment' && r.metadata.labels['app.kubernetes.io/component'] === 'proxy').spec.replicas, 6);
 });
 
 test('native placement options reject fractional domains and string booleans', () => {

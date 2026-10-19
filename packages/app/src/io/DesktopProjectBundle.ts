@@ -43,6 +43,7 @@ export function prepareDesktopProjectBundle(input: NativeProjectBundle) {
     datasets: ProjectBundleSnapshot['datasets'];
     attachments: Record<string, unknown>;
     evaluationDatasets: ReturnType<typeof parseDatasetsFileContents>['evaluationDatasets'];
+    bundleMember: boolean;
   }[] = [];
   let attachments: Record<string, unknown> = {};
   let evaluationDatasets: ReturnType<typeof parseDatasetsFileContents>['evaluationDatasets'] = [];
@@ -73,6 +74,8 @@ export function prepareDesktopProjectBundle(input: NativeProjectBundle) {
         datasets,
         attachments: attached,
         evaluationDatasets: memberEvaluationDatasets,
+        bundleMember:
+          !manifest.workspace || manifest.workspace.members.some((member) => member.projectId === project.metadata.id),
       });
     if (artifact.id === artifactId) {
       attachments = attached;
@@ -83,6 +86,9 @@ export function prepareDesktopProjectBundle(input: NativeProjectBundle) {
   return {
     manifest,
     manifestPath: input.manifestPath,
+    bundleMember:
+      !manifest.workspace ||
+      manifest.workspace.members.some((member) => member.projectId === snapshot.project.metadata.id),
     artifactId,
     snapshot,
     snapshots,

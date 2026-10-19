@@ -206,7 +206,7 @@ export function updateOpenedProjectMetadata(
   current: OpenedProjectsInfo,
   projectId: ProjectId,
   metadataPatch: ProjectMetadataPatch | null | undefined,
-  options: { fsPath?: string | null } = {},
+  options: { fsPath?: string | null; hostedBundleKey?: string | null } = {},
 ): OpenedProjectsInfo {
   const existingProject = current.openedProjects[projectId];
   if (!existingProject) {
@@ -215,8 +215,14 @@ export function updateOpenedProjectMetadata(
 
   const nextTitle = typeof metadataPatch?.title === 'string' ? metadataPatch.title : existingProject.title;
   const nextFsPath = options.fsPath !== undefined ? options.fsPath ?? null : existingProject.fsPath;
+  const nextBundleKey =
+    options.hostedBundleKey !== undefined ? options.hostedBundleKey : existingProject.hostedBundleKey;
 
-  if (existingProject.title === nextTitle && existingProject.fsPath === nextFsPath) {
+  if (
+    existingProject.title === nextTitle &&
+    existingProject.fsPath === nextFsPath &&
+    existingProject.hostedBundleKey === nextBundleKey
+  ) {
     return current;
   }
 
@@ -228,6 +234,7 @@ export function updateOpenedProjectMetadata(
         ...existingProject,
         title: nextTitle,
         fsPath: nextFsPath,
+        hostedBundleKey: nextBundleKey,
       },
     },
   };

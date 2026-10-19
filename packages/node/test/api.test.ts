@@ -1206,6 +1206,8 @@ describe('api', () => {
 
     const loads: string[] = [];
     const recordedGraphIds: GraphId[] = [];
+    const recordedCreationTimes: number[] = [];
+    const beforeRun = Date.now();
     const processor = createProcessor(caller, {
       graph: fixture.graphId,
       inputs: { input: 'hello' },
@@ -1217,6 +1219,7 @@ describe('api', () => {
       },
       onSubgraphProjectRun: (run) => {
         recordedGraphIds.push(run.graphId);
+        recordedCreationTimes.push(Date.parse(run.createdAt!));
       },
     });
     try {
@@ -1224,6 +1227,8 @@ describe('api', () => {
       assert.equal(outputs.result?.value, 'hellox');
       assert.deepEqual(loads, ['hosted-subgraph-target:latest']);
       assert.deepEqual(recordedGraphIds, [childGraphId]);
+      assert.equal(recordedCreationTimes.length, 1);
+      assert.ok(recordedCreationTimes[0]! >= beforeRun && recordedCreationTimes[0]! <= Date.now());
     } finally {
       processor.dispose();
     }

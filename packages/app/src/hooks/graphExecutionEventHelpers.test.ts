@@ -12,10 +12,12 @@ import {
 import type { RunDataByNodeId } from '../state/dataFlow.js';
 import {
   appendRootRunIdOnce,
+  finishGraphRunHistory,
   MISSING_DEBUGGER_TERMINAL_EVENT_WARNING,
   reconcileRunningProcessesAfterSuccessfulDone,
   removeRunningGraphEntry,
 } from './graphExecutionEventHelpers.js';
+import { buildGraphViewKeyFromExecution } from '../utils/executionIdentity.js';
 
 test('removeRunningGraphEntry removes one matching graph entry', () => {
   assert.deepEqual(removeRunningGraphEntry(['a' as GraphId, 'b' as GraphId, 'a' as GraphId], 'a' as GraphId), [
@@ -32,6 +34,24 @@ test('appendRootRunIdOnce keeps one reconciliation entry per root run', () => {
     'root-1' as RootRunId,
     'root-2' as RootRunId,
   ]);
+});
+
+test('repeated graph terminals preserve the original finish clock', (t) => {
+  let clock = 10;
+  t.mock.method(Date, 'now', () => clock++);
+  const execution = {
+    graphId: 'graph' as GraphId,
+    graphRunId: 'invocation' as GraphRunId,
+    rootRunId: 'root' as RootRunId,
+  };
+  const view = buildGraphViewKeyFromExecution({ execution, graphIdFallback: execution.graphId });
+  const history = {
+    [view]: [{ ...execution, status: 'running' as const, startedAt: 1 }],
+  };
+  const terminal = finishGraphRunHistory(history, view, execution.graphRunId, 'error');
+  assert.equal(terminal[view]![0]!.finishedAt, 10);
+  assert.equal(finishGraphRunHistory(terminal, view, execution.graphRunId, 'error'), terminal);
+  assert.equal(clock, 11);
 });
 
 test('reconcileRunningProcessesAfterSuccessfulDone clears orphaned running processes with a warning', () => {

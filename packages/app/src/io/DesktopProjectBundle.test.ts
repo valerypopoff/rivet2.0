@@ -34,6 +34,34 @@ test('known bundle execution fails closed when its path, reader or manifest resu
   assert.equal(await readProjectBundleForExecution(emptyReader, '/standalone'), undefined);
 });
 
+test('explicit portable membership survives Desktop opening without treating dependency snapshots as members', () => {
+  const input = fixture().native;
+  const manifest = JSON.parse(input.manifestContents);
+  manifest.requiredLoaderVersion = 4;
+  manifest.versionPolicy = 'latest';
+  manifest.workspace = {
+    name: 'Feature',
+    folders: ['Nested', 'Empty'],
+    members: [{ projectId: 'root', relativePath: 'Nested/Root.rivet-project' }],
+  };
+  input.manifestContents = JSON.stringify(manifest);
+  const opened = prepareDesktopProjectBundle(input);
+  assert.equal(opened.manifest.workspace?.name, 'Feature');
+  assert.deepEqual(
+    opened.workspaceProjects!.map((member) => [member.project.metadata.id, member.bundleMember]),
+    [
+      ['root', true],
+      ['child', false],
+    ],
+  );
+  const edited = structuredClone(opened.snapshot.project);
+  edited.metadata.description = 'Saved Desktop edit';
+  input.files.find((file) => file.path === manifest.artifacts[0].project.path)!.contents = serializeProject(
+    edited,
+  ) as string;
+  assert.equal(prepareDesktopProjectBundle(input).snapshot.project.metadata.description, 'Saved Desktop edit');
+});
+
 test('execution preserves reader ownership and passes the remembered manifest for the entry project', async () => {
   const bundle = prepareDesktopProjectBundle(fixture().native);
   const io = {

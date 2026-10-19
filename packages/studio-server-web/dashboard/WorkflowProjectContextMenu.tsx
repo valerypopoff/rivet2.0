@@ -12,7 +12,6 @@ import ArrowDownIcon from 'majesticons/line/arrow-down-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowProjectItem } from './types';
-import { BundleTransferIcon } from './BundleTransferIcon';
 
 type WorkflowProjectContextMenuProps = {
   isOpen: boolean;
@@ -22,7 +21,6 @@ type WorkflowProjectContextMenuProps = {
   onClose: () => void;
   onRename: () => void;
   onDownload: () => void;
-  onDownloadBundle: () => void;
   onDuplicate: () => void;
   canCompare: boolean;
   onCompare: () => void;
@@ -57,7 +55,6 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   onClose,
   onRename,
   onDownload,
-  onDownloadBundle,
   onDuplicate,
   canCompare,
   onCompare,
@@ -125,10 +122,6 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDownload}>
         <ArrowDownIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>Download project</span>
-      </button>
-      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDownloadBundle}>
-        <BundleTransferIcon direction="down" />
-        <span>Download bundle</span>
       </button>
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onDuplicate}>
         <span className="workflow-project-context-menu-item-icon" aria-hidden="true">

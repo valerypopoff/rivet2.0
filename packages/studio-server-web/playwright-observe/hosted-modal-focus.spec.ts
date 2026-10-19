@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { serializeProject } from '@valerypopoff/rivet2-core';
 
 async function setupFocusFixture(page: Page): Promise<string[]> {
   await seedHostedEditorProject(page, {
@@ -74,13 +75,195 @@ async function setupFocusFixture(page: Page): Promise<string[]> {
       },
     }),
   );
+  await page.route('**/api/projects/load', async (route) => {
+    const project = await page.evaluate(() => JSON.parse(localStorage.getItem('project')!).projectState);
+    await route.fulfill({ json: { contents: serializeProject(project), datasetsContents: null, revisionId: null } });
+  });
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForDashboardReady(page);
+  // Open through the real dashboard bridge rather than relying on legacy recovery state.
+  await page.locator('.project-row', { hasText: 'Focus fixture' }).dblclick();
   await expect(
     page.frameLocator('iframe.dashboard-editor-frame').locator('.node[data-nodeid="text-output"]'),
   ).toBeVisible({ timeout: 60_000 });
   return writes;
 }
+
+test('modal backdrops block sidebar resize in both documents and cancel an existing drag', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  const writes = await setupFocusFixture(page);
+  const sidebar = page.locator('.dashboard-sidebar');
+  const resizer = page.getByRole('separator', { name: 'Resize folders pane' });
+  const width = async () => Math.round((await sidebar.boundingBox())!.width);
+  const drag = async (destination: number) => {
+    const box = (await resizer.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, 48);
+    await page.mouse.down();
+    await page.mouse.move(destination, 48, { steps: 4 });
+  };
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+  await drag(340);
+  await page.mouse.up();
+  await expect.poll(width).toBe(340);
+
+  // A modal opening while a drag owns the pointer cancels it without flushing a queued move.
+  await drag(360);
+  await expect(sidebar).toHaveClass(/dashboard-sidebar-resizing/);
+  await expect.poll(width).toBe(360);
+  await page
+    .locator('.panel-bottom-actions')
+    .getByRole('button', { name: 'Settings', exact: true })
+    .evaluate((element: HTMLButtonElement) => element.click());
+  const settings = page.getByTestId('app-settings-modal');
+  await expect(settings).toBeVisible();
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  await expect(sidebar).not.toHaveClass(/dashboard-sidebar-resizing/);
+  await page.mouse.move(480, 48, { steps: 4 });
+  await page.mouse.up();
+  expect(await width()).toBe(360);
+  await expect(resizer).toHaveCSS('pointer-events', 'none');
+  // Exercise event guards too, independently of CSS hit testing (including touch/pen).
+  for (const type of ['mousedown', 'pointerdown']) {
+    await resizer.dispatchEvent(type, { button: 0, clientX: 470, pointerType: 'pen', isPrimary: true, pointerId: 19 });
+    await expect(sidebar).not.toHaveClass(/dashboard-sidebar-resizing/);
+    expect(await width()).toBe(360);
+  }
+  await settings.getByRole('button', { name: 'Close app settings', exact: true }).click();
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const node = editor.locator('.node[data-nodeid="text-output"]');
+  await editor.locator('.run-button button').first().click();
+  await expect(node).toHaveClass(/success/);
+  await node.locator('.node-output').hover();
+  await node.locator('.expand-button').click();
+  const output = editor.getByTestId('fullscreen-output-modal');
+  await expect(output).toBeVisible();
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  await resizer.dispatchEvent('mousedown', { button: 0, clientX: 480 });
+  await expect(sidebar).not.toHaveClass(/dashboard-sidebar-resizing/);
+  expect(await width()).toBe(360);
+  const outputWidth = (await output.boundingBox())!.width;
+  const outputHandle = output.getByRole('separator', { name: 'Resize fullscreen output modal from the left edge' });
+  const handleBox = (await outputHandle.boundingBox())!;
+  await page.mouse.move(handleBox.x + 12, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + 82, handleBox.y + handleBox.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await output.boundingBox())!.width).toBeLessThan(outputWidth - 40);
+  expect(await width()).toBe(360);
+
+  // Closing one of two stacked modals must not unlock the separator.
+  await editor
+    .getByRole('button', { name: 'Project settings', exact: true })
+    .evaluate((element: HTMLButtonElement) => element.click());
+  const projectSettings = editor.getByTestId('project-settings-modal');
+  await expect(projectSettings).toBeVisible();
+  await projectSettings.getByRole('button', { name: 'Close modal', exact: true }).click();
+  await expect(output).toBeVisible();
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  await output.press('Escape');
+  await expect(output).toHaveCount(0);
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+
+  // Retained hidden dialogs and non-modal popovers do not lock the sidebar.
+  await editor.locator('body').evaluate((body) => {
+    const popup = document.createElement('section');
+    popup.dataset.testid = 'resize-guard-popup';
+    popup.setAttribute('role', 'dialog');
+    popup.setAttribute('aria-modal', 'false');
+    popup.textContent = 'Non-modal popup';
+    body.append(popup);
+  });
+  const popup = editor.getByTestId('resize-guard-popup');
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+  await popup.evaluate((element) => element.setAttribute('aria-modal', 'true'));
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  await popup.evaluate((element: HTMLElement) => {
+    element.hidden = true;
+  });
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+  await popup.evaluate((element: HTMLElement) => {
+    element.hidden = false;
+  });
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  await popup.evaluate((element) => element.remove());
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+  await drag(320);
+  await page.mouse.up();
+  await expect.poll(width).toBe(320);
+  expect(pageErrors, 'blocked pointer events never attempt capture or throw').toEqual([]);
+  expect(writes).toEqual([]);
+});
+
+test('a native modeless dialog does not block sidebar resize', async ({ page }) => {
+  await setupFocusFixture(page);
+  const resizer = page.getByRole('separator', { name: 'Resize folders pane' });
+  await page.evaluate(() => {
+    const dialog = document.createElement('dialog');
+    dialog.dataset.testid = 'native-resize-dialog';
+    dialog.textContent = 'Modeless native dialog';
+    document.body.append(dialog);
+    dialog.show();
+  });
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false', { timeout: 2_000 });
+  const dialog = page.getByTestId('native-resize-dialog');
+  await dialog.evaluate((element: HTMLDialogElement) => {
+    element.close();
+    element.showModal();
+  });
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  await dialog.evaluate((element: HTMLDialogElement) => element.close());
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+});
+
+test('an editor modal locks resize only while its iframe is visible', async ({ page }) => {
+  await setupFocusFixture(page);
+  const resizer = page.getByRole('separator', { name: 'Resize folders pane' });
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await editor.getByRole('button', { name: 'Project settings', exact: true }).click();
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  const iframe = page.locator('iframe.dashboard-editor-frame');
+  await iframe.evaluate((element) => element.classList.add('dashboard-editor-frame-hidden'));
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false', { timeout: 2_000 });
+  await iframe.evaluate((element) => element.classList.remove('dashboard-editor-frame-hidden'));
+  await expect(resizer).toHaveAttribute('aria-disabled', 'true');
+  await editor.getByTestId('project-settings-modal').getByRole('button', { name: 'Close modal', exact: true }).click();
+  await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+});
+
+test('losing touch pointer capture ends the sidebar drag', async ({ page }) => {
+  await setupFocusFixture(page);
+  const sidebar = page.locator('.dashboard-sidebar');
+  const resizer = page.getByRole('separator', { name: 'Resize folders pane' });
+  const box = (await resizer.boundingBox())!;
+  await resizer.evaluate((element) =>
+    element.addEventListener('gotpointercapture', (event) => {
+      (element as HTMLElement).dataset.pointerId = String((event as PointerEvent).pointerId);
+    }),
+  );
+  const client = await page.context().newCDPSession(page);
+  try {
+    await client.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: box.x + 8, y: 48, id: 1 }],
+    });
+    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 340, y: 48, id: 1 }] });
+    await expect(sidebar).toHaveClass(/dashboard-sidebar-resizing/);
+    await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(340);
+    await resizer.evaluate((element) =>
+      element.releasePointerCapture(Number((element as HTMLElement).dataset.pointerId)),
+    );
+    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 430, y: 48, id: 1 }] });
+    await expect(sidebar).not.toHaveClass(/dashboard-sidebar-resizing/, { timeout: 2_000 });
+    expect(Math.round((await sidebar.boundingBox())!.width)).toBe(340);
+  } finally {
+    await client.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    await client.detach();
+  }
+});
 
 test('editor output modal yields focus to dashboard inputs without losing its own keyboard trap', async ({ page }) => {
   const writes = await setupFocusFixture(page);

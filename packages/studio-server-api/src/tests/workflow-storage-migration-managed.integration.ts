@@ -37,7 +37,14 @@ import { SqliteMigrationSource } from '../scripts/sqlite-migration-source.js';
 import { createWorkflowProjectContentHash } from '../routes/workflows/publication.js';
 import { readWorkflowMigrationTargetConfig } from '../scripts/migrate-workflow-storage-lib.js';
 import { prepareLegacyRestoreSource, importLegacyRestoreSource } from '../scripts/migrate-workflow-storage.js';
-import { captureRestoreObjects, clearRestoreObjects, clearRestoreTables } from '../legacy-restore/scope.js';
+import {
+  assertRestoreTableBoundary,
+  existingRestoreTables,
+  captureRestoreObjects,
+  clearRestoreObjects,
+  clearRestoreTables,
+} from '../legacy-restore/scope.js';
+import { MANAGED_BUNDLE_RESTORE_GUARDS } from '../routes/workflows/managed/bundle-schema.js';
 import { LegacyRestoreControl, acquireRestoreServingLease } from '../legacy-restore/control.js';
 import { resetWorkflowRecordingDatabaseForTests } from '../routes/workflows/recordings-db.js';
 import { S3Client, PutObjectCommand, GetObjectCommand, PutBucketVersioningCommand } from '@aws-sdk/client-s3';
@@ -800,6 +807,46 @@ fixture: try {
         runtimeLibraries: runtimeRoot,
       };
       const prepared = await prepareLegacyRestoreSource(roots, target);
+      const restoreTables = await existingRestoreTables(pool!);
+      const definitions = await pool!.query<{ name: string; definition: string }>(
+        `SELECT t.tgname AS name, pg_get_triggerdef(t.oid, true) AS definition
+         FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+         JOIN pg_namespace n ON n.oid=c.relnamespace
+         WHERE n.nspname='public' AND t.tgname=ANY($1::text[]) ORDER BY t.tgname`,
+        [MANAGED_BUNDLE_RESTORE_GUARDS.map((guard) => guard.name)],
+      );
+      assert.deepEqual(
+        definitions.rows,
+        MANAGED_BUNDLE_RESTORE_GUARDS.map(({ name, definition }) => ({ name, definition })).sort((a, b) =>
+          a.name.localeCompare(b.name),
+        ),
+      );
+      await assertRestoreTableBoundary(pool!, restoreTables);
+      const scopeClient = await pool!.connect();
+      try {
+        for (const mutation of [
+          'ALTER FUNCTION lock_workflow_bundle_topology() SECURITY DEFINER',
+          'ALTER FUNCTION lock_workflow_bundle_topology() SET search_path TO public',
+          'CREATE OR REPLACE FUNCTION lock_workflow_bundle_topology() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END; $$',
+          'ALTER TABLE workflows DISABLE TRIGGER workflow_project_topology_lock',
+          'CREATE TRIGGER custom_restore_trigger BEFORE INSERT ON workflows FOR EACH STATEMENT EXECUTE FUNCTION lock_workflow_bundle_topology()',
+          'CREATE TABLE unrelated_restore_dependency(workflow_id TEXT REFERENCES workflows(workflow_id))',
+          `DROP TRIGGER workflow_project_move_topology_lock ON workflows;
+           CREATE TRIGGER workflow_project_move_topology_lock BEFORE UPDATE ON workflows
+           FOR EACH ROW EXECUTE FUNCTION lock_workflow_bundle_topology()`,
+        ]) {
+          await scopeClient.query('BEGIN');
+          try {
+            await scopeClient.query(mutation);
+            await assert.rejects(assertRestoreTableBoundary(scopeClient, restoreTables), /dependencies or triggers/);
+          } finally {
+            await scopeClient.query('ROLLBACK');
+          }
+        }
+      } finally {
+        scopeClient.release();
+      }
+      await assertRestoreTableBoundary(pool!, restoreTables);
       const objects = await captureRestoreObjects(pool!, target);
       assert.equal(
         objects.some((object) => object.key === sentinel),

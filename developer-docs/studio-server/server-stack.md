@@ -50,6 +50,27 @@ and exact predecessor lineage. Local storage is not an exemption from release
 safety. The API image already contains the editor executor; its separate
 manifest component is retained as release evidence, not another local runner.
 
+The one-shot `migrate` service uses an exact schema window (minimum = maximum =
+the selected image's schema version). Only the verify-only `backend` and
+`execution` services inherit the release's rollback-compatible reader range.
+Do not relax the migration guard or set a broad migration window in `.env`.
+This separation applies to all six commands, including offline cutovers. If an
+older launcher reports that migrations require an exact schema version, update
+the launcher and rerun the same command; retained database and object-store
+volumes must not be deleted. Regression coverage is in `container-server.test.mjs`
+and `managed-workflow-schema-migrations.test.ts`. It rejects lower/upper widened
+windows and both stale/future exact versions before opening the migration's
+database connection. Correcting the window permits migration; retrying afterward
+does not replay committed migrations. Restore-recovery exit 75 still skips both
+DDL and settings seeding, while other preparation failures leave admission closed.
+The existing managed CI lane also runs
+`yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs` against
+its own disposable PostgreSQL container. It applies the generated Compose writer
+environment to the compiled migration owner, checks that a wider serving window
+cannot create the ledger, verifies the result with the serving policy, and checks
+repeat migration and index-drift rejection. It never reads `.env` or accepts an
+operator database URL; it removes only its own container and temporary volume.
+
 `studio-server:dev` and `studio-server:vm` alias dev/local storage.
 `studio-server:dev:recreate` rebuilds the same managed Docker installation;
 it does not switch to Kubernetes.

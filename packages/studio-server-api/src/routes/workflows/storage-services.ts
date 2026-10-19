@@ -21,6 +21,7 @@ export interface LocalWorkflowResources extends WorkflowDataBackend, Disposable 
   cleanupRecordings(): Promise<number>;
 }
 export interface ManagedWorkflowResources extends WorkflowDataBackend, Disposable {
+  readonly bundles: ReturnType<typeof import('./managed/bundles.js').createManagedBundleService>;
   importProjectBundle(parent: string, bundle: PreparedProjectBundleImport): Promise<ProjectBundleImportResult>;
   initialize(): Promise<void>;
   drain(): Promise<void>;
@@ -72,9 +73,14 @@ export class WorkflowStorageServices {
   get phase() {
     return this.#phase;
   }
-  beginRetirement(): void { this.#retiring = true; this.#managedInstance?.beginRetirement?.(); }
+  beginRetirement(): void {
+    this.#retiring = true;
+    this.#managedInstance?.beginRetirement?.();
+  }
   async drainAcceptedWork(): Promise<void> {
-    this.beginRetirement(); await this.#initializing; await this.#managed;
+    this.beginRetirement();
+    await this.#initializing;
+    await this.#managed;
     if (this.#managedInstance) {
       if (!this.#managedInstance.drainAcceptedWork) throw new Error('Managed accepted-work drain is unavailable');
       await this.#managedInstance.drainAcceptedWork();

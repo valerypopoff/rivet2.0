@@ -69,7 +69,7 @@ function promoted(overrides = {}, options = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 15,
+    version: 16,
     minimumRollbackCompatibleVersion: 15,
   });
 });
@@ -829,11 +829,15 @@ test('release selection rejects untrusted releases and checkout drift before ret
 test('only promoted manifests can produce production Helm values', () => {
   assert.throws(() => createProductionHelmValues(candidate()), /requires a promoted release manifest/);
 
-  const values = createProductionHelmValues(promoted());
+  const manifest = promoted();
+  const values = createProductionHelmValues(manifest);
   assert.equal(values.release.production.enabled, true);
   assert.match(values.release.production.manifestDigest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(values.images.api.digest, digest('c'));
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 15, maximumVersion: 15 });
+  assert.deepEqual(values.workflowSchema.compatibility, {
+    minimumVersion: manifest.database.managedWorkflowSchema.version,
+    maximumVersion: manifest.database.managedWorkflowSchema.version,
+  });
   assert.equal(values.workflowSchema.migrationJob.enabled, true);
 });
 

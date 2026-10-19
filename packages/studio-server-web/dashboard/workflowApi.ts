@@ -3,7 +3,10 @@ import {
   normalizeHostedRuntimeConfig,
   RIVET_API_BASE_URL,
 } from '../../studio-server-shared/hosted-env';
-import type { ProjectBundleImportResult, ProjectBundleUploadFile } from '../../studio-server-shared/project-bundle-types';
+import type {
+  ProjectBundleImportResult,
+  ProjectBundleUploadFile,
+} from '../../studio-server-shared/project-bundle-types';
 import {
   WORKFLOW_TREE_CLIENT_ID_HEADER,
   type WorkflowProjectReferencesResponse,
@@ -42,6 +45,20 @@ import type {
 import { createResponseError, parseJsonResponse, parseTextResponse } from './apiRequest';
 
 const API = RIVET_API_BASE_URL;
+export async function requestWorkflowBundle<T>(path: string, input: unknown, signal?: AbortSignal): Promise<T> {
+  return workflowJsonResponse<T>(
+    await fetch(`${API}/workflows/bundles${path}`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rivet-Bundle-Intent': '1',
+        ...getWorkflowTreeMutationHeaders(),
+      },
+      body: JSON.stringify(input),
+    }),
+  );
+}
 let workflowTreeClientId: string | null = null;
 
 function createWorkflowTreeClientId(): string {
@@ -230,6 +247,7 @@ export async function fetchWorkflowRecordingRuns(
     inputCursor?: number;
     inputAfter?: string;
     includeSubgraphRuns?: boolean;
+    groupByRoot?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<WorkflowRecordingRunsPageResponse> {
@@ -239,6 +257,7 @@ export async function fetchWorkflowRecordingRuns(
     status: options.status,
   });
   if (workflowId && options.includeSubgraphRuns) query.set('includeSubgraphRuns', 'true');
+  if (options.groupByRoot) query.set('groupByRoot', 'true');
   if (options.inputFilter) {
     query.set('inputPath', options.inputFilter.path);
     query.set('inputOperator', options.inputFilter.operator);
@@ -264,9 +283,10 @@ export async function fetchRecordingSubRuns(
   recordingId: string,
   page: number,
   signal: AbortSignal,
+  context?: 'all' | 'project',
 ): Promise<WorkflowRecordingRunsPageResponse> {
   const response = await fetch(
-    `${API}/workflows/recordings/${encodeURIComponent(recordingId)}/sub-runs?page=${page}&pageSize=100`,
+    `${API}/workflows/recordings/${encodeURIComponent(recordingId)}/sub-runs?page=${page}&pageSize=100${context ? `&context=${context}` : ''}`,
     { cache: 'no-store', signal },
   );
   return workflowJsonResponse<WorkflowRecordingRunsPageResponse>(response);

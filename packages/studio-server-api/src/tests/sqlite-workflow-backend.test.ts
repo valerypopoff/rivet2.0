@@ -1039,6 +1039,46 @@ test('SQLite project browsing reads only the selected pair, and metadata discove
   });
 });
 
+test('SQLite recording creation follows start time, not completion order, without reinterpreting legacy writes', async () => {
+  await fixture(async (backend) => {
+    const item = await createExecutable(backend);
+    const [project, attached] = loadProjectAndAttachedDataFromString(
+      (await backend.loadHostedProject(item.absolutePath)).contents,
+    );
+    const timestamps = [new Date(Date.now() - 20_000).toISOString(), new Date(Date.now() - 40_000).toISOString()];
+    const ids: string[] = [];
+    for (const [index, status] of (['failed', 'succeeded', 'suspicious'] as const).entries()) {
+      ids.push(
+        (await backend.persistWorkflowExecutionRecording({
+          createdAt: timestamps[index],
+          sourceProject: project,
+          sourceProjectPath: item.absolutePath,
+          executedProject: project,
+          executedAttachedData: attached,
+          executedDatasets: [],
+          endpointName: 'flow',
+          recordingSerialized: '{}',
+          runKind: 'editor',
+          status,
+          durationMs: 1,
+        }))!,
+      );
+    }
+    const page = await backend.listWorkflowRecordingRunsPage({
+      workflowId: item.projectMetadataId!,
+      page: 1,
+      pageSize: 20,
+    });
+    assert.deepEqual(
+      page.runs.map((run) => run.id),
+      [ids[2], ids[0], ids[1]],
+    );
+    assert.equal(page.runs.find((run) => run.id === ids[0])!.createdAt, timestamps[0]);
+    assert.equal(page.runs.find((run) => run.id === ids[1])!.createdAt, timestamps[1]);
+    assert.ok(Date.parse(page.runs.find((run) => run.id === ids[2])!.createdAt) > Date.parse(timestamps[0]!));
+  });
+});
+
 test('SQLite recording workflow summaries aggregate in SQL and never load project or run bodies', async (t) => {
   await fixture(async (backend, options) => {
     assert.deepEqual(await backend.listWorkflowRecordingWorkflows(), { workflows: [] });
@@ -2512,6 +2552,39 @@ test('SQLite caller browse scope includes cross-project descendants with accurat
     assert.equal(bad.totalRuns, 2);
     assert.deepEqual(new Set(bad.runs.map((run) => run.id)), new Set([childId, nestedId]));
     assert.equal(bad.runs.find((run) => run.id === childId)?.sourceProjectRelativePath, child.relativePath);
+    const familyPage = await backend.listWorkflowRecordingRunsPage({
+      workflowId,
+      page: 1,
+      pageSize: 1,
+      includeSubgraphRuns: true,
+      runScope: 'families',
+    });
+    assert.equal(familyPage.totalRuns, 1);
+    assert.deepEqual(
+      familyPage.runs.map((run) => run.id),
+      [rootId],
+    );
+    assert.equal(familyPage.hasMore, false);
+    assert.equal(familyPage.runs[0]?.hasSubRuns, true);
+    const childContext = await backend.listWorkflowRecordingRunsPage({
+      workflowId: child.projectMetadataId!,
+      page: 1,
+      pageSize: 1,
+      includeSubgraphRuns: true,
+      runScope: 'families',
+    });
+    assert.equal(childContext.totalRuns, 1);
+    assert.equal(childContext.runs[0]?.familyContext, true);
+    const contextChildren = await backend.listWorkflowRecordingRunsPage({
+      workflowId: childId,
+      page: 1,
+      pageSize: 100,
+      runScope: 'project-family-children',
+    });
+    assert.deepEqual(
+      contextChildren.runs.map((run) => run.id),
+      [childId],
+    );
     assert.equal(
       (await backend.listWorkflowRecordingRunsPage({ workflowId: workflowId, page: 1, pageSize: 20 })).totalRuns,
       1,

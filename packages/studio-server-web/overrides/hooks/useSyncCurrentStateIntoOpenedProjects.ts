@@ -15,7 +15,7 @@ import {
   projectsState,
 } from '../../../app/src/state/savedGraphs';
 import { addOpenedProject, resolveSyncedOpenedProjectFsPathOptions } from '../../../app/src/utils/openedProjects.js';
-import { useExecutorSessionState } from '../../../app/src/hooks/useExecutorSession.js';
+import { useOwnExecutorSessionState } from '../../../app/src/hooks/useExecutorSession.js';
 import {
   projectExecutorModesEqual,
   resolveCurrentProjectExecutorMode,
@@ -80,6 +80,8 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
     fsPath,
   );
   const openedGraph = getPersistedString(entry.openedGraph) ?? getPersistedString(legacyProject?.metadata?.mainGraphId);
+  const hostedBundleKey =
+    typeof entry.hostedBundleKey === 'string' || entry.hostedBundleKey === null ? entry.hostedBundleKey : undefined;
   const info: OpenedProjectInfo = {
     projectId,
     title,
@@ -87,6 +89,8 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
     ...(getPersistedString(entry.bundleManifestPath)
       ? { bundleManifestPath: getPersistedString(entry.bundleManifestPath) }
       : {}),
+    ...(hostedBundleKey !== undefined ? { hostedBundleKey } : {}),
+    ...(typeof entry.bundleMember === 'boolean' ? { bundleMember: entry.bundleMember } : {}),
     ...(executorMode ? { executorMode } : {}),
     ...(openedGraph ? { openedGraph: openedGraph as GraphId } : {}),
   };
@@ -106,6 +110,7 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
       entry.title !== title ||
       entry.fsPath !== fsPath ||
       entry.openedGraph !== openedGraph ||
+      entry.hostedBundleKey !== hostedBundleKey ||
       executorModeChanged ||
       'project' in entry,
   };
@@ -186,7 +191,7 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
   const loadedProject = useAtomValue(loadedProjectState);
   const currentGraph = useAtomValue(graphState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
-  const executorSession = useExecutorSessionState();
+  const executorSession = useOwnExecutorSessionState();
   const executorTargetType = executorSession.target?.type;
   const executorTargetUrl = executorSession.target?.url;
   const executorTarget = useMemo(

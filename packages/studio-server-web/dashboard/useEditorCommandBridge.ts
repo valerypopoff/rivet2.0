@@ -1,11 +1,15 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
 import { beginDevelopmentCommand } from './developmentActivity';
-import { useSetAtom } from 'jotai';
+import { useSetAtom, useStore } from 'jotai';
 import { useEffect, useRef } from 'react';
 
 import { useIOProvider, type RivetWorkspaceHost } from '../../app/src/host';
 import { clearLoadedRecordingForPathState, rebindLoadedRecordingPathState } from '../../app/src/state/execution';
-import { loadedProjectState, type OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
+import {
+  loadedProjectState,
+  projectUnsavedChangesState,
+  type OpenedProjectsInfo,
+} from '../../app/src/state/savedGraphs';
 import type { DefaultExecutor } from '../../app/src/state/settings.js';
 import type { OverlayKey } from '../../app/src/state/ui.js';
 import {
@@ -65,6 +69,7 @@ export function useEditorCommandBridge({
   workspaceHost: RivetWorkspaceHost;
 }) {
   const setLoadedProject = useSetAtom(loadedProjectState);
+  const store = useStore();
   const clearLoadedRecordingForPath = useSetAtom(clearLoadedRecordingForPathState);
   const rebindLoadedRecordingPath = useSetAtom(rebindLoadedRecordingPathState);
   const ioProvider = useIOProvider();
@@ -146,7 +151,19 @@ export function useEditorCommandBridge({
           postMessageToDashboard({
             type: 'workflow-project-reconciliation-captured',
             requestId: command.requestId,
-            context: captureHostedProjectReconciliation(editableProjects().map((project) => project.projectId)),
+            context: (() => {
+              const openedIds = editableProjects().map((project) => project.projectId);
+              const captured = captureHostedProjectReconciliation(openedIds);
+              const flags = store.get(projectUnsavedChangesState);
+              return {
+                ...captured,
+                editCheckComplete: captured.projects.length === openedIds.length,
+                projects: captured.projects.map((project) => ({
+                  ...project,
+                  hasUnsavedChanges: Boolean(flags[project.projectId as ProjectId]),
+                })),
+              };
+            })(),
           });
           return;
         case 'open-project':

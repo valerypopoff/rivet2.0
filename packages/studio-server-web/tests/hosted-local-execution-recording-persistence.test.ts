@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createHostedLocalExecutionRecordingPersistence } from '../dashboard/hostedLocalExecutionRecordingPersistence.js';
+import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../studio-server-shared/workflow-recording-time.js';
 
 const exampleInput = {
   projectId: 'project-1' as never,
@@ -15,6 +16,21 @@ const exampleInput = {
     graphId: 'graph-1',
   },
 };
+
+test('start time is sent as optional upload metadata without changing older APIs strict JSON body', async (t) => {
+  const createdAt = '2026-10-19T10:00:00.000Z';
+  const requests: RequestInit[] = [];
+  t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+    requests.push(init);
+    assert.deepEqual(JSON.parse(String(init.body)), exampleInput);
+    return Response.json({ availability: 'available' });
+  });
+  const provider = createHostedLocalExecutionRecordingPersistence();
+  await provider.persist({ ...exampleInput, createdAt });
+  await provider.persist(exampleInput);
+  assert.equal(new Headers(requests[0]!.headers).get(WORKFLOW_RECORDING_CREATED_AT_HEADER), createdAt);
+  assert.equal(new Headers(requests[1]!.headers).has(WORKFLOW_RECORDING_CREATED_AT_HEADER), false);
+});
 
 for (const [label, firstResponse] of [
   ['authentication failure', () => new Response(null, { status: 401 })],

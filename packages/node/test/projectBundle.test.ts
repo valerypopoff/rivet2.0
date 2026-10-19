@@ -106,26 +106,38 @@ async function fixture() {
 }
 
 void test('bundle-wide policies run one child snapshot through source and public ESM/CJS loaders', async () => {
-  for (const policy of ['latest', 'published'] as const) {
-    const f = await fixture();
-    try {
-      f.manifest.requiredLoaderVersion = 3;
-      f.manifest.versionPolicy = policy;
-      f.manifest.artifacts = f.manifest.artifacts.filter(
-        (artifact) => artifact.id === 'root' || artifact.id === policy,
-      );
-      f.manifest.targets = f.manifest.targets.map((binding) => ({ ...binding, artifact: policy }));
-      await f.save();
-      const esm = await import('../dist/esm/index.js');
-      const cjs = createRequire(import.meta.url)('../dist/cjs/bundle.cjs') as typeof esm;
-      for (const load of [loadProjectBundle, esm.loadProjectBundle, cjs.loadProjectBundle]) {
-        const bundle = await load(f.manifestPath);
-        assert.equal(bundle.manifest.artifacts.length, 2);
-        const processor = bundle.createProcessor({ inputs: { input: 'visible' } });
-        assert.equal((await processor.run()).result?.value, policy === 'latest' ? 'visiblexx' : 'visiblepp');
+  for (const capability of [3, 4] as const) {
+    for (const policy of ['latest', 'published'] as const) {
+      const f = await fixture();
+      try {
+        f.manifest.requiredLoaderVersion = capability;
+        f.manifest.versionPolicy = policy;
+        f.manifest.artifacts = f.manifest.artifacts.filter(
+          (artifact) => artifact.id === 'root' || artifact.id === policy,
+        );
+        f.manifest.targets = f.manifest.targets.map((binding) => ({ ...binding, artifact: policy }));
+        if (capability === 4)
+          f.manifest.workspace = {
+            name: 'Feature',
+            folders: ['Nested'],
+            members: f.manifest.artifacts.map((artifact, index) => ({
+              projectId: artifact.projectId,
+              relativePath: `${index ? 'Nested/' : ''}${artifact.id}.rivet-project`,
+            })),
+          };
+        await f.save();
+        const esm = await import('../dist/esm/index.js');
+        const cjs = createRequire(import.meta.url)('../dist/cjs/bundle.cjs') as typeof esm;
+        for (const load of [loadProjectBundle, esm.loadProjectBundle, cjs.loadProjectBundle]) {
+          const bundle = await load(f.manifestPath);
+          assert.equal(bundle.manifest.artifacts.length, 2);
+          assert.deepEqual(bundle.manifest.workspace, f.manifest.workspace);
+          const processor = bundle.createProcessor({ inputs: { input: 'visible' } });
+          assert.equal((await processor.run()).result?.value, policy === 'latest' ? 'visiblexx' : 'visiblepp');
+        }
+      } finally {
+        await fs.rm(f.directory, { recursive: true, force: true });
       }
-    } finally {
-      await fs.rm(f.directory, { recursive: true, force: true });
     }
   }
 });
@@ -315,7 +327,7 @@ void test('bundle rejects incompatible, incomplete, oversized and unsafe artifac
       ],
       [
         () => {
-          f.manifest.requiredLoaderVersion = 4 as never;
+          f.manifest.requiredLoaderVersion = 5 as never;
         },
         /unsupported/,
       ],

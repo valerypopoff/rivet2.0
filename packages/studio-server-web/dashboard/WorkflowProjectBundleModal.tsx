@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FC } from 'react';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import Button from '@atlaskit/button';
 import type { ProjectBundleJobStatus } from '../../studio-server-shared/project-bundle-types';
-import type { WorkflowProjectDownloadVersion, WorkflowProjectItem } from './types';
+import type { WorkflowProjectDownloadVersion, WorkflowFolderItem } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
 import { parseJsonResponse } from './apiRequest';
 import './WorkflowProjectBundleModal.css';
@@ -14,12 +14,12 @@ function request(url: string, options: RequestInit = {}) {
 }
 const active = (job: ProjectBundleJobStatus | null) => job?.phase === 'collecting' || job?.phase === 'packaging';
 
-export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOpen: boolean; onClose(): void }> = ({
-  project,
+export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen: boolean; onClose(): void }> = ({
+  bundle,
   isOpen,
   onClose,
 }) => {
-  const storageKey = `rivet-project-bundle:${project.id}`;
+  const storageKey = `rivet-container-bundle:${bundle.bundleId}`;
   const [jobId, setJobId] = useState<string | null>(() => {
     try {
       return sessionStorage.getItem(storageKey);
@@ -45,9 +45,7 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
     if (status?.versionPolicy === 'latest' || status?.versionPolicy === 'published')
       setVersion(status.versionPolicy === 'latest' ? 'live' : 'published');
   };
-  const [version, setVersion] = useState<WorkflowProjectDownloadVersion>(
-    project.settings.status === 'unpublished' ? 'live' : 'published',
-  );
+  const [version, setVersion] = useState<WorkflowProjectDownloadVersion>('live');
   const [error, setError] = useState<{ kind: 'progress' | 'prepare' | 'cancel'; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const actionInFlight = useRef(false);
@@ -112,13 +110,12 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
     remember(id); // Known before POST, so a lost acknowledgement is recoverable by GET.
     try {
       const status = await parseJsonResponse<ProjectBundleJobStatus>(
-        await request(endpoint, {
+        await request(`${endpoint}/container`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
           body: JSON.stringify({
-            relativePath: project.relativePath,
-            version,
-            versionPolicy: version === 'live' ? 'latest' : 'published',
+            bundleId: bundle.bundleId,
+            version: version === 'live' ? 'latest' : 'published',
             requestId: id,
           }),
         }),
@@ -181,11 +178,11 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
             </div>
             <div className="project-settings-modal-content workflow-project-bundle-content">
               <section className="workflow-project-bundle-card" aria-labelledby="bundle-project-heading">
-                <h3 id="bundle-project-heading">{project.name}</h3>
+                <h3 id="bundle-project-heading">{bundle.name}</h3>
                 <p className="project-settings-help">
-                  Includes saved projects, their dependencies and datasets. Unsaved editor changes are excluded. Project
-                  files and datasets may contain sensitive values. Credentials and server settings are not copied
-                  separately.
+                  Includes every bundle member, subfolders, disconnected projects, dependency snapshots and datasets.
+                  Unsaved editor changes are excluded. Project files and datasets may contain sensitive values.
+                  Credentials and server settings are not copied separately.
                 </p>
                 {!jobId ? (
                   <div className="workflow-project-bundle-version">
@@ -239,8 +236,9 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
                   ) : null}
                   {job?.phase === 'ready' ? (
                     <p className="project-settings-help">
-                      Extract the ZIP and follow README.txt to run it with the Node package. Latest targets are frozen
-                      at export time.
+                      Extract the ZIP and open rivet-bundle.json in an updated Rivet Desktop app. Edit and save the
+                      projects, then use Upload bundle on the server to import the extracted folder or a new ZIP. The
+                      original server bundle is not overwritten.
                     </p>
                   ) : null}
                 </section>
@@ -252,7 +250,7 @@ export const WorkflowProjectBundleModal: FC<{ project: WorkflowProjectItem; isOp
                 </p>
               ) : null}
               <p className="project-settings-help">
-                Closing this window does not cancel preparation. Reopen this project’s download action to check its
+                Closing this window does not cancel preparation. Reopen this bundle’s download action to check its
                 progress.
               </p>
             </div>

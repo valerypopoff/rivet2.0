@@ -1,6 +1,6 @@
 import { Field } from '@atlaskit/form';
 import { css } from '@emotion/react';
-import { useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom } from 'jotai';
 import { useEffect, useRef, useState, type FC } from 'react';
 import {
   getGraphBoundary,
@@ -12,7 +12,12 @@ import {
   type SubgraphProjectVersion,
 } from '@valerypopoff/rivet2-core';
 import { useSubgraphProjectCatalog } from '../../../providers/ProvidersContext';
-import { referencedProjectsState } from '../../../state/savedGraphs';
+import { projectState, projectsState, referencedProjectsState } from '../../../state/savedGraphs';
+import {
+  findSubgraphProjectBundle,
+  subgraphSourceScope,
+  type SubgraphProjectTree,
+} from '../../../utils/subgraphBundleScope.js';
 import type { SharedEditorProps } from '../SharedEditorProps';
 import { SegmentedEditor } from '../SegmentedEditor';
 import { SubgraphTargetControl } from '../../nodes/SubgraphTargetControl';
@@ -28,7 +33,12 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
   const node = chartNode as SubGraphNode;
   const session = useNodeEditorSessionContext();
   const catalog = useSubgraphProjectCatalog();
-  const otherProjects = !!catalog && (node.data.targetScope === 'other-projects' || !!node.data.targetProjectId);
+  const ownProjectId = useAtomValue(projectState).metadata.id;
+  const membershipKey = useAtomValue(projectsState).openedProjects[ownProjectId]?.hostedBundleKey;
+  const [tree, setTree] = useState<SubgraphProjectTree | null>(null);
+  const scope = subgraphSourceScope(node.data, tree, ownProjectId);
+  const ownBundle = findSubgraphProjectBundle(tree, ownProjectId);
+  const otherProjects = !!catalog && scope !== 'this-project';
   const [publishedAvailable, setPublishedAvailable] = useState<boolean | null>(null);
   const [publishedError, setPublishedError] = useState<string>();
   const [versionLoading, setVersionLoading] = useState(false);
@@ -50,7 +60,7 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
     return () => {
       requests.current++;
     };
-  }, [session]);
+  }, [session, ownProjectId, membershipKey]);
 
   useEffect(() => {
     if (!catalog || !otherProjects || !node.data.targetProjectId) {
@@ -61,25 +71,28 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
     let active = true;
     setPublishedAvailable(null);
     setPublishedError(undefined);
-    void catalog.preview({ projectId: node.data.targetProjectId, version: 'published' }).then(
-      () => {
-        if (active && (!session || session.isCurrent())) setPublishedAvailable(true);
-      },
-      (error: { status?: number }) => {
-        if (!active || (session && !session.isCurrent())) return;
-        setPublishedAvailable(false);
-        if (error.status !== 409) setPublishedError('Could not check this project’s published version.');
-      },
-    );
+    void catalog
+      .preview({ projectId: node.data.targetProjectId, version: 'published', callerProjectId: ownProjectId })
+      .then(
+        () => {
+          if (active && (!session || session.isCurrent())) setPublishedAvailable(true);
+        },
+        (error: { status?: number }) => {
+          if (!active || (session && !session.isCurrent())) return;
+          setPublishedAvailable(false);
+          if (error.status !== 409) setPublishedError('Could not check this project’s published version.');
+        },
+      );
     return () => {
       active = false;
     };
-  }, [catalog, otherProjects, node.data.targetProjectId, session]);
+  }, [catalog, otherProjects, node.data.targetProjectId, session, ownProjectId, membershipKey]);
 
   const changeScope = (scope: string | boolean) => {
     if (disabled || (session && !session.canWrite())) return;
-    const other = scope === 'other-projects';
-    if (other === otherProjects) return;
+    const other = scope === 'other-projects' || scope === 'same-bundle';
+    if (scope === subgraphSourceScope(node.data, tree, ownProjectId)) return;
+    if (scope === 'same-bundle' && !ownBundle) return;
     versionRequest.current++;
     setVersionLoading(false);
     setVersionError(undefined);
@@ -89,7 +102,7 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
       data: {
         ...node.data,
         graphId: '' as GraphId,
-        targetScope: other ? 'other-projects' : undefined,
+        targetScope: other ? (scope as 'other-projects' | 'same-bundle') : undefined,
         targetProjectId: undefined,
         targetVersion: other ? 'latest' : undefined,
         targetBoundary: undefined,
@@ -110,7 +123,7 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
     setVersionError(undefined);
     setVersionWarning(undefined);
     try {
-      const project = await catalog.preview({ projectId, version: nextVersion });
+      const project = await catalog.preview({ projectId, version: nextVersion, callerProjectId: ownProjectId });
       if (versionRequest.current !== request || (session && !session.canWrite())) return;
       const current = (session?.getNode() ?? latestNode.current) as SubGraphNode;
       if (
@@ -161,7 +174,7 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
     <>
       {catalog && (
         <SegmentedEditor
-          value={otherProjects ? 'other-projects' : 'this-project'}
+          value={scope}
           onChange={changeScope}
           isDisabled={disabled || versionLoading}
           isReadonly={isReadonly}
@@ -169,6 +182,7 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
           ariaLabel="Subgraph graph source"
           options={[
             { label: 'This project', value: 'this-project' },
+            ...(ownBundle ? [{ label: 'Same bundle', value: 'same-bundle' }] : []),
             { label: 'Other projects', value: 'other-projects' },
           ]}
         />
@@ -177,6 +191,8 @@ export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, o
         {() => (
           <SubgraphTargetControl
             node={node}
+            projectTree={tree}
+            onProjectTreeChange={setTree}
             isReadonly={disabled || versionLoading}
             onChange={(next) => {
               if (disabled || (session && !session.canWrite())) return;

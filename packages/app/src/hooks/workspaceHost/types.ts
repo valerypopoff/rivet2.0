@@ -55,6 +55,7 @@ export type RivetOpeningProjectTabHandle = {
 };
 
 export type RivetProjectMetadataUpdateOptions = {
+  hostedBundleKey?: string | null;
   path?: string | null;
   persistedExternally?: boolean;
   changeSource?: 'external-wrapper-rename';

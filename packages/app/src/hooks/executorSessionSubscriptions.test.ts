@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { ProjectId } from '@valerypopoff/rivet2-core';
 import { createExecutorSessionRuntime } from './executorSession';
 import {
   captureConsoleErrors,
@@ -10,6 +11,28 @@ import {
 } from './executorSessionTestUtils';
 
 installExecutorSessionTestHooks();
+
+test('all subscribers share exactly one admission decision, even if an earlier subscriber changes the request', async () => {
+  const scoped = createExecutorSessionRuntime({ projectId: 'a' as ProjectId, onStateChange() {} });
+  const admissions: unknown[] = [];
+  scoped.setActiveGraphRunRequestId('owned');
+  scoped.subscribeMessages((_message, _data, _request, admission) => {
+    admissions.push(admission);
+    scoped.setActiveGraphRunRequestId(null);
+  });
+  scoped.subscribeMessages((_message, _data, _request, admission) => {
+    admissions.push(admission);
+  });
+  const connected = scoped.connectExternalDebugger('ws://localhost:8888');
+  FakeWebSocket.instances[0]!.open();
+  await connected;
+  scoped.setActiveGraphRunRequestId('owned');
+  FakeWebSocket.instances[0]!.emitMessage({ message: 'trace', data: 'test', requestId: 'owned' });
+  assert.equal(admissions.length, 2);
+  assert.equal(admissions[0], admissions[1]);
+  assert.equal((admissions[0] as { decision: { shouldDispatch: boolean } }).decision.shouldDispatch, true);
+  scoped.disconnect();
+});
 
 test('delivers process messages to all subscribed handlers', async () => {
   const receivedByFirst: string[] = [];

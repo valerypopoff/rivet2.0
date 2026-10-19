@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import {
+  getWorkflowRecordingCreatedAt,
+  WORKFLOW_RECORDING_CREATED_AT_HEADER,
+} from '../../studio-server-shared/workflow-recording-time.js';
 import { CatalogNativeApi } from '../../studio-server-shared/catalogNativeApi.js';
 import {
   NodeDatasetProvider,
@@ -93,6 +97,7 @@ async function loadSubgraphTarget(target: SubgraphProjectTarget) {
     executionEnvironmentServiceUrl,
   );
   url.searchParams.set('version', target.version);
+  if (target.callerProjectId) url.searchParams.set('callerProjectId', target.callerProjectId);
   const response = await fetch(url, {
     headers: createProxyAuthenticationHeaders(),
     cache: 'no-store',
@@ -125,6 +130,24 @@ async function loadSubgraphTarget(target: SubgraphProjectTarget) {
   };
 }
 
+async function validateSubgraphTarget(target: SubgraphProjectTarget) {
+  const url = new URL(
+    `/api/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/access`,
+    executionEnvironmentServiceUrl,
+  );
+  url.searchParams.set('version', target.version);
+  if (target.callerProjectId) url.searchParams.set('callerProjectId', target.callerProjectId);
+  const response = await fetch(url, {
+    headers: createProxyAuthenticationHeaders(),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok)
+    throw new Error(
+      `Subgraph target is unavailable to this project (${response.status}). Bundle members can only be referenced from the same bundle.`,
+    );
+}
+
 async function persistSubgraphRun(run: SubgraphProjectRun): Promise<void> {
   if (!run.resolved.projectContents) throw new Error('Subgraph replay has no saved project snapshot.');
   const response = await fetch(
@@ -132,7 +155,11 @@ async function persistSubgraphRun(run: SubgraphProjectRun): Promise<void> {
     {
       method: 'POST',
       signal: AbortSignal.timeout(60_000),
-      headers: { ...createProxyAuthenticationHeaders(), 'content-type': 'application/json' },
+      headers: {
+        ...createProxyAuthenticationHeaders(),
+        'content-type': 'application/json',
+        [WORKFLOW_RECORDING_CREATED_AT_HEADER]: run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events),
+      },
       body: JSON.stringify({
         projectId: run.target.projectId,
         projectContents: run.resolved.projectContents,
@@ -159,7 +186,7 @@ void startAppExecutor({
     ...localCatalogOptions,
     executionEnvironment: await readExecutionEnvironment(),
     llmProfileHealthStore: healthStore,
-    subgraphProjectLoader: { loadTarget: loadSubgraphTarget },
+    subgraphProjectLoader: { loadTarget: loadSubgraphTarget, validateTarget: validateSubgraphTarget },
     onSubgraphProjectRun: recordSubgraphProjectRuns ? persistSubgraphRun : undefined,
     ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
   }),

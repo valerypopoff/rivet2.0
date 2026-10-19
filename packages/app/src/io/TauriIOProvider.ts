@@ -164,6 +164,7 @@ export class TauriIOProvider implements PathBasedIOProvider {
     options.signal?.throwIfAborted();
     const bundleProjects = bundle?.workspaceProjects?.map((member) => ({
       path: member.path,
+      bundleMember: member.bundleMember,
       project: { ...structuredClone(member.project), plugins: structuredClone(bundle.manifest.plugins) },
       evaluation: {
         evaluationData: deserializeLegacyEvaluationProjectData(member.attachments.evaluations),
@@ -196,7 +197,13 @@ export class TauriIOProvider implements PathBasedIOProvider {
       project: projectData,
       evaluation: { evaluationData, evaluationDatasets },
       ...(bundleProjects ? { bundleProjects } : {}),
-      ...(bundle ? { path: bundle.snapshot.sourceProjectPath, bundleManifestPath: bundle.manifestPath } : {}),
+      ...(bundle
+        ? {
+            path: bundle.snapshot.sourceProjectPath,
+            bundleManifestPath: bundle.manifestPath,
+            bundleMember: bundle.bundleMember,
+          }
+        : {}),
     };
     if (options.deferCommit) return { ...result, commit };
     if (!(await commit(() => !options.signal?.aborted))) throw new DOMException('Project load cancelled', 'AbortError');

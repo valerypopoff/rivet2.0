@@ -33,11 +33,13 @@ test('hosted tab normalization retains recoverable saved and draft tabs while dr
         title: 'Saved project',
         fsPath: '/workflows/Saved project.rivet-project',
         bundleManifestPath: '/bundle/rivet-bundle.json',
+        hostedBundleKey: 'server#bundle:one',
       },
       [draftProjectId]: {
         projectId: draftProjectId,
         title: 'Unsaved draft',
         fsPath: null,
+        hostedBundleKey: null,
       },
       [orphanProjectId]: {
         projectId: orphanProjectId,
@@ -60,6 +62,8 @@ test('hosted tab normalization retains recoverable saved and draft tabs while dr
   assert.deepEqual(normalized.openedProjectsSortedIds, [savedProjectId, draftProjectId]);
   assert.deepEqual(Object.keys(normalized.openedProjects).sort(), [draftProjectId, savedProjectId]);
   assert.equal(normalized.openedProjects[savedProjectId]!.bundleManifestPath, '/bundle/rivet-bundle.json');
+  assert.equal(normalized.openedProjects[savedProjectId]!.hostedBundleKey, 'server#bundle:one');
+  assert.equal(normalized.openedProjects[draftProjectId]!.hostedBundleKey, null);
 });
 test('hosted tab normalization drops malformed legacy project payloads without throwing', () => {
   const brokenProjectId = 'broken-1' as ProjectId;

@@ -2,7 +2,28 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createResponseError, parseJsonResponse, parseTextResponse } from '../dashboard/apiRequest.js';
-import { fetchWorkflowRecordingRuns } from '../dashboard/workflowApi.js';
+import { fetchWorkflowRecordingRuns, fetchRecordingSubRuns } from '../dashboard/workflowApi.js';
+
+test('family browsing is explicit and context-child requests preserve cancellation and scope', async (t) => {
+  const calls: Array<{ url: URL; init?: RequestInit }> = [];
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: new URL(String(input), 'http://localhost'), init });
+    return Response.json({ runs: [] });
+  });
+  const signal = new AbortController().signal;
+  await fetchWorkflowRecordingRuns('', { page: 2, pageSize: 20, status: 'all', groupByRoot: true, signal });
+  assert.equal(calls[0]!.url.searchParams.get('groupByRoot'), 'true');
+  assert.equal(calls[0]!.url.searchParams.get('pageSize'), '20');
+  await fetchWorkflowRecordingRuns('project', { page: 1, pageSize: 10, status: 'all' });
+  assert.equal(calls[1]!.url.searchParams.has('groupByRoot'), false);
+  await fetchRecordingSubRuns('context anchor', 2, signal, 'project');
+  assert.equal(calls[2]!.url.searchParams.get('context'), 'project');
+  assert.equal(calls[2]!.url.searchParams.get('pageSize'), '100');
+  assert.equal(calls[2]!.init?.signal, signal);
+  assert.equal(calls[2]!.init?.cache, 'no-store');
+  await fetchRecordingSubRuns('root', 1, signal);
+  assert.equal(calls[3]!.url.searchParams.has('context'), false);
+});
 
 test('parseJsonResponse returns parsed JSON for successful JSON responses', async () => {
   const response = new Response(JSON.stringify({ ok: true }), {

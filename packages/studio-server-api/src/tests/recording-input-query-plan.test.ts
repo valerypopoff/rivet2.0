@@ -67,6 +67,8 @@ test('production SQLite listing seeks the composite boundary for all and failed 
       const plan = (await explainWorkflowRecordingWindow('workflow', options)).join('\n');
       assert.match(plan, /USING INDEX idx_recording_runs_workflow_(?:failed_)?created_at_id/);
       assert.match(plan, /\(created_at,id\)<\(\?,\?\)/);
+      assert.match(plan, /(?:COVERING )?INDEX idx_recording_runs_correlation_surface/);
+      assert.doesNotMatch(plan, /SCAN (?:member|child|primary_run)\b/);
       assert.doesNotMatch(plan, /TEMP B-TREE/);
     }
   } finally {

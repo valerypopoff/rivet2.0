@@ -7,7 +7,11 @@ import { setImmediate as yieldToRequests } from 'node:timers/promises';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
 import { LRUCache } from 'lru-cache';
-import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
+import {
+  recordingHasSubRunsSql,
+  recordingWorkflowScopeClause,
+  type RecordingRunScope,
+} from '../routes/workflows/recording-workflow-scope.js';
 import {
   recordingStatisticsCatalogSql,
   recordingStatisticsRowsSql,
@@ -173,6 +177,7 @@ export type LocalRecordingMetadata = Omit<
   LocalRecordingCatalogSnapshot,
   'recordingContents' | 'replayProjectContents' | 'replayDatasetContents'
 > & {
+  hasSubRuns?: boolean;
   recordingHash: string;
   recordingBytes: number;
   projectBytes: number;
@@ -1314,7 +1319,23 @@ export class LocalWorkflowCatalog {
     return row.count;
   }
 
-  recordingScopeCounts(workflowId: string, runScope: 'all' | 'roots' | 'children' = 'all') {
+  countRecordingFamilies(workflowId: string, failedOnly: boolean, includeSubgraphRuns: boolean): number {
+    const clause = recordingWorkflowScopeClause(
+      workflowId,
+      includeSubgraphRuns,
+      'sqlite',
+      1,
+      'families',
+      failedOnly ? 'failed' : 'all',
+    );
+    return (
+      this.#database()
+        .prepare(`SELECT COUNT(*) AS count FROM recordings WHERE ${clause}`)
+        .get(...(workflowId ? [workflowId] : [])) as { count: number }
+    ).count;
+  }
+
+  recordingScopeCounts(workflowId: string, runScope: RecordingRunScope = 'all') {
     return this.#database()
       .prepare(
         `SELECT COUNT(*) AS totalRuns,
@@ -1395,7 +1416,9 @@ export class LocalWorkflowCatalog {
       recordingId?: string;
       workflowId?: string;
       includeSubgraphRuns?: boolean;
-      runScope?: 'all' | 'roots' | 'children';
+      /** UI-only projection; internal point lookups and retention must stay cheap. */
+      includeSubRunPresence?: boolean;
+      runScope?: RecordingRunScope;
       failedOnly?: boolean;
       limit?: number;
       offset?: number;
@@ -1410,7 +1433,7 @@ export class LocalWorkflowCatalog {
       conditions.push('recording_id = ?');
       values.push(options.recordingId);
     }
-    if (options.workflowId || options.runScope === 'roots') {
+    if (options.workflowId || options.runScope === 'roots' || options.runScope === 'families') {
       conditions.push(
         recordingWorkflowScopeClause(
           options.workflowId ?? '',
@@ -1418,6 +1441,7 @@ export class LocalWorkflowCatalog {
           'sqlite',
           values.length + 1,
           options.runScope,
+          options.failedOnly ? 'failed' : 'all',
         ),
       );
       if (options.workflowId) values.push(options.workflowId);
@@ -1442,13 +1466,14 @@ export class LocalWorkflowCatalog {
       throw new Error('Invalid recording metadata window.');
     const rows = this.#database()
       .prepare(
-        `SELECT * FROM recordings ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY ${created} DESC, recording_id DESC LIMIT ? OFFSET ?`,
+        `SELECT *${options.includeSubRunPresence ? `, ${recordingHasSubRunsSql('sqlite')} AS has_sub_runs` : ''} FROM recordings ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY ${created} DESC, recording_id DESC LIMIT ? OFFSET ?`,
       )
-      .all(...values, limit, offset) as RecordingRow[];
+      .all(...values, limit, offset) as (RecordingRow & { has_sub_runs?: number })[];
     return rows.map((row) => {
       const { recordingContents, replayProjectContents, replayDatasetContents, ...data } = this.#storedRecording(row);
       return {
         ...data,
+        hasSubRuns: row.has_sub_runs == null ? undefined : Boolean(row.has_sub_runs),
         recordingHash: recordingContents!.hash,
         recordingBytes: recordingContents!.size,
         projectBytes: replayProjectContents!.size,

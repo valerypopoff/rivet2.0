@@ -11,6 +11,7 @@ import {
   type SubgraphProjectLoader,
   type SubgraphProjectRun,
   type Project,
+  type ProjectGraphCallSite,
 } from '@valerypopoff/rivet2-core';
 import {
   type EvaluationDataset,
@@ -72,19 +73,41 @@ export type SubgraphProjectTreeItem = {
   name: string;
   projectMetadataId?: string;
   relativePath: string;
+  bundleId?: string | null;
 };
 
 export type SubgraphProjectTreeFolder = {
   id: string;
   name: string;
+  bundleId?: string | null;
   folders: SubgraphProjectTreeFolder[];
   projects: SubgraphProjectTreeItem[];
 };
 
 export type SubgraphProjectCatalogProvider = {
   listTree(): Promise<{ folders: SubgraphProjectTreeFolder[]; projects: SubgraphProjectTreeItem[] }>;
-  preview(target: { projectId: ProjectId; version: 'latest' | 'published' }): Promise<Project>;
+  preview(target: {
+    projectId: ProjectId;
+    version: 'latest' | 'published';
+    callerProjectId?: ProjectId;
+  }): Promise<Project>;
   openGraph(target: { projectId: ProjectId; graphId: GraphId }): void;
+  /** Advisory saved/publication scan; absence means only local open projects can be inspected. */
+  graphReferences?(
+    target: { projectId: ProjectId; graphIds: readonly GraphId[] },
+    signal: AbortSignal,
+  ): Promise<{
+    projectId: string;
+    complete: boolean;
+    references: Array<
+      ProjectGraphCallSite & {
+        projectId: string;
+        projectName: string;
+        relativePath?: string;
+        sourceDescription: string;
+      }
+    >;
+  }>;
 };
 
 export type HostedEvaluationJobState = 'queued' | 'claimed' | 'accepted' | 'settled' | 'interrupted' | 'canceled';
@@ -156,6 +179,8 @@ export type LocalExecutionRecordingPersistenceProvider = {
   /** Marks health evidence unavailable when a terminal replay cannot be captured. */
   markUnavailable(correlationId: string): Promise<void>;
   persist(input: {
+    /** Logical run creation time, captured before asynchronous persistence. */
+    createdAt?: string;
     projectId: ProjectId;
     projectPath: string;
     projectContents: string;

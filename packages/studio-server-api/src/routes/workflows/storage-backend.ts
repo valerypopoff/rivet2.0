@@ -217,6 +217,12 @@ export function getLocalWorkflowPendingCatalogOperationCount(): number {
 }
 const getDataBackend = () => getWorkflowStorageServices().getData();
 const getManagedBackend = () => getWorkflowStorageServices().getManaged();
+export async function getExplicitBundleService() {
+  const services = getWorkflowStorageServices();
+  if (services.mode !== 'managed')
+    throw createHttpError(409, 'Explicit bundles require PostgreSQL and S3 storage.', { expose: true });
+  return (await services.getManaged()).bundles;
+}
 export async function importProjectBundleWithBackend(parent: string, bundle: PreparedProjectBundleImport) {
   const services = getWorkflowStorageServices();
   if (services.mode !== 'managed')
@@ -458,7 +464,7 @@ export async function initializeWorkflowStorage(): Promise<void> {
 }
 
 export async function getWorkflowTree() {
-  return delegate(
+  const tree = await delegate(
     async (backend) => backend.getTree(),
     async () => {
       const root = isVmMigrationMaintenanceActive() ? getWorkflowsRoot() : await ensureWorkflowsRoot();
@@ -469,6 +475,7 @@ export async function getWorkflowTree() {
       }));
     },
   );
+  return { ...tree, capabilities: { explicitBundles: getWorkflowStorageServices().mode === 'managed' } };
 }
 
 export async function listHostedProjectPaths(): Promise<string[]> {
@@ -748,7 +755,9 @@ export async function drainWorkflowStorageAcceptedWork(): Promise<void> {
   await peekWorkflowStorageServices()?.drainAcceptedWork();
   await peekWorkflowStorageServices()?.drain();
 }
-export function beginWorkflowStorageRetirement(): void { peekWorkflowStorageServices()?.beginRetirement(); }
+export function beginWorkflowStorageRetirement(): void {
+  peekWorkflowStorageServices()?.beginRetirement();
+}
 
 export async function readWorkflowRecordingArtifactWithBackend(
   recordingId: string,
@@ -1163,6 +1172,12 @@ export async function createExecutionProjectReferenceLoader(projectPath: string)
 
 export function createExecutionSubgraphProjectLoader() {
   return {
+    async validateTarget(target: SubgraphProjectTarget): Promise<void> {
+      await delegate(
+        async (backend) => backend.validateSubgraphTarget?.(target),
+        async () => {},
+      );
+    },
     async loadTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject> {
       return delegate(
         async (backend) => backend.loadSubgraphTarget(target),
@@ -1215,6 +1230,7 @@ export function createExecutionSubgraphProjectLoader() {
 }
 
 export async function persistWorkflowExecutionRecordingWithBackend(options: {
+  createdAt?: string;
   sourceProject: Project;
   sourceProjectPath: string;
   executedProject: Project;

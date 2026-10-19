@@ -9,11 +9,11 @@ import {
 } from '@floating-ui/react';
 import ArrowUpIcon from 'majesticons/line/arrow-up-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
-import EditPenIcon from 'majesticons/line/edit-pen-2-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowFolderItem } from './types';
 import { BundleTransferIcon } from './BundleTransferIcon';
+import { WorkflowBundleIcon } from './WorkflowBundleIcon';
 
 type WorkflowFolderContextMenuProps = {
   isOpen: boolean;
@@ -22,11 +22,17 @@ type WorkflowFolderContextMenuProps = {
   y: number;
   onClose: () => void;
   canDelete: boolean;
+  bundleActions?: {
+    canConvert: boolean;
+    convert(): void;
+    duplicate(): void;
+    download(): void;
+  };
   onRename: () => void;
   onCreateFolder: () => void;
   onCreateProject: () => void;
   onUploadProject: () => void;
-  onUploadBundle: () => void;
+  onUploadBundle?: () => void;
   onDelete: () => void;
 };
 
@@ -54,6 +60,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
   y,
   onClose,
   canDelete,
+  bundleActions,
   onRename,
   onCreateFolder,
   onCreateProject,
@@ -99,12 +106,48 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
       {...getFloatingProps()}
     >
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
-        <span>Rename folder</span>
+        <span>Rename {folder.bundleId ? 'bundle' : 'folder'}</span>
       </button>
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateFolder}>
         <PlusIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>New folder</span>
       </button>
+      {bundleActions ? (
+        <>
+          {bundleActions.canConvert ? (
+            <button
+              type="button"
+              className="workflow-project-context-menu-item"
+              role="menuitem"
+              onClick={bundleActions.convert}
+            >
+              <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+              <span>{folder.bundleId ? 'Convert to ordinary folder' : 'Convert to bundle'}</span>
+            </button>
+          ) : null}
+          {folder.bundleId ? (
+            <button
+              type="button"
+              className="workflow-project-context-menu-item"
+              role="menuitem"
+              onClick={bundleActions.download}
+            >
+              <BundleTransferIcon direction="down" />
+              <span>Download bundle</span>
+            </button>
+          ) : null}
+          {folder.bundleId ? (
+            <button
+              type="button"
+              className="workflow-project-context-menu-item"
+              role="menuitem"
+              onClick={bundleActions.duplicate}
+            >
+              Duplicate bundle
+            </button>
+          ) : null}
+        </>
+      ) : null}
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateProject}>
         <PlusIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
@@ -114,10 +157,12 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
         <ArrowUpIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
         <span>Upload project</span>
       </button>
-      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onUploadBundle}>
-        <BundleTransferIcon direction="up" />
-        <span>Upload bundle</span>
-      </button>
+      {onUploadBundle ? (
+        <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onUploadBundle}>
+          <BundleTransferIcon direction="up" />
+          <span>Upload bundle</span>
+        </button>
+      ) : null}
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button
         type="button"

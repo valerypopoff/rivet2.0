@@ -1,9 +1,10 @@
-import { expect, test, type Page, type Request } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { once } from 'node:events';
 import { createServer, type ServerResponse } from 'node:http';
 import {
   createBuiltInRegistry,
   ExecutionRecorder,
+  serializeProject,
   type ChartNode,
   type GraphId,
   type NodeConnection,
@@ -15,68 +16,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { createProcessor } from '../../node/src/api.js';
 import { startDebuggerServer } from '../../node/src/debugger.js';
-import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
-import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
-
-const transientWindowsBootstrapFailures = new Set(['net::ERR_NO_BUFFER_SPACE', 'net::ERR_INSUFFICIENT_RESOURCES']);
-
-function isTransientWindowsBootstrapError(error: unknown) {
-  return (
-    error instanceof Error && [...transientWindowsBootstrapFailures].some((failure) => error.message.includes(failure))
-  );
-}
-
-async function openHostedEditor(page: Page) {
-  const baseOrigin = new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:8080').origin;
-  const bootstrapFailures: string[] = [];
-  const recordBootstrapFailure = (request: Request) => {
-    const failure = request.failure()?.errorText;
-    if (
-      failure &&
-      transientWindowsBootstrapFailures.has(failure) &&
-      new URL(request.url()).origin === baseOrigin &&
-      request.resourceType() === 'script'
-    ) {
-      bootstrapFailures.push(`${failure}: ${request.url()}`);
-    }
-  };
-  const editorMounted = async () =>
-    (await page.locator('iframe.dashboard-editor-frame').count()) > 0 ||
-    (await page.locator('.node-canvas').first().isVisible());
-
-  page.on('requestfailed', recordBootstrapFailure);
-  try {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      bootstrapFailures.length = 0;
-      try {
-        await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
-        await authenticateIfNeeded(page);
-      } catch (error) {
-        if (!isTransientWindowsBootstrapError(error) || attempt === 2) throw error;
-        await page.waitForTimeout(250);
-        continue;
-      }
-
-      const deadline = Date.now() + 60_000;
-      while (Date.now() < deadline) {
-        if (await editorMounted()) return;
-        if (bootstrapFailures.length > 0) break;
-        await page.waitForTimeout(100);
-      }
-
-      if (bootstrapFailures.length === 0) {
-        throw new Error('Hosted editor did not mount within 60 seconds');
-      }
-      if (attempt === 2) {
-        throw new Error(`Hosted editor bootstrap repeatedly exhausted local sockets:\n${bootstrapFailures.join('\n')}`);
-      }
-
-      await page.waitForTimeout(250);
-    }
-  } finally {
-    page.off('requestfailed', recordBootstrapFailure);
-  }
-}
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 test('remote conditional producer keeps independent nested Watch pages for two field callers', async ({ page }) => {
   test.setTimeout(180_000);
@@ -224,41 +164,42 @@ test('remote conditional producer keeps independent nested Watch pages for two f
   let run: ReturnType<typeof runner.run> | undefined;
   try {
     await page.setViewportSize({ width: 1920, height: 1080 });
-    await seedHostedEditorProject(page, {
-      projectId: project.metadata.id,
-      graphId: 'main',
-      title: 'Remote Watch',
-      projectPath: '/workflows/Remote Watch.rivet-project',
-      loaded: true,
-      graph: main,
-      extraGraphs: [producer, child].map((item) => ({
-        id: item.metadata!.id!,
-        name: item.metadata!.name,
-        nodes: item.nodes,
-        connections: item.connections,
-      })),
-    });
     await page.addInitScript(() => {
       localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: true }));
     });
-    await page.route('**/api/workflows/evaluation-runs/library', (route) =>
+    await page.route(
+      (url) => url.pathname.startsWith('/api/'),
+      (route) => route.fulfill({ status: 503, json: { error: 'No ambient API in fixture' } }),
+    );
+    await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', (route) =>
       route.fulfill({
         json: {
-          revision: 0,
-          resourceVersions: { suites: {}, datasets: {} },
-          library: {
-            version: 1,
-            data: { version: 1, suites: [], baselines: [] },
-            datasets: [],
-            migratedLegacyProjectIds: [],
-          },
+          root: '/workflows',
+          folders: [],
+          projects: [
+            {
+              id: project.metadata.id,
+              projectMetadataId: project.metadata.id,
+              name: 'Remote Watch',
+              fileName: 'Remote Watch.rivet-project',
+              absolutePath: '/workflows/Remote Watch.rivet-project',
+              relativePath: 'Remote Watch.rivet-project',
+              updatedAt: '2026-10-19T00:00:00Z',
+              settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+            },
+          ],
         },
       }),
     );
-    await openHostedEditor(page);
-    const editor = (await page.locator('iframe.dashboard-editor-frame').count())
-      ? page.frameLocator('iframe.dashboard-editor-frame')
-      : page;
+    await page.route('**/api/projects/load', (route) =>
+      route.fulfill({ json: { contents: serializeProject(project), datasetsContents: null, revisionId: null } }),
+    );
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.locator('.project-row').filter({ hasText: 'Remote Watch' }).dblclick();
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
     await expect(editor.locator('.node[data-nodeid="alpha"]')).toBeVisible();
     await editor.locator('button.more-menu').click();
     await editor.getByRole('button', { name: 'Remote Debugger', exact: true }).click();

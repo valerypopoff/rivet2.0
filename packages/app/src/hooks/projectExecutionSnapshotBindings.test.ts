@@ -8,8 +8,16 @@ import {
   type GraphRunId,
   type RootRunId,
   type PortId,
+  type ProjectId,
 } from '@valerypopoff/rivet2-core';
-import { createEmptyProjectExecutionSnapshot, graphRunningState, lastRunDataByNodeState } from '../state/dataFlow.js';
+import {
+  createEmptyProjectExecutionSnapshot,
+  graphRunningState,
+  lastRunDataByNodeState,
+  projectExecutionSnapshotsState,
+} from '../state/dataFlow.js';
+import { projectState, projectsState } from '../state/savedGraphs.js';
+import { updateOpenProjectExecutionSnapshot } from './projectExecutionSnapshotRouting.js';
 import {
   captureProjectExecutionSnapshot,
   restoreProjectExecutionSnapshot,
@@ -61,4 +69,43 @@ test('legacy additive fields are restored to empty values without changing the s
   restoreProjectExecutionSnapshot(store, legacy);
   assert.deepEqual(captureProjectExecutionSnapshot(store), snapshot);
   assert.equal(Object.hasOwn(legacy, 'runActivityJournal'), false);
+});
+
+test('passive snapshot boundary runs reference effects once and writes only changed active fields', () => {
+  const store = createStore();
+  const id = store.get(projectState).metadata.id;
+  store.set(projectsState, {
+    openedProjects: { [id]: { projectId: id, title: 'A', fsPath: '/a' } },
+    openedProjectsSortedIds: [id],
+  });
+  const originalData = store.get(lastRunDataByNodeState);
+  let writes = 0;
+  let updates = 0;
+  const unsubscribe = store.sub(lastRunDataByNodeState, () => writes++);
+  updateOpenProjectExecutionSnapshot(store, id, (before) => {
+    updates++;
+    return { ...before, graphPaused: true };
+  });
+  assert.equal(updates, 1);
+  assert.equal(writes, 0);
+  assert.equal(store.get(lastRunDataByNodeState), originalData);
+  assert.equal(captureProjectExecutionSnapshot(store).graphPaused, true);
+  assert.equal(store.get(projectExecutionSnapshotsState)[id]!.graphPaused, true);
+  unsubscribe();
+});
+
+test('passive snapshots update inactive tabs, but never recreate closed tabs or touch active atoms', () => {
+  const store = createStore();
+  const id = 'inactive' as ProjectId;
+  store.set(projectsState, {
+    openedProjects: { [id]: { projectId: id, title: 'B', fsPath: '/b' } },
+    openedProjectsSortedIds: [id],
+  });
+  updateOpenProjectExecutionSnapshot(store, id, (before) => ({ ...before, graphPaused: true }));
+  assert.equal(store.get(projectExecutionSnapshotsState)[id]!.graphPaused, true);
+  assert.equal(captureProjectExecutionSnapshot(store).graphPaused, false);
+  store.set(projectsState, { openedProjects: {}, openedProjectsSortedIds: [] });
+  const snapshots = store.get(projectExecutionSnapshotsState);
+  updateOpenProjectExecutionSnapshot(store, id, () => assert.fail('Closed tab update was evaluated'));
+  assert.equal(store.get(projectExecutionSnapshotsState), snapshots);
 });

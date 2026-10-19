@@ -1,4 +1,4 @@
-import { deserializeProject, listProjectBundleCalls } from '@valerypopoff/rivet2-node';
+import { deserializeProject, listProjectBundleCalls, listProjectGraphCallSites } from '@valerypopoff/rivet2-node';
 import type { WorkflowProjectReferencesResponse } from '../../../../studio-server-shared/workflow-types.js';
 import { createHttpError } from '../../utils/httpError.js';
 import type {
@@ -18,8 +18,9 @@ const parseProject = (contents: string) => deserializeProject(contents, null, { 
 /** Direct incoming connections from saved drafts and currently serving publications.
  * Never execute graphs or recursively fetch dependencies to infer these edges. */
 export async function scanIncomingProjectReferences(options: {
-  relativePath: string;
+  relativePath?: string;
   expectedProjectId?: string;
+  graphIds?: readonly string[];
   signal: AbortSignal;
   getCatalog(): Promise<WorkflowProjectReferenceCatalogEntry[]>;
   readSaved(relativePath: string): Promise<string>;
@@ -29,9 +30,16 @@ export async function scanIncomingProjectReferences(options: {
 }): Promise<WorkflowProjectReferencesResponse> {
   const { signal } = options;
   signal.throwIfAborted();
+  if (!options.relativePath && !options.expectedProjectId) throw createHttpError(400, 'Project identity is required');
   const catalog = sortCatalog(await options.getCatalog());
   signal.throwIfAborted();
-  const selected = catalog.find((project) => project.relativePath === options.relativePath);
+  const matches = catalog.filter((project) =>
+    options.relativePath
+      ? project.relativePath === options.relativePath
+      : project.projectMetadataId === options.expectedProjectId,
+  );
+  if (matches.length > 1) throw createHttpError(409, 'Project identity is ambiguous. Refresh before deleting.');
+  const selected = matches[0];
   if (!selected) throw createHttpError(404, 'Project not found');
   const target = parseProject(await options.readSaved(selected.relativePath));
   const projectId = target.metadata.id;
@@ -50,7 +58,9 @@ export async function scanIncomingProjectReferences(options: {
     complete: false,
     changedDuringScan: false,
     unreadableProjects: [],
+    ...(options.graphIds ? { graphReferences: [], graphReferencesTruncated: false } : {}),
   };
+  const graphIds = options.graphIds && new Set(options.graphIds);
   for (const candidate of candidates) {
     signal.throwIfAborted();
     if (result.checkedProjects >= (options.maxProjects ?? 1000) || Date.now() >= (options.deadline ?? Infinity)) break;
@@ -78,13 +88,31 @@ export async function scanIncomingProjectReferences(options: {
           throw new Error('Project identity does not match.');
         callerId = project.metadata.id;
         const versions = new Set<'latest' | 'published' | 'project-reference'>();
-        for (const call of listProjectBundleCalls(project)) {
-          if (call.projectId !== projectId) continue;
-          if (call.version !== 'latest' && call.version !== 'published') throw new Error('Invalid target version.');
-          versions.add(call.version);
+        if (graphIds) {
+          for (const call of listProjectGraphCallSites(project)) {
+            if (call.targetProjectId !== projectId || !graphIds.has(call.targetGraphId)) continue;
+            versions.add(call.targetVersion);
+            if (result.graphReferences!.length >= 1000) {
+              result.graphReferencesTruncated = true;
+              break;
+            }
+            result.graphReferences!.push({
+              ...call,
+              projectId: callerId,
+              projectName: candidate.name,
+              relativePath: candidate.relativePath,
+              source: snapshot.source,
+            });
+          }
+        } else {
+          for (const call of listProjectBundleCalls(project)) {
+            if (call.projectId !== projectId) continue;
+            if (call.version !== 'latest' && call.version !== 'published') throw new Error('Invalid target version.');
+            versions.add(call.version);
+          }
+          if ((project.references ?? []).some((reference) => reference.id === projectId))
+            versions.add('project-reference');
         }
-        if ((project.references ?? []).some((reference) => reference.id === projectId))
-          versions.add('project-reference');
         if (versions.size) sources.push({ ...snapshot.source, targetVersions: [...versions].sort() });
       }
     } catch (error) {
@@ -105,15 +133,19 @@ export async function scanIncomingProjectReferences(options: {
   result.changedDuringScan = catalogIdentity(catalog) !== catalogIdentity(await options.getCatalog());
   signal.throwIfAborted();
   result.complete =
-    !result.changedDuringScan && !result.unreadableProjects.length && result.checkedProjects === result.totalProjects;
+    !result.changedDuringScan &&
+    !result.unreadableProjects.length &&
+    !result.graphReferencesTruncated &&
+    result.checkedProjects === result.totalProjects;
   return result;
 }
 
 let scanning = false;
 export async function listIncomingProjectReferences(
-  relativePath: string,
+  relativePath: string | undefined,
   expectedProjectId: string | undefined,
   signal: AbortSignal,
+  graphIds?: readonly string[],
 ) {
   if (scanning) throw createHttpError(503, 'Project references are already being checked. Try again shortly.');
   scanning = true;
@@ -121,6 +153,7 @@ export async function listIncomingProjectReferences(
     return await scanIncomingProjectReferences({
       relativePath,
       expectedProjectId,
+      graphIds,
       signal,
       getCatalog: listWorkflowProjectReferenceCatalogWithBackend,
       readSaved: async (value) => {

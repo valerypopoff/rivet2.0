@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
+import { MANAGED_BUNDLE_SCHEMA_SQL } from './bundle-schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 15;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 16;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
@@ -417,6 +418,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_EVALUATION_PROJECTION_INDEX_SQL,
     checksum: 'c3435ac7c225b41334a63806f74e3e95a41a5846f35668fffc1607a8143614d2',
   },
+  {
+    version: 16,
+    name: 'explicit-workflow-bundles',
+    sql: MANAGED_BUNDLE_SCHEMA_SQL,
+    checksum: '21c458310c5f0c66bfb4ad431cba5f2cea95c7366f2ffe2a5adf7d0fca3cbc29',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -637,6 +644,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['workflow_folders', 'name', 'text', 'NO'],
   ['workflow_folders', 'parent_relative_path', 'text', 'NO'],
   ['workflow_folders', 'updated_at', 'timestamptz', 'NO'],
+  ['workflow_folders', 'bundle_id', 'uuid', 'YES'],
   ['workflow_published_versions', 'version_id', 'text', 'NO'],
   ['workflow_published_versions', 'workflow_id', 'text', 'NO'],
   ['workflow_published_versions', 'revision_id', 'text', 'NO'],
@@ -1011,6 +1019,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
   ['workflow_endpoints', 'p', 'PRIMARY KEY (lookup_name)'],
   ['workflow_endpoints', 'f', 'FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id) ON DELETE CASCADE'],
   ['workflow_folders', 'p', 'PRIMARY KEY (relative_path)'],
+  ['workflow_folders', 'u', 'UNIQUE (bundle_id)'],
   ['workflow_published_versions', 'p', 'PRIMARY KEY (version_id)'],
   [
     'workflow_published_versions',
@@ -1372,7 +1381,49 @@ async function validateManagedWorkflowSchemaObjects(client: PoolClient): Promise
       ? null
       : `${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.name}(${MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION.argumentTypes}) (expected ${expectedFunctionSignature}, received ${actualFunctionSignature ?? 'missing'})`;
 
+  const guardResult = await client.query<{
+    name: string;
+    enabled: string;
+    deferred: boolean;
+    source: string;
+    table_name: string;
+  }>(
+    `SELECT t.tgname AS name, t.tgenabled AS enabled, t.tginitdeferred AS deferred,
+      p.prosrc AS source, c.relname AS table_name FROM pg_trigger t
+      JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN pg_proc p ON p.oid=t.tgfoid WHERE n.nspname=current_schema()
+      AND t.tgname=ANY($1::text[])`,
+    [
+      [
+        'workflow_bundle_topology_lock',
+        'workflow_project_topology_lock',
+        'workflow_project_move_topology_lock',
+        'workflow_bundle_topology_check',
+      ],
+    ],
+  );
+  const missingGuards = [
+    'workflow_bundle_topology_lock',
+    'workflow_project_topology_lock',
+    'workflow_project_move_topology_lock',
+    'workflow_bundle_topology_check',
+  ].filter((name) => {
+    const guard = guardResult.rows.find((row) => row.name === name);
+    const functionName =
+      name === 'workflow_bundle_topology_check' ? 'check_workflow_bundle_topology' : 'lock_workflow_bundle_topology';
+    const body = MANAGED_BUNDLE_SCHEMA_SQL.match(
+      new RegExp(`CREATE FUNCTION ${functionName}\\(\\)[\\s\\S]*?AS \\$\\$([\\s\\S]*?)\\$\\$;`),
+    )?.[1];
+    return (
+      !guard ||
+      guard.enabled !== 'O' ||
+      guard.deferred !== (name === 'workflow_bundle_topology_check') ||
+      guard.table_name !== (name.startsWith('workflow_project_') ? 'workflows' : 'workflow_folders') ||
+      guard.source !== body
+    );
+  });
   const problems = [
+    missingGuards.length ? `bundle guards: ${missingGuards.join(', ')}` : null,
     tableProblems.length > 0 ? `tables: ${describeMissing(tableProblems)}` : null,
     missingColumns.length > 0 ? `columns: ${describeMissing(missingColumns)}` : null,
     invalidColumnDefaults.length > 0 ? `column defaults: ${describeMissing(invalidColumnDefaults)}` : null,

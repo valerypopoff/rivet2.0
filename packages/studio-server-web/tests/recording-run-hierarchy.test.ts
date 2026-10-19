@@ -27,6 +27,30 @@ function run(id: string, correlationId?: string, child = false): WorkflowRecordi
   };
 }
 
+test('context groups lazily load children without treating their representative as a root', () => {
+  const representative = run('anchor', 'orphan-key', true);
+  const other = run('newer-child', 'orphan-key', true);
+  const initial = groupRecordingRuns([representative], {});
+  assert.equal(initial[0]!.root, null);
+  assert.equal(initial[0]!.childLoadState, 'unloaded');
+  const loaded = groupRecordingRuns([other, representative], { anchor: 'complete' });
+  assert.equal(loaded[0]!.root, null);
+  assert.equal(loaded[0]!.childLoadState, 'complete');
+  assert.equal(recordingHierarchyRows(loaded, new Set(['correlation:orphan-key'])).length, 3);
+});
+
+test('a paginated context anchor never attaches to one visible member of an ambiguous root key', () => {
+  const root = run('one-of-two-primaries', 'ambiguous');
+  const child = { ...run('context-anchor', 'ambiguous', true), familyContext: true as const };
+  // The unmarked duplicate models the same child returned by its browse endpoint.
+  const groups = groupRecordingRuns([root, child, { ...child, familyContext: undefined }], {});
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0]!.root?.id, root.id);
+  assert.equal(groups[0]!.children.length, 0);
+  assert.equal(groups[1]!.root, null);
+  assert.equal(groups[1]!.childLoadState, 'unloaded');
+});
+
 test('input matches offer child discovery before any children are loaded, preserving expansion and status', () => {
   const root = run('root', 'execution');
   const initial = groupRecordingRuns([root], {});
@@ -37,7 +61,21 @@ test('input matches offer child discovery before any children are loaded, preser
   assert.equal(recordingHierarchyRows(loaded, new Set([initial[0]!.key])).length, 2);
   const empty = groupRecordingRuns([root], { root: 'complete' });
   assert.equal(empty[0]!.children.length, 0);
-  assert.equal(empty[0]!.childLoadState, 'complete');
+  assert.equal(recordingHierarchyRows(empty, new Set())[0]!.family, null);
+});
+
+test('roots without retained sub-runs have no disclosure, while unknown and positive presence remain discoverable', () => {
+  for (const hasSubRuns of [false, true, undefined]) {
+    const root = { ...run('root', 'execution'), hasSubRuns };
+    const [row] = recordingHierarchyRows(groupRecordingRuns([root], {}), new Set());
+    assert.equal(row!.family !== null, hasSubRuns !== false);
+    // Already loaded children take precedence over an older presence snapshot.
+    const [withChild] = recordingHierarchyRows(
+      groupRecordingRuns([root, run('child', 'execution', true)], {}),
+      new Set(),
+    );
+    assert.ok(withChild!.family);
+  }
 });
 
 test('children preceding their root are folded beneath it without duplicating recordings', () => {
@@ -60,6 +98,50 @@ test('children preceding their root are folded beneath it without duplicating re
   );
   assert.equal(expanded[1]!.isChild, true);
   assert.equal(new Set(expanded.map((row) => row.id)).size, expanded.length);
+});
+
+for (const context of ['primary', 'related', 'loaded related'] as const) {
+  test(`sub-runs are chronological regardless of status and arrival order in ${context} families`, () => {
+    const root = run('root', 'execution');
+    const children = [
+      { ...run('latest-failed', 'execution', true), createdAt: '2026-10-03T00:00:03Z', status: 'failed' as const },
+      { ...run('tie-b', 'execution', true), createdAt: '2026-10-03T00:00:02Z', status: 'succeeded' as const },
+      { ...run('earliest', 'execution', true), createdAt: '2026-10-03T01:00:00+01:00' },
+      { ...run('tie-a', 'execution', true), createdAt: '2026-10-03T00:00:02Z', status: 'suspicious' as const },
+      { ...run('middle-failed', 'execution', true), createdAt: '2026-10-03T00:00:01Z', status: 'failed' as const },
+    ];
+    const input = context === 'primary' ? [root, ...children] : children;
+    const before = [...input];
+    const states = context === 'loaded related' ? { 'latest-failed': 'complete' as const } : undefined;
+    const expected = ['earliest', 'middle-failed', 'tie-a', 'tie-b', 'latest-failed'];
+    const groups = groupRecordingRuns(input, states);
+    assert.deepEqual(
+      groups[0]!.children.map((child) => child.id),
+      expected,
+    );
+    assert.deepEqual(
+      recordingHierarchyRows(groups, new Set([groups[0]!.key]))
+        .filter((row) => row.isChild)
+        .map((row) => row.recording!.id),
+      expected,
+    );
+    assert.deepEqual(input, before, 'grouping must not reorder caller-owned results');
+    // Arrival order across metadata pages and retries must not determine ties.
+    assert.deepEqual(
+      groupRecordingRuns([...input].reverse(), states)[0]!.children.map((child) => child.id),
+      expected,
+    );
+  });
+}
+
+test('sorting descendants does not reorder primary recording families', () => {
+  const newest = run('newest-root', 'new');
+  const older = { ...run('older-root', 'old'), createdAt: '2026-10-02T00:00:00Z' };
+  const groups = groupRecordingRuns([newest, older, run('new-child', 'new', true), run('old-child', 'old', true)]);
+  assert.deepEqual(
+    groups.map((group) => group.root?.id),
+    ['newest-root', 'older-root'],
+  );
 });
 
 test('filtered, page-split and retained orphan children get context, never a fake root', () => {

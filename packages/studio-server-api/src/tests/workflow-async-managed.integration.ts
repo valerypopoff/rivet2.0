@@ -23,6 +23,7 @@ import { ManagedWorkflowBackend } from '../routes/workflows/managed/backend.js';
 import { getManagedWorkflowStorageConfigFromSettings } from '../routes/workflows/storage-config.js';
 import { deserializeProject, serializeProject } from '@valerypopoff/rivet2-node';
 import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
+import { verifyExplicitBundleContract } from './helpers/explicit-bundle-contract.js';
 
 // This command creates its own services. It never accepts a deployment URL.
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
@@ -300,6 +301,10 @@ try {
   );
   try {
     await publicationBackend.initialize();
+    await verifyExplicitBundleContract(publicationBackend, pool, {
+      baseUrl: api.baseUrl,
+      headers: { 'x-rivet-proxy-auth': createHash('sha256').update('async-fixture-key:proxy-auth').digest('hex') },
+    });
     await verifyWorkflowPublicationContract(publicationBackend);
     const failedId = randomUUID();
     const failedFolder = `Failed bundle ${failedId}`;

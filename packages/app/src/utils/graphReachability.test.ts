@@ -35,6 +35,17 @@ function makeNode(
   };
 }
 
+test('modern external Subgraphs never claim a coincident local graph ID', () => {
+  const caller = makeGraph('main', 'Caller', [makeNode('subGraph', { graphId: 'same-id', targetProjectId: 'other' })]);
+  const project = makeProject([caller, makeGraph('same-id', 'Unrelated local graph')], 'main');
+  assert.deepEqual([...getGraphIdsReferencingGraph(project, 'same-id' as GraphId)], []);
+  const report = getGraphReachabilityReport(project);
+  assert.deepEqual([...report.definite], ['main']);
+  assert.deepEqual([...report.unreachable], ['same-id']);
+  (caller.nodes[0]!.data as { targetProjectId?: string }).targetProjectId = undefined;
+  assert.deepEqual([...getGraphIdsReferencingGraph(project, 'same-id' as GraphId)], ['main']);
+});
+
 function makeConnection(outputNodeId: string, inputNodeId: string, outputId: string, inputId: string) {
   return {
     outputNodeId: outputNodeId as any,
@@ -990,9 +1001,7 @@ describe('graphReachability', () => {
       'static-caller',
     ]);
     assert.deepEqual(
-      sortGraphIds(
-        getGraphIdsReferencingGraph(project, 'target' as GraphId, { includeDynamicCallGraphEdges: false }),
-      ),
+      sortGraphIds(getGraphIdsReferencingGraph(project, 'target' as GraphId, { includeDynamicCallGraphEdges: false })),
       ['static-caller'],
     );
   });
@@ -1003,11 +1012,15 @@ describe('graphReachability', () => {
       handlers: [],
       unknownHandler: undefined,
     });
-    const delegateManual = makeNode('delegateFunctionCall', {
-      autoDelegate: false,
-      handlers: [{ key: 'tool', value: 'target' as GraphId }],
-      unknownHandler: 'target' as GraphId,
-    }, { id: 'delegate' });
+    const delegateManual = makeNode(
+      'delegateFunctionCall',
+      {
+        autoDelegate: false,
+        handlers: [{ key: 'tool', value: 'target' as GraphId }],
+        unknownHandler: 'target' as GraphId,
+      },
+      { id: 'delegate' },
+    );
     const llm = makeNode('llmChatV2', { useToolCalling: true }, { id: 'llm' });
     const delegateCaller = makeGraph(
       'delegate-caller',

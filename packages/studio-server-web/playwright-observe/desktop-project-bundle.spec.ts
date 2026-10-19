@@ -34,7 +34,15 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     manifestContents: JSON.stringify({
       format: 'rivet-project-bundle',
       schemaVersion: 1,
-      requiredLoaderVersion: 3,
+      requiredLoaderVersion: 4,
+      workspace: {
+        name: 'Desktop feature',
+        folders: ['Nested', 'Empty'],
+        members: [fixture.root.project, fixture.child.project].map((project, index) => ({
+          projectId: project.metadata.id,
+          relativePath: index ? 'Child.rivet-project' : 'Nested/Root.rivet-project',
+        })),
+      },
       versionPolicy: 'latest',
       exportingRuntimeVersion: 'fixture',
       rootArtifact: 'root',
@@ -154,12 +162,19 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   // Manifest opening creates every tab; called dataflow survives inactive/active switching.
   await expect(page.locator('.projects-container .project')).toHaveCount(2);
   await expect(page.locator(`.node[data-nodeid="${subgraph.id}"]`)).toBeVisible();
+  await expect(page.locator(`.node[data-nodeid="${subgraph.id}"]`)).toContainText(
+    'Run this target from an extracted bundle',
+  );
+  await expect(page.getByText('This project target can only be edited or run in Rivet Studio Server.')).toHaveCount(0);
   // Reference discovery must retain the same binding as execution. Verify it
   // before Run so its reads cannot accidentally satisfy the regression.
-  await page.waitForFunction(() => (window as any).bundleReadRequests?.some(
-    (request: any) => request.path === '/bundle/projects/nested/root.rivet-project'
-      && request.manifestPath === '/bundle/rivet-bundle.json',
-  ));
+  await page.waitForFunction(() =>
+    (window as any).bundleReadRequests?.some(
+      (request: any) =>
+        request.path === '/bundle/projects/nested/root.rivet-project' &&
+        request.manifestPath === '/bundle/rivet-bundle.json',
+    ),
+  );
   const run = page.locator('.run-button button').first();
   await run.click();
   await expect(page.locator(`.node[data-nodeid="${output.id}"]`)).toContainText('child-result');

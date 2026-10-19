@@ -34,7 +34,13 @@ export type ProjectBundleArtifact = {
 export type ProjectBundleManifest = {
   format: 'rivet-project-bundle';
   schemaVersion: 1;
-  requiredLoaderVersion: 1 | 2 | 3;
+  requiredLoaderVersion: 1 | 2 | 3 | 4;
+  /** Explicit container membership; other artifacts are portable dependency snapshots. */
+  workspace?: {
+    name: string;
+    folders: string[];
+    members: { projectId: string; relativePath: string }[];
+  };
   /** Explicit export-wide version selection; one artifact per project. */
   versionPolicy?: 'latest' | 'published';
   exportingRuntimeVersion: string;
@@ -72,7 +78,7 @@ function* projectSubgraphs(project: Project) {
       if (data.targetProjectId) {
         if (data.targetVersion !== undefined && data.targetVersion !== 'latest' && data.targetVersion !== 'published')
           throw new ProjectBundleError('Invalid Subgraph project version.');
-      } else if (data.targetScope === 'other-projects') {
+      } else if (data.targetScope) {
         throw new ProjectBundleError(`Subgraph ${node.title || node.id} has no selected project.`);
       }
       yield { sourceGraphId, data };
@@ -117,6 +123,7 @@ export function validateProjectBundleProjects(
   const targets = new Map(manifest.targets.map((t) => [projectBundleTargetKey(t.projectId, t.version), t.artifact]));
   const references = new Map(manifest.references.map((r) => [r.projectId, r.artifact]));
   const plugins = new Map(manifest.plugins.map((plugin) => [plugin.id, plugin]));
+  const members = manifest.workspace ? new Set(manifest.workspace.members.map((m) => m.projectId)) : undefined;
   type Vertex = { edges: { target: Vertex; crossProject: boolean }[] };
   const vertices = new Map<string, Vertex>();
   const graphKey = (artifact: string, graph: string) => JSON.stringify([artifact, graph]);
@@ -136,6 +143,10 @@ export function validateProjectBundleProjects(
     for (const { sourceGraphId, data } of projectSubgraphs(project)) {
       let targetId = artifact.id;
       if (data.targetProjectId) {
+        if (members?.has(data.targetProjectId) && !members.has(project.metadata.id))
+          throw new ProjectBundleError(
+            'A project outside this bundle cannot reference a bundle member through a Subgraph node.',
+          );
         const call = {
           projectId: data.targetProjectId,
           version: data.targetVersion ?? 'latest',
@@ -219,12 +230,12 @@ export function validateProjectBundleManifest(value: unknown): ProjectBundleMani
   if (
     obj.format !== 'rivet-project-bundle' ||
     obj.schemaVersion !== 1 ||
-    (obj.requiredLoaderVersion !== 1 && obj.requiredLoaderVersion !== 2 && obj.requiredLoaderVersion !== 3)
+    ![1, 2, 3, 4].includes(obj.requiredLoaderVersion as number)
   )
     fail('unsupported format or loader version; update @valerypopoff/rivet2-node');
   const versionPolicy = obj.versionPolicy === undefined ? undefined : version(obj.versionPolicy);
-  if (versionPolicy && obj.requiredLoaderVersion !== 3) fail('version selection requires loader version 3');
-  if (obj.requiredLoaderVersion === 3 && !versionPolicy) fail('loader version 3 requires a version selection');
+  if (versionPolicy && Number(obj.requiredLoaderVersion) < 3) fail('version selection requires loader version 3');
+  if (Number(obj.requiredLoaderVersion) >= 3 && !versionPolicy) fail('loader version 3 requires a version selection');
   const artifacts = array(obj.artifacts).map((v): ProjectBundleArtifact => {
     const a = object(v);
     return {
@@ -247,6 +258,49 @@ export function validateProjectBundleManifest(value: unknown): ProjectBundleMani
     fail('latest version policy contains a published artifact');
   const rootArtifact = string(obj.rootArtifact);
   if (!byId.has(rootArtifact)) fail('missing root artifact');
+  let workspace: ProjectBundleManifest['workspace'];
+  if (obj.workspace !== undefined) {
+    if (obj.requiredLoaderVersion !== 4) fail('workspace membership requires loader version 4');
+    const w = object(obj.workspace);
+    const safePath = (value: unknown) => {
+      const path = string(value);
+      if (
+        /[\\:\0<>"|?*\x01-\x1f]/.test(path) ||
+        path.split('/').some((p) => !p || p === '.' || p === '..' || /[. ]$/.test(p))
+      )
+        fail('unsafe workspace path');
+      return path;
+    };
+    const folders = array(w.folders, 511).map(safePath);
+    const memberIds = new Set<string>(),
+      locations = new Set<string>();
+    for (const folder of folders) {
+      if (locations.has(folder.toLowerCase())) fail('duplicate workspace folder');
+      locations.add(folder.toLowerCase());
+      if (folder.includes('/') && !folders.includes(folder.slice(0, folder.lastIndexOf('/'))))
+        fail('missing workspace parent folder');
+    }
+    const members = array(w.members).map((value) => {
+      const m = object(value),
+        projectId = string(m.projectId),
+        relativePath = safePath(m.relativePath);
+      if (
+        !relativePath.endsWith('.rivet-project') ||
+        memberIds.has(projectId) ||
+        locations.has(relativePath.toLowerCase()) ||
+        !artifacts.some((a) => a.projectId === projectId)
+      )
+        fail('invalid workspace member');
+      const parent = relativePath.includes('/') ? relativePath.slice(0, relativePath.lastIndexOf('/')) : '';
+      if (parent && !folders.includes(parent)) fail('missing workspace member folder');
+      memberIds.add(projectId);
+      locations.add(relativePath.toLowerCase());
+      return { projectId, relativePath };
+    });
+    if (!members.length || !memberIds.has(byId.get(rootArtifact)!.projectId)) fail('workspace has no initial member');
+    workspace = { name: string(w.name), folders, members };
+  }
+  if (obj.requiredLoaderVersion === 4 && !workspace) fail('loader version 4 requires workspace membership');
   const targetKeys = new Set<string>(),
     referenceIds = new Set<string>();
   // A version-selected artifact has both latest and published bindings. The
@@ -289,7 +343,8 @@ export function validateProjectBundleManifest(value: unknown): ProjectBundleMani
   return {
     format: 'rivet-project-bundle',
     schemaVersion: 1,
-    requiredLoaderVersion: obj.requiredLoaderVersion as 1 | 2 | 3,
+    requiredLoaderVersion: obj.requiredLoaderVersion as 1 | 2 | 3 | 4,
+    ...(workspace ? { workspace } : {}),
     ...(versionPolicy ? { versionPolicy } : {}),
     exportingRuntimeVersion: string(obj.exportingRuntimeVersion),
     rootArtifact,

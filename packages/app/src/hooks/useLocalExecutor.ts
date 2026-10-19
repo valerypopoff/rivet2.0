@@ -66,6 +66,7 @@ import {
   createEmptyProjectExecutionSnapshot,
   frozenNodeOutputsState,
   graphRunningState,
+  graphRunHistoryByViewState,
   lastRunDataByNodeState,
   projectExecutionSnapshotsState,
 } from '../state/dataFlow';
@@ -95,6 +96,7 @@ import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
 import {
   applyProcessEventToProjectExecutionSnapshots,
   shouldRouteProjectEventToSnapshot,
+  updateOpenProjectExecutionSnapshot,
 } from './projectExecutionSnapshotRouting.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
@@ -106,6 +108,8 @@ import {
   prepareEvaluationRun,
 } from './preparedEditorRun.js';
 import { EditorRunSession } from './editorRunSession.js';
+import { resetRecordingPlaybackDisplay } from './recordingPlaybackDisplay.js';
+import { getRecordingPlaybackGraphId } from '../utils/recordingPlayback.js';
 
 function createEvaluationRecordingReference(): EvaluationRecordingReference {
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -303,103 +307,110 @@ export function useLocalExecutor() {
     );
   }
 
-  function attachGraphEvents(processor: GraphProcessor, runProjectId: ProjectId) {
+  function attachGraphEvents(
+    processor: GraphProcessor,
+    runProjectId: ProjectId,
+    withDisplayOwnership: (dispatch: () => void) => void,
+  ) {
+    const routeLocalEvent: typeof routeLocalProcessEvent = (projectId, message, data, dispatchActive) => {
+      withDisplayOwnership(() => routeLocalProcessEvent(projectId, message, data, dispatchActive));
+    };
     // nodeStart and nodeFinish use awaited emit in GraphProcessor, so returning
     // a Promise here pauses the processor until the macrotask yield completes,
     // giving the browser a chance to repaint with updated React state.
     processor.on('nodeStart', async (data: ProcessEvents['nodeStart']) => {
-      routeLocalProcessEvent(runProjectId, 'nodeStart', data, () => eventDispatcher.nodeStart(data));
+      routeLocalEvent(runProjectId, 'nodeStart', data, () => eventDispatcher.nodeStart(data));
       await yieldToMacrotask();
     });
     processor.on('nodeFinish', async (data: ProcessEvents['nodeFinish']) => {
-      routeLocalProcessEvent(runProjectId, 'nodeFinish', data, () => eventDispatcher.nodeFinish(data));
+      routeLocalEvent(runProjectId, 'nodeFinish', data, () => eventDispatcher.nodeFinish(data));
       await yieldToMacrotask();
     });
     processor.on('nodeError', (data) => {
-      routeLocalProcessEvent(runProjectId, 'nodeError', data, () => eventDispatcher.nodeError(data));
+      routeLocalEvent(runProjectId, 'nodeError', data, () => eventDispatcher.nodeError(data));
     });
 
     processor.on('userInput', (data) => {
-      routeLocalProcessEvent(runProjectId, 'userInput', data, () => eventDispatcher.userInput(data));
+      routeLocalEvent(runProjectId, 'userInput', data, () => eventDispatcher.userInput(data));
     });
     // start and graphStart are already awaited by GraphProcessor, so yielding
     // here also creates a macrotask boundary before node processing begins.
     processor.on('start', async (data: ProcessEvents['start']) => {
-      routeLocalProcessEvent(runProjectId, 'start', data, () => eventDispatcher.start(data));
+      routeLocalEvent(runProjectId, 'start', data, () => eventDispatcher.start(data));
       await yieldToMacrotask();
     });
     processor.on('done', (data) => {
-      routeLocalProcessEvent(runProjectId, 'done', data, () => eventDispatcher.done(data));
+      routeLocalEvent(runProjectId, 'done', data, () => eventDispatcher.done(data));
     });
     processor.on('abort', (data) => {
-      routeLocalProcessEvent(runProjectId, 'abort', data, () => eventDispatcher.abort(data));
+      routeLocalEvent(runProjectId, 'abort', data, () => eventDispatcher.abort(data));
     });
     processor.on('graphAbort', (data) => {
-      routeLocalProcessEvent(runProjectId, 'graphAbort', data, () => eventDispatcher.graphAbort(data));
+      routeLocalEvent(runProjectId, 'graphAbort', data, () => eventDispatcher.graphAbort(data));
     });
     processor.on('graphError', (data) => {
-      routeLocalProcessEvent(runProjectId, 'graphError', data, () => eventDispatcher.graphError(data));
+      routeLocalEvent(runProjectId, 'graphError', data, () => eventDispatcher.graphError(data));
     });
     processor.on('partialOutput', (data) => {
-      routeLocalProcessEvent(runProjectId, 'partialOutput', data, () => eventDispatcher.partialOutput(data));
+      routeLocalEvent(runProjectId, 'partialOutput', data, () => eventDispatcher.partialOutput(data));
     });
     processor.on('progress', (data) => {
-      routeLocalProcessEvent(runProjectId, 'progress', data, () => eventDispatcher.progress(data));
+      routeLocalEvent(runProjectId, 'progress', data, () => eventDispatcher.progress(data));
     });
     processor.on('llmCallFinished', (data) => {
-      routeLocalProcessEvent(runProjectId, 'llmCallFinished', data, () => eventDispatcher.llmCallFinished(data));
+      routeLocalEvent(runProjectId, 'llmCallFinished', data, () => eventDispatcher.llmCallFinished(data));
     });
     processor.on('llmChatOutputSnapshot', (data) => {
-      routeLocalProcessEvent(runProjectId, 'llmChatOutputSnapshot', data, () =>
-        eventDispatcher.llmChatOutputSnapshot(data),
-      );
+      routeLocalEvent(runProjectId, 'llmChatOutputSnapshot', data, () => eventDispatcher.llmChatOutputSnapshot(data));
     });
     processor.on('llmProfileAttempt', (data) => {
-      routeLocalProcessEvent(runProjectId, 'llmProfileAttempt', data, () => eventDispatcher.llmProfileAttempt(data));
+      routeLocalEvent(runProjectId, 'llmProfileAttempt', data, () => eventDispatcher.llmProfileAttempt(data));
     });
     processor.on('toolCallFinished', (data) => {
-      routeLocalProcessEvent(runProjectId, 'toolCallFinished', data, () => eventDispatcher.toolCallFinished(data));
+      routeLocalEvent(runProjectId, 'toolCallFinished', data, () => eventDispatcher.toolCallFinished(data));
     });
     processor.on('graphStart', async (data: ProcessEvents['graphStart']) => {
-      routeLocalProcessEvent(runProjectId, 'graphStart', data, () => eventDispatcher.graphStart(data));
+      routeLocalEvent(runProjectId, 'graphStart', data, () => eventDispatcher.graphStart(data));
       await yieldToMacrotask();
     });
     processor.on('graphFinish', (data) => {
-      routeLocalProcessEvent(runProjectId, 'graphFinish', data, () => eventDispatcher.graphFinish(data));
+      routeLocalEvent(runProjectId, 'graphFinish', data, () => eventDispatcher.graphFinish(data));
     });
     processor.on('graphOutputsReady', (data) => {
-      routeLocalProcessEvent(runProjectId, 'graphOutputsReady', data, () => eventDispatcher.graphOutputsReady(data));
+      routeLocalEvent(runProjectId, 'graphOutputsReady', data, () => eventDispatcher.graphOutputsReady(data));
     });
     processor.on('nodeOutputsCleared', (data) => {
-      routeLocalProcessEvent(runProjectId, 'nodeOutputsCleared', data, () => eventDispatcher.nodeOutputsCleared(data));
+      routeLocalEvent(runProjectId, 'nodeOutputsCleared', data, () => eventDispatcher.nodeOutputsCleared(data));
     });
     processor.on('streamingOutputWatchSummary', (data) => {
-      routeLocalProcessEvent(runProjectId, 'streamingOutputWatchSummary', data, () =>
+      routeLocalEvent(runProjectId, 'streamingOutputWatchSummary', data, () =>
         eventDispatcher.streamingOutputWatchSummary(data),
       );
     });
     processor.on('trace', (trace) => logRuntimeDebug('Local graph trace', { trace }));
     processor.on('pause', (data) => {
-      routeLocalProcessEvent(runProjectId, 'pause', data, () => eventDispatcher.pause(data));
+      routeLocalEvent(runProjectId, 'pause', data, () => eventDispatcher.pause(data));
     });
     processor.on('resume', (data) => {
-      routeLocalProcessEvent(runProjectId, 'resume', data, () => eventDispatcher.resume(data));
+      routeLocalEvent(runProjectId, 'resume', data, () => eventDispatcher.resume(data));
     });
     processor.on('error', (data) => {
-      routeLocalProcessEvent(runProjectId, 'error', data, () => eventDispatcher.error(data));
+      routeLocalEvent(runProjectId, 'error', data, () => eventDispatcher.error(data));
     });
     processor.on('nodeExcluded', (data) => {
-      routeLocalProcessEvent(runProjectId, 'nodeExcluded', data, () => eventDispatcher.nodeExcluded(data));
+      routeLocalEvent(runProjectId, 'nodeExcluded', data, () => eventDispatcher.nodeExcluded(data));
     });
 
-    processor.onUserEvent('toast', (data: DataValue | undefined) => {
-      if (store.get(projectState).metadata.id !== runProjectId) {
-        return;
-      }
+    processor.onUserEvent('toast', (data: DataValue | undefined) =>
+      withDisplayOwnership(() => {
+        if (store.get(projectState).metadata.id !== runProjectId) {
+          return;
+        }
 
-      const stringData = coerceTypeOptional(data, 'string');
-      toast(stringData ?? 'Toast called, but no message was provided');
-    });
+        const stringData = coerceTypeOptional(data, 'string');
+        toast(stringData ?? 'Toast called, but no message was provided');
+      }),
+    );
 
     currentProcessorsByProjectId.current.set(runProjectId, processor);
   }
@@ -439,7 +450,31 @@ export function useLocalExecutor() {
   const tryRunGraph = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
     const recordingToReplay = loadedRecording;
     const runProjectId = project.metadata.id;
+    const ownerWasOpen = store.get(projectsState).openedProjects[runProjectId] != null;
     const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;
+    const readPlaybackHistory = () =>
+      store.get(projectState).metadata.id === runProjectId
+        ? store.get(graphRunHistoryByViewState)
+        : store.get(projectExecutionSnapshotsState)[runProjectId]?.graphRunHistoryByView;
+    let playbackHistory: ReturnType<typeof readPlaybackHistory>;
+    const ownsPlaybackDisplay = () => {
+      if (!recordingToReplay) return true;
+      const current = store.get(loadedRecordingState);
+      // Once reserved, immutable display history follows the run across tab
+      // switches. A different recording can be selected in another open tab
+      // without replacing this run's display. A reopened/cleared tab cannot
+      // inherit this ownership merely by reusing the same project ID.
+      if (playbackHistory && readPlaybackHistory() !== playbackHistory) return false;
+      if (playbackHistory && current && current.projectId !== runProjectId)
+        return store.get(projectsState).openedProjects[runProjectId] != null;
+      // A path rebind retains the recorder. Closing/reloading the tab does not,
+      // even when the replacement has the same serialized project identity.
+      return (
+        current?.projectId === runProjectId &&
+        current.recorder === recordingToReplay.recorder &&
+        current.path === recordingToReplay.path
+      );
+    };
 
     if (!runProjectId) {
       return;
@@ -482,6 +517,7 @@ export function useLocalExecutor() {
     // Discovery is async and precedes GraphProcessor's start event. Reserve the
     // run and allow Abort while reading, rather than starting a second run.
     store.set(graphRunningState, true);
+    if (recordingToReplay) playbackHistory = readPlaybackHistory();
     try {
       const savedGraph = saveGraph() ?? graph;
       const captured = captureEditorRun({
@@ -493,12 +529,16 @@ export function useLocalExecutor() {
       });
       options = captured.options;
       const tempProject = captured.project;
-      const graphToRun = captured.graphId;
+      const recordedGraphId = recordingToReplay && getRecordingPlaybackGraphId(recordingToReplay.recorder.events);
+      // Abort/pause lifecycle belongs to the recording entry, not the canvas
+      // the user happens to be viewing. Keep malformed-artifact failures in
+      // RecordingPlayer by retaining a valid fallback processor graph.
+      const graphToRun = recordedGraphId && tempProject.graphs[recordedGraphId] ? recordedGraphId : captured.graphId;
       const contextValues = getProjectContextValues(projectContext);
       const runSettings = structuredClone(savedSettings);
       // Capture before any awaited preparation can select another tab's data.
       const entryDatasets =
-        ioProvider.readProjectBundle && loadedProject.path
+        !recordingToReplay && ioProvider.readProjectBundle && loadedProject.path
           ? datasetProvider.exportDatasetsForProject(runProjectId)
           : Promise.resolve([]);
       // Observe a rejection even if preparation fails before consumption;
@@ -539,6 +579,7 @@ export function useLocalExecutor() {
         ? `rvt-local-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
         : undefined;
       const localRecordingStartedAt = shouldRecordExecution ? performance.now() : undefined;
+      const localRecordingCreatedAt = shouldRecordExecution ? new Date().toISOString() : undefined;
 
       const recorder = shouldRecordExecution ? new ExecutionRecorder() : undefined;
       processor = new GraphProcessor(tempProject, graphToRun, projectNodeRegistry, true, {
@@ -558,23 +599,28 @@ export function useLocalExecutor() {
       processor.executor = 'browser';
       processor.recordingPlaybackChatLatency = savedSettings.recordingPlaybackLatency ?? 1000;
 
-      const selection = prepareEditorRunSelection({
-        project: tempProject,
-        graphId: graphToRun,
-        options,
-        registry: projectNodeRegistry,
-        previousRunData: lastRunData,
-        frozen: loadedRecording ? undefined : { frozenNodeOutputs, graphId: graphToRun },
-      });
-      processor.runToNodeIds = selection.runToNodeIds;
-      if (selection.preloadData) {
-        for (const [nodeId, outputs] of Object.entries(selection.preloadData)) {
-          processor.preloadNodeData(nodeId as NodeId, outputs);
+      // Replay consumes recorded events, never a live run-from/run-to plan or
+      // preloaded outputs. Planning here could fail on an irrelevant selection
+      // or install preservation flags on a different tab after the repaint yield.
+      if (!recordingToReplay) {
+        const selection = prepareEditorRunSelection({
+          project: tempProject,
+          graphId: graphToRun,
+          options,
+          registry: projectNodeRegistry,
+          previousRunData: lastRunData,
+          frozen: { frozenNodeOutputs, graphId: graphToRun },
+        });
+        processor.runToNodeIds = selection.runToNodeIds;
+        if (selection.preloadData) {
+          for (const [nodeId, outputs] of Object.entries(selection.preloadData)) {
+            processor.preloadNodeData(nodeId as NodeId, outputs);
+          }
         }
+        if (selection.preserveNodeIds) currentExecution.preserveNodeRunDataForNextStart(selection.preserveNodeIds);
+        if (selection.suppressPreloadedNodeIds)
+          currentExecution.suppressPreloadedNodeEventsForCurrentRun(selection.suppressPreloadedNodeIds);
       }
-      if (selection.preserveNodeIds) currentExecution.preserveNodeRunDataForNextStart(selection.preserveNodeIds);
-      if (selection.suppressPreloadedNodeIds)
-        currentExecution.suppressPreloadedNodeEventsForCurrentRun(selection.suppressPreloadedNodeIds);
 
       if (recorder) {
         recorder.record(processor);
@@ -601,6 +647,7 @@ export function useLocalExecutor() {
             const projectContents = serializeProject(tempProject) as string;
             const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(runProjectId));
             await localRecordingProvider.persist({
+              createdAt: localRecordingCreatedAt,
               projectId: runProjectId,
               projectPath: localRecordingProjectPath,
               projectContents,
@@ -633,12 +680,26 @@ export function useLocalExecutor() {
         };
       }
 
-      attachGraphEvents(processor, runProjectId);
+      attachGraphEvents(processor, runProjectId, (dispatch) => {
+        if (!ownsPlaybackDisplay()) {
+          runSession.abort(new DOMException('Recording playback owner changed.', 'AbortError'));
+          return;
+        }
+        dispatch();
+        if (recordingToReplay) playbackHistory = readPlaybackHistory();
+      });
 
       let results: GraphOutputs;
 
       if (recordingToReplay) {
         preparation.signal.throwIfAborted();
+        if (
+          activeRunControllersByProjectId.current.get(runProjectId) !== runSession ||
+          !resetRecordingPlaybackDisplay(store, recordingToReplay, dataRefs, ownerWasOpen)
+        ) {
+          return undefined;
+        }
+        playbackHistory = readPlaybackHistory();
         results = await processor.replayRecording(recordingToReplay.recorder);
       } else {
         const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
@@ -690,6 +751,10 @@ export function useLocalExecutor() {
       if (responseTrace) options.onResponseTrace?.(responseTrace);
       return results;
     } catch (e) {
+      if (!ownsPlaybackDisplay()) {
+        if (options.throwOnError) throw e;
+        return undefined;
+      }
       if (preparation.signal.aborted) {
         localRecordingStatus = 'failed';
         localRecordingErrorMessage = 'Run cancelled.';
@@ -731,8 +796,20 @@ export function useLocalExecutor() {
         responseTraceCollector?.dispose();
         const ownsRun = activeRunControllersByProjectId.current.get(runProjectId) === runSession;
         if (ownsRun) activeRunControllersByProjectId.current.delete(runProjectId);
-        if (ownsRun && store.get(projectState).metadata.id === runProjectId) {
+        const ownsDisplay = ownsRun && ownsPlaybackDisplay();
+        if (ownsDisplay && store.get(projectState).metadata.id === runProjectId) {
           dispatchGraphExecutionEvent('stop', () => currentExecution.onStop());
+        } else if (ownsDisplay) {
+          // Preparation can be canceled before any lifecycle event while the
+          // owner is inactive. Release its display reservation without inventing
+          // a recorded terminal or erasing the results from its previous run.
+          updateOpenProjectExecutionSnapshot(store, runProjectId, (snapshot) => ({
+            ...snapshot,
+            graphRunning: false,
+            graphPaused: false,
+            runningGraphs: [],
+            userInputQuestions: {},
+          }));
         }
 
         if (processor && runProjectId && currentProcessorsByProjectId.current.get(runProjectId) === processor) {

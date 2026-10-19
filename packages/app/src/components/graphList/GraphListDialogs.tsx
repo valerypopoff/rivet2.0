@@ -3,9 +3,11 @@ import type { NodeGraph, UiGraph } from '@valerypopoff/rivet2-core';
 import { DeleteResourceConfirmModal } from '../DeleteResourceConfirmModal.js';
 import { GraphInfoModal } from '../GraphInfoModal.js';
 import { ProjectInfoModal } from '../ProjectInfoModal.js';
+import { GraphDeleteConfirmModal } from './GraphDeleteConfirmModal.js';
+import type { GraphDeletionRequest } from './graphDeletion.js';
 
 export const GraphListDialogs: FC<{
-  graphPendingDelete: NodeGraph | null;
+  graphPendingDelete: GraphDeletionRequest | null;
   graphPendingInfo: NodeGraph | null;
   isProjectInfoOpen: boolean;
   onCloseGraphDelete(): void;
@@ -30,13 +32,14 @@ export const GraphListDialogs: FC<{
   uiGraphPendingDelete,
 }) => (
   <>
-    <DeleteResourceConfirmModal
-      isOpen={graphPendingDelete != null}
-      resourceName={graphPendingDelete?.metadata?.name ?? 'Untitled graph'}
-      title="Delete Graph?"
-      onClose={onCloseGraphDelete}
-      onConfirm={onConfirmGraphDelete}
-    />
+    {graphPendingDelete && (
+      <GraphDeleteConfirmModal
+        key={`${graphPendingDelete.projectId}/${graphPendingDelete.folderPath ?? graphPendingDelete.graphIds.join(',')}`}
+        request={graphPendingDelete}
+        onClose={onCloseGraphDelete}
+        onConfirm={onConfirmGraphDelete}
+      />
+    )}
     <DeleteResourceConfirmModal
       isOpen={uiGraphPendingDelete != null}
       resourceName={uiGraphPendingDelete?.name ?? 'Untitled web app'}

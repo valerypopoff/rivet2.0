@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Pool } from 'pg';
+import { MANAGED_BUNDLE_SCHEMA_SQL } from '../routes/workflows/managed/bundle-schema.js';
 
 import {
   CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
@@ -180,7 +181,7 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
             return queryResult();
           }
 
-          if (sql.includes('pg_advisory_xact_lock')) {
+          if (sql.startsWith('SELECT') && sql.includes('pg_advisory_xact_lock')) {
             if (database.transientLockFailures > 0) {
               database.transientLockFailures -= 1;
               throw Object.assign(new Error('simulated lock timeout'), { code: '55P03' });
@@ -289,6 +290,27 @@ function createPool(database: FakeSchemaDatabase): Pick<Pool, 'connect'> {
             );
           }
 
+          if (sql.includes('FROM pg_trigger t')) {
+            return queryResult(
+              (params[0] as string[])
+                .filter((name) => database.missingObject !== `trigger:${name}`)
+                .map((name) => {
+                  const fn =
+                    name === 'workflow_bundle_topology_check'
+                      ? 'check_workflow_bundle_topology'
+                      : 'lock_workflow_bundle_topology';
+                  return {
+                    name,
+                    enabled: 'O',
+                    deferred: name === 'workflow_bundle_topology_check',
+                    table_name: name.startsWith('workflow_project_') ? 'workflows' : 'workflow_folders',
+                    source: MANAGED_BUNDLE_SCHEMA_SQL.match(
+                      new RegExp(`CREATE FUNCTION ${fn}\\(\\)[\\s\\S]*?AS \\$\\$([\\s\\S]*?)\\$\\$;`),
+                    )![1],
+                  };
+                }),
+            );
+          }
           if (sql.includes('FROM pg_index')) {
             const requested = params[0] as string[];
             const expectedIndexes = new Map<
@@ -428,8 +450,8 @@ test('managed schema mode defaults to migrate and accepts only migrate or verify
 
 test('managed schema compatibility windows are explicit and reject invalid bounds', () => {
   assert.deepEqual(getManagedWorkflowSchemaCompatibilityWindow({}), {
-    minimumVersion: 15,
-    maximumVersion: 15,
+    minimumVersion: 16,
+    maximumVersion: 16,
   });
   assert.deepEqual(
     getManagedWorkflowSchemaCompatibilityWindow({
@@ -452,11 +474,52 @@ test('managed schema compatibility windows are explicit and reject invalid bound
   );
 });
 
+test('migration rejects non-current windows before database access and retries safely with an exact current window', async () => {
+  let connections = 0;
+  const pool = {
+    async connect() {
+      connections++;
+      throw new Error('The migration guard must reject the window before database access.');
+    },
+  } as unknown as Pool;
+  const names = ['RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION', 'RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION'] as const;
+  const previous = names.map((name) => process.env[name]);
+  try {
+    const version = CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION;
+    for (const [minimum, maximum] of [
+      [version - 1, version],
+      [version, version + 1],
+      [version - 1, version - 1],
+      [version + 1, version + 1],
+    ]) {
+      process.env[names[0]] = String(minimum);
+      process.env[names[1]] = String(maximum);
+      await assert.rejects(migrateManagedWorkflowSchema(pool), /migrations require the exact schema version/);
+      assert.equal(connections, 0, `${minimum}-${maximum} must fail before opening a database connection`);
+    }
+
+    process.env[names[0]] = process.env[names[1]] = String(version);
+    const database = createDatabase();
+    const result = await migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger });
+    assert.equal(result.currentVersion, version);
+    assert.ok(result.appliedVersions.includes(version));
+    const applied = database.applyCount;
+    const retry = await migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger });
+    assert.deepEqual(retry, { currentVersion: version, appliedVersions: [] });
+    assert.equal(database.applyCount, applied, 'retrying startup must not replay committed schema changes');
+  } finally {
+    names.forEach((name, index) => {
+      if (previous[index] === undefined) delete process.env[name];
+      else process.env[name] = previous[index];
+    });
+  }
+});
+
 test('managed schema migration definitions and compatibility probes remain coherent', () => {
-  assert.equal(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, 15);
+  assert.equal(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION, 16);
   assert.deepEqual(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
   );
   assert.equal(
     MANAGED_WORKFLOW_SCHEMA_MIGRATIONS[0]?.checksum,
@@ -546,32 +609,39 @@ test('concurrent schema migrators serialize and apply each migration once', asyn
     Array.from({ length: 4 }, () => migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger })),
   );
 
-  assert.equal(database.applyCount, 15);
-  assert.deepEqual([...database.migrations.keys()], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-  assert.ok(results.every(({ currentVersion }) => currentVersion === 15));
+  assert.equal(database.applyCount, 16);
+  assert.deepEqual([...database.migrations.keys()], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  assert.ok(results.every(({ currentVersion }) => currentVersion === 16));
   assert.equal(results.filter(({ appliedVersions }) => appliedVersions.length === 0).length, 3);
   assert.equal(
-    results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15').length,
+    results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16')
+      .length,
     1,
   );
-  assert.equal(database.queryLog.filter((sql) => sql.includes('pg_advisory_xact_lock(')).length, 4);
+  assert.equal(
+    database.queryLog.filter((sql) => sql.startsWith('SELECT') && sql.includes('pg_advisory_xact_lock(')).length,
+    4,
+  );
 });
 
 test('migration baselines an existing unversioned schema without losing compatibility', async () => {
   const database = createDatabase({ schemaReady: true });
   const result = await migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger });
 
-  assert.deepEqual(result, { currentVersion: 15, appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] });
+  assert.deepEqual(result, {
+    currentVersion: 16,
+    appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+  });
   assert.equal(database.migrationTableExists, true);
   assert.equal(database.schemaReady, true);
-  assert.equal(database.migrations.get(15)?.checksum, currentMigration().checksum);
+  assert.equal(database.migrations.get(16)?.checksum, currentMigration().checksum);
 });
 
 test('verify mode takes a shared lock and never applies schema SQL', async () => {
   const database = createCurrentDatabase();
   const result = await verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger });
 
-  assert.deepEqual(result, { currentVersion: 15, appliedVersions: [] });
+  assert.deepEqual(result, { currentVersion: 16, appliedVersions: [] });
   assert.equal(database.applyCount, 0);
   assert.ok(database.queryLog.some((sql) => sql.includes('pg_advisory_xact_lock_shared')));
   assert.ok(
@@ -593,7 +663,7 @@ test('verify mode rejects a database that has not been migrated', async () => {
 test('schema compatibility rejects future and modified migration histories', async (t) => {
   await t.test('future version', async () => {
     const database = createCurrentDatabase();
-    database.migrations.set(16, { version: 16, name: 'future', checksum: 'f'.repeat(64) });
+    database.migrations.set(17, { version: 17, name: 'future', checksum: 'f'.repeat(64) });
     await assert.rejects(
       verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
       /newer than this server supports/,
@@ -615,7 +685,7 @@ test('schema compatibility rejects future and modified migration histories', asy
 
 test('verify mode accepts only an explicitly declared additive successor schema', async () => {
   const database = createCurrentDatabase();
-  database.migrations.set(16, { version: 16, name: 'successor', checksum: 'f'.repeat(64) });
+  database.migrations.set(17, { version: 17, name: 'successor', checksum: 'f'.repeat(64) });
 
   await assert.rejects(
     verifyManagedWorkflowSchema(createPool(database), { logger: quietLogger }),
@@ -624,9 +694,9 @@ test('verify mode accepts only an explicitly declared additive successor schema'
 
   const result = await verifyManagedWorkflowSchema(createPool(database), {
     logger: quietLogger,
-    compatibilityWindow: { minimumVersion: 15, maximumVersion: 16 },
+    compatibilityWindow: { minimumVersion: 16, maximumVersion: 17 },
   });
-  assert.deepEqual(result, { currentVersion: 16, appliedVersions: [] });
+  assert.deepEqual(result, { currentVersion: 17, appliedVersions: [] });
   assert.equal(database.applyCount, 0);
 });
 
@@ -637,6 +707,7 @@ test('schema compatibility rejects a ledger marked current when required objects
     ['index', `index:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES[0]?.[1]}`, /indexes:/],
     ['constraint', `constraint:${MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS[0]?.join('/')}`, /constraints:/],
     ['function', 'function', /function:/],
+    ['bundle topology trigger', 'trigger:workflow_bundle_topology_check', /bundle guards:/],
   ] as const) {
     await t.test(label, async () => {
       const database = createCurrentDatabase();
@@ -788,8 +859,11 @@ test('failed migration rolls back its ledger and can be retried cleanly', async 
   assert.equal(database.migrations.size, 0);
 
   const result = await migrateManagedWorkflowSchema(createPool(database), { logger: quietLogger });
-  assert.deepEqual(result, { currentVersion: 15, appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] });
-  assert.equal(database.applyCount, 16);
+  assert.deepEqual(result, {
+    currentVersion: 16,
+    appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+  });
+  assert.equal(database.applyCount, 17);
 });
 
 test('failed rollback preserves the migration error and destroys the uncertain client', async () => {
@@ -826,7 +900,10 @@ test('migration retries only a transient PostgreSQL lock failure in a fresh tran
     },
   });
 
-  assert.deepEqual(result, { currentVersion: 15, appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] });
+  assert.deepEqual(result, {
+    currentVersion: 16,
+    appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+  });
   assert.equal(database.queryLog.filter((sql) => sql === 'BEGIN').length, 2);
   assert.equal(database.queryLog.filter((sql) => sql === 'ROLLBACK').length, 1);
   assert.match(warnings[0] ?? '', /transient PostgreSQL error 55P03/);
@@ -846,7 +923,10 @@ test('logger failures cannot change committed, failed, or retried migration outc
     const result = await migrateManagedWorkflowSchema(createPool(createDatabase()), {
       logger: throwingLogger,
     });
-    assert.deepEqual(result, { currentVersion: 15, appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] });
+    assert.deepEqual(result, {
+      currentVersion: 16,
+      appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    });
   });
 
   await t.test('failed migration and rollback', async () => {
@@ -863,6 +943,9 @@ test('logger failures cannot change committed, failed, or retried migration outc
     const result = await migrateManagedWorkflowSchema(createPool(database), {
       logger: throwingLogger,
     });
-    assert.deepEqual(result, { currentVersion: 15, appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] });
+    assert.deepEqual(result, {
+      currentVersion: 16,
+      appliedVersions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    });
   });
 });

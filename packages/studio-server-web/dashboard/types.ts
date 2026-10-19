@@ -115,6 +115,7 @@ export type HostedRouteConfig = {
 };
 
 export type WorkflowProjectOpenOptions = {
+  bundleId?: string | null;
   preview?: boolean;
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;

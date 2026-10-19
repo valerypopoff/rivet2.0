@@ -10,6 +10,7 @@ import {
   type Project,
 } from '@valerypopoff/rivet2-node';
 
+import type { RecordingRunScope } from './recording-workflow-scope.js';
 import type {
   WorkflowRecordingFilterStatus,
   WorkflowRecordingExecutionIdentity,
@@ -84,6 +85,7 @@ import { getFilesystemRecordingInputCacheKey, workflowRecordingInputCache } from
 import { buildWorkflowRunStatistics, buildWorkflowRunStatisticsCatalog } from './recording-statistics.js';
 
 type PersistWorkflowExecutionRecordingOptions = {
+  createdAt?: string;
   workflowsRoot: string;
   sourceProject: Project;
   sourceProjectPath: string;
@@ -169,6 +171,7 @@ export function getWorkflowExecutionRecordingPersistenceMetrics() {
 
 function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRecordingRunSummary {
   return {
+    hasSubRuns: row.hasSubRuns,
     id: row.id,
     workflowId: row.workflowId,
     sourceProjectName: row.sourceProjectName,
@@ -489,12 +492,12 @@ export async function listWorkflowRecordingRunsPage(
   signal?: AbortSignal,
   inputAfter?: string,
   includeSubgraphRuns = false,
-  runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
+  runScope: RecordingRunScope = inputFilter ? 'roots' : 'all',
 ): Promise<WorkflowRecordingRunsPageResponse> {
   await ensureWorkflowRecordingStorage(root);
   const scopeCounts =
     (workflowId && includeSubgraphRuns) || runScope === 'roots'
-      ? await getWorkflowRecordingScopeCounts(workflowId, runScope)
+      ? await getWorkflowRecordingScopeCounts(workflowId, runScope === 'families' ? 'all' : runScope)
       : undefined;
 
   const normalizedPage = Math.max(1, Math.floor(page));
@@ -528,11 +531,12 @@ export async function listWorkflowRecordingRunsPage(
     };
   }
 
-  const totalRuns = scopeCounts
-    ? statusFilter === 'failed'
-      ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
-      : scopeCounts.totalRuns
-    : await countWorkflowRecordingRuns(workflowId, statusFilter, includeSubgraphRuns, runScope);
+  const totalRuns =
+    scopeCounts && runScope !== 'families'
+      ? statusFilter === 'failed'
+        ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+        : scopeCounts.totalRuns
+      : await countWorkflowRecordingRuns(workflowId, statusFilter, includeSubgraphRuns, runScope);
   const rows = await listWorkflowRecordingRunRowsByWorkflowId(workflowId, {
     page: normalizedPage,
     pageSize: normalizedPageSize,
@@ -551,7 +555,12 @@ export async function listWorkflowRecordingRunsPage(
     hasMore: normalizedPage * normalizedPageSize < totalRuns,
     statusFilter,
     inputFilter,
-    runs: rows.map(toWorkflowRecordingRunSummary),
+    runs: rows.map((row) => ({
+      ...toWorkflowRecordingRunSummary(row),
+      ...(runScope === 'families' && row.executionIdentity?.surface === 'subgraph_project'
+        ? { familyContext: true as const }
+        : {}),
+    })),
   };
 }
 
@@ -718,7 +727,8 @@ export async function persistWorkflowExecutionRecording(
   const bundlePath = getWorkflowRecordingBundlePath(recordingsRoot, workflowId, recordingId);
   const sourceProjectName = path.basename(options.sourceProjectPath, PROJECT_EXTENSION);
   const sourceProjectRelativePath = path.relative(options.workflowsRoot, options.sourceProjectPath).replace(/\\/g, '/');
-  const createdAt = new Date().toISOString();
+  const persistedAt = new Date().toISOString();
+  const createdAt = options.createdAt ?? persistedAt;
   const replayProject: Project = {
     ...options.executedProject,
     metadata: {
@@ -805,7 +815,7 @@ export async function persistWorkflowExecutionRecording(
         sourceProjectPath: options.sourceProjectPath,
         sourceProjectRelativePath,
         sourceProjectName,
-        updatedAt: createdAt,
+        updatedAt: persistedAt,
       },
       {
         id: recordingId,

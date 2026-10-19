@@ -9,7 +9,7 @@ export function withRemoteEvaluationAccounting(
   collectorsByRequestId: ReadonlyMap<RemoteRunRequestId, EvaluationEventCollector>,
   handleMessage: MessageHandler,
 ): MessageHandler {
-  return (message, data, requestId) => {
+  return (message, data, requestId, admission) => {
     const collector = requestId == null ? undefined : collectorsByRequestId.get(requestId);
     switch (message) {
       case 'llmCallFinished':
@@ -22,6 +22,6 @@ export function withRemoteEvaluationAccounting(
         collector?.toolCallFinished(data as ProcessEventMessageMap['toolCallFinished']);
         break;
     }
-    handleMessage(message, data, requestId);
+    handleMessage(message, data, requestId, admission);
   };
 }

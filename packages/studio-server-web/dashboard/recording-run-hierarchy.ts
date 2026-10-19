@@ -17,12 +17,16 @@ export type RecordingListRow = {
 
 /** Group only actual results. Never invent an ancestor or treat a child as one.
  * Correlation identifies a root execution, not the immediate parent of a nested
- * Subgraph. Keep all its descendants at one level and preserve result order.
+ * Subgraph. Keep descendants at one level, oldest first, while preserving the
+ * primary/context result order supplied by the paginated API.
  */
 export function groupRecordingRuns(
   recordings: WorkflowRecordingRunSummary[],
   childLoadStates?: Readonly<Record<string, RecordingRunFamily['childLoadState']>>,
 ): RecordingRunFamily[] {
+  const contextKeys = new Set(
+    recordings.filter((run) => run.familyContext).map((run) => run.executionIdentity?.correlationId),
+  );
   const uniqueRuns = [...new Map(recordings.map((run) => [run.id, run])).values()];
   const rootsByCorrelation = new Map<string, WorkflowRecordingRunSummary[]>();
   const childrenByCorrelation = new Map<string, WorkflowRecordingRunSummary[]>();
@@ -45,14 +49,20 @@ export function groupRecordingRuns(
     const children = correlation?.trim() ? childrenByCorrelation.get(correlation) ?? [] : [];
     // Multiple primary recordings with one key are ambiguous. Leave the roots
     // independent, and group children without asserting a particular parent.
-    const root = roots.length === 1 ? roots[0]! : null;
-    const discoverChildren = childLoadStates != null && root?.id === run.id;
+    const root = roots.length === 1 && !contextKeys.has(correlation) ? roots[0]! : null;
+    const contextAnchor = children.find((child) => childLoadStates?.[child.id] != null) ?? children[0];
+    const anchor = root ?? contextAnchor;
+    const discoverChildren =
+      childLoadStates != null &&
+      anchor != null &&
+      (isChild || root?.id === run.id) &&
+      (isChild || children.length > 0 || (root?.hasSubRuns !== false && childLoadStates[anchor.id] !== 'complete'));
     if ((children.length > 0 || discoverChildren) && (isChild || root?.id === run.id)) {
       const family: RecordingRunFamily = {
         key: `correlation:${correlation}`,
         root,
         children,
-        childLoadState: discoverChildren ? childLoadStates[root!.id] ?? 'unloaded' : undefined,
+        childLoadState: discoverChildren ? childLoadStates[anchor!.id] ?? 'unloaded' : undefined,
       };
       families.push(family);
       if (root) emitted.add(root.id);
@@ -61,6 +71,11 @@ export function groupRecordingRuns(
       families.push({ key: `run:${run.id}`, root: isChild ? null : run, children: isChild ? [run] : [] });
       emitted.add(run.id);
     }
+  }
+  // Fetch pages are newest-first. Sort the complete display family once, not
+  // individual pages or statuses, including context and input-search families.
+  for (const family of families) {
+    family.children.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id));
   }
   return families;
 }

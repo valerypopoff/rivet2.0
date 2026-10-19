@@ -113,6 +113,24 @@ function dispatchUnscopedEvent<K extends keyof ProcessEventMessageMap>(
   });
 }
 
+test('foreign pre-start failures cannot inherit an admitted root or consume its terminal decision', () => {
+  const state = createUnscopedRemoteExecutionRoutingState();
+  assert.equal(dispatchUnscopedEvent(state, 'start', makeStartEvent('project-1', 'accepted')), true);
+  const foreign = makeGraphFinishEvent('foreign');
+  const failure: ProcessEventMessageMap['graphError'] = {
+    graph: foreign.graph,
+    error: 'preparation failed',
+    execution: { ...foreign.execution!, projectId: 'project-2' as ProjectId },
+  };
+  assert.equal(dispatchUnscopedEvent(state, 'graphError', failure), false);
+  assert.equal(dispatchUnscopedEvent(state, 'error', { error: 'preparation failed' }), false);
+  const child = makeNodeFinishEvent('accepted');
+  child.execution = { ...child.execution!, projectId: 'project-2' as ProjectId };
+  assert.equal(dispatchUnscopedEvent(state, 'nodeFinish', child), true);
+  assert.equal(dispatchUnscopedEvent(state, 'graphFinish', makeGraphFinishEvent('accepted')), true);
+  assert.equal(dispatchUnscopedEvent(state, 'done', { results: {} }), true);
+});
+
 test('shouldDispatchRemoteExecutionEvent accepts legacy unscoped events and the active request only', () => {
   const unscopedRoutingState = createUnscopedRemoteExecutionRoutingState();
 
@@ -149,6 +167,24 @@ test('shouldDispatchRemoteExecutionEvent accepts legacy unscoped events and the 
     }),
     false,
   );
+});
+
+test('identified terminal messages settle their exact root without consuming another legacy completion', () => {
+  const state = createUnscopedRemoteExecutionRoutingState();
+  dispatchUnscopedEvent(state, 'start', makeStartEvent('project-1', 'one'));
+  dispatchUnscopedEvent(state, 'start', makeStartEvent('project-2', 'two'));
+  dispatchUnscopedEvent(state, 'graphFinish', makeGraphFinishEvent('two'));
+  dispatchUnscopedEvent(state, 'graphFinish', makeGraphFinishEvent('one'));
+  const execution = makeGraphFinishEvent('one').execution;
+  assert.equal(dispatchUnscopedEvent(state, 'abort', { successful: false, execution }), true);
+  assert.equal(state.acceptedRootRunIds.has('one' as RootRunId), true);
+  assert.equal(dispatchUnscopedEvent(state, 'done', { results: {}, execution }), true);
+  assert.equal(state.acceptedRootRunIds.has('one' as RootRunId), false);
+  assert.deepEqual(
+    state.completedRootRunDecisions.map((entry) => entry.rootRunId),
+    ['two'],
+  );
+  assert.equal(dispatchUnscopedEvent(state, 'done', { results: {} }), false);
 });
 
 test('shouldDispatchRemoteExecutionEvent ignores unscoped runs for another project', () => {

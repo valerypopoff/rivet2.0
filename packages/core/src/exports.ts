@@ -37,6 +37,7 @@ export * from './model/AgentResponseTracePresentation.js';
 export * from './model/DebuggerTransportSentinel.js';
 export * from './model/ProjectReferenceLoader.js';
 export * from './model/SubgraphProjectTarget.js';
+export * from './model/ProjectGraphCallSites.js';
 export * from './model/ProjectBundle.js';
 export * from './model/ProjectBundleRuntime.js';
 export * from './model/RivetUIContext.js';

@@ -517,6 +517,16 @@ test('remote project binding reconciliation validates immutable IDs and the ackn
     observationSequence: 1,
     projects: [{ projectId: 'project-1', generation: 1 }],
   };
+  for (const editCheckComplete of [true, false, undefined, 'yes']) {
+    assert.equal(
+      isEditorToDashboardEvent({
+        type: 'workflow-project-reconciliation-captured',
+        context: { ...context, editCheckComplete },
+        requestId: 'capture',
+      }),
+      editCheckComplete !== 'yes',
+    );
+  }
   assert.equal(
     isDashboardToEditorCommand({
       type: 'reconcile-workflow-project-bindings',

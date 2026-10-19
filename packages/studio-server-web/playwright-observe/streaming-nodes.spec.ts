@@ -1,19 +1,89 @@
-import { expect, test } from '@playwright/test';
-import { authenticateIfNeeded, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
-import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { expect, test, type Page } from '@playwright/test';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import type { SeedHostedEditorProjectOptions } from './helpers/hostedEditorStorage';
+import { serializeProject, type Project } from '@valerypopoff/rivet2-core';
+
+async function mockStreamingProject(page: Page, seed: SeedHostedEditorProjectOptions, extraProjects: unknown[] = []) {
+  const project = {
+    metadata: { id: seed.projectId, title: seed.title, description: '', mainGraphId: seed.graphId },
+    graphs: {
+      [seed.graphId]: {
+        metadata: { id: seed.graphId, name: 'Main Graph' },
+        nodes: seed.graph?.nodes ?? [],
+        connections: seed.graph?.connections ?? [],
+      },
+    },
+  } as Project;
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        folders: [],
+        projects: [
+          {
+            id: seed.projectId,
+            projectMetadataId: seed.projectId,
+            name: seed.title,
+            relativePath: seed.projectPath.slice('/workflows/'.length),
+            absolutePath: seed.projectPath,
+            fileName: seed.projectPath.split('/').at(-1),
+            settings: { status: 'unpublished', publishedWebApps: [] },
+          },
+          ...extraProjects,
+        ],
+      },
+    }),
+  );
+  await page.route('**/api/projects/load', (route) =>
+    route.fulfill({
+      json: {
+        contents: serializeProject(project),
+        datasetsContents: null,
+        revisionId: null,
+      },
+    }),
+  );
+}
+
+async function openStreamingProject(page: Page, title: string) {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.project-row').filter({ hasText: title }).dblclick();
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await expect(editor.locator('.node-canvas')).toBeVisible();
+  return editor;
+}
 
 test('Streaming nodes show header icons and Catch streaming chunks has a once-only count', async ({ page }) => {
-  await seedHostedEditorProject(page, {
+  await mockStreamingProject(page, {
     graph: {
       nodes: [
         { id: 'early-value', type: 'streamValue', title: 'Stream value', data: {}, visualData: { x: 50, y: 300 } },
-        { id: 'first-chunk', type: 'catchStreamingChunks', title: 'Catch streaming chunks', data: { count: 1 }, visualData: { x: 450, y: 300 } },
-        { id: 'watch', type: 'watchStreamingOutput', title: 'Watch Streaming Output', data: {}, visualData: { x: 50, y: 600 } },
-        { id: 'stop', type: 'stopWatchingStreamingOutput', title: 'Stop Watching Streaming Output', data: {}, visualData: { x: 450, y: 600 } },
+        {
+          id: 'first-chunk',
+          type: 'catchStreamingChunks',
+          title: 'Catch streaming chunks',
+          data: { count: 1 },
+          visualData: { x: 450, y: 300 },
+        },
+        {
+          id: 'watch',
+          type: 'watchStreamingOutput',
+          title: 'Watch Streaming Output',
+          data: {},
+          visualData: { x: 50, y: 600 },
+        },
+        {
+          id: 'stop',
+          type: 'stopWatchingStreamingOutput',
+          title: 'Stop Watching Streaming Output',
+          data: {},
+          visualData: { x: 450, y: 600 },
+        },
       ],
-      connections: [
-        { inputId: 'stream', inputNodeId: 'first-chunk', outputId: 'value', outputNodeId: 'early-value' },
-      ],
+      connections: [{ inputId: 'stream', inputNodeId: 'first-chunk', outputId: 'value', outputNodeId: 'early-value' }],
     },
     graphId: 'catch-streaming-chunks-graph',
     loaded: true,
@@ -21,15 +91,7 @@ test('Streaming nodes show header icons and Catch streaming chunks has a once-on
     projectPath: '/workflows/Catch streaming chunks.rivet-project',
     title: 'Catch streaming chunks',
   });
-  await mockHostedEditorBootstrap(page);
-
-  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
-  await authenticateIfNeeded(page);
-  const frame = page.locator('iframe.dashboard-editor-frame');
-  await expect.poll(async () => (await frame.count()) > 0 || (await page.locator('.node-canvas').first().isVisible()), {
-    timeout: 60_000,
-  }).toBe(true);
-  const editor = (await frame.count()) > 0 ? page.frameLocator('iframe.dashboard-editor-frame') : page;
+  const editor = await openStreamingProject(page, 'Catch streaming chunks');
   const emitter = editor.locator('.node[data-nodeid="early-value"]');
   const take = editor.locator('.node[data-nodeid="first-chunk"]');
   await expect(emitter).toBeVisible({ timeout: 60_000 });
@@ -48,21 +110,14 @@ test('Streaming nodes show header icons and Catch streaming chunks has a once-on
 });
 
 test('Streaming menu uses the requested order and creates a Watch streaming node', async ({ page }) => {
-  await seedHostedEditorProject(page, {
+  await mockStreamingProject(page, {
     graphId: 'streaming-menu-graph',
     loaded: true,
     projectId: 'streaming-menu-project',
     projectPath: '/workflows/Streaming menu.rivet-project',
     title: 'Streaming menu',
   });
-  await mockHostedEditorBootstrap(page);
-  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
-  await authenticateIfNeeded(page);
-  const frame = page.locator('iframe.dashboard-editor-frame');
-  await expect.poll(async () => (await frame.count()) > 0 || (await page.locator('.node-canvas').first().isVisible()), {
-    timeout: 60_000,
-  }).toBe(true);
-  const editor = (await frame.count()) > 0 ? page.frameLocator('iframe.dashboard-editor-frame') : page;
+  const editor = await openStreamingProject(page, 'Streaming menu');
   await editor.locator('.node-canvas').click({ button: 'right', position: { x: 500, y: 350 } });
   await editor.locator('.context-menu-label-text', { hasText: /^Add node$/ }).hover();
   await editor.locator('.context-menu-label-text', { hasText: /^Streaming$/ }).hover();
@@ -80,8 +135,10 @@ test('Streaming menu uses the requested order and creates a Watch streaming node
 });
 
 for (const streamable of [true, false]) {
-  test(`cross-project Subgraph wire ${streamable ? 'shows' : 'omits'} arrows for a ${streamable ? 'streamable' : 'plain'} output`, async ({ page }) => {
-    await seedHostedEditorProject(page, {
+  test(`cross-project Subgraph wire ${streamable ? 'shows' : 'omits'} arrows for a ${streamable ? 'streamable' : 'plain'} output`, async ({
+    page,
+  }) => {
+    const seed = {
       graph: {
         nodes: [
           {
@@ -102,53 +159,42 @@ for (const streamable of [true, false]) {
           },
           { id: 'watch', type: 'watchStreamingOutput', title: 'Watch', data: {}, visualData: { x: 550, y: 250 } },
         ],
-        connections: [
-          { outputNodeId: 'external-caller', outputId: 'answer', inputNodeId: 'watch', inputId: 'stream' },
-        ],
+        connections: [{ outputNodeId: 'external-caller', outputId: 'answer', inputNodeId: 'watch', inputId: 'stream' }],
       },
       graphId: 'root',
       loaded: true,
       projectId: 'caller-project',
       projectPath: '/workflows/Caller.rivet-project',
       title: 'Caller',
-    });
-    await mockHostedEditorBootstrap(page);
-    await page.route('**/api/workflows/tree', async (route) => {
-      await route.fulfill({ json: {
-        root: '/workflows',
-        folders: [],
-        projects: [{
-          id: 'external-project',
-          name: 'External',
-          relativePath: 'External.rivet-project',
-          settings: { status: 'unpublished' },
-        }],
-      } });
-    });
-    await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest', async (route) => {
-      await route.fulfill({ json: {
-        revisionKey: 'test-revision',
-        streamingOutputNodeIdsByGraph: { child: streamable ? ['child-out'] : [] },
-        project: {
-          metadata: { id: 'external-project', title: 'External', mainGraphId: 'child' },
-          graphs: {
-            child: {
-              metadata: { id: 'child', name: 'Main Graph' },
-              nodes: [{ id: 'child-out', type: 'graphOutput', data: { id: 'answer', dataType: 'string' } }],
-              connections: [],
+    };
+    await mockStreamingProject(page, seed, [
+      {
+        id: 'external-project',
+        name: 'External',
+        relativePath: 'External.rivet-project',
+        settings: { status: 'unpublished' },
+      },
+    ]);
+    await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest*', async (route) => {
+      await route.fulfill({
+        json: {
+          revisionKey: 'test-revision',
+          streamingOutputNodeIdsByGraph: { child: streamable ? ['child-out'] : [] },
+          project: {
+            metadata: { id: 'external-project', title: 'External', mainGraphId: 'child' },
+            graphs: {
+              child: {
+                metadata: { id: 'child', name: 'Main Graph' },
+                nodes: [{ id: 'child-out', type: 'graphOutput', data: { id: 'answer', dataType: 'string' } }],
+                connections: [],
+              },
             },
           },
         },
-      } });
+      });
     });
 
-    await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
-    await authenticateIfNeeded(page);
-    const frame = page.locator('iframe.dashboard-editor-frame');
-    await expect.poll(async () => (await frame.count()) > 0 || (await page.locator('.node-canvas').first().isVisible()), {
-      timeout: 60_000,
-    }).toBe(true);
-    const editor = (await frame.count()) > 0 ? page.frameLocator('iframe.dashboard-editor-frame') : page;
+    const editor = await openStreamingProject(page, seed.title);
     await expect(editor.locator('.node[data-nodeid="external-caller"]')).toBeVisible({ timeout: 60_000 });
     await expect(editor.locator('.node[data-nodeid="watch"]')).toBeVisible();
     const markers = editor.locator('.streaming-output-watch-marker-path');

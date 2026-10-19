@@ -3,6 +3,7 @@ import type { WorkflowRecordingExecutionIdentity } from '../../../../../studio-s
 type TimestampValue = Date | string;
 
 export type FolderRow = {
+  bundle_id?: string | null;
   relative_path: string;
   name: string;
   parent_relative_path: string;
@@ -96,6 +97,7 @@ export type FolderMoveRow = {
 };
 
 export type RecordingRow = {
+  has_sub_runs?: boolean;
   recording_id: string;
   workflow_id: string;
   source_project_name: string;

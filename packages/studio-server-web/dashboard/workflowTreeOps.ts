@@ -19,10 +19,7 @@ export const remapExpandedFolderIds = (
   for (const [folderId, isExpanded] of Object.entries(expandedFolders)) {
     const normalizedFolderId = normalizeWorkflowPath(folderId);
 
-    if (
-      normalizedFolderId === normalizedFromPath ||
-      normalizedFolderId.startsWith(`${normalizedFromPath}/`)
-    ) {
+    if (normalizedFolderId === normalizedFromPath || normalizedFolderId.startsWith(`${normalizedFromPath}/`)) {
       const suffix = normalizedFolderId.slice(normalizedFromPath.length);
       nextExpandedFolders[`${normalizedToPath}${suffix}`] = isExpanded;
       changed = true;
@@ -57,8 +54,16 @@ export const rewriteProjectForFolderMove = (
   destinationFolder: WorkflowFolderItem,
 ): WorkflowProjectItem => ({
   ...project,
-  relativePath: rewriteWorkflowPathPrefix(project.relativePath, sourceFolder.relativePath, destinationFolder.relativePath),
-  absolutePath: rewriteWorkflowPathPrefix(project.absolutePath, sourceFolder.absolutePath, destinationFolder.absolutePath),
+  relativePath: rewriteWorkflowPathPrefix(
+    project.relativePath,
+    sourceFolder.relativePath,
+    destinationFolder.relativePath,
+  ),
+  absolutePath: rewriteWorkflowPathPrefix(
+    project.absolutePath,
+    sourceFolder.absolutePath,
+    destinationFolder.absolutePath,
+  ),
 });
 
 export const rewriteFolderTreeForFolderMove = (
@@ -67,13 +72,15 @@ export const rewriteFolderTreeForFolderMove = (
   destinationFolder: WorkflowFolderItem,
 ): WorkflowFolderItem => {
   const nextFolders = folder.folders.map((childFolder) =>
-    rewriteFolderTreeForFolderMove(childFolder, sourceFolder, destinationFolder));
+    rewriteFolderTreeForFolderMove(childFolder, sourceFolder, destinationFolder),
+  );
   const nextProjects = folder.projects.map((project) =>
-    rewriteProjectForFolderMove(project, sourceFolder, destinationFolder));
+    rewriteProjectForFolderMove(project, sourceFolder, destinationFolder),
+  );
   const normalizedFolderPath = normalizeWorkflowPath(folder.relativePath);
   const normalizedSourcePath = normalizeWorkflowPath(sourceFolder.relativePath);
-  const isMovedFolder = normalizedFolderPath === normalizedSourcePath ||
-    normalizedFolderPath.startsWith(`${normalizedSourcePath}/`);
+  const isMovedFolder =
+    normalizedFolderPath === normalizedSourcePath || normalizedFolderPath.startsWith(`${normalizedSourcePath}/`);
 
   if (!isMovedFolder) {
     return {
@@ -89,9 +96,18 @@ export const rewriteFolderTreeForFolderMove = (
     ...folder,
     id: rewriteWorkflowPathPrefix(folder.id, sourceFolder.relativePath, destinationFolder.relativePath),
     name: isMovedRoot ? destinationFolder.name : folder.name,
-    relativePath: rewriteWorkflowPathPrefix(folder.relativePath, sourceFolder.relativePath, destinationFolder.relativePath),
-    absolutePath: rewriteWorkflowPathPrefix(folder.absolutePath, sourceFolder.absolutePath, destinationFolder.absolutePath),
+    relativePath: rewriteWorkflowPathPrefix(
+      folder.relativePath,
+      sourceFolder.relativePath,
+      destinationFolder.relativePath,
+    ),
+    absolutePath: rewriteWorkflowPathPrefix(
+      folder.absolutePath,
+      sourceFolder.absolutePath,
+      destinationFolder.absolutePath,
+    ),
     updatedAt: isMovedRoot ? destinationFolder.updatedAt : folder.updatedAt,
+    ...(isMovedRoot && destinationFolder.bundleId !== undefined ? { bundleId: destinationFolder.bundleId } : {}),
     folders: nextFolders,
     projects: nextProjects,
   };
@@ -182,6 +198,24 @@ export const insertFolderIntoTree = (
   };
 };
 
+// Paths and bundle membership must become visible together, even if the follow-up
+// tree read fails. Ordinary ancestors do not override nested bundle identities.
+const reconcileFolderBundleMembership = (
+  folder: WorkflowFolderItem,
+  inheritedBundleId: string | null = null,
+): WorkflowFolderItem => {
+  const bundleId = folder.bundleId ?? inheritedBundleId;
+  return {
+    ...folder,
+    projects: folder.projects.map((project) =>
+      project.bundleId === bundleId || (project.bundleId === undefined && bundleId === null)
+        ? project
+        : { ...project, bundleId },
+    ),
+    folders: folder.folders.map((child) => reconcileFolderBundleMembership(child, bundleId)),
+  };
+};
+
 export const applyFolderMoveToTree = (
   folders: WorkflowFolderItem[],
   rootProjects: WorkflowProjectItem[],
@@ -191,31 +225,25 @@ export const applyFolderMoveToTree = (
   folders: WorkflowFolderItem[];
   rootProjects: WorkflowProjectItem[];
 } => {
-  const rewrittenInPlace = {
+  let nextTree = {
     folders: folders.map((folder) => rewriteFolderTreeForFolderMove(folder, sourceFolder, destinationFolder)),
     rootProjects: rootProjects.map((project) => rewriteProjectForFolderMove(project, sourceFolder, destinationFolder)),
   };
   const sourceParentRelativePath = getParentRelativePath(sourceFolder.relativePath);
   const destinationParentRelativePath = getParentRelativePath(destinationFolder.relativePath);
 
-  if (normalizeWorkflowPath(sourceParentRelativePath) === normalizeWorkflowPath(destinationParentRelativePath)) {
-    return rewrittenInPlace;
-  }
-
-  const detached = detachFolderFromTree(folders, sourceFolder.relativePath);
-  if (!detached.removedFolder) {
-    return rewrittenInPlace;
-  }
-
-  const movedFolder = rewriteFolderTreeForFolderMove(detached.removedFolder, sourceFolder, destinationFolder);
-  const inserted = insertFolderIntoTree(detached.folders, destinationParentRelativePath, movedFolder);
-  if (!inserted.inserted) {
-    return rewrittenInPlace;
+  if (normalizeWorkflowPath(sourceParentRelativePath) !== normalizeWorkflowPath(destinationParentRelativePath)) {
+    const detached = detachFolderFromTree(folders, sourceFolder.relativePath);
+    if (detached.removedFolder) {
+      const movedFolder = rewriteFolderTreeForFolderMove(detached.removedFolder, sourceFolder, destinationFolder);
+      const inserted = insertFolderIntoTree(detached.folders, destinationParentRelativePath, movedFolder);
+      if (inserted.inserted) nextTree = { folders: inserted.folders, rootProjects };
+    }
   }
 
   return {
-    folders: inserted.folders,
-    rootProjects,
+    folders: nextTree.folders.map((folder) => reconcileFolderBundleMembership(folder)),
+    rootProjects: nextTree.rootProjects,
   };
 };
 
@@ -266,7 +294,8 @@ export const applyProjectMoveToTree = (
   rootProjects: WorkflowProjectItem[];
 } => {
   const nextRootProjects = rootProjects.map((project) =>
-    project.absolutePath === sourceProject.absolutePath ? destinationProject : project);
+    project.absolutePath === sourceProject.absolutePath ? destinationProject : project,
+  );
   const rootChanged = nextRootProjects.some((project, index) => project !== rootProjects[index]);
 
   return {

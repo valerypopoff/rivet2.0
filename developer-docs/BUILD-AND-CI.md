@@ -1712,6 +1712,48 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-10-20)
+
+All tracks' latest actual version changes are in `c2e1c3bc3`. The subsequent
+explicit-bundle change (`2d39d63ad`) and guarded singleton-validation launcher
+correction prepare these compatible minor releases:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.27.0` → `2.28.0` | Explicit bundle scope, desktop round trips and bundle-only debugger sessions. |
+| Public Core/Node/Evaluations/CLI | `2.20.0` → `2.21.0` | Optional explicit workspace manifest/loader4 and Subgraph scope contract; required family companions. |
+| App executor | `2.13.0` → `2.14.0` | Source-bundled runtime companion; no separate package-local feature. |
+| Documentation | `2.20.0` → `2.21.0` | Explicit bundle lifecycle and portable editing guidance. |
+| Five private Studio Server packages | `1.27.0` → `1.28.0` | Explicit bundle storage/duplication/import/export/access/debugging and deployment validation fixes. |
+
+Sync desktop metadata and the CLI Docker fallback; do not change dependency
+ranges, Helm metadata or the already implemented schema16 contract just for
+versioning. The [package inventory](PACKAGES.md) distinguishes changed workspaces
+from release companions. Develop publication/CI is not a GCP deployment or proof
+of a mixed-version production upgrade for these new schema16 images.
+
+### Previous prepared release versions (2026-10-19)
+
+Versions below cover committed and pending changes since each track's last
+version bump. These are release preparation, not evidence of publication or deployment.
+
+| Release track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.26.1` → `2.27.0` | Cross-project deletion warnings, shared bundle debugging and recording-playback improvements, plus compatible UI fixes. |
+| Public Core/Node/Evaluations/CLI | `2.19.0` → `2.20.0` | Additive graph call-site and debugger-session APIs, execution metadata and recording creation timestamps. Evaluations and CLI follow the required four-package lockstep contract. |
+| App executor | `2.12.0` → `2.13.0` | Bundle-aware debugger integration and runtime retirement/continuity support. |
+| Documentation | `2.19.0` → `2.20.0` | User guidance for the new subgraph warnings, bundle debugging and recording behavior. |
+| Five private Studio Server workspaces | `1.26.2` → `1.27.0` | New reference-check and recording-family browsing capabilities, with playback, logical creation-time and PostgreSQL query fixes. Bootstrap follows the private product's lockstep contract. |
+
+The public runtime baseline is `27af6beb5`; desktop, app-executor and docs use
+`204edeb26`; the Studio Server baseline is `e4baec121`. Compatible new capabilities
+make these minor rather than patch releases; no major-version break was identified.
+Synchronize the desktop Tauri/Cargo versions from `packages/app/package.json`
+using `yarn sync:desktop-version`, and keep the CLI Dockerfile's local-build
+fallback aligned with the public runtime family. Existing `workspace:^`
+dependencies follow the family versions without hard-coded range changes.
+Do not bump Helm chart metadata or the database schema merely for package versions.
+
 ### npm trusted publishing
 
 Main-branch npm publishing uses tokenless npm trusted publishing. The workflow

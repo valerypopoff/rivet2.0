@@ -15,6 +15,7 @@ import {
   type NodeId,
   type PortId,
   type ProcessEvents,
+  type ProcessEventMessageMap,
   type ProcessId,
   type ProjectId,
   type GraphProgress,
@@ -95,6 +96,8 @@ export type RunActivityGraphRun = {
   rootRunId: RootRunId;
   graphRunId: GraphRunId;
   graphId: GraphId;
+  /** Actual runtime owner; older journals may omit it. Never resolve foreign cloned IDs locally. */
+  projectId?: ProjectId;
   graphName?: string;
   parentGraphRunId?: GraphRunId;
   executor?: GraphExecutionMetadata['executor'];
@@ -159,6 +162,8 @@ export type RunActivityJournal = {
    * event from one concurrent root can never settle another active root.
    */
   pendingUnscopedTerminalConfirmations: number;
+  /** Bounded exact owners within that count; absent in older snapshots. */
+  pendingTerminalRootRunIds?: RootRunId[];
   ignoredLegacyEventCount: number;
   limits: RunActivityJournalLimits;
 };
@@ -195,7 +200,9 @@ type ProcessEventName =
 type RunActivityEventByName = {
   [K in ProcessEventName]: {
     type: K;
-    data: WithOptionalExecution<ProcessEvents[K]>;
+    data: K extends 'done' | 'error' | 'abort' | 'pause' | 'resume'
+      ? ProcessEventMessageMap[K]
+      : WithOptionalExecution<ProcessEvents[K]>;
     /** Supplied by the event boundary so reduction stays deterministic. */
     occurredAt: number;
     resultOrigin?: RunActivityResultOrigin;
@@ -219,6 +226,7 @@ export function createRunActivityJournal(limits: Partial<RunActivityJournalLimit
     rootOrder: [],
     activeRootRunIds: [],
     pendingUnscopedTerminalConfirmations: 0,
+    pendingTerminalRootRunIds: [],
     ignoredLegacyEventCount: 0,
     limits: normalizeLimits(limits),
   };
@@ -342,19 +350,40 @@ function applyEvent(journal: RunActivityJournal, event: RunActivityEvent, occurr
       applyToolCallFinished(journal, event.data, occurredAt);
       break;
     case 'done':
-      applyUnscopedRootTerminal(journal, 'completed', occurredAt, undefined, getReplayRecordedAt(event.data));
+      applyRootTerminal(
+        journal,
+        'completed',
+        occurredAt,
+        undefined,
+        getReplayRecordedAt(event.data),
+        getEventExecution(event.data),
+      );
       break;
     case 'abort':
-      applyUnscopedRootTerminal(journal, 'aborted', occurredAt, event.data?.error, getReplayRecordedAt(event.data));
+      applyRootTerminal(
+        journal,
+        'aborted',
+        occurredAt,
+        event.data?.error,
+        getReplayRecordedAt(event.data),
+        getEventExecution(event.data),
+      );
       break;
     case 'error':
-      applyUnscopedRootTerminal(journal, 'error', occurredAt, event.data?.error, getReplayRecordedAt(event.data));
+      applyRootTerminal(
+        journal,
+        'error',
+        occurredAt,
+        event.data?.error,
+        getReplayRecordedAt(event.data),
+        getEventExecution(event.data),
+      );
       break;
     case 'pause':
-      applyUnscopedPause(journal, true);
+      applyRootPause(journal, true, getEventExecution(event.data));
       break;
     case 'resume':
-      applyUnscopedPause(journal, false);
+      applyRootPause(journal, false, getEventExecution(event.data));
       break;
   }
 
@@ -440,10 +469,16 @@ function applyGraphTerminal(
   if (error != null) graph.errorSummary = serializeErrorMessage(error);
 
   if (execution.parentGraphRunId == null) {
-    const wasTerminal = isTerminalRootStatus(root.status);
+    const previousStatus = root.status;
     finishRoot(journal, root, status, at, error);
-    if (!wasTerminal) {
+    // Abort is announced before cleanup; a later graphError/graphFinish has
+    // its own processor confirmation even if the journal is already terminal.
+    if (!isTerminalRootStatus(previousStatus) || previousStatus !== status) {
       journal.pendingUnscopedTerminalConfirmations = (journal.pendingUnscopedTerminalConfirmations ?? 0) + 1;
+      const owners = (journal.pendingTerminalRootRunIds ??= []);
+      owners.push(execution.rootRunId);
+      // Preserve the count for legacy confirmations beyond the identity window.
+      if (owners.length > 32) owners.shift();
     }
   }
 }
@@ -951,6 +986,7 @@ function ensureGraphRun(
       rootRunId: execution.rootRunId,
       graphRunId: execution.graphRunId,
       graphId: execution.graphId,
+      ...(execution.projectId == null ? {} : { projectId: execution.projectId }),
       graphName: graph?.metadata?.name,
       parentGraphRunId: execution.parentGraphRunId,
       executor: execution.executor,
@@ -960,6 +996,7 @@ function ensureGraphRun(
     root.graphRunsById[execution.graphRunId] = graphRun;
     root.graphRunOrder.push(execution.graphRunId);
   } else {
+    if (execution.projectId != null) graphRun.projectId = execution.projectId;
     graphRun.graphName = graph?.metadata?.name ?? graphRun.graphName;
     graphRun.parentGraphRunId = execution.parentGraphRunId ?? graphRun.parentGraphRunId;
     graphRun.executor = execution.executor ?? graphRun.executor;
@@ -1020,6 +1057,21 @@ function ensureNodeInvocation(
   root.nodeInvocationsByKey[key] = invocation;
   root.nodeInvocationOrder.push(key);
   return invocation;
+}
+
+/** Finish a passive projection without inventing a root graph or processor event. */
+export function settleObservedRunActivityRoot(
+  journal: RunActivityJournal | undefined,
+  rootRunId: RootRunId,
+  status: 'completed' | 'error' | 'aborted',
+  at = Date.now(),
+): RunActivityJournal {
+  if (!journal) return createRunActivityJournal();
+  const root = journal.rootsById[rootRunId];
+  if (!root || isTerminalRootStatus(root.status)) return journal;
+  return produce(journal, (draft) => {
+    finishRoot(draft, draft.rootsById[rootRunId]!, status, at);
+  });
 }
 
 function finishRoot(
@@ -1094,17 +1146,44 @@ function markNodeInvocationTerminalFromRoot(
   invocation.terminalEventMissing = true;
 }
 
-function applyUnscopedRootTerminal(
+function consumeTerminalConfirmation(journal: RunActivityJournal, rootRunId?: RootRunId): boolean {
+  const owners = journal.pendingTerminalRootRunIds ?? [];
+  if (rootRunId != null) {
+    const index = owners.indexOf(rootRunId);
+    if (index < 0) return false;
+    owners.splice(index, 1);
+  } else {
+    if (!(journal.pendingUnscopedTerminalConfirmations > 0)) return false;
+    // Unattributed confirmations from older snapshots/evicted identities came
+    // before the retained exact owners. Consume them without stealing an owner.
+    if (journal.pendingUnscopedTerminalConfirmations <= owners.length) owners.shift();
+  }
+  journal.pendingUnscopedTerminalConfirmations = Math.max(0, journal.pendingUnscopedTerminalConfirmations - 1);
+  return true;
+}
+
+function applyRootTerminal(
   journal: RunActivityJournal,
   status: Exclude<RunActivityRootStatus, 'running' | 'outputs-ready'>,
   at: number,
   error?: unknown,
   replayRecordedAt?: number,
+  execution?: GraphExecutionMetadata,
 ): void {
-  if ((journal.pendingUnscopedTerminalConfirmations ?? 0) > 0) {
-    journal.pendingUnscopedTerminalConfirmations -= 1;
+  if (execution != null) {
+    consumeTerminalConfirmation(journal, execution.rootRunId);
+    const root = journal.rootsById[execution.rootRunId];
+    if (!root) {
+      noteLegacyEvent(journal);
+      return;
+    }
+    // An exact graph terminal already owns the run's status and finish clock.
+    // Duplicate processor confirmations must not settle another active root.
+    if (!isTerminalRootStatus(root.status)) finishRoot(journal, root, status, at, error);
+    applyRecordedTiming(root, replayRecordedAt, false, false, false);
     return;
   }
+  if (consumeTerminalConfirmation(journal)) return;
 
   const root = getSingleActiveRoot(journal);
   if (root == null) {
@@ -1178,13 +1257,13 @@ function getEventExecution(data: unknown): GraphExecutionMetadata | undefined {
   return execution != null && typeof execution === 'object' ? (execution as GraphExecutionMetadata) : undefined;
 }
 
-function applyUnscopedPause(journal: RunActivityJournal, paused: boolean): void {
-  const root = getSingleActiveRoot(journal);
+function applyRootPause(journal: RunActivityJournal, paused: boolean, execution?: GraphExecutionMetadata): void {
+  const root = execution == null ? getSingleActiveRoot(journal) : journal.rootsById[execution.rootRunId];
   if (root == null) {
     noteLegacyEvent(journal);
     return;
   }
-  root.paused = paused;
+  if (!isTerminalRootStatus(root.status)) root.paused = paused;
 }
 
 function getExactExecution(

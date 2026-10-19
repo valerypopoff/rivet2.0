@@ -399,6 +399,32 @@ test('all six commands share one managed application model without Kubernetes ma
       } else assert.ok(!commands.includes('CreateBucketCommand'));
     }
 });
+test('migration jobs use an exact schema version without narrowing serving compatibility across all six commands', () => {
+  for (const stage of ['dev', 'staging', 'prod']) {
+    for (const storage of ['local-storage', 'external-storage']) {
+      const config = containerServerConfig(environment(stage), stage, storage);
+      // Keep this regression effective even after a later release has no
+      // predecessor window: the writer must never inherit a serving range.
+      config.schema = { ...config.schema, minimumRollbackCompatibleVersion: config.schema.version - 1 };
+      for (const offline of [false, true]) {
+        const model = createManagedCompose(config, images, { offline });
+        const migration = model.services.migrate.environment;
+        assert.equal(migration.RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION, String(config.schema.version));
+        assert.equal(migration.RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION, String(config.schema.version));
+        for (const name of ['backend', 'execution']) {
+          const serving = model.services[name].environment;
+          assert.equal(serving.RIVET_MANAGED_WORKFLOW_SCHEMA_MODE, 'verify');
+          assert.equal(
+            serving.RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION,
+            String(config.schema.minimumRollbackCompatibleVersion),
+          );
+          assert.equal(serving.RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION, String(config.schema.version));
+        }
+      }
+    }
+  }
+});
+
 test('shared port and UI auth configure all six deployments without changing internal ports or storage identity', () => {
   for (const stage of ['dev', 'staging', 'prod']) {
     for (const storage of ['local-storage', 'external-storage']) {

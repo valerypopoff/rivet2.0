@@ -14,7 +14,11 @@ import type {
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { normalizeRivetCorrelationId } from '../../request-correlation.js';
-import { recordingWorkflowScopeClause } from './recording-workflow-scope.js';
+import {
+  recordingHasSubRunsSql,
+  recordingWorkflowScopeClause,
+  type RecordingRunScope,
+} from './recording-workflow-scope.js';
 
 export type WorkflowRecordingWorkflowRow = {
   workflowId: string;
@@ -26,6 +30,7 @@ export type WorkflowRecordingWorkflowRow = {
 };
 
 export type WorkflowRecordingRunRow = {
+  hasSubRuns?: boolean;
   id: string;
   workflowId: string;
   sourceProjectName?: string;
@@ -323,6 +328,8 @@ async function openDatabase(): Promise<DatabaseSync> {
     `);
     ensureRecordingRunIdentityColumns(db);
     db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_recording_runs_correlation_surface
+        ON recording_runs(correlation_id, execution_surface);
       CREATE INDEX IF NOT EXISTS idx_recording_runs_statistics_target
         ON recording_runs(
           execution_surface,
@@ -525,7 +532,7 @@ export async function listWorkflowRecordingRunRowsByWorkflowId(
     pageSize: number;
     statusFilter: WorkflowRecordingFilterStatus;
     includeSubgraphRuns?: boolean;
-    runScope?: 'all' | 'roots' | 'children';
+    runScope?: RecordingRunScope;
   },
 ): Promise<WorkflowRecordingRunRow[]> {
   return listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
@@ -549,7 +556,7 @@ export async function listWorkflowRecordingRunRowsForWorkflowWindow(
     statusFilter: WorkflowRecordingFilterStatus;
     after?: { createdAt: string; recordingId: string };
     includeSubgraphRuns?: boolean;
-    runScope?: 'all' | 'roots' | 'children';
+    runScope?: RecordingRunScope;
   },
 ): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
@@ -590,7 +597,7 @@ function buildRecordingWindowQuery(
   parameters.push(Math.max(1, Math.floor(options.limit)), Math.max(0, Math.floor(options.offset)));
   const sql = `
     SELECT
-      ${RECORDING_RUN_COLUMNS}
+      ${RECORDING_RUN_COLUMNS}, ${recordingHasSubRunsSql('filesystem')} AS hasSubRuns
     FROM recording_runs
     ${whereClause}
     ${afterClause}
@@ -604,7 +611,7 @@ export async function countWorkflowRecordingRuns(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   includeSubgraphRuns = false,
-  runScope: 'all' | 'roots' | 'children' = 'all',
+  runScope: RecordingRunScope = 'all',
 ): Promise<number> {
   const db = await getDatabase();
   const whereClause = buildRunFilterClause(workflowId, statusFilter, includeSubgraphRuns, runScope);
@@ -615,10 +622,7 @@ export async function countWorkflowRecordingRuns(
   return toNumber(row?.count ?? 0);
 }
 
-export async function getWorkflowRecordingScopeCounts(
-  workflowId: string,
-  runScope: 'all' | 'roots' | 'children' = 'all',
-) {
+export async function getWorkflowRecordingScopeCounts(workflowId: string, runScope: RecordingRunScope = 'all') {
   const db = await getDatabase();
   const row = db
     .prepare(
@@ -862,6 +866,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
   }
 
   return {
+    hasSubRuns: row.hasSubRuns == null ? undefined : Boolean(row.hasSubRuns),
     id: String(row.id ?? ''),
     workflowId: String(row.workflowId ?? ''),
     sourceProjectName: toOptionalString(row.sourceProjectName),
@@ -918,9 +923,9 @@ function buildRunFilterClause(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   includeSubgraphRuns = false,
-  runScope: 'all' | 'roots' | 'children' = 'all',
+  runScope: RecordingRunScope = 'all',
 ): string {
-  return `WHERE ${recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'filesystem', 1, runScope)}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
+  return `WHERE ${recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'filesystem', 1, runScope, statusFilter)}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
 }
 
 function buildStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {

@@ -208,7 +208,7 @@ export function useWorkspaceHostOpenProject() {
   const openLoadedProject = useStableCallback(async (loaded: LoadedProjectData, isCurrent: () => boolean) => {
     if (!isCurrent()) return false;
     const members = loaded.bundleProjects ?? [
-      { project: loaded.project, path: loaded.path, evaluation: loaded.evaluation },
+      { project: loaded.project, path: loaded.path, evaluation: loaded.evaluation, bundleMember: loaded.bundleMember },
     ];
     const existingProjects = store.get(projectsState).openedProjects;
     for (const member of members) {
@@ -279,7 +279,11 @@ export function useWorkspaceHostOpenProject() {
           ...previous,
           openedProjects: {
             ...previous.openedProjects,
-            [id]: { ...previous.openedProjects[id]!, bundleManifestPath: loaded.bundleManifestPath },
+            [id]: {
+              ...previous.openedProjects[id]!,
+              bundleManifestPath: loaded.bundleManifestPath,
+              bundleMember: member.bundleMember,
+            },
           },
         }));
     }

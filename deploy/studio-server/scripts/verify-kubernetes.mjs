@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { readManagedWorkflowSchemaReleaseContract } from './lib/studio-server-release-manifest.mjs';
 import { singleMachineConfig, singleMachineValues } from './lib/single-machine-kubernetes.mjs';
+import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
 
 const rootDir = process.cwd();
 const launcherName = 'verify-kubernetes';
@@ -159,6 +160,25 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
       '-f', './deploy/studio-server/helm/overlays/gke-ha.yaml',
       ...prodImageArgs,
     ]);
+    console.log(`[${launcherName}] Linting the fenced singleton phase of GKE HA adoption...`);
+    const validationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-validation-render-'));
+    const validationPath = path.join(validationDir, 'maintenance.json');
+    try {
+      fs.writeFileSync(validationPath, JSON.stringify({
+        ...maintenanceValidationValues,
+        ha: { enabled: false },
+        replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 },
+      }));
+      await spawnProgram(helmBin, [
+        'lint', './deploy/studio-server/helm',
+        '-f', './deploy/studio-server/helm/overlays/prod.yaml', ...profileArgs,
+        '-f', './deploy/studio-server/helm/overlays/gke-ha.yaml', ...prodImageArgs,
+        '-f', validationPath,
+      ]);
+    } finally {
+      if (fs.existsSync(validationPath)) fs.unlinkSync(validationPath);
+      fs.rmdirSync(validationDir);
+    }
   }
 }
 

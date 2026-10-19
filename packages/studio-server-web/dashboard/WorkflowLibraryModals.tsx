@@ -7,6 +7,7 @@ import { RunRecordingsModal } from './RunRecordingsModal';
 import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
 import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
 import { WorkflowBundleUploadModal } from './WorkflowBundleUploadModal';
+import { WorkflowBundleModal } from './WorkflowBundleModal';
 import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
@@ -68,6 +69,17 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      {controller.bundleDialog ? (
+        <WorkflowBundleModal
+          key={`${controller.bundleDialog.source?.bundleId ?? 'new'}:${controller.bundleDialog.parent}`}
+          source={controller.bundleDialog.source}
+          parent={controller.bundleDialog.parent}
+          folders={controller.bundleFolders}
+          onClose={controller.closeBundleDialog}
+          inspectEdits={controller.captureBundleEdits}
+          onCreated={controller.handleBundleCreated}
+        />
+      ) : null}
       {controller.bundleUploadFolder ? (
         <WorkflowBundleUploadModal
           key={controller.bundleUploadFolder.id}
@@ -76,10 +88,10 @@ export const WorkflowLibraryModals: FC<{
           onImported={controller.handleBundleImported}
         />
       ) : null}
-      {controller.bundleProject ? (
+      {controller.bundleFolder ? (
         <WorkflowProjectBundleModal
-          key={controller.bundleProject.id}
-          project={controller.bundleProject}
+          key={controller.bundleFolder.bundleId}
+          bundle={controller.bundleFolder}
           isOpen={controller.bundleOpen}
           onClose={controller.closeBundleModal}
         />
@@ -87,6 +99,7 @@ export const WorkflowLibraryModals: FC<{
       <LocalStorageUpgradePrompt
         suppressed={
           scheduledRunsOpen ||
+          controller.bundleDialog != null ||
           controller.bundleOpen ||
           controller.bundleUploadFolder != null ||
           appSettingsOpen ||

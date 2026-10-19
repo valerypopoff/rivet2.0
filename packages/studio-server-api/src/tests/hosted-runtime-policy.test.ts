@@ -99,7 +99,9 @@ function processorFixture(tail: () => Promise<Record<string, { type: 'string'; v
   return { processor, disposals: () => disposals };
 }
 
-test('a failed foreground delivery does not dispose or release a still-running execution', async () => {
+test('a failed foreground delivery does not dispose or release a still-running execution', async (t) => {
+  const createdAt = Date.parse('2026-10-19T10:00:00.000Z');
+  t.mock.timers.enable({ apis: ['Date'], now: createdAt });
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => {
     finish = resolve;
@@ -115,11 +117,13 @@ test('a failed foreground delivery does not dispose or release a still-running e
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(f.disposals(), 0);
+  t.mock.timers.tick(60_000);
   finish();
   const result = await running;
   assert.equal(result.outputs!.output!.value, 'terminal');
   assert.equal(result.failure!.error, failure);
   assert.equal(result.status, 'succeeded', 'delivery failure is not a graph failure');
+  assert.equal(result.createdAt, new Date(createdAt).toISOString(), 'background completion cannot move the start time');
   assert.equal(f.disposals(), 1);
   await assert.rejects(session.run(), /only once/);
 });

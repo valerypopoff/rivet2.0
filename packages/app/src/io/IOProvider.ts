@@ -28,8 +28,9 @@ export type LoadedProjectData = {
   project: Project;
   evaluation: EvaluationProjectFileData;
   /** Opening a manifest publishes the whole workspace, not just its entry. */
-  bundleProjects?: { path: string; project: Project; evaluation: EvaluationProjectFileData }[];
+  bundleProjects?: { path: string; project: Project; evaluation: EvaluationProjectFileData; bundleMember?: boolean }[];
   bundleManifestPath?: string;
+  bundleMember?: boolean;
   /** Optional provider preparation, invoked only while this selection is current. */
   commit?: (isCurrent: () => boolean, skipProjects?: ReadonlySet<ProjectId>) => Promise<boolean>;
 };

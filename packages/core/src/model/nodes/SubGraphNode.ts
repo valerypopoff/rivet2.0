@@ -38,7 +38,7 @@ export type SubGraphNode = ChartNode & {
     /** Saved project target resolved by a host or portable bundle loader. Absent means the current project. */
     targetProjectId?: ProjectId;
     /** Retains the hosted picker mode before an external project is selected. */
-    targetScope?: 'other-projects';
+    targetScope?: 'other-projects' | 'same-bundle';
     targetVersion?: SubgraphProjectVersion;
     /** Last selected boundary keeps existing wires visible while a hosted preview reloads. */
     targetBoundary?: GraphBoundary;
@@ -430,6 +430,7 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
           // upload before reporting the caller run complete, so closing its tab
           // immediately after completion cannot discard the called-project run.
           await context.onSubgraphProjectRun?.({
+            createdAt: new Date(startedAt).toISOString(),
             target: { projectId: this.data.targetProjectId, version: this.data.targetVersion ?? 'latest' },
             resolved: recordingTarget,
             graphId: this.data.graphId,

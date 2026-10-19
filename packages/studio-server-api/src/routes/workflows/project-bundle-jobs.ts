@@ -8,6 +8,8 @@ import { createHttpError } from '../../utils/httpError.js';
 import { getWorkflowsRoot } from '../../security.js';
 import { createProjectBundleArchive } from './project-bundle-archive.js';
 import type { ProjectBundleJobStatus } from '../../../../studio-server-shared/project-bundle-types.js';
+import { PROJECT_BUNDLE_UPLOAD_MAX_BYTES } from '../../../../studio-server-shared/project-bundle-types.js';
+import { DEFAULT_JSON_BODY_LIMIT_BYTES } from '../../middleware/body-parsers.js';
 import { sharedBundleArchives, BundlePublicationUncertainError } from '../../ha-bundle-archives.js';
 
 export type { ProjectBundleJobStatus } from '../../../../studio-server-shared/project-bundle-types.js';
@@ -242,38 +244,65 @@ export class ProjectBundleJobs {
           job.status.archiveBytes = bytes;
         },
       });
+      // A 4096-code-unit destination can expand sixfold as JSON escapes.
+      let uploadJsonBytes = 64 * 1024; // Bounded envelope and destination, not artifact payloads.
+      const writePortableFile = async (file: string, contents: string) => {
+        if (source.workspace) {
+          uploadJsonBytes += Buffer.byteLength(JSON.stringify({ path: file, contents })) + 1;
+          if (uploadJsonBytes > DEFAULT_JSON_BODY_LIMIT_BYTES)
+            throw new ProjectBundleError(
+              'Bundle exceeds the server upload JSON limit. Reduce its size before downloading.',
+            );
+        }
+        await writer!.writeFile(file, contents);
+      };
       const captured = await collectProjectBundle({
         source,
         rootVersion,
         signal: writer.signal,
         maxBytes: configured,
-        writeFile: writer.writeFile,
+        writeFile: writePortableFile,
         progress: (_phase, projects, bytes) => {
           job.status.projects = projects;
           job.status.bytes = bytes;
         },
       });
-      await writer.writeFile(
-        'README.txt',
+      const readme =
         `Rivet project bundle\n\nExtract the complete ZIP. Install a release of @valerypopoff/rivet2-node that supports bundle loader capability ${captured.manifest.requiredLoaderVersion} (bundle schema 1).\n` +
-          'Older npm releases cannot load this bundle. Create run.mjs in the extracted directory:\n\n' +
-          'import { loadProjectBundle } from "@valerypopoff/rivet2-node";\n' +
-          'const bundle = await loadProjectBundle("./rivet-bundle.json");\n' +
-          'const runner = bundle.createProcessor({ inputs: {} }); // Add your graph inputs. Main Graph is selected by default.\n' +
-          'try { console.log(await runner.run()); } finally { runner.dispose(); }\n\n' +
-          'Run node run.mjs from this directory. Configure your provider credentials and environment variables first.\n' +
-          (captured.manifest.versionPolicy
-            ? `Version selection for all projects: ${captured.manifest.versionPolicy}. Published falls back to saved latest only when no publication exists.\n`
-            : 'Versions follow authored Subgraph choices; a published root can include saved latest targets.\n') +
-          'Files initially contain saved snapshots from export time. Extracted projects and datasets may be edited; reload the bundle to use edits. Unsaved editor changes are excluded.\n' +
-          'Datasets are included; modifications during execution remain in memory. Project/dataset files may contain sensitive values.\n' +
-          'Configure credentials, custom providers, external services and local file paths separately. Install required Code-node packages locally.\n' +
-          'Plugin declarations (no automatic installation):\n' +
-          JSON.stringify(captured.manifest.plugins, null, 2),
-      );
+        'Older npm releases cannot load this bundle. Create run.mjs in the extracted directory:\n\n' +
+        'import { loadProjectBundle } from "@valerypopoff/rivet2-node";\n' +
+        'const bundle = await loadProjectBundle("./rivet-bundle.json");\n' +
+        'const runner = bundle.createProcessor({ inputs: {} }); // Add your graph inputs. Main Graph is selected by default.\n' +
+        'try { console.log(await runner.run()); } finally { runner.dispose(); }\n\n' +
+        'Run node run.mjs from this directory. Configure your provider credentials and environment variables first.\n' +
+        (captured.manifest.versionPolicy
+          ? `Version selection for all projects: ${captured.manifest.versionPolicy}. Published falls back to saved latest only when no publication exists.\n`
+          : 'Versions follow authored Subgraph choices; a published root can include saved latest targets.\n') +
+        'Files initially contain saved snapshots from export time. Extracted projects and datasets may be edited; reload the bundle to use edits. Unsaved editor changes are excluded.\n' +
+        'Datasets are included; modifications during execution remain in memory. Project/dataset files may contain sensitive values.\n' +
+        'Configure credentials, custom providers, external services and local file paths separately. Install required Code-node packages locally.\n' +
+        'Plugin declarations (no automatic installation):\n' +
+        JSON.stringify(captured.manifest.plugins, null, 2);
+      const desktopInstructions = captured.manifest.workspace
+        ? '\nDesktop round trip: open rivet-bundle.json in an updated Rivet Desktop app. Each project can be edited and saved. Upload this extracted folder or a newly zipped copy with Upload bundle on Rivet Server. Upload creates new unpublished projects; it never updates the original.\nThe initial selected project is only a compatibility selection, not a bundle entry project.\n'
+        : '';
+      const finalReadme = readme + desktopInstructions;
+      if (
+        captured.manifest.workspace &&
+        job.status.bytes +
+          Buffer.byteLength(JSON.stringify(captured.manifest, null, 2)) +
+          Buffer.byteLength(finalReadme) >
+          PROJECT_BUNDLE_UPLOAD_MAX_BYTES
+      )
+        throw new ProjectBundleError(
+          'Bundle exceeds the 64 MiB round-trip upload limit. Reduce its size before downloading.',
+        );
+      await writePortableFile('README.txt', finalReadme);
       job.status.phase = 'packaging';
       await this.#save(job);
       const completed = await writer.finish();
+      if (captured.manifest.workspace && completed.bytes > PROJECT_BUNDLE_UPLOAD_MAX_BYTES)
+        throw new ProjectBundleError('Bundle ZIP exceeds the 64 MiB upload limit. Reduce its size before downloading.');
       await captured.verify();
       await writer.checkCapacity();
       job.status.archiveBytes = completed.bytes;

@@ -21,4 +21,6 @@ export type ProjectBundleImportResult = {
   folder: WorkflowFolderItem;
   projects: WorkflowProjectItem[];
   rootProjectId: string;
+  /** Portable dependency snapshots imported outside the explicit bundle boundary. */
+  dependenciesFolder?: WorkflowFolderItem;
 };

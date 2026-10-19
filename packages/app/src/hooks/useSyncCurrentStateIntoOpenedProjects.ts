@@ -4,7 +4,7 @@ import { graphState } from '../state/graph';
 import { loadedProjectState, projectDataState, projectState, projectsState } from '../state/savedGraphs';
 import { selectedExecutorState } from '../state/settings.js';
 import { addOpenedProject, resolveSyncedOpenedProjectFsPathOptions } from '../utils/openedProjects.js';
-import { useExecutorSessionState } from './useExecutorSession.js';
+import { useOwnExecutorSessionState } from './useExecutorSession.js';
 import { projectExecutorModesEqual, resolveCurrentProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import { useSyncProjectDirtyState } from './useSyncProjectDirtyState.js';
 
@@ -15,7 +15,7 @@ export function useSyncCurrentStateIntoOpenedProjects({ enabled = true }: { enab
   const loadedProject = useAtomValue(loadedProjectState);
   const currentGraph = useAtomValue(graphState);
   const selectedExecutor = useAtomValue(selectedExecutorState);
-  const executorSession = useExecutorSessionState();
+  const executorSession = useOwnExecutorSessionState();
   const executorTargetType = executorSession.target?.type;
   const executorTargetUrl = executorSession.target?.url;
   const executorTarget = useMemo(

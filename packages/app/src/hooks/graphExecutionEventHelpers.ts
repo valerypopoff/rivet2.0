@@ -48,18 +48,19 @@ export function finishGraphRunHistory(
   if (!graphRunId) return history;
   return produce(history, (draft) => {
     const run = draft[graphViewKey]?.find((candidate) => candidate.graphRunId === graphRunId);
-    if (run) {
+    if (run && run.status !== status) {
       run.finishedAt = Date.now();
       run.status = status;
     }
   });
 }
 
-export function interruptRunningProcesses(lastRunData: RunDataByNodeId): RunDataByNodeId {
+export function interruptRunningProcesses(lastRunData: RunDataByNodeId, rootRunId?: RootRunId): RunDataByNodeId {
   return produce(lastRunData, (draft) => {
     for (const processes of Object.values(draft)) {
       for (const process of processes) {
-        if (process.data.status?.type === 'running') process.data.status = { type: 'interrupted' };
+        if (process.data.status?.type === 'running' && shouldReconcileProcess(process, rootRunId))
+          process.data.status = { type: 'interrupted' };
       }
     }
   });
@@ -83,6 +84,29 @@ export function removeRunningGraphEntry(runningGraphs: GraphId[], graphId: Graph
     nextRunningGraphs.splice(graphIndex, 1);
   }
   return nextRunningGraphs;
+}
+
+/** One identified invocation owns one running slot, even across abort cleanup. */
+export function finishGraphRunState(
+  state: Pick<ProjectExecutionSnapshot, 'graphRunHistoryByView' | 'runningGraphs'>,
+  graphViewKey: GraphViewKey,
+  graphId: GraphId,
+  graphRunId: GraphRunId | undefined,
+  status: GraphRunRecord['status'],
+): Pick<ProjectExecutionSnapshot, 'graphRunHistoryByView' | 'runningGraphs'> {
+  const run =
+    graphRunId == null
+      ? undefined
+      : state.graphRunHistoryByView[graphViewKey]?.find((candidate) => candidate.graphRunId === graphRunId);
+  return {
+    graphRunHistoryByView: finishGraphRunHistory(state.graphRunHistoryByView, graphViewKey, graphRunId, status),
+    // Legacy events retain their existing one-slot fallback. An identified
+    // terminal without a matching start cannot consume another invocation.
+    runningGraphs:
+      graphRunId == null || run?.status === 'running'
+        ? removeRunningGraphEntry(state.runningGraphs, graphId)
+        : state.runningGraphs,
+  };
 }
 
 export function updateSelectedGraphRunForGraphStart(

@@ -1,8 +1,33 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { authenticateIfNeeded, mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { serializeProject } from '@valerypopoff/rivet2-core';
 
 type EditorRoot = Page | FrameLocator;
+
+async function openSeededProject(page: Page) {
+  // These checks exercise output, not recovery of legacy localStorage fragments.
+  await page.route('**/api/projects/load', async (route) => {
+    const fixture = await page.evaluate(() => JSON.parse(localStorage.getItem('project')!));
+    await route.fulfill({
+      json: { contents: serializeProject(fixture.projectState), datasetsContents: null, revisionId: null },
+    });
+  });
+  await page.getByRole('button', { name: 'Menu', exact: true }).waitFor();
+  await page.evaluate(() => {
+    const fixture = JSON.parse(localStorage.getItem('project')!);
+    window.postMessage(
+      {
+        type: 'open-project',
+        path: fixture.loadedProjectState.path,
+        expectedProjectId: fixture.projectState.metadata.id,
+        preferredGraphId: fixture.projectState.metadata.mainGraphId,
+        replaceCurrent: false,
+      },
+      location.origin,
+    );
+  });
+}
 
 test('fullscreen output resizes independently from both edges and retains bounds across node types', async ({
   page,
@@ -47,6 +72,7 @@ test('fullscreen output resizes independently from both edges and retains bounds
   );
   await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
+  await openSeededProject(page);
   const editor = await getEditorRoot(page);
   const textNode = editor.locator('.node[data-nodeid="resize-text"]');
   await expect(textNode).toBeVisible();
@@ -215,6 +241,7 @@ test('fullscreen search keeps the match highlighted after opening a paged JSON c
 
   await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
+  await openSeededProject(page);
   const editor = await getEditorRoot(page);
   const node = editor.locator('.node[data-nodeid="large-object-output"]');
   await expect(node).toBeVisible({ timeout: 60_000 });

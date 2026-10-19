@@ -6,6 +6,7 @@ import {
 import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import { isWorkflowRecordingEnabled } from './recordings-config.js';
 import { persistWorkflowExecutionRecordingWithBackend } from './storage-backend.js';
+import { getWorkflowRecordingCreatedAt } from '../../../../studio-server-shared/workflow-recording-time.js';
 
 /** A called project owns its own replay, independently of the caller's run. */
 export function enqueueSubgraphProjectRecording(run: SubgraphProjectRun): void {
@@ -16,12 +17,14 @@ export function enqueueSubgraphProjectRecording(run: SubgraphProjectRun): void {
     return;
   }
   const recordingSerialized = run.recorder.serialize();
+  const createdAt = run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events);
   const accepted = enqueueWorkflowExecutionRecordingPersistence(async () => {
     const [executedProject, executedAttachedData] = loadProjectAndAttachedDataFromString(projectContents);
     if (executedProject.metadata.id !== run.target.projectId) {
       throw new Error('Subgraph recording project identity changed.');
     }
     await persistWorkflowExecutionRecordingWithBackend({
+      createdAt,
       sourceProject: executedProject,
       sourceProjectPath,
       executedProject,

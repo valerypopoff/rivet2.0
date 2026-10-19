@@ -1,3 +1,4 @@
+import type { RecordingRunScope } from './recording-workflow-scope.js';
 import type {
   AttachedData,
   CombinedDataset,
@@ -71,6 +72,8 @@ export type WorkflowExecutionDefinition = {
 };
 export type WorkflowWebAppPolicy = { appId: string; relativePath: string; uiGraphId: string; allowedEmails: string[] };
 export type PersistWorkflowExecutionRecordingOptions = {
+  /** Logical run creation/start time; omitted by older producers. Never a storage key. */
+  createdAt?: string;
   sourceProject: Project;
   sourceProjectPath: string;
   executedProject: Project;
@@ -192,6 +195,7 @@ export interface WorkflowExecutionSources {
   resolveWebAppAccessPolicy(slug: string): Promise<WorkflowWebAppPolicy | null>;
   createProjectReferenceLoader(): ProjectReferenceLoader;
   loadSubgraphTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject>;
+  validateSubgraphTarget?(target: SubgraphProjectTarget): Promise<void>;
 }
 export type WorkflowRecordingPageQuery = {
   workflowId: string;
@@ -203,7 +207,7 @@ export type WorkflowRecordingPageQuery = {
   signal?: AbortSignal;
   inputAfter?: string;
   includeSubgraphRuns?: boolean;
-  runScope?: 'all' | 'roots' | 'children';
+  runScope?: RecordingRunScope;
 };
 
 export interface WorkflowRecordingRepository {

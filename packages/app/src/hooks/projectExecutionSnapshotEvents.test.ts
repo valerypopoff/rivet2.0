@@ -13,7 +13,7 @@ import {
   type RootRunId,
 } from '@valerypopoff/rivet2-core';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
-import { createRunActivityNodeKey } from '../features/runActivity/runActivityJournal.js';
+import { createRunActivityNodeKey, settleObservedRunActivityRoot } from '../features/runActivity/runActivityJournal.js';
 import { createEmptyProjectExecutionSnapshot, type ProjectExecutionSnapshot } from '../state/dataFlow.js';
 import { MISSING_DEBUGGER_TERMINAL_EVENT_WARNING } from './graphExecutionEventHelpers.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
@@ -31,6 +31,149 @@ function createDataRefStore(): DataRefStore {
     },
   };
 }
+
+test('duplicate graph starts and abort cleanup terminals cannot consume a sibling running graph', () => {
+  const projectId = 'b' as ProjectId;
+  const refStore = createDataRefStore();
+  let snapshot = createEmptyProjectExecutionSnapshot();
+  const graph = { metadata: { id: 'main' as GraphId }, nodes: [], connections: [] };
+  const first = { graphId: 'main' as GraphId, graphRunId: 'first' as GraphRunId, rootRunId: 'root' as RootRunId };
+  const sibling = { ...first, graphRunId: 'sibling' as GraphRunId };
+  const emit = (message: 'graphStart' | 'graphAbort' | 'graphError' | 'graphFinish', execution = first) => {
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      message,
+      projectId,
+      refStore,
+      snapshot,
+      data: { graph, execution, inputs: {}, outputs: {}, error: 'cancelled' },
+    }).snapshot;
+  };
+  emit('graphStart');
+  emit('graphStart', sibling);
+  emit('graphStart');
+  assert.deepEqual(snapshot.runningGraphs, ['main', 'main'], 'repeated start must not acquire another running slot');
+  emit('graphAbort');
+  assert.deepEqual(snapshot.runningGraphs, ['main']);
+  emit('graphError');
+  emit('graphError');
+  emit('graphError', { ...first, graphRunId: 'missing-start' as GraphRunId });
+  assert.deepEqual(snapshot.runningGraphs, ['main'], 'cleanup and repeated terminals must not consume the sibling');
+  emit('graphStart');
+  assert.deepEqual(snapshot.runningGraphs, ['main'], 'late start cannot reopen a terminal invocation');
+  emit('graphFinish', sibling);
+  assert.deepEqual(snapshot.runningGraphs, []);
+});
+
+test('passive canvas rebasing preserves repeated child call ancestry until the real root settles', () => {
+  const projectId = 'b' as ProjectId;
+  const rootRunId = 'a-root' as RootRunId;
+  const refStore = createDataRefStore();
+  let snapshot = createEmptyProjectExecutionSnapshot();
+  for (const invocation of ['first', 'second']) {
+    const execution = {
+      projectId,
+      rootRunId,
+      graphRunId: invocation as GraphRunId,
+      graphId: 'main' as GraphId,
+      parentGraphRunId: 'a-graph' as GraphRunId,
+      projectScope: '\u0000rivet-subgraph:latest:b',
+    };
+    for (const message of ['graphStart', 'graphFinish'] as const) {
+      const activityData = {
+        execution,
+        graph: { metadata: { id: execution.graphId, name: 'B' }, nodes: [], connections: [] },
+        inputs: {},
+        outputs: {},
+      };
+      snapshot = applyProcessEventToProjectExecutionSnapshot({
+        message,
+        projectId,
+        refStore,
+        snapshot,
+        activityData,
+        data: { ...activityData, execution: { ...execution, parentGraphRunId: undefined, projectScope: undefined } },
+      }).snapshot;
+      assert.equal(snapshot.runActivityJournal.rootsById[rootRunId]!.status, 'running');
+    }
+  }
+  const journal = snapshot.runActivityJournal;
+  assert.deepEqual(journal.rootsById[rootRunId]!.graphRunOrder, ['first', 'second']);
+  assert.equal(journal.rootsById[rootRunId]!.graphRunsById.first!.projectId, projectId);
+  assert.equal(journal.rootsById[rootRunId]!.graphRunsById.first!.parentGraphRunId, 'a-graph');
+  assert.equal(journal.pendingUnscopedTerminalConfirmations, 0);
+  const completed = settleObservedRunActivityRoot(journal, rootRunId, 'completed', 42);
+  assert.equal(completed.rootsById[rootRunId]!.status, 'completed');
+  assert.equal(completed.rootsById[rootRunId]!.finishedAt, 42);
+  assert.equal(settleObservedRunActivityRoot(completed, rootRunId, 'aborted'), completed);
+  assert.equal(journal.rootsById[rootRunId]!.status, 'running');
+});
+
+test('disconnect closes only the observed root in Run Activity, including unfinished nodes', () => {
+  const refStore = createDataRefStore();
+  const projectId = 'b' as ProjectId;
+  let snapshot = createEmptyProjectExecutionSnapshot();
+  for (const root of ['one', 'two'])
+    snapshot = applyProcessEventToProjectExecutionSnapshot({
+      message: 'nodeStart',
+      projectId,
+      snapshot,
+      refStore,
+      data: {
+        execution: { rootRunId: root as RootRunId, graphRunId: root as GraphRunId, graphId: 'main' as GraphId },
+        node: { id: 'node' as NodeId },
+        processId: root as ProcessId,
+        inputs: {},
+      } as never,
+    }).snapshot;
+  const journal = settleObservedRunActivityRoot(snapshot.runActivityJournal, 'one' as RootRunId, 'aborted');
+  assert.equal(journal.rootsById.one!.status, 'aborted');
+  assert.equal(Object.values(journal.rootsById.one!.nodeInvocationsByKey)[0]!.status, 'aborted');
+  assert.equal(journal.rootsById.two!.status, 'running');
+  assert.equal(settleObservedRunActivityRoot(journal, 'two' as RootRunId, 'error').rootsById.two!.status, 'error');
+});
+
+test('passive user input reaches Run Activity without creating a second interactive prompt', () => {
+  const snapshot = applyProcessEventToProjectExecutionSnapshot({
+    message: 'userInput',
+    activityOnly: true,
+    projectId: 'b' as ProjectId,
+    refStore: createDataRefStore(),
+    snapshot: createEmptyProjectExecutionSnapshot(),
+    data: {
+      execution: { rootRunId: 'a-root', graphRunId: 'b-run', graphId: 'main' },
+      node: { id: 'node' },
+      processId: 'process',
+      inputs: {},
+      inputStrings: ['Question?'],
+      renderingType: 'text',
+    } as never,
+  }).snapshot;
+  assert.deepEqual(snapshot.userInputQuestions, {});
+  const root = snapshot.runActivityJournal.rootsById['a-root']!;
+  assert.equal(Object.values(root.nodeInvocationsByKey)[0]!.waitingForUserInput?.questionCount, 1);
+});
+
+test('return-to-source canvas projection leaves lifecycle journaling to the original source dispatcher', () => {
+  const before = createEmptyProjectExecutionSnapshot();
+  const result = applyProcessEventToProjectExecutionSnapshot({
+    message: 'graphFinish',
+    activityData: false,
+    projectId: 'a' as ProjectId,
+    snapshot: before,
+    refStore: createDataRefStore(),
+    data: {
+      graph: { metadata: { id: 'helper' } },
+      execution: { graphId: 'helper', graphRunId: 'helper-run', rootRunId: 'root' },
+    } as never,
+  });
+  assert.equal(result.snapshot.runActivityJournal, before.runActivityJournal);
+  assert.equal(result.snapshot.runActivityJournal.pendingUnscopedTerminalConfirmations, 0);
+});
+
+test('unmatched graph observations tolerate legacy snapshots without a Run Activity journal', () => {
+  const journal = settleObservedRunActivityRoot(undefined, 'missing' as RootRunId, 'completed');
+  assert.deepEqual(journal.rootOrder, []);
+});
 
 test('called-project terminal events tolerate inactive snapshots created before prompt storage was added', () => {
   const snapshot = createEmptyProjectExecutionSnapshot();

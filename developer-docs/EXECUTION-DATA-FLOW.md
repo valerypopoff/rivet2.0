@@ -108,6 +108,15 @@ foreign-scoped live events. Root recorders exclude those child events because th
 root snapshot cannot replay foreign nodes; a child recorder owns that scope.
 Do not confuse this recording boundary with missing live dataflow across bundle tabs.
 
+## Remote bundle dataflow across tabs
+
+External Remote Debugger has one shared bundle connection, startable/stoppable
+from any open member. Open-project references or an explicit bundle manifest bind
+its controls; runtime identity/ancestry still gates per-project display projection.
+Transient shared sessions never replace persisted local executor preferences. See
+[remote dependency observations](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md#remote-dependency-observations-across-open-tabs)
+for admission, tab lifetimes, control ownership and Run Activity ancestry.
+
 ## Per-Node Run Duration Metadata
 
 Node run duration display is an app preference layered over execution events. The persisted setting lives in [`showNodeRunDurationsState`](../packages/app/src/state/settings.ts) with storage key `showNodeRunDurations` and default `false`. It is not part of core `Settings`, project YAML, node data, output definitions, or DataValue output maps.
@@ -1999,6 +2008,91 @@ the owner is selected again. Playback captures that exact selection, then
 revalidates it after its pre-start repaint yield; only the same still-loaded
 selection may clear the shared pre-start flag. A closed tab therefore cannot
 continue a hidden replay or reset a newer recording's startup state.
+
+Every accepted local playback resets its owning project's canvas execution
+display immediately before `replayRecording`, through
+[`resetRecordingPlaybackDisplay`](../packages/app/src/hooks/recordingPlaybackDisplay.ts).
+Do not rely on a recorded `start` for this: real cross-project Subgraph artifacts
+contain `graphStart` but no root `start`. Without this boundary, fresh replay IDs
+append another copy of every graph invocation on each Play Recording click.
+The reset clears graph/node histories, pinned graph/process/LLM-page selections,
+stale prompts and running/paused state, then reserves the new playback. It retains
+the loaded artifact, authored project, frozen-output configuration and existing
+Run Activity journal/retention policy. Run Activity may therefore retain separate
+replay roots while the canvas selector represents only the current playback.
+
+The final acceptance check revalidates the exact loaded-recording object, current
+owner path, tab availability and run-session cancellation/ownership after async
+preparation. Switching tabs updates the still-open owner's inactive snapshot,
+not the newly selected canvas; closing/replacing the recording rejects the stale
+playback. Standalone desktop sessions without workspace tabs remain supported.
+State is installed synchronously before obsolete output references are released.
+The ordinary root-start handler reads the current store, not the previous React
+render's node data, so a recorded `start` in the same turn cannot delete those
+already-released references again.
+No synthetic lifecycle events are added to recordings, and Core still allocates
+fresh replay identities. Genuine repeated graph calls within one artifact remain
+individually selectable; only previous playbacks are removed from canvas history.
+The reset and hosted recording opener share `getRecordingPlaybackGraphId`: prefer
+an authored root `start`, otherwise the child's first `graphStart`. Navigating to
+an inner graph before pressing Play must not change the recording's root/timing
+owner. The strict Evaluation loader still requires an authored root `start`.
+The playback processor is also constructed for that entry graph, not the selected
+inner canvas: its own Abort terminal must carry the same graph identity as the
+recorded root. If the declared graph is missing, retain a valid processor graph
+so RecordingPlayer can report its ordinary scoped mismatch diagnostic. Replay
+does not export live datasets or prepare run-from/run-to/preload plans; those
+settings neither filter recorded events nor authorize preservation flags in a
+different tab after asynchronous preparation.
+Cancellation before playback acceptance preserves the owner's previous results,
+but must still release its reserved running/paused/prompt state if the user has
+already switched tabs. Local run disposal updates that still-open inactive
+snapshot through the normal synchronous boundary, only while it owns the run
+session. It does not emit a synthetic recording terminal or change Run Activity,
+and a closed owner cannot be recreated. The active tab's display is untouched.
+Replay display events and disposal check the captured recording's recorder
+identity, artifact path and owning project ID, together with the immutable
+graph-history object retained by the reserved display. Each accepted event
+advances that reference synchronously; tab capture/restore preserves it without
+copying histories. Selecting a different recording in another still-open tab
+must not invalidate the first playback: the global loaded-recording selection
+describes the visible mode, not every running replay. The original display
+history proves which inactive snapshot still belongs to this run. A switch
+during preparation can reject acceptance, but must release that same display's
+running reservation without clearing its previous results. Closing and
+reopening a tab can reuse its project ID before React's close effect runs; that
+ID alone must never authorize queued old node outputs, Run Activity, toasts or
+terminal cleanup to write into the replacement. An invalidated replay requests
+normal cancellation, suppresses its stale display events and releases its own
+run session without stopping the new display. A project-path rebind keeps the
+same recorder and artifact path and therefore continues playback normally.
+
+Regression coverage lives in `recordingPlaybackDisplay.test.ts` (real child,
+nested, legacy, root, failed/aborted and historical-prompt artifacts plus
+ownership/reference cleanup), and
+`recording-playback-history.spec.ts` (Run recordings → expand parent → open child
+→ play three times, real repeated calls, pinned selection reset, noninteractive
+historical prompts, neighboring live-tab state, Run Activity and unchanged export).
+An editor-hook regression starts replay while viewing an inner graph and aborts
+the actual processor, checking entry-graph attribution and absence of live bundle,
+dataset or partial-run preparation.
+The preparation-cancel regression also switches to a neighbor before cleanup,
+and checks that the inactive owner becomes runnable without losing its old data.
+Additional real-hook regressions replace an accepted replay's tab before its
+remaining events arrive (including a newly reserved display), move a still
+running recording's project path, and select another recording both during
+preparation and during accepted playback. The latter must finish in its own
+inactive snapshot without changing the second recording's display. The UI
+scenario covers switches between two recording tabs and closing/reopening the
+same child recording, checking an empty initial display followed by normal replay.
+Run the focused state/ownership checks from the repository root with
+`yarn workspace @valerypopoff/rivet-app run test:files -- src/hooks/recordingPlaybackDisplay.test.ts src/utils/recordingPlayback.test.ts`.
+The app CI runner discovers these tests automatically; the shared
+`hooks/fixtures/childPlaybackRecording.ts` fixture executes a real cross-project
+Subgraph without provider calls, rather than hand-authoring the child lifecycle.
+The browser spec is enrolled in `playwright.ci.config.ts`; verify locally with
+`PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe recording-playback-history.spec.ts`
+against a built local preview. No Kubernetes rehearsal is required.
 
 The critical design point is **execution metadata topology parity**: replay
 emits each event with a fresh, internally consistent `GraphExecutionMetadata`
