@@ -1,5 +1,11 @@
 # HA rolling-upgrade implementation status
 
+For the first legacy/singleton production conversion, use the
+[maintenance cutover and consistent-backup runbook contract](production-ha-cutover.md).
+It distinguishes the pre-migration backup freeze from the release runner, requires
+explicit approval of the external maintenance gate, and documents why the initial
+HA-enabling hop still recovers with `--resume-cutover`, not `--resume-ha`.
+
 ## Required guarantee
 
 The target is continuous request availability during planned upgrades, with

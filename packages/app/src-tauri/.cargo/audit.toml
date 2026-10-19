@@ -3,4 +3,13 @@
 # issue and only h2 0.4.16+ is patched; upgrading it requires the Tauri 2
 # migration. Update Tauri and remove this exception by 2026-11-30.
 [advisories]
-ignore = ["RUSTSEC-2026-0258"]
+ignore = [
+  "RUSTSEC-2026-0258",
+  # Short-lived reachability review for the signed Windows updater, NOT a patched
+  # zip release. Exact crate identities and sole consumer are checked in CI.
+  # Unix updater archives are tar; Tauri's ZIP loop creates no symlinks and the
+  # Unix permission code is not compiled on Windows. Re-review by 2026-11-01.
+  "RUSTSEC-2026-0367",
+  "RUSTSEC-2026-0368",
+  "RUSTSEC-2026-0369",
+]

@@ -4,17 +4,20 @@ import { resolve } from 'node:path';
 const rootDirectory = resolve(import.meta.dirname, '../..');
 const defaultExceptionsPath = resolve(rootDirectory, 'security/rust-audit-exceptions.json');
 const defaultAuditConfigPath = resolve(rootDirectory, 'packages/app/src-tauri/.cargo/audit.toml');
+const defaultLockfilePath = resolve(rootDirectory, 'packages/app/src-tauri/Cargo.lock');
 
 const parseArguments = (arguments_) => {
   const exceptionsIndex = arguments_.indexOf('--exceptions');
   const configIndex = arguments_.indexOf('--audit-config');
   const reportIndex = arguments_.indexOf('--audit-report');
+  const lockfileIndex = arguments_.indexOf('--lockfile');
 
   return {
     exceptionsPath:
       exceptionsIndex >= 0 ? resolve(rootDirectory, arguments_[exceptionsIndex + 1]) : defaultExceptionsPath,
     auditConfigPath: configIndex >= 0 ? resolve(rootDirectory, arguments_[configIndex + 1]) : defaultAuditConfigPath,
     auditReportPath: reportIndex >= 0 ? resolve(rootDirectory, arguments_[reportIndex + 1]) : undefined,
+    lockfilePath: lockfileIndex >= 0 ? resolve(rootDirectory, arguments_[lockfileIndex + 1]) : defaultLockfilePath,
   };
 };
 
@@ -55,7 +58,8 @@ const loadExceptions = (path) => {
 };
 
 const parseIgnoredAdvisories = (path) => {
-  const content = readFileSync(path, 'utf8');
+  // Advisory IDs contain no '#'; comments may contain quotes or apostrophes.
+  const content = readFileSync(path, 'utf8').replace(/#.*$/gm, '');
   const advisorySectionStart = content.match(/^\[advisories\]\s*$/m);
   if (!advisorySectionStart || advisorySectionStart.index === undefined) return [];
 
@@ -63,7 +67,7 @@ const parseIgnoredAdvisories = (path) => {
   const nextSectionIndex = remainingContent.search(/^\[[^\]]+\]\s*$/m);
   const advisorySection = nextSectionIndex >= 0 ? remainingContent.slice(0, nextSectionIndex) : remainingContent;
   const ignoreList = advisorySection.match(/^ignore\s*=\s*\[([^\]]*)\]/m)?.[1] ?? '';
-  return [...ignoreList.matchAll(/['\"]([^'\"]+)['\"]/g)].map((match) => match[1]);
+  return [...ignoreList.matchAll(/(['"])(.*?)\1/g)].map((match) => match[2]);
 };
 
 const parseAuditReport = (path) => {
@@ -78,16 +82,60 @@ const parseAuditReport = (path) => {
     if (typeof advisoryId !== 'string' || typeof packageName !== 'string') {
       throw new Error('Rust audit report contains a vulnerability without an advisory ID or package name.');
     }
-    return { advisoryId, packageName, key: `${advisoryId}:${packageName}` };
+    return { advisoryId, packageName, packageVersion: finding.package.version, key: `${advisoryId}:${packageName}` };
   });
 };
 
-const { exceptionsPath, auditConfigPath, auditReportPath } = parseArguments(process.argv.slice(2));
+// This review is for Tauri's signed Windows updater, not arbitrary ZIP consumers.
+// Parse only Cargo's generated package records; a changed identity/graph requires
+// a fresh reachability review even when cargo-audit reports the same advisory ID.
+const zipReview = {
+  zip: {
+    version: '0.6.6',
+    checksum: '760394e246e4c28189f19d488c058bf16f564016aefac5d32bb1f3b51d5e9261',
+  },
+  tauri: {
+    version: '1.8.3',
+    checksum: '3ae1f57c291a6ab8e1d2e6b8ad0a35ff769c9925deb8a89de85425ff08762d0c',
+  },
+};
+const checkZipDependencyScope = (path) => {
+  const packages = readFileSync(path, 'utf8')
+    .split(/^\[\[package\]\]\s*$/m)
+    .slice(1)
+    .map((record) => {
+      const field = (name) => record.match(new RegExp(`^${name} = "([^"]+)"$`, 'm'))?.[1];
+      return {
+        name: field('name'),
+        version: field('version'),
+        checksum: field('checksum'),
+        source: field('source'),
+        dependencies: record.match(/^dependencies = \[([\s\S]*?)\]/m)?.[1] ?? '',
+      };
+    });
+  const matchesReview = (name, matches) =>
+    matches.length === 1 &&
+    matches[0].name === name &&
+    matches[0].source === 'registry+https://github.com/rust-lang/crates.io-index' &&
+    matches[0].version === zipReview[name].version &&
+    matches[0].checksum === zipReview[name].checksum;
+  const zipPackages = packages.filter((entry) => entry.name === 'zip');
+  const consumers = packages.filter((entry) => /"zip(?: [^"]+)?"/.test(entry.dependencies));
+  return matchesReview('zip', zipPackages) && matchesReview('tauri', consumers);
+};
+
+const { exceptionsPath, auditConfigPath, auditReportPath, lockfilePath } = parseArguments(process.argv.slice(2));
 const exceptions = loadExceptions(exceptionsPath);
 const ignoredAdvisories = parseIgnoredAdvisories(auditConfigPath);
 const configuredIds = new Set(ignoredAdvisories);
 const documentedIds = new Set(exceptions.map((exception) => exception.advisoryId));
 const problems = [];
+
+if (exceptions.some((exception) => exception.packages.includes('zip')) && !checkZipDependencyScope(lockfilePath)) {
+  problems.push(
+    'ZIP exceptions require the reviewed zip 0.6.6 with Tauri 1.8.3 as its only consumer; re-review changed versions, checksums or consumers.',
+  );
+}
 
 if (configuredIds.size !== ignoredAdvisories.length) {
   problems.push(`${auditConfigPath} declares a RustSec advisory ignore more than once.`);
@@ -120,6 +168,15 @@ if (auditReportPath) {
   for (const finding of findings) {
     if (!documentedFindings.has(finding.key)) {
       problems.push(`${finding.key} is an unreviewed Rust vulnerability.`);
+    }
+    if (
+      finding.packageName === 'zip' &&
+      documentedFindings.has(finding.key) &&
+      finding.packageVersion !== zipReview.zip.version
+    ) {
+      problems.push(
+        `${finding.key} version ${finding.packageVersion ?? '(missing)'} is outside the reviewed ZIP scope.`,
+      );
     }
   }
 
