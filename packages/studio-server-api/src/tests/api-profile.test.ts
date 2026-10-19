@@ -181,6 +181,37 @@ function trustedProxyHeaders(): Record<string, string> {
   };
 }
 
+test('graph reference review requires authentication and validates bounded JSON input', async () => {
+  await withApiEnv({}, async () => {
+    const server = await startServer('control');
+    const url = `${server.baseUrl}/api/workflows/projects/references`;
+    try {
+      const anonymous = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', connection: 'close' },
+        body: JSON.stringify({ projectId: 'target', graphIds: ['graph'] }),
+      });
+      assert.equal(anonymous.status, 403);
+      await anonymous.arrayBuffer();
+      for (const body of [
+        { graphIds: ['graph'] },
+        { projectId: 'target', graphIds: [] },
+        { projectId: 'target', graphIds: Array.from({ length: 501 }, (_, index) => `graph-${index}`) },
+      ]) {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { ...trustedProxyHeaders(), 'content-type': 'application/json', connection: 'close' },
+          body: JSON.stringify(body),
+        });
+        assert.equal(response.status, 400);
+        await response.arrayBuffer();
+      }
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 test('a timed-out body keeps its original 408 without a second API error response', async (t) => {
   await withApiEnv({}, async () => {
     const server = await startServer('control');

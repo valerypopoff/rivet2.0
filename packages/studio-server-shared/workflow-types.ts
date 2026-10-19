@@ -187,6 +187,21 @@ export type WorkflowProjectReferencesResponse = {
   complete: boolean;
   changedDuringScan: boolean;
   unreadableProjects: Array<{ name: string; relativePath: string }>;
+  /** Present only for graph-filtered requests; project-level callers retain their contract. */
+  graphReferences?: Array<{
+    sourceGraphId: string;
+    sourceGraphName: string;
+    nodeId: string;
+    nodeTitle: string;
+    targetProjectId: string;
+    targetGraphId: string;
+    targetVersion: 'latest' | 'published' | 'project-reference';
+    projectId: string;
+    projectName: string;
+    relativePath: string;
+    source: WorkflowProjectReferenceSource;
+  }>;
+  graphReferencesTruncated?: boolean;
 };
 
 export const WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE = 'Choose a Main Graph before publishing this endpoint.';

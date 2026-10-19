@@ -9,17 +9,24 @@ import {
   useMemo,
   useRef,
   useState,
+  useEffect,
   type SVGProps,
 } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { type GraphId, type NodeGraph, type UiGraph, type UiGraphId } from '@valerypopoff/rivet2-core';
 import clsx from 'clsx';
+import { toast } from 'react-toastify';
 import { runningGraphsState } from '../state/dataFlow.js';
 import { graphState } from '../state/graph.js';
 import { openOrFocusGraphSearchState, searchingGraphState } from '../state/graphBuilder.js';
 import { pluginsState } from '../state/plugins.js';
 import { projectState, savedGraphsState } from '../state/savedGraphs.js';
 import { clipboardState } from '../state/clipboard.js';
+import {
+  getFolderDeletionGraphIds,
+  isGraphDeletionRequestCurrent,
+  type GraphDeletionRequest,
+} from './graphList/graphDeletion.js';
 import {
   expandedFoldersState,
   overlayOpenState,
@@ -753,7 +760,10 @@ export const GraphList: FC = memo(() => {
   const nodeLibraryItemCount = Object.keys(project.nodePrefabs ?? {}).length;
   const plugins = useAtomValue(pluginsState);
   const projectNodeRegistry = useProjectNodeRegistry();
-  const [graphPendingDelete, setGraphPendingDelete] = useState<NodeGraph | null>(null);
+  const [graphPendingDelete, setGraphPendingDelete] = useState<GraphDeletionRequest | null>(null);
+  useEffect(() => {
+    setGraphPendingDelete(null);
+  }, [project.metadata.id]);
   const [uiGraphPendingDelete, setUiGraphPendingDelete] = useState<UiGraph | null>(null);
   const [graphPendingInfo, setGraphPendingInfo] = useState<NodeGraph | null>(null);
   const [isProjectInfoOpen, setIsProjectInfoOpen] = useState(false);
@@ -889,8 +899,17 @@ export const GraphList: FC = memo(() => {
     if (!graphPendingDelete) {
       return;
     }
-
-    handleDelete(graphPendingDelete);
+    if (!isGraphDeletionRequestCurrent(graphPendingDelete, project.metadata.id, savedGraphs)) {
+      toast.error('The project or folder changed. Review its deletion again.');
+      setGraphPendingDelete(null);
+      return;
+    }
+    if (graphPendingDelete.folderPath) {
+      handleDeleteFolder(graphPendingDelete.folderPath);
+    } else {
+      const target = savedGraphs.find((candidate) => candidate.metadata?.id === graphPendingDelete.graphIds[0]);
+      if (target) handleDelete(target);
+    }
     setGraphPendingDelete(null);
   });
 
@@ -971,7 +990,11 @@ export const GraphList: FC = memo(() => {
         makeMainGraph(target.graph);
         break;
       case 'delete-graph':
-        setGraphPendingDelete(target.graph);
+        setGraphPendingDelete({
+          projectId: project.metadata.id,
+          graphIds: [target.graph.metadata!.id!],
+          name: target.graph.metadata?.name ?? 'Untitled graph',
+        });
         break;
       default:
         break;
@@ -1010,7 +1033,12 @@ export const GraphList: FC = memo(() => {
         pasteGraphs(target.folderPath);
         break;
       case 'delete-folder':
-        handleDeleteFolder(target.folderPath);
+        setGraphPendingDelete({
+          projectId: project.metadata.id,
+          folderPath: target.folderPath,
+          name: target.folderPath,
+          graphIds: getFolderDeletionGraphIds(savedGraphs, target.folderPath),
+        });
         break;
       default:
         break;

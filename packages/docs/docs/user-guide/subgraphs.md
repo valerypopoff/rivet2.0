@@ -83,6 +83,27 @@ Output chunks through this route: their outputs aggregate or transform
 child-graph results instead of exposing named Graph Output ports directly.
 **Loop Until** can still emit its own per-iteration output updates.
 
+### Deleting a graph used by another project
+
+Before deleting a graph or graph folder, Rivet Server checks saved projects and
+active publications for enabled Subgraph and Referenced Graph Alias calls. The confirmation lists the referring
+project/path, caller graph/node and **Saved latest** or **Published** target choice.
+Unsaved callers in your open editor tabs are included too.
+Library nodes whose definitions are missing are ignored by this check; they do
+not cause an incomplete-check warning. Resolvable Library nodes containing
+Subgraph calls are still checked.
+
+**Saved latest** calls can break once you save the deletion. **Published** calls
+keep the existing published graph until that publication changes. A published
+workflow may still call a Saved-latest target.
+
+Choose **Cancel** to update callers first, or **Delete anyway** to proceed
+deliberately. Failed/incomplete checks are shown explicitly; **Check again**
+retries them. This is a point-in-time warning, not a guarantee: another user's
+unsaved changes cannot be checked. Hosts without server scanning inspect only
+open projects. Existing restrictions for running graphs and references within
+the same project still apply.
+
 ### Rearranging Subgraph ports
 
 To change the visual order of a Subgraph node's graph input and graph output ports, right-click the Subgraph node and choose **Rearrange inputs/outputs**. The draggable port labels get rounded backgrounds while rearrange mode is active. Drag a port label or row up and down; the other labels shift while you drag, so you can drop a port between existing ports. Click outside the node to leave rearrange mode. The circular port handles still create and rewire connections. Port ordering is saved for that Subgraph node instance only; it does not change port IDs, connections, or output object keys. The optional error output stays after the graph outputs.

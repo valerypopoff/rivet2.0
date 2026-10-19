@@ -371,6 +371,67 @@ marking its check incomplete. Failed callers, limit exhaustion, and catalog chan
 than an empty "safe to delete" claim. The UI offers retry/refresh. This is a point-in-time advisory, not an atomic
 deletion proof: users should review it just before deleting and retain a backup.
 
+## Incoming graph connections before graph/folder deletion
+
+The editor uses `GraphDeleteConfirmModal` for individual graphs and folders. It
+asks the optional Subgraph catalog host's `graphReferences` method before
+enabling confirmation. Studio Server reuses the authenticated incoming-project
+endpoint using a JSON POST body containing `projectId` and `graphIds` (plus an
+optional `relativePath`). The JSON body avoids proxy URL limits for large folders.
+The original whole-project GET remains supported. Filtered results
+add `graphReferences`: caller project/path, source graph/node, caller snapshot and
+target version. Without a graph filter, the old project-level response remains
+unchanged. Stable-ID lookup rejects ambiguous identities. No new reverse index,
+database schema, graph execution or server save prohibition is introduced.
+For legacy filesystem catalogs without indexed IDs, the host resolves a fresh
+unique tree path and retries with both path and expected ID; ambiguous/missing
+matches are failed checks, never arbitrary selections.
+
+Core's `listProjectGraphCallSites` resolves prefab instances and explicit external
+Subgraph/legacy-alias calls, excluding disabled nodes. Unresolved Library node
+instances are skipped: a missing definition is not evidence of a graph call and
+must not make this advisory incomplete or hide known callers in the same project.
+This rule applies to both the server scan and open editor snapshots. It does not
+repair missing definitions or change execution behavior; malformed projects,
+storage failures, identity mismatches and scan limits still produce incomplete results.
+Saved drafts and active
+endpoint/web-app publications are scanned, not datasets, recordings, archived
+history or transitive callers. Existing 1,000-project/30-second between-read limits
+remain; graph details are capped at 1,000 sites and input at 500 graph IDs. Limits,
+unreadable callers and catalog drift yield incomplete results while preserving
+verified sites. Individual storage reads can exceed the server's between-read
+deadline; the modal has a 35-second request deadline and explicit retry.
+
+Dirty/unknown-save-state open editor snapshots add callers without hiding saved
+or published ones. While the server scan is pending, failed or incomplete, clean
+open snapshots also contribute known callers; a failed request must not hide
+references already available in the editor. After a complete server scan, clean
+snapshots are omitted to avoid redundant saved-draft entries. Library callers use
+the effective Library definition's current node title, not an instance's stale
+stored title. Another user's unsaved browser edits cannot be inspected.
+Hosts without this method label their open-project-only scope; an older server
+without graph-detail support is an unavailable check, not a false empty result.
+Errors and partial results warn explicitly. Known references or incomplete checks
+are grouped in one red (`--error-dark`) block with white text, including caller
+details, target-version guidance and any scan failure/incomplete message. The
+deletion prompt and point-in-time disclaimer stay outside that block. Clean
+results and loading states do not render an empty warning block.
+Known references or incomplete checks use **Delete anyway**; Cancel/disposal
+abort stale requests. Project identity and
+folder membership are rechecked before applying the reviewed deletion.
+
+Saved-latest callers can fail after the target draft deletion is saved. Published
+targets retain the existing graph until the target publication changes; published
+callers can themselves choose Saved latest. This advisory is not an atomic lock
+or cascade. Existing local/web-app and running-graph hard guards remain, with the
+live active graph overlaid for unsaved local callers. Local reachability does not
+mistake an external Subgraph's coincident graph ID for a current-project reference.
+
+Regression owners: `ProjectGraphCallSites.test.ts`, `project-references.test.ts`,
+`api-profile.test.ts` (HTTP authentication and bounded JSON validation),
+`useDeleteGraph.test.tsx`, `graphReachability.test.ts`, `graphDeletion.test.ts` and
+the CI-enrolled headless `graph-deletion-references.spec.ts` observer.
+
 ## Publish flow
 
 1. User sets an endpoint name and clicks `Publish`.

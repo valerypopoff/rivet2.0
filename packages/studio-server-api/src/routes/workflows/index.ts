@@ -798,6 +798,31 @@ workflowsRouter.get(
   }),
 );
 
+const graphReferenceReviewSchema = z.object({
+  projectId: z.string().min(1).max(256),
+  relativePath: z.string().min(1).optional(),
+  graphIds: z.array(z.string().min(1).max(256)).min(1).max(500),
+});
+
+// Graph folders can contain enough IDs to exceed a proxy's request-line limit.
+// Keep the existing project-level GET contract; share the same read-only scan.
+workflowsRouter.post(
+  '/projects/references',
+  requireAuth,
+  jsonBody,
+  validateBody(graphReferenceReviewSchema),
+  asyncHandler(async (req, res) => {
+    const { projectId, relativePath, graphIds } = req.body as z.infer<typeof graphReferenceReviewSchema>;
+    const { signal, cleanup } = createRequestAbortSignal(req, res);
+    try {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json(await listIncomingProjectReferences(relativePath, projectId, signal, graphIds));
+    } finally {
+      cleanup();
+    }
+  }),
+);
+
 workflowsRouter.get(
   '/projects/web-apps',
   asyncHandler(async (req, res) => {

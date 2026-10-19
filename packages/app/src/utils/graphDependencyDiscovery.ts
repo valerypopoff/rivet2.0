@@ -46,6 +46,7 @@ type GraphDependencyDiscovery = {
 
 type GraphReferenceNodeData = {
   graphId?: GraphId;
+  targetProjectId?: string;
   useGraphIdOrNameInput?: boolean;
 };
 
@@ -192,10 +193,7 @@ export function getGraphDependencyIndex(
  * usable while the user repairs it by retaining ordinary direct connections
  * but excluding bus-connected ones rather than inventing cross-channel paths.
  */
-function getGraphDependencyTopologyConnections(
-  project: GraphDependencyProject,
-  graph: NodeGraph,
-): NodeConnection[] {
+function getGraphDependencyTopologyConnections(project: GraphDependencyProject, graph: NodeGraph): NodeConnection[] {
   const effectiveNodes = resolveNodePrefabInstances(project as Project, graph.nodes);
 
   try {
@@ -232,6 +230,10 @@ export function collectGraphDependencyEdges(options: {
 
     switch (node.type) {
       case 'subGraph':
+        if ((node.data as GraphReferenceNodeData).targetProjectId) {
+          edges.push({ kind: 'cross-project', targets: [] });
+          break;
+        }
         addStoredTarget(edges, index, 'direct-static', {
           graphId: (node.data as GraphReferenceNodeData).graphId,
           description: 'subgraph target',

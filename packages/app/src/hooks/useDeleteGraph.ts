@@ -15,7 +15,10 @@ import {
   recoverableNodeConnectionsStatePerGraph,
 } from '../state/recoverableNodeConnections.js';
 import { projectEditorStateByProjectIdState } from '../state/projectEditor.js';
-import { sanitizeNavigationStackForProject, sanitizeProjectEditorStateForProject } from '../utils/projectEditorState.js';
+import {
+  sanitizeNavigationStackForProject,
+  sanitizeProjectEditorStateForProject,
+} from '../utils/projectEditorState.js';
 import { clearProjectWorkspaceTargetState, projectWorkspaceTargetsState } from '../state/workspaceTarget.js';
 import { isProjectWorkspaceTargetValid } from '../domain/workspace/projectWorkspaceTarget.js';
 import { getGraphIdsReferencingGraph, getUiGraphIdsReferencingGraph } from '../utils/graphReachability.js';
@@ -35,23 +38,33 @@ export function useDeleteGraphs() {
   const store = useStore();
 
   return useStableCallback((requestedGraphIds: readonly GraphId[]): DeleteGraphsResult => {
-    const project = store.get(projectState);
+    const savedProject = store.get(projectState);
+    const activeGraph = store.get(graphState);
+    const activeId = activeGraph.metadata?.id;
+    const project =
+      activeId && savedProject.graphs[activeId]
+        ? { ...savedProject, graphs: { ...savedProject.graphs, [activeId]: activeGraph } }
+        : savedProject;
     const deletedGraphIds = [...new Set(requestedGraphIds.filter((graphId) => project.graphs[graphId] != null))];
     if (deletedGraphIds.length === 0) {
       return { blockedGraphIds: [], deletedGraphIds: [], referencedGraphIds: [] };
     }
 
     const deletedGraphIdSet = new Set(deletedGraphIds);
-    const blockedGraphIds = [...new Set(store.get(runningGraphsState).filter((graphId) => deletedGraphIdSet.has(graphId)))];
+    const blockedGraphIds = [
+      ...new Set(store.get(runningGraphsState).filter((graphId) => deletedGraphIdSet.has(graphId))),
+    ];
     if (blockedGraphIds.length > 0) {
       return { blockedGraphIds, deletedGraphIds: [], referencedGraphIds: [] };
     }
 
     const referencedGraphIds = deletedGraphIds.filter((targetGraphId) => {
-      const isReferencedByRetainedGraph = [...getGraphIdsReferencingGraph(project, targetGraphId, {
-        includeDelegateFunctionCallEdges: true,
-        includeDynamicCallGraphEdges: false,
-      })].some((referencingGraphId) => !deletedGraphIdSet.has(referencingGraphId));
+      const isReferencedByRetainedGraph = [
+        ...getGraphIdsReferencingGraph(project, targetGraphId, {
+          includeDelegateFunctionCallEdges: true,
+          includeDynamicCallGraphEdges: false,
+        }),
+      ].some((referencingGraphId) => !deletedGraphIdSet.has(referencingGraphId));
       return isReferencedByRetainedGraph || getUiGraphIdsReferencingGraph(project, targetGraphId).size > 0;
     });
     if (referencedGraphIds.length > 0) {
@@ -69,7 +82,9 @@ export function useDeleteGraphs() {
     );
 
     const nextProject = store.get(projectState);
-    store.set(frozenNodeOutputsState, (previousOutputs) => removeFrozenNodeOutputsForGraphs(previousOutputs, deletedGraphIds));
+    store.set(frozenNodeOutputsState, (previousOutputs) =>
+      removeFrozenNodeOutputsForGraphs(previousOutputs, deletedGraphIds),
+    );
     store.set(recoverableNodeConnectionsStatePerGraph, (previousConnections) =>
       clearRecoverableNodeConnectionsForGraphs(previousConnections, deletedGraphIds),
     );

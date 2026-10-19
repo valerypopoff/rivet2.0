@@ -344,6 +344,54 @@ test('deleting a referenced graph leaves its callers and web apps valid', async 
   }
 });
 
+test('deletion checks unsaved active callers and does not confuse external targets with local IDs', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restoreGlobals = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const store = getDefaultStore();
+  const previousProject = store.get(projectState);
+  const previousGraph = store.get(graphState);
+  const target = makeGraph('target', 'Target');
+  const savedCaller = makeGraph('caller', 'Caller');
+  const liveCaller = makeGraph('caller', 'Caller', [
+    { id: 'call', type: 'subGraph', data: { graphId: 'target' } } as never,
+  ]);
+  let remove: ReturnType<typeof useDeleteGraphs> | undefined;
+  function Harness() {
+    remove = useDeleteGraphs();
+    return null;
+  }
+  try {
+    store.set(projectState, makeProject([target, savedCaller], 'caller'));
+    store.set(graphState, liveCaller);
+    await act(async () => {
+      root.render(<Harness />);
+    });
+    await act(async () => {
+      assert.deepEqual(remove!(['target' as GraphId]).referencedGraphIds, ['target']);
+    });
+    assert.ok(store.get(projectState).graphs['target' as GraphId]);
+    store.set(
+      graphState,
+      makeGraph('caller', 'Caller', [
+        { ...liveCaller.nodes[0]!, data: { graphId: 'target', targetProjectId: 'other-project' } },
+      ]),
+    );
+    await act(async () => {
+      assert.deepEqual(remove!(['target' as GraphId]).deletedGraphIds, ['target']);
+    });
+    assert.equal(store.get(projectState).graphs['target' as GraphId], undefined);
+  } finally {
+    await act(async () => {
+      root.unmount();
+      store.set(projectState, previousProject);
+      store.set(graphState, previousGraph);
+    });
+    restoreGlobals();
+    dom.window.close();
+  }
+});
+
 test('deleting a folder may remove graphs that only reference one another', async () => {
   const dom = new JSDOM('<div id="root"></div>');
   const restoreGlobals = installDomGlobals(dom);
