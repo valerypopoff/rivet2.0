@@ -27,6 +27,30 @@ function run(id: string, correlationId?: string, child = false): WorkflowRecordi
   };
 }
 
+test('context groups lazily load children without treating their representative as a root', () => {
+  const representative = run('anchor', 'orphan-key', true);
+  const other = run('newer-child', 'orphan-key', true);
+  const initial = groupRecordingRuns([representative], {});
+  assert.equal(initial[0]!.root, null);
+  assert.equal(initial[0]!.childLoadState, 'unloaded');
+  const loaded = groupRecordingRuns([other, representative], { anchor: 'complete' });
+  assert.equal(loaded[0]!.root, null);
+  assert.equal(loaded[0]!.childLoadState, 'complete');
+  assert.equal(recordingHierarchyRows(loaded, new Set(['correlation:orphan-key'])).length, 3);
+});
+
+test('a paginated context anchor never attaches to one visible member of an ambiguous root key', () => {
+  const root = run('one-of-two-primaries', 'ambiguous');
+  const child = { ...run('context-anchor', 'ambiguous', true), familyContext: true as const };
+  // The unmarked duplicate models the same child returned by its browse endpoint.
+  const groups = groupRecordingRuns([root, child, { ...child, familyContext: undefined }], {});
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0]!.root?.id, root.id);
+  assert.equal(groups[0]!.children.length, 0);
+  assert.equal(groups[1]!.root, null);
+  assert.equal(groups[1]!.childLoadState, 'unloaded');
+});
+
 test('input matches offer child discovery before any children are loaded, preserving expansion and status', () => {
   const root = run('root', 'execution');
   const initial = groupRecordingRuns([root], {});

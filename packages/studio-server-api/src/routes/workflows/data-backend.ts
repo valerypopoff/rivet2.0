@@ -1,3 +1,4 @@
+import type { RecordingRunScope } from './recording-workflow-scope.js';
 import type {
   AttachedData,
   CombinedDataset,
@@ -203,7 +204,7 @@ export type WorkflowRecordingPageQuery = {
   signal?: AbortSignal;
   inputAfter?: string;
   includeSubgraphRuns?: boolean;
-  runScope?: 'all' | 'roots' | 'children';
+  runScope?: RecordingRunScope;
 };
 
 export interface WorkflowRecordingRepository {

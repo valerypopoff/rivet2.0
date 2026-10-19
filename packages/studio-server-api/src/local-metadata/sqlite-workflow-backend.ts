@@ -1228,7 +1228,11 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       includeSubgraphRuns = false,
       runScope = inputFilter ? 'roots' : 'all',
     } = query;
-    if (workflowId && runScope !== 'children' && !(await this.#catalog.findProjectPathById(workflowId)))
+    if (
+      workflowId &&
+      !['children', 'family-children', 'project-family-children'].includes(runScope) &&
+      !(await this.#catalog.findProjectPathById(workflowId))
+    )
       throw createHttpError(404, 'Project not found');
     const normalizedPage = Math.max(1, Math.floor(page)),
       size = Math.min(100, Math.max(1, Math.floor(pageSize)));
@@ -1240,7 +1244,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       throw badRequest('Invalid recording page');
     const scopeCounts =
       (workflowId && includeSubgraphRuns) || runScope !== 'all'
-        ? await this.#catalog.recordingScopeCounts(workflowId, runScope)
+        ? await this.#catalog.recordingScopeCounts(workflowId, runScope === 'families' ? 'all' : runScope)
         : undefined;
     const scope = inputFilter ? { workflowId, statusFilter, filter: inputFilter, includeSubgraphRuns } : null;
     const load = async (after: string | undefined, offset: number, limit: number) =>
@@ -1280,11 +1284,13 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     const rows = filtered?.rows ?? (await load(undefined, (normalizedPage - 1) * size, size));
     const count =
       filtered?.totalRuns ??
-      (scopeCounts
-        ? statusFilter === 'failed'
-          ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
-          : scopeCounts.totalRuns
-        : await this.#catalog.countRecordings(workflowId, statusFilter === 'failed'));
+      (runScope === 'families'
+        ? await this.#catalog.countRecordingFamilies(workflowId, statusFilter === 'failed', includeSubgraphRuns)
+        : scopeCounts
+          ? statusFilter === 'failed'
+            ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+            : scopeCounts.totalRuns
+          : await this.#catalog.countRecordings(workflowId, statusFilter === 'failed'));
     return {
       workflowId,
       scopeCounts,
@@ -1298,7 +1304,15 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       inputSearchAnalyzedRuns: filtered?.analyzedRuns,
       nextInputCursor: filtered?.nextInputCursor,
       nextInputAfter: filtered?.nextInputAfter,
-      runs: rows.map((row) => this.#recordingSummary(row)),
+      runs: rows.map((row) => {
+        const summary = this.#recordingSummary(row);
+        return {
+          ...summary,
+          ...(runScope === 'families' && summary.executionIdentity?.surface === 'subgraph_project'
+            ? { familyContext: true as const }
+            : {}),
+        };
+      }),
     };
   }
 

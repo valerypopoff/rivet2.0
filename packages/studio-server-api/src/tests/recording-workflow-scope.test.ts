@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { familyRows, verifyFamilyQueries } from './helpers/recording-family-fixture.js';
 import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
 import {
   createWorkflowRecordingInputAfter,
@@ -8,6 +9,78 @@ import {
 } from '../routes/workflows/recording-input-filter.js';
 
 for (const storage of ['filesystem', 'sqlite', 'managed'] as const) {
+  test(`${storage} family pagination counts primaries, not descendants`, async () => {
+    const db = new DatabaseSync(':memory:');
+    const table =
+      storage === 'filesystem' ? 'recording_runs' : storage === 'sqlite' ? 'recordings' : 'workflow_recordings';
+    try {
+      db.exec(
+        `CREATE TABLE ${table} (id TEXT, recording_id TEXT, workflow_id TEXT, execution_surface TEXT, correlation_id TEXT, status TEXT, created_at TEXT, metadata_json TEXT)`,
+      );
+      for (const row of familyRows)
+        db.prepare(`INSERT INTO ${table} VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          row.id,
+          row.id,
+          row.workflow,
+          row.surface,
+          row.correlation,
+          row.status,
+          row.created,
+          JSON.stringify({
+            status: row.status,
+            createdAt: row.created,
+            executionIdentity: { surface: row.surface, correlationId: row.correlation },
+          }),
+        );
+      await verifyFamilyQueries(
+        storage,
+        async (sql, values) =>
+          db.prepare(sql.replaceAll('$1::text', '?1').replaceAll('$1', '?1')).all(...values) as Array<{ id: string }>,
+      );
+      db.prepare(
+        `INSERT INTO ${table} SELECT 'duplicate', 'duplicate', 'other', execution_surface,
+        correlation_id, status, created_at, metadata_json FROM ${table} WHERE id = 'root-24'`,
+      ).run();
+      const clause = recordingWorkflowScopeClause('a', true, storage, 1, 'families').replaceAll('$1', '?1');
+      const ambiguous = db
+        .prepare(`SELECT id FROM ${table} WHERE ${clause}`)
+        .all('a')
+        .map((row) => row.id);
+      assert.equal(ambiguous.length, 26, 'Ambiguous children remain one separate context group');
+      assert.ok(ambiguous.includes('root-24'));
+      assert.equal(ambiguous.filter((id) => String(id).startsWith('child-')).length, 1);
+      for (const id of ['blank-a', 'blank-b'])
+        db.prepare(`INSERT INTO ${table} VALUES (?, ?, 'a', 'subgraph_project', '   ', 'succeeded', ?, ?)`).run(
+          id,
+          id,
+          familyRows[0]!.created,
+          JSON.stringify({
+            status: 'succeeded',
+            createdAt: familyRows[0]!.created,
+            executionIdentity: { surface: 'subgraph_project', correlationId: '   ' },
+          }),
+        );
+      const blankIds = db
+        .prepare(`SELECT id FROM ${table} WHERE ${clause}`)
+        .all('a')
+        .map((row) => row.id);
+      assert.ok(
+        blankIds.includes('blank-a') && blankIds.includes('blank-b'),
+        'Blank legacy keys must not merge unrelated runs',
+      );
+      const blankContextClause = recordingWorkflowScopeClause(
+        'blank-a',
+        true,
+        storage,
+        1,
+        'family-children',
+      ).replaceAll('$1', '?1');
+      assert.deepEqual(db.prepare(`SELECT id FROM ${table} WHERE ${blankContextClause}`).all('blank-a'), []);
+    } finally {
+      db.close();
+    }
+  });
+
   test(`${storage} recording scope includes related descendants without sibling or unlinked runs`, () => {
     const db = new DatabaseSync(':memory:');
     try {

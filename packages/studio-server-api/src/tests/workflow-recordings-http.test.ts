@@ -302,6 +302,15 @@ test('input search matches only roots and unfolds cross-project Subgraphs withou
     );
     await withEnvOverride('RIVET_KEY', 'root-child-browse-test-key', async () => {
       const headers = { 'x-rivet-proxy-auth': getExpectedProxyAuthToken() };
+      const familyPage = await readJson<{ totalRuns: number; hasMore: boolean; runs: Array<{ id: string }> }>(
+        await fetch(`${callerUrl}?groupByRoot=true&includeSubgraphRuns=true&pageSize=1`, { headers }),
+      );
+      assert.equal(familyPage.totalRuns, 1);
+      assert.equal(familyPage.hasMore, false);
+      assert.deepEqual(
+        familyPage.runs.map((run) => run.id),
+        [callerRuns.runs[0]!.id],
+      );
       const childUrl = `${apiBaseUrl}/recordings/${callerRuns.runs[0]!.id}/sub-runs`;
       assert.equal((await fetch(childUrl)).status, 403);
       const children = await readJson<{ runs: Array<{ id: string }>; totalRuns: number }>(
@@ -316,6 +325,13 @@ test('input search matches only roots and unfolds cross-project Subgraphs withou
         await fetch(`${apiBaseUrl}/recordings/${targetRuns.runs[0]!.id}/sub-runs`, { headers }),
       );
       assert.deepEqual(childAsParent.runs, []);
+      const childContext = await readJson<{ runs: Array<{ id: string }> }>(
+        await fetch(`${apiBaseUrl}/recordings/${targetRuns.runs[0]!.id}/sub-runs?context=project`, { headers }),
+      );
+      assert.deepEqual(
+        childContext.runs.map((run) => run.id),
+        [targetRuns.runs[0]!.id],
+      );
     });
   });
 });

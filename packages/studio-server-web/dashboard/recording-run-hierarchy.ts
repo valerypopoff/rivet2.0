@@ -23,6 +23,9 @@ export function groupRecordingRuns(
   recordings: WorkflowRecordingRunSummary[],
   childLoadStates?: Readonly<Record<string, RecordingRunFamily['childLoadState']>>,
 ): RecordingRunFamily[] {
+  const contextKeys = new Set(
+    recordings.filter((run) => run.familyContext).map((run) => run.executionIdentity?.correlationId),
+  );
   const uniqueRuns = [...new Map(recordings.map((run) => [run.id, run])).values()];
   const rootsByCorrelation = new Map<string, WorkflowRecordingRunSummary[]>();
   const childrenByCorrelation = new Map<string, WorkflowRecordingRunSummary[]>();
@@ -45,14 +48,19 @@ export function groupRecordingRuns(
     const children = correlation?.trim() ? childrenByCorrelation.get(correlation) ?? [] : [];
     // Multiple primary recordings with one key are ambiguous. Leave the roots
     // independent, and group children without asserting a particular parent.
-    const root = roots.length === 1 ? roots[0]! : null;
-    const discoverChildren = childLoadStates != null && root?.id === run.id;
+    const root = roots.length === 1 && !contextKeys.has(correlation) ? roots[0]! : null;
+    const contextAnchor = children.find((child) => childLoadStates?.[child.id] != null) ?? children[0];
+    const anchor = root ?? contextAnchor;
+    const discoverChildren = childLoadStates != null && anchor != null && (isChild || root?.id === run.id);
+    if (!root && anchor && childLoadStates?.[anchor.id] === 'complete') {
+      children.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    }
     if ((children.length > 0 || discoverChildren) && (isChild || root?.id === run.id)) {
       const family: RecordingRunFamily = {
         key: `correlation:${correlation}`,
         root,
         children,
-        childLoadState: discoverChildren ? childLoadStates[root!.id] ?? 'unloaded' : undefined,
+        childLoadState: discoverChildren ? childLoadStates[anchor!.id] ?? 'unloaded' : undefined,
       };
       families.push(family);
       if (root) emitted.add(root.id);

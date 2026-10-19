@@ -300,6 +300,10 @@ const recordingsRunsQuerySchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),
+  groupByRoot: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
 });
 
 const reconciliationFindingQuerySchema = z
@@ -535,6 +539,7 @@ workflowsRouter.get(
         signal: requestAbort.signal,
         inputAfter: parsedQuery.inputAfter,
         includeSubgraphRuns: parsedQuery.includeSubgraphRuns,
+        runScope: inputFilter ? 'roots' : parsedQuery.groupByRoot ? 'families' : 'all',
       });
       if (!requestAbort.signal.aborted && !res.destroyed) {
         res.json(runsPage);
@@ -555,10 +560,19 @@ workflowsRouter.get(
   '/recordings/:recordingId/sub-runs',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { page, pageSize } = recordingsRunsQuerySchema.pick({ page: true, pageSize: true }).parse(req.query);
+    const { page, pageSize, context } = recordingsRunsQuerySchema
+      .pick({ page: true, pageSize: true })
+      .extend({ context: z.enum(['all', 'project']).optional() })
+      .parse(req.query);
     const recordingId = z.string().min(1).max(256).parse(req.params.recordingId);
     res.json(
-      await listWorkflowRecordingRunsPageWithBackend({ workflowId: recordingId, page, pageSize, runScope: 'children' }),
+      await listWorkflowRecordingRunsPageWithBackend({
+        workflowId: recordingId,
+        page,
+        pageSize,
+        runScope:
+          context === 'all' ? 'family-children' : context === 'project' ? 'project-family-children' : 'children',
+      }),
     );
   }),
 );

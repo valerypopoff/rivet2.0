@@ -530,18 +530,48 @@ at 55 seconds. Single-phase runtime fixtures retain their shorter limits.
 children start folded and expand into individually virtualized, indented rows.
 Do not group by project/graph name or infer immediate nesting from the root key.
 Missing or ambiguous primaries get an explicit context group, never a synthetic
-recording. Ordinary pagination and status filtering operate on individual
-recordings; their expand count says `in current results`. **Filter by input**
+recording. Ordinary modal browsing requests `groupByRoot=true`: SQL selects one
+metadata anchor per family before applying LIMIT/OFFSET. Thus 20 per page means
+20 top-level entries even if one has 151 descendants. Children load separately
+through the existing disclosure, in metadata pages of at most 100, and never
+consume ordinary page slots. Status filtering selects eligible anchors; child-only
+matches stay in an explicit Related sub-runs context group instead of becoming a
+false primary. Missing/out-of-project primaries and ambiguous keys likewise keep
+one context entry per execution key. Unlinked legacy rows stay independent.
+The `familyContext` browse-only flag prevents a context anchor from attaching to
+one visible member of an ambiguous primary key after pagination; it is not persisted.
+Child loading also prefers that explicit context anchor over a lone visible primary;
+otherwise a partial page could select the wrong child endpoint and hide descendants.
+**Filter by input**
 searches only primary/root recordings (non-`subgraph_project` rows, including legacy
 rows without surface metadata). It never promotes a child-only match into a root.
-Expanding a matching root fetches all linked child metadata through the authenticated
+Expanding a root fetches all linked child metadata through the authenticated
 `GET /api/workflows/recordings/:recordingId/sub-runs` path, in pages of at most 100.
 These children bypass both input and status predicates and do not inflate match
 counts or search progress. Loading/failed disclosure controls provide feedback and
 retry; complete families are published only after all pages load. View replacement
 aborts pending child reads and discards late replies. An absent or ambiguous primary
 key cannot manufacture ancestry. Changing workflow/page/filter resets expansion;
-appending root matches preserves expanded correlation keys.
+appending root matches preserves expanded correlation keys. Context disclosures
+use `context=all` in Any or for a caller's foreign-project anchor, and
+`context=project` for an anchor owned by the selected project. The latter only
+includes other projects' children if the anchor's project also owns a caller
+under that key, matching the normal project browse scope. The ordinary root-owned endpoint still requires a unique retained
+primary. Counts and page bounds come from the family query, not catalog row totals.
+Catalog/status summary counters continue to describe retained recordings, including
+children; deleting a child must not optimistically subtract a family page slot.
+
+`recording-workflow-scope.ts` owns the common metadata-only SQL selection for all
+three backends. Window ranking uses global primary-key cardinality before scope
+and status eligibility, preserving ambiguity across pages/projects. This scans
+metadata to compute exact family anchors; it does not read replay artifacts, add
+a materialized index, or change recording compression/retention. Existing API
+clients without `groupByRoot` retain individual-recording pagination. No schema
+migration is needed. Input search remains root-only with its existing cursor contract.
+Regression coverage includes 25 roots/151 descendants, 20/10-page limits, context
+scope, ambiguity, blank keys, deletion and stale replies in the existing SQL,
+SQLite backend, hierarchy and Run recordings browser suites. The existing
+`test:statistics-managed` command also executes family queries on disposable PostgreSQL.
 
 Each page must identify the requested primary/page, contain only linked Subgraph
 rows, make unique-ID progress and retain a consistent total. Final unique-ID count

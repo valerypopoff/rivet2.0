@@ -10,6 +10,7 @@ import {
   type Project,
 } from '@valerypopoff/rivet2-node';
 
+import type { RecordingRunScope } from './recording-workflow-scope.js';
 import type {
   WorkflowRecordingFilterStatus,
   WorkflowRecordingExecutionIdentity,
@@ -489,12 +490,12 @@ export async function listWorkflowRecordingRunsPage(
   signal?: AbortSignal,
   inputAfter?: string,
   includeSubgraphRuns = false,
-  runScope: 'all' | 'roots' | 'children' = inputFilter ? 'roots' : 'all',
+  runScope: RecordingRunScope = inputFilter ? 'roots' : 'all',
 ): Promise<WorkflowRecordingRunsPageResponse> {
   await ensureWorkflowRecordingStorage(root);
   const scopeCounts =
     (workflowId && includeSubgraphRuns) || runScope === 'roots'
-      ? await getWorkflowRecordingScopeCounts(workflowId, runScope)
+      ? await getWorkflowRecordingScopeCounts(workflowId, runScope === 'families' ? 'all' : runScope)
       : undefined;
 
   const normalizedPage = Math.max(1, Math.floor(page));
@@ -528,11 +529,12 @@ export async function listWorkflowRecordingRunsPage(
     };
   }
 
-  const totalRuns = scopeCounts
-    ? statusFilter === 'failed'
-      ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
-      : scopeCounts.totalRuns
-    : await countWorkflowRecordingRuns(workflowId, statusFilter, includeSubgraphRuns, runScope);
+  const totalRuns =
+    scopeCounts && runScope !== 'families'
+      ? statusFilter === 'failed'
+        ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
+        : scopeCounts.totalRuns
+      : await countWorkflowRecordingRuns(workflowId, statusFilter, includeSubgraphRuns, runScope);
   const rows = await listWorkflowRecordingRunRowsByWorkflowId(workflowId, {
     page: normalizedPage,
     pageSize: normalizedPageSize,
@@ -551,7 +553,12 @@ export async function listWorkflowRecordingRunsPage(
     hasMore: normalizedPage * normalizedPageSize < totalRuns,
     statusFilter,
     inputFilter,
-    runs: rows.map(toWorkflowRecordingRunSummary),
+    runs: rows.map((row) => ({
+      ...toWorkflowRecordingRunSummary(row),
+      ...(runScope === 'families' && row.executionIdentity?.surface === 'subgraph_project'
+        ? { familyContext: true as const }
+        : {}),
+    })),
   };
 }
 

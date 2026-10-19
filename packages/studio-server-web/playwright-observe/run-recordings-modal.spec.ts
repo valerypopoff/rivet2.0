@@ -9,6 +9,7 @@ import type {
   WorkflowRecordingWorkflowSummary,
 } from '../../studio-server-shared/workflow-recording-types';
 import { matchesWorkflowRecordingInputFilter } from '../../studio-server-api/src/routes/workflows/recording-input-filter.js';
+import { groupRecordingRuns } from '../dashboard/recording-run-hierarchy';
 
 type RecordingRun = WorkflowRecordingRunSummary & {
   input?: Record<string, unknown>;
@@ -524,6 +525,7 @@ async function installRunRecordingRoutes(
     relatedSubgraphRuns?: boolean;
     latestFlowDurationMs?: number | null;
     latestFlowRunCount?: number;
+    publishedFlowRunCount?: number;
     cursorDelayMs?: number;
     deletionGate?: Promise<void>;
     recordingError?: string;
@@ -610,6 +612,15 @@ async function installRunRecordingRoutes(
     }
   }
   const recordingFetches: string[] = [];
+  const publishedRuns = runsByWorkflow.get('workflow-a')!;
+  for (let index = publishedRuns.length; index < (options.publishedFlowRunCount ?? publishedRuns.length); index++) {
+    publishedRuns.push({
+      ...publishedRuns[0]!,
+      id: `published-root-${index}`,
+      createdAt: new Date(Date.UTC(2026, 2, 1, 0, -index)).toISOString(),
+      executionIdentity: { surface: 'workflow_endpoint', correlationId: `published-key-${index}` },
+    });
+  }
   const replayProjectFetches: string[] = [];
   const runFetches: string[] = [];
   const latestRuns = runsByWorkflow.get('workflow-b');
@@ -684,13 +695,18 @@ async function installRunRecordingRoutes(
       await options.beforeRuns?.(url);
       const allRuns = [...runsByWorkflow.values()].flat();
       const root = allRuns.find(
-        (run) => run.id === decodeURIComponent(parts.at(-2)!) && run.executionIdentity?.surface !== 'subgraph_project',
+        (run) =>
+          run.id === decodeURIComponent(parts.at(-2)!) &&
+          (url.searchParams.has('context')
+            ? run.executionIdentity?.surface === 'subgraph_project'
+            : run.executionIdentity?.surface !== 'subgraph_project'),
       );
       const children = root?.executionIdentity?.correlationId
         ? allRuns.filter(
             (run) =>
               run.executionIdentity?.surface === 'subgraph_project' &&
-              run.executionIdentity.correlationId === root.executionIdentity!.correlationId,
+              run.executionIdentity.correlationId === root.executionIdentity!.correlationId &&
+              (url.searchParams.get('context') !== 'project' || run.workflowId === root.workflowId),
           )
         : [];
       const pageNumber = Number(url.searchParams.get('page') ?? '1');
@@ -753,7 +769,13 @@ async function installRunRecordingRoutes(
           : hasInputFilter
             ? inputCursor
             : (pageNumber - 1) * pageSize;
-      const candidateRuns = filteredRuns.slice(
+      const paginationRuns =
+        !hasInputFilter && url.searchParams.get('groupByRoot') === 'true'
+          ? groupRecordingRuns(filteredRuns)
+              .map((family) => family.root ?? { ...family.children[0]!, familyContext: true as const })
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+          : filteredRuns;
+      const candidateRuns = paginationRuns.slice(
         offset,
         offset + (hasInputFilter ? Math.min(pageSize, options.inputSearchWindowSize ?? pageSize) : pageSize),
       );
@@ -781,7 +803,7 @@ async function installRunRecordingRoutes(
             : {}),
           page: pageNumber,
           pageSize,
-          totalRuns: hasInputFilter ? pageRuns.length : filteredRuns.length,
+          totalRuns: hasInputFilter ? pageRuns.length : paginationRuns.length,
           totalRunsExact: !hasInputFilter || !hasMore,
           hasMore,
           nextInputCursor: hasMore ? nextInputCursor : undefined,
@@ -1374,13 +1396,47 @@ test.describe('Run recordings modal', () => {
     const modal = await openLatestFlowRecordings(page);
     await selectPublishedFlow(page, modal);
     await expect(modal.locator('.run-recordings-family-context')).toContainText('Primary run is not identified');
-    await modal.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true }).click();
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     const run = modal.locator('.run-recordings-sub-run');
     await expect(run).toContainText('Subgraph · Local editor');
     await expect(run.locator('.run-recordings-run-endpoint').filter({ hasText: 'Called graph:' })).toContainText(
       'Called graph: Extract facts',
     );
     await expect(run).toContainText('Related run key: rvt-related-example-12345');
+  });
+
+  test('a context group uses its child anchor even when one ambiguous primary shares the page', async ({ page }) => {
+    const { runFetches } = await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
+    const fixture = createRunRecordingsFixture();
+    const root = fixture.runsByWorkflow.get('workflow-a')![0]!;
+    const child = fixture.runsByWorkflow.get('workflow-b')![0]!;
+    root.executionIdentity = { surface: 'workflow_endpoint', correlationId: 'rvt-root-caller-12345' };
+    child.executionIdentity = { surface: 'subgraph_project', correlationId: 'rvt-root-caller-12345' };
+    // The other primary is outside this page. The API's global ambiguity check
+    // keeps this child context separate from the one primary visible here.
+    await page.route('**/api/workflows/recordings/workflows/workflow-a/runs?*', (route) =>
+      route.fulfill({
+        json: {
+          workflowId: 'workflow-a',
+          page: 1,
+          pageSize: 20,
+          totalRuns: 2,
+          hasMore: false,
+          statusFilter: 'all',
+          runs: [root, { ...child, familyContext: true }],
+        },
+      }),
+    );
+    const modal = await openLatestFlowRecordings(page);
+    await selectPublishedFlow(page, modal);
+    await expect(modal.locator('.run-recordings-family-context')).toHaveCount(1);
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Hide 1 sub-run', exact: true })).toBeVisible();
+    await expect(modal.locator('.run-recordings-sub-run')).toHaveCount(1);
+    const requests = runFetches.map((url) => new URL(url)).filter((url) => url.pathname.endsWith('/sub-runs'));
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.pathname).toContain('/recording-b-1/sub-runs');
+    expect(requests[0]!.searchParams.get('context')).toBe('all');
   });
 
   test('root recordings unfold indented sub-runs without opening the primary replay', async ({ page }) => {
@@ -1392,15 +1448,12 @@ test.describe('Run recordings modal', () => {
     await expect(root).not.toContainText('Related run key:');
     await expect(modal).not.toContainText('Recording scope');
     await expect(modal).not.toContainText('This project and related called-project Subgraph runs');
-    const toggle = root.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true });
+    const toggle = root.getByRole('button', { name: 'Show sub-runs', exact: true });
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await expect(child).toHaveCount(0);
     await toggle.focus();
     await toggle.press('Enter');
-    await expect(root.getByRole('button', { name: 'Hide 1 sub-run in current results' })).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    );
+    await expect(root.getByRole('button', { name: 'Hide 1 sub-run' })).toHaveAttribute('aria-expanded', 'true');
     await expect(child).toHaveClass(/run-recordings-sub-run/);
     await expect(child.locator('.run-recordings-run-title')).toContainText('Sub-run ·');
     await expect(child).toContainText('Related run key: rvt-root-caller-12345');
@@ -1409,27 +1462,21 @@ test.describe('Run recordings modal', () => {
     expect(childBox!.x).toBeGreaterThan(rootBox!.x + 20);
     expect(childBox!.y).toBeGreaterThan(rootBox!.y + rootBox!.height);
     expect(recordingFetches).toEqual([]);
-    await root.getByRole('button', { name: 'Hide 1 sub-run in current results' }).press('Space');
+    await root.getByRole('button', { name: 'Hide 1 sub-run' }).press('Space');
     await expect(child).toHaveCount(0);
-    await root.getByRole('button', { name: 'Show 1 sub-run in current results' }).click();
+    await root.getByRole('button', { name: 'Show 1 sub-run' }).click();
     await child.locator('.run-recordings-run-open-button').click();
     await expect(modal).toBeHidden();
     expect(recordingFetches).toEqual(['recording-b-1']);
     await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
     await expect(modal).toBeVisible();
     await expect(child).toBeVisible();
-    await expect(root.getByRole('button', { name: 'Hide 1 sub-run in current results' })).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    );
+    await expect(root.getByRole('button', { name: 'Hide 1 sub-run' })).toHaveAttribute('aria-expanded', 'true');
     await modal.getByLabel('Close run recordings').click();
     await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
     await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
     await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
-    await expect(root.getByRole('button', { name: 'Show 1 sub-run in current results' })).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
+    await expect(root.getByRole('button', { name: 'Show sub-runs' })).toHaveAttribute('aria-expanded', 'false');
     await expect(child).toHaveCount(0);
   });
 
@@ -1620,26 +1667,64 @@ test.describe('Run recordings modal', () => {
     }
   });
 
-  test('page-split families stay collapsible in Any without inventing a primary run', async ({ page }) => {
+  test('a family stays with its primary page instead of appearing as a page-split context', async ({ page }) => {
     await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
     const modal = await openLatestFlowRecordings(page);
     await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
     await page.locator('.run-recordings-select__option').filter({ hasText: /^Any/ }).click();
     await choosePageSizeTen(modal);
-    const group = modal.locator('.run-recordings-family-context');
-    await expect(group).toContainText('Primary run is not identified');
+    await expect(modal.locator('.run-recordings-family-context')).toHaveCount(0);
     await expect(modal.locator('[data-recording-id="recording-b-1"]')).toHaveCount(0);
-    await group.getByRole('button', { name: 'Show 1 sub-run in current results' }).click();
-    await expect(modal.locator('[data-recording-id="recording-b-1"]')).toBeVisible();
     await modal.getByRole('button', { name: 'Next', exact: true }).click();
     await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 2 of 2');
     await expect(modal.locator('[data-recording-id="recording-a-1"]')).toBeVisible();
     await expect(modal.locator('.run-recordings-family-context')).toHaveCount(0);
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+    await expect(modal.locator('[data-recording-id="recording-b-1"]')).toBeVisible();
     await modal.getByRole('button', { name: 'Previous', exact: true }).click();
-    await expect(group.getByRole('button', { name: 'Show 1 sub-run in current results' })).toHaveAttribute(
+    await expect(modal.locator('[data-recording-id="recording-b-1"]')).toHaveCount(0);
+    await modal.getByRole('button', { name: 'Next', exact: true }).click();
+    await expect(modal.getByRole('button', { name: 'Show sub-runs', exact: true })).toHaveAttribute(
       'aria-expanded',
       'false',
     );
+  });
+
+  test('twenty primary runs keep all 151 descendants without consuming page slots', async ({ page }) => {
+    const { runFetches, recordingFetches } = await installRunRecordingRoutes(page, {
+      relatedSubgraphRuns: true,
+      relatedSubgraphRunCount: 151,
+      publishedFlowRunCount: 25,
+    });
+    const modal = await openLatestFlowRecordings(page);
+    const firstPage = page.waitForResponse(
+      (response) => response.url().includes('/workflow-a/runs?') && response.request().method() === 'GET',
+    );
+    await selectPublishedFlow(page, modal);
+    const payload = await (await firstPage).json();
+    expect(payload.totalRuns).toBe(25);
+    expect(payload.runs).toHaveLength(20);
+    expect(payload.runs.every((run: RecordingRun) => run.executionIdentity?.surface !== 'subgraph_project')).toBe(true);
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
+    const root = modal.locator('[data-recording-id="recording-a-1"]');
+    await root.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
+    await expect(root.getByRole('button', { name: 'Hide 151 sub-runs', exact: true })).toBeVisible();
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 1 of 2');
+    expect(runFetches.filter((url) => url.includes('/recording-a-1/sub-runs?'))).toHaveLength(2);
+    expect(recordingFetches).toEqual([]);
+    const nextPage = page.waitForResponse(
+      (response) =>
+        response.url().includes('/workflow-a/runs?') && new URL(response.url()).searchParams.get('page') === '2',
+    );
+    await modal.getByRole('button', { name: 'Next', exact: true }).click();
+    expect((await (await nextPage).json()).runs).toHaveLength(5);
+    await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 2 of 2');
+    await choosePageSizeTen(modal, 3);
+    expect(
+      runFetches
+        .filter((url) => url.includes('/workflow-a/runs?'))
+        .every((url) => new URL(url).searchParams.get('groupByRoot') === 'true'),
+    ).toBe(true);
   });
 
   test('caller recordings include linked cross-project children with counts, input filtering and deletion', async ({
@@ -1652,7 +1737,7 @@ test.describe('Run recordings modal', () => {
     await expect(modal.getByRole('button', { name: 'Bad only (2)', exact: true })).toBeVisible();
     const child = modal.locator('.run-recordings-run').filter({ hasText: 'Called graph: Extract facts' });
     await expect(child).toHaveCount(0);
-    await modal.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true }).click();
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(child).toHaveCount(1);
     await expect(child).toContainText('Project: Latest Flow.rivet-project');
     await expect(child).toContainText('Subgraph · Latest');
@@ -1661,7 +1746,7 @@ test.describe('Run recordings modal', () => {
       true,
     );
     await modal.getByRole('button', { name: 'Bad only (2)', exact: true }).click();
-    await modal.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true }).click();
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
     await expect(child).toBeVisible();
     await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
@@ -1728,7 +1813,7 @@ test.describe('Run recordings modal', () => {
     );
     await expect(child).toHaveCount(0);
     await modal.getByRole('button', { name: 'Clear', exact: true }).click();
-    await modal.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true }).click();
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(child).toHaveCount(1);
   });
 
@@ -1738,7 +1823,7 @@ test.describe('Run recordings modal', () => {
     await installRunRecordingRoutes(page, { relatedSubgraphRuns: true });
     const modal = await openLatestFlowRecordings(page);
     await selectPublishedFlow(page, modal);
-    await modal.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true }).click();
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     const child = modal.locator('.run-recordings-run').filter({ hasText: 'Called graph: Extract facts' });
     await expect(child).toHaveCount(1);
     await page.route('**/api/workflows/recordings/workflows', (route) =>
@@ -1753,7 +1838,7 @@ test.describe('Run recordings modal', () => {
     // The child still belongs to Any; only this caller's cached scope was retired.
     await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
     await page.locator('.run-recordings-select__option').filter({ hasText: /^Any/ }).click();
-    await modal.getByRole('button', { name: 'Show 1 sub-run in current results', exact: true }).click();
+    await modal.getByRole('button', { name: 'Show sub-runs', exact: true }).click();
     await expect(child).toHaveCount(1);
   });
 
@@ -2497,6 +2582,9 @@ test.describe('Run recordings modal', () => {
     await fullscreen.locator('.response-inspector-button').click();
     await expect(inspector).toContainText('Profile: Another classifier profile');
     await editor.getByRole('button', { name: 'Close modal', exact: true }).last().click();
+    await expect(inspector).not.toBeVisible();
+    await expect(fullscreen).toHaveAttribute('data-modal-stack', '0');
+    await fullscreen.focus();
     await page.keyboard.press('Escape');
     await expect(fullscreen).not.toBeVisible();
     await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();

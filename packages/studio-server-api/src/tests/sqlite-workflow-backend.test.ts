@@ -2512,6 +2512,38 @@ test('SQLite caller browse scope includes cross-project descendants with accurat
     assert.equal(bad.totalRuns, 2);
     assert.deepEqual(new Set(bad.runs.map((run) => run.id)), new Set([childId, nestedId]));
     assert.equal(bad.runs.find((run) => run.id === childId)?.sourceProjectRelativePath, child.relativePath);
+    const familyPage = await backend.listWorkflowRecordingRunsPage({
+      workflowId,
+      page: 1,
+      pageSize: 1,
+      includeSubgraphRuns: true,
+      runScope: 'families',
+    });
+    assert.equal(familyPage.totalRuns, 1);
+    assert.deepEqual(
+      familyPage.runs.map((run) => run.id),
+      [rootId],
+    );
+    assert.equal(familyPage.hasMore, false);
+    const childContext = await backend.listWorkflowRecordingRunsPage({
+      workflowId: child.projectMetadataId!,
+      page: 1,
+      pageSize: 1,
+      includeSubgraphRuns: true,
+      runScope: 'families',
+    });
+    assert.equal(childContext.totalRuns, 1);
+    assert.equal(childContext.runs[0]?.familyContext, true);
+    const contextChildren = await backend.listWorkflowRecordingRunsPage({
+      workflowId: childId,
+      page: 1,
+      pageSize: 100,
+      runScope: 'project-family-children',
+    });
+    assert.deepEqual(
+      contextChildren.runs.map((run) => run.id),
+      [childId],
+    );
     assert.equal(
       (await backend.listWorkflowRecordingRunsPage({ workflowId: workflowId, page: 1, pageSize: 20 })).totalRuns,
       1,

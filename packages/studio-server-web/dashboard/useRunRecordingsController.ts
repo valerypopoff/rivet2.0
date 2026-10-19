@@ -121,7 +121,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         inputAfter?: string;
         signal?: AbortSignal;
       },
-    ) => fetchWorkflowRecordingRuns(workflowId, { ...options, includeSubgraphRuns: true }),
+    ) => fetchWorkflowRecordingRuns(workflowId, { ...options, includeSubgraphRuns: true, groupByRoot: true }),
     [],
   );
   const abortInputSearch = useCallback(() => {
@@ -371,7 +371,8 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
   const badRunsCount = scopeCounts
     ? scopeCounts.failedRuns + scopeCounts.suspiciousRuns
     : getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'failed');
-  const visibleRuns = appliedInputFilter ? [...inputFilterRuns, ...subRuns] : runsPage?.runs ?? [];
+  const primaryRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
+  const visibleRuns = [...primaryRuns, ...subRuns];
   const filteredRunsCount = appliedInputFilter
     ? inputFilterRuns.length
     : runsPage?.totalRuns ?? (statusFilter === 'failed' ? badRunsCount : overallRunsCount);
@@ -379,8 +380,14 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
 
   const handleLoadSubRuns = useCallback(
     async (key: string) => {
-      if (!appliedInputFilter || !key.startsWith('correlation:')) return;
-      const root = inputFilterRuns.find((run) => `correlation:${run.executionIdentity?.correlationId}` === key);
+      if (!key.startsWith('correlation:')) return;
+      const candidates = primaryRuns.filter((run) => `correlation:${run.executionIdentity?.correlationId}` === key);
+      const primaries = candidates.filter((run) => run.executionIdentity?.surface !== 'subgraph_project');
+      const root =
+        candidates.find((run) => run.familyContext) ??
+        (primaries.length === 1
+          ? primaries[0]
+          : candidates.find((run) => run.executionIdentity?.surface === 'subgraph_project'));
       if (!root || childLoadStates[root.id] === 'complete' || childRequestsRef.current.has(root.id)) return;
       const controller = new AbortController();
       const version = runsRequestVersionRef.current;
@@ -398,7 +405,16 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         const children = new Map<string, WorkflowRecordingRunSummary>();
         let expectedCount: number | undefined;
         for (let childPage = 1; ; childPage++) {
-          const response = await fetchRecordingSubRuns(root.id, childPage, controller.signal);
+          const response = await fetchRecordingSubRuns(
+            root.id,
+            childPage,
+            controller.signal,
+            root.executionIdentity?.surface === 'subgraph_project'
+              ? selectedWorkflowId === root.workflowId
+                ? 'project'
+                : 'all'
+              : undefined,
+          );
           if (!isCurrent()) return;
           if (
             response.workflowId !== root.id ||
@@ -451,7 +467,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
         if (childRequestsRef.current.get(root.id) === controller) childRequestsRef.current.delete(root.id);
       }
     },
-    [appliedInputFilter, inputFilterRuns, childLoadStates],
+    [primaryRuns, childLoadStates, selectedWorkflowId],
   );
 
   useEffect(() => {
@@ -602,7 +618,9 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
           return {
             ...current,
             runs: current.runs.filter((run) => run.id !== recordingId),
-            totalRuns: deletingRun && !currentInputFilter ? Math.max(0, current.totalRuns - 1) : current.totalRuns,
+            // A child does not consume a page slot. The authoritative refresh
+            // recalculates family counts, including deleted context anchors.
+            totalRuns: current.totalRuns,
             scopeCounts:
               deletingRun &&
               current.scopeCounts &&
@@ -705,8 +723,8 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
     inputSearchStatus,
     inputSearchProgress,
     visibleRuns,
-    childLoadStates: appliedInputFilter ? childLoadStates : undefined,
-    childLoadErrors: appliedInputFilter ? childLoadErrors : {},
+    childLoadStates,
+    childLoadErrors,
     handleLoadSubRuns,
     setSelectedWorkflowId,
     setRunsPerPage,

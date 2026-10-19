@@ -7,7 +7,7 @@ import { setImmediate as yieldToRequests } from 'node:timers/promises';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { gzip, gunzip } from 'node:zlib';
 import { LRUCache } from 'lru-cache';
-import { recordingWorkflowScopeClause } from '../routes/workflows/recording-workflow-scope.js';
+import { recordingWorkflowScopeClause, type RecordingRunScope } from '../routes/workflows/recording-workflow-scope.js';
 import {
   recordingStatisticsCatalogSql,
   recordingStatisticsRowsSql,
@@ -1314,7 +1314,23 @@ export class LocalWorkflowCatalog {
     return row.count;
   }
 
-  recordingScopeCounts(workflowId: string, runScope: 'all' | 'roots' | 'children' = 'all') {
+  countRecordingFamilies(workflowId: string, failedOnly: boolean, includeSubgraphRuns: boolean): number {
+    const clause = recordingWorkflowScopeClause(
+      workflowId,
+      includeSubgraphRuns,
+      'sqlite',
+      1,
+      'families',
+      failedOnly ? 'failed' : 'all',
+    );
+    return (
+      this.#database()
+        .prepare(`SELECT COUNT(*) AS count FROM recordings WHERE ${clause}`)
+        .get(...(workflowId ? [workflowId] : [])) as { count: number }
+    ).count;
+  }
+
+  recordingScopeCounts(workflowId: string, runScope: RecordingRunScope = 'all') {
     return this.#database()
       .prepare(
         `SELECT COUNT(*) AS totalRuns,
@@ -1395,7 +1411,7 @@ export class LocalWorkflowCatalog {
       recordingId?: string;
       workflowId?: string;
       includeSubgraphRuns?: boolean;
-      runScope?: 'all' | 'roots' | 'children';
+      runScope?: RecordingRunScope;
       failedOnly?: boolean;
       limit?: number;
       offset?: number;
@@ -1410,7 +1426,7 @@ export class LocalWorkflowCatalog {
       conditions.push('recording_id = ?');
       values.push(options.recordingId);
     }
-    if (options.workflowId || options.runScope === 'roots') {
+    if (options.workflowId || options.runScope === 'roots' || options.runScope === 'families') {
       conditions.push(
         recordingWorkflowScopeClause(
           options.workflowId ?? '',
@@ -1418,6 +1434,7 @@ export class LocalWorkflowCatalog {
           'sqlite',
           values.length + 1,
           options.runScope,
+          options.failedOnly ? 'failed' : 'all',
         ),
       );
       if (options.workflowId) values.push(options.workflowId);

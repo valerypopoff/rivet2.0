@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
+import { familyRows, verifyFamilyQueries } from './helpers/recording-family-fixture.js';
 import { checkStatisticsQueries, statisticsFixture } from './recording-statistics-sql.test.js';
 import type { RecordingStatisticsSqlRow } from '../routes/workflows/recording-statistics-sql.js';
 
@@ -73,6 +74,25 @@ try {
     async ({ sql, values }) => (await database.query<RecordingStatisticsSqlRow>(sql, values)).rows,
   );
   console.log('PostgreSQL and SQLite statistics parity passed on real database engines.');
+  await pool.query('DROP TABLE workflow_recordings');
+  await pool.query(`CREATE TABLE workflow_recordings (id text, recording_id text PRIMARY KEY, workflow_id text,
+    execution_surface text, correlation_id text, status text, created_at timestamptz, metadata_json text)`);
+  for (const row of familyRows)
+    await pool.query('INSERT INTO workflow_recordings VALUES ($1,$1,$2,$3,$4,$5,$6,$7)', [
+      row.id,
+      row.workflow,
+      row.surface,
+      row.correlation,
+      row.status,
+      row.created,
+      JSON.stringify({
+        status: row.status,
+        createdAt: row.created,
+        executionIdentity: { surface: row.surface, correlationId: row.correlation },
+      }),
+    ]);
+  await verifyFamilyQueries('managed', async (sql, values) => (await database.query<{ id: string }>(sql, values)).rows);
+  console.log('PostgreSQL family pagination and complete child browsing passed.');
 } finally {
   await pool?.end();
   if (container) docker('stop', container);

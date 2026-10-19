@@ -14,7 +14,7 @@ import type {
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { normalizeRivetCorrelationId } from '../../request-correlation.js';
-import { recordingWorkflowScopeClause } from './recording-workflow-scope.js';
+import { recordingWorkflowScopeClause, type RecordingRunScope } from './recording-workflow-scope.js';
 
 export type WorkflowRecordingWorkflowRow = {
   workflowId: string;
@@ -525,7 +525,7 @@ export async function listWorkflowRecordingRunRowsByWorkflowId(
     pageSize: number;
     statusFilter: WorkflowRecordingFilterStatus;
     includeSubgraphRuns?: boolean;
-    runScope?: 'all' | 'roots' | 'children';
+    runScope?: RecordingRunScope;
   },
 ): Promise<WorkflowRecordingRunRow[]> {
   return listWorkflowRecordingRunRowsForWorkflowWindow(workflowId, {
@@ -549,7 +549,7 @@ export async function listWorkflowRecordingRunRowsForWorkflowWindow(
     statusFilter: WorkflowRecordingFilterStatus;
     after?: { createdAt: string; recordingId: string };
     includeSubgraphRuns?: boolean;
-    runScope?: 'all' | 'roots' | 'children';
+    runScope?: RecordingRunScope;
   },
 ): Promise<WorkflowRecordingRunRow[]> {
   const db = await getDatabase();
@@ -604,7 +604,7 @@ export async function countWorkflowRecordingRuns(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   includeSubgraphRuns = false,
-  runScope: 'all' | 'roots' | 'children' = 'all',
+  runScope: RecordingRunScope = 'all',
 ): Promise<number> {
   const db = await getDatabase();
   const whereClause = buildRunFilterClause(workflowId, statusFilter, includeSubgraphRuns, runScope);
@@ -615,10 +615,7 @@ export async function countWorkflowRecordingRuns(
   return toNumber(row?.count ?? 0);
 }
 
-export async function getWorkflowRecordingScopeCounts(
-  workflowId: string,
-  runScope: 'all' | 'roots' | 'children' = 'all',
-) {
+export async function getWorkflowRecordingScopeCounts(workflowId: string, runScope: RecordingRunScope = 'all') {
   const db = await getDatabase();
   const row = db
     .prepare(
@@ -918,9 +915,9 @@ function buildRunFilterClause(
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   includeSubgraphRuns = false,
-  runScope: 'all' | 'roots' | 'children' = 'all',
+  runScope: RecordingRunScope = 'all',
 ): string {
-  return `WHERE ${recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'filesystem', 1, runScope)}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
+  return `WHERE ${recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'filesystem', 1, runScope, statusFilter)}${statusFilter === 'failed' ? " AND status IN ('failed', 'suspicious')" : ''}`;
 }
 
 function buildStatisticsTargetClause(target: WorkflowRunStatisticsTarget | undefined): {

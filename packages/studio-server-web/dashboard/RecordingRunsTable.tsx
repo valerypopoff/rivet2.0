@@ -225,7 +225,7 @@ function RecordingFamilyToggle({
       onClick={() => onToggle(family.key)}
       title={
         family.childLoadState
-          ? 'Sub-runs are shown regardless of the root input filter.'
+          ? 'Sub-runs do not count toward runs per page and are shown regardless of the root filters.'
           : 'Includes sub-runs in this page.'
       }
     >
@@ -309,7 +309,7 @@ function MeasuredRecordingRow({
         <div className="run-recordings-family-context">
           <div className="run-recordings-run-title">Related sub-runs</div>
           <div>
-            Primary run is not identified in these results. It may be on another page, filtered out, or no longer
+            Primary run is not identified in these results. It may be outside this project, filtered out, or no longer
             retained.
           </div>
           <RecordingFamilyToggle

@@ -71,6 +71,8 @@ export type WorkflowRecordingInputFilter = {
 export type WorkflowRecordingBlobEncoding = 'identity' | 'gzip';
 
 export type WorkflowRecordingRunSummary = {
+  /** Browse-only context representative, not a claimed parent. Never persisted. */
+  familyContext?: true;
   id: string;
   workflowId: string;
   sourceProjectName?: string;
