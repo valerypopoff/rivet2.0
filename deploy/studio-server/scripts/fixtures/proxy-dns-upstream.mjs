@@ -68,7 +68,7 @@ const handleUpgrade = (req, socket) => {
     .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
     .digest('base64');
   socket.end(
-    `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nX-Fixture-Path: ${req.url}\r\n\r\n`,
+    `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\nX-Fixture-Path: ${req.url}\r\nX-Fixture-Identity: ${identity}\r\n\r\n`,
   );
 };
 const server = http.createServer(handleRequest);
