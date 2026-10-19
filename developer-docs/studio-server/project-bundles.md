@@ -1,13 +1,229 @@
-# Portable project bundles
+# Project bundles
 
-Studio Server's project-row **Download bundle** action exports a saved
-project and its recursive dependency closure as a ZIP. Ordinary **Download project** and
+## Explicit Studio Server containers
+
+PostgreSQL/S3 installations support **New bundle** and **Convert to bundle**.
+Creation is available through the library's **+ New bundle** action. Folder context
+menus offer **Convert to bundle**, not nested creation; the conversion action uses
+the same bundle icon as the project tree. **Upload bundle** is available only outside
+bundles. A bundle root and every ordinary folder beneath it hide that action;
+**Upload project** remains available there.
+A bundle owns every descendant project, including disconnected projects and ordinary
+subfolders. It has no entry/main project. Ordinary folders may contain bundles,
+but bundles cannot nest. Existing folders are not converted automatically.
+Conversion back to an ordinary folder removes grouping only. Projects, references
+and publications survive; only empty containers can be deleted.
+
+Bundle creation/duplication and ordinary folder creation/rename validate their
+complete destination through the same folder-path rules used by later operations.
+In particular, folder names ending in `.rivet-project` are rejected before storage
+work rather than creating containers that folder APIs cannot address. Import also
+checks every declared workspace folder against server path/name rules before
+preparing projects; it rejects non-canonical names instead of silently merging or
+renaming folders. No database migration is needed for these checks.
+
+Desktop cross-project target bindings remain read-only in the editor, but are
+executable from an extracted portable bundle (or a compatible project loader).
+The node's helper text must not imply that Studio Server is required to run them.
+The desktop bundle Playwright check covers this message and actual child execution.
+
+### Subgraph encapsulation
+
+Bundled projects may be targeted through Subgraph only by projects in the same
+explicit bundle. Ordinary projects remain reusable from both ordinary and bundled
+callers. A bundle has no entry project; published endpoints can still start any
+published member directly. This rule is graph-reference policy, not a new user
+authorization boundary or a restriction on opening projects.
+
+The Subgraph **Graph source** control offers **This project**, **Same bundle**
+(only for bundled callers), and **Other projects**. Same bundle lists all sibling
+members, including nested folders; the picker starts at the bundle's contents,
+omitting the bundle root and its ordinary ancestors. Other projects lists only ordinary projects
+and preserves their folder hierarchy.
+Old saved internal targets are displayed under Same bundle without rewriting them.
+After conversion to an ordinary folder, a saved Same bundle hint displays as Other
+projects, preserving usable ordinary calls instead of stranding the selector.
+The same applies when only the target moves out of the bundle. Once the catalog
+has loaded, actual selected-target membership takes precedence over that UI hint;
+an unselected Same bundle picker retains its chosen mode. The settings source
+buttons and graph dropdown share one tree snapshot and refresh together when the
+dropdown opens. Caller membership changes invalidate the tree and pending target
+requests, without editing authored references or marking the project dirty.
+Changing source clears the previous target intentionally. Missing/inaccessible
+targets retain their saved IDs and wire boundary for repair; saving unrelated edits
+does not silently remove or retarget them.
+
+Shared preview definitions remain available for displaying existing ports and
+wires, but are not permission to select a graph. Each dropdown visit refreshes
+the catalog and its visible expanded projects. Graph choices stay disabled until
+that project's current preview succeeds; pending or failed reads cannot reuse an
+older cached boundary. Readiness is tracked per project/version, so one successful
+preview cannot clear another project's failure. A catalog-refresh failure removes
+the stale choices instead of presenting them as current. Closing/reopening retries
+without modifying the saved node; ordinary local node-body selectors still avoid
+catalog requests.
+
+`SubgraphProjectTarget.callerProjectId` is additive transient metadata assigned by
+Core from each actual graph owner, never trusted from node data. The managed
+`subgraph-access.ts` owner checks target/caller membership in one live SQL statement,
+using workflow-ID lookups plus bundle ancestors, without reading revision blobs.
+Browser previews/execution and Node executor requests include the caller ID;
+requests without a caller cannot load a bundled target through those HTTP routes.
+Internal root snapshot selection for endpoints, schedules and maintenance remains
+available without a caller. It does not authorize any subsequent graph edge.
+
+The loader's optional `validateTarget` hook rechecks cached targets too: an allowed
+caller must not authorize a different nested caller sharing that snapshot. API,
+hosted Browser, hosted Node and Evaluation loaders implement it. Ordinary custom
+loaders stay source compatible. Access checks are not cached across runs or topology
+changes. A move/conversion can therefore invalidate an old outside call; the next
+run fails clearly instead of selecting a different project. In-flight graph runs
+are not protected by a topology lock or retroactively aborted.
+
+Capability-4 portable manifests enforce the same member/ordinary boundary during
+closure validation, including editable Desktop entry overrides. Server exports
+also validate actual source membership before collection and final publication,
+so another bundle's project cannot be smuggled in as an ordinary dependency snapshot.
+Legacy referenced-graph aliases are unchanged; this policy applies to Subgraph nodes.
+Regression owners: `subgraphBundleScope.test.ts`, `managed-subgraph-access.test.ts`,
+the Core cached-caller test, `project-bundle-import.test.ts`, the real PostgreSQL
+explicit-bundle integration matrix and headless `subgraph-bundle-scope.spec.ts`.
+The picker regression covers a target moving out and back while settings stay
+open, unchanged save state, and conversion of the caller's bundle to a folder.
+It also holds then rejects a cached preview and verifies that another sibling's
+successful preview does not re-enable that failed graph choice. Clicks on those
+disabled choices and a failed catalog refresh preserve the clean project; reopening
+after recovery restores usable choices.
+The same tests assert that Same bundle omits its root/ancestors while retaining
+nested member folders. `explicit-bundles.spec.ts` checks conversion icon parity,
+absence of folder-scoped creation, and upload visibility at ordinary ancestors,
+prefix-sharing siblings, bundle roots and descendants. The real managed round-trip
+contract rejects both legacy and capability-4 uploads at a bundle root and nested
+folder and verifies that rejected imports do not change the catalog.
+
+Migration 16 adds nullable, unique `workflow_folders.bundle_id`. Membership is
+derived from the hierarchy into tree/editor bindings, not stored in project files.
+The tree advertises `capabilities.explicitBundles`; filesystem/SQLite compatibility
+backends reject new container operations. Folder moves retain the UUID. PostgreSQL
+topology locks and deferred constraints reject nesting through predecessor folder
+operations too, checking final paths rather than temporary move prefixes. Startup
+verification checks the column, uniqueness and enabled trigger/function bodies.
+Ordinary folders skip deferred ancestry scans. Execution and recording writes do
+not acquire the topology lock. Saving an existing project also leaves its folder
+chain untouched: the workflow row lock protects its current location, and saves
+must not acquire topology after that row lock. The managed integration regression
+holds a topology lease while both unchanged and edited full-service saves finish;
+checking only the final workflow UPDATE would miss folder-preparation regressions.
+
+Authenticated POST operations under `/api/workflows/bundles` provide creation
+(`/`), conversion (`/kind`), preview (`/:id/preview`) and duplication
+(`/:id/duplicate`). They require `X-Rivet-Bundle-Intent: 1`, reject cross-site
+requests and use maintenance-owner routing. Preview fingerprints hierarchy,
+membership and selected revisions; duplication rechecks under topology/member locks.
+
+**Duplicate bundle** copies all members and preserves subfolder layout. Saved latest
+is the default; Published selects published revisions with explicit saved-latest
+fallback for unpublished members. Opened unsaved members are identified; copying
+their saved versions requires acknowledgement, never an implicit editor save.
+An unavailable editor, predecessor browser, or capture omitting a saving/loading
+tab is not evidence of clean edits. The additive `editCheckComplete` capture flag
+must be true to skip that acknowledgement; otherwise the dialog explicitly asks
+to copy stored revisions without a complete edit check. Revision fingerprints
+still protect against source saves that finish before duplication commits.
+The shared `remapBundleProject` helper assigns fresh project identities and remaps
+internal Subgraph/legacy references, prefab sources and saved variants. Graph/node/
+port IDs survive. Internal targets become saved-latest; external targets and their
+version settings remain shared. Dataset ownership is remapped without changing rows
+or dataset IDs. Unfinished variants survive; Code strings and URLs are not rewritten.
+
+Limits are 256 projects, 512 folders and 64 MiB decoded project/dataset content.
+Capture resolves the root through its unique bundle ID and fetches only its
+subtree. SQL limits of 257 projects and 513 folders detect over-limit containers
+without materializing every installation folder or an arbitrarily large bundle.
+Root handling compares stable paths, not object identity between query results.
+Artifacts are prepared outside SQL; one transaction exposes the entire copied group.
+Stale/failed operations expose no partial group. Existing reference-aware cleanup
+handles unused uploads and uncertain commits. Lost responses are not automatically
+retried: refresh the tree first. Copies have no published routes, enabled schedules,
+publication/recording history or copied server credentials. External services and
+shared configuration are not sandboxed. Coordinated publishing/merge-back is not added.
+
+New portable imports create explicit containers. Capability-4 imports preserve
+membership and subfolders. Both legacy and capability-4 imports reject destinations
+at or inside existing bundles. The managed importer checks the destination while
+holding the topology lock in its transaction, so stale menus and direct HTTP calls
+cannot bypass the rule. Rejected imports discard prepared revisions and expose no
+partial folders or projects. Ordinary ancestors containing bundles may still accept
+uploads as new sibling bundles. Previously imported folders are not converted automatically. The
+archive's root artifact is only an initial Desktop/Node selection, not an
+entry-project property on the container.
+
+Remote Debugger grouping uses server-qualified explicit bundle identity only.
+Cross-project calls never expand membership; standalone projects stay independent.
+Explicit desktop manifest grouping remains supported. Start/stop from any opened
+member. Closed members are not opened automatically. Membership changes reconcile
+joins/departures and fence late events while retaining remaining members' sessions.
+An authoritative tree deletion clears a tab's hosted membership without closing
+the tab, rewriting content or saving edits. Initial loading and failed tree reads
+are not authoritative empty trees. Membership helpers receive only opened-tab
+metadata; streamed graph snapshots are not inputs or subscriptions for grouping.
+Hosted tab normalization retains the bundle key (including explicit null) when
+repairing other legacy tabs. Explicit hosted detachment never falls back to an
+old portable-manifest hint; desktop tabs without hosted metadata still use theirs.
+Passive projection also checks membership. Root lifecycle bookkeeping can settle
+eligible children called from outside without painting the outside caller.
+Old browser builds must reload to adopt the policy.
+
+Optimistic folder move/rename updates reconcile descendant project bundle IDs
+from the resulting hierarchy, not just their paths. This makes newly opened tabs
+use the correct membership before the background tree read completes, including
+when that read fails. Moving an ordinary folder into/out of/between bundles
+updates all descendants; moving a bundle or an ordinary ancestor retains nested
+bundle identities. The returned moved-root identity takes precedence over the
+old tree, covering a concurrent conversion. No project content or references are
+rewritten. `workflow-tree-ops.test.ts` owns these regressions; the browser move
+check opens the moved project while follow-up tree reads fail.
+
+Verification owners: `remap-bundle-project.test.ts`, schema migration tests,
+registry/observation tests, the explicit-container contract in `test:async-managed`,
+and headless `explicit-bundles.spec.ts` / `remote-bundle-observation.spec.ts`.
+`managed-bundles.test.ts` covers source changes during artifact preparation and
+failure of a later upload, asserting that no copied metadata becomes visible and
+only prepared copy artifacts are offered for reference-aware cleanup.
+
+### Plan and delivery boundaries
+
+The first-class-container plan has the following acceptance surface. These are
+implementation boundaries, not a claim that a deployment has already been upgraded.
+
+| Planned behavior                                                                                                                      | Implemented owner / regression evidence                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Explicit folder identity, derived membership, no entry projects or nesting                                                            | Migration 16, managed tree projection, schema tests and PostgreSQL integration                                   |
+| Create, convert, rename/move and empty-container deletion without rewriting references                                                | Existing folder operations plus bundle routes; integration and browser checks                                    |
+| Duplicate all members and subfolders with fresh identities, internal rewiring, shared external references and selected saved versions | Shared remapper, managed duplication service, copy-execution integration                                         |
+| Unpublished copies, no copied routes/schedules/history, no silent saving or partial group exposure                                    | Duplication preview/acknowledgement, rollback integration and preparation-failure tests                          |
+| One debugger session from any opened member; no grouping by inferred references                                                       | Explicit membership helper, registry/routing tests and browser streaming matrix                                  |
+| Membership changes/deletion retain edits and reject late events                                                                       | Guarded editor binding reconciliation, registry lifetime fences and deletion-during-streaming browser regression |
+| Keep existing portable artifacts, desktop runtimes and storage compatibility paths working                                            | Existing import/Node contracts retained; unsupported backends advertise no new container actions                 |
+
+Coordinated publication, endpoint cutover and merge-back between copies remain
+outside this plan. Container-level download reuses the existing portable archive
+and job owner rather than introducing another transfer format or scheduler.
+Deployments apply migration 16 through the existing migration owner before serving
+the updated API; no manual project conversion or new Kubernetes component is needed.
+
+## Portable project bundles
+
+Studio Server's explicit bundle-folder **Download bundle** action exports every
+saved member, including disconnected members, subfolder/empty-folder metadata and
+the recursive external dependency closure as a ZIP. Ordinary **Download project** and
 published-history downloads retain their single-file contract. Closing the bundle
 dialog does not cancel export, activate a project, refresh the tree or discard edits.
 
-The project context menu distinguishes the single downward arrow for **Download project**
-from two downward arrows for **Download bundle**, with the right arrow
-slightly lower. Icons are decorative; menu labels provide accessible names. The
+Projects and ordinary folders do not offer **Download bundle**. A bundle folder
+uses the existing two downward arrows, with the right arrow slightly lower.
+Project menus retain the single downward arrow for **Download project**.
+Icons are decorative; menu labels provide accessible names. The
 bundle dialog also uses the **Download bundle** title.
 The single-project version chooser retains its **Download** title and version
 buttons; `workflow-project-version-modal.spec.ts` exercises that flow through
@@ -17,8 +233,8 @@ Failed, cancelled and interrupted jobs offer **Retry export** directly: disposal
 must succeed before creating a fresh job with the selected bundle-wide version. Ready
 jobs retain **Prepare another bundle** for choosing a different version. Job status
 includes the optional durable `versionPolicy`; reopening or retrying a new-format
-job restores its actual choice instead of the root project's publication default.
-Legacy jobs without that field retain the existing default behavior.
+job restores its actual choice. New bundle downloads default to Saved latest.
+The session-storage key is the explicit bundle ID, not a project's metadata ID.
 Status responses and polling errors are fenced by the current job ID, so late replies
 from a disposed job cannot overwrite the retry's progress or download link.
 Late start acknowledgements cannot regress packaging back to collection, or
@@ -60,10 +276,13 @@ archive paths to disk. One optional wrapper directory is stripped. macOS
 `__MACOSX` and `.DS_Store` entries are ignored. Traversal, duplicate paths, multiple
 manifests, files outside the wrapper and invalid UTF-8 are rejected.
 
-Upload limits differ from background export limits: 64 MiB compressed ZIP size,
+Upload limits are 64 MiB compressed ZIP size,
 64 MiB total actual decoded file contents, 514 meaningful files (up to 256 projects
 with sidecars, manifest and README), 1 MiB manifest, and the existing 100 MiB JSON
-control-plane request limit. Actual decoded sizes are checked independently of ZIP
+control-plane request limit. New container exports enforce these same round-trip
+limits (including manifest/README and JSON escaping) before exposing a ready ZIP;
+edits may still grow an extracted bundle past those limits. Legacy programmatic
+project-closure exports retain their configurable larger limits. Actual decoded sizes are checked independently of ZIP
 headers; directory entries and ignored metadata also have a bounded entry count.
 
 Authenticated `POST /api/workflows/project-bundles/import` requires
@@ -97,8 +316,13 @@ not cast to provider/node-specific data or used to invent dependencies. Qualific
 must rebuild Core/Node declarations before compiling the API and its tests; stale
 local declarations are not evidence of clean-container compilation. The API Docker
 builder performs this dependency-first build with the supported Node 24 toolchain.
-Project names are sanitized and made unique within the group. A fresh
-`<root title> bundle <suffix>` folder is created under the captured destination,
+Project names are sanitized and made unique within each logical folder. A fresh
+`<bundle name> <suffix>` explicit folder preserves declared member subfolders,
+including empty folders. External dependency snapshots are copied into a separate
+ordinary neighboring `<bundle name> <suffix> dependencies` folder; their references
+are remapped to those new snapshots without expanding bundle membership. Desktop
+retains each artifact's member/dependency role for debugger and live display grouping.
+Legacy archives keep the `<root title> bundle <suffix>` naming. The new bundle is
 expanded after success, and announced through the existing tree-change mechanism.
 Existing projects are never overwritten. Ordinary move/rename operations work
 after import because references bind to stable project IDs, not folder paths.
@@ -169,7 +393,8 @@ through the normal recording API before later recording contracts run.
 
 The archive contains `rivet-bundle.json`, `README.txt`, and opaque numbered
 `projects/*.rivet-project` / optional `.rivet-data` artifacts. Schema
-version is 1; loader capability is 3 for bundle-wide version selection. `exportingRuntimeVersion` records the installed Node
+version is 1; loader capability is 4 for explicit membership and 3 for older
+bundle-wide version selection. `exportingRuntimeVersion` records the installed Node
 runtime version independently of the loader capability. Bundles are not a trust boundary:
 executing a bundle can execute its Code nodes and network requests.
 The generated `README.txt` describes the actual bundle-wide policy; legacy API
@@ -183,10 +408,36 @@ Extracted project and dataset files may be edited without updating the manifest.
 New manifests contain only `path` in each file descriptor; per-file checksums and
 export-time lengths are no longer calculated or enforced. The loader accepts old
 capability-1 bundles too, ignoring their legacy `bytes`/`sha256` fields, including
-stale values. New UI exports declare `requiredLoaderVersion: 3` and
-`versionPolicy: latest|published`; capability 3 requires that policy and rejects
+stale values. New UI exports declare `requiredLoaderVersion: 4`, `workspace` and
+`versionPolicy: latest|published`. Capability 4 requires both metadata fields;
+capabilities 3 and 4 require that policy and reject
 duplicate project identities. Latest policy rejects published artifacts. Older loaders
 fail with an upgrade instruction rather than misinterpreting the new descriptors.
+
+`workspace` carries the logical bundle name, relative subfolders and a
+`{projectId, relativePath}` record for every member. Other artifacts are external
+dependency snapshots. Core validates unique identities/locations, safe relative
+paths, existing parent folders and a member initial selection. Physical artifact
+paths remain opaque and contained; no native extraction or arbitrary path writes
+are added. Every capability-4 artifact declares a dataset sidecar, including an
+empty one, so Desktop can add its first dataset without editing the manifest.
+Use an updated Desktop build supporting capability 4. Extract the entire ZIP and
+open `rivet-bundle.json`, edit/save existing projects, then upload the folder or a
+new ZIP. Import ignores stale legacy checksums but validates the current files.
+It creates a separate unpublished bundle; it is not synchronization or merge-back.
+
+Authenticated `POST /api/workflows/project-bundles/container` accepts
+`{bundleId, version: latest|published, requestId}` and requires the existing intent
+header. It seeds the shared collector with all members, rechecks the topology and
+selected-revision fingerprint before publication, and uses existing job status,
+cancel, shared-archive and download routes. An empty bundle cannot be exported.
+The older project-closure POST remains compatible for API callers, but has no UI
+menu action. The new managed round-trip contract runs inside `test:async-managed`:
+real ZIP/Node loading, edit/save equivalent files, public HTTP import, empty and
+nested folders, disconnected members, external dependency separation, new dataset
+ownership, execution and source preservation. `desktop-project-bundle.spec.ts`
+exercises the actual Desktop IO adapter and editor with owned native replies;
+native reader containment is covered separately by Rust tests.
 
 File limits (64 MiB per artifact, the configured total budget, and 1 MiB for the
 manifest) use actual sizes before allocation, with bounded reads detecting growth

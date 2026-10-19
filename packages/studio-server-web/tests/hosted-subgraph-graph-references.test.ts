@@ -1,9 +1,50 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { hostedSubgraphProjectCatalog } from '../dashboard/hostedSubgraphProjects.js';
+import { hostedSubgraphProjectCatalog, hostedSubgraphProjectLoader } from '../dashboard/hostedSubgraphProjects.js';
+import { serializeProject } from '@valerypopoff/rivet2-core';
 import type { ProjectId, GraphId } from '@valerypopoff/rivet2-core';
 
 const target = { projectId: 'target' as ProjectId, graphIds: ['one', 'two'] as GraphId[] };
+
+test('preview, execution and cached-target validation forward the actual caller', async (t) => {
+  const selection = {
+    projectId: 'target' as ProjectId,
+    version: 'latest' as const,
+    callerProjectId: 'actual-caller' as ProjectId,
+  };
+  const project = { metadata: { id: selection.projectId, title: 'Target', description: '' }, graphs: {} };
+  const operations: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string) => {
+    const url = new URL(input, 'http://owned-fixture');
+    assert.equal(url.searchParams.get('callerProjectId'), selection.callerProjectId);
+    assert.equal(url.searchParams.get('version'), 'latest');
+    const operation = url.pathname.split('/').at(-1)!;
+    operations.push(operation);
+    return operation === 'access'
+      ? new Response(null, { status: 204 })
+      : operation === 'preview'
+        ? Response.json({ project })
+        : Response.json({ projectContents: serializeProject(project) });
+  });
+  await hostedSubgraphProjectCatalog.preview(selection);
+  assert.equal((await hostedSubgraphProjectLoader.loadTarget(selection)).project.metadata.id, selection.projectId);
+  await hostedSubgraphProjectLoader.validateTarget(selection);
+  assert.deepEqual(operations, ['preview', 'execution', 'access']);
+});
+
+test('cached target validation surfaces bundle rejection instead of reusing permission from another caller', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ error: 'Only the same bundle may call this project.' }, { status: 403 }),
+  );
+  await assert.rejects(
+    hostedSubgraphProjectLoader.validateTarget({
+      projectId: 'target' as ProjectId,
+      version: 'published',
+      callerProjectId: 'outside' as ProjectId,
+    }),
+    /Only the same bundle/,
+  );
+});
 const result = () => ({
   projectId: 'target',
   complete: false,

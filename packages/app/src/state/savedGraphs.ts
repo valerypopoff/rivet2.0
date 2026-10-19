@@ -169,6 +169,10 @@ export type OpenedProjectInfo = {
   executorMode?: ProjectExecutorMode;
   /** Local bundle membership; never part of the saved project. */
   bundleManifestPath?: string;
+  /** False for portable dependency snapshots outside the explicit container. */
+  bundleMember?: boolean;
+  /** Server-qualified explicit bundle identity. Never serialized into a project. */
+  hostedBundleKey?: string | null;
 };
 
 export type OpenedProjectSnapshot = {

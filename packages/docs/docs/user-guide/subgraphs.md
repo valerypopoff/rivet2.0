@@ -20,9 +20,20 @@ If you select multiple nodes by holding shift and clicking on them, you can righ
 
 To call a subgraph, add a [Subgraph Node](../node-reference/subgraph) to your graph. Connect any required data to the input ports of the subgraph, and connect any output data of the subgraph to the next nodes in your chain.
 
-In Rivet Studio Server, open the Subgraph node settings and choose **This project** or **Other projects** under **Graph source**. The graph field in both the node body and settings is a searchable dropdown. **This project** lists graphs under folder headings in the same order as the graph panel. For **Other projects**, expand server folders and projects in place, then select a graph from the selected project's graph-folder list. Graphs load when you expand the project. The selector shows **Project name > graph name** for an external target, and the node header's **Go to subgraph** button opens that project and graph.
+In Rivet Studio Server, open the Subgraph node settings and choose a **Graph source**: **This project**, **Same bundle** (when available), or **Other projects**. The graph field in both the node body and settings is a searchable dropdown. **This project** lists graphs under folder headings in the same order as the graph panel. For **Other projects**, expand server folders and projects in place, then select a graph from the selected project's graph-folder list. Graphs load when you expand the project. The selector shows **Project name > graph name** for an external target, and the node header's **Go to subgraph** button opens that project and graph.
 
-For **Other projects**, choose a **Version** below the graph selector:
+If the current project belongs to a bundle, **Graph source** also offers
+**Same bundle**. It lists other member projects, including nested subfolders,
+starting inside the current bundle rather than showing its parent folders or bundle root.
+**Other projects** lists only ordinary projects, not members of any bundle.
+An ordinary project, or a project in another bundle, cannot call into a bundled
+project through Subgraph. Bundle members can still call ordinary projects.
+These rules apply to saved nodes and runtime execution too, not just the picker.
+Moving a target into a different bundle may therefore make an existing call fail;
+Rivet keeps its saved target and connections so you can repair it explicitly.
+Published endpoints can still start any published bundle member directly.
+
+For **Other projects** or **Same bundle**, choose a **Version** below the graph selector:
 
 | Version                    | What each new run uses                                                                                                                             | When future runs can change                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |

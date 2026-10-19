@@ -17,11 +17,21 @@ import {
 } from '../../../../studio-server-shared/project-bundle-types.js';
 import { badRequest } from '../../utils/httpError.js';
 import { sanitizeWorkflowName } from './fs-helpers.js';
+import { remapBundleProject } from './remap-bundle-project.js';
+import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
 
 export type PreparedProjectBundleImport = {
   folderName: string;
   rootProjectId: string;
-  projects: { id: string; name: string; contents: string; datasetsContents: string | null }[];
+  folders?: string[];
+  projects: {
+    id: string;
+    name: string;
+    contents: string;
+    datasetsContents: string | null;
+    folder?: string;
+    externalDependency?: boolean;
+  }[];
 };
 
 /** Validates the whole group before storage mutation; never installs plugins or executes nodes. */
@@ -48,6 +58,15 @@ export function prepareProjectBundleImport(files: ProjectBundleUploadFile[]): Pr
     throw badRequest('Choose a bundle containing rivet-bundle.json (maximum 1 MiB).');
   try {
     const manifest = validateProjectBundleManifest(JSON.parse(manifestText.replace(/^\uFEFF/, '')));
+    // Portable folder paths must also be addressable by the server's folder APIs.
+    // Reject rather than silently normalizing, which could merge distinct folders.
+    for (const folder of manifest.workspace?.folders ?? []) {
+      if (
+        normalizeWorkflowRelativePath(folder, { allowProjectFile: false }) !== folder ||
+        folder.split('/').some((part) => sanitizeWorkflowName(part, 'bundle subfolder') !== part)
+      )
+        throw badRequest('Invalid bundle subfolder path.');
+    }
     const originals = new Map<
       string,
       {
@@ -129,49 +148,35 @@ export function prepareProjectBundleImport(files: ProjectBundleUploadFile[]): Pr
     const projects = manifest.artifacts.map((artifact) => {
       const { project, attached, datasets } = originals.get(artifact.id)!;
       const base = cleanName(project.metadata.title);
+      const member = manifest.workspace?.members.find((m) => m.projectId === artifact.projectId);
+      const folder = member?.relativePath.includes('/')
+        ? member.relativePath.slice(0, member.relativePath.lastIndexOf('/'))
+        : '';
+      const externalDependency = Boolean(manifest.workspace && !member);
+      const nameKey = (name: string) => `${externalDependency ? 'external' : 'member'}:${folder}/${name.toLowerCase()}`;
       let name = base;
-      for (let i = 2; names.has(name.toLowerCase()); i++) name = `${base} ${i}`;
-      names.add(name.toLowerCase());
-      project.metadata.id = resolveId(artifact.projectId);
+      for (let i = 2; names.has(nameKey(name)); i++) name = `${base} ${i}`;
+      names.add(nameKey(name));
+      remapBundleProject(project, ids);
       project.metadata.title = name;
-      delete project.metadata.path;
-      if (project.references)
-        project.references = project.references.map(({ hintPaths: _hints, ...reference }) => ({
-          ...reference,
-          id: resolveId(reference.id),
-        }));
-      const nodes = [
-        ...Object.values(project.graphs).flatMap((g) => g.nodes),
-        ...Object.values(project.nodePrefabs ?? {}).map((p) => p.sourceNode),
-      ];
-      for (const node of nodes) {
-        if (node.type !== 'subGraph' && node.type !== 'referencedGraphAlias') continue;
-        const targetField = node.type === 'subGraph' ? 'targetProjectId' : 'projectId';
-        for (const configuration of [node.data, ...(node.variants ?? []).map((variant) => variant.data)]) {
-          // Saved variants deliberately have unknown data in Core's public contract.
-          // Narrow each object before remapping; preserve unfinished inactive values.
-          if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) continue;
-          const data = configuration as Record<string, unknown>;
-          const target = data[targetField];
-          const mapped = typeof target === 'string' ? ids.get(target) : undefined;
-          if (!mapped) continue;
-          data[targetField] = mapped;
-          // Imported snapshots are drafts, including saved alternative configurations.
-          if (node.type === 'subGraph') data.targetVersion = 'latest';
-        }
-      }
       for (const dataset of datasets ?? []) dataset.meta.projectId = project.metadata.id;
       return {
         id: project.metadata.id,
         name,
         contents: serializeProject(project, attached) as string,
         datasetsContents: datasets === null ? null : serializeDatasets(datasets),
+        ...(manifest.workspace ? { folder, externalDependency } : {}),
       };
     });
     const rootArtifact = manifest.artifacts.find((a) => a.id === manifest.rootArtifact)!;
     const rootProjectId = resolveId(rootArtifact.projectId);
     const root = projects.find((project) => project.id === rootProjectId)!;
-    return { folderName: `${root.name} bundle ${randomUUID().slice(0, 8)}`, rootProjectId, projects };
+    return {
+      folderName: `${manifest.workspace ? cleanName(manifest.workspace.name) : root.name + ' bundle'} ${randomUUID().slice(0, 8)}`,
+      rootProjectId,
+      projects,
+      ...(manifest.workspace ? { folders: manifest.workspace.folders } : {}),
+    };
   } catch (error) {
     if (error instanceof ProjectBundleError) throw badRequest(error.message);
     if (error instanceof Error && 'status' in error) throw error;

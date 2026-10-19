@@ -79,12 +79,10 @@ export function useWorkspaceHostProjectMetadata() {
         : undefined;
 
       setProjects((previousProjects) =>
-        updateOpenedProjectMetadata(
-          previousProjects,
-          projectId,
-          metadataPatch,
-          hasPathUpdate ? { fsPath: nextPath } : {},
-        ),
+        updateOpenedProjectMetadata(previousProjects, projectId, metadataPatch, {
+          ...(hasPathUpdate ? { fsPath: nextPath } : {}),
+          ...(options.hostedBundleKey !== undefined ? { hostedBundleKey: options.hostedBundleKey } : {}),
+        }),
       );
 
       if (hasPathUpdate && isCurrentProject) {

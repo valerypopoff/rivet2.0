@@ -30,6 +30,11 @@ import { handleRefreshOpenProjectCommand } from './editorProjectOpenCommands';
 import type { WorkflowProjectPathMove } from './types';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
+import { workflowBundleKey } from './workflowBundleBinding';
+
+function bundleKey(binding: WorkflowProjectEditorBinding): string | null {
+  return workflowBundleKey(binding.bundleId);
+}
 
 function getHostedProjectPathMoveInputs(moves: WorkflowProjectPathMove[]) {
   const moveKeys = new Set<string>();
@@ -159,6 +164,7 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
     fromPath: string | null;
     fromTitle: string;
   }> = [];
+  const detachedBundleMembers: ProjectId[] = [];
   let status: WorkflowProjectBindingReconciliationResult['status'] = 'applied';
 
   pruneHostedProjectRevisions(projects.openedProjectsSortedIds);
@@ -166,7 +172,7 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
   for (const projectId of projects.openedProjectsSortedIds) {
     const openedProject = projects.openedProjects[projectId];
     const binding = openedProject ? bindingsByProjectId.get(projectId) : undefined;
-    if (!openedProject || !binding) {
+    if (!openedProject || (!binding && !openedProject.hostedBundleKey)) {
       continue;
     }
 
@@ -176,9 +182,17 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
       continue;
     }
 
+    if (!binding) {
+      // A deleted project stays open for recovery, but it no longer belongs to
+      // an authoritative server container. Do not change its content or path.
+      detachedBundleMembers.push(projectId);
+      continue;
+    }
+
     const pathChanged = normalizeWorkflowPath(openedProject.fsPath ?? '') !== normalizeWorkflowPath(binding.path);
     const titleChanged = openedProject.title !== binding.title;
-    const structuralChange = pathChanged || titleChanged;
+    const structuralChange =
+      pathChanged || titleChanged || (openedProject.hostedBundleKey ?? null) !== bundleKey(binding);
     observeHostedProjectRevision({
       projectId,
       path: binding.path,
@@ -255,11 +269,25 @@ export async function handleReconcileWorkflowProjectBindingsCommand(
         { title: update.binding.title },
         {
           path: update.binding.path,
+          hostedBundleKey: bundleKey(update.binding),
           persistedExternally: true,
           changeSource: 'external-wrapper-rename',
         },
       );
     });
+    for (const projectId of detachedBundleMembers) {
+      metadataUpdates.push(
+        context.getWorkspace().updateProjectMetadata(
+          projectId,
+          {},
+          {
+            hostedBundleKey: null,
+            persistedExternally: true,
+            changeSource: 'external-wrapper-rename',
+          },
+        ),
+      );
+    }
     if ((await Promise.all(metadataUpdates)).some(Boolean)) {
       await flushHybridStorageGroup('project');
     }

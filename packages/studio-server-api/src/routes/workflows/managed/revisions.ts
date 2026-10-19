@@ -201,7 +201,10 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             'Could not save project',
           );
           const { project: sourceProject, attachedData } = normalizedContents;
-          await deps.ensureFolderChain(client, folderRelativePath);
+          // Existing projects already own their folder chain. Rewriting it here
+          // acquires the bundle topology lock after the workflow row lock,
+          // reversing duplication's lock order and needlessly blocking saves.
+          if (!workflow) await deps.ensureFolderChain(client, folderRelativePath);
 
           let contents = normalizedContents.contents;
           let created = false;

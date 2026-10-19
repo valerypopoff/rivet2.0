@@ -225,6 +225,8 @@ export type WorkflowProjectStats = {
 
 export type WorkflowProjectItem = {
   id: string;
+  /** Explicit Studio Server container membership, never inferred from references. */
+  bundleId?: string | null;
   /** Immutable Rivet project metadata id used by runtime-scoped services. */
   projectMetadataId?: string;
   /** Opaque current content revision used for optimistic hosted saves. */
@@ -262,6 +264,8 @@ export type WorkflowProjectDeleteResponse = {
 
 export type WorkflowFolderItem = {
   id: string;
+  /** Stable identity on a bundle root; ordinary folders have no identity. */
+  bundleId?: string | null;
   name: string;
   relativePath: string;
   absolutePath: string;
@@ -282,6 +286,7 @@ export type WorkflowProjectPathMove = {
  */
 export type WorkflowProjectEditorBinding = {
   projectId: string;
+  bundleId?: string | null;
   path: string;
   title: string;
   /** Optional only while an older server is rolling out; current servers always provide it. */
@@ -308,6 +313,7 @@ export const WORKFLOW_TREE_CLIENT_ID_HEADER = 'x-rivet-workflow-tree-client';
 
 export type WorkflowTreeResponse = {
   root: string;
+  capabilities?: { explicitBundles: boolean };
   folders: WorkflowFolderItem[];
   projects: WorkflowProjectItem[];
   sync: WorkflowTreeSyncState;

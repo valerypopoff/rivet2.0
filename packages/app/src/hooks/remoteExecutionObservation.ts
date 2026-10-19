@@ -28,6 +28,7 @@ type Source = { serial: number; projectId: ProjectId; runs: Map<string, Run> };
 
 /** Metadata-only admission/lifetime owner. Never opens a socket or sends controls. */
 export function createRemoteExecutionObservationRouter(options: {
+  eligible?(projectId: ProjectId, source: object): boolean;
   receivers(): Map<ProjectId, Receiver>;
   conflict(projectId: ProjectId, source: object): string | undefined;
   publish(projectId: ProjectId, observation: RemoteObservation): void;
@@ -63,7 +64,10 @@ export function createRemoteExecutionObservationRouter(options: {
   }
   function blocked(key: object, run: Run, root: string, id: ProjectId, member: Member) {
     if (!isCurrent(id, member) || member.observation.status === 'blocked') return true;
-    const conflict = options.conflict(id, key);
+    const conflict =
+      options.eligible?.(id, key) === false
+        ? 'This project no longer belongs to this Remote Debugger session.'
+        : options.conflict(id, key);
     if (!conflict) return false;
     if (!run.settled && id !== run.projectId) options.settle(id, root, 'aborted');
     update(id, member, { status: 'blocked', message: conflict, needsInput: false, paused: false });
@@ -219,6 +223,7 @@ export function createRemoteExecutionObservationRouter(options: {
       if (execution.projectId === sourceProjectId && !execution.projectScope) return;
       const id = execution.projectId;
       const receiver = run.receivers.get(id);
+      if (options.eligible?.(id, key) === false) return;
       if (!receiver || receiver.token !== options.receivers().get(id)?.token) return;
       if (run.owners.get(execution.graphRunId) !== id) return;
       const version = (['latest', 'published'] as const).find(

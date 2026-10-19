@@ -6,11 +6,14 @@ import {
   serializeProject,
   serializeDatasets,
   ReferencedGraphAliasNodeImpl,
+  SubGraphNodeImpl,
+  validateProjectBundleManifest,
   type ProjectId,
   type DatasetId,
   type SubGraphNode,
   type NodePrefabId,
   type ChartNode,
+  type GraphId,
 } from '@valerypopoff/rivet2-node';
 import { prepareProjectBundleImport } from '../routes/workflows/project-bundle-import.js';
 import { collectProjectBundle } from '../routes/workflows/project-bundle.js';
@@ -55,6 +58,185 @@ async function filesFixture() {
   });
   return { files, fixture, manifest: result.manifest };
 }
+
+test('import rejects workspace folders that cannot be addressed by server folder APIs', async () => {
+  const { files, manifest } = await filesFixture();
+  for (const folder of ['Broken.rivet-project', '.hidden', ' Leading']) {
+    const modified = {
+      ...manifest,
+      requiredLoaderVersion: 4,
+      workspace: {
+        name: 'Feature',
+        folders: [folder],
+        members: [{ projectId: manifest.artifacts[0]!.projectId, relativePath: `${folder}/Root.rivet-project` }],
+      },
+    };
+    assert.throws(
+      () =>
+        prepareProjectBundleImport(
+          files.map((file) =>
+            file.path === 'rivet-bundle.json' ? { ...file, contents: JSON.stringify(modified) } : file,
+          ),
+        ),
+      /folder path|relativePath|bundle subfolder/,
+      folder,
+    );
+  }
+});
+
+test('explicit export includes disconnected members, editable empty sidecars and round-trip membership', async () => {
+  const fixture = projectBundleFixture();
+  const disconnected = structuredClone(fixture.child);
+  disconnected.project.metadata.id = 'disconnected' as ProjectId;
+  disconnected.project.metadata.title = 'Unconnected';
+  disconnected.projectContents = serializeProject(disconnected.project) as string;
+  const files: { path: string; contents: string }[] = [];
+  let prepared = false,
+    verified = false;
+  const result = await collectProjectBundle({
+    source: {
+      ...fixture.source,
+      versionPolicy: 'latest',
+      prepare: async () => {
+        prepared = true;
+      },
+      workspace: {
+        name: 'Feature',
+        folders: ['Nested', 'Empty'],
+        members: [
+          { projectId: fixture.root.project.metadata.id, relativePath: 'Nested/Root.rivet-project' },
+          { projectId: disconnected.project.metadata.id, relativePath: 'Unconnected.rivet-project' },
+        ],
+      },
+      additionalRoots: async function* () {
+        assert.equal(prepared, true);
+        yield disconnected;
+      },
+      reference: async (id) => (id === 'disconnected' ? disconnected : fixture.child),
+      verify: async () => {
+        verified = true;
+      },
+    },
+    rootVersion: 'latest',
+    signal: new AbortController().signal,
+    writeFile: async (path, contents) => {
+      files.push({ path, contents });
+    },
+    progress: () => {},
+  });
+  await result.verify();
+  assert.equal(verified, true);
+  assert.equal(result.manifest.requiredLoaderVersion, 4);
+  assert.equal(result.manifest.artifacts.length, 3);
+  for (const artifact of result.manifest.artifacts) {
+    assert.ok(artifact.datasets);
+    assert.deepEqual(deserializeDatasets(files.find((f) => f.path === artifact.datasets!.path)!.contents), []);
+  }
+  const imported = prepareProjectBundleImport(files);
+  assert.deepEqual(imported.folders, ['Nested', 'Empty']);
+  assert.ok(imported.folderName.startsWith('Feature '));
+  assert.equal(imported.projects.filter((p) => p.externalDependency).length, 1);
+  assert.equal(imported.projects.find((p) => p.id === imported.rootProjectId)!.folder, 'Nested');
+  assert.equal(imported.projects.find((p) => p.name === 'Unconnected')!.externalDependency, false);
+});
+
+test('workspace validation rejects unsafe, ambiguous and missing membership before any import', async () => {
+  const { manifest } = await filesFixture();
+  const valid = {
+    ...manifest,
+    requiredLoaderVersion: 4,
+    workspace: {
+      name: 'Feature',
+      folders: ['Nested'],
+      members: [{ projectId: manifest.artifacts[0]!.projectId, relativePath: 'Nested/Root.rivet-project' }],
+    },
+  };
+  assert.deepEqual(validateProjectBundleManifest(valid).workspace, valid.workspace);
+  for (const workspace of [
+    { ...valid.workspace, folders: ['../escape'] },
+    { ...valid.workspace, folders: ['Nested', 'nested'] },
+    { ...valid.workspace, folders: ['Missing/Nested'] },
+    { ...valid.workspace, members: [] },
+    { ...valid.workspace, members: [{ projectId: 'unknown', relativePath: 'Root.rivet-project' }] },
+    { ...valid.workspace, members: [...valid.workspace.members, ...valid.workspace.members] },
+    { ...valid.workspace, members: [{ ...valid.workspace.members[0], relativePath: 'Other/Root.rivet-project' }] },
+    { ...valid.workspace, members: [{ ...valid.workspace.members[0], relativePath: '/Root.rivet-project' }] },
+  ])
+    assert.throws(() => validateProjectBundleManifest({ ...valid, workspace }), /workspace/);
+  assert.throws(() => validateProjectBundleManifest({ ...manifest, requiredLoaderVersion: 4 }), /workspace/);
+  assert.throws(() => validateProjectBundleManifest({ ...valid, requiredLoaderVersion: 3 }), /version 4/);
+});
+
+test('portable ordinary dependencies cannot call back into explicit bundle members', async () => {
+  const fixture = projectBundleFixture();
+  const helper = structuredClone(Object.values(fixture.child.project.graphs)[0]!);
+  helper.metadata!.id = 'helper' as GraphId;
+  fixture.root.project.graphs['helper' as GraphId] = helper;
+  const back = SubGraphNodeImpl.create();
+  back.data.graphId = 'helper' as GraphId;
+  back.data.targetProjectId = fixture.root.project.metadata.id;
+  Object.values(fixture.child.project.graphs)[0]!.nodes.push(back);
+  fixture.root.projectContents = serializeProject(fixture.root.project) as string;
+  fixture.child.projectContents = serializeProject(fixture.child.project) as string;
+  await assert.rejects(
+    collectProjectBundle({
+      source: {
+        ...fixture.source,
+        versionPolicy: 'latest',
+        target: async (target) =>
+          target.projectId === fixture.root.project.metadata.id ? fixture.root : fixture.child,
+        workspace: {
+          name: 'Feature',
+          folders: [],
+          members: [{ projectId: fixture.root.project.metadata.id, relativePath: 'Root.rivet-project' }],
+        },
+      },
+      rootVersion: 'latest',
+      signal: new AbortController().signal,
+      writeFile: async () => {},
+      progress: () => {},
+    }),
+    /outside this bundle/,
+  );
+});
+
+test('cancelling explicit source preparation never reads or writes project artifacts afterward', async () => {
+  const fixture = projectBundleFixture();
+  const controller = new AbortController();
+  let entered!: () => void, release!: () => void;
+  const preparing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reason = new Error('Owned export cancellation');
+  const collection = collectProjectBundle({
+    source: {
+      ...fixture.source,
+      prepare: async () => {
+        entered();
+        await pending;
+      },
+      root: async () => {
+        assert.fail('Cancelled preparation must not read projects');
+      },
+    },
+    rootVersion: 'latest',
+    signal: controller.signal,
+    writeFile: async () => {
+      assert.fail('Cancelled preparation must not write files');
+    },
+    progress: () => {},
+  });
+  try {
+    await preparing;
+    controller.abort(reason);
+    await assert.rejects(collection, (error) => error === reason);
+  } finally {
+    release();
+  }
+});
 
 test('import remaps a coherent group, including prefabs and references, retaining wires, attachments and datasets', async () => {
   const { files, fixture } = await filesFixture();

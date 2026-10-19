@@ -2091,7 +2091,7 @@ export class GraphProcessor {
           const candidate = resolveNodePrefabInstance(owner, authored);
           if (candidate.type !== 'subGraph' || candidate.disabled) continue;
           const node = candidate as SubGraphNode;
-          if (node.data.targetScope === 'other-projects' && !node.data.targetProjectId) {
+          if (node.data.targetScope && !node.data.targetProjectId) {
             throw new Error('Select a project and graph for this Subgraph before running it.');
           }
           let childOwner = owner;
@@ -2099,9 +2099,11 @@ export class GraphProcessor {
             const target: SubgraphProjectTarget = {
               projectId: node.data.targetProjectId,
               version: node.data.targetVersion ?? 'latest',
+              callerProjectId: owner.metadata.id,
             };
             const key = getSubgraphProjectKey(target);
             let resolved = this.#shared.subgraphTargetCache.get(key);
+            if (resolved) await this.#run.context.subgraphProjectLoader?.validateTarget?.(target);
             if (!resolved) {
               if (!this.#run.context.subgraphProjectLoader) {
                 throw new Error(

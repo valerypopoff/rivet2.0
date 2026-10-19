@@ -49,13 +49,15 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
         projectInfo = currentInfo;
         const requestedPath = projectInfo.fsPath;
         const requestedManifest = projectInfo.bundleManifestPath;
+        const requestedMembership = projectInfo.bundleMember;
         const isTabCurrent = () => {
           const latest = store.get(projectsState).openedProjects[projectInfo.projectId];
           return (
             isCurrent() &&
             latest !== undefined &&
             latest.fsPath === requestedPath &&
-            latest.bundleManifestPath === requestedManifest
+            latest.bundleManifestPath === requestedManifest &&
+            latest.bundleMember === requestedMembership
           );
         };
         const currentProject = store.get(projectState);

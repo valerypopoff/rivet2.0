@@ -24,6 +24,29 @@ function makeProject(id: string, title: string): Project {
 }
 
 describe('openedProjects helpers', () => {
+  test('bundle-only metadata updates reach tabs without altering project identity or paths', () => {
+    const project = makeProject('bundle-member', 'Member');
+    const current = addOpenedProject({ openedProjects: {}, openedProjectsSortedIds: [] }, project);
+    const attached = updateOpenedProjectMetadata(
+      current,
+      project.metadata.id,
+      {},
+      { hostedBundleKey: 'server#bundle:one' },
+    );
+    assert.notEqual(attached, current);
+    assert.equal(attached.openedProjects[project.metadata.id]!.hostedBundleKey, 'server#bundle:one');
+    assert.equal(
+      updateOpenedProjectMetadata(attached, project.metadata.id, {}, { hostedBundleKey: 'server#bundle:one' }),
+      attached,
+    );
+    const detached = updateOpenedProjectMetadata(attached, project.metadata.id, {}, { hostedBundleKey: null });
+    assert.equal(detached.openedProjects[project.metadata.id]!.hostedBundleKey, null);
+    assert.equal(detached.openedProjects[project.metadata.id]!.title, project.metadata.title);
+    assert.equal(
+      detached.openedProjects[project.metadata.id]!.fsPath,
+      attached.openedProjects[project.metadata.id]!.fsPath,
+    );
+  });
   test('adds a new project without dropping existing open projects', () => {
     const existingProject = makeProject('project-1', 'Existing');
     const nextProject = makeProject('project-2', 'Next');
@@ -518,7 +541,9 @@ describe('openedProjects helpers', () => {
       openedProjectsSortedIds: [firstProject.metadata.id, secondProject.metadata.id],
     };
 
-    assert.equal(resolveOpenedProjectSavePath(openedProjects, secondProject.metadata.id, '/tmp/first.rivet-project'), null);
+    assert.equal(
+      resolveOpenedProjectSavePath(openedProjects, secondProject.metadata.id, '/tmp/first.rivet-project'),
+      null,
+    );
   });
-
 });

@@ -195,6 +195,7 @@ export interface WorkflowExecutionSources {
   resolveWebAppAccessPolicy(slug: string): Promise<WorkflowWebAppPolicy | null>;
   createProjectReferenceLoader(): ProjectReferenceLoader;
   loadSubgraphTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject>;
+  validateSubgraphTarget?(target: SubgraphProjectTarget): Promise<void>;
 }
 export type WorkflowRecordingPageQuery = {
   workflowId: string;

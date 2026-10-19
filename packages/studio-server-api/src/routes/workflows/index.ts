@@ -4,6 +4,7 @@ import { Router, type Request, type Response } from 'express';
 import { scheduledRunsRouter } from '../../scheduled-runs/router.js';
 import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
 import { projectBundleRouter } from './project-bundle-router.js';
+import { bundlesRouter } from './bundles-router.js';
 import { listIncomingProjectReferences } from './project-references.js';
 import { z } from 'zod';
 import { prepareWorkflowRecordingInputExtractor } from './recording-input-extractor.js';
@@ -78,6 +79,7 @@ import {
 export const workflowsRouter = Router();
 workflowsRouter.use('/scheduled-runs', scheduledRunsRouter);
 workflowsRouter.use('/project-bundles', projectBundleRouter);
+workflowsRouter.use('/bundles', bundlesRouter);
 workflowsRouter.use('/local-catalog-io', localCatalogExecutorIoRouter);
 const timing = createResponseTimingMiddleware();
 const jsonBody = createControlPlaneJsonBodyParser();
@@ -367,18 +369,32 @@ workflowsRouter.get(
   }),
 );
 
+const subgraphRequestTarget = (req: Request) => ({
+  projectId: z.string().trim().min(1).max(256).parse(req.params.projectId) as ProjectId,
+  version: z.enum(['latest', 'published']).parse(req.query.version ?? 'latest'),
+  callerProjectId: z.string().trim().min(1).max(256).optional().parse(req.query.callerProjectId) as
+    | ProjectId
+    | undefined,
+});
+workflowsRouter.get(
+  '/subgraph-projects/:projectId/access',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    await createExecutionSubgraphProjectLoader().validateTarget(subgraphRequestTarget(req));
+    res.sendStatus(204);
+  }),
+);
+
 workflowsRouter.get(
   '/subgraph-projects/:projectId/preview',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const target = {
-      projectId: z.string().trim().min(1).max(256).parse(req.params.projectId),
-      version: z.enum(['latest', 'published']).parse(req.query.version ?? 'latest'),
-    };
-    const { project, revisionKey } = await createExecutionSubgraphProjectLoader().loadTarget({
-      ...target,
-      projectId: target.projectId as ProjectId,
-    });
+    const target = subgraphRequestTarget(req);
+    const loader = createExecutionSubgraphProjectLoader();
+    // Caller-qualified loads validate at the managed loader boundary. Missing
+    // callers need an explicit check, not the internal root-snapshot exemption.
+    if (!target.callerProjectId) await loader.validateTarget(target);
+    const { project, revisionKey } = await loader.loadTarget(target);
     // A built-in provider node can emit partials too. Use the target's own
     // registered node definitions when deriving hints; unavailable external
     // plugins remain conservative (no arrow) without exposing their contents.
@@ -435,14 +451,10 @@ workflowsRouter.get(
   '/subgraph-projects/:projectId/execution',
   requireAuth,
   asyncHandler(async (req, res) => {
-    const target = {
-      projectId: z.string().trim().min(1).max(256).parse(req.params.projectId),
-      version: z.enum(['latest', 'published']).parse(req.query.version ?? 'latest'),
-    };
-    const resolved = await createExecutionSubgraphProjectLoader().loadTarget({
-      ...target,
-      projectId: target.projectId as ProjectId,
-    });
+    const target = subgraphRequestTarget(req);
+    const loader = createExecutionSubgraphProjectLoader();
+    if (!target.callerProjectId) await loader.validateTarget(target);
+    const resolved = await loader.loadTarget(target);
     res.json({
       projectContents: resolved.projectContents,
       datasetsContents: resolved.datasetsContents,

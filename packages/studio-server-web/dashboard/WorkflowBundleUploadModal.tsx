@@ -69,7 +69,9 @@ export function WorkflowBundleUploadModal({
               </p>
               <p className="project-settings-help">
                 Projects and datasets will be imported together into a new folder inside {folder.name}. You can move the
-                projects afterward. Imported projects are unpublished.
+                projects afterward. Imported projects are unpublished. Portable dependency snapshots are placed in a
+                separate neighboring folder, outside the bundle membership. Existing projects are never reused or
+                overwritten.
               </p>
               <p className="project-settings-help">
                 Maximum bundle contents: 64 MiB. Existing projects are not overwritten.

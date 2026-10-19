@@ -9,7 +9,7 @@ an older loader reports that an upgrade is required.
 
 ## Example
 
-In Studio Server, save the project, right-click it in the project tree, choose
+In Studio Server, save your projects, right-click their explicit bundle folder in the project tree, choose
 **Download bundle**, prepare the bundle and download the ZIP. Extract
 the complete ZIP, keeping its directory structure. Create `run.mjs` alongside it:
 
@@ -43,9 +43,10 @@ and a 32 MiB default free-space reserve, not a fixed 512 MiB minimum. Operators 
 tune headroom using `RIVET_PROJECT_BUNDLE_FREE_SPACE_RESERVE_BYTES` (1 MiB to 1 GiB).
 Free disk space or correct the export mount, then retry.
 
-The same action works with projects stored on the VM (files or local SQLite) and
-with S3 + managed PostgreSQL. It uses the selected backend's saved project versions
-and matching datasets; you do not need to copy cloud projects onto the VM first.
+The bundle-folder action requires PostgreSQL/S3 storage. Legacy programmatic
+project-closure exports remain readable, including filesystem/SQLite archives.
+Exports use saved project versions and matching datasets; you do not need to copy
+cloud projects onto the VM first.
 Even with cloud source storage, ZIP preparation uses private disk space on the API
 host. Download and browser resume use the same authenticated server URL in either setup.
 
@@ -84,9 +85,21 @@ Extracted project and dataset files are editable. No manifest checksums need to 
 recalculated; legacy checksum fields are ignored too. The loader captures current
 file contents once, and each processor gets isolated copies. Load the bundle again
 after editing files to use those changes. Adding a project or dataset file requires
-updating the manifest; identities, graph interfaces and dependency mappings must
+updating the manifest, except that capability-4 exports already declare an empty
+dataset file for each artifact, so adding data to that file needs no manifest edit.
+Identities, graph interfaces and dependency mappings must
 still remain valid. This does not disable storage or backup integrity checks on
 Studio Server.
+
+Capability 4 adds `manifest.workspace`: the explicit bundle name, logical folders
+and member identities/paths. All members are exported, including disconnected
+ones; other artifacts are external snapshots. `rootArtifact` remains only the
+default processor/initial Desktop selection, not a bundle entry-project concept.
+An updated Desktop build opens these archives after extraction. Uploading the
+edited folder creates a fresh unpublished bundle, preserving membership; external
+snapshots become ordinary neighboring dependency projects. It never updates the
+source server bundle. New UI exports fit the 64 MiB round-trip upload limits;
+the larger Node loader defaults below remain compatible with legacy exports.
 
 Projects may call back into different graphs in each other. Only an actual recursive
 graph-call cycle containing a cross-project call is rejected, not mutual project references.

@@ -51,11 +51,12 @@ observer object; the next render returns to each tab's own runtime instead.
 `useExecutorSessionRuntime` owns the effective session's revision subscription;
 consumers do not need another subscription just to read its current state.
 
-`remoteDebuggerBundle.ts` finds the undirected component of open projects using
-explicit cross-project Subgraph references (including resolved library nodes),
-legacy `project.references`, or an explicit desktop bundle manifest. Thus attaching from C can admit roots in A,
-B or C. It never groups projects by directory, title, graph/node IDs or debugger
-URL. New linked tabs can join shared controls, but passive data still requires
+`remoteDebuggerBundle.ts` matches explicit server-qualified container identities
+or an explicit desktop bundle manifest. References never create membership.
+Attaching from any member admits other opened members, including disconnected
+projects. Standalone projects stay independent. It never groups projects by
+ordinary directory, title, graph/node IDs or debugger URL. New member tabs can
+join shared controls, but passive data still requires
 their lifetime to have been captured at root admission. Separate bundles remain
 independent even when their debugger URLs match. Active local execution blocks a
 conflicting attachment rather than being stopped implicitly. Browser preparation
@@ -75,13 +76,17 @@ same captured lifetime through the registry, not the initiating tab or a raw
 socket callback. Even when no current source remains, the registry still notifies
 the passive observation owner so it can settle its existing receivers. A normal
 file rename/move does not end the source tab's lifetime or strand its active run.
-Membership discovery is reused once per connected component during each workspace
-refresh rather than rescanning every graph separately for each member.
+Membership discovery is reused per explicit group during workspace refresh.
+Reconciliation removes departed members as well as adding new ones, without
+merging independent sessions. Only display eligibility changes; external calls
+continue executing normally. Root lifecycle bookkeeping can settle eligible child
+observations even when the caller is outside the group, without painting that caller.
 
 If that admitted live root executes A → B → C, the editor projects events into
 eligible open B/C tabs using actual `execution.projectId`, `rootRunId` and
-`graphRunId`. It does not infer bundle membership from a folder, desktop manifest,
-matching graph/node IDs, or a shared debugger URL. Unexecuted projects are untouched.
+`graphRunId`. The observation receiver must also belong to the source session's
+explicit group. Matching graph/node IDs or URLs confer no membership. Unexecuted
+projects are untouched.
 
 Ownership is split deliberately:
 

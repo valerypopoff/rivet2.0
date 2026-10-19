@@ -17,8 +17,8 @@ import {
   WORKFLOW_RECORDING_CREATED_AT_HEADER,
 } from '../../studio-server-shared/workflow-recording-time';
 
-function targetUrl(target: SubgraphProjectTarget, operation: 'preview' | 'execution'): string {
-  return `${RIVET_API_BASE_URL}/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/${operation}?version=${target.version}`;
+function targetUrl(target: SubgraphProjectTarget, operation: 'preview' | 'execution' | 'access'): string {
+  return `${RIVET_API_BASE_URL}/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/${operation}?version=${target.version}${target.callerProjectId ? `&callerProjectId=${encodeURIComponent(target.callerProjectId)}` : ''}`;
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -107,7 +107,14 @@ export const hostedSubgraphProjectCatalog: SubgraphProjectCatalogProvider = {
 };
 
 export const hostedSubgraphProjectLoader = {
-  async loadTarget(target: { projectId: ProjectId; version: 'latest' | 'published' }) {
+  async validateTarget(target: SubgraphProjectTarget) {
+    const response = await fetch(targetUrl(target, 'access'), {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) await readJson(response);
+  },
+  async loadTarget(target: SubgraphProjectTarget) {
     const body = await readJson<{
       projectContents: string;
       datasetsContents?: string;

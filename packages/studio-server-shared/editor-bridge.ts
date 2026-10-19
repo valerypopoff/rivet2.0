@@ -10,7 +10,9 @@ export type ProjectCompareSideLabels = {
 export type HostedProjectReconciliationContext = {
   editorInstanceId: string;
   observationSequence: number;
-  projects: Array<{ projectId: string; generation: number }>;
+  /** False/absent means callers cannot infer that all opened edits were checked. */
+  editCheckComplete?: boolean;
+  projects: Array<{ projectId: string; generation: number; hasUnsavedChanges?: boolean }>;
 };
 
 export type HostedProjectConflictSnapshot = {
@@ -26,6 +28,7 @@ export type DashboardToEditorCommand =
       path: string;
       replaceCurrent: boolean;
       title?: string;
+      bundleId?: string | null;
       preview?: boolean;
       reloadFromDisk?: boolean;
       preferredGraphId?: string;
@@ -133,7 +136,8 @@ const isWorkflowProjectEditorBinding = (value: unknown): value is WorkflowProjec
   typeof value.projectId === 'string' &&
   typeof value.path === 'string' &&
   typeof value.title === 'string' &&
-  (value.revisionId == null || typeof value.revisionId === 'string');
+  (value.revisionId == null || typeof value.revisionId === 'string') &&
+  (value.bundleId == null || typeof value.bundleId === 'string');
 
 const isWorkflowProjectBindingReconciliation = (value: unknown): value is WorkflowProjectBindingReconciliation =>
   isRecord(value) &&
@@ -157,9 +161,14 @@ export const isHostedProjectReconciliationContext = (value: unknown): value is H
   isRecord(value) &&
   typeof value.editorInstanceId === 'string' &&
   isSequence(value.observationSequence) &&
+  (value.editCheckComplete === undefined || typeof value.editCheckComplete === 'boolean') &&
   Array.isArray(value.projects) &&
   value.projects.every(
-    (entry) => isRecord(entry) && typeof entry.projectId === 'string' && isSequence(entry.generation),
+    (entry) =>
+      isRecord(entry) &&
+      typeof entry.projectId === 'string' &&
+      isSequence(entry.generation) &&
+      (entry.hasUnsavedChanges === undefined || typeof entry.hasUnsavedChanges === 'boolean'),
   ) &&
   new Set(value.projects.map((entry) => entry.projectId)).size === value.projects.length;
 
@@ -190,6 +199,7 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         typeof value.path === 'string' &&
         typeof value.replaceCurrent === 'boolean' &&
         (value.title == null || typeof value.title === 'string') &&
+        (value.bundleId == null || typeof value.bundleId === 'string') &&
         (value.preview == null || typeof value.preview === 'boolean') &&
         (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean') &&
         (value.preferredGraphId == null || typeof value.preferredGraphId === 'string') &&

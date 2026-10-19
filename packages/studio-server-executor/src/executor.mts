@@ -97,6 +97,7 @@ async function loadSubgraphTarget(target: SubgraphProjectTarget) {
     executionEnvironmentServiceUrl,
   );
   url.searchParams.set('version', target.version);
+  if (target.callerProjectId) url.searchParams.set('callerProjectId', target.callerProjectId);
   const response = await fetch(url, {
     headers: createProxyAuthenticationHeaders(),
     cache: 'no-store',
@@ -127,6 +128,24 @@ async function loadSubgraphTarget(target: SubgraphProjectTarget) {
     datasetsContents: body.datasetsContents,
     sourceProjectPath: body.sourceProjectPath,
   };
+}
+
+async function validateSubgraphTarget(target: SubgraphProjectTarget) {
+  const url = new URL(
+    `/api/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/access`,
+    executionEnvironmentServiceUrl,
+  );
+  url.searchParams.set('version', target.version);
+  if (target.callerProjectId) url.searchParams.set('callerProjectId', target.callerProjectId);
+  const response = await fetch(url, {
+    headers: createProxyAuthenticationHeaders(),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok)
+    throw new Error(
+      `Subgraph target is unavailable to this project (${response.status}). Bundle members can only be referenced from the same bundle.`,
+    );
 }
 
 async function persistSubgraphRun(run: SubgraphProjectRun): Promise<void> {
@@ -167,7 +186,7 @@ void startAppExecutor({
     ...localCatalogOptions,
     executionEnvironment: await readExecutionEnvironment(),
     llmProfileHealthStore: healthStore,
-    subgraphProjectLoader: { loadTarget: loadSubgraphTarget },
+    subgraphProjectLoader: { loadTarget: loadSubgraphTarget, validateTarget: validateSubgraphTarget },
     onSubgraphProjectRun: recordSubgraphProjectRuns ? persistSubgraphRun : undefined,
     ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
   }),

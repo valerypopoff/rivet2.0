@@ -253,76 +253,96 @@ test('same-ID replacement, read-only entry and deleted nodes fail closed', async
   }
 });
 
-test('a renewed Subgraph session releases retired loading and rejects its reference writes', async () => {
-  const subgraph = {
-    ...node,
-    type: 'subGraph',
-    data: { graphId: 'g', targetScope: 'other-projects', targetProjectId: 'external', targetVersion: 'latest' },
-  } as SubGraphNode;
-  const f = fixture(subgraph);
-  try {
-    const externalProject = {
-      ...project,
-      metadata: { ...project.metadata, id: 'external' as Project['metadata']['id'] },
-    };
-    let hold = false;
-    let resolve!: (value: Project) => void;
-    const pending = new Promise<Project>((done) => {
-      resolve = done;
-    });
-    const catalog = {
-      listTree: async () => ({ folders: [], projects: [] }),
-      preview: async () => (hold ? pending : externalProject),
-      openGraph() {},
-    };
-    function Editor() {
-      const current = useAtomValue(nodesState)[0]!;
-      return (
-        <ProvidersProvider providers={{ subgraphProjectCatalog: catalog }}>
-          <SubgraphTargetEditor
-            node={current}
-            isReadonly={false}
-            isDisabled={false}
-            onChange={(changed) => f.store.set(nodesState, [changed])}
-          />
-        </ProvidersProvider>
-      );
-    }
-    await f.render(false, undefined, <Editor />);
-    const publishedButton = () =>
-      [...document.querySelectorAll('button')].find((button) => button.textContent === 'Published')!;
-    const latestButton = () =>
-      [...document.querySelectorAll('button')].find((button) => button.textContent === 'Saved latest')!;
-    assert.equal(publishedButton().disabled, false);
-    hold = true;
-    await act(async () => publishedButton().dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
-    assert.equal(publishedButton().disabled, true);
-    assert.equal(latestButton().disabled, true);
-    await act(async () => {
-      f.store.set(projectState, {
-        ...project,
-        metadata: { ...project.metadata, id: 'B' as Project['metadata']['id'] },
+for (const invalidation of ['session renewal', 'bundle membership change'] as const) {
+  test(`Subgraph ${invalidation} releases retired loading and rejects its reference writes`, async () => {
+    const subgraph = {
+      ...node,
+      type: 'subGraph',
+      data: { graphId: 'g', targetScope: 'other-projects', targetProjectId: 'external', targetVersion: 'latest' },
+    } as SubGraphNode;
+    const f = fixture(subgraph);
+    try {
+      f.store.set(projectsState, {
+        openedProjects: { A: { projectId: project.metadata.id, title: 'A', hostedBundleKey: 'old-bundle' } },
+        openedProjectsSortedIds: [project.metadata.id],
       });
-      f.store.set(projectState, project);
-    });
-    assert.equal(f.session.canWrite(), true);
-    assert.equal(latestButton().disabled, false, 'retired work cannot leave the fresh session blocked');
-    await act(async () => resolve(externalProject));
-    assert.equal((f.store.get(nodesState)[0]!.data as typeof subgraph.data).targetVersion, 'latest');
-    assert.equal(
-      Object.hasOwn(
-        f.store.get(referencedProjectsState),
-        getSubgraphProjectKey({ projectId: 'external' as Project['metadata']['id'], version: 'published' }),
-      ),
-      false,
-    );
-    hold = false;
-    await act(async () => publishedButton().dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
-    assert.equal((f.store.get(nodesState)[0]!.data as typeof subgraph.data).targetVersion, 'published');
-  } finally {
-    await f.cleanup();
-  }
-});
+      const externalProject = {
+        ...project,
+        metadata: { ...project.metadata, id: 'external' as Project['metadata']['id'] },
+      };
+      let hold = false;
+      let resolve!: (value: Project) => void;
+      const pending = new Promise<Project>((done) => {
+        resolve = done;
+      });
+      const catalog = {
+        listTree: async () => ({ folders: [], projects: [] }),
+        preview: async () => (hold ? pending : externalProject),
+        openGraph() {},
+      };
+      function Editor() {
+        const current = useAtomValue(nodesState)[0]!;
+        return (
+          <ProvidersProvider providers={{ subgraphProjectCatalog: catalog }}>
+            <SubgraphTargetEditor
+              node={current}
+              isReadonly={false}
+              isDisabled={false}
+              onChange={(changed) => f.store.set(nodesState, [changed])}
+            />
+          </ProvidersProvider>
+        );
+      }
+      await f.render(false, undefined, <Editor />);
+      const publishedButton = () =>
+        [...document.querySelectorAll('button')].find((button) => button.textContent === 'Published')!;
+      const latestButton = () =>
+        [...document.querySelectorAll('button')].find((button) => button.textContent === 'Saved latest')!;
+      assert.equal(publishedButton().disabled, false);
+      hold = true;
+      await act(async () => publishedButton().dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
+      assert.equal(publishedButton().disabled, true);
+      assert.equal(latestButton().disabled, true);
+      const oldSession = f.session;
+      await act(async () => {
+        if (invalidation === 'session renewal') {
+          f.store.set(projectState, {
+            ...project,
+            metadata: { ...project.metadata, id: 'B' as Project['metadata']['id'] },
+          });
+          f.store.set(projectState, project);
+        } else {
+          const opened = f.store.get(projectsState);
+          f.store.set(projectsState, {
+            ...opened,
+            openedProjects: {
+              ...opened.openedProjects,
+              [project.metadata.id]: { ...opened.openedProjects[project.metadata.id]!, hostedBundleKey: null },
+            },
+          });
+        }
+      });
+      if (invalidation === 'bundle membership change')
+        assert.equal(f.session, oldSession, 'membership fencing must work without retiring the editor session');
+      assert.equal(f.session.canWrite(), true);
+      assert.equal(latestButton().disabled, false, 'retired work cannot leave the fresh session blocked');
+      await act(async () => resolve(externalProject));
+      assert.equal((f.store.get(nodesState)[0]!.data as typeof subgraph.data).targetVersion, 'latest');
+      assert.equal(
+        Object.hasOwn(
+          f.store.get(referencedProjectsState),
+          getSubgraphProjectKey({ projectId: 'external' as Project['metadata']['id'], version: 'published' }),
+        ),
+        false,
+      );
+      hold = false;
+      await act(async () => publishedButton().dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
+      assert.equal((f.store.get(nodesState)[0]!.data as typeof subgraph.data).targetVersion, 'published');
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
 
 test('closing and reopening a tab cannot revive its field callbacks', async () => {
   const f = fixture();

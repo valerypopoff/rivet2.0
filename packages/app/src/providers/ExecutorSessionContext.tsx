@@ -11,8 +11,8 @@ import {
 } from '../hooks/executorSession.js';
 import { releaseRuntimeExecutorResources } from '../hooks/executorSessionRuntimeResources.js';
 import { executorSessionRevisionState, getLoadedRecordingForTab, loadedRecordingState } from '../state/execution.js';
-import { projectsState, projectState, openedProjectSnapshotsState } from '../state/savedGraphs.js';
-import { getRemoteDebuggerBundleProjects } from '../hooks/remoteDebuggerBundle.js';
+import { projectsState, projectState } from '../state/savedGraphs.js';
+import { getRemoteDebuggerBundleProjects, getRemoteDebuggerBundleKey } from '../hooks/remoteDebuggerBundle.js';
 import { useDataRefs, useDatasetProvider, type AppDatasetProvider } from './ProvidersContext.js';
 import { graphRunningState, projectExecutionSnapshotsState } from '../state/dataFlow.js';
 import { previousDataPerNodeToKeepState } from '../state/settings.js';
@@ -26,10 +26,13 @@ import {
 const FALLBACK_EXECUTOR_SESSION_PROJECT_ID = '__rivet_fallback_project__' as ProjectId;
 
 export type ExecutorSessionRegistry = {
-  connectBundleDebugger(projectId: ProjectId, members: ProjectId[], url?: string): Promise<void>;
+  connectBundleDebugger(projectId: ProjectId, members: ProjectId[], url?: string, scopeKey?: string): Promise<void>;
   getRemoteDebuggerRuntime(projectId: ProjectId): ExecutorSessionRuntime | undefined;
   isBundleDebuggerRuntime(runtime: ExecutorSessionRuntime): boolean;
-  refreshDebuggerBundles(getMembers: (projectId: ProjectId) => ProjectId[]): void;
+  refreshDebuggerBundles(
+    getMembers: (projectId: ProjectId) => ProjectId[],
+    getKey?: (projectId: ProjectId) => string,
+  ): void;
   disconnectAll(): void;
   getRuntime(projectId?: ProjectId): ExecutorSessionRuntime;
   removeProject(projectId: ProjectId): void;
@@ -95,6 +98,7 @@ export function createExecutorSessionRegistry(options: {
 }): ExecutorSessionRegistry {
   const runtimes = new Map<ProjectId, ExecutorSessionRuntime>();
   type DebuggerBundle = {
+    scopeKey?: string;
     members: Map<ProjectId, number>;
     sourceProjects: Set<ProjectId>;
     runtime: ExecutorSessionRuntime;
@@ -110,7 +114,9 @@ export function createExecutorSessionRegistry(options: {
     const getProjectLifetime = bundle ? (id: ProjectId) => bundle.members.get(id)?.toString() : undefined;
     const runtime = createExecutorSessionRuntime({
       projectId,
-      acceptsProject: bundle ? (id) => bundle.members.has(id) : undefined,
+      // Root lifecycle can originate outside the container and call a member.
+      // Lifetime fencing and observation eligibility still forbid outsider display.
+      acceptsProject: bundle ? () => true : undefined,
       getProjectLifetime,
       onStateChange: options.onStateChange,
       resolveInternalHostedExecutorUrl: options.resolveInternalHostedExecutorUrl,
@@ -146,7 +152,7 @@ export function createExecutorSessionRegistry(options: {
   }
 
   return {
-    async connectBundleDebugger(projectId, members, url) {
+    async connectBundleDebugger(projectId, members, url, scopeKey) {
       const ids = new Set([projectId, ...members]);
       const existing = [...ids].map((id) => debuggerBundles.get(id)).find(Boolean);
       if (existing) {
@@ -163,6 +169,7 @@ export function createExecutorSessionRegistry(options: {
           throw new Error('Stop the existing project execution or debugger before connecting the bundle.');
       }
       const bundle: DebuggerBundle = {
+        scopeKey,
         members: new Map([...ids].map((id) => [id, ++nextMembership])),
         sourceProjects: new Set(),
         runtime: undefined!,
@@ -185,19 +192,48 @@ export function createExecutorSessionRegistry(options: {
     isBundleDebuggerRuntime(runtime) {
       return bundleRuntimes.has(runtime);
     },
-    refreshDebuggerBundles(getMembers) {
+    refreshDebuggerBundles(getMembers, getKey) {
       let changed = false;
-      for (const bundle of new Set(debuggerBundles.values()))
+      for (const bundle of new Set(debuggerBundles.values())) {
+        const anchors = [...bundle.members.keys()].filter(
+          (id) => !getKey || !bundle.scopeKey || getKey(id) === bundle.scopeKey,
+        );
+        const desired = new Set(
+          (anchors.length ? getMembers(anchors[0]!) : []).filter(
+            (id) => !getKey || !bundle.scopeKey || getKey(id) === bundle.scopeKey,
+          ),
+        );
         for (const id of [...bundle.members.keys()])
-          for (const member of getMembers(id)) {
-            if (bundle.members.has(member) || debuggerBundles.has(member)) continue;
-            const own = runtimes.get(member);
-            if (own?.getActiveGraphRunRequestId() || own?.getRuntimeState().target?.type === 'external-debugger')
-              continue;
-            bundle.members.set(member, ++nextMembership);
-            debuggerBundles.set(member, bundle);
+          if (!desired.has(id)) {
+            bundle.members.delete(id);
+            bundle.sourceProjects.delete(id);
+            if (debuggerBundles.get(id) === bundle) debuggerBundles.delete(id);
+            const state = bundle.runtime.getRuntimeState();
+            for (const subscriber of [...disconnectSubscribers])
+              subscriber(id, bundle.runtime, {
+                type: 'disconnected',
+                reason: 'replaced',
+                status: state.status,
+                isInternalExecutor: false,
+                target: state.target,
+                url: state.url,
+              });
             changed = true;
           }
+        if (!desired.size) {
+          bundle.runtime.disconnect();
+          continue;
+        }
+        for (const member of desired) {
+          if (bundle.members.has(member) || debuggerBundles.has(member)) continue;
+          const own = runtimes.get(member);
+          if (own?.getActiveGraphRunRequestId() || own?.getRuntimeState().target?.type === 'external-debugger')
+            continue;
+          bundle.members.set(member, ++nextMembership);
+          debuggerBundles.set(member, bundle);
+          changed = true;
+        }
+      }
       if (changed) options.onStateChange();
     },
     disconnectAll() {
@@ -278,25 +314,29 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
   );
   const observations = useRemoteExecutionObservations(registry);
   const opened = useAtomValue(projectsState).openedProjects;
-  const snapshots = useAtomValue(openedProjectSnapshotsState);
   const activeProject = useAtomValue(projectState);
+  const activeRunning = useAtomValue(graphRunningState);
+  const sessionRevision = useAtomValue(executorSessionRevisionState);
   useEffect(() => {
     const components = new Map<ProjectId, ProjectId[]>();
-    registry.refreshDebuggerBundles((id) => {
-      let members = components.get(id);
-      if (!members) {
-        members = getRemoteDebuggerBundleProjects(id, opened, snapshots, activeProject);
-        for (const member of members) components.set(member, members);
-      }
-      return members.filter(
-        (member) =>
-          registry.getRemoteDebuggerRuntime(member) ||
-          !(member === activeProject.metadata.id
-            ? store.get(graphRunningState)
-            : store.get(projectExecutionSnapshotsState)[member]?.graphRunning),
-      );
-    });
-  }, [registry, opened, snapshots, activeProject, store]);
+    registry.refreshDebuggerBundles(
+      (id) => {
+        let members = components.get(id);
+        if (!members) {
+          members = getRemoteDebuggerBundleProjects(id, opened);
+          for (const member of members) components.set(member, members);
+        }
+        return members.filter(
+          (member) =>
+            registry.getRemoteDebuggerRuntime(member) ||
+            !(member === activeProject.metadata.id
+              ? store.get(graphRunningState)
+              : store.get(projectExecutionSnapshotsState)[member]?.graphRunning),
+        );
+      },
+      (id) => getRemoteDebuggerBundleKey(opened[id]) ?? `project:${id}`,
+    );
+  }, [registry, opened, activeProject, activeRunning, sessionRevision, store]);
 
   useEffect(() => {
     registry.setDatasetProvider(datasetProvider);
@@ -391,7 +431,13 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
       },
     );
     const unsubscribeDisconnects = registry.subscribeDisconnectsForAllProjects((projectId, runtime) => {
-      observations.disconnect(runtime);
+      if (
+        Object.keys(store.get(projectsState).openedProjects).some(
+          (id) => registry.getRemoteDebuggerRuntime(id as ProjectId) === runtime,
+        )
+      )
+        observations.reconcileOwnership();
+      else observations.disconnect(runtime);
       if (
         registry.isBundleDebuggerRuntime(runtime) &&
         getLoadedRecordingForTab(

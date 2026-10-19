@@ -108,7 +108,7 @@ test('Go to subgraph selects the external graph over remembered navigation on re
       json: { contents: serializeProject(paths.get(path)!), datasetsContents: null, revisionId: null },
     });
   });
-  await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest', (route) =>
+  await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest*', (route) =>
     route.fulfill({ json: { project: target } }),
   );
   await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -130,7 +130,7 @@ test('Go to subgraph selects the external graph over remembered navigation on re
   await callerRow.dblclick();
   await expect(caller).toBeVisible();
   await targetTab.hover();
-  await targetTab.getByRole('button', { name: 'Close target', exact: true }).click();
+  await targetTab.locator('.close-project').click();
   await expect(targetTab).toHaveCount(0);
   await caller.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
   await expect(targetTab).toHaveClass(/\bactive\b/);
@@ -289,7 +289,7 @@ test('new external graph input survives connection, tab switches and saved-file 
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest', async (route) => {
+  await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=latest*', async (route) => {
     previewRequests++;
     if (holdPreview) await gate;
     await route.fulfill({ json: { project: paths.get('/workflows/target.rivet-project') } });

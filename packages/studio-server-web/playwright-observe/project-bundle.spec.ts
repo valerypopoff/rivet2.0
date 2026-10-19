@@ -30,6 +30,27 @@ function bundleProject(id: string) {
   };
 }
 
+function bundleTree(project: ReturnType<typeof bundleProject>) {
+  return {
+    root: '/workflows',
+    sync: { epoch: 'bundle', revision: 0 },
+    capabilities: { explicitBundles: true },
+    folders: [
+      {
+        id: 'portable-folder',
+        bundleId: project.id,
+        name: 'Portable feature',
+        relativePath: 'Portable feature',
+        absolutePath: '/workflows/Portable feature',
+        updatedAt: project.updatedAt,
+        folders: [],
+        projects: [project],
+      },
+    ],
+    projects: [],
+  };
+}
+
 test('download dependencies survives closing the dialog and runs the real downloaded bundle locally', async ({
   page,
 }) => {
@@ -69,13 +90,12 @@ test('download dependencies survives closing the dialog and runs the real downlo
         url = new URL(request.url());
       if (url.pathname === '/api/workflows/tree')
         return route.fulfill({
-          json: { root: '/workflows', sync: { epoch: 'bundle', revision: 0 }, folders: [], projects: [rootProject] },
+          json: bundleTree(rootProject),
         });
-      if (url.pathname === '/api/workflows/project-bundles' && request.method() === 'POST') {
+      if (url.pathname === '/api/workflows/project-bundles/container' && request.method() === 'POST') {
         const body = request.postDataJSON();
-        expect(body.relativePath).toBe('root.rivet-project');
-        expect(body.version).toBe('live');
-        expect(body.versionPolicy).toBe('latest');
+        expect(body.bundleId).toBe(rootProject.id);
+        expect(body.version).toBe('latest');
         const source = failPreparation
           ? {
               ...fixture.source,
@@ -132,11 +152,15 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await page.goto('/');
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    const row = page.locator('.project-row').filter({ hasText: 'Portable root' });
-    await row.click({ button: 'right' });
+    const row = page.getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ });
+    await row.click();
+    await page.locator('.project-row').filter({ hasText: 'Portable root' }).click({ button: 'right' });
     const downloadProject = page.getByRole('menuitem', { name: 'Download project', exact: true });
     const downloadBundle = page.getByRole('menuitem', { name: 'Download bundle', exact: true });
     await expect(downloadProject).toBeVisible();
+    await expect(downloadBundle).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await row.click({ button: 'right' });
     await expect(downloadBundle).toBeVisible();
     const bundleIcon = downloadBundle.locator('svg');
     await expect(bundleIcon).toHaveAttribute('aria-hidden', 'true');
@@ -164,7 +188,7 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await expect(dialog.locator('select')).toHaveCount(0);
     await expect(rootVersions.getByRole('button', { name: 'Published', exact: true })).toHaveAttribute(
       'aria-pressed',
-      'true',
+      'false',
     );
     await rootVersions.getByRole('button', { name: 'Saved latest', exact: true }).click();
     await expect(rootVersions.getByRole('button', { name: 'Saved latest', exact: true })).toHaveAttribute(
@@ -305,18 +329,17 @@ test('download dependencies survives closing the dialog and runs the real downlo
 test('reopened failed export retries the durable version choice rather than the project default', async ({ page }) => {
   const project = bundleProject('bundle-retry-policy');
   const oldId = 'd16225ba-b6a6-4c02-bd73-67daab3eb5da';
-  let posted: { version: string; versionPolicy: string; requestId: string } | undefined;
+  let posted: { bundleId: string; version: string; requestId: string } | undefined;
   await page.addInitScript(({ key, id }) => sessionStorage.setItem(key, id), {
-    key: `rivet-project-bundle:${project.id}`,
+    key: `rivet-container-bundle:${project.id}`,
     id: oldId,
   });
   await page.route(
     (url) => url.pathname.startsWith('/api/'),
     async (route) => {
       const url = new URL(route.request().url());
-      if (url.pathname === '/api/workflows/tree')
-        return route.fulfill({ json: { root: '/workflows', folders: [], projects: [project] } });
-      if (url.pathname === '/api/workflows/project-bundles') {
+      if (url.pathname === '/api/workflows/tree') return route.fulfill({ json: bundleTree(project) });
+      if (url.pathname === '/api/workflows/project-bundles/container') {
         posted = route.request().postDataJSON();
         return route.fulfill({
           status: 202,
@@ -353,13 +376,13 @@ test('reopened failed export retries the durable version choice rather than the 
   await page.goto('/');
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.locator('.project-row').filter({ hasText: 'Portable root' }).click({ button: 'right' });
+  await page.getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ }).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
   const dialog = page.getByTestId('workflow-project-bundle-modal');
   await expect(dialog.getByRole('status')).toContainText('Export: failed.');
   await dialog.getByRole('button', { name: 'Retry export', exact: true }).click();
-  await expect.poll(() => posted?.versionPolicy).toBe('latest');
-  expect(posted!.version).toBe('live');
+  await expect.poll(() => posted?.version).toBe('latest');
+  expect(posted!.bundleId).toBe(project.id);
   expect(posted!.requestId).not.toBe(oldId);
   await expect(dialog.getByRole('status')).toContainText('Export: collecting.');
 });
@@ -388,9 +411,8 @@ test('late bundle admission cannot regress packaging and duplicate clicks admit 
     (url) => url.pathname.startsWith('/api/'),
     async (route) => {
       const url = new URL(route.request().url());
-      if (url.pathname === '/api/workflows/tree')
-        return route.fulfill({ json: { root: '/workflows', folders: [], projects: [project] } });
-      if (url.pathname === '/api/workflows/project-bundles') {
+      if (url.pathname === '/api/workflows/tree') return route.fulfill({ json: bundleTree(project) });
+      if (url.pathname === '/api/workflows/project-bundles/container') {
         posts++;
         id = route.request().postDataJSON().requestId;
         await admission;
@@ -409,7 +431,7 @@ test('late bundle admission cannot regress packaging and duplicate clicks admit 
     await page.goto('/');
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    await page.locator('.project-row').filter({ hasText: 'Portable root' }).click({ button: 'right' });
+    await page.getByRole('button', { name: /^(Expand|Collapse) Portable feature bundle$/ }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Download bundle', exact: true }).click();
     const dialog = page.getByTestId('workflow-project-bundle-modal');
     await dialog.getByRole('button', { name: 'Prepare bundle', exact: true }).evaluate((element) => {

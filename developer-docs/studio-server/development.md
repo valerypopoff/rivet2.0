@@ -1,5 +1,31 @@
 # Development
 
+### Explicit bundle changes
+
+See [project bundles](project-bundles.md) for the managed container/duplication
+contract (migration 16). Run `test:async-managed` for actual SQL/S3 copy, rollback,
+membership, stale-preview and copied execution coverage. Run the schema/remapping
+API tests, App registry/observation tests and the headless `explicit-bundles.spec.ts`
+and `remote-bundle-observation.spec.ts` through the repository UI runner. No cloud
+deployment or Kubernetes rehearsal is needed. The supported Node 24 toolchain is
+required for release qualification; report local alternate-runtime evidence separately.
+
+The bundle move/rename projection also has a fast web regression owner,
+`tests/workflow-tree-ops.test.ts`, enrolled in the web package's normal `test`
+command. It checks membership alongside paths before a background refresh.
+`explicit-bundles.spec.ts` verifies a real drag/drop and project open while the
+follow-up tree endpoint returns 503. Keep this failure case when changing tree
+optimism or editor bundle bindings; a successful-refresh-only test hides stale
+membership bugs. The bundle feature and modal/sidebar checks do not require a
+Kubernetes deployment or a cloud rehearsal.
+
+Streaming UI fixtures open their test-owned project through the mocked server
+tree/load routes and the real dashboard/editor bridge. Do not rely on legacy
+browser-storage seeds or a standalone `?editor` route to mount a server project:
+that can leave the welcome screen visible and fail before the behavior under test.
+`streaming-nodes.spec.ts` shares this setup across its ordinary-node and
+cross-project streaming-port checks, without changing production recovery behavior.
+
 The supported server development command is `yarn studio-server:dev:local-storage`
 (Docker Compose with PostgreSQL/MinIO; Kubernetes is not required). Start with
 [Supported Server Stack](./server-stack.md). Compose/bare-host material below is

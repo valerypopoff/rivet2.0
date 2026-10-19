@@ -7,6 +7,39 @@ import { FakeWebSocket } from '../hooks/executorSessionTestUtils.js';
 import { bindExecutorSessionRun } from '../hooks/executorSessionRunReadiness.js';
 
 describe('ExecutorSessionRegistry', () => {
+  test('explicit bundle reconciliation removes moved members without merging debugger groups', async () => {
+    const original = globalThis.WebSocket;
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    FakeWebSocket.instances = [];
+    const registry = createExecutorSessionRegistry({ onStateChange() {} });
+    const a = 'a' as ProjectId,
+      b = 'b' as ProjectId,
+      c = 'c' as ProjectId;
+    try {
+      await registry.connectBundleDebugger(a, [a, b], 'ws://bundle', 'one');
+      FakeWebSocket.instances.at(-1)!.open();
+      const runtime = registry.getRemoteDebuggerRuntime(b);
+      const keys = new Map([
+        [a, 'two'],
+        [b, 'one'],
+        [c, 'one'],
+      ]);
+      registry.refreshDebuggerBundles(
+        (id) => [...keys].filter(([, key]) => key === keys.get(id)).map(([id]) => id),
+        (id) => keys.get(id)!,
+      );
+      assert.equal(registry.getRemoteDebuggerRuntime(a), undefined);
+      assert.equal(registry.getRemoteDebuggerRuntime(b), runtime);
+      assert.equal(registry.getRemoteDebuggerRuntime(c), runtime);
+      registry.removeProject(b);
+      assert.equal(registry.getRemoteDebuggerRuntime(c), runtime);
+      registry.removeProject(c);
+      assert.equal(runtime!.getRuntimeState().status, 'idle');
+    } finally {
+      registry.disconnectAll();
+      globalThis.WebSocket = original;
+    }
+  });
   test('shared debugger attachment invalidates an in-flight local preparation even while its connection stays ready', async () => {
     const original = globalThis.WebSocket;
     FakeWebSocket.instances = [];
@@ -155,7 +188,7 @@ describe('ExecutorSessionRegistry', () => {
         data: { ...start.data, execution: { ...start.data.execution, rootRunId: 'new', graphRunId: 'new-a' } },
       });
       assert.deepEqual(events, [
-        { accepted: false, display: false },
+        { accepted: true, display: false },
         { accepted: true, display: false },
         { accepted: true, display: true },
       ]);
@@ -185,9 +218,13 @@ describe('ExecutorSessionRegistry', () => {
       assert.notEqual(registry.getRuntime(b), shared, 'local preferences/runtime remain separate');
       await registry.connectBundleDebugger(c, [a, b, c], 'ws://bundle');
       assert.equal(FakeWebSocket.instances.length, 1);
-      const events: Array<{ project: ProjectId | undefined; accepted: boolean }> = [];
+      const events: Array<{ project: ProjectId | undefined; accepted: boolean; display: boolean }> = [];
       registry.subscribeMessagesForAllProjects((_id, _runtime, _message, _data, _request, admission) => {
-        events.push({ project: admission?.projectId, accepted: admission!.decision.shouldDispatch });
+        events.push({
+          project: admission?.projectId,
+          accepted: admission!.decision.shouldDispatch,
+          display: admission?.sourceDisplayAllowed !== false,
+        });
       });
       socket.emitMessage({
         message: 'start',
@@ -245,13 +282,13 @@ describe('ExecutorSessionRegistry', () => {
         },
       });
       assert.deepEqual(events, [
-        { project: a, accepted: true },
-        { project: a, accepted: true },
-        { project: a, accepted: true },
-        { project: b, accepted: true },
-        { project: b, accepted: true },
-        { project: b, accepted: true },
-        { project: d, accepted: false },
+        { project: a, accepted: true, display: true },
+        { project: a, accepted: true, display: true },
+        { project: a, accepted: true, display: true },
+        { project: b, accepted: true, display: true },
+        { project: b, accepted: true, display: true },
+        { project: b, accepted: true, display: true },
+        { project: d, accepted: true, display: false },
       ]);
       registry.removeProject(b);
       assert.equal(

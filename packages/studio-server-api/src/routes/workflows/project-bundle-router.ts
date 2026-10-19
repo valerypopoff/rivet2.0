@@ -5,7 +5,7 @@ import { createHttpError } from '../../utils/httpError.js';
 import { createControlPlaneJsonBodyParser } from '../../middleware/body-parsers.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { projectBundleJobs } from './project-bundle-jobs.js';
-import { createSavedBundleSource } from './project-bundle.js';
+import { createSavedBundleSource, createExplicitBundleSource } from './project-bundle.js';
 import { prepareProjectBundleImport } from './project-bundle-import.js';
 import { importProjectBundleWithBackend } from './storage-backend.js';
 import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
@@ -29,6 +29,30 @@ const input = z
   })
   .strict();
 const jobId = z.string().uuid();
+projectBundleRouter.post(
+  '/container',
+  (req, _res, next) => {
+    if (req.get('X-Rivet-Bundle-Intent') !== '1' || req.get('Sec-Fetch-Site') === 'cross-site')
+      throw createHttpError(403, 'Bundle download must be requested from the server UI.');
+    next();
+  },
+  createControlPlaneJsonBodyParser(),
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({ bundleId: z.string().uuid(), version: z.enum(['latest', 'published']), requestId: z.string().uuid() })
+      .strict()
+      .parse(req.body);
+    res
+      .status(202)
+      .json(
+        await projectBundleJobs.start(
+          createExplicitBundleSource(input.bundleId, input.version),
+          input.version,
+          input.requestId,
+        ),
+      );
+  }),
+);
 projectBundleRouter.post(
   '/import',
   (req, _res, next) => {

@@ -115,10 +115,12 @@ export const DashboardPage: FC = () => {
     sidebarCollapsed,
     sidebarContentVisible,
     sidebarResizing,
+    sidebarResizeBlocked,
     sidebarWidth,
   } = useDashboardSidebar({
     maxWidth: MAX_SIDEBAR_WIDTH,
     minWidth: MIN_SIDEBAR_WIDTH,
+    editorIframeRef: iframeRef,
   });
 
   const clearPendingWorkflowProjectOpen = useCallback((path?: string, requestId?: string) => {
@@ -172,6 +174,7 @@ export const DashboardPage: FC = () => {
         .request(
           {
             type: 'open-project',
+            bundleId: options?.bundleId,
             path,
             replaceCurrent: Boolean(options?.replaceCurrent),
             title: options?.title,
@@ -614,6 +617,7 @@ export const DashboardPage: FC = () => {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize folders pane"
+          aria-disabled={sidebarResizeBlocked}
           onMouseDown={handleResizeMouseDown}
           onPointerDown={handleResizePointerDown}
         />

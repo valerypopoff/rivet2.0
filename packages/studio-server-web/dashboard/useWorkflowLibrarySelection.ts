@@ -48,10 +48,7 @@ export function useWorkflowLibrarySelection({
   );
   if (openedWorkflowProject) {
     openedWorkflowProjectRef.current = openedWorkflowProject;
-  } else if (
-    !openedProjectPath ||
-    openedWorkflowProjectRef.current?.absolutePath !== openedProjectPath
-  ) {
+  } else if (!openedProjectPath || openedWorkflowProjectRef.current?.absolutePath !== openedProjectPath) {
     // Keep the last known tree item only for the still-open document. A
     // remote rename/delete removes its row before the synchronization hook
     // can explain that the editor intentionally remains unchanged.
@@ -66,14 +63,17 @@ export function useWorkflowLibrarySelection({
     pendingPreviewPathRef.current = null;
   }, []);
 
-  const cancelPendingPreviewOpen = useCallback((path: string) => {
-    if (pendingPreviewPathRef.current !== path) {
-      return;
-    }
+  const cancelPendingPreviewOpen = useCallback(
+    (path: string) => {
+      if (pendingPreviewPathRef.current !== path) {
+        return;
+      }
 
-    clearPendingPreviewOpen();
-    onWorkflowProjectOpenIntentCanceled(path);
-  }, [clearPendingPreviewOpen, onWorkflowProjectOpenIntentCanceled]);
+      clearPendingPreviewOpen();
+      onWorkflowProjectOpenIntentCanceled(path);
+    },
+    [clearPendingPreviewOpen, onWorkflowProjectOpenIntentCanceled],
+  );
 
   useEffect(() => clearPendingPreviewOpen, [clearPendingPreviewOpen]);
 
@@ -98,10 +98,7 @@ export function useWorkflowLibrarySelection({
     // The initially empty tree, or an unavailable server, is not evidence that
     // the recovered selection was deleted. Validate only a loaded tree.
     if (loading || error) return;
-    if (
-      selectedProjectPath &&
-      !allProjects.some((project) => project.absolutePath === selectedProjectPath)
-    ) {
+    if (selectedProjectPath && !allProjects.some((project) => project.absolutePath === selectedProjectPath)) {
       setSelectedProjectPath(openedWorkflowProject?.absolutePath ?? '');
     }
   }, [allProjects, error, loading, openedWorkflowProject, selectedProjectPath]);
@@ -121,7 +118,9 @@ export function useWorkflowLibrarySelection({
     return flattenedFolders
       .filter((folder) => {
         const normalizedFolderPath = normalizeWorkflowPath(folder.absolutePath);
-        return normalizedActivePath === normalizedFolderPath || normalizedActivePath.startsWith(`${normalizedFolderPath}/`);
+        return (
+          normalizedActivePath === normalizedFolderPath || normalizedActivePath.startsWith(`${normalizedFolderPath}/`)
+        );
       })
       .sort((left, right) => left.absolutePath.length - right.absolutePath.length)
       .map((folder) => folder.id);
@@ -133,10 +132,7 @@ export function useWorkflowLibrarySelection({
       lastAutoExpandedActivePathRef.current = null;
       return;
     }
-    if (
-      activeAncestorFolderIds.length === 0 ||
-      lastAutoExpandedActivePathRef.current === normalizedActivePath
-    ) {
+    if (activeAncestorFolderIds.length === 0 || lastAutoExpandedActivePathRef.current === normalizedActivePath) {
       return;
     }
     lastAutoExpandedActivePathRef.current = normalizedActivePath;
@@ -179,56 +175,68 @@ export function useWorkflowLibrarySelection({
     projectRowRefs.current[projectPath] = node;
   }, []);
   const remapSelectedPath = useCallback((moves: Array<{ fromAbsolutePath: string; toAbsolutePath: string }>) => {
-    setSelectedProjectPath((previous) => (
-      moves.find((move) => move.fromAbsolutePath === previous)?.toAbsolutePath ?? previous
-    ));
+    setSelectedProjectPath(
+      (previous) => moves.find((move) => move.fromAbsolutePath === previous)?.toAbsolutePath ?? previous,
+    );
   }, []);
-  const toggleFolderExpanded = useCallback((folderId: string) => {
-    setExpandedFolders((previous) => ({ ...previous, [folderId]: !(previous[folderId] ?? false) }));
-  }, [setExpandedFolders]);
-  const toggleAllFoldersExpanded = useCallback((folderId: string) => {
-    setExpandedFolders((previous) => {
-      const nextExpanded = !(previous[folderId] ?? false);
-      let changed = false;
-      const next = { ...previous };
+  const toggleFolderExpanded = useCallback(
+    (folderId: string) => {
+      setExpandedFolders((previous) => ({ ...previous, [folderId]: !(previous[folderId] ?? false) }));
+    },
+    [setExpandedFolders],
+  );
+  const toggleAllFoldersExpanded = useCallback(
+    (folderId: string) => {
+      setExpandedFolders((previous) => {
+        const nextExpanded = !(previous[folderId] ?? false);
+        let changed = false;
+        const next = { ...previous };
 
-      for (const folder of flattenedFolders) {
-        if ((previous[folder.id] ?? false) === nextExpanded) {
-          continue;
+        for (const folder of flattenedFolders) {
+          if ((previous[folder.id] ?? false) === nextExpanded) {
+            continue;
+          }
+
+          next[folder.id] = nextExpanded;
+          changed = true;
         }
 
-        next[folder.id] = nextExpanded;
-        changed = true;
-      }
-
-      return changed ? next : previous;
-    });
-  }, [flattenedFolders, setExpandedFolders]);
+        return changed ? next : previous;
+      });
+    },
+    [flattenedFolders, setExpandedFolders],
+  );
   const suppressAncestorExpansion = useCallback((folderIds: string[]) => {
     suppressedActiveAncestorExpansionIdsRef.current = new Set([
       ...suppressedActiveAncestorExpansionIdsRef.current,
       ...folderIds,
     ]);
   }, []);
-  const openPreview = useCallback((project: WorkflowProjectItem) => {
-    clearPendingPreviewOpen();
-    pendingPreviewPathRef.current = project.absolutePath;
-    setSelectedProjectPath(project.absolutePath);
-    onWorkflowProjectOpenIntent(project.absolutePath);
-    previewOpenTimeoutRef.current = window.setTimeout(() => {
-      previewOpenTimeoutRef.current = null;
-      if (pendingPreviewPathRef.current !== project.absolutePath) {
-        return;
-      }
-      pendingPreviewPathRef.current = null;
-      onOpenProject(project.absolutePath, { preview: true, title: project.name });
-    }, 180);
-  }, [clearPendingPreviewOpen, onOpenProject, onWorkflowProjectOpenIntent]);
-  const openPersistent = useCallback((project: WorkflowProjectItem) => {
-    clearPendingPreviewOpen();
-    setSelectedProjectPath(project.absolutePath);
-    onOpenProject(project.absolutePath, { title: project.name });
-  }, [clearPendingPreviewOpen, onOpenProject]);
+  const openPreview = useCallback(
+    (project: WorkflowProjectItem) => {
+      clearPendingPreviewOpen();
+      pendingPreviewPathRef.current = project.absolutePath;
+      setSelectedProjectPath(project.absolutePath);
+      onWorkflowProjectOpenIntent(project.absolutePath);
+      previewOpenTimeoutRef.current = window.setTimeout(() => {
+        previewOpenTimeoutRef.current = null;
+        if (pendingPreviewPathRef.current !== project.absolutePath) {
+          return;
+        }
+        pendingPreviewPathRef.current = null;
+        onOpenProject(project.absolutePath, { preview: true, title: project.name, bundleId: project.bundleId ?? null });
+      }, 180);
+    },
+    [clearPendingPreviewOpen, onOpenProject, onWorkflowProjectOpenIntent],
+  );
+  const openPersistent = useCallback(
+    (project: WorkflowProjectItem) => {
+      clearPendingPreviewOpen();
+      setSelectedProjectPath(project.absolutePath);
+      onOpenProject(project.absolutePath, { title: project.name, bundleId: project.bundleId ?? null });
+    },
+    [clearPendingPreviewOpen, onOpenProject],
+  );
 
   return {
     activePath,

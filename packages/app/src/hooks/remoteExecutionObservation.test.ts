@@ -5,7 +5,7 @@ import { getSubgraphProjectKey } from '@valerypopoff/rivet2-core';
 import { createRemoteExecutionObservationRouter, type RemoteObservation } from './remoteExecutionObservation.js';
 
 const id = (value: string) => value as ProjectId;
-function fixture() {
+function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
   const source = {};
   const opened = new Map(['a', 'b', 'c', 'd'].map((name) => [id(name), { token: 1 }]));
   const conflicts = new Map<ProjectId, string>();
@@ -20,6 +20,7 @@ function fixture() {
   const outcomes: string[] = [];
   const notices: Array<string | undefined> = [];
   const router = createRemoteExecutionObservationRouter({
+    eligible,
     receivers: () => new Map(opened),
     conflict: (project) => conflicts.get(project),
     publish: (project, observation) => {
@@ -80,6 +81,27 @@ function fixture() {
   };
   return { router, source, opened, conflicts, records, projected, settled, outcomes, notices, emit, begin };
 }
+
+test('explicit eligibility prevents outsider projection without losing nested eligible children', () => {
+  const eligible = new Set(['a', 'c']);
+  const f = fixture((id) => eligible.has(id));
+  f.begin();
+  f.emit('graphStart', 'b');
+  f.emit('nodeStart', 'b');
+  f.emit('graphStart', 'c');
+  f.emit('nodeStart', 'c');
+  assert.deepEqual(
+    f.projected.map((event) => event.project),
+    ['c', 'c'],
+  );
+  assert.ok([...f.records.values()].every((item) => item.project === 'c'));
+  eligible.delete('c');
+  f.router.reconcileOwnership();
+  assert.equal(f.settled.at(-1)?.project, 'c');
+  const count = f.projected.length;
+  f.emit('nodeFinish', 'c');
+  assert.equal(f.projected.length, count, 'departed members cannot receive late values');
+});
 
 test('one admitted stream projects A → B → C into actual owners and retains same-project nesting', () => {
   const f = fixture();

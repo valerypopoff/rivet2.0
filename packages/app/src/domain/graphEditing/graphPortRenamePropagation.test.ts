@@ -124,6 +124,9 @@ for (const kind of ['input', 'output'] as const) {
       },
     });
     const incomplete = makeSubGraphNode('incomplete', childGraphId, { data: { targetScope: 'other-projects' } });
+    const bundleIncomplete = makeSubGraphNode('bundle-incomplete', childGraphId, {
+      data: { targetScope: 'same-bundle' },
+    });
     const wire = (node: ChartNode) =>
       makeConnection(
         kind === 'input'
@@ -132,8 +135,8 @@ for (const kind of ['input', 'output'] as const) {
       );
     const parent = makeGraph(
       firstParentGraphId,
-      [local, external, incomplete],
-      [wire(local), wire(external), wire(incomplete)],
+      [local, external, incomplete, bundleIncomplete],
+      [wire(local), wire(external), wire(incomplete), wire(bundleIncomplete)],
     );
     const result = propagateGraphPortRename({
       currentGraphId: childGraphId,
@@ -147,7 +150,7 @@ for (const kind of ['input', 'output'] as const) {
     const changed = result.projectGraphSnapshots[firstParentGraphId]!.nextGraph;
     assert.equal(changed.connections[0]![kind === 'input' ? 'inputId' : 'outputId'], 'new');
     assert.deepEqual(changed.connections.slice(1), parent.connections.slice(1));
-    assert.deepEqual(changed.nodes.slice(1), [external, incomplete]);
+    assert.deepEqual(changed.nodes.slice(1), [external, incomplete, bundleIncomplete]);
   });
 }
 

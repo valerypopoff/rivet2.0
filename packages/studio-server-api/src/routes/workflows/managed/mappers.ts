@@ -139,6 +139,7 @@ export function mapWorkflowRowToProjectItem(
 export function mapFolderRowToFolderItem(row: FolderRow): WorkflowFolderItem {
   return {
     id: row.relative_path,
+    bundleId: row.bundle_id ?? null,
     name: row.name,
     relativePath: row.relative_path,
     absolutePath: getManagedWorkflowFolderVirtualPath(row.relative_path),

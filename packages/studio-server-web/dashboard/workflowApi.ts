@@ -45,6 +45,20 @@ import type {
 import { createResponseError, parseJsonResponse, parseTextResponse } from './apiRequest';
 
 const API = RIVET_API_BASE_URL;
+export async function requestWorkflowBundle<T>(path: string, input: unknown, signal?: AbortSignal): Promise<T> {
+  return workflowJsonResponse<T>(
+    await fetch(`${API}/workflows/bundles${path}`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rivet-Bundle-Intent': '1',
+        ...getWorkflowTreeMutationHeaders(),
+      },
+      body: JSON.stringify(input),
+    }),
+  );
+}
 let workflowTreeClientId: string | null = null;
 
 function createWorkflowTreeClientId(): string {

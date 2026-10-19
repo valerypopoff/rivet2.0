@@ -4,9 +4,9 @@ import { useCallback, useEffect } from 'react';
 import type { OutgoingMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
 import { useExecutorSessionRegistry, useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
 import { getLoadedRecordingForTab, loadedRecordingState } from '../state/execution.js';
-import { projectState, projectsState, openedProjectSnapshotsState } from '../state/savedGraphs.js';
+import { projectState, projectsState } from '../state/savedGraphs.js';
 import { graphRunningState, projectExecutionSnapshotsState } from '../state/dataFlow.js';
-import { getRemoteDebuggerBundleProjects } from './remoteDebuggerBundle.js';
+import { getRemoteDebuggerBundleProjects, getRemoteDebuggerBundleKey } from './remoteDebuggerBundle.js';
 import { selectedExecutorState } from '../state/settings.js';
 import { handleError } from '../utils/errorHandling.js';
 import { updateOpenedProjectExecutorMode } from '../utils/openedProjects.js';
@@ -91,12 +91,7 @@ export function useRemoteDebugger(
       }
 
       const project = store.get(projectState);
-      const members = getRemoteDebuggerBundleProjects(
-        project.metadata.id,
-        store.get(projectsState).openedProjects,
-        store.get(openedProjectSnapshotsState),
-        project,
-      );
+      const members = getRemoteDebuggerBundleProjects(project.metadata.id, store.get(projectsState).openedProjects);
       const busy = members.some((id) =>
         id === project.metadata.id
           ? store.get(graphRunningState)
@@ -109,7 +104,10 @@ export function useRemoteDebugger(
         );
         return;
       }
-      void registry.connectBundleDebugger(project.metadata.id, members, remoteMode.url).catch((error) => {
+      const key =
+        getRemoteDebuggerBundleKey(store.get(projectsState).openedProjects[project.metadata.id]) ??
+        `project:${project.metadata.id}`;
+      void registry.connectBundleDebugger(project.metadata.id, members, remoteMode.url, key).catch((error) => {
         handleError(error, 'Failed to connect Remote Debugger');
       });
     },

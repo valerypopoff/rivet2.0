@@ -1,6 +1,8 @@
 import type { WorkflowRecordingPageQuery } from '../data-backend.js';
 import type { PreparedProjectBundleImport } from '../project-bundle-import.js';
 import { importManagedProjectBundle } from './bundle-import.js';
+import { createManagedBundleService } from './bundles.js';
+import { validateManagedSubgraphTarget } from './subgraph-access.js';
 import { isLegacyRestorePaused } from '../../../legacy-restore/service.js';
 import type {
   WorkflowFolderItem,
@@ -60,6 +62,7 @@ import type {
 export { resolveManagedHostedProjectSaveTarget } from './revision-factory.js';
 
 export class ManagedWorkflowBackend implements WorkflowDataBackend {
+  readonly bundles;
   readonly #context;
   readonly #executionService: ManagedWorkflowExecutionService;
   readonly #catalog: ReturnType<typeof createManagedWorkflowCatalogService>;
@@ -82,6 +85,7 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   ) {
     this.#runBackgroundTasks = options?.migrationMode === undefined && !isLegacyRestorePaused();
     this.#context = createManagedWorkflowContext(config, blobStore, options);
+    this.bundles = createManagedBundleService(this.#context);
     this.#executionService = new ManagedWorkflowExecutionService({
       context: this.#context,
     });
@@ -111,6 +115,7 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
           createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
           createSubgraphProjectLoader: () => ({
             loadTarget: (target) => this.#executionService.loadSubgraphTarget(target),
+            validateTarget: (target) => this.validateSubgraphTarget(target),
           }),
         }),
       });
@@ -146,8 +151,12 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
       await this.#hostedEvaluationCoordinator?.stop();
     })());
   }
-  beginRetirement(): void { this.#hostedEvaluationCoordinator?.beginRetirement(); }
-  async drainAcceptedWork(): Promise<void> { await this.#hostedEvaluationCoordinator?.drainAcceptedWork(); }
+  beginRetirement(): void {
+    this.#hostedEvaluationCoordinator?.beginRetirement();
+  }
+  async drainAcceptedWork(): Promise<void> {
+    await this.#hostedEvaluationCoordinator?.drainAcceptedWork();
+  }
 
   async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
     await this.#context.checkHealth(context);
@@ -433,6 +442,11 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   async loadSubgraphTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject> {
     await this.initialize();
     return this.#executionService.loadSubgraphTarget(target);
+  }
+
+  async validateSubgraphTarget(target: SubgraphProjectTarget): Promise<void> {
+    await this.initialize();
+    await validateManagedSubgraphTarget(this.#context.pool, target);
   }
 
   async importWorkflowRecording(options: ImportManagedWorkflowRecordingOptions): Promise<void> {

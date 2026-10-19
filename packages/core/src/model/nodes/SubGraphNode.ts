@@ -38,7 +38,7 @@ export type SubGraphNode = ChartNode & {
     /** Saved project target resolved by a host or portable bundle loader. Absent means the current project. */
     targetProjectId?: ProjectId;
     /** Retains the hosted picker mode before an external project is selected. */
-    targetScope?: 'other-projects';
+    targetScope?: 'other-projects' | 'same-bundle';
     targetVersion?: SubgraphProjectVersion;
     /** Last selected boundary keeps existing wires visible while a hosted preview reloads. */
     targetBoundary?: GraphBoundary;

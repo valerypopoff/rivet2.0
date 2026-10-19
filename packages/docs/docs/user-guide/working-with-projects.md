@@ -49,9 +49,11 @@ You can press **Ctrl+Shift+S** or **Cmd+Shift+S** (or choose **Save Project As**
 
 In Studio Server, Save writes through the server rather than asking for a local file destination. The tab's dirty dot tracks unsaved project changes. A failed server save leaves the project dirty; edits made while a save is pending remain unsaved after that earlier save completes. Browser recovery is separate from Save and does not publish an endpoint or save a new server version.
 
-## Downloading a Studio Server project for local execution
+## Downloading a Studio Server bundle for local editing and execution
 
-Right-click a project in the server's project tree and choose **Download bundle**.
+Right-click an actual bundle folder in the server's project tree and choose **Download bundle**.
+For ordinary folders, use **Convert to bundle** first. Projects retain
+**Download project** for a single-file download; they no longer offer Download bundle.
 Choose **Published** or **Saved latest** for every project in the
 bundle, then **Prepare bundle**. Published uses saved latest for projects that have
 no publication. Progress continues if you close the dialog;
@@ -63,7 +65,8 @@ Ready bundles are retained for 24 hours. If a browser download is interrupted,
 resume it using the browser's download controls while the export remains available;
 after it expires, prepare a new bundle.
 
-The ZIP includes recursively called projects and their matching datasets, with
+The ZIP includes all bundle members (even disconnected projects), their folder layout,
+empty folders, recursively called external dependency snapshots and matching datasets, with
 one selected version per project. This selection overrides individual Subgraph
 version choices only inside the bundle; it does not change the server project.
 An incompatible target graph interface fails export rather than removing wires.
@@ -80,7 +83,9 @@ only one `.rivet-project` file.
 ### Opening and running a bundle in desktop Rivet
 
 Extract the complete ZIP, then use **Open Project** to open `rivet-bundle.json`.
-Rivet opens all bundled projects in separate tabs and selects the root project.
+Use an updated Rivet Desktop version that supports bundle loader capability 4.
+Rivet opens the included projects in separate tabs and selects an initial project;
+this is not an entry-project designation. Run any member's graphs as needed.
 Already-open projects at those same paths keep their unsaved edits and datasets.
 Opening a declared `.rivet-project` inside the bundle's `projects/` directory
 opens just that member, while retaining its bundle dependency mapping.
@@ -97,8 +102,9 @@ The entry project uses its current editor content and datasets. Other projects
 are read from their saved bundle files for each run, so save edits in dependency
 tabs before running the caller. You can edit and save extracted files without
 recalculating checksums. Saves update the project and its data sidecar, not the
-manifest; adding another project or a new dataset sidecar requires updating the
-manifest or exporting a new bundle. Renaming an existing Graph Input or Graph
+manifest. New exports already declare empty dataset sidecars, so adding the first
+dataset works without updating the manifest. Adding projects or changing bundle
+membership requires updating the manifest or exporting a new bundle. Renaming an existing Graph Input or Graph
 Output preserves its connections and updates the caller's visible port label,
 including cross-project calls. Removing or replacing the node, changing its type,
 or creating a conflicting port ID requires reviewing the caller before running.
@@ -107,7 +113,74 @@ Keep the directory structure when moving the bundle. Existing older bundles with
 multiple versions of one project cannot open all versions as desktop tabs;
 re-export with a bundle-wide version choice, or open an individual member.
 
+### Uploading your edited bundle back to Studio Server
+
+Save all changed projects in Desktop. In Studio Server, choose **Upload bundle**
+at the library root or an ordinary folder outside a bundle, then select the extracted folder or
+a newly zipped copy of its complete contents. Rivet creates a new unpublished
+bundle with fresh project IDs, preserved member subfolders and remapped internal
+references. The original server bundle is never overwritten. Publish the new
+projects explicitly when ready; endpoints and schedules are not activated by upload.
+
+Included snapshots of projects outside the original bundle are imported into a
+separate neighboring **dependencies** folder, with calls redirected to those fresh
+copies. They do not silently become bundle members. Move them into the bundle
+afterward if that is what you want. Upload outside existing bundles: bundles cannot
+nest. Keep downloaded files under the 64 MiB ZIP/decoded-content and 100 MiB JSON
+request limits; large Desktop edits can exceed them.
+
 ## Opening a Project
+
+### Studio Server bundles
+
+Use **+ New bundle** in the project tree, or **Convert to bundle** on an existing
+folder. A bundle is an explicit group of projects, not a graph entry point.
+All projects underneath it, including ordinary subfolders and disconnected
+experiments, are members. Bundles cannot contain other bundles. Folder menus offer
+conversion rather than **New bundle**. **Upload bundle** is hidden on bundles and
+their subfolders; **Upload project** is still available.
+
+Subgraph calls into a bundle are limited to members of that same bundle. Use
+**Same bundle** in the Subgraph node's **Graph source** selector. **Other projects**
+continues to offer ordinary projects, which remain reusable from everywhere.
+References into other bundles fail explicitly; moving or converting projects does
+not silently rewrite existing calls. Bundles still have no entry project, and any
+published member may expose its own endpoint.
+
+**Duplicate bundle** copies every member, preserving internal references between
+the copies. References outside the bundle stay shared and are listed in the
+preview. Choose Saved latest or Published (with saved-latest fallback for members
+without a publication). Save unsaved edits first, or explicitly choose to copy
+their saved versions. Copies are unpublished; endpoint routes, schedules and run
+history are not activated/copied. Credentials and external services remain shared.
+If Rivet cannot fully check open edits (for example, while a project is saving),
+it asks you to acknowledge copying stored revisions without that check. It never
+silently includes unsaved editor content.
+The operation is limited to 256 projects, 512 folders and 64 MiB of saved contents.
+
+Moving projects across the bundle boundary changes membership, not references.
+Rivet updates that membership immediately after a successful folder move, even
+if refreshing the project list temporarily fails. Opened projects follow the new
+Remote Debugger group without discarding unsaved content.
+Renaming/moving the whole bundle preserves membership. **Convert to ordinary folder**
+removes grouping without deleting projects or changing publications. Empty bundles
+can be deleted like empty folders. Release/merge-back remains project-owned.
+
+Opened members share Remote Debugger controls; cross-references outside the bundle
+do not extend that session. Existing folders are never converted automatically.
+This feature requires PostgreSQL/S3 Studio Server storage.
+
+#### Trying changes without replacing the original
+
+1. Save the member projects you want to copy, then right-click the bundle and choose **Duplicate bundle**.
+2. Review the version selection and shared external dependencies, choose a name and destination, and duplicate it.
+3. Edit and test the copied projects. Their internal calls target the copies, not the original bundle.
+4. Publish projects explicitly when ready. Duplication does not switch an existing endpoint, merge changes back, or replace the original projects.
+
+A copy is not a sandbox for external side effects: credentials, ordinary external
+projects, API calls and external databases can still be shared. Review these
+before testing against live services. If an operation loses its response, refresh
+the tree before retrying; it may already have created the copy.
 
 To open a project, choose **Open Project** in the top-bar **Menu** dropdown or press **Ctrl+O**/**Cmd+O**. This will open a file dialog where you can choose a project to open. The project will be loaded into Rivet as the current project.
 

@@ -25,7 +25,17 @@ function gate() {
   return { promise, release };
 }
 
-for (const outcome of ['completion', 'failure', 'abort', 'shared stop', 'mixed versions', 'source reopen'] as const) {
+for (const outcome of [
+  'completion',
+  'failure',
+  'abort',
+  'shared stop',
+  'mixed versions',
+  'source reopen',
+  'outside caller',
+  'external dependency',
+  'member deleted',
+] as const) {
   test(`one remote connection shows A → B → C ${outcome} without child controls or ID collisions`, async ({ page }) => {
     const defaults = createBuiltInRegistry();
     const gates = new Map(['a', 'b', 'c'].map((id) => [id, gate()]));
@@ -128,7 +138,28 @@ for (const outcome of ['completion', 'failure', 'abort', 'shared stop', 'mixed v
       },
     });
     let run: ReturnType<typeof runner.run> | undefined;
+    let memberDeleted = false;
     try {
+      if (outcome === 'member deleted') {
+        await page.addInitScript(() => {
+          class TreeEventSource extends EventTarget {
+            private changed = () =>
+              this.dispatchEvent(
+                new MessageEvent('tree-changed', {
+                  data: JSON.stringify({ epoch: 'bundle-fixture', revision: 1, sourceClientId: 'other-user' }),
+                }),
+              );
+            constructor(_url: string) {
+              super();
+              window.addEventListener('fixture-delete-member', this.changed);
+            }
+            close() {
+              window.removeEventListener('fixture-delete-member', this.changed);
+            }
+          }
+          Object.defineProperty(window, 'EventSource', { configurable: true, value: TreeEventSource });
+        });
+      }
       await page.addInitScript(() =>
         localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false })),
       );
@@ -145,16 +176,25 @@ for (const outcome of ['completion', 'failure', 'abort', 'shared stop', 'mixed v
           json: {
             root: '/workflows',
             folders: [],
-            projects: [...paths].map(([absolutePath, project]) => ({
-              id: project.metadata.id,
-              projectMetadataId: project.metadata.id,
-              name: project.metadata.title,
-              fileName: absolutePath.split('/').pop(),
-              absolutePath,
-              relativePath: absolutePath.slice('/workflows/'.length),
-              updatedAt: '2026-10-19T00:00:00Z',
-              settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
-            })),
+            sync: { epoch: 'bundle-fixture', revision: memberDeleted ? 1 : 0 },
+            projects: [...paths]
+              .filter(([, project]) => !memberDeleted || project.metadata.id !== 'b')
+              .map(([absolutePath, project]) => ({
+                id: project.metadata.id,
+                projectMetadataId: project.metadata.id,
+                bundleId:
+                  project.metadata.id === 'd' ||
+                  (outcome === 'outside caller' && project.metadata.id === 'a') ||
+                  (outcome === 'external dependency' && project.metadata.id === 'c')
+                    ? null
+                    : '58019223-bd4e-49c3-a042-321215efaa35',
+                name: project.metadata.title,
+                fileName: absolutePath.split('/').pop(),
+                absolutePath,
+                relativePath: absolutePath.slice('/workflows/'.length),
+                updatedAt: '2026-10-19T00:00:00Z',
+                settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+              })),
           },
         }),
       );
@@ -184,15 +224,31 @@ for (const outcome of ['completion', 'failure', 'abort', 'shared stop', 'mixed v
           .dblclick();
         await expect(editor.locator('.node[data-nodeid="shared-node"]')).toBeVisible();
       }
+      if (outcome === 'member deleted') {
+        await tab('b').click();
+        const title = editor.locator('.node[data-nodeid="shared-node"] .node-title');
+        const box = (await title.boundingBox())!;
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width / 2 + 75, box.y + box.height / 2 + 40, { steps: 8 });
+        await page.mouse.up();
+        await expect(tab('b')).toHaveClass(/has-unsaved-changes/);
+      }
       const connectFrom =
-        outcome === 'completion' || outcome === 'source reopen' ? 'c' : outcome === 'mixed versions' ? 'b' : 'a';
+        outcome === 'completion' || outcome === 'source reopen'
+          ? 'c'
+          : outcome === 'mixed versions' || outcome === 'outside caller'
+            ? 'b'
+            : 'a';
       await tab(connectFrom).click();
       await editor.locator('button.more-menu').click();
       await editor.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
       await editor.getByPlaceholder('(Default)').fill(`ws://127.0.0.1:${address.port}`);
       await editor.getByRole('button', { name: 'Connect', exact: true }).click();
       await expect(editor.getByText('Stop Remote Debugger', { exact: true })).toBeVisible();
-      for (const id of ['a', 'b', 'c']) {
+      const members =
+        outcome === 'outside caller' ? ['b', 'c'] : outcome === 'external dependency' ? ['a', 'b'] : ['a', 'b', 'c'];
+      for (const id of members) {
         await tab(id).click();
         await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
       }
@@ -204,6 +260,22 @@ for (const outcome of ['completion', 'failure', 'abort', 'shared stop', 'mixed v
       void run.catch(() => {});
       await expect.poll(() => [...started].sort().join(',')).toBe('a,b,c');
       const output = editor.locator('.node[data-nodeid="shared-node"] .node-output');
+      if (outcome === 'outside caller' || outcome === 'external dependency') {
+        const outside = outcome === 'outside caller' ? 'a' : 'c';
+        await tab(outside).click();
+        await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
+        await expect(editor.locator('.node[data-nodeid="shared-node"]')).not.toContainText(
+          `${outside.toUpperCase()} streaming`,
+        );
+        await tab('b').click();
+        await expect(output).toContainText('B streaming');
+        for (const gate of gates.values()) gate.release();
+        await run;
+        await expect(output).toContainText('B done');
+        await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
+        expect(commands).toEqual([]);
+        return;
+      }
       await expect(output).toContainText('A streaming');
       await tab('b').click();
       await expect(output).toContainText('B streaming');
@@ -219,6 +291,29 @@ for (const outcome of ['completion', 'failure', 'abort', 'shared stop', 'mixed v
       await expect(output).toContainText('B streaming');
       await tab('c').click();
       await expect(output).toContainText('C streaming');
+      if (outcome === 'member deleted') {
+        memberDeleted = true;
+        await page.evaluate(() => window.dispatchEvent(new Event('fixture-delete-member')));
+        await expect(page.locator('.project-row').filter({ hasText: 'Project B' })).toHaveCount(0);
+        await tab('b').click();
+        await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
+        await expect(banner).toContainText('This project no longer belongs to this Remote Debugger session.');
+        await expect(editor.locator('.run-button').first()).toBeVisible();
+        await expect(tab('b')).toHaveClass(/has-unsaved-changes/);
+        await expect(output).toContainText('B streaming');
+        expect(runner.processor.isRunning).toBe(true);
+        expect(debuggerServer.webSocketServer.clients.size).toBe(1);
+        for (const item of gates.values()) item.release();
+        await run;
+        await expect(output).not.toContainText('B done');
+        await tab('c').click();
+        await expect(output).toContainText('C done');
+        await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
+        await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
+        await expect.poll(() => debuggerServer.webSocketServer.clients.size).toBe(0);
+        expect(commands).toEqual([]);
+        return;
+      }
       if (outcome === 'source reopen') {
         await tab('a').hover();
         await tab('a').getByRole('button', { name: 'Close Project A', exact: true }).click();

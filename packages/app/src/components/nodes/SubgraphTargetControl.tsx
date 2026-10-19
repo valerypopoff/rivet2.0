@@ -19,11 +19,12 @@ import {
   type SubgraphProjectTreeFolder,
   type SubgraphProjectTreeItem,
 } from '../../providers/ProvidersContext';
-import { projectState, referencedProjectsState } from '../../state/savedGraphs';
+import { projectState, projectsState, referencedProjectsState } from '../../state/savedGraphs';
 import { GraphSelectorSelect, getHierarchicalGraphOptions } from '../editors/GraphSelectorEditor';
 import { OpenFolderIcon } from '../graphList/OpenFolderIcon';
 import { graphState } from '../../state/graph';
 import { useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext';
+import { filterSubgraphProjectTree, subgraphSourceScope } from '../../utils/subgraphBundleScope.js';
 
 const controlCss = css`
   min-width: 0;
@@ -37,6 +38,11 @@ const controlCss = css`
 
   .target-warning {
     color: var(--warning);
+    font-size: var(--ui-font-size-sm);
+    margin-top: 6px;
+  }
+
+  .target-help {
     font-size: var(--ui-font-size-sm);
     margin-top: 6px;
   }
@@ -69,6 +75,7 @@ type TargetOption = {
   expanded?: boolean;
   isDisabled?: boolean;
 };
+type PreviewStatus = 'loading' | 'ready' | 'failed';
 
 function makeTargetOptions(
   tree: Tree,
@@ -77,6 +84,8 @@ function makeTargetOptions(
   expandedFolders: ReadonlySet<string>,
   expandedProjects: ReadonlySet<ProjectId>,
   previews: Record<string, Project>,
+  previewStatus: Readonly<Record<string, PreviewStatus>>,
+  loadingTree: boolean,
   searching: boolean,
 ): TargetOption[] {
   const visit = (
@@ -120,7 +129,10 @@ function makeTargetOptions(
                 depth: depth + 1 + graphOption.depth,
                 projectId,
                 graphId: graphOption.graphId,
-                isDisabled: graphOption.kind === 'folder',
+                isDisabled:
+                  graphOption.kind === 'folder' ||
+                  loadingTree ||
+                  previewStatus[getSubgraphProjectKey({ projectId, version })] !== 'ready',
               }),
             )
           : [];
@@ -155,29 +167,36 @@ function makeTargetOptions(
 export const SubgraphTargetControl: FC<{
   node: SubGraphNode;
   isReadonly?: boolean;
+  projectTree?: Tree | null;
+  onProjectTreeChange?(tree: Tree | null): void;
   onChange(next: SubGraphNode): void;
-}> = ({ node, isReadonly, onChange }) => {
+}> = ({ node, isReadonly, projectTree, onProjectTreeChange, onChange }) => {
   const catalog = useSubgraphProjectCatalog();
   const store = useStore();
   const session = useNodeEditorSessionContext();
   const ownProject = useAtomValue(projectState);
+  const membershipKey = useAtomValue(projectsState).openedProjects[ownProject.metadata.id]?.hostedBundleKey;
   const graphId = useAtomValue(graphState).metadata?.id;
   const referencedProjects = useAtomValue(referencedProjectsState);
   const setReferencedProjects = useSetAtom(referencedProjectsState);
-  const [tree, setTree] = useState<Tree | null>(null);
+  const [localTree, setLocalTree] = useState<Tree | null>(null);
+  // The settings source buttons and dropdown share one snapshot. Node-body
+  // controls own their snapshot when no settings editor is present.
+  const tree = projectTree === undefined ? localTree : projectTree;
+  const setTree = onProjectTreeChange ?? setLocalTree;
   const [expandedFolders, setExpandedFolders] = useState<ReadonlySet<string>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<ReadonlySet<ProjectId>>(new Set());
   const [menuOpen, setMenuOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [loadingTree, setLoadingTree] = useState(false);
-  const [loadingProjectId, setLoadingProjectId] = useState<ProjectId>();
+  const [previewStatus, setPreviewStatus] = useState<Record<string, PreviewStatus>>({});
   const [error, setError] = useState<string>();
-  const [failedPreviewKey, setFailedPreviewKey] = useState<string>();
   const requestGenerations = useRef(new Map<string, number>());
   const treeGeneration = useRef(0);
   const mounted = useRef(false);
   const version = node.data.targetVersion ?? 'latest';
-  const otherProjects = catalog && (node.data.targetScope === 'other-projects' || !!node.data.targetProjectId);
+  const scope = subgraphSourceScope(node.data, tree, ownProject.metadata.id);
+  const otherProjects = catalog && scope !== 'this-project';
   const selectedKey = node.data.targetProjectId
     ? getSubgraphProjectKey({ projectId: node.data.targetProjectId, version })
     : undefined;
@@ -189,34 +208,54 @@ export const SubgraphTargetControl: FC<{
     return (
       mounted.current &&
       store.get(projectState).metadata.id === ownProject.metadata.id &&
+      store.get(projectsState).openedProjects[ownProject.metadata.id]?.hostedBundleKey === membershipKey &&
       graph.metadata?.id === graphId &&
       current?.type === node.type &&
       ((current.data as SubGraphNode['data']).targetVersion ?? 'latest') === version &&
       !!(
         catalog &&
-        ((current.data as SubGraphNode['data']).targetScope === 'other-projects' ||
-          (current.data as SubGraphNode['data']).targetProjectId)
+        ((current.data as SubGraphNode['data']).targetScope || (current.data as SubGraphNode['data']).targetProjectId)
       ) === !!otherProjects &&
+      (current.data as SubGraphNode['data']).targetScope === node.data.targetScope &&
       (!session || session.isCurrent())
     );
-  }, [store, session, ownProject.metadata.id, graphId, node.id, node.type, version, catalog, otherProjects]);
+  }, [
+    store,
+    session,
+    ownProject.metadata.id,
+    membershipKey,
+    graphId,
+    node.id,
+    node.type,
+    node.data.targetScope,
+    version,
+    catalog,
+    otherProjects,
+  ]);
 
   useLayoutEffect(() => {
     const requests = requestGenerations.current;
     const treeRequests = treeGeneration;
     mounted.current = true;
-    setLoadingProjectId(undefined);
+    setPreviewStatus({});
     setLoadingTree(false);
+    setError(undefined);
     return () => {
       mounted.current = false;
       treeRequests.current++;
       // Keep generations monotonic; clearing the map could reuse an old ID.
       for (const [key, generation] of requests) requests.set(key, generation + 1);
     };
-  }, [session, ownProject.metadata.id, graphId, version, otherProjects]);
+  }, [session, ownProject.metadata.id, membershipKey, graphId, version, otherProjects, node.data.targetScope]);
+
+  useLayoutEffect(() => {
+    setTree(null);
+  }, [catalog, ownProject.metadata.id, membershipKey, setTree]);
 
   useEffect(() => {
-    if (!catalog || !node.data.targetProjectId || tree) return;
+    // Local node-body selectors need no server catalog. Settings load it even
+    // before a target is chosen so they can advertise Same bundle correctly.
+    if (!catalog || tree || menuOpen || (!onProjectTreeChange && !node.data.targetProjectId)) return;
     let active = true;
     const generation = ++treeGeneration.current;
     void catalog.listTree().then(
@@ -228,7 +267,7 @@ export const SubgraphTargetControl: FC<{
     return () => {
       active = false;
     };
-  }, [catalog, node.data.targetProjectId, tree, isCurrent]);
+  }, [catalog, tree, menuOpen, isCurrent, setTree, onProjectTreeChange, node.data.targetProjectId]);
 
   useEffect(() => {
     if (!catalog || !node.data.targetProjectId || !selectedKey || selectedPreview) return;
@@ -236,17 +275,19 @@ export const SubgraphTargetControl: FC<{
     const projectId = node.data.targetProjectId;
     const generation = (requestGenerations.current.get(selectedKey) ?? 0) + 1;
     requestGenerations.current.set(selectedKey, generation);
-    void catalog.preview({ projectId, version }).then(
+    void catalog.preview({ projectId, version, callerProjectId: ownProject.metadata.id }).then(
       (project) => {
         if (!active || !isCurrent() || requestGenerations.current.get(selectedKey) !== generation) return;
         setReferencedProjects((current) =>
           Object.hasOwn(current, selectedKey) ? current : { ...current, [selectedKey]: project },
         );
-        setFailedPreviewKey(undefined);
+        setPreviewStatus((current) => ({ ...current, [selectedKey]: 'ready' }));
       },
-      () => {
-        if (active && isCurrent() && requestGenerations.current.get(selectedKey) === generation)
-          setFailedPreviewKey(selectedKey);
+      (error: unknown) => {
+        if (active && isCurrent() && requestGenerations.current.get(selectedKey) === generation) {
+          setPreviewStatus((current) => ({ ...current, [selectedKey]: 'failed' }));
+          if (error instanceof Error && 'status' in error && error.status === 403) setError(error.message);
+        }
       },
     );
     return () => {
@@ -261,7 +302,10 @@ export const SubgraphTargetControl: FC<{
           <span>
             {node.data.targetProjectId} / {node.data.graphId}
           </span>
-          <div className="target-error">This project target can only be edited or run in Rivet Studio Server.</div>
+          <div className="target-help">
+            Run this target from an extracted bundle or a compatible project loader. Edit its project/graph binding in
+            Rivet Studio Server.
+          </div>
         </div>
       );
     }
@@ -295,12 +339,14 @@ export const SubgraphTargetControl: FC<{
 
   const options = tree
     ? makeTargetOptions(
-        tree,
+        filterSubgraphProjectTree(tree, ownProject.metadata.id, scope),
         ownProject.metadata.id,
         version,
         expandedFolders,
         expandedProjects,
         referencedProjects,
+        previewStatus,
+        loadingTree,
         !!search.trim(),
       )
     : [];
@@ -327,27 +373,22 @@ export const SubgraphTargetControl: FC<{
         }
       : null;
 
-  const loadPreview = async (projectId: ProjectId, refresh: boolean) => {
+  const loadPreview = async (projectId: ProjectId) => {
     if (!isCurrent()) return;
     const key = getSubgraphProjectKey({ projectId, version });
-    if (!refresh && referencedProjects[key]) return;
     const generation = (requestGenerations.current.get(key) ?? 0) + 1;
     requestGenerations.current.set(key, generation);
-    setLoadingProjectId(projectId);
+    setPreviewStatus((current) => ({ ...current, [key]: 'loading' }));
     setError(undefined);
     try {
-      const project = await catalog.preview({ projectId, version });
+      const project = await catalog.preview({ projectId, version, callerProjectId: ownProject.metadata.id });
       if (!isCurrent() || requestGenerations.current.get(key) !== generation) return;
       setReferencedProjects((current) => ({ ...current, [key]: project }));
-      setFailedPreviewKey(undefined);
+      setPreviewStatus((current) => ({ ...current, [key]: 'ready' }));
     } catch (caught) {
       if (!isCurrent() || requestGenerations.current.get(key) !== generation) return;
-      if (selectedKey === key) setFailedPreviewKey(key);
+      setPreviewStatus((current) => ({ ...current, [key]: 'failed' }));
       setError(caught instanceof Error ? caught.message : 'Could not load project graphs.');
-    } finally {
-      if (isCurrent() && requestGenerations.current.get(key) === generation) {
-        setLoadingProjectId((current) => (current === projectId ? undefined : current));
-      }
     }
   };
 
@@ -357,21 +398,33 @@ export const SubgraphTargetControl: FC<{
     setMenuOpen(true);
     setLoadingTree(true);
     setError(undefined);
+    // Shared definitions preserve existing wires, but do not authorize a new
+    // selection. Each menu visit refreshes its visible expanded projects.
+    setPreviewStatus({});
+    for (const [key, generation] of requestGenerations.current) requestGenerations.current.set(key, generation + 1);
     void catalog.listTree().then(
       (nextTree) => {
         if (!isCurrent() || treeGeneration.current !== generation) return;
         setTree(nextTree);
         setLoadingTree(false);
+        const visible = filterSubgraphProjectTree(
+          nextTree,
+          ownProject.metadata.id,
+          subgraphSourceScope(node.data, nextTree, ownProject.metadata.id),
+        );
+        const refresh = new Set([...expandedProjects].filter((id) => findProjectName(visible, id) !== undefined));
+        if (node.data.targetProjectId) refresh.add(node.data.targetProjectId);
+        for (const id of refresh) void loadPreview(id);
       },
       (caught) => {
         if (!isCurrent() || treeGeneration.current !== generation) return;
         setError(caught instanceof Error ? caught.message : 'Could not load projects.');
         setLoadingTree(false);
+        setTree(null);
       },
     );
     if (node.data.targetProjectId) {
       setExpandedProjects((current) => new Set(current).add(node.data.targetProjectId!));
-      void loadPreview(node.data.targetProjectId, true);
     }
   };
 
@@ -382,7 +435,7 @@ export const SubgraphTargetControl: FC<{
         className="subgraph-node-body-select"
         isDisabled={isReadonly}
         isSearchable
-        isLoading={loadingTree || !!loadingProjectId}
+        isLoading={loadingTree || Object.values(previewStatus).includes('loading')}
         closeMenuOnSelect={false}
         menuIsOpen={menuOpen}
         onMenuOpen={openMenu}
@@ -433,19 +486,20 @@ export const SubgraphTargetControl: FC<{
               else next.add(option.projectId!);
               return next;
             });
-            void loadPreview(option.projectId, false);
+            if (!expandedProjects.has(option.projectId)) void loadPreview(option.projectId);
           } else if (option.kind === 'graph' && option.projectId && option.graphId) {
             const key = getSubgraphProjectKey({ projectId: option.projectId, version });
             const preview = referencedProjects[key];
-            if (!preview || failedPreviewKey === key) return;
-            const nextBoundary = getGraphBoundary(preview, option.graphId)!;
+            if (!preview || loadingTree || previewStatus[key] !== 'ready') return;
+            const nextBoundary = getGraphBoundary(preview, option.graphId);
+            if (!nextBoundary) return;
             const sameTarget = node.data.targetProjectId === option.projectId && node.data.graphId === option.graphId;
             onChange({
               ...node,
               data: {
                 ...node.data,
                 graphId: option.graphId,
-                targetScope: 'other-projects',
+                targetScope: scope === 'same-bundle' ? 'same-bundle' : 'other-projects',
                 targetProjectId: option.projectId,
                 targetVersion: version,
                 targetBoundary:
@@ -462,7 +516,7 @@ export const SubgraphTargetControl: FC<{
       {node.data.targetProjectId && selectedPreview && !selectedGraph && (
         <div className="target-error">Selected graph is unavailable. Choose another graph.</div>
       )}
-      {selectedKey && failedPreviewKey === selectedKey && (
+      {selectedKey && previewStatus[selectedKey] === 'failed' && (
         <div className="target-error">Could not refresh the target preview. Try again.</div>
       )}
       {boundaryIssue && (

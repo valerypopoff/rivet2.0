@@ -16,6 +16,7 @@ import type {
 } from '../../../../../studio-server-shared/workflow-types.js';
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
+import { lockBundleTopology } from './bundles.js';
 import { createBlankProjectFile, sanitizeWorkflowName } from '../fs-helpers.js';
 import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
 import { getWorkflowDownloadFileName, getWorkflowDuplicateProjectName } from '../workflow-project-naming.js';
@@ -112,6 +113,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
   ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> => {
     try {
       return await deps.withTransaction(async (client, hooks) => {
+        await lockBundleTopology(client);
         const temporaryPrefix = `.__move__-${randomUUID()}`;
         const folderName = path.posix.basename(targetRelativePath);
         const folderRow = await deps.queryOne<FolderMoveRow>(
@@ -138,11 +140,19 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         else await deps.queueCatalogInvalidation(client);
 
         return {
-          folder: deps.mapFolderRowToFolderItem(folderRow),
+          folder: deps.mapFolderRowToFolderItem({
+            ...folderRow,
+            ...(await deps.queryOne<{ bundle_id: string | null }>(
+              client,
+              'SELECT bundle_id FROM workflow_folders WHERE relative_path=$1',
+              [targetRelativePath],
+            )),
+          }),
           movedProjectPaths,
         };
       });
     } catch (error) {
+      if ((error as { code?: string })?.code === '23514') throw conflict('Bundles cannot contain other bundles.');
       if (
         typeof error === 'object' &&
         error != null &&
@@ -218,6 +228,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     }
 
     return deps.withTransaction(async (client, hooks) => {
+      await lockBundleTopology(client);
       const workflow = await deps.getWorkflowByRelativePath(client, sourceRelativePath, { forUpdate: true });
       if (!workflow) {
         throw createHttpError(404, 'Project not found');
@@ -307,8 +318,10 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       }
 
       const folderMap = new Map<string, WorkflowFolderItem>();
+      const bundleByFolder = new Map<string, string | null>();
       for (const row of folderRows) {
         folderMap.set(row.relative_path, deps.mapFolderRowToFolderItem(row));
+        bundleByFolder.set(row.relative_path, row.bundle_id ?? bundleByFolder.get(row.parent_relative_path) ?? null);
       }
 
       const rootFolders: WorkflowFolderItem[] = [];
@@ -363,6 +376,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       }
 
       for (const { row, project } of workflowProjects) {
+        project.bundleId = bundleByFolder.get(row.folder_relative_path) ?? null;
         const parent = row.folder_relative_path ? folderMap.get(row.folder_relative_path) : null;
         if (parent) {
           parent.projects.push(project);
@@ -455,7 +469,12 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         allowProjectFile: false,
         allowEmpty: true,
       });
-      const folderRelativePath = parentPath ? `${parentPath}/${folderName}` : folderName;
+      const folderRelativePath = normalizeManagedWorkflowRelativePath(
+        parentPath ? `${parentPath}/${folderName}` : folderName,
+        {
+          allowProjectFile: false,
+        },
+      );
 
       return deps.withTransaction(async (client) => {
         if (
@@ -493,13 +512,18 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       const folderName = sanitizeWorkflowName(newName, 'new folder name');
       const parentRelativePath =
         path.posix.dirname(sourceRelativePath) === '.' ? '' : path.posix.dirname(sourceRelativePath);
-      const targetRelativePath = parentRelativePath ? `${parentRelativePath}/${folderName}` : folderName;
+      const targetRelativePath = normalizeManagedWorkflowRelativePath(
+        parentRelativePath ? `${parentRelativePath}/${folderName}` : folderName,
+        {
+          allowProjectFile: false,
+        },
+      );
 
       if (sourceRelativePath === targetRelativePath) {
         const folderRow = await deps.queryOne<FolderRow>(
           deps.pool,
           `
-          SELECT relative_path, name, parent_relative_path, updated_at
+          SELECT relative_path, name, parent_relative_path, updated_at, bundle_id
           FROM workflow_folders WHERE relative_path = $1
         `,
           [sourceRelativePath],
@@ -542,7 +566,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         const folderRow = await deps.queryOne<FolderRow>(
           deps.pool,
           `
-          SELECT relative_path, name, parent_relative_path, updated_at
+          SELECT relative_path, name, parent_relative_path, updated_at, bundle_id
           FROM workflow_folders WHERE relative_path = $1
         `,
           [sourcePath],
@@ -850,6 +874,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
 
       return deps.withTransaction(async (client, hooks) => {
+        await lockBundleTopology(client);
         const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
         if (!workflow) {
           throw createHttpError(404, 'Project not found');

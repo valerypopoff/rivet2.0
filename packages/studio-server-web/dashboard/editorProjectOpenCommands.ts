@@ -11,6 +11,7 @@ import {
 } from './editorCommandBridgeContext';
 import { beginHostedProjectReload } from '../io/hostedProjectRevisionTracker';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
+import { workflowBundleKey } from './workflowBundleBinding';
 
 function resolveOpeningProjectTitle(command: Extract<DashboardToEditorCommand, { type: 'open-project' }>): string {
   const commandTitle = command.title?.trim();
@@ -115,6 +116,16 @@ export async function handleOpenProjectCommand(
       return;
     }
 
+    if (openResult.projectId && command.bundleId !== undefined) {
+      await context.getWorkspace().updateProjectMetadata(
+        openResult.projectId,
+        {},
+        {
+          hostedBundleKey: workflowBundleKey(command.bundleId),
+          persistedExternally: true,
+        },
+      );
+    }
     if (shouldUsePreviewSlot) {
       const openedProject = openResult.projectId
         ? { projectId: openResult.projectId }

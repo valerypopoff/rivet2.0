@@ -1,4 +1,5 @@
 import { workflowFailure } from '../workflow-failure.js';
+import { validateManagedSubgraphTarget } from './subgraph-access.js';
 import { performance } from 'node:perf_hooks';
 import {
   NodeDatasetProvider,
@@ -172,6 +173,7 @@ export class ManagedWorkflowExecutionService {
     target: SubgraphProjectTarget,
     remainingRetries = MANAGED_WORKFLOW_EXECUTION_INVALIDATION_RETRY_LIMIT,
   ): Promise<ResolvedSubgraphProject> {
+    if (target.callerProjectId) await validateManagedSubgraphTarget(this.#pool, target);
     const resolveSnapshot = this.#invalidationController.captureResolveSnapshot();
     const workflow = await this.#getWorkflowById(this.#pool, target.projectId);
     if (!workflow) throw createHttpError(404, `Subgraph project ${target.projectId} was not found.`);

@@ -73,18 +73,24 @@ export type SubgraphProjectTreeItem = {
   name: string;
   projectMetadataId?: string;
   relativePath: string;
+  bundleId?: string | null;
 };
 
 export type SubgraphProjectTreeFolder = {
   id: string;
   name: string;
+  bundleId?: string | null;
   folders: SubgraphProjectTreeFolder[];
   projects: SubgraphProjectTreeItem[];
 };
 
 export type SubgraphProjectCatalogProvider = {
   listTree(): Promise<{ folders: SubgraphProjectTreeFolder[]; projects: SubgraphProjectTreeItem[] }>;
-  preview(target: { projectId: ProjectId; version: 'latest' | 'published' }): Promise<Project>;
+  preview(target: {
+    projectId: ProjectId;
+    version: 'latest' | 'published';
+    callerProjectId?: ProjectId;
+  }): Promise<Project>;
   openGraph(target: { projectId: ProjectId; graphId: GraphId }): void;
   /** Advisory saved/publication scan; absence means only local open projects can be inspected. */
   graphReferences?(

@@ -354,6 +354,10 @@ export function createManagedCompose(
     entrypoint: ['/bin/sh', '-ec'],
     environment: {
       ...common,
+      // Only verify-only readers may accept a compatibility range. The writer
+      // must migrate to the exact schema declared by its selected API image.
+      RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION: String(schema.version),
+      RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION: String(schema.version),
       RIVET_APP_DATA_ROOT: '/var/tmp/rivet-migration-app-data',
       RIVET_HOSTED_EVALUATIONS_ENABLED: 'false',
       RIVET_MANAGED_SCHEMA_OFFLINE: offline ? '1' : '',

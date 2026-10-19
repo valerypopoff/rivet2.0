@@ -9,6 +9,8 @@ export type SubgraphProjectVersion = 'latest' | 'published';
 export type SubgraphProjectTarget = {
   projectId: ProjectId;
   version: SubgraphProjectVersion;
+  /** Actual graph owner, supplied by the processor rather than persisted node configuration. */
+  callerProjectId?: ProjectId;
 };
 
 export type ResolvedSubgraphProject = {
@@ -39,6 +41,8 @@ export type SubgraphProjectRun = {
 
 export type SubgraphProjectLoader = {
   loadTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject>;
+  /** Recheck caller-dependent policy even when a target snapshot is already cached. */
+  validateTarget?(target: SubgraphProjectTarget): Promise<void>;
 };
 
 /** Internal definition key; not a project metadata ID or a persisted reference. */

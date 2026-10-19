@@ -961,6 +961,41 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.deepEqual(correlations, ['rvt-nested-subgraph-test-12345', 'rvt-nested-subgraph-test-12345']);
   });
 
+  void it('rechecks the actual caller before reusing a cross-project target snapshot', async () => {
+    const leaf = makeProject(makeGraph('access-leaf', [], []));
+    leaf.metadata.id = 'access-leaf' as ProjectId;
+    const middleCall = makeSubgraphNode('middle-leaf', 'access-leaf' as GraphId);
+    middleCall.data.targetProjectId = leaf.metadata.id;
+    const middle = makeProject(makeGraph('access-middle', [middleCall], []));
+    middle.metadata.id = 'access-middle' as ProjectId;
+    const first = makeSubgraphNode('root-leaf', 'access-leaf' as GraphId);
+    first.data.targetProjectId = leaf.metadata.id;
+    const second = makeSubgraphNode('root-middle', 'access-middle' as GraphId);
+    second.data.targetProjectId = middle.metadata.id;
+    const root = makeGraph('access-root', [first, second], []);
+    const loads: string[] = [],
+      validations: string[] = [];
+    await assert.rejects(
+      createProcessor(root).processGraph({
+        ...testProcessContext(),
+        subgraphProjectLoader: {
+          async loadTarget(target) {
+            assert.equal(target.callerProjectId, makeProject(root).metadata.id);
+            loads.push(target.projectId);
+            return { project: target.projectId === leaf.metadata.id ? leaf : middle };
+          },
+          async validateTarget(target) {
+            validations.push(`${target.callerProjectId}:${target.projectId}`);
+            if (target.callerProjectId === middle.metadata.id) throw new Error('Outside bundle caller rejected');
+          },
+        },
+      }),
+      /Outside bundle caller rejected/,
+    );
+    assert.deepEqual(loads, ['access-leaf', 'access-middle']);
+    assert.deepEqual(validations, ['access-middle:access-leaf']);
+  });
+
   void it('keeps Saved latest and Published snapshots of one project distinct', async () => {
     const latestSource = makeTestNode('latest-version-source');
     const publishedSource = makeTestNode('published-version-source');

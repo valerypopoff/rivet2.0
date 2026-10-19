@@ -35,13 +35,15 @@ By default, you can both pause and abort the current execution in Rivet, and the
 Open the projects you want to inspect **before** starting the remote run, then
 connect Remote Debugger from **any** open project in the bundle. If A calls B and B calls C,
 switch between those tabs to see their live node inputs, streaming outputs,
-completed results and Run Activity. Projects do not need to be in the same folder.
+completed results and Run Activity. In Studio Server they must belong to the same
+explicit bundle, including its ordinary subfolders.
 Only projects actually executed by the admitted run receive data.
 All open bundle members show the same **Stop Remote Debugger** button immediately.
 For example, you can connect from C, start A in the runtime, and stop the debugger
 from B. One connection serves the bundle; unrelated open projects stay independent.
-Bundle membership follows explicit project references or an opened bundle manifest,
-not simply projects being in the same folder.
+Bundle membership follows your Studio Server bundle container, or an explicitly
+opened desktop bundle manifest. References alone do not group projects. Standalone
+projects connect independently; external dependencies are not automatically observed.
 
 Dependency tabs show an **Observing Remote Debugger** banner identifying the
 source project and runtime target version when available. These are view-only

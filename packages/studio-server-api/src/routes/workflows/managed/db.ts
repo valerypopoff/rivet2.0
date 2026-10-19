@@ -143,7 +143,7 @@ export function createManagedWorkflowQueries(pool: Pool): ManagedWorkflowQueries
     async listFolderRows(client: ManagedWorkflowDbClient = pool): Promise<FolderRow[]> {
       return queryRows<FolderRow>(
         client,
-        'SELECT relative_path, name, parent_relative_path, updated_at FROM workflow_folders ORDER BY relative_path ASC',
+        'SELECT relative_path, name, parent_relative_path, updated_at, bundle_id FROM workflow_folders ORDER BY relative_path ASC',
       );
     },
 

@@ -300,6 +300,11 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         >
           {bodyContent}
           <div className="body-actions">
+            {controller.explicitBundles ? (
+              <button type="button" className="link-button" onClick={() => controller.handleCreateBundle()}>
+                + New bundle
+              </button>
+            ) : null}
             <button type="button" className="link-button" onClick={() => void handleCreateFolder()}>
               + New folder
             </button>

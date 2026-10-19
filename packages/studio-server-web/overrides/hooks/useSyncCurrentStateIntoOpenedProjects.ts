@@ -80,6 +80,8 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
     fsPath,
   );
   const openedGraph = getPersistedString(entry.openedGraph) ?? getPersistedString(legacyProject?.metadata?.mainGraphId);
+  const hostedBundleKey =
+    typeof entry.hostedBundleKey === 'string' || entry.hostedBundleKey === null ? entry.hostedBundleKey : undefined;
   const info: OpenedProjectInfo = {
     projectId,
     title,
@@ -87,6 +89,8 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
     ...(getPersistedString(entry.bundleManifestPath)
       ? { bundleManifestPath: getPersistedString(entry.bundleManifestPath) }
       : {}),
+    ...(hostedBundleKey !== undefined ? { hostedBundleKey } : {}),
+    ...(typeof entry.bundleMember === 'boolean' ? { bundleMember: entry.bundleMember } : {}),
     ...(executorMode ? { executorMode } : {}),
     ...(openedGraph ? { openedGraph: openedGraph as GraphId } : {}),
   };
@@ -106,6 +110,7 @@ function normalizeOpenedProjectEntry(previousProjectId: ProjectId, entry: Legacy
       entry.title !== title ||
       entry.fsPath !== fsPath ||
       entry.openedGraph !== openedGraph ||
+      entry.hostedBundleKey !== hostedBundleKey ||
       executorModeChanged ||
       'project' in entry,
   };

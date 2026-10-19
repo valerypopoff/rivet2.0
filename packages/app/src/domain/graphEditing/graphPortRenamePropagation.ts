@@ -216,7 +216,7 @@ function reconcileGraph({
     const data = (node as SubGraphNode).data;
     // Graph IDs are project-scoped. Local edits cannot rename a saved external
     // contract, even when a copied graph happens to have the same graph ID.
-    if (data.targetProjectId || data.targetScope === 'other-projects' || data.graphId !== targetGraphId) {
+    if (data.targetProjectId || data.targetScope || data.graphId !== targetGraphId) {
       return node;
     }
 

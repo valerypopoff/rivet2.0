@@ -6,6 +6,7 @@ import { WorkflowInlineRenameInput } from './WorkflowInlineRenameInput';
 import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
 import { countProjectsInFolder, normalizeWorkflowPath } from './workflowLibraryHelpers';
 import { WorkflowProjectRow } from './WorkflowProjectRow';
+import { WorkflowBundleIcon } from './WorkflowBundleIcon';
 
 type WorkflowFolderTreeProps = {
   folders: WorkflowFolderItem[];
@@ -72,11 +73,7 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
 }) => {
   const normalizedActivePath = normalizeWorkflowPath(activePath);
   const renderFolderRenameInput = (folder: WorkflowFolderItem) => (
-    <FolderRenameInput
-      folder={folder}
-      onSubmit={onFolderRenameSubmit}
-      onCancel={onFolderRenameCancel}
-    />
+    <FolderRenameInput folder={folder} onSubmit={onFolderRenameSubmit} onCancel={onFolderRenameCancel} />
   );
 
   const renderProjectRow = (project: WorkflowProjectItem) => (
@@ -118,7 +115,9 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
       isRenaming ? 'renaming' : null,
       dropTargetFolderPath === folder.relativePath ? 'drag-over' : null,
       draggedItem?.itemType === 'folder' && draggedItem.absolutePath === folder.absolutePath ? 'dragging' : null,
-    ].filter(Boolean).join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     return (
       <div className="folder" key={folder.id}>
@@ -129,7 +128,11 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
           tabIndex={rowIsBusy ? undefined : 0}
           aria-busy={isRenaming ? true : undefined}
           aria-expanded={rowIsBusy ? undefined : expanded}
-          aria-label={isEditing || isRenaming ? `Renaming ${folder.name}` : `${expanded ? 'Collapse' : 'Expand'} ${folder.name}`}
+          aria-label={
+            isEditing || isRenaming
+              ? `Renaming ${folder.name}`
+              : `${expanded ? 'Collapse' : 'Expand'} ${folder.name}${folder.bundleId ? ' bundle' : ''}`
+          }
           onClick={rowIsBusy ? undefined : onFolderClick(folder)}
           onKeyDown={rowIsBusy ? undefined : onFolderKeyDown(folder)}
           onContextMenu={rowIsBusy ? undefined : (event) => onFolderContextMenu(folder, event)}
@@ -150,13 +153,27 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
           <div className="folder-content">
             <div className="folder-name-button" title={isEditing ? undefined : folder.name}>
               <div className="folder-main">
-                {isEditing ? renderFolderRenameInput(folder) : (
+                {isEditing ? (
+                  renderFolderRenameInput(folder)
+                ) : (
                   <div className="folder-label-wrap">
                     {isRenaming ? <span className="folder-rename-spinner" aria-hidden="true" /> : null}
-                    <div className="label">{folder.name}</div>
+                    <div className="label">
+                      {folder.bundleId ? (
+                        <WorkflowBundleIcon
+                          aria-label="Bundle"
+                          role="img"
+                          style={{ verticalAlign: 'text-bottom', marginRight: 5 }}
+                        />
+                      ) : null}
+                      {folder.name}
+                    </div>
                   </div>
                 )}
-                <div className="folder-project-count" aria-label={`${projectCount} project${projectCount === 1 ? '' : 's'} in ${folder.name}`}>
+                <div
+                  className="folder-project-count"
+                  aria-label={`${projectCount} project${projectCount === 1 ? '' : 's'} in ${folder.name}`}
+                >
                   {projectCount}
                 </div>
               </div>
@@ -181,7 +198,9 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
 
   return (
     <>
-      {rootProjects.length > 0 ? <div className="projects">{rootProjects.map((project) => renderProjectRow(project))}</div> : null}
+      {rootProjects.length > 0 ? (
+        <div className="projects">{rootProjects.map((project) => renderProjectRow(project))}</div>
+      ) : null}
       {folders.map((folder) => renderFolder(folder))}
     </>
   );
@@ -193,11 +212,7 @@ type FolderRenameInputProps = {
   onCancel: (folder: WorkflowFolderItem) => void;
 };
 
-const FolderRenameInput: FC<FolderRenameInputProps> = ({
-  folder,
-  onSubmit,
-  onCancel,
-}) => (
+const FolderRenameInput: FC<FolderRenameInputProps> = ({ folder, onSubmit, onCancel }) => (
   <WorkflowInlineRenameInput
     classNamePrefix="folder"
     initialValue={folder.name}

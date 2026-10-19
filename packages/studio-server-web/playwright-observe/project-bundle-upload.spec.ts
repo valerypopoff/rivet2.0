@@ -20,7 +20,18 @@ for (const kind of ['archive', 'folder'] as const)
     const files: { path: string; contents: string }[] = [];
     const fixture = projectBundleFixture();
     await collectProjectBundle({
-      source: { ...fixture.source, versionPolicy: 'latest' },
+      source: {
+        ...fixture.source,
+        versionPolicy: 'latest',
+        workspace: {
+          name: 'Edited feature',
+          folders: ['Empty'],
+          members: [fixture.root.project, fixture.child.project].map((project) => ({
+            projectId: project.metadata.id,
+            relativePath: `${project.metadata.id}.rivet-project`,
+          })),
+        },
+      },
       rootVersion: 'latest',
       signal: new AbortController().signal,
       progress: () => {},
@@ -46,19 +57,23 @@ for (const kind of ['archive', 'folder'] as const)
       async (route) => {
         const url = new URL(route.request().url());
         if (url.pathname === '/api/workflows/tree')
-          return route.fulfill({ json: { root: '/workflows', folders: [parent], projects: [] } });
+          return route.fulfill({
+            json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [parent], projects: [] },
+          });
         if (url.pathname === '/api/workflows/project-bundles/import') {
           imports++;
           expect(route.request().headers()['x-rivet-bundle-intent']).toBe('1');
           const body = route.request().postDataJSON();
           expect(body.folderRelativePath).toBe('Imports');
           const prepared = prepareProjectBundleImport(body.files);
+          expect(prepared.folders).toEqual(['Empty']);
           if (kind === 'archive' && imports === 1)
             return route.fulfill({ status: 503, json: { error: 'Fixture storage unavailable' } });
           const relativePath = `Imports/${prepared.folderName}`;
           const projects = prepared.projects.map<WorkflowProjectItem>((p) => ({
             id: `${relativePath}/${p.name}.rivet-project`,
             projectMetadataId: p.id,
+            bundleId: prepared.rootProjectId,
             name: p.name,
             fileName: `${p.name}.rivet-project`,
             relativePath: `${relativePath}/${p.name}.rivet-project`,
@@ -74,6 +89,7 @@ for (const kind of ['archive', 'folder'] as const)
           }));
           const folder = {
             id: relativePath,
+            bundleId: prepared.rootProjectId,
             name: prepared.folderName,
             relativePath,
             absolutePath: `/workflows/${relativePath}`,
@@ -96,6 +112,7 @@ for (const kind of ['archive', 'folder'] as const)
       await waitForDashboardReady(page);
       await page.getByRole('button', { name: 'Expand Imports', exact: true }).click({ button: 'right' });
       await expect(page.getByRole('menuitem', { name: 'Upload project', exact: true })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toHaveCount(0);
       const action = page.getByRole('menuitem', { name: 'Upload bundle', exact: true });
       await expect(action.locator('svg path').nth(0)).toHaveAttribute('d', 'M7 16V3m-4 4 4-4 4 4');
       await expect(action.locator('svg path').nth(1)).toHaveAttribute('d', 'M17 19V6m-4 4 4-4 4 4');
@@ -128,6 +145,7 @@ for (const kind of ['archive', 'folder'] as const)
       await expect(modal).toHaveCount(0);
       await expect(page.locator('.project-row').filter({ hasText: 'Root' })).toBeVisible();
       await expect(page.locator('.project-row').filter({ hasText: '子供' })).toBeVisible();
+      await expect(page.getByRole('button', { name: /^Collapse Edited feature .* bundle$/ })).toBeVisible();
       expect(imports).toBe(kind === 'archive' ? 2 : 1);
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });

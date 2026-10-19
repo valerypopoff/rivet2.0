@@ -37,6 +37,7 @@ for (const operation of ['create', 'rename', 'move', 'delete', 'duplicate', 'non
     };
     const client = {
       query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
         if (sql.includes('pg_notify')) {
           assert.equal(JSON.parse(String(params?.[1])).eventType, 'catalog-changed');
           events.push('notify');
@@ -151,6 +152,7 @@ function createCatalogForDeleteGuard(
 ) {
   const client = {
     query: async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('pg_advisory_xact_lock')) return { rows: [] };
       options.executedQueries?.push(sql);
       assert.deepEqual(params, [workflowRow.workflow_id]);
       if (/FROM workflow_web_apps/.test(sql)) return { rows: webAppRows };

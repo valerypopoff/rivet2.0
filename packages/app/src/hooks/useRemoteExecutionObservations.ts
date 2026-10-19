@@ -40,6 +40,7 @@ export function useRemoteExecutionObservations(registry: ExecutorSessionRegistry
       return new Map(lifetimes);
     };
     const notice = (id: ProjectId, message: string | undefined) => {
+      if (message && !registry.getRemoteDebuggerRuntime(id)) return;
       const previous = store.get(remoteObservationNoticesState);
       if (previous[id] === message) return;
       const next = { ...previous };
@@ -48,6 +49,9 @@ export function useRemoteExecutionObservations(registry: ExecutorSessionRegistry
       store.set(remoteObservationNoticesState, next);
     };
     return createRemoteExecutionObservationRouter({
+      eligible(id, source) {
+        return registry.getRemoteDebuggerRuntime(id) === source;
+      },
       receivers,
       conflict(id, source) {
         const info = store.get(projectsState).openedProjects[id];
