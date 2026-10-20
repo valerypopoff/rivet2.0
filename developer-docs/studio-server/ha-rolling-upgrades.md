@@ -656,8 +656,81 @@ installation/pod/incarnation MAC authenticates each internal socket, browser
 Origins are refused, and controls traverse each owner once without retry. Each
 processor remains on its original owner. Replay buffers are bounded and gaps are
 reported; per-owner cursors prevent evicted event IDs from being replayed as new
-events. No generic broker or extra PostgreSQL connection is introduced. Existing
-managed-store invalidations refresh workflow tree observers on other API owners.
+events. No generic broker or extra PostgreSQL connection is introduced.
+
+Each owner retains a shared ring of at most 32 MiB / 8,192 observations. Browser
+and internal-peer replay use a per-socket cursor and one `ws.send` in flight,
+including live broadcasts through the Node debugger's optional `sendBroadcast`
+adapter. Do not synchronously enqueue the entire retained ring: it can exceed
+the transport's former 8 MiB queue limit and create a reconnect loop. No private
+copy of the replay or unbounded live-event queue is created for a slow observer.
+If its cursor falls behind the shared ring, it skips the evicted portion and
+receives a gap notice; other observers continue independently. A write callback
+that fails or does not settle within 60 seconds terminates only that socket.
+Socket closure and relay disposal clear pending deadlines and replay wakes.
+An individual encoded event over 32 MiB is omitted with a diagnostic rather than
+discarding the existing history or interrupting the actual workflow. Terminal
+events are the exception: node/graph finishes, exclusions, failures, root `done`
+and aborts retain bounded identity/outcome envelopes, replacing oversized values
+with explicit diagnostic warnings. This prevents stuck nodes, Run Activity rows
+and root runs. Normal provenance (including executor/evaluation metadata) is
+preserved; pathological metadata is reduced to bounded routing identities. No
+placeholder is presented as the workflow's actual result. The workflow still
+returns its full original result to its caller; this is an observation-only limit.
+Successful paced local broadcasts also notify the existing debugger heartbeat.
+Enqueueing work alone is not proof of delivery; a blocked writer cannot conceal
+a dead peer.
+
+`latest-diagnostic` protocol 1 carries one of four bounded notice codes:
+`history-truncated`, `history-gap`, `event-too-large`, `owner-unavailable`.
+These are nonterminal warnings, not graph `error` events: the editor does not
+stop the displayed run or reject pending graph results. Warnings are shown once
+per logical connection, including automatic reconnects. During mixed-version
+rollouts the editor also recognizes the exact unscoped legacy HA error notices;
+ordinary graph errors retain their original behavior. Old editors ignore the new
+notice envelope safely. Ordinary local/desktop debugger connections do not use
+the HA writer or change their error handling.
+
+An internal reconnect may send `x-rivet-ha-after: <owner-incarnation>:<sequence>`
+to avoid retransmitting acknowledged history. It is only a catch-up hint on the
+existing authenticated peer connection: missing, malformed, future or stale
+incarnation hints fall back to retained replay. Older owners ignore the header.
+Per-owner event IDs still deduplicate replay in both the relay and editor.
+Neither reconnect nor replay resubmits workflow commands or moves processors.
+
+Regressions: `ha-latest-relay.test.ts`, `ha-latest-replay.test.ts` and
+`ha-latest-peer-replay.test.ts` run in the default API lane. They cover 12/40 MiB
+histories, reconnect ordering, slow/independent observers, oversized events,
+stalled/failed writes, disposal, authenticated mesh catch-up, oversized terminal
+identity/outcome preservation and legacy hints. Node heartbeat tests distinguish
+completed adapter writes from queued writes.
+App session/diagnostic tests cover warning deduplication and genuine graph errors.
+`latest-workflow-remote-debugger.test.ts` also enables the actual production HA
+initializer with temporary settings: 40 MiB history, authenticated browser and
+internal-peer upgrades, real processor runs, reconnects and ordered observations.
+It rejects a missing UI session even with the trusted-proxy header, forged peer
+MACs, and a browser Origin on the internal peer route. Replay pacing must not
+bypass any of these authorization boundaries.
+The browser CI lane includes `ha-latest-replay.spec.ts`, exercising two real local
+HA owners connected through the authenticated mesh. The browser initially
+observes runs from the other backend, observes runs from both owners, then
+reconnects through the same URL onto the other backend during a live streaming
+run. It covers 40 MiB generated history, per-owner deduplication and a 33 MiB
+result that must complete without stranding the editor. Ordinary local debugger
+behavior remains a separate case. To run against a development/preview server:
+`PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 PLAYWRIGHT_BASE_URL=<local-url> yarn studio-server:ui:observe ha-latest-replay.spec.ts`.
+All API calls are fixture-owned; this does not access or qualify a live GCP deployment.
+`remote-bundle-observation.spec.ts` additionally uses that same two-owner fixture
+for A → B → C bundle projection through history eviction and a backend-switch
+reconnect, including child failure and shared stop from a dependency tab. These
+tests protect one logical bundle session, per-project outputs/Run Activity and
+exclusion of unrelated tabs; see [project bundles](project-bundles.md).
+The production incident is fixed only after the corrected API/Node and web
+artifacts are published and deployed through the normal guarded release flow.
+These local checks do not deploy anything or make old running backend code safe;
+do not clear production history or weaken authentication as a workaround.
+
+Existing managed-store invalidations refresh workflow tree observers on other API owners.
 Evaluation library writes also issue a transaction-scoped notification on that
 same LISTEN connection. The originating API suppresses its own echo; another API
 notifies its existing library SSE observers. Listener loss/reconnect rotates the

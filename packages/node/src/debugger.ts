@@ -75,6 +75,11 @@ export function startDebuggerServer(
     sessions?: DebuggerSessions;
     /** Hosting adapters can relay observations/controls without owning processors. */
     transformBroadcast?: (payload: string) => string;
+    /**
+     * Order live observations through the adapter's bounded replay writer.
+     * Call onWritten after successful delivery, never merely after enqueueing.
+     */
+    sendBroadcast?: (client: WebSocket, payload: string, onWritten: () => void) => void;
     onControl?: (client: WebSocket, payload: string) => void;
     port?: number;
     dynamicGraphRun?: DynamicGraphRun;
@@ -170,6 +175,8 @@ export function startDebuggerServer(
 
     clients.forEach((client) => {
       if (options.sessions) options.sessions.send(client, payload);
+      else if (options.sendBroadcast)
+        options.sendBroadcast(client, payload, () => socketHeartbeats.get(client)?.markActivity());
       else sendDebuggerMessage(client, payload, emitter, socketHeartbeats.get(client));
     });
   }

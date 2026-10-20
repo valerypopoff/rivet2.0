@@ -117,6 +117,7 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
   latestWorkflowRemoteDebugger = startDebuggerServer({
     server: webSocketServer as RivetDebuggerServerOptions['server'],
     transformBroadcast: relay?.transformBroadcast,
+    sendBroadcast: relay?.sendBroadcast,
     onControl: relay?.onControl,
   });
 

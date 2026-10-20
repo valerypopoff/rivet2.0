@@ -3,6 +3,7 @@ import test from 'node:test';
 import { FakeWebSocket, installExecutorSessionTestHooks, runtime } from './executorSessionTestUtils.js';
 import { createExecutorSessionRuntime } from './executorSession.js';
 import { ExecutionRecorder } from '@valerypopoff/rivet2-core';
+import { toast } from 'react-toastify';
 
 installExecutorSessionTestHooks();
 
@@ -436,6 +437,43 @@ test('HA latest reconnect preserves observations and never duplicates lifecycle 
   resumed.emitMessage({ message: 'start', data: {}, rivetEventId: 'backend-0:owner:1' });
   resumed.emitMessage({ message: 'done', data: {}, rivetEventId: 'backend-0:owner:2' });
   assert.equal(connects, 1); assert.deepEqual(messages, ['start', 'done']); assert.deepEqual(resumed.sent, []);
+});
+
+test('HA replay warnings survive reconnect without terminating runs or generating duplicate toasts', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const warn = t.mock.method(toast, 'warn', () => 'notice');
+  const messages: string[] = [];
+  runtime.subscribeMessages(message => { messages.push(message); });
+  await runtime.connectExternalDebugger('wss://rivet.example/ws/latest-debugger');
+  const pending = runtime.createPendingGraphExecution('still-running');
+  runtime.setActiveGraphRunRequestId('still-running');
+  const first = FakeWebSocket.instances.at(-1)!; first.open();
+  const warning = { message: 'latest-diagnostic', data: { protocol: 1, code: 'history-gap' } };
+  first.emitMessage({ message: 'latest-session', data: { protocol: 1 } });
+  first.emitMessage(warning);
+  first.emitMessage({ message: 'error', data: { error: 'Latest debugger history has a gap. Earlier diagnostics may be unavailable; executions were not replayed.' } });
+  assert.equal(runtime.isReady(), true);
+  assert.equal(runtime.getActiveGraphRunRequestId(), 'still-running');
+  assert.equal(warn.mock.calls.length, 1); assert.deepEqual(messages, []);
+  first.emitClose(); t.mock.timers.tick(200);
+  const resumed = FakeWebSocket.instances.at(-1)!; resumed.open();
+  resumed.emitMessage({ message: 'latest-session', data: { protocol: 1 } }); resumed.emitMessage(warning);
+  assert.equal(runtime.isReady(), true); assert.equal(warn.mock.calls.length, 1);
+  runtime.resolvePendingGraphExecution(pending.requestId, {}); assert.deepEqual(await pending.promise, {});
+  resumed.emitMessage({ message: 'error', data: { error: 'Actual graph error' } });
+  assert.deepEqual(messages, ['error']);
+  assert.deepEqual(FakeWebSocket.instances.flatMap(socket => socket.sent), []);
+});
+
+test('a local debugger without the HA handshake retains ordinary graph error handling', async t => {
+  const warn = t.mock.method(toast, 'warn', () => 'notice');
+  const messages: string[] = [];
+  runtime.subscribeMessages(message => { messages.push(message); });
+  await runtime.connectExternalDebugger('ws://localhost:21889');
+  const socket = FakeWebSocket.instances.at(-1)!; socket.open();
+  socket.emitMessage({ message: 'error', data: { error: 'Latest debugger history has a gap. Earlier diagnostics may be unavailable; executions were not replayed.' } });
+  assert.deepEqual(messages, ['error']);
+  assert.equal(warn.mock.calls.length, 0);
 });
 
 for (const kind of ['hosted', 'latest'] as const) {

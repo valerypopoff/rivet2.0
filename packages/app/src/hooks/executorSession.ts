@@ -11,6 +11,8 @@ import type {
 import { logRuntimeDebug } from '@valerypopoff/rivet2-core';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
 import { handleError } from '../utils/errorHandling.js';
+import { toast } from 'react-toastify';
+import { readLatestDebuggerDiagnostic } from './latestDebuggerDiagnostic.js';
 import {
   createUnscopedRemoteExecutionRoutingState,
   getRemoteExecutionEventDispatchDecision,
@@ -172,6 +174,7 @@ export function createExecutorSessionRuntime(options: {
   let connectionNotified = false;
   let idleHandoff: symbol | undefined;
   const latestEventCursors = new Map<string, number>();
+  const latestDiagnostics = new Set<string>();
   let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
   let recordingChannel: (EventTarget & { readyState: number }) | undefined;
   // Retain completed dataset responses across transport gaps, never requests,
@@ -532,6 +535,16 @@ export function createExecutorSessionRuntime(options: {
             latestEventCursors.set(origin, sequence);
             if (latestEventCursors.size > 256) latestEventCursors.delete(latestEventCursors.keys().next().value!);
           }
+          if (latestObservation) {
+            const diagnostic = readLatestDebuggerDiagnostic(value);
+            if (diagnostic) {
+              if (!latestDiagnostics.has(diagnostic.code)) {
+                latestDiagnostics.add(diagnostic.code);
+                toast.warn(diagnostic.message, { toastId: `latest-debugger-${diagnostic.code}` });
+              }
+              return false;
+            }
+          }
           if (resumableTarget && envelope.message === 'executor-session') {
             if (
               envelope.data?.protocol !== 1 ||
@@ -731,6 +744,7 @@ export function createExecutorSessionRuntime(options: {
     closeRecordingChannel();
     latestObservation = false;
     latestEventCursors.clear();
+    latestDiagnostics.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
     resumeSequence = 0;
@@ -780,6 +794,7 @@ export function createExecutorSessionRuntime(options: {
     closeRecordingChannel();
     latestObservation = false;
     latestEventCursors.clear();
+    latestDiagnostics.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
     resumeSequence = 0;

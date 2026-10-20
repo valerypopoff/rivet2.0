@@ -635,6 +635,33 @@ function connect(outputNodeId: NodeId, outputId: string, inputNodeId: NodeId, in
 }
 
 describe('startDebuggerServer heartbeat', () => {
+  it('counts completed adapter writes as activity without treating queued writes as delivered', (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+    const server = new FakeWebSocketServer();
+    const socket = new FakeWebSocket();
+    let onWritten: (() => void) | undefined;
+    const debuggerServer = startDebuggerServer({
+      server: server as unknown as WebSocketServer,
+      heartbeatIntervalMs: 100, heartbeatTimeoutMs: 30,
+      sendBroadcast: (_client, _payload, completed) => { onWritten = completed; },
+    });
+    try {
+      server.connect(socket);
+      t.mock.timers.tick(100);
+      assert.equal(socket.pingCount, 1);
+      debuggerServer.broadcast(fakeProcessor(), 'trace', 'paced activity');
+      assert.equal(typeof onWritten, 'function');
+      t.mock.timers.tick(20);
+      onWritten!();
+      t.mock.timers.tick(15);
+      assert.equal(socket.terminated, false);
+      // Enqueueing without successful completion must not hide a dead socket.
+      t.mock.timers.tick(65);
+      debuggerServer.broadcast(fakeProcessor(), 'trace', 'blocked write');
+      t.mock.timers.tick(31);
+      assert.equal(socket.terminated, true);
+    } finally { socket.close(); }
+  });
   it('exports centralized heartbeat defaults', () => {
     assert.equal(DEBUGGER_HEARTBEAT_INTERVAL_MS, 30_000);
     assert.equal(DEBUGGER_HEARTBEAT_TIMEOUT_MS, 10_000);

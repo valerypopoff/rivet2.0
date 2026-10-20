@@ -16,6 +16,7 @@ import {
 import { createProcessor } from '../../node/src/api.js';
 import { startDebuggerServer } from '../../node/src/debugger.js';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { createLatestDebuggerFixture } from './helpers/latestDebuggerFixture';
 
 function gate() {
   let release!: () => void;
@@ -35,6 +36,9 @@ for (const outcome of [
   'outside caller',
   'external dependency',
   'member deleted',
+  'HA replay',
+  'HA replay failure',
+  'HA replay shared stop',
 ] as const) {
   test(`one remote connection shows A → B → C ${outcome} without child controls or ID collisions`, async ({ page }) => {
     const defaults = createBuiltInRegistry();
@@ -48,7 +52,8 @@ for (const outcome of [
         started.add(owner);
         context.onPartialOutputs?.({ output: { type: 'string', value: `${owner.toUpperCase()} streaming` } });
         await gates.get(owner)!.promise;
-        if (outcome === 'failure' && owner === 'c') throw new Error('Fixture C failure');
+        if ((outcome === 'failure' || outcome === 'HA replay failure') && owner === 'c')
+          throw new Error('Fixture C failure');
         if (outcome === 'abort' && owner === 'c') {
           context.reportProgress({ message: 'C cleanup diagnostics after abort', percent: 90 });
           await cleanupGate.promise;
@@ -117,19 +122,29 @@ for (const outcome of [
         plugins: [],
       });
     }
-    const debuggerServer = startDebuggerServer({
-      port: 0,
-      host: '127.0.0.1',
-      heartbeatIntervalMs: 0,
-      throttlePartialOutputs: 0,
-    });
-    await once(debuggerServer.webSocketServer, 'listening');
-    const address = debuggerServer.webSocketServer.address();
-    if (typeof address === 'string') throw new Error('Missing debugger address');
-    const commands: string[] = [];
-    debuggerServer.webSocketServer.on('connection', (client) =>
-      client.on('message', (data) => commands.push(data.toString())),
-    );
+    const ha = outcome.startsWith('HA replay');
+    const fixture = ha ? await createLatestDebuggerFixture({ ha: true, throttlePartialOutputs: 0 }) : undefined;
+    const debuggerServer =
+      fixture?.debuggerServer ??
+      startDebuggerServer({
+        port: 0,
+        host: '127.0.0.1',
+        heartbeatIntervalMs: 0,
+        throttlePartialOutputs: 0,
+      });
+    let port = fixture?.port;
+    if (!fixture) {
+      await once(debuggerServer.webSocketServer, 'listening');
+      const address = debuggerServer.webSocketServer.address();
+      if (typeof address === 'string') throw new Error('Missing debugger address');
+      port = address.port;
+    }
+    const commands: string[] = fixture?.commands ?? [];
+    const clientCount = () => fixture?.clientCount() ?? debuggerServer.webSocketServer.clients.size;
+    if (!fixture)
+      debuggerServer.webSocketServer.on('connection', (client) =>
+        client.on('message', (data) => commands.push(data.toString())),
+      );
     const runner = createProcessor(projects.get('a')!, {
       registry,
       remoteDebugger: debuggerServer,
@@ -140,6 +155,11 @@ for (const outcome of [
     let run: ReturnType<typeof runner.run> | undefined;
     let memberDeleted = false;
     try {
+      if (fixture) {
+        const history = fixture.warmHistory();
+        await expect.poll(fixture.ready).toBe(true);
+        await expect.poll(fixture.peerSequence).toBeGreaterThanOrEqual(history);
+      }
       if (outcome === 'member deleted') {
         await page.addInitScript(() => {
           class TreeEventSource extends EventTarget {
@@ -235,7 +255,7 @@ for (const outcome of [
         await expect(tab('b')).toHaveClass(/has-unsaved-changes/);
       }
       const connectFrom =
-        outcome === 'completion' || outcome === 'source reopen'
+        outcome === 'completion' || outcome === 'source reopen' || ha
           ? 'c'
           : outcome === 'mixed versions' || outcome === 'outside caller'
             ? 'b'
@@ -243,9 +263,10 @@ for (const outcome of [
       await tab(connectFrom).click();
       await editor.locator('button.more-menu').click();
       await editor.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
-      await editor.getByPlaceholder('(Default)').fill(`ws://127.0.0.1:${address.port}`);
+      await editor.getByPlaceholder('(Default)').fill(`ws://127.0.0.1:${port}/ws/latest-debugger`);
       await editor.getByRole('button', { name: 'Connect', exact: true }).click();
       await expect(editor.getByText('Stop Remote Debugger', { exact: true })).toBeVisible();
+      if (ha) await expect(editor.getByText(/Latest debugger history was truncated/)).toBeVisible();
       const members =
         outcome === 'outside caller' ? ['b', 'c'] : outcome === 'external dependency' ? ['a', 'b'] : ['a', 'b', 'c'];
       for (const id of members) {
@@ -255,7 +276,7 @@ for (const outcome of [
       await tab('d').click();
       await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
       await tab('a').click();
-      await expect.poll(() => debuggerServer.webSocketServer.clients.size).toBe(1);
+      await expect.poll(clientCount).toBe(1);
       run = runner.run();
       void run.catch(() => {});
       await expect.poll(() => [...started].sort().join(',')).toBe('a,b,c');
@@ -291,6 +312,26 @@ for (const outcome of [
       await expect(output).toContainText('B streaming');
       await tab('c').click();
       await expect(output).toContainText('C streaming');
+      if (fixture) {
+        // Evict the active run's cached start while its live projection is
+        // already admitted, then resume the same logical bundle on owner 0.
+        const history = fixture.warmHistory();
+        await expect.poll(fixture.peerSequence).toBeGreaterThanOrEqual(history);
+        fixture.routeToOwner(0);
+        fixture.disconnectObservers();
+        await expect.poll(fixture.connectionCount).toBe(2);
+        await expect.poll(clientCount).toBe(1);
+        for (const id of ['a', 'b', 'c']) {
+          await tab(id).click();
+          await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
+          await expect(output).toContainText(`${id.toUpperCase()} streaming`);
+        }
+        await expect(editor.getByText(/Graph execution error/)).toHaveCount(0);
+        await tab('d').click();
+        await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
+        await expect(editor.locator('.node[data-nodeid="shared-node"]')).not.toContainText('C streaming');
+        await tab('c').click();
+      }
       if (outcome === 'member deleted') {
         memberDeleted = true;
         await page.evaluate(() => window.dispatchEvent(new Event('fixture-delete-member')));
@@ -302,7 +343,7 @@ for (const outcome of [
         await expect(tab('b')).toHaveClass(/has-unsaved-changes/);
         await expect(output).toContainText('B streaming');
         expect(runner.processor.isRunning).toBe(true);
-        expect(debuggerServer.webSocketServer.clients.size).toBe(1);
+        expect(clientCount()).toBe(1);
         for (const item of gates.values()) item.release();
         await run;
         await expect(output).not.toContainText('B done');
@@ -310,7 +351,7 @@ for (const outcome of [
         await expect(output).toContainText('C done');
         await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
         await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
-        await expect.poll(() => debuggerServer.webSocketServer.clients.size).toBe(0);
+        await expect.poll(clientCount).toBe(0);
         expect(commands).toEqual([]);
         return;
       }
@@ -335,7 +376,7 @@ for (const outcome of [
         await run;
         await expect(sourceNode).not.toContainText('A done');
         await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
-        await expect.poll(() => debuggerServer.webSocketServer.clients.size).toBe(0);
+        await expect.poll(clientCount).toBe(0);
         expect(commands).toEqual([]);
         return;
       }
@@ -359,7 +400,7 @@ for (const outcome of [
         expect(commands).toEqual([]);
         return;
       }
-      if (outcome === 'shared stop') {
+      if (outcome === 'shared stop' || outcome === 'HA replay shared stop') {
         await tab('b').click();
         await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
         await expect(banner).toHaveCount(0);
@@ -376,14 +417,14 @@ for (const outcome of [
         expect(commands).toEqual([]);
         return;
       }
-      if (outcome === 'failure') {
+      if (outcome === 'failure' || outcome === 'HA replay failure') {
         for (const item of gates.values()) item.release();
         await expect(run).rejects.toThrow('failed to process');
         await expect(banner).toContainText('Remote run interrupted');
         await expect(editor.locator('.node[data-nodeid="shared-node"]')).toContainText('Fixture C failure');
         await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
         await expect(editor.locator('[aria-label="Run Activity"]')).toContainText('C source');
-        expect(debuggerServer.webSocketServer.clients.size).toBe(1);
+        expect(clientCount()).toBe(1);
         expect(commands).toEqual([]);
         return;
       }
@@ -419,7 +460,7 @@ for (const outcome of [
       await expect(banner).toHaveCount(0);
       await expect(editor.locator('.run-button').first()).toBeVisible();
       expect(commands).toEqual([]);
-      await expect.poll(() => debuggerServer.webSocketServer.clients.size).toBe(0);
+      await expect.poll(clientCount).toBe(0);
       await tab('a').click();
       await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
       await tab('c').click();
@@ -431,8 +472,11 @@ for (const outcome of [
       if (runner.processor.isRunning) await runner.processor.abort();
       await run?.catch(() => {});
       runner.dispose();
-      for (const client of debuggerServer.webSocketServer.clients) client.terminate();
-      await new Promise<void>((resolve) => debuggerServer.webSocketServer.close(() => resolve()));
+      if (fixture) await fixture.close();
+      else {
+        for (const client of debuggerServer.webSocketServer.clients) client.terminate();
+        await new Promise<void>((resolve) => debuggerServer.webSocketServer.close(() => resolve()));
+      }
     }
   });
 }
