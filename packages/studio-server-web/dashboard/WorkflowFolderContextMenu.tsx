@@ -14,6 +14,7 @@ import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowFolderItem } from './types';
 import { BundleTransferIcon } from './BundleTransferIcon';
 import { WorkflowBundleIcon } from './WorkflowBundleIcon';
+import { useHostedSurfaceDismiss } from './useHostedSurfaceDismiss';
 
 type WorkflowFolderContextMenuProps = {
   isOpen: boolean;
@@ -69,6 +70,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
   onUploadBundle,
   onDelete,
 }) => {
+  useHostedSurfaceDismiss(onClose, isOpen);
   const { context, refs, floatingStyles, update } = useFloating({
     open: isOpen,
     onOpenChange(nextOpen) {

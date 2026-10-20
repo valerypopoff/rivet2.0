@@ -235,6 +235,16 @@ for (const outcome of [
       await authenticateIfNeeded(page);
       await waitForDashboardReady(page);
       const editor = page.frameLocator('iframe.dashboard-editor-frame');
+      const infoButton = editor.getByRole('button', { name: 'Remote Debugger details', exact: true });
+      const details = editor.getByTestId('remote-debugger-details');
+      const showDetails = async (text: string) => {
+        await infoButton.click();
+        await expect(details).toHaveAttribute('role', 'status');
+        await expect(details).toContainText(text);
+        await editor.getByRole('button', { name: 'Done', exact: true }).click();
+        await expect(details).toHaveCount(0);
+        await expect(infoButton).toBeFocused();
+      };
       const tab = (id: string) =>
         editor.locator('.projects-container .project:not(.opening)').filter({ hasText: `Project ${id.toUpperCase()}` });
       for (const id of ['d', 'c', 'b', 'a']) {
@@ -266,6 +276,38 @@ for (const outcome of [
       await editor.getByPlaceholder('(Default)').fill(`ws://127.0.0.1:${port}/ws/latest-debugger`);
       await editor.getByRole('button', { name: 'Connect', exact: true }).click();
       await expect(editor.getByText('Stop Remote Debugger', { exact: true })).toBeVisible();
+      await expect(infoButton).toHaveText('?');
+      await expect(details).toHaveCount(0);
+      const infoBox = (await infoButton.boundingBox())!;
+      const stopBox = (await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).boundingBox())!;
+      const moreBox = (await editor.locator('button.more-menu').boundingBox())!;
+      expect(Math.round(infoBox.width)).toBe(Math.round(moreBox.width));
+      expect(Math.round(infoBox.height)).toBe(Math.round(moreBox.height));
+      for (const property of ['font-family', 'font-size', 'font-weight']) {
+        const expected = await editor
+          .getByRole('button', { name: 'Stop Remote Debugger', exact: true })
+          .evaluate((element, property) => getComputedStyle(element).getPropertyValue(property), property);
+        await expect(infoButton).toHaveCSS(property, expected);
+      }
+      expect(infoBox.x + infoBox.width).toBeLessThan(stopBox.x);
+      expect(stopBox.x + stopBox.width).toBeLessThan(moreBox.x);
+      await showDetails('Remote Debugger is active. Execution details will appear here when available.');
+      await infoButton.click();
+      await editor.getByRole('button', { name: 'Done', exact: true }).press('Escape');
+      await expect(details).toHaveCount(0);
+      await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
+      if (outcome === 'completion') {
+        await infoButton.click();
+        await expect(details).toBeVisible();
+        // The outer dashboard remains a project-navigation surface while an
+        // editor-iframe modal is open. Its state must not leak into another tab.
+        await page.locator('.project-row').filter({ hasText: 'Project D' }).dblclick();
+        await expect(details).toHaveCount(0);
+        await expect(infoButton).toHaveCount(0);
+        await tab(connectFrom).click();
+        await expect(infoButton).toHaveAttribute('aria-expanded', 'false');
+        await expect(details).toHaveCount(0);
+      }
       if (ha) await expect(editor.getByText(/Latest debugger history was truncated/)).toBeVisible();
       const members =
         outcome === 'outside caller' ? ['b', 'c'] : outcome === 'external dependency' ? ['a', 'b'] : ['a', 'b', 'c'];
@@ -301,14 +343,16 @@ for (const outcome of [
       await tab('b').click();
       await expect(output).toContainText('B streaming');
       await expect(output).not.toContainText('C streaming');
-      const banner = editor.getByTestId('remote-observation-banner');
-      await expect(banner).toContainText('through Project A — view only');
-      if (outcome === 'mixed versions') await expect(banner).toContainText('Runtime target: latest and published.');
+      await expect(editor.getByText('through Project A — view only', { exact: false })).toHaveCount(0);
+      await infoButton.click();
+      await expect(details).toContainText('through Project A — view only');
+      if (outcome === 'mixed versions') await expect(details).toContainText('Runtime target: latest and published.');
       await expect(editor.locator('.run-button')).toHaveCount(0);
-      await page.keyboard.press('Control+Enter');
       await editor.getByRole('button', { name: 'Go to debugger source: Project A' }).click();
+      await expect(details).toHaveCount(0);
       await expect(output).toContainText('A streaming');
       await tab('b').click();
+      await page.keyboard.press('Control+Enter');
       await expect(output).toContainText('B streaming');
       await tab('c').click();
       await expect(output).toContainText('C streaming');
@@ -317,10 +361,15 @@ for (const outcome of [
         // already admitted, then resume the same logical bundle on owner 0.
         const history = fixture.warmHistory();
         await expect.poll(fixture.peerSequence).toBeGreaterThanOrEqual(history);
+        await infoButton.click();
+        await expect(details).toContainText('through Project A — view only');
         fixture.routeToOwner(0);
         fixture.disconnectObservers();
         await expect.poll(fixture.connectionCount).toBe(2);
         await expect.poll(clientCount).toBe(1);
+        await expect(details).toContainText('through Project A — view only');
+        await editor.getByRole('button', { name: 'Done', exact: true }).click();
+        await expect(details).toHaveCount(0);
         for (const id of ['a', 'b', 'c']) {
           await tab(id).click();
           await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
@@ -338,7 +387,7 @@ for (const outcome of [
         await expect(page.locator('.project-row').filter({ hasText: 'Project B' })).toHaveCount(0);
         await tab('b').click();
         await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
-        await expect(banner).toContainText('This project no longer belongs to this Remote Debugger session.');
+        await showDetails('This project no longer belongs to this Remote Debugger session.');
         await expect(editor.locator('.run-button').first()).toBeVisible();
         await expect(tab('b')).toHaveClass(/has-unsaved-changes/);
         await expect(output).toContainText('B streaming');
@@ -396,14 +445,15 @@ for (const outcome of [
         for (const item of gates.values()) item.release();
         await aborting;
         await expect(run).rejects.toThrow();
-        await expect(banner).toContainText('Remote run interrupted');
+        await showDetails('Remote run interrupted');
         expect(commands).toEqual([]);
         return;
       }
       if (outcome === 'shared stop' || outcome === 'HA replay shared stop') {
         await tab('b').click();
         await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
-        await expect(banner).toHaveCount(0);
+        await expect(infoButton).toHaveCount(0);
+        await expect(details).toHaveCount(0);
         await expect(editor.locator('.run-button').first()).toBeVisible();
         expect(runner.processor.isRunning).toBe(true);
         for (const id of ['a', 'c']) {
@@ -413,14 +463,14 @@ for (const outcome of [
         for (const item of gates.values()) item.release();
         await run;
         await expect(editor.locator('.run-button').first()).toBeVisible();
-        await expect(banner).toHaveCount(0);
+        await expect(infoButton).toHaveCount(0);
         expect(commands).toEqual([]);
         return;
       }
       if (outcome === 'failure' || outcome === 'HA replay failure') {
         for (const item of gates.values()) item.release();
         await expect(run).rejects.toThrow('failed to process');
-        await expect(banner).toContainText('Remote run interrupted');
+        await showDetails('Remote run interrupted');
         await expect(editor.locator('.node[data-nodeid="shared-node"]')).toContainText('Fixture C failure');
         await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
         await expect(editor.locator('[aria-label="Run Activity"]')).toContainText('C source');
@@ -433,9 +483,17 @@ for (const outcome of [
       await tab('b').click();
       gates.get('b')!.release();
       await expect(output).toContainText('B done');
-      await tab('a').click();
+      await tab('c').click();
+      await infoButton.click();
       gates.get('a')!.release();
       await run;
+      await expect(details).toContainText('Remote run completed.');
+      if (outcome === 'completion') {
+        await page.screenshot({ path: test.info().outputPath('remote-debugger-details.png'), animations: 'disabled' });
+      }
+      await editor.getByRole('button', { name: 'Close modal', exact: true }).click();
+      await expect(details).toHaveCount(0);
+      await tab('a').click();
       await expect(output).toContainText('A done');
       await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
       await expect(editor.locator('[aria-label="Run Activity"]')).toContainText('B source');
@@ -453,18 +511,18 @@ for (const outcome of [
         .getByRole('button', { name: 'Close Run Activity', exact: true })
         .click();
       await tab('d').click();
-      await expect(banner).toHaveCount(0);
+      await expect(infoButton).toHaveCount(0);
       await expect(editor.locator('.node[data-nodeid="shared-node"]')).not.toContainText('C done');
       await tab('b').click();
       await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
-      await expect(banner).toHaveCount(0);
+      await expect(infoButton).toHaveCount(0);
       await expect(editor.locator('.run-button').first()).toBeVisible();
       expect(commands).toEqual([]);
       await expect.poll(clientCount).toBe(0);
       await tab('a').click();
       await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
       await tab('c').click();
-      await expect(banner).toHaveCount(0);
+      await expect(infoButton).toHaveCount(0);
       await expect(output).toContainText('C done');
     } finally {
       cleanupGate.release();

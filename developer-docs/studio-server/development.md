@@ -1437,12 +1437,14 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.28.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.29.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release adds explicit bundle containers, safe duplication and portable
-round trips, bundle-scoped Subgraph access/debugging and the deployment launcher's
-fenced-singleton GKE validation fix. Bump all five manifests together even when
-only one workspace has runtime changes; run the repository-structure check before
+This minor release adds confirmed deletion of non-empty bundles and one-click
+saved-version duplication, and fixes bundle conversion guards, hosted Subgraph
+authorization, HA debugger replay/reconnects and cross-surface context menus.
+The explicit-bundle primitive was already covered by `1.28.0`.
+Bump all five manifests together even when only one workspace has runtime
+changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
 [Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-20) for the
 separate desktop, sidecar, documentation and public runtime version decisions.

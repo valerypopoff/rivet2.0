@@ -89,6 +89,171 @@ async function setupFocusFixture(page: Page): Promise<string[]> {
   return writes;
 }
 
+test('reloading an editor with an open menu releases its dashboard listeners', async ({ page }) => {
+  await setupFocusFixture(page);
+  await page.evaluate(() => {
+    const frameWindow = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame')!.contentWindow! as Window &
+      typeof globalThis;
+    const active = new Map<string, Set<EventListenerOrEventListenerObject>>();
+    const sync = () => {
+      document.documentElement.dataset.editorMenuListeners = String(
+        [...active.values()].reduce((sum, listeners) => sum + listeners.size, 0),
+      );
+    };
+    const add = document.addEventListener.bind(document);
+    const remove = document.removeEventListener.bind(document);
+    document.addEventListener = ((type, listener, options) => {
+      if (listener instanceof frameWindow.Function && ['pointerdown', 'click', 'contextmenu'].includes(type)) {
+        const listeners = active.get(type) ?? new Set();
+        listeners.add(listener);
+        active.set(type, listeners);
+        sync();
+      }
+      add(type, listener, options);
+    }) as Document['addEventListener'];
+    document.removeEventListener = ((type, listener, options) => {
+      if (listener) active.get(type)?.delete(listener);
+      sync();
+      remove(type, listener, options);
+    }) as Document['removeEventListener'];
+    sync();
+  });
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  await editor.locator('.node-canvas').click({ button: 'right', position: { x: 600, y: 300 } });
+  await expect(editor.locator('.context-menu-search input:visible')).toBeVisible();
+  const listeners = page.locator('html');
+  await expect(listeners).toHaveAttribute('data-editor-menu-listeners', '3');
+  await Promise.all([
+    page.waitForEvent('framenavigated', (frame) => frame.parentFrame() === page.mainFrame()),
+    page
+      .locator('iframe.dashboard-editor-frame')
+      .evaluate((frame: HTMLIFrameElement) => frame.contentWindow!.location.reload()),
+  ]);
+  await expect(listeners).toHaveAttribute('data-editor-menu-listeners', '0', { timeout: 2_000 });
+});
+
+for (const target of ['editor', 'dashboard'] as const) {
+  test(`keyboard activation in ${target} dismisses the other surface's context menu`, async ({ page }) => {
+    const writes = await setupFocusFixture(page);
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
+    const menu =
+      target === 'editor'
+        ? page.getByRole('menu', { name: 'Actions for Focus fixture' })
+        : editor.locator('.context-menu-search input:visible');
+    if (target === 'editor') {
+      await page.locator('.project-row', { hasText: 'Focus fixture' }).click({ button: 'right' });
+    } else {
+      await editor.locator('.node-canvas').click({ button: 'right', position: { x: 600, y: 300 } });
+    }
+    await expect(menu).toBeVisible();
+    const control =
+      target === 'editor'
+        ? editor.getByRole('button', { name: 'Project settings', exact: true })
+        : page.locator('.active-project-more-button');
+    await control.focus();
+    await expect(menu).toBeVisible(); // Focus/Tab alone is not an outside click.
+    await control.press('Enter');
+    const modal =
+      target === 'editor'
+        ? editor.getByTestId('project-settings-modal')
+        : page.getByRole('button', { name: 'Close project settings' });
+    await expect(modal).toBeVisible();
+    await expect(menu).not.toBeVisible({ timeout: 2_000 });
+    expect(writes).toEqual([]);
+  });
+}
+
+for (const kind of ['project', 'folder'] as const) {
+  test(`${kind} context menu dismisses on editor input without consuming the click`, async ({ page }) => {
+    const writes = await setupFocusFixture(page);
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
+    const row =
+      kind === 'project'
+        ? page.locator('.project-row', { hasText: 'Focus fixture' })
+        : page.locator('.folder-row', { hasText: 'Focus folder' });
+    const menu = page.getByRole('menu', {
+      name: `Actions for ${kind === 'project' ? 'Focus fixture' : 'Focus folder'}`,
+    });
+    await row.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    await editor.getByRole('button', { name: 'Project settings', exact: true }).click();
+    await expect(menu).toHaveCount(0);
+    const settings = editor.getByTestId('project-settings-modal');
+    await expect(settings).toBeVisible();
+    await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
+
+    // Touch/pen and keyboard context-menu events use the same outside surface.
+    for (const pointerType of ['touch', 'pen']) {
+      await row.click({ button: 'right' });
+      await expect(menu).toBeVisible();
+      await editor.locator('body').dispatchEvent('pointerdown', { pointerType, pointerId: 7, isPrimary: true });
+      await expect(menu).toHaveCount(0);
+    }
+    await row.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    await editor.locator('body').dispatchEvent('contextmenu');
+    await expect(menu).toHaveCount(0);
+
+    // Own menu-item clicks still run once and preserve inline rename focus.
+    await row.click({ button: 'right' });
+    await menu.getByRole('menuitem', { name: `Rename ${kind}` }).click();
+    const rename = page.getByRole('textbox', {
+      name: `Rename ${kind === 'project' ? 'Focus fixture' : 'Focus folder'}`,
+    });
+    await expect(rename).toBeFocused();
+    await rename.fill('unchanged until committed');
+    await expect(rename).toBeFocused();
+    await rename.press('Escape');
+    expect(writes).toEqual([]);
+  });
+}
+
+test('editor context menus dismiss into dashboard input without stealing focus or closing dialogs', async ({
+  page,
+}) => {
+  const writes = await setupFocusFixture(page);
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const canvas = editor.locator('.node-canvas');
+  await canvas.click({ button: 'right', position: { x: 600, y: 300 } });
+  const search = editor.locator('.context-menu-search input:visible');
+  await expect(search).toBeVisible();
+  await search.fill('Text');
+  await expect(search).toBeFocused();
+  await expect(search).toBeVisible();
+  // A real dashboard control still receives the original click.
+  await page.locator('.project-row', { hasText: 'Focus fixture' }).click({ button: 'right' });
+  await expect(search).not.toBeVisible();
+  await page.getByRole('menuitem', { name: 'Rename project' }).click();
+  const rename = page.getByRole('textbox', { name: 'Rename Focus fixture' });
+  await rename.fill('dashboard typing');
+  await expect(rename).toBeFocused();
+  await rename.press('Escape');
+
+  const graph = editor.getByRole('button', { name: 'Main Graph', exact: true });
+  await graph.click({ button: 'right' });
+  const graphMenu = editor.locator('.graph-item-context-menu');
+  await expect(graphMenu).toBeVisible();
+  await page.locator('.active-project-more-button').click();
+  await expect(graphMenu).toHaveCount(0);
+  const endpoint = page.getByRole('textbox', { name: 'Workflow endpoint path' });
+  await endpoint.fill('still-focused');
+  await expect(endpoint).toBeFocused();
+  await page.getByRole('button', { name: 'Close project settings' }).click();
+
+  // Cross-surface dismissal is menu-only: an editor dialog stays open.
+  await editor.getByRole('button', { name: 'Project settings', exact: true }).click();
+  const settings = editor.getByTestId('project-settings-modal');
+  await expect(settings).toBeVisible();
+  await page.locator('.project-row', { hasText: 'Focus fixture' }).click({ button: 'right' });
+  const dashboardMenu = page.getByRole('menu', { name: 'Actions for Focus fixture' });
+  await expect(dashboardMenu).toBeVisible();
+  await settings.getByRole('button', { name: 'General', exact: true }).click();
+  await expect(dashboardMenu).toHaveCount(0);
+  await expect(settings).toBeVisible();
+  await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
+  expect(writes).toEqual([]);
+});
+
 for (const kind of ['project', 'folder'] as const) {
   test(`${kind} context menu owns pointer hover and clicks over the sidebar splitter`, async ({ page }) => {
     const writes = await setupFocusFixture(page);

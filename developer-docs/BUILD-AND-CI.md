@@ -1714,6 +1714,26 @@ workflow does not turn an already-published package into a hard failure.
 
 ### Prepared release versions (2026-10-20)
 
+All tracks were last bumped in `c71d4b1dd`. Changes through `6e0e9b27e` and the
+debugger-information, desktop target-label and cross-surface context-menu
+fixes prepare the following release versions:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.28.0` → `2.28.1` | HA debugger/bundle observation fixes and existing debugger/desktop-label UI refinements. |
+| Public Core/Node/Evaluations/CLI | `2.21.0` → `2.22.0` | Node's additive optional debugger broadcast adapter hook; other packages are required family companions. |
+| App executor | `2.14.0` → `2.14.1` | Source-bundled Node runtime fix companion; no new sidecar feature. |
+| Documentation | `2.21.0` → `2.22.0` | User-facing bundle creation, one-click duplication and non-empty deletion guidance. |
+| Five private Studio Server packages | `1.28.0` → `1.29.0` | Adds confirmed non-empty bundle deletion and simplifies duplication; includes authorization, HA replay and UI correctness fixes. |
+
+Desktop Tauri/Cargo metadata and the CLI Docker fallback are synchronized. No
+dependency range, Yarn lockfile, Helm version or managed-schema contract change
+is required for this version update. See the [package inventory](PACKAGES.md)
+for package-local changes versus release companions. Publication, CI and
+production deployment remain separate actions.
+
+### Previous prepared release versions — explicit bundles (2026-10-20)
+
 All tracks' latest actual version changes are in `c2e1c3bc3`. The subsequent
 explicit-bundle change (`2d39d63ad`) and guarded singleton-validation launcher
 correction prepare these compatible minor releases:

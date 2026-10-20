@@ -4,6 +4,7 @@
 
 import { useFloating, autoUpdate, shift, useMergeRefs } from '@floating-ui/react';
 import { useRef, useState, useCallback, useEffect } from 'react';
+import { useHostedSurfaceDismiss } from '../../dashboard/useHostedSurfaceDismiss';
 
 export type ContextMenuData = {
   x: number;
@@ -43,6 +44,11 @@ export const useContextMenu = () => {
       activeElement.blur();
     }
   }, []);
+  const dismissFromDashboard = useCallback(() => {
+    blurContextMenuFocus();
+    setShowContextMenu(false);
+  }, [blurContextMenuFocus]);
+  useHostedSurfaceDismiss(dismissFromDashboard, showContextMenu);
 
   const { refs, floatingStyles, update } = useFloating({
     placement: 'bottom-start',

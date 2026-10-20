@@ -110,8 +110,19 @@ renaming folders. No database migration is needed for these checks.
 
 Desktop cross-project target bindings remain read-only in the editor, but are
 executable from an extracted portable bundle (or a compatible project loader).
-The node's helper text must not imply that Studio Server is required to run them.
-The desktop bundle Playwright check covers this message and actual child execution.
+Desktop target labels use the version-qualified referenced project snapshot to
+show the project title and full graph name, including graph folders. An opened
+project tab's title is a fallback while reference discovery is pending; unknown
+project/graph names fall back to their stored IDs. This is display-only: it does
+not rewrite bindings, choose another version or make cross-project targets editable.
+The old “Run this target from…” instruction is not shown in node bodies or settings.
+Read-only target labels wrap long/unbroken names inside the node rather than
+overflowing the canvas; full graph paths are preserved, not truncated or rewritten.
+The desktop bundle Playwright check covers readable labels before Run, absence of
+the instruction, long names in a narrow node, tab-name/graph-ID fallback while a
+snapshot refresh is loading, resolved names after completion, tab switching and
+actual child execution. Labels do not retain the previous tab's reference
+snapshot while discovery is pending.
 
 ### Subgraph encapsulation
 
@@ -366,6 +377,19 @@ archive's root artifact is only an initial Desktop/Node selection, not an
 entry-project property on the container.
 
 Remote Debugger grouping uses server-qualified explicit bundle identity only.
+The action bar shows one square **?** button immediately before **Stop Remote
+Debugger**, sharing the overflow button's dimensions but using the Stop button's
+text font and size (not the overflow icon's larger font). Observation statuses,
+runtime-version information, warnings and **Go to debugger source** actions live
+in the standard **Remote Debugger details** modal instead of inline banners.
+Details update while open; dismissing the modal never disconnects the session.
+The details retain their live `status` role for screen-reader announcements.
+Source navigation closes the modal, and switching projects resets its open state.
+Detached-session notices remain accessible through **?** even without a Stop button.
+`remote-bundle-observation.spec.ts` verifies button dimensions/placement, focus
+return, Escape/Done/close dismissal, source navigation, live terminal details,
+project switches through the outer dashboard and reconnects while open,
+alongside the existing streaming, mixed-version, membership and HA replay cases.
 Cross-project calls never expand membership; standalone projects stay independent.
 Explicit desktop manifest grouping remains supported. Start/stop from any opened
 member. Closed members are not opened automatically. Membership changes reconcile
