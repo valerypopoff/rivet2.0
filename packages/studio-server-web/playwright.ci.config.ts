@@ -26,6 +26,7 @@ export default defineConfig({
     'cross-project-subgraph-loading.spec.ts',
     'subgraph-bundle-scope.spec.ts',
     'remote-bundle-observation.spec.ts',
+    'ha-latest-replay.spec.ts',
     'recording-playback-history.spec.ts',
     'graph-deletion-references.spec.ts',
     'node-editor-ownership.spec.ts',

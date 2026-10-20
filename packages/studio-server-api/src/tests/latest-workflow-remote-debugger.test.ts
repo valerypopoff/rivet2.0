@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import { PassThrough } from 'node:stream';
 import { once } from 'node:events';
+import { createHmac, randomUUID } from 'node:crypto';
+import type { GraphProcessor, Project, ProjectId, GraphId } from '@valerypopoff/rivet2-core';
 import test from 'node:test';
 import { createReviewedBackendPublicationFixtures, createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';
 import WebSocket from 'ws';
@@ -64,7 +66,7 @@ process.env.RIVET_LATEST_APPS_BASE_PATH = '/apps-latest';
 process.env.RIVET_WEB_APPS_BASE_PATH = '/apps';
 process.env.RIVET_LATEST_WEB_APPS_BASE_PATH = '/apps-latest';
 
-const { getExpectedProxyAuthToken } = await import('../auth.js');
+const { getExpectedProxyAuthToken, getExpectedUiSessionToken } = await import('../auth.js');
 const { writeTrustedClientSettings } = await import('../trusted-client-settings.js');
 const { createApiApp } = await import('../app.js');
 const {
@@ -617,5 +619,139 @@ test('multiple debugger clients on the single backend all observe latest runs', 
     closeDebuggerSocket(firstSocket);
     closeDebuggerSocket(secondSocket);
     await server.close();
+  }
+});
+
+test('production HA initializer preserves authenticated large-history replay and real workflow observations', async () => {
+  const identity = randomUUID();
+  const configuration = {
+    RIVET_HA_PROTOCOL: '1',
+    RIVET_HA_PEER_LIMIT: '2',
+    RIVET_POD_NAME: 'backend-0',
+    RIVET_PROCESS_INCARNATION: identity,
+    RIVET_HA_HEADLESS_SERVICE: 'fixture.invalid',
+    RIVET_HA_BACKEND_NAME: 'backend',
+    RIVET_BACKEND_API_PORT: '8080',
+    RIVET_BACKEND_EXECUTOR_PORT: '21889',
+    RIVET_LEGACY_RESTORE_INSTALLATION: 'ha-initializer-fixture',
+    RIVET_SERVER_UI_AUTH_MODE: 'key',
+  };
+  const previous = new Map(Object.keys(configuration).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, configuration);
+  const server = http.createServer();
+  const clients: WebSocket[] = [];
+  let listener: Awaited<ReturnType<typeof listenTestServer>> | undefined;
+  let runner: ReturnType<typeof rivetNode.createProcessor> | undefined;
+  const wait = async (condition: () => boolean) => {
+    const deadline = Date.now() + 10_000;
+    while (!condition()) {
+      assert.ok(Date.now() < deadline, 'Production HA debugger fixture did not settle');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  try {
+    const debuggerServer = initializeLatestWorkflowRemoteDebugger(server)!;
+    listener = await listenTestServer(server);
+    const base = listener.baseUrl.replace(/^http/, 'ws');
+    assert.equal((await expectWebSocketConnectionFailure(`${base}/ws/latest-debugger`)).statusCode, 401);
+    assert.equal(
+      (await expectWebSocketConnectionFailure(`${base}/ws/latest-debugger`, { headers: trustedProxyHeaders() }))
+        .statusCode,
+      401,
+    );
+    const incarnation = randomUUID();
+    const peerHeaders = {
+      'x-rivet-ha-pod': 'backend-1',
+      'x-rivet-ha-incarnation': incarnation,
+      'x-rivet-ha-peer': createHmac('sha256', process.env.RIVET_KEY!)
+        .update(
+          JSON.stringify([
+            'rivet-latest-peer-v1',
+            configuration.RIVET_LEGACY_RESTORE_INSTALLATION,
+            'backend-1',
+            incarnation,
+          ]),
+        )
+        .digest('hex'),
+    };
+    for (const headers of [
+      { ...peerHeaders, 'x-rivet-ha-peer': '0'.repeat(64) },
+      { ...peerHeaders, origin: 'https://public.invalid' },
+    ])
+      assert.equal((await expectWebSocketConnectionFailure(`${base}/internal/ha/latest`, { headers })).statusCode, 401);
+    for (let i = 0; i < 40; i++)
+      debuggerServer.broadcast({} as GraphProcessor, 'trace', {
+        marker: `history-${i}`,
+        padding: 'x'.repeat(1024 * 1024),
+      });
+    const observe = async (peer = false) => {
+      const client = new WebSocket(`${base}${peer ? '/internal/ha/latest' : '/ws/latest-debugger'}`, {
+        headers: peer
+          ? peerHeaders
+          : { ...trustedProxyHeaders(), cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` },
+      });
+      clients.push(client);
+      const frames: Array<{
+        message: string;
+        rivetEventId?: string;
+        data?: { marker?: string; code?: string; execution?: { projectId?: string } };
+      }> = [];
+      client.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString());
+        if (frame.message === 'trace') delete frame.data.padding;
+        frames.push(frame);
+      });
+      await once(client, 'open');
+      await wait(() => frames.some((frame) => frame.data?.marker === 'history-39'));
+      assert.equal(client.readyState, WebSocket.OPEN);
+      if (peer) assert.ok(frames.every((frame) => frame.rivetEventId));
+      else {
+        assert.equal(frames[0]!.message, 'latest-session');
+        assert.equal(frames.filter((frame) => frame.data?.code === 'history-truncated').length, 1);
+      }
+      return { client, frames };
+    };
+    const browser = await observe(),
+      peer = await observe(true);
+    const graphId = 'main' as GraphId;
+    const project: Project = {
+      metadata: { id: 'ha-live-project' as ProjectId, title: 'HA live project', description: '', mainGraphId: graphId },
+      graphs: { [graphId]: { metadata: { id: graphId, name: 'Main Graph' }, nodes: [], connections: [] } },
+      plugins: [],
+    };
+    runner = rivetNode.createProcessor(project, { remoteDebugger: debuggerServer });
+    await runner.run();
+    await wait(() =>
+      [browser, peer].every((observer) =>
+        observer.frames.some(
+          (frame) => frame.message === 'done' && frame.data?.execution?.projectId === project.metadata.id,
+        ),
+      ),
+    );
+    browser.client.terminate();
+    const resumed = await observe();
+    await runner.run();
+    const fence = `live-fence-${randomUUID()}`;
+    debuggerServer.broadcast({} as GraphProcessor, 'trace', { marker: fence });
+    await wait(() =>
+      [resumed, peer].every((observer) => observer.frames.some((frame) => frame.data?.marker === fence)),
+    );
+    for (const observer of [resumed, peer]) {
+      const ids = observer.frames.flatMap((frame) => (frame.rivetEventId ? [frame.rivetEventId] : []));
+      assert.equal(new Set(ids).size, ids.length);
+      const sequences = ids.map((id) => Number(id.split(':').at(-1)));
+      assert.ok(sequences.every((sequence, i) => i === 0 || sequence > sequences[i - 1]!));
+      assert.ok(!observer.frames.some((frame) => frame.message === 'error'));
+      assert.equal(observer.client.readyState, WebSocket.OPEN);
+    }
+  } finally {
+    runner?.dispose();
+    clients.forEach((client) => closeWebSocket(client));
+    await resetLatestWorkflowRemoteDebuggerForTests();
+    await listener?.close();
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });

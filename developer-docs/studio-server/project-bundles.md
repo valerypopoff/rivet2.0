@@ -202,6 +202,25 @@ check opens the moved project while follow-up tree reads fail.
 Verification owners: `remap-bundle-project.test.ts`, schema migration tests,
 registry/observation tests, the explicit-container contract in `test:async-managed`,
 and headless `explicit-bundles.spec.ts` / `remote-bundle-observation.spec.ts`.
+The debugger browser matrix includes HA replay completion, child failure and
+active shared-stop cases:
+open A/B/C from one explicit bundle, connect from C, and execute A → B → C on
+another backend. It fills the bounded history before connecting and again during
+streaming (evicting the active start), then reconnects the one shared socket onto
+the other backend. Every member retains **Stop Remote Debugger**, its own live
+node outputs and Run Activity; completion/failure settles the correct member
+views. An unrelated standalone tab stays independent, and stopping from B
+disconnects the shared observer without sending workflow controls. Existing
+non-HA cases still cover abort, mixed versions, source reopen, external calls and
+membership deletion. `helpers/latestDebuggerFixture.ts` supplies the same real
+two-owner authenticated relay used by the focused HA replay browser tests; no
+production services or cloud rehearsal are involved.
+Transport replay warnings are consumed before project-event routing, so a
+history gap cannot masquerade as a terminal graph error in any bundle member.
+Per-owner event deduplication and the logical session survive physical reconnects;
+bundle membership and tab-lifetime fences are not reset by reconnecting.
+Only executed members have new flow data. Closed tabs are not opened automatically,
+and a newly opened member does not retroactively acquire an already-admitted run.
 `managed-bundles.test.ts` covers source changes during artifact preparation and
 failure of a later upload, asserting that no copied metadata becomes visible and
 only prepared copy artifacts are offered for reference-aware cleanup.
