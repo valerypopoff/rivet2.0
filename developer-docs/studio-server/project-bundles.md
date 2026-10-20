@@ -14,6 +14,57 @@ but bundles cannot nest. Existing folders are not converted automatically.
 Conversion back to an ordinary folder removes grouping only. Projects, references
 and publications survive; only empty containers can be deleted.
 
+**Convert to bundle** validates every descendant project's saved draft, endpoint
+publication and independently pinned published web-app snapshots before changing
+the folder. Each distinct revision is read once. Authored cross-project bindings
+(Subgraph nodes, legacy references/aliases, Library source nodes, disabled nodes and
+saved variants) cannot target a project in another explicit bundle. Internal targets
+and ordinary external projects remain allowed. A 409 response identifies the caller,
+saved version, target and other bundle. Conversion failures open a persistent,
+accessible modal, not a toast, without optimistically changing the tree. The
+`bundle_cross_bundle_reference` error code selects specific repair guidance:
+retarget calls, save drafts and republish/unpublish affected endpoint or web-app
+snapshots, then explicitly retry conversion. Other errors retain their details
+and warn that a lost response needs a tree refresh before retrying; they do not
+claim a write was rolled back. The shared modal provides backdrop, focus trapping,
+Escape/close actions and a scrolling body with a visible footer on short screens.
+Closing never retries a request. Local-upgrade prompts stay suppressed while it
+is open. The browser regression covers actionable errors, no duplicate toast,
+explicit retry/reopen, keyboard dismissal and long diagnostics on a short viewport.
+Unsaved editor content is not inspected or saved automatically; missing Library
+definitions do not hide other authored bindings.
+
+`managed/bundle-conversion.ts` reads immutable project blobs outside topology/row
+locks, with at most 256 members and 128 MiB across selected saved snapshots; datasets
+are not downloaded. Before assigning the bundle ID, the existing topology lease
+and member row locks protect a recheck of paths, draft/endpoint/web-app revisions and
+current target membership through commit. Concurrent source edits require a retry;
+concurrent target conversion/moves cannot bypass the final membership check.
+Web-app publication/unpublication also locks its workflow row, fencing changes to
+independent app revision bindings until conversion commits. Unreadable/mismatched
+source revisions fail closed; parse failures identify the project/version without
+logging or returning snippets from its contents. Conversion back to ordinary
+folders and idempotent requests for an existing bundle do not scan project blobs.
+This guards new conversions, not an automatic repair of existing invalid bundles
+or a global reference lock on subsequent authoring/moves. Empty bundle creation is
+unchanged. Regression owners: `managed-bundles.test.ts`,
+`remap-bundle-project.test.ts`, the real PostgreSQL/MinIO explicit-bundle contract,
+and the rejected-conversion case in headless `explicit-bundles.spec.ts`.
+
+Focused verification from the repository root:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/managed-bundles.test.ts src/tests/remap-bundle-project.test.ts src/tests/project-bundle-import.test.ts src/tests/project-bundle.test.ts src/tests/managed-subgraph-access.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api test:async-managed
+yarn studio-server:ui:observe explicit-bundles.spec.ts
+```
+
+The integration command provisions and removes only its own disposable local
+PostgreSQL/MinIO containers. The browser command uses the local application or
+preview at `PLAYWRIGHT_BASE_URL`; set `PLAYWRIGHT_HEADLESS=1` and
+`PLAYWRIGHT_SLOW_MO=0`. Its API fixtures do not send conversion writes to a live
+deployment. No Kubernetes rehearsal or database migration is required for this guard.
+
 Bundle creation/duplication and ordinary folder creation/rename validate their
 complete destination through the same folder-path rules used by later operations.
 In particular, folder names ending in `.rivet-project` are rejected before storage

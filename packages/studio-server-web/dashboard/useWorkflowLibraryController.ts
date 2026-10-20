@@ -24,6 +24,7 @@ import { useWorkflowLibraryTreeSync } from './useWorkflowLibraryTreeSync';
 import { useWorkflowProjectVersionActions } from './useWorkflowProjectVersionActions';
 import { isPlainF2ShortcutEvent } from './editorBridgeFocus';
 import { requestWorkflowBundle } from './workflowApi';
+import type { WorkflowBundleConversionFailure } from './WorkflowBundleConversionErrorModal';
 
 export const instantWarningToastTransition = cssTransition({
   enter: 'workflow-toast-instant-enter',
@@ -156,6 +157,7 @@ export function useWorkflowLibraryController(options: {
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [bundleUploadFolder, setBundleUploadFolder] = useState<WorkflowFolderItem | null>(null);
   const [bundleDialog, setBundleDialog] = useState<{ source?: WorkflowFolderItem; parent: string } | null>(null);
+  const [bundleConversionFailure, setBundleConversionFailure] = useState<WorkflowBundleConversionFailure | null>(null);
   const bundleActionPending = useRef(false);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
   const selection = useWorkflowLibrarySelection({
@@ -518,11 +520,18 @@ export function useWorkflowLibraryController(options: {
     )
       return;
     bundleActionPending.current = true;
+    setBundleConversionFailure(null);
     try {
       await requestWorkflowBundle('/kind', { relativePath: folder.relativePath, enabled: !folder.bundleId });
       await refresh(false);
     } catch (failure) {
-      toast.error(failure instanceof Error ? failure.message : 'Bundle conversion failed.');
+      setBundleConversionFailure({
+        folderPath: folder.relativePath,
+        creatingBundle: !folder.bundleId,
+        message: failure instanceof Error ? failure.message : 'Bundle conversion failed.',
+        referenceConflict:
+          failure instanceof Error && 'code' in failure && failure.code === 'bundle_cross_bundle_reference',
+      });
     } finally {
       bundleActionPending.current = false;
     }
@@ -743,6 +752,8 @@ export function useWorkflowLibraryController(options: {
   return {
     explicitBundles,
     bundleDialog,
+    bundleConversionFailure,
+    closeBundleConversionFailure: () => setBundleConversionFailure(null),
     captureBundleEdits: onCaptureProjectReconciliation,
     closeBundleDialog: () => setBundleDialog(null),
     handleCreateBundle: startBundleCreate,

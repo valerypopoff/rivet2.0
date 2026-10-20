@@ -8,6 +8,7 @@ import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
 import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
 import { WorkflowBundleUploadModal } from './WorkflowBundleUploadModal';
 import { WorkflowBundleModal } from './WorkflowBundleModal';
+import { WorkflowBundleConversionErrorModal } from './WorkflowBundleConversionErrorModal';
 import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
@@ -69,6 +70,12 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      {controller.bundleConversionFailure ? (
+        <WorkflowBundleConversionErrorModal
+          failure={controller.bundleConversionFailure}
+          onClose={controller.closeBundleConversionFailure}
+        />
+      ) : null}
       {controller.bundleDialog ? (
         <WorkflowBundleModal
           key={`${controller.bundleDialog.source?.bundleId ?? 'new'}:${controller.bundleDialog.parent}`}
@@ -99,6 +106,7 @@ export const WorkflowLibraryModals: FC<{
       <LocalStorageUpgradePrompt
         suppressed={
           scheduledRunsOpen ||
+          controller.bundleConversionFailure != null ||
           controller.bundleDialog != null ||
           controller.bundleOpen ||
           controller.bundleUploadFolder != null ||
