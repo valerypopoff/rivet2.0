@@ -26,7 +26,7 @@ export const requireOperatorAuth: RequestHandler = (req, res, next) => {
       isTrustedExecutorRequest(req) &&
       ((req.method === 'GET' &&
         (req.path === '/workflows/execution-environment' ||
-          /^\/workflows\/subgraph-projects\/[^/]+\/execution$/.test(req.path))) ||
+          /^\/workflows\/subgraph-projects\/[^/]+\/(?:execution|access)$/.test(req.path))) ||
         (req.method === 'POST' && req.path === '/workflows/local-editor-recordings/subgraph-run') ||
         (req.method === 'POST' && req.path === '/workflows/local-catalog-io') ||
         req.path === '/workflows/llm-profile-health' ||

@@ -26,7 +26,10 @@ test('bundle encapsulation permits same-bundle and ordinary targets but rejects 
       },
     } as unknown as Pool;
     if (allowed) await validateManagedSubgraphTarget(pool, query);
-    else await assert.rejects(validateManagedSubgraphTarget(pool, query), { status: 403 });
+    else await assert.rejects(validateManagedSubgraphTarget(pool, query), {
+      status: 403,
+      code: 'subgraph_bundle_scope_forbidden',
+    });
     assert.equal(reads, 1, 'one live membership snapshot, without reading project blobs');
   }
   await assert.rejects(validateManagedSubgraphTarget({ query: async () => ({ rows: [] }) } as unknown as Pool, query), {

@@ -167,6 +167,8 @@ jobs:
         run: yarn check:compiled-workspace-exports
       - name: Run pure web tests
         run: yarn studio-server:verify:web-pure
+      - name: Verify hosted executor Subgraph loader
+        run: yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Studio Server web tests"

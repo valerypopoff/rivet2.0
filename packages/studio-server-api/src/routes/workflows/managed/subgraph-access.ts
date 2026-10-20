@@ -28,5 +28,6 @@ export async function validateManagedSubgraphTarget(pool: Pool, target: Subgraph
     throw createHttpError(
       403,
       'This project belongs to a bundle. Only projects in the same bundle can reference it through a Subgraph node.',
+      { code: 'subgraph_bundle_scope_forbidden' },
     );
 }

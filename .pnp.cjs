@@ -16701,6 +16701,7 @@ const RAW_RUNTIME_STATE =
           ["@valerypopoff/rivet-app-executor", "workspace:packages/app-executor"],\
           ["@valerypopoff/rivet-studio-server-executor", "workspace:packages/studio-server-executor"],\
           ["@valerypopoff/rivet-studio-server-shared", "workspace:packages/studio-server-shared"],\
+          ["@valerypopoff/rivet2-node", "workspace:packages/node"],\
           ["esbuild", "npm:0.25.12"],\
           ["tsx", "npm:4.23.0"]\
         ],\

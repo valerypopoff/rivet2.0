@@ -92,6 +92,67 @@ test('real HTTP operator gate ignores stale proxy hostname approval', () => isol
   } finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
 }));
 
+for (const mode of ['key', 'oauth'] as const) {
+  test(`executor Subgraph permission route has a narrow service exception in ${mode} mode`, () =>
+    isolated(async () => {
+      process.env.RIVET_SERVER_UI_AUTH_MODE = mode;
+      await writeTrustedClientSettings({ trustedClients: [] });
+      const app = express();
+      app.use('/api', requireOperatorAuth);
+      app.use((_req, res) => res.sendStatus(204));
+      app.use((error: { status?: number }, _req: express.Request, res: express.Response, _next: express.NextFunction) =>
+        res.sendStatus(error.status ?? 500),
+      );
+      const server = http.createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const base = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+      const headers = {
+        'x-rivet-proxy-auth': getExpectedProxyAuthToken(),
+        'x-rivet-executor-auth': getExpectedExecutorAuthToken(),
+      };
+      try {
+        for (const suffix of ['access', 'execution']) {
+          const response = await fetch(
+            `${base}/api/workflows/subgraph-projects/target/${suffix}?version=latest&callerProjectId=caller`,
+            { headers },
+          );
+          assert.equal(response.status, 204, `${suffix} must work without an operator cookie or trusted IP`);
+        }
+        for (const supplied of [
+          {},
+          { ...headers, 'x-rivet-proxy-auth': 'wrong' },
+          { ...headers, 'x-rivet-executor-auth': 'wrong' },
+          { 'x-rivet-proxy-auth': headers['x-rivet-proxy-auth'] },
+          { 'x-rivet-executor-auth': headers['x-rivet-executor-auth'] },
+        ] as Record<string, string>[]) {
+          assert.equal(
+            (await fetch(`${base}/api/workflows/subgraph-projects/target/access`, { headers: supplied })).status,
+            403,
+          );
+        }
+        for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
+          assert.equal(
+            (await fetch(`${base}/api/workflows/subgraph-projects/target/access`, { headers, method })).status,
+            403,
+            method,
+          );
+        for (const path of [
+          '/api/workflows/subgraph-projects/target/preview',
+          '/api/workflows/subgraph-projects/target/access/extra',
+          '/api/workflows/subgraph-projects/target/access-more',
+          '/api/workflows/subgraph-projects/access',
+          '/api/app-settings',
+          '/api/projects',
+          '/api/workflows/tree',
+        ])
+          assert.equal((await fetch(base + path, { headers })).status, 403, path);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }));
+}
+
 test('policy revocation escapes the opening request snapshot', () => isolated(async () => {
   await writeTrustedClientSettings({ trustedClients: ['10.20.0.0/16'] });
   let revoked = 0;

@@ -131,6 +131,80 @@ changes. A move/conversion can therefore invalidate an old outside call; the nex
 run fails clearly instead of selecting a different project. In-flight graph runs
 are not protected by a topology lock or retroactively aborted.
 
+Hosted Node permission checks are service requests, not browser operator sessions.
+The API operator gate admits only authenticated executor **GET** requests to
+`/api/workflows/subgraph-projects/:projectId/execution` and `/access` (in addition
+to the executor's other explicitly listed service routes). Both the proxy and
+executor tokens are required; this works with key or OAuth UI authentication,
+without a UI cookie or trusted-client bypass. The route still checks live bundle
+membership and caller identity. Do not replace this with a broad Subgraph-route
+or `/api` exemption, remove cached-target validation, or forward operator cookies
+from the executor.
+
+Managed bundle-policy denials carry `subgraph_bundle_scope_forbidden`. The hosted
+loader reports a same-bundle restriction only for that explicit 403 code; generic
+401/403 responses identify service authentication/access failures instead. Missing
+targets, service failures and connection failures are distinct. Permission checks
+require 204, use a deadline, and do not follow redirects. Error-body inspection is
+bounded and never displays raw upstream HTML, credentials or arbitrary messages.
+An unpublished target selected as **Published** returns the existing API status
+409 with `workflow_publication_missing`, not 404. The hosted loader recognizes
+that exact status/code/selection combination and asks the user to publish the
+target or choose **Saved latest**. Other conflicts stay generic; changing only
+an HTTP status or error message cannot masquerade as a bundle/publication decision.
+
+Regression ownership: `trusted-clients.test.ts` exercises the real operator gate
+in key and OAuth modes with no UI session/trusted IP, including wrong/missing
+service credentials and neighboring routes/methods. Executor
+`subgraphProjectLoader.test.mts` covers transport, domain-error classification,
+caller/version preservation, published snapshot datasets/revision identity,
+cancellation of oversized/stalled denial bodies, missing publication diagnostics
+and fail-closed responses. The required browser lane
+includes `hosted-subgraph-auth.spec.ts`: it creates its own local PostgreSQL and
+MinIO containers, an authenticated real API and the built hosted Node executor.
+Both single-host and replicated executor configurations are exercised; the latter
+uses the real HA session handshake and derives service URLs from its loopback
+runtime-config URL. This is a local protocol/auth proof, not a cluster-rollout test.
+Two Subgraphs call different graphs of one sibling and return distinct values;
+each cold single-node call, whole-graph runs, repeated runs and a warm single-node
+call must succeed. A never-published sibling is also exercised through the real
+API and editor, checking the actionable publication failure before returning to
+a valid graph. Moving the target to another bundle between its
+snapshot read and cached permission check must fail. Its internal `/access`
+requests are real HTTP requests, never Playwright mocks, and have no operator
+cookie. The test proxy preserves those actual service headers rather than repairing
+missing/wrong credentials; negative requests verify that distinction. Each repeated
+run must deliver fresh root completion and Subgraph result events, not merely retain
+the previous run's successful node styling. The fixture removes only its own child
+processes, exact containers and their image-created anonymous volumes, and verifies
+that the recorded test volumes are gone. It never prunes Docker or deletes unrelated
+volumes. Diagnostic attachment failures cannot skip runtime cleanup.
+
+To reproduce locally, build the API and hosted executor first, serve the web
+preview on loopback, then run:
+
+```powershell
+$env:PLAYWRIGHT_HEADLESS = '1'
+$env:PLAYWRIGHT_SLOW_MO = '0'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:5174'
+yarn studio-server:ui:observe hosted-subgraph-auth.spec.ts
+```
+
+Docker must be available for this fixture. No cluster, production credentials,
+ambient database/bucket or paid provider rehearsal is used. API test enrollment
+and the executor package test commands run the focused regressions in existing CI
+lanes. `test:source` remains safe for the source-only repository-contract lane;
+`test:runtime` runs after compiled Core/Node artifacts are restored in the web-test
+lane. The package's `test` runs both locally. No new deployment step or database
+migration is needed.
+
+A passing local proof does not update an installed server. Release the API and
+hosted executor together through the normal pinned-image CI/deployment workflow.
+This service-auth fix needs no project edits, bundle recreation or republishing;
+adding an operator cookie to executor requests is not a workaround. Until that
+release is deployed, an older server can still deny service-only `/access`
+requests even though an operator-authenticated request for the same caller passes.
+
 Capability-4 portable manifests enforce the same member/ordinary boundary during
 closure validation, including editable Desktop entry overrides. Server exports
 also validate actual source membership before collection and final publication,

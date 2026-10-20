@@ -4,18 +4,13 @@ import {
   WORKFLOW_RECORDING_CREATED_AT_HEADER,
 } from '../../studio-server-shared/workflow-recording-time.js';
 import { CatalogNativeApi } from '../../studio-server-shared/catalogNativeApi.js';
-import {
-  NodeDatasetProvider,
-  deserializeDatasets,
-  loadProjectAndAttachedDataFromString,
-  type SubgraphProjectRun,
-  type SubgraphProjectTarget,
-} from '@valerypopoff/rivet2-node';
+import { type SubgraphProjectRun } from '@valerypopoff/rivet2-node';
 
 import { startAppExecutor } from '../../app-executor/bin/executorHost.mjs';
 import { createHttpRivetLLMProfileHealthStore } from '../../studio-server-shared/llmProfileHealthHttpStore.js';
 import { createHostedClientAuthorizer } from './clientAuthorization.mjs';
 import { resolveHostedExecutorApiUrls } from './internalApiUrls.mjs';
+import { createHostedSubgraphProjectLoader } from './subgraphProjectLoader.mjs';
 
 function createProxyAuthenticationHeaders(): HeadersInit {
   const sharedKey = process.env.RIVET_KEY?.trim();
@@ -91,62 +86,10 @@ async function readExecutionEnvironment(): Promise<Readonly<Record<string, strin
   );
 }
 
-async function loadSubgraphTarget(target: SubgraphProjectTarget) {
-  const url = new URL(
-    `/api/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/execution`,
-    executionEnvironmentServiceUrl,
-  );
-  url.searchParams.set('version', target.version);
-  if (target.callerProjectId) url.searchParams.set('callerProjectId', target.callerProjectId);
-  const response = await fetch(url, {
-    headers: createProxyAuthenticationHeaders(),
-    cache: 'no-store',
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Subgraph project ${target.projectId} (${target.version}) could not be loaded (${response.status}).`,
-    );
-  }
-  const body = (await response.json()) as {
-    projectContents: string;
-    datasetsContents?: string;
-    revisionKey?: string;
-    sourceProjectPath?: string;
-  };
-  if (typeof body.projectContents !== 'string') {
-    throw new Error('Subgraph project service returned no saved artifact.');
-  }
-  const [project] = loadProjectAndAttachedDataFromString(body.projectContents);
-  if (project.metadata.id !== target.projectId) {
-    throw new Error('Subgraph project service returned an invalid target.');
-  }
-  return {
-    project,
-    datasetProvider: new NodeDatasetProvider(body.datasetsContents ? deserializeDatasets(body.datasetsContents) : []),
-    revisionKey: body.revisionKey,
-    projectContents: body.projectContents,
-    datasetsContents: body.datasetsContents,
-    sourceProjectPath: body.sourceProjectPath,
-  };
-}
-
-async function validateSubgraphTarget(target: SubgraphProjectTarget) {
-  const url = new URL(
-    `/api/workflows/subgraph-projects/${encodeURIComponent(target.projectId)}/access`,
-    executionEnvironmentServiceUrl,
-  );
-  url.searchParams.set('version', target.version);
-  if (target.callerProjectId) url.searchParams.set('callerProjectId', target.callerProjectId);
-  const response = await fetch(url, {
-    headers: createProxyAuthenticationHeaders(),
-    cache: 'no-store',
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok)
-    throw new Error(
-      `Subgraph target is unavailable to this project (${response.status}). Bundle members can only be referenced from the same bundle.`,
-    );
-}
+const subgraphProjectLoader = createHostedSubgraphProjectLoader({
+  baseUrl: executionEnvironmentServiceUrl,
+  headers: createProxyAuthenticationHeaders,
+});
 
 async function persistSubgraphRun(run: SubgraphProjectRun): Promise<void> {
   if (!run.resolved.projectContents) throw new Error('Subgraph replay has no saved project snapshot.');
@@ -186,7 +129,7 @@ void startAppExecutor({
     ...localCatalogOptions,
     executionEnvironment: await readExecutionEnvironment(),
     llmProfileHealthStore: healthStore,
-    subgraphProjectLoader: { loadTarget: loadSubgraphTarget, validateTarget: validateSubgraphTarget },
+    subgraphProjectLoader,
     onSubgraphProjectRun: recordSubgraphProjectRuns ? persistSubgraphRun : undefined,
     ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
   }),

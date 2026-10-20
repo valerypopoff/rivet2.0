@@ -9833,6 +9833,7 @@ __metadata:
   dependencies:
     "@valerypopoff/rivet-app-executor": "workspace:^"
     "@valerypopoff/rivet-studio-server-shared": "workspace:^"
+    "@valerypopoff/rivet2-node": "workspace:^"
     esbuild: "npm:0.25.12"
     tsx: "npm:^4.23.0"
   languageName: unknown

@@ -5,13 +5,16 @@
   "description": "Hosted Rivet executor entry point and container bundle",
   "dependencies": {
     "@valerypopoff/rivet-app-executor": "workspace:^",
-    "@valerypopoff/rivet-studio-server-shared": "workspace:^"
+    "@valerypopoff/rivet-studio-server-shared": "workspace:^",
+    "@valerypopoff/rivet2-node": "workspace:^"
   },
   "type": "module",
   "scripts": {
     "build": "node build/bundle-executor.cjs",
     "dev": "node build/watch-executor.cjs",
-    "test": "tsx --test src/internalApiUrls.test.mts"
+    "test": "yarn test:source && yarn test:runtime",
+    "test:source": "tsx --test src/internalApiUrls.test.mts",
+    "test:runtime": "tsx --test src/subgraphProjectLoader.test.mts"
   },
   "devDependencies": {
     "esbuild": "0.25.12",

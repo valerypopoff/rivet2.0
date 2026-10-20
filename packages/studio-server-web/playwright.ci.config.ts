@@ -25,6 +25,7 @@ export default defineConfig({
     'port-connection-warnings.spec.ts',
     'cross-project-subgraph-loading.spec.ts',
     'subgraph-bundle-scope.spec.ts',
+    'hosted-subgraph-auth.spec.ts',
     'remote-bundle-observation.spec.ts',
     'ha-latest-replay.spec.ts',
     'ha-recording-selection.spec.ts',
