@@ -101,6 +101,8 @@ export class HaReleaseProbes {
       }),
     });
     const relativePath = upload.project.relativePath;
+    this.backgroundWorkflowId = upload.project.id;
+    assert.ok(this.backgroundWorkflowId, 'background fixture must retain its stored workflow identity');
     const snapshot = await this.request(
       `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
     );
@@ -175,7 +177,7 @@ export class HaReleaseProbes {
       assert.equal(response.status, 200);
       assert.equal(response.body.output.value, JSON.stringify({ input: 'preserved' }));
       assert.ok(response.correlationId);
-      this.background.push({ pod: pod.name, uid: pod.uid, correlationId: response.correlationId });
+      this.background.push({ pod: pod.name, uid: pod.uid, workflowId: this.backgroundWorkflowId, correlationId: response.correlationId });
     }
   }
   async startEditor(pod, neighbor, holdMs = 25_000) {
@@ -248,8 +250,17 @@ export class HaReleaseProbes {
     }
     const background = this.background.find((p) => p.uid === pod.uid);
     if (background) {
-      const page = await this.request('/api/workflows/recordings/runs?page=1&pageSize=100&status=all');
-      const recordings = page.runs.filter((r) => r.executionIdentity?.correlationId === background.correlationId);
+      assert.ok(background.workflowId, 'background proof must be bound to its stored workflow');
+      // Global traffic keeps creating newer recordings while this 45-second
+      // background run settles. Its absence from the latest global page does
+      // not mean it was lost. This owned fixture has only two retirement runs;
+      // require a complete project-scoped page rather than relaxing durability.
+      const page = await this.request(`/api/workflows/recordings/workflows/${encodeURIComponent(background.workflowId)}/runs?page=1&pageSize=100&status=all`);
+      background.recordingLookup = { workflowId: page.workflowId, totalRuns: page.totalRuns, hasMore: page.hasMore };
+      assert.equal(page.hasMore, false, 'background fixture recording catalog must be complete');
+      const recordings = page.runs.filter((r) => r.workflowId === background.workflowId &&
+        r.executionIdentity?.surface === 'workflow_endpoint' && r.executionIdentity.correlationId === background.correlationId);
+      background.recordingLookup.matches = recordings.map(({ id, status }) => ({ id, status }));
       assert.equal(recordings.length, 1, 'one full-run recording must be durable before removing its owner');
       assert.equal(recordings[0].status, 'succeeded');
       background.recordingId = recordings[0].id;

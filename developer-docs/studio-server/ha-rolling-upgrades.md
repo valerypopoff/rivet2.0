@@ -15,6 +15,15 @@ uncertain execution. A long-running or paused execution may block retirement.
 This is not a guarantee against simultaneous provider failure or arbitrary pod
 termination. Legacy restore remains an explicitly destructive maintenance task.
 
+The background-retirement certificate checks the recording catalog of its exact
+uploaded workflow, then matches the endpoint execution's correlation identity.
+Do not search only the latest global recordings page: the continuous traffic
+fixture can push a 45-second background run beyond that page before it settles.
+The fixture's project-scoped page must be complete, with exactly one successful
+endpoint recording for that correlation; missing, duplicate, failed, foreign or
+child-only results still fail before owner deletion. This is a proof lookup fix,
+not a relaxation of recording durability or a production runtime change.
+
 ### Latest regional follow-up: DNS gap fixed locally, provider proof unchanged
 
 The same published pair's regional Gateway primary upgrade passed with 7,809
