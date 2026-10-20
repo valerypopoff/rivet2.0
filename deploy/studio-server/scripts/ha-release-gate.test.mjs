@@ -24,6 +24,38 @@ import {
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 
+test('background retirement finds its recording outside the newest global page without weakening durability', async () => {
+  const pod = { name: 'fixture-ha-execution-0', uid: 'retiring-owner' };
+  const background = { pod: pod.name, uid: pod.uid, workflowId: 'owned/workflow', correlationId: 'background-correlation' };
+  const recording = { id: 'durable-recording', workflowId: background.workflowId, status: 'succeeded',
+    executionIdentity: { surface: 'workflow_endpoint', correlationId: background.correlationId } };
+  const globalNewest = Array.from({ length: 100 }, (_, i) => ({ ...recording, id: `newer-${i}`,
+    workflowId: 'traffic-workflow', executionIdentity: { ...recording.executionIdentity, correlationId: `traffic-${i}` } }));
+  for (const scenario of ['durable', 'missing', 'duplicate', 'failed', 'incomplete', 'wrong workflow', 'child only']) {
+    const calls = [];
+    const gate = { requestWorkflow: async (_base, route) => {
+      calls.push(route);
+      if (route === '/api/workflows/recordings/runs?page=1&pageSize=100&status=all') return { runs: globalNewest, hasMore: true };
+      assert.equal(route, '/api/workflows/recordings/workflows/owned%2Fworkflow/runs?page=1&pageSize=100&status=all');
+      const row = structuredClone(recording);
+      if (scenario === 'failed') row.status = 'failed';
+      if (scenario === 'wrong workflow') row.workflowId = 'foreign';
+      if (scenario === 'child only') row.executionIdentity.surface = 'subgraph_project';
+      return { runs: scenario === 'missing' ? [] : scenario === 'duplicate' ? [row, { ...row, id: 'duplicate' }] : [row], hasMore: scenario === 'incomplete' };
+    } };
+    const probes = new HaReleaseProbes(gate, 'http://fixture', rootDir);
+    probes.background.push({ ...background });
+    if (scenario === 'durable') {
+      await probes.afterWithdrawal(pod);
+      assert.equal(probes.background[0].recordingId, recording.id);
+    } else {
+      await assert.rejects(probes.afterWithdrawal(pod), /one full-run recording|succeeded|catalog must be complete/);
+      assert.equal(probes.background[0].recordingId, undefined, 'failed proof cannot earn a preservation receipt');
+    }
+    assert.equal(calls.length, 1, 'do not retry execution, scan the global history or conceal a missing recording');
+  }
+});
+
 function recoveryCasFixture() {
   let version = 7;
   const record = { token: 'operation', runner: 'controller', owner: { name: 'owner-0', uid: 'original', beginIssued: true } };
