@@ -2095,6 +2095,12 @@ of [`RivetApp`](../packages/app/src/components/RivetApp.tsx) directly:
 - it wraps the editor in `ProvidersProvider` and `ExecutorSessionProvider`
 - it runs the same async storage bootstrap as the desktop app through
   `RivetAppLoader`
+- `ExecutorSessionProvider` mounts through the loader's `wrapInitialized` boundary,
+  after persistent workspace initialization succeeds. Its bundle observers read
+  saved project atoms; mounting it outside the loader can cache empty atom values
+  before recovery loads, leaving valid saved projects behind the welcome screen.
+  Keep all persisted-state observers behind this boundary, including on reload;
+  initialization errors must show recovery controls without mounting them
 - it accepts optional `providers` for custom IO, dataset, audio, data-ref,
   environment-variable, storage, and path-policy adapters
 - a custom `providers.storage` backend is applied before storage-backed atoms

@@ -242,7 +242,7 @@ test('failed and partial scans retain clean open callers without duplicating a c
       json: {
         projectId: 'target',
         complete: checks > 2,
-        graphReferences: checks === 2 ? [] : [{ ...reference, projectId: 'open-caller', projectName: 'open-caller' }],
+        graphReferences: checks === 2 ? [] : [{ ...reference, projectId: 'open-caller', projectName: 'Open caller' }],
       },
     });
   });
@@ -255,7 +255,7 @@ test('failed and partial scans retain clean open callers without duplicating a c
   const warning = dialog.getByRole('region', { name: 'Graph deletion warning', exact: true });
   await expect(warning).toContainText('Could not check incoming graph references');
   await expect(warning).toContainText('Open editor');
-  await expect(warning).toContainText('open-caller');
+  await expect(warning).toContainText('Open caller');
   await expect(warning).toContainText('Unsaved caller');
   await expect(warning).toContainText('The reference check is incomplete');
   await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toBeEnabled();
@@ -297,7 +297,7 @@ test('dirty open callers ignore missing library nodes without hiding real refere
   await fixture.editor.locator('.projects-container .project', { hasText: 'target' }).click();
   const dialog = await fixture.open();
   await expect(dialog).toContainText('Unsaved open editor');
-  await expect(dialog).toContainText('open-caller');
+  await expect(dialog).toContainText('Open caller');
   await expect(dialog).not.toContainText('The reference check is incomplete');
   await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toBeEnabled();
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();

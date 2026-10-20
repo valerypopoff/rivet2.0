@@ -1052,6 +1052,14 @@ helpers; their default remains promoted-only for deployment. The gate's shared
 preflight validates source, chart, image identities and exact predecessor before
 fixture creation. Offline regressions exercise this preflight with real candidate
 manifests, including mismatches and rejection of promoted certification inputs.
+The initial mixed-version installation pairs the predecessor images with the
+predecessor manifest's exact managed-workflow schema contract. It must not use
+the candidate schema bounds for that migration Job: older migration binaries
+deliberately reject a newer build's exact version. Candidate rollout then uses
+the candidate contract without mutating either manifest or weakening migration
+guards. `ha-release-gate.test.mjs` renders the actual Helm migration Job to verify
+both its predecessor image and exact schema arguments across a schema increment,
+and checks that subsequent candidate values retain their own contract.
 Bootstrap uses a same-image template revision change to exercise retirement but cannot
 authorize a mixed-source rollout. The report producer verifies real readiness
 samples, per-owner workload receipts, withdrawn UIDs, replacement UIDs and both
