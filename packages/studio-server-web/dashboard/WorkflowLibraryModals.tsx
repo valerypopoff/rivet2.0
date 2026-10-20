@@ -8,6 +8,7 @@ import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
 import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
 import { WorkflowBundleUploadModal } from './WorkflowBundleUploadModal';
 import { WorkflowBundleConversionErrorModal } from './WorkflowBundleConversionErrorModal';
+import { WorkflowBundleDeleteModal } from './WorkflowBundleDeleteModal';
 import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
@@ -69,6 +70,14 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      {controller.bundleDeleteFolder ? (
+        <WorkflowBundleDeleteModal
+          key={controller.bundleDeleteFolder.bundleId}
+          folder={controller.bundleDeleteFolder}
+          onClose={controller.closeBundleDelete}
+          onDeleted={controller.handleBundleDeleted}
+        />
+      ) : null}
       {controller.bundleConversionFailure ? (
         <WorkflowBundleConversionErrorModal
           failure={controller.bundleConversionFailure}
@@ -94,6 +103,7 @@ export const WorkflowLibraryModals: FC<{
       <LocalStorageUpgradePrompt
         suppressed={
           scheduledRunsOpen ||
+          controller.bundleDeleteFolder != null ||
           controller.bundleConversionFailure != null ||
           controller.bundleOpen ||
           controller.bundleUploadFolder != null ||

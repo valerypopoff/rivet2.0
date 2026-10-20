@@ -89,6 +89,50 @@ async function setupFocusFixture(page: Page): Promise<string[]> {
   return writes;
 }
 
+for (const kind of ['project', 'folder'] as const) {
+  test(`${kind} context menu owns pointer hover and clicks over the sidebar splitter`, async ({ page }) => {
+    const writes = await setupFocusFixture(page);
+    const sidebar = page.locator('.dashboard-sidebar');
+    const resizer = page.getByRole('separator', { name: 'Resize folders pane' });
+    const before = (await sidebar.boundingBox())!.width;
+    const edge = (await resizer.boundingBox())!;
+    const row =
+      kind === 'project'
+        ? page.locator('.project-row', { hasText: 'Focus fixture' })
+        : page.getByRole('button', { name: 'Expand Focus folder', exact: true });
+    const bounds = (await row.boundingBox())!;
+    await row.click({ button: 'right', position: { x: bounds.width - 30, y: bounds.height / 2 } });
+    const menu = page.getByRole('menu', { name: `Actions for Focus ${kind === 'project' ? 'fixture' : 'folder'}` });
+    await expect(menu).toBeVisible();
+    const rename = menu.getByRole('menuitem', { name: `Rename ${kind}`, exact: true });
+    const item = (await rename.boundingBox())!;
+    const point = { x: edge.x + edge.width / 2, y: item.y + item.height / 2 };
+    expect(point.x).toBeGreaterThan(item.x);
+    expect(point.x).toBeLessThan(item.x + item.width);
+    await page.mouse.move(point.x, point.y);
+    await expect
+      .poll(() =>
+        page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('[role="menuitem"]')), point),
+      )
+      .toBe(true);
+    expect(await resizer.evaluate((element) => element.matches(':hover'))).toBe(false);
+    await page.mouse.click(point.x, point.y);
+    await expect(menu).toHaveCount(0);
+    await expect(
+      page.getByRole('textbox', { name: `Rename Focus ${kind === 'project' ? 'fixture' : 'folder'}` }),
+    ).toBeFocused();
+    await expect(sidebar).not.toHaveClass(/dashboard-sidebar-resizing/);
+    expect((await sidebar.boundingBox())!.width).toBe(before);
+    await page.keyboard.press('Escape');
+    await page.mouse.move(point.x, 48);
+    await page.mouse.down();
+    await page.mouse.move(360, 48, { steps: 4 });
+    await page.mouse.up();
+    await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(360);
+    expect(writes).toEqual([]);
+  });
+}
+
 test('modal backdrops block sidebar resize in both documents and cancel an existing drag', async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));

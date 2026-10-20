@@ -17,6 +17,7 @@ import type {
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
 import { lockBundleTopology } from './bundles.js';
+import { deleteManagedWorkflowProject } from './project-deletion.js';
 import { createBlankProjectFile, sanitizeWorkflowName } from '../fs-helpers.js';
 import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
 import { getWorkflowDownloadFileName, getWorkflowDuplicateProjectName } from '../workflow-project-naming.js';
@@ -35,7 +36,6 @@ import type { ManagedWorkflowContext } from './context.js';
 import type {
   FolderMoveRow,
   FolderRow,
-  RecordingRow,
   RevisionRow,
   SaveHostedProjectResult,
   TransactionHooks,
@@ -97,7 +97,6 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     ),
     maintenance: options.context.maintenance,
     isUniqueViolation: options.context.db.isUniqueViolation,
-    recordingColumns: options.context.mappers.RECORDING_COLUMNS,
     workflowColumnsQualified: options.context.mappers.WORKFLOW_COLUMNS_QUALIFIED,
     getWorkflowProjectStatsFromContents,
   };
@@ -880,52 +879,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
           throw createHttpError(404, 'Project not found');
         }
 
-        const publishedWebAppResult = await client.query(
-          'SELECT 1 FROM workflow_web_apps WHERE workflow_id = $1 LIMIT 1',
-          [workflow.workflow_id],
-        );
-        if (
-          workflow.published_revision_id ||
-          workflow.published_version_id ||
-          workflow.published_endpoint_name ||
-          publishedWebAppResult.rows.length > 0
-        ) {
-          throw conflict('Unpublish the workflow endpoint and web apps before deleting the project');
-        }
-
-        const revisions = await deps.queryRows<RevisionRow>(
-          client,
-          `
-            SELECT revision_id, workflow_id, project_blob_key, dataset_blob_key, stats_graph_count, stats_total_node_count, stats_web_app_count, created_at
-            FROM workflow_revisions
-            WHERE workflow_id = $1
-          `,
-          [workflow.workflow_id],
-        );
-        const recordings = await deps.queryRows<RecordingRow>(
-          client,
-          `
-            SELECT ${deps.recordingColumns}
-            FROM workflow_recordings
-            WHERE workflow_id = $1
-          `,
-          [workflow.workflow_id],
-        );
-
-        // Health is project-scoped operational state. Remove it inside the
-        // workflow deletion transaction so no durable circuit state can
-        // survive a successfully deleted managed project.
-        await client.query('DELETE FROM llm_profile_health WHERE project_id = $1', [workflow.workflow_id]);
-        await client.query('DELETE FROM workflows WHERE workflow_id = $1', [workflow.workflow_id]);
-        await deps.maintenance.enqueueObjectDeletions(client, 'workflow-project-deletion', [
-          ...revisions.flatMap((revision) => [revision.project_blob_key, revision.dataset_blob_key]),
-          ...recordings.flatMap((recording) => [
-            recording.recording_blob_key,
-            recording.replay_project_blob_key,
-            recording.replay_dataset_blob_key,
-          ]),
-        ]);
-        await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
+        await deleteManagedWorkflowProject(options.context, client, hooks, workflow);
         return workflow.workflow_id;
       });
     },

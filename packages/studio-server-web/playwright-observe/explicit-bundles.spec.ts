@@ -4,6 +4,219 @@ import type { WorkflowFolderItem } from '../dashboard/types';
 import { serializeProject, type ProjectId } from '@valerypopoff/rivet2-core';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 
+for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure'] as const) {
+  test(`non-empty bundle deletion requires a copyable exact name (${outcome})`, async ({ page }, testInfo) => {
+    const project = projectBundleFixture().child.project;
+    project.metadata.title = 'Member';
+    const bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
+    const member = {
+      id: 'member',
+      projectMetadataId: project.metadata.id,
+      name: 'Member',
+      bundleId,
+      fileName: 'Member.rivet-project',
+      relativePath: 'Feature/Member.rivet-project',
+      absolutePath: '/managed/workflows/Feature/Member.rivet-project',
+      updatedAt: '',
+      settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+    };
+    const folder = {
+      id: 'Feature',
+      name: 'Feature',
+      relativePath: 'Feature',
+      absolutePath: '/managed/workflows/Feature',
+      updatedAt: '',
+      bundleId,
+      folders: [],
+      projects: [member],
+    };
+    const ordinary = { ...folder, id: 'Ordinary', name: 'Ordinary', relativePath: 'Ordinary', bundleId: null };
+    let removed = false,
+      requests = 0;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.addInitScript(() =>
+      document.addEventListener('copy', (event) => {
+        Object.assign(window, {
+          __bundleCopiedName: window.getSelection()?.toString(),
+          __bundleCopyPrevented: event.defaultPrevented,
+        });
+      }),
+    );
+    await page.route('**/api/workflows/tree', (route) =>
+      removed && outcome === 'refresh failure'
+        ? route.fulfill({ status: 503, json: { error: 'Tree unavailable' } })
+        : route.fulfill({
+            json: {
+              root: '/managed/workflows',
+              capabilities: { explicitBundles: true },
+              folders: removed ? [ordinary] : [folder, ordinary],
+              projects: [],
+            },
+          }),
+    );
+    await page.route('**/api/projects/load', (route) =>
+      route.fulfill({ json: { contents: serializeProject(project), datasetsContents: null, revisionId: null } }),
+    );
+    await page.route(`**/api/workflows/bundles/${bundleId}/delete`, async (route) => {
+      requests++;
+      expect(route.request().postDataJSON()).toEqual({ name: 'Feature', relativePath: 'Feature' });
+      expect(route.request().headers()['x-rivet-bundle-intent']).toBe('1');
+      await ready;
+      if (outcome === 'blocked')
+        return route.fulfill({
+          status: 409,
+          json: { error: 'Unpublish the workflow endpoint and web apps before deleting the project: Member' },
+        });
+      if (outcome === 'lost response') return route.abort('failed');
+      removed = true;
+      return route.fulfill({
+        json: { deleted: true, deletedProjects: [{ path: member.absolutePath, projectId: project.metadata.id }] },
+      });
+    });
+    await mockHostedEditorBootstrap(page);
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Expand Ordinary', exact: true }).click({ button: 'right' });
+    await expect(page.getByRole('menuitem', { name: 'Delete folder', exact: true })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await page.keyboard.press('Escape');
+    const row = page.getByRole('button', { name: 'Expand Feature bundle', exact: true });
+    await row.click();
+    await page.locator('.project-row').filter({ hasText: 'Member' }).first().dblclick();
+    const editorTab = page
+      .frameLocator('iframe.dashboard-editor-frame')
+      .locator('.projects-container .project:not(.opening)')
+      .filter({ hasText: 'Member' });
+    await expect(editorTab).toBeVisible();
+    const openDelete = async () => {
+      await page.getByRole('button', { name: 'Collapse Feature bundle', exact: true }).click({ button: 'right' });
+      await expect(page.getByRole('menuitem', { name: 'Delete folder', exact: true })).toHaveCount(0);
+      await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
+    };
+    await openDelete();
+    const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
+    const submit = modal.getByRole('button', { name: 'Delete bundle', exact: true });
+    const input = modal.getByRole('textbox', { name: 'Bundle name', exact: true });
+    await expect(page.getByTestId('workflow-bundle-delete-modal--blanket')).toHaveCSS(
+      'background-color',
+      'rgba(0, 0, 0, 0.56)',
+    );
+    await expect(page.getByTestId('workflow-bundle-delete-modal--blanket')).toHaveCSS('backdrop-filter', 'blur(2px)');
+    await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
+    await expect(page.getByTestId('workflow-bundle-delete-modal--body')).toHaveCSS('padding', '0px');
+    await expect(modal.locator('label, .workflow-project-bundle-card')).toHaveCount(0);
+    await expect(input).toHaveCSS('height', '38px');
+    expect((await input.boundingBox())!.width).toBeGreaterThan((await modal.boundingBox())!.width - 40);
+    expect((await modal.boundingBox())!.height).toBeLessThanOrEqual(340);
+    if (outcome === 'success')
+      await page.screenshot({ path: testInfo.outputPath('bundle-delete-compact.png'), animations: 'disabled' });
+    await expect(page.getByRole('separator', { name: 'Resize folders pane' })).toHaveAttribute('aria-disabled', 'true');
+    await expect(submit).toBeDisabled();
+    await input.fill('feature');
+    await expect(submit).toBeDisabled();
+    await input.fill('Feature ');
+    await expect(submit).toBeDisabled();
+    const name = modal.getByTestId('bundle-delete-name');
+    await expect(name).toHaveCSS('user-select', 'text');
+    // Click within the name, not the surrounding confirmation sentence.
+    await name.dblclick({ position: { x: 12, y: (await name.boundingBox())!.height / 2 } });
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Feature');
+    await page.keyboard.press('Control+c');
+    await expect.poll(() => page.evaluate(() => (window as any).__bundleCopiedName)).toBe('Feature');
+    expect(await page.evaluate(() => (window as any).__bundleCopyPrevented)).toBe(false);
+    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(requests).toBe(0);
+    await expect(editorTab).toBeVisible();
+    await openDelete();
+    await expect(input).toHaveValue('');
+    await input.fill('Feature');
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    try {
+      await expect.poll(() => requests).toBe(1);
+      await expect(modal.getByRole('button', { name: 'Deleting…', exact: true })).toBeDisabled();
+      await expect(modal.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
+      await page.keyboard.press('Escape');
+      await expect(modal).toBeVisible();
+    } finally {
+      release();
+    }
+    if (outcome === 'blocked' || outcome === 'lost response') {
+      await expect(modal.getByRole('alert')).toContainText(
+        outcome === 'blocked' ? 'Unpublish' : 'refresh the project tree before retrying',
+      );
+      await expect(editorTab).toBeVisible();
+      await expect(submit).toBeEnabled();
+    } else {
+      await expect(modal).toHaveCount(0);
+      await expect(editorTab).toHaveCount(0);
+      if (outcome === 'refresh failure') {
+        await expect(page.locator('.Toastify__toast--warning')).toContainText('Bundle deleted');
+      } else {
+        await expect(page.getByRole('button', { name: 'Collapse Feature bundle', exact: true })).toHaveCount(0);
+      }
+    }
+    expect(requests).toBe(1);
+  });
+}
+
+test('compact bundle deletion stays usable with a long name on a narrow short viewport', async ({ page }) => {
+  // Open through the tree at a height that fits its context menu, then resize
+  // the modal itself: this fixture owns dialog layout, not menu placement.
+  await page.setViewportSize({ width: 360, height: 1000 });
+  const name = `Long bundle ${'very-long-name-'.repeat(12)}`;
+  const folder = {
+    id: 'long',
+    name,
+    relativePath: name,
+    absolutePath: `/workflows/${name}`,
+    updatedAt: '',
+    bundleId: '58019223-bd4e-49c3-a042-321215efaa35',
+    folders: [],
+    projects: [],
+  };
+  await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        capabilities: { explicitBundles: true },
+        folders: [folder],
+        projects: [],
+      },
+    }),
+  );
+  let deletions = 0;
+  await page.route('**/api/workflows/bundles/*/delete', (route) => {
+    deletions++;
+    return route.abort();
+  });
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page
+    .getByRole('button', { name: `Expand ${name} bundle`, exact: true })
+    .click({ button: 'right', position: { x: 20, y: 10 } });
+  await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
+  await page.setViewportSize({ width: 360, height: 430 });
+  const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
+  await expect(modal.getByRole('button', { name: 'Close bundle deletion' })).toBeInViewport();
+  await expect(modal.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport();
+  const input = modal.getByRole('textbox', { name: 'Bundle name', exact: true });
+  await input.fill(name);
+  await expect(input).toBeInViewport();
+  await expect(modal.getByRole('button', { name: 'Delete bundle', exact: true })).toBeEnabled();
+  expect(await modal.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(deletions).toBe(0);
+});
+
 test('opening a moved folder member uses its new bundle even when the tree refresh fails', async ({ page }) => {
   const bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
   const project = projectBundleFixture().child.project;

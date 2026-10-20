@@ -40,7 +40,11 @@ export const WorkflowLibraryContextMenus: FC<{
           x={folderContextMenuState.x}
           y={folderContextMenuState.y}
           onClose={closeFolderContextMenu}
-          canDelete={isFolderEmpty(folderContextMenuState.folder)}
+          canDelete={
+            folderContextMenuState.folder.bundleId
+              ? !controller.bundleAction
+              : isFolderEmpty(folderContextMenuState.folder)
+          }
           bundleActions={
             controller.explicitBundles
               ? {

@@ -25,6 +25,18 @@ const name = z.string().min(1).max(255);
 const version = z.enum(['latest', 'published']);
 const id = z.string().uuid();
 bundlesRouter.post(
+  '/:id/delete',
+  asyncHandler(async (req, res) => {
+    const confirmation = z
+      .object({ name, relativePath: location.min(1) })
+      .strict()
+      .parse(req.body);
+    const result = await (await getExplicitBundleService()).delete(id.parse(req.params.id), confirmation);
+    notifyWorkflowTreeChanged(req);
+    res.json(result);
+  }),
+);
+bundlesRouter.post(
   '/',
   asyncHandler(async (req, res) => {
     const input = z.object({ name, parentRelativePath: location }).strict().parse(req.body);

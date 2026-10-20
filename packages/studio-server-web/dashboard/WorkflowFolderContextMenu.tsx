@@ -175,7 +175,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
         onClick={onDelete}
       >
         <DeleteBinIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>Delete folder</span>
+        <span>{folder.bundleId ? 'Delete bundle' : 'Delete folder'}</span>
       </button>
     </div>
   );

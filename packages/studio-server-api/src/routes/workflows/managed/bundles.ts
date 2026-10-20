@@ -23,6 +23,7 @@ import { remapBundleProject } from '../remap-bundle-project.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { FolderRow, RevisionRow, WorkflowRow } from './types.js';
 import { prepareBundleConversion, assertBundleConversion } from './bundle-conversion.js';
+import { deleteManagedWorkflowProject } from './project-deletion.js';
 
 export const lockBundleTopology = (client: PoolClient) => client.query('SELECT pg_advisory_xact_lock(8071, 24016)');
 
@@ -141,6 +142,47 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
     return { snapshot, projects, preview };
   }
   return {
+    async delete(id: string, confirmation: { name: string; relativePath: string }) {
+      return context.withTransaction(async (client, hooks) => {
+        await lockBundleTopology(client);
+        const root = (
+          await client.query<FolderRow>('SELECT * FROM workflow_folders WHERE bundle_id = $1 FOR UPDATE', [id])
+        ).rows[0];
+        if (!root) throw createHttpError(404, 'Bundle not found');
+        if (root.name !== confirmation.name || root.relative_path !== confirmation.relativePath)
+          throw conflict('The bundle name or location changed. Refresh the tree and confirm deletion again.');
+        // The topology lease (also acquired by SQL statement triggers) fences
+        // creates/imports/moves. Lock folders before examining member rows.
+        await client.query(
+          `SELECT relative_path FROM workflow_folders
+          WHERE relative_path = $1 OR left(relative_path, length($1) + 1) = $1 || '/'
+          ORDER BY relative_path FOR UPDATE`,
+          [root.relative_path],
+        );
+        const members = (
+          await client.query<WorkflowRow>(
+            `SELECT * FROM workflows
+          WHERE left(relative_path, length($1) + 1) = $1 || '/'
+          ORDER BY relative_path FOR UPDATE`,
+            [root.relative_path],
+          )
+        ).rows;
+        for (const member of members) await deleteManagedWorkflowProject(context, client, hooks, member);
+        await client.query(
+          `DELETE FROM workflow_folders
+          WHERE relative_path = $1 OR left(relative_path, length($1) + 1) = $1 || '/'`,
+          [root.relative_path],
+        );
+        await context.executionInvalidationController.queueCatalogInvalidation(client);
+        return {
+          deleted: true,
+          deletedProjects: members.map((member) => ({
+            path: context.mappers.mapWorkflowRowToProjectItem(member).absolutePath,
+            projectId: member.workflow_id,
+          })),
+        };
+      });
+    },
     async exportSnapshot(id: string, version: WorkflowBundleVersion) {
       await context.initialize();
       const snapshot = await context.withTransaction(async (client) => {

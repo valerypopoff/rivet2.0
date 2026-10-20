@@ -5,7 +5,8 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.42);
-  z-index: 60;
+  /* Above the sidebar splitter (6500), below dashboard modal/toast layers. */
+  z-index: 6501;
 }
 
 .workflow-project-context-menu-item {

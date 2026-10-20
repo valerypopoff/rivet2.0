@@ -25,6 +25,7 @@ import { useWorkflowProjectVersionActions } from './useWorkflowProjectVersionAct
 import { isPlainF2ShortcutEvent } from './editorBridgeFocus';
 import { requestWorkflowBundle } from './workflowApi';
 import type { WorkflowBundleConversionFailure } from './WorkflowBundleConversionErrorModal';
+import type { WorkflowBundleDeleteResult } from './WorkflowBundleDeleteModal';
 
 export const instantWarningToastTransition = cssTransition({
   enter: 'workflow-toast-instant-enter',
@@ -156,6 +157,7 @@ export function useWorkflowLibraryController(options: {
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [bundleUploadFolder, setBundleUploadFolder] = useState<WorkflowFolderItem | null>(null);
+  const [bundleDeleteFolder, setBundleDeleteFolder] = useState<WorkflowFolderItem | null>(null);
   const [bundleAction, setBundleAction] = useState<{ kind: 'conversion' | 'duplication'; name: string } | null>(null);
   const [bundleConversionFailure, setBundleConversionFailure] = useState<WorkflowBundleConversionFailure | null>(null);
   const bundleActionPending = useRef(false);
@@ -333,7 +335,8 @@ export function useWorkflowLibraryController(options: {
   } = versionActions;
 
   const projectTreeOverlayOpen = Boolean(
-    bundleOpen ||
+    bundleDeleteFolder ||
+      bundleOpen ||
       appSettingsOpen ||
       folderContextMenuState ||
       projectContextMenuState ||
@@ -647,6 +650,13 @@ export function useWorkflowLibraryController(options: {
       return;
     }
 
+    if (targetFolder.bundleId) {
+      if (bundleActionPending.current) return;
+      closeFolderContextMenu();
+      setBundleDeleteFolder(targetFolder);
+      return;
+    }
+
     if (!isFolderEmpty(targetFolder)) {
       toast.error('You can only delete empty folders', {
         transition: instantWarningToastTransition,
@@ -664,6 +674,16 @@ export function useWorkflowLibraryController(options: {
     handleDeleteFolder,
     uploadingFolderPath,
   ]);
+
+  const handleBundleDeleted = (result: WorkflowBundleDeleteResult) => {
+    setBundleDeleteFolder(null);
+    for (const project of result.deletedProjects) onDeleteProject(project.path, project.projectId);
+    void refreshTreeAfterBundleChange().then((outcome) => {
+      if (outcome.failed)
+        toast.warn('Bundle deleted, but the project list could not refresh. Refresh the tree before trying again.');
+      else toast.success('Bundle deleted.');
+    });
+  };
 
   const openProjectSettingsModal = useCallback((project: WorkflowProjectItem) => {
     setSettingsModalProject(project);
@@ -785,6 +805,9 @@ export function useWorkflowLibraryController(options: {
   return {
     explicitBundles,
     bundleAction,
+    bundleDeleteFolder,
+    closeBundleDelete: () => setBundleDeleteFolder(null),
+    handleBundleDeleted,
     bundleConversionFailure,
     closeBundleConversionFailure: () => setBundleConversionFailure(null),
     handleToggleBundleKind: toggleBundleKind,

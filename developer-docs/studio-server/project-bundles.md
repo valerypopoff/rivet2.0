@@ -13,7 +13,40 @@ A bundle owns every descendant project, including disconnected projects and ordi
 subfolders. It has no entry/main project. Ordinary folders may contain bundles,
 but bundles cannot nest. Existing folders are not converted automatically.
 Conversion back to an ordinary folder removes grouping only. Projects, references
-and publications survive; only empty containers can be deleted.
+and publications survive. Ordinary folders must be empty to delete; bundles have
+a separate recursive deletion flow.
+
+**Delete bundle** is available for empty and non-empty bundles. The shared modal
+requires an exact, case-sensitive name match (no trimming) before enabling its
+destructive action. The displayed name is selectable/copyable text. The compact
+layout has no inner card or visible input label; the input retains its accessible
+name and confirmation description and uses a full-width 38px control. Register
+the dialog in the shared dashboard theme selectors, including the black
+translucent/blurred blanket and zero-padding Atlaskit body, rather than falling
+back to Atlaskit's tinted blanket and extra inner padding. Browser checks cover
+computed theme, input size, desktop compactness and narrow-view controls.
+Cancellation does not issue a write. Pending deletion disables dismissal and resubmission;
+errors retain the confirmation and explain lost-response recovery without an
+automatic retry. Open member tabs, including unsaved edits, are closed only after
+confirmed deletion. A failed follow-up tree read does not turn a committed delete
+into an error or trigger another delete.
+
+`POST /api/workflows/bundles/:id/delete` requires the existing authenticated,
+same-site bundle-intent guard and `{ name, relativePath }`. The managed service
+locks topology, verifies the current bundle identity/name/location, locks its
+subtree and project rows, and deletes the complete group in one transaction.
+The shared project-deletion helper retains publication safeguards (unpublish
+workflow endpoints and web apps first), transactional artifact-GC enqueueing,
+project health removal and execution-cache invalidation. Independent workflow
+recording history retains the existing project-deletion/retention semantics; no
+new recording purge is introduced. Any failure rolls back
+all members, folders and GC intents; unrelated/shared projects and similarly named
+siblings are untouched. No schema change or Kubernetes rehearsal is needed.
+Regression owners: `managed-bundles.test.ts`, `managed-catalog.test.ts`, the real
+PostgreSQL/MinIO explicit-bundle contract, and `explicit-bundles.spec.ts`.
+The managed contract injects a later-member deletion failure and checks both
+project metadata and exact artifact-GC intents roll back; successful deletion
+queues the member revision keys through the existing reference-aware outbox.
 
 **Convert to bundle** validates every descendant project's saved draft, endpoint
 publication and independently pinned published web-app snapshots before changing

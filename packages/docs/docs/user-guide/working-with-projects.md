@@ -169,8 +169,14 @@ Rivet updates that membership immediately after a successful folder move, even
 if refreshing the project list temporarily fails. Opened projects follow the new
 Remote Debugger group without discarding unsaved content.
 Renaming/moving the whole bundle preserves membership. **Convert to ordinary folder**
-removes grouping without deleting projects or changing publications. Empty bundles
-can be deleted like empty folders. Release/merge-back remains project-owned.
+removes grouping without deleting projects or changing publications.
+**Delete bundle** removes the whole bundle, including its projects and subfolders.
+In the confirmation popup, select/copy the displayed bundle name if needed and
+type or paste it exactly to enable deletion. This cannot be undone and closes
+opened member tabs, discarding their unsaved edits. Shared projects outside the
+bundle are not deleted. Unpublish member workflow endpoints and web apps first;
+otherwise deletion is rejected without deleting any members. Ordinary folders
+still must be empty to delete. Release/merge-back remains project-owned.
 If conversion completes but the project list cannot refresh, the old list stays
 visible and a warning confirms conversion succeeded. Refresh the list before
 trying another conversion; the old icon does not mean the conversion failed.

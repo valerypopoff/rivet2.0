@@ -5,6 +5,115 @@ import { createManagedBundleService } from '../routes/workflows/managed/bundles.
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
 import type { HttpError } from '../utils/httpError.js';
 
+for (const failure of ['none', 'empty', 'name', 'path', 'missing', 'endpoint', 'web app', 'storage queue'] as const) {
+  test(`bundle deletion is atomic and guarded (${failure})`, async () => {
+    const root = { name: 'Feature', relative_path: 'Parent/Feature', bundle_id: 'bundle' };
+    const members = (failure === 'empty' ? [] : ['one', 'two']).map((workflow_id) => ({
+      workflow_id,
+      name: workflow_id,
+      relative_path: `Parent/Feature/${workflow_id}.rivet-project`,
+      published_revision_id: failure === 'endpoint' && workflow_id === 'two' ? 'published' : null,
+    }));
+    const committed: string[] = [];
+    const queued: Array<string | null> = [];
+    let locked = false;
+    const journal: string[] = [];
+    const client = {
+      async query(sql: string, params: unknown[] = []) {
+        if (sql.includes('pg_advisory_xact_lock')) {
+          locked = true;
+          return { rows: [] };
+        }
+        assert.ok(locked);
+        if (sql.includes('WHERE bundle_id = $1')) {
+          assert.match(sql, /FOR UPDATE/);
+          return { rows: failure === 'missing' ? [] : [root] };
+        }
+        if (sql.startsWith('SELECT relative_path')) {
+          assert.match(sql, /FOR UPDATE/);
+          return { rows: [root] };
+        }
+        if (sql.startsWith('SELECT * FROM workflows')) {
+          assert.match(sql, /FOR UPDATE/);
+          assert.deepEqual(params, ['Parent/Feature']);
+          return { rows: members };
+        }
+        if (sql.includes('FROM workflow_web_apps'))
+          return { rows: failure === 'web app' && params[0] === 'two' ? [{}] : [] };
+        if (sql.startsWith('DELETE')) {
+          journal.push(`${sql.split(' ')[2]}:${params[0]}`);
+          return { rows: [] };
+        }
+        throw new Error(`Unexpected query: ${sql}`);
+      },
+    };
+    const context = {
+      withTransaction: async (run: (connection: typeof client, hooks: unknown) => Promise<unknown>) => {
+        const result = await run(client, {});
+        committed.push(...journal);
+        return result;
+      },
+      db: {
+        queryRows: async (_client: unknown, sql: string, params: string[]) =>
+          sql.includes('workflow_revisions')
+            ? [{ project_blob_key: `${params[0]}-project`, dataset_blob_key: `${params[0]}-data` }]
+            : [
+                {
+                  recording_blob_key: `${params[0]}-recording`,
+                  replay_project_blob_key: `${params[0]}-replay`,
+                  replay_dataset_blob_key: null,
+                },
+              ],
+      },
+      mappers: {
+        RECORDING_COLUMNS: '*',
+        mapWorkflowRowToProjectItem: (row: { relative_path: string }) => ({
+          absolutePath: `/workflows/${row.relative_path}`,
+        }),
+      },
+      maintenance: {
+        enqueueObjectDeletions: async (_client: unknown, _domain: string, keys: Array<string | null>) => {
+          if (failure === 'storage queue') throw new Error('Queue unavailable');
+          queued.push(...keys);
+        },
+      },
+      executionInvalidationController: {
+        queueWorkflowInvalidation: async () => {},
+        queueCatalogInvalidation: async () => {},
+      },
+    } as unknown as ManagedWorkflowContext;
+    const operation = createManagedBundleService(context).delete('bundle', {
+      name: failure === 'name' ? 'feature' : 'Feature',
+      relativePath: failure === 'path' ? 'Moved/Feature' : root.relative_path,
+    });
+    if (failure === 'none' || failure === 'empty') {
+      const result = await operation;
+      assert.equal(result.deleted, true);
+      assert.deepEqual(
+        result.deletedProjects.map((p) => p.projectId),
+        members.map((member) => member.workflow_id),
+      );
+      assert.equal(committed.length, members.length * 2 + 1);
+      if (members.length) {
+        assert.ok(queued.includes('two-recording'));
+        assert.ok(queued.includes('one-replay'));
+      }
+    } else {
+      await assert.rejects(
+        operation,
+        failure === 'missing'
+          ? /Bundle not found/
+          : failure === 'name' || failure === 'path'
+            ? /name or location changed/
+            : failure === 'storage queue'
+              ? /Queue unavailable/
+              : /Unpublish/,
+      );
+      assert.deepEqual(committed, [], 'no partial transaction is committed');
+    }
+  });
+}
+
 for (const operation of ['create', 'duplicate'] as const) {
   test(`bundle ${operation} rejects project-file folder names before storage access`, async () => {
     const service = createManagedBundleService({
