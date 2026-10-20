@@ -4,6 +4,17 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 
+/** The global first page is continuously displaced by the traffic proof. Use
+ * the real workflow selector, including in a retained predecessor/oldest UI. */
+export async function selectHaBrowserRecordingWorkflow(page, workflowName, expect) {
+  const modal = page.getByTestId('run-recordings-modal');
+  await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
+  await page.locator('.run-recordings-select__option').filter({
+    has: page.getByText(workflowName, { exact: true }),
+  }).click();
+  await expect(modal.locator('.run-recordings-workflow-name')).toHaveText(workflowName);
+}
+
 // Pod removal is not proof that a browser has observed its socket closing.
 // Wait for every original observer to leave and for ordered session replay on
 // its replacements before sending a control once. Never retry an uncertain send.
@@ -372,6 +383,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
         await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
         const modal = page.getByTestId('run-recordings-modal');
         await expect(modal).toBeVisible();
+        await selectHaBrowserRecordingWorkflow(page, marker, expect);
         const row = modal.locator(`[data-recording-id="${ids[1]}"]`);
         await expect(row).toBeVisible({ timeout: 30_000 });
         await row.locator('.run-recordings-run-title').click();
