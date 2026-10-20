@@ -15,7 +15,12 @@ metadata:
     {{- include "rivet.labels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ $component }}
 spec:
+  {{- if and (eq $component "execution") $root.Values.autoscaling.executionController.enabled }}
+  # Voluntary node eviction must not bypass accepted-work retirement.
+  minAvailable: "100%"
+  {{- else }}
   maxUnavailable: {{ $root.Values.availability.disruptionBudget.maxUnavailable }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 6 }}

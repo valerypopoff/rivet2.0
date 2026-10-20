@@ -3,6 +3,7 @@ import type { RequestHandler } from 'express';
 import { pipeline } from 'node:stream/promises';
 import { sharedBundleArchives } from './ha-bundle-archives.js';
 import { retainRequestWork } from './request-work.js';
+import { ownsMaintenance } from './ha-control-plane.js';
 
 /** Authenticated UI management requests only. No general service locator, retry, or archive buffering. */
 export const routeMaintenanceOwner: RequestHandler = (req, res, next) => {
@@ -21,7 +22,7 @@ export const routeMaintenanceOwner: RequestHandler = (req, res, next) => {
         res.once('close', () => stream.destroy()); await pipeline(stream, res); return;
       }
     }
-    if (process.env.RIVET_HA_MAINTENANCE === '1') { next(); return; }
+    if (ownsMaintenance()) { next(); return; }
     const upstream = new URL(process.env.RIVET_HA_MAINTENANCE_URL || '');
     if (upstream.protocol !== 'http:' || upstream.username || upstream.password || upstream.pathname !== '/' || !/^[a-z0-9.-]+$/.test(upstream.hostname))
       throw new Error('Maintenance owner identity invalid');

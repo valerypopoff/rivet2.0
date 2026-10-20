@@ -18,6 +18,9 @@ import { ScheduledRunService } from './service.js';
 import { runScheduledGraph } from './runner.js';
 import { beginScheduledActivity } from './activity.js';
 import { settleBeforeDeadline } from '../shutdown-deadline.js';
+import { getScheduledRunScope } from '../ha-control-plane.js';
+import { getApiRuntimeProfile } from '../runtime-profile.js';
+import { getPublishedExecutionAdmission } from '../published-execution-admission.js';
 
 let service: ScheduledRunService | undefined;
 let stopping = false;
@@ -86,6 +89,8 @@ export async function initializeScheduledRuns() {
   return initialization;
 }
 async function initializeStore() {
+  const scope = getScheduledRunScope(getApiRuntimeProfile());
+  if (!scope) return;
   const maxConcurrent = Number(process.env.RIVET_SCHEDULED_RUNS_MAX_CONCURRENT ?? '1');
   if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8)
     throw new Error('RIVET_SCHEDULED_RUNS_MAX_CONCURRENT must be 1–8.');
@@ -153,6 +158,26 @@ async function initializeStore() {
       }
     },
     maxConcurrent,
+    {
+      scope,
+      ...(scope === 'published'
+        ? {
+            acquirePermit() {
+              const admission = getPublishedExecutionAdmission();
+              const snapshot = admission.getSnapshot();
+              // Schedules never bypass the public budget, even in observe mode;
+              // leave one slot for request traffic. No permit means no durable claim.
+              if (
+                snapshot.draining ||
+                (snapshot.mode !== 'disabled' && snapshot.activeRuns >= snapshot.maxActiveRuns - 1)
+              )
+                return undefined;
+              const result = admission.acquire('scheduled-run');
+              return result.kind === 'accepted' ? result.permit : undefined;
+            },
+          }
+        : {}),
+    },
   );
   if (draining) service.beginDrain();
   else service.start();

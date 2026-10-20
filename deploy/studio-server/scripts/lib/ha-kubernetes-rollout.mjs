@@ -3,6 +3,13 @@ import { releaseOperationJournalName, journalForReleaseOperation } from './relea
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 
+export const haFrozenAutoscalingValues = {
+  autoscaling: {
+    execution: { enabled: false }, executionController: { suspended: true },
+    proxy: { enabled: false }, web: { enabled: false }, backend: { enabled: false },
+  },
+};
+
 const ownerEnvNames = new Set([
   'PORT', 'RIVET_KEY', 'RIVET_API_PROFILE', 'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_BACKEND_API_PORT', 'RIVET_BACKEND_EXECUTOR_PORT', 'RIVET_BACKEND_HEALTH_PORT',
@@ -29,9 +36,11 @@ export function hasSameHaOwnerIdentity(current, candidate) {
   const identity = (template) => {
     const container = template?.spec?.containers?.find(c => ['backend', 'api'].includes(c.name));
     if (!container) return null;
+    const mode = (container.env ?? []).find(e => e.name === 'RIVET_HA_CONTROL_PLANE_MODE');
     return {
-      env: (container.env ?? []).filter(e => ownerEnvNames.has(e.name) ||
-        ownerEnvPrefixes.some(prefix => e.name.startsWith(prefix)))
+      controlPlaneMode: mode?.valueFrom ? mode : mode?.value ?? 'replicated',
+      env: (container.env ?? []).filter(e => e.name !== 'RIVET_HA_CONTROL_PLANE_MODE' && (ownerEnvNames.has(e.name) ||
+        ownerEnvPrefixes.some(prefix => e.name.startsWith(prefix))))
         // The API omits empty literal values; an absent EnvVar or valueFrom
         // remains distinct because it can resolve a different runtime value.
         .map(e => e.valueFrom ? e : { ...e, value: e.value ?? '' })
@@ -65,10 +74,42 @@ export function resolveHaWorkloadCapacity(candidate, existing, journal, resumeTo
   if (!saved) return existing.spec.replicas;
   if (
     resumeToken !== journal.token ||
-    ![saved.replicas, saved.replicas + (saved.role === 'maintenance' ? 0 : 1)].includes(existing.spec.replicas)
+    ![saved.replicas, saved.replicas + (saved.role === 'maintenance' || (saved.role === 'backend' && journal.controlPlaneMode === 'singleton') ? 0 : 1)].includes(existing.spec.replicas)
   )
     throw new Error('HA recovery capacity or token changed; no templates were applied.');
   return saved.replicas; // The extra owner is this operation's retained surge.
+}
+
+/** Do not reset HPA-grown frontend capacity to static values while Helm changes
+ * images. Freeze its HPA during the roll and carry API-server preconditions in
+ * the same update, just as for the owned execution StatefulSets. */
+export async function captureHaFrontendCapacity(kube, resources, release) {
+  const targets = new Set(resources.filter(r => r.kind === 'HorizontalPodAutoscaler' &&
+    r.spec.scaleTargetRef?.kind === 'Deployment').map(r => r.spec.scaleTargetRef.name));
+  const candidates = resources.filter(r => r.kind === 'Deployment' && targets.has(r.metadata.name));
+  const identities = [];
+  const read = async name => JSON.parse((await kube(['get', 'deployment', name, '-o', 'json'])).stdout);
+  for (const candidate of candidates) {
+    const component = candidate.metadata.labels?.['app.kubernetes.io/component'];
+    const current = await read(candidate.metadata.name);
+    if (!['proxy', 'web'].includes(component) || !current.metadata.uid ||
+        current.metadata.labels?.['app.kubernetes.io/instance'] !== release ||
+        current.metadata.labels?.['app.kubernetes.io/component'] !== component)
+      throw new Error('Autoscaled frontend identity is unconfirmed.');
+    identities.push({ name: candidate.metadata.name, uid: current.metadata.uid, component });
+  }
+  return async () => {
+    const replicas = {}, versions = {};
+    for (const identity of identities) {
+      const current = await read(identity.name);
+      if (current.metadata.uid !== identity.uid || !current.metadata.resourceVersion ||
+          !Number.isSafeInteger(current.spec.replicas) || current.spec.replicas < 1)
+        throw new Error('Autoscaled frontend identity or capacity changed; no templates were applied.');
+      replicas[identity.component] = current.spec.replicas;
+      versions[identity.name] = current.metadata.resourceVersion;
+    }
+    return { replicas, versions };
+  };
 }
 
 /** Kubernetes plumbing only; retirement policy stays independently testable. */
@@ -103,11 +144,19 @@ export async function runHaKubernetesRollout({
     );
   };
   const initialJournal = await readJournal();
+  const frontendCapacity = await captureHaFrontendCapacity(kube, resources, release);
   const selector = `app.kubernetes.io/instance=${release}`;
   const publicServices = new Set(
     resources.filter((r) => r.kind === 'Service' && !r.spec.publishNotReadyAddresses).map((r) => r.metadata.name),
   );
   const inventory = JSON.parse((await kube(['get', 'statefulset', '-l', selector, '-o', 'json'])).stdout).items;
+  const controlMode = template => template?.spec?.containers?.find(c => c.name === 'backend')?.env
+    ?.find(e => e.name === 'RIVET_HA_CONTROL_PLANE_MODE')?.value ?? 'replicated';
+  const backend = resources.find(r => r.kind === 'StatefulSet' && r.metadata.labels?.['app.kubernetes.io/component'] === 'backend');
+  const controlPlaneMode = controlMode(backend?.spec.template);
+  const oldBackend = inventory.find(r => r.metadata.labels?.['app.kubernetes.io/component'] === 'backend');
+  if (controlMode(oldBackend?.spec.template) !== controlPlaneMode)
+    throw new Error('Control-plane mode changed: use the separate journaled topology transition, not an ordinary upgrade.');
   const services = JSON.parse((await kube(['get', 'service', '-l', selector, '-o', 'json'])).stdout).items;
   for (const current of services) {
     const candidate = resources.find(r => r.kind === 'Service' && r.metadata.name === current.metadata.name);
@@ -153,6 +202,11 @@ export async function runHaKubernetesRollout({
     if (!raw.trim()) return null;
     const pod = JSON.parse(raw);
     if (pod.metadata.labels?.['app.kubernetes.io/instance'] !== release) throw new Error('Foreign HA pod.');
+    const workloadName = podName.slice(0, podName.lastIndexOf('-'));
+    const workload = workloads.find(w => w.name === workloadName);
+    if (!workload || !pod.metadata.ownerReferences?.some(
+      owner => owner.kind === 'StatefulSet' && owner.controller === true && owner.uid === workload.uid))
+      throw new Error('HA pod controller ownership changed; observation/retirement blocked.');
     const container = pod.spec.containers.find((c) => ['backend', 'api'].includes(c.name));
     if (!container) throw new Error('Missing HA owner container.');
     return {
@@ -193,13 +247,14 @@ export async function runHaKubernetesRollout({
     }
     // Helm's patch must carry this resourceVersion. A scale/status change after
     // the read conflicts at the API server rather than overwriting new owners.
+    const frontends = await frontendCapacity();
     return {
-      replicaCount: Object.fromEntries(workloads.filter(w => w.role !== 'maintenance').map(w => [w.role, w.replicas])),
-      ha: { rolloutResourceVersions: versions },
+      replicaCount: { ...Object.fromEntries(workloads.filter(w => w.role !== 'maintenance').map(w => [w.role, w.replicas])), ...frontends.replicas },
+      ha: { rolloutResourceVersions: { ...versions, ...frontends.versions } },
     };
   };
   const result = await runHaRollingUpgrade({
-    identity: { release, namespace, manifestDigest, configurationDigest: getHaConfigurationDigest(resources) },
+    identity: { release, namespace, manifestDigest, controlPlaneMode, configurationDigest: getHaConfigurationDigest(resources) },
     workloads,
     resumeToken,
     timeoutMs,

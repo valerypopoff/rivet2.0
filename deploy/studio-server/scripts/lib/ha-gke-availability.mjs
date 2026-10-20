@@ -10,12 +10,21 @@ const ready = (pod) => !pod.metadata?.deletionTimestamp &&
 /** A Pod Ready bit alone is not load-balancer health evidence on GKE. This
  * preflight rejects the known no-health-check and timed-out NEG-ready cases.
  * It is an observation, not a custom readiness controller or a PDB substitute. */
-export function assertGkeFrontendAvailability(pods, nodes, release) {
+export function assertGkeFrontendAvailability(pods, nodes, release, controlPlaneMode = 'replicated', edgeProfile = 'regional') {
+  assert.ok(['replicated', 'singleton'].includes(controlPlaneMode), 'unknown control availability policy');
+  assert.ok(['regional', 'compact'].includes(edgeProfile), 'unknown GKE edge profile');
+  const compact = edgeProfile === 'compact';
+  const proxyMinimum = compact ? 2 : 6;
+  const zoneMinimum = compact ? 2 : 3;
   const frontend = pods.filter(p => ['proxy', 'web'].includes(component(p)) &&
     p.metadata?.labels?.['app.kubernetes.io/instance'] === release);
   const proxies = frontend.filter(p => component(p) === 'proxy');
+  // This is qualification at the compact floor, not general live monitoring.
+  // Surplus replicas could hide the endpoint-loss risk we need to exercise.
+  if (compact) assert.equal(proxies.length, 2, 'Compact qualification requires exactly two steady-state proxies');
   const web = frontend.filter(p => component(p) === 'web');
-  assert.ok(proxies.length >= 6 && web.length >= 2, 'GKE proof requires six proxies and two web replicas');
+  const webMinimum = controlPlaneMode === 'singleton' ? 1 : 2;
+  assert.ok(proxies.length >= proxyMinimum && web.length >= webMinimum, `GKE proof requires ${proxyMinimum} proxies and ${webMinimum} web replicas`);
   assert.equal(new Set(frontend.map(p => p.metadata.uid)).size, frontend.length, 'frontend UID evidence is duplicated');
   const zones = new Map();
   for (const role of [proxies, web]) {
@@ -24,8 +33,8 @@ export function assertGkeFrontendAvailability(pods, nodes, release) {
       assert.ok(pod.metadata.uid && ready(pod), 'frontend is missing identity or not ready');
       const spread = pod.spec?.topologySpreadConstraints?.find(c => c.topologyKey === 'topology.kubernetes.io/zone');
       assert.ok(spread?.nodeTaintsPolicy === 'Honor' && spread.whenUnsatisfiable === 'DoNotSchedule' &&
-        spread.minDomains === 3 && spread.maxSkew === 1,
-        'GKE frontend must retain hard three-zone spread with nodeTaintsPolicy=Honor');
+        spread.minDomains === zoneMinimum && spread.maxSkew === 1,
+        `GKE frontend must retain hard ${zoneMinimum}-zone spread with nodeTaintsPolicy=Honor`);
       const node = nodes.find(n => n.metadata.name === pod.spec?.nodeName);
       const host = node?.metadata.labels?.['kubernetes.io/hostname'];
       const zone = node?.metadata.labels?.['topology.kubernetes.io/zone'];
@@ -40,8 +49,9 @@ export function assertGkeFrontendAvailability(pods, nodes, release) {
       zones.set(zone, (zones.get(zone) ?? 0) + 1);
     }
   }
-  assert.ok(zones.size === 3 && [...zones.values()].every(n => n >= 2),
-    'GKE proof requires at least two healthy proxy endpoints in each of exactly three zones');
+  assert.ok(compact ? zones.size >= 2 : zones.size === 3 && [...zones.values()].every(n => n >= 2),
+    compact ? 'Compact GKE proof requires healthy proxies in at least two zones'
+      : 'GKE proof requires at least two healthy proxy endpoints in each of exactly three zones');
   return frontend.map(p => {
     const node = nodes.find(n => n.metadata.name === p.spec.nodeName);
     return { name: p.metadata.name, uid: p.metadata.uid, component: component(p), node: p.spec.nodeName,
@@ -66,7 +76,9 @@ export async function waitForGkeFrontendAvailability(gate, removed = []) {
     await gate.assertProofContext();
     try {
       assert.ok(!pods.some(p => removed.includes(p.metadata.uid)), 'evicted frontend UID still exists');
-      return assertGkeFrontendAvailability(pods, nodes, gate.config.release);
+      return assertGkeFrontendAvailability(pods, nodes, gate.config.release,
+        gate.providerValues?.ha?.controlPlane?.mode ?? 'replicated',
+        gate.providerValues?.availability?.gkeGatewayProfile ?? 'regional');
     } catch (error) { last = error; }
     await new Promise(resolve => setTimeout(resolve, 1000));
   } while (Date.now() < deadline);
@@ -124,8 +136,10 @@ export async function verifyGkeFrontendEvictions(gate, baseUrl) {
     }
     // Non-empty simultaneous public observations are required even in a very
     // fast fixture. Production's long pre-stop normally supplies many samples.
+    const samplingDeadline = Date.now() + gate.config.deploymentTimeoutSeconds * 1000;
     while (workflow.report.samples < 100 && !workflow.report.failures.length && !web.report.failures.length) {
       await gate.assertProofContext();
+      assert.ok(Date.now() < samplingDeadline, 'Frontend proof sampling deadline exceeded; qualification is incomplete');
       await new Promise(resolve => setTimeout(resolve, 25));
     }
   } finally {

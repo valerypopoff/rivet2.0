@@ -57,12 +57,13 @@ function commandLine(program, args) {
 }
 
 async function run(program, args, options = {}) {
-  const { cwd = rootDir, input, capture = false, allowFailure = false } = options;
+  const { cwd = rootDir, input, capture = false, allowFailure = false, env = process.env } = options;
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       cwd,
       shell: false,
       windowsHide: true,
+      env,
       stdio: capture ? ['pipe', 'pipe', 'pipe'] : input == null ? 'inherit' : ['pipe', 'inherit', 'inherit'],
     });
     let stdout = '';
@@ -360,7 +361,7 @@ function readCookiePair(response, name) {
  * avoids duplicating production cookie/session-version signing rules in the
  * gate while still remaining independent of an external identity provider.
  */
-async function createReleaseGateWebAppOAuthSession(baseUrl, slug, email) {
+export async function createReleaseGateWebAppOAuthSession(baseUrl, slug, email) {
   const login = await fetch(`${baseUrl}/apps/${encodeURIComponent(slug)}?auth_action=login`, {
     redirect: 'manual',
     signal: AbortSignal.timeout(10_000),

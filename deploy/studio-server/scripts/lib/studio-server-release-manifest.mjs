@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { assertHaReleaseEvidence } from './ha-release-evidence.mjs';
+import { assertHaReleaseEvidence, assertRuntimeControlEvidence, assertRuntimeAutoscalingEvidence } from './ha-release-evidence.mjs';
 
 export const STUDIO_SERVER_RELEASE_MANIFEST_VERSION = 2;
 export const STUDIO_SERVER_LEGACY_RELEASE_MANIFEST_VERSION = 1;
@@ -263,6 +263,8 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
     },
   };
   if (evidence.ha) normalized.evidence.ha = assertHaReleaseEvidence(evidence.ha, normalized);
+  if (evidence.runtimeControl) normalized.evidence.runtimeControl = assertRuntimeControlEvidence(evidence.runtimeControl, normalized);
+  if (evidence.runtimeAutoscaling) normalized.evidence.runtimeAutoscaling = assertRuntimeAutoscalingEvidence(evidence.runtimeAutoscaling, normalized);
   return normalized;
 }
 

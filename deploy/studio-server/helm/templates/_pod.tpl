@@ -118,7 +118,7 @@ securityContext:
 
 {{- define "rivet.pod.backendVolumeMounts" -}}
 {{- include "rivet.pod.apiVolumeMounts" . }}
-{{- if and (or (not .Values.ha.enabled) (default false .haMaintenance)) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
+{{- if and (or (not .Values.ha.enabled) (default false .haMaintenance) (eq .Values.ha.controlPlane.mode "singleton")) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
 - name: legacy-restore
   mountPath: /data/rivet-restore
 {{- end }}

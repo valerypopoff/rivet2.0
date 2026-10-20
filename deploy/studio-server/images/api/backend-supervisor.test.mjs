@@ -617,6 +617,10 @@ test('UI restart is private, stops both children and reloads the journal with a 
 test('combined backend keeps the child environments and loopback configuration separate', async () => {
   const env = environment(await ports());
   const children = childEnvironments(env);
+  assert.throws(() => childEnvironments({ ...env, RIVET_RUNNER_SLOT_ID: 'runtime-2',
+    RIVET_EXECUTION_STARTUP_FENCE: 'runtime-2' }), /startup-fenced/);
+  assert.doesNotThrow(() => childEnvironments({ ...env, RIVET_RUNNER_SLOT_ID: 'runtime-1',
+    RIVET_EXECUTION_STARTUP_FENCE: 'runtime-2' }));
   assert.equal(children.api.RIVET_RUNTIME_PROCESS_ROLE, 'api');
   assert.equal(children.api.PORT, env.RIVET_BACKEND_API_PORT);
   assert.equal(children.executor.RIVET_RUNTIME_PROCESS_ROLE, 'executor');

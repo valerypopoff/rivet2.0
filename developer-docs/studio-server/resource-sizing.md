@@ -1,11 +1,24 @@
 # Kubernetes resource-sizing handoff
 
+The opt-in [runtime autoscaler](runtime-autoscaling.md) has its own pod requests
+and ceiling: compact mode is six application pods plus one controller. Its
+execution maximum must fit the real DB/node/provider budgets. Local protocol
+tests are not representative-load or GKE capacity measurements.
+
 Status: **measurement pending**. Do not replace the production overlay's
 `resourceLimitAcknowledgements` with guessed values. This is a staging-only
 procedure for when DevOps can provide the cluster and monitoring access. The
 current [published-capacity gate](kubernetes.md#published-execution-capacity-calibration-and-certificate)
 proves a deterministic execution envelope; it does **not** size every Rivet
 container or exercise arbitrary user graphs.
+
+The opt-in [runtime-HA/singleton-control profile](runtime-ha-singleton-control-plan.md)
+has six proxies, one web, one editor/maintenance backend and two execution pods.
+Ten is its steady-state count, not its surge ceiling. Maintenance is embedded,
+not removed: include archive upload/extraction/export, restore recovery and editor
+activity together in backend peak measurements. Removing three old reservations
+does not prove that the merged backend can keep its old memory/CPU budget. Its
+published scheduler shares the ordinary per-pod execution admission envelope.
 
 ## Before running a trial
 

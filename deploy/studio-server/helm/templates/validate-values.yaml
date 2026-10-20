@@ -1,4 +1,13 @@
 {{- $kubernetesQuantityPattern := "^[+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$" -}}
+{{- if or (not (kindIs "bool" .Values.autoscaling.executionController.enabled)) (not (kindIs "bool" .Values.autoscaling.executionController.suspended)) -}}
+{{- fail "executionController.enabled and suspended must be booleans" -}}
+{{- end -}}
+{{- if and .Values.autoscaling.executionController.enabled (or (not .Values.ha.enabled) .Values.workflowSchema.maintenanceValidation) -}}
+{{- fail "executionController requires HA and cannot run during maintenance validation" -}}
+{{- end -}}
+{{- if or (hasKey .Values.env "RIVET_EXECUTION_STARTUP_FENCE") (hasKey .Values.podAnnotations.execution "rivet.dev/execution-retirement-fence") -}}
+{{- fail "execution startup fencing is controller-owned and cannot be overridden" -}}
+{{- end -}}
 {{- if not (has .Values.deploymentProfile (list "cluster" "single-machine")) -}}
 {{- fail "deploymentProfile must be cluster or single-machine" -}}
 {{- end -}}
@@ -514,7 +523,7 @@
 {{- end -}}
 {{- $backendReplicas := int .Values.replicaCount.backend -}}
 {{- $executionReplicas := int .Values.replicaCount.execution -}}
-{{- if .Values.autoscaling.execution.enabled -}}
+{{- if or .Values.autoscaling.execution.enabled .Values.autoscaling.executionController.enabled -}}
 {{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
 {{- end -}}
 {{- $evaluationReplicas := ternary (int .Values.replicaCount.evaluation) 0 (and .Values.compatibility.legacyStartupSettingsFiles .Values.hostedEvaluations.enabled) -}}
@@ -528,17 +537,27 @@
 {{- if gt (len (include "rivet.fullname" .)) 40 -}}
 {{- fail "HA fullname must be at most 40 characters so every owner pod has a valid DNS identity" -}}
 {{- end -}}
-{{- /* One maintenance owner and one surge owner; tiers are replaced serially. */ -}}
-{{- $apiPods = add $apiPods 2 -}}
+{{- /* Embedded control has no extra maintenance process. Both modes need one runtime surge. */ -}}
+{{- $apiPods = add $apiPods (ternary 1 2 (eq .Values.ha.controlPlane.mode "singleton")) -}}
 {{- end -}}
 {{- $requiredPostgresConnections := add $postgresReservedConnections (mul $apiPods $apiPodConnections) -}}
+{{- /* ScheduledRunStore has its own two-connection pool, outside the shared
+      managed query pool. HA execution owners now schedule published work too.
+      Only one backend/execution surge exists at a time; maintenance/evaluation
+      roles never start a scheduler. Non-HA schedules remain control-owned. */ -}}
+{{- $schedulerPods := $backendReplicas -}}
+{{- if .Values.ha.enabled -}}
+{{- $schedulerPods = add $schedulerPods $executionReplicas 1 -}}
+{{- end -}}
+{{- $schedulerConnections := mul $schedulerPods 2 -}}
+{{- $requiredPostgresConnections = add $requiredPostgresConnections $schedulerConnections -}}
 {{- $restoreConnections := 0 -}}
 {{- if and .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) -}}
 {{- $restoreConnections = add (mul $apiPods 2) 3 -}}
 {{- $requiredPostgresConnections = add $requiredPostgresConnections $restoreConnections -}}
 {{- end -}}
 {{- if gt $requiredPostgresConnections $postgresMaxConnections -}}
-{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN) + %d restore%s), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, lower execution autoscaling.maxReplicas, or lower replicaCount.evaluation" $requiredPostgresConnections $postgresReservedConnections $apiPods $poolMaxPerApiPod $restoreConnections $evaluationCapacityDetail $postgresMaxConnections) -}}
+{{- fail (printf "PostgreSQL capacity is too small: the chart requires %d connections (%d reserved + %d API pods * (%d pooled + 3 LISTEN) + %d restore + %d scheduler%s), but postgres.maxConnections is %d; raise database capacity, lower postgres.poolMaxPerApiPod, lower execution autoscaling.maxReplicas, or lower replicaCount.evaluation" $requiredPostgresConnections $postgresReservedConnections $apiPods $poolMaxPerApiPod $restoreConnections $schedulerConnections $evaluationCapacityDetail $postgresMaxConnections) -}}
 {{- end -}}
 
 {{- range $key := list "RIVET_MANAGED_MAINTENANCE_ENABLED" "RIVET_MANAGED_MAINTENANCE_INTERVAL_MS" "RIVET_MANAGED_MAINTENANCE_LEASE_MS" "RIVET_MANAGED_MAINTENANCE_BATCH_SIZE" -}}
@@ -700,6 +719,12 @@
 {{- if not (kindIs "bool" .Values.availability.gkeGateway) -}}
 {{- fail "availability.gkeGateway must be a boolean" -}}
 {{- end -}}
+{{- if not (has .Values.availability.gkeGatewayProfile (list "regional" "compact")) -}}
+{{- fail "availability.gkeGatewayProfile must be regional or compact" -}}
+{{- end -}}
+{{- if and (eq .Values.availability.gkeGatewayProfile "compact") (not .Values.availability.gkeGateway) -}}
+{{- fail "compact edge requires the guarded GKE Gateway policy" -}}
+{{- end -}}
 {{- if not (kindIs "bool" .Values.availability.podAntiAffinity.required) -}}
 {{- fail "availability.podAntiAffinity.required must be a boolean" -}}
 {{- end -}}
@@ -728,8 +753,9 @@
 {{- if or (not .Values.ha.enabled) (ne .Values.gateway.mode "embedded") (ne .Values.deploymentProfile "cluster") -}}
 {{- fail "availability.gkeGateway requires cluster HA with the embedded proxy" -}}
 {{- end -}}
-{{- if or (not .Values.availability.topologySpread.enabled) (ne .Values.availability.topologySpread.topologyKey "topology.kubernetes.io/zone") (ne .Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule") (ne (int .Values.availability.topologySpread.maxSkew) 1) (ne (int .Values.availability.topologySpread.minDomains) 3) -}}
-{{- fail "availability.gkeGateway requires hard zone spread, maxSkew=1 and minDomains=3" -}}
+{{- $zoneFloor := ternary 2 3 (eq .Values.availability.gkeGatewayProfile "compact") -}}
+{{- if or (not .Values.availability.topologySpread.enabled) (ne .Values.availability.topologySpread.topologyKey "topology.kubernetes.io/zone") (ne .Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule") (ne (int .Values.availability.topologySpread.maxSkew) 1) (ne (int .Values.availability.topologySpread.minDomains) $zoneFloor) -}}
+{{- fail (printf "availability.gkeGateway requires hard zone spread, maxSkew=1 and minDomains=%d" $zoneFloor) -}}
 {{- end -}}
 {{- if ne .Values.availability.topologySpread.nodeTaintsPolicy "Honor" -}}
 {{- fail "availability.gkeGateway requires topologySpread.nodeTaintsPolicy=Honor for autoscaler placement" -}}
@@ -747,9 +773,14 @@
 {{- range $component := list "proxy" "web" -}}
 {{- $autoscaling := index $.Values.autoscaling $component -}}
 {{- $minimum := ternary (int $autoscaling.minReplicas) (int (index $.Values.replicaCount $component)) $autoscaling.enabled -}}
-{{- $floor := ternary 6 2 (eq $component "proxy") -}}
+{{- $webFloor := ternary 1 2 (eq $.Values.ha.controlPlane.mode "singleton") -}}
+{{- $proxyFloor := ternary 2 6 (eq $.Values.availability.gkeGatewayProfile "compact") -}}
+{{- $floor := ternary $proxyFloor $webFloor (eq $component "proxy") -}}
 {{- if or (lt $minimum $floor) (lt (int (index $.Values.replicaCount $component)) $floor) -}}
 {{- fail (printf "availability.gkeGateway requires an effective minimum of %d %s replicas, including the initial count" $floor $component) -}}
+{{- end -}}
+{{- if and $autoscaling.enabled (or (lt (int $autoscaling.maxReplicas) (int $autoscaling.minReplicas)) (lt (int $autoscaling.maxReplicas) (int (index $.Values.replicaCount $component)))) -}}
+{{- fail (printf "autoscaling.%s maximum must cover its minimum and initial replica count" $component) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -784,7 +815,7 @@
 {{- if and .Values.autoscaling.web.enabled (empty (dig "requests" "cpu" "" .Values.resources.web)) -}}
 {{- fail "resources.web.requests.cpu is required when web autoscaling is enabled" -}}
 {{- end -}}
-{{- if and .Values.autoscaling.execution.enabled (empty (dig "requests" "cpu" "" .Values.resources.execution)) -}}
+{{- if and (or .Values.autoscaling.execution.enabled .Values.autoscaling.executionController.enabled) (empty (dig "requests" "cpu" "" .Values.resources.execution)) -}}
 {{- fail "resources.execution.requests.cpu is required when execution autoscaling is enabled" -}}
 {{- end -}}
 
@@ -795,20 +826,57 @@
 {{- end -}}
 
 {{- if .Values.ha.enabled -}}
+{{- if not (has .Values.ha.controlPlane.mode (list "replicated" "singleton")) -}}
+{{- fail "ha.controlPlane.mode must be replicated or singleton" -}}
+{{- end -}}
+{{- $backendFloor := ternary 1 2 (eq .Values.ha.controlPlane.mode "singleton") -}}
+{{- if eq .Values.ha.controlPlane.mode "singleton" -}}
+{{- if or (ne (int .Values.replicaCount.backend) 1) (ne (int .Values.replicaCount.web) 1) (lt (int .Values.replicaCount.execution) 2) (not .Values.availability.gkeGateway) (ne .Values.publishedExecutionAdmission.mode "enforce") (lt (int .Values.publishedExecutionAdmission.maxActiveRunsPerPod) 2) .Values.autoscaling.web.enabled -}}
+{{- fail "singleton control requires one backend/web, GKE Gateway HA, >=2 execution pods, enforced admission >=2 and no web autoscaler" -}}
+{{- end -}}
+{{- end -}}
+{{- if not .Values.workflowSchema.maintenanceValidation -}}
+{{- if lt (int .Values.replicaCount.execution) 2 -}}
+{{- fail "HA requires a minimum of two execution pods" -}}
+{{- end -}}
+{{- if and (or .Values.autoscaling.execution.enabled .Values.autoscaling.executionController.enabled) (or (lt (int .Values.autoscaling.execution.minReplicas) 2) (lt (int .Values.autoscaling.execution.maxReplicas) (int .Values.autoscaling.execution.minReplicas)) (lt (int .Values.autoscaling.execution.maxReplicas) (int .Values.replicaCount.execution))) -}}
+{{- fail "HA execution autoscaling must retain a minimum of two and a maximum covering both minimum and initial runtime capacity" -}}
+{{- end -}}
+
+{{- if .Values.autoscaling.executionController.enabled -}}
+{{- if or (not .Values.ha.enabled) .Values.workflowSchema.maintenanceValidation (not .Values.metrics.enabled) (ne .Values.publishedExecutionAdmission.mode "enforce") (not .Values.availability.disruptionBudget.enabled) .Values.autoscaling.execution.enabled .Values.autoscaling.web.enabled .Values.autoscaling.backend.enabled -}}
+{{- fail "executionController requires HA, enforced admission, metrics and disruption budgets, no execution HPA or developer autoscalers, and no maintenance validation" -}}
+{{- end -}}
+{{- range $key := list "targetSlotsPercent" "stabilizationSeconds" "cooldownSeconds" "withdrawalSeconds" "pollSeconds" "metricsMaxAgeSeconds" -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" (printf "autoscaling.executionController.%s" $key) "value" (index $.Values.autoscaling.executionController $key)) -}}
+{{- if lt (int (index $.Values.autoscaling.executionController $key)) 1 -}}
+{{- fail "executionController policy values must be positive" -}}
+{{- end -}}
+{{- end -}}
+{{- range $key := list "minReplicas" "maxReplicas" "targetCPUUtilizationPercentage" -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" (printf "autoscaling.execution.%s" $key) "value" (index $.Values.autoscaling.execution $key)) -}}
+{{- end -}}
+{{- if or (gt (int .Values.autoscaling.execution.maxReplicas) 100) (gt (int .Values.autoscaling.executionController.targetSlotsPercent) 90) (gt (int .Values.autoscaling.execution.targetCPUUtilizationPercentage) 90) (lt (int .Values.autoscaling.execution.targetCPUUtilizationPercentage) 1) (lt (int .Values.autoscaling.executionController.stabilizationSeconds) (mul 2 (int .Values.autoscaling.executionController.pollSeconds))) (lt (int .Values.autoscaling.executionController.withdrawalSeconds) 60) -}}
+{{- fail "executionController requires bounded capacity, targets 1-90%, a two-poll stabilization window and >=60s routing withdrawal" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- range $field := list (dict "path" "ha.protocol" "value" .Values.ha.protocol) (dict "path" "ha.peerLimit" "value" .Values.ha.peerLimit) -}}
 {{- include "rivet.assertNonNegativeWholeNumber" $field -}}
 {{- end -}}
-{{- if or (lt (int .Values.replicaCount.backend) 2) (gt (int .Values.replicaCount.backend) 8) (ne (int .Values.ha.protocol) 1) (ne .Values.deploymentProfile "cluster") .Values.compatibility.legacyStartupSettingsFiles (not .Values.legacyRestore.enabled) .Values.runtimeLibraries.cache.existingClaimName -}}
-{{- fail "HA requires 2-8 ready backends, protocol 1, current cluster profile, dedicated restore storage and per-pod runtime caches" -}}
+{{- if or (lt (int .Values.replicaCount.backend) $backendFloor) (gt (int .Values.replicaCount.backend) 8) (ne (int .Values.ha.protocol) 1) (ne .Values.deploymentProfile "cluster") .Values.compatibility.legacyStartupSettingsFiles (not .Values.legacyRestore.enabled) .Values.runtimeLibraries.cache.existingClaimName -}}
+{{- fail (printf "HA requires %d-8 ready backends, protocol 1, current cluster profile, dedicated restore storage and per-pod runtime caches" $backendFloor) -}}
 {{- end -}}
 {{- if or (le (int .Values.ha.peerLimit) (int .Values.replicaCount.backend)) (gt (int .Values.ha.peerLimit) 33) -}}
 {{- fail "ha.peerLimit must include the surge ordinal and be at most 33" -}}
 {{- end -}}
+{{- else if ne .Values.ha.controlPlane.mode "replicated" -}}
+{{- fail "ha.controlPlane.mode=singleton requires ha.enabled=true" -}}
 {{- else if ne (int .Values.replicaCount.backend) 1 -}}
 {{- fail "replicaCount.backend=1 is required because /ws/latest-debugger and co-located editor executor session routing remain process-local control-plane features" -}}
 {{- end -}}
 
-{{- range $key := list "RIVET_HA_DEPLOYMENT" "RIVET_HA_MAINTENANCE" "RIVET_HA_API_ONLY" "RIVET_HA_PROTOCOL" "RIVET_HA_PEER_LIMIT" "RIVET_HA_BACKEND_NAME" "RIVET_HA_HEADLESS_SERVICE" "RIVET_HA_MAINTENANCE_URL" "RIVET_ROLLING_RETIREMENT_PROTOCOL" "RIVET_ROLLING_RETIREMENT_TOKEN" "RIVET_ROLLING_RETIREMENT_SOCKET" "RIVET_PROCESS_INCARNATION" -}}
+{{- range $key := list "RIVET_HA_CONTROL_PLANE_MODE" "RIVET_PROXY_HEALTH_OWNER" "RIVET_HA_DEPLOYMENT" "RIVET_HA_MAINTENANCE" "RIVET_HA_API_ONLY" "RIVET_HA_PROTOCOL" "RIVET_HA_PEER_LIMIT" "RIVET_HA_BACKEND_NAME" "RIVET_HA_HEADLESS_SERVICE" "RIVET_HA_MAINTENANCE_URL" "RIVET_ROLLING_RETIREMENT_PROTOCOL" "RIVET_ROLLING_RETIREMENT_TOKEN" "RIVET_ROLLING_RETIREMENT_SOCKET" "RIVET_PROCESS_INCARNATION" -}}
 {{- if hasKey $.Values.env $key -}}
 {{- fail (printf "env.%s is reserved for deployment ownership" $key) -}}
 {{- end -}}

@@ -97,6 +97,7 @@ COPY --chown=10001:10001 deploy/studio-server/images/api/backend-retirement.mjs 
 COPY --chown=10001:10001 deploy/studio-server/images/api/retire-backend.mjs /opt/rivet/retire-backend.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/local-upgrade-ui.mjs /opt/rivet/local-upgrade-ui.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/local-metadata-owner-lease.mjs /opt/rivet/local-metadata-owner-lease.mjs
+COPY --chown=10001:10001 deploy/studio-server/scripts/lib/execution-autoscaler*.mjs deploy/studio-server/scripts/lib/release-operation-journal.mjs /app/packages/studio-server-api/autoscaler/
 
 RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/api-entrypoint.sh /opt/rivet/executor-entrypoint.sh
 

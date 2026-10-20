@@ -1627,6 +1627,54 @@ Running staging images against the production VM's existing data is still a live
 
 ## Proxy DNS recovery and health
 
+`kubernetes-runtime-control-local.mjs` is the local functional fixture for the
+runtime-HA profile. It reuses the managed PostgreSQL/MinIO fixture and supported
+retirement/transfer adapters, accepts only a loopback API and a fresh
+`rivet-runtime-control-*` namespace in an explicitly allowed
+`rivet-runtime-ha10-*` local context, and requires seven simulated-zone nodes
+(six proxy hosts plus surge). Supply the ordinary `RIVET_K8S_RELEASE_GATE_*`
+configuration with immutable local-registry image references and
+`RIVET_RUNTIME_CONTROL_BASELINE_IMAGES` pointing to the old image-map JSON.
+Set `RIVET_RUNTIME_EDGE_PROFILE=compact` only for a fresh isolated two-proxy
+fixture: it needs at least three local proxy/surge hosts and exercises 9 -> 6 -> 9.
+The default remains regional, seven hosts and 13 -> 10 -> 13. The report records
+the selected policy. Neither fixture proves GKE timing, representative capacity,
+or a regional-to-compact edge change; qualify those separately before deployment.
+Optionally supply `RIVET_RUNTIME_CONTROL_NEXT_IMAGES` for a second, genuinely
+different immutable API build after consolidation. Without it the serial
+singleton stage proves replacement only, not mixed-image compatibility.
+Use a separate workspace kubeconfig, never production credentials. It exercises
+old-to-bridge 13 pods, transfer to ten, actual restore-volume bytes, an embedded
+export, cold proxies and published schedule/recording/browser OAuth/action with
+developer Services absent, cold execution replacement with a ready surge while
+both developer Services remain absent, serial control replacement and reverse
+transfer. The cold-proxy check waits for the actual old UIDs to disappear;
+Deployment rollout completion alone can leave a terminating process. Its marker
+is retained in subsequent rendered values rather than weakening template matching.
+The same-image serial stage is not a second mixed-version certificate. The
+fixture retains its namespace for exact-identity diagnostics/cleanup and writes
+`runtime-control-local-report.json`; a failed primary stage stays failed.
+Do not convert this report into provider or promoted-source evidence.
+After a permitted singleton developer outage, the fixture polls only a safe
+`GET /api/config` through the real edge before submitting new maintenance work.
+A ready Pod can precede Service/UI-auth routing propagation. Only this expected
+developer GET is recoverable. Recovery checks every proxy in the selected profile
+(six regional or two compact), not a hard-coded regional count. The independent workflow/web-app/edge-health
+observers remain strict. Never retry a failed POST or combine an earlier failed
+window with a later successful one. Execution retirement
+selects the actual `api` or combined `backend` container from the Pod spec.
+
+On Windows, point `RIVET_K8S_KUBECTL_BIN` at the native executable rather than a
+process-spawning package-manager shim. A shim may exit on cancellation while its
+port-forward child continues to hold the test port. Observe actual child exit
+before deleting the owned fixture; never terminate unrelated kubectl processes.
+
+This fixture initializes only its fresh Minikube hostPath restore claim with
+the API user's ownership and pins that PV to its actual host. It never changes
+a production volume or weakens the non-root application security context.
+The ownership-transfer adapter rejects node-local PVs without exact one-host
+affinity: `ReadWriteOnce` alone cannot preserve hostPath bytes across nodes.
+
 Proxy startup fetches the authenticated, read-only
 `GET /internal/app-settings/proxy-config` snapshot before starting Nginx. The
 migration request barrier must permit this exact method/path during migration

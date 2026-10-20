@@ -7,7 +7,24 @@ import {
   HA_REQUIRED_CHECKS,
   HA_BROWSER_CONTRACT,
   selectHaBrowserContract,
+  assertRuntimeControlEvidence,
+  HA_RUNTIME_CONTROL_CHECKS,
+  HA_COMPACT_EDGE_CHECKS,
 } from './lib/ha-release-evidence.mjs';
+
+test('full-HA receipts cannot authorize singleton control; its qualification binds the exact image pair and chart', () => {
+  const f = fixture();
+  assert.throws(() => assertRuntimeControlEvidence(undefined, f.release), /own exact mixed-image/);
+  const proof = { protocol: 1, candidateSourceSha: f.release.source.sha, candidateImages: f.release.images,
+    chartDigest: f.release.chart.contentDigest, predecessorSourceSha: f.release.lineage.predecessor.sourceSha,
+    predecessorImages: f.release.lineage.predecessor.images, failedRequests: 0, requestSamples: 150,
+    checks: [...HA_RUNTIME_CONTROL_CHECKS] };
+  assert.deepEqual(assertRuntimeControlEvidence(proof, f.release), proof);
+  for (const change of [{ failedRequests: 1 }, { requestSamples: 99 }, { candidateImages: images('c') },
+    { predecessorImages: images('c') }, { chartDigest: 'wrong' }, { checks: proof.checks.slice(1) },
+    { checks: proof.checks.filter(c => c !== 'embedded-maintenance-capacity') }])
+    assert.throws(() => assertRuntimeControlEvidence({ ...proof, ...change }, f.release));
+});
 const images = (x) =>
   Object.fromEntries(
     ['proxy', 'web', 'api', 'executor'].map((name) => [
@@ -15,6 +32,39 @@ const images = (x) =>
       { repository: `registry/${name}`, digest: `sha256:${x.repeat(64)}` },
     ]),
   );
+
+test('compact edge requires explicit profile-bound mixed-image, roll, eviction and transition evidence', () => {
+  const { release } = fixture();
+  const proof = { protocol: 1, candidateSourceSha: release.source.sha, candidateImages: release.images,
+    chartDigest: release.chart.contentDigest, predecessorSourceSha: release.lineage.predecessor.sourceSha,
+    predecessorImages: release.lineage.predecessor.images, failedRequests: 0, requestSamples: 150,
+    checks: [...HA_RUNTIME_CONTROL_CHECKS] };
+  assert.throws(() => assertRuntimeControlEvidence(proof, release, 'compact'), /edge profile/);
+  const compact = { ...proof, edgeProfiles: ['regional', 'compact'], checks: [...proof.checks, ...HA_COMPACT_EDGE_CHECKS] };
+  assert.deepEqual(assertRuntimeControlEvidence(compact, release, 'compact'), compact);
+  assert.doesNotThrow(() => assertRuntimeControlEvidence(compact, release, 'regional'));
+  for (const change of [{ edgeProfiles: ['typo'] }, { edgeProfiles: ['compact', 'compact'] },
+    { edgeProfiles: [] }, { checks: proof.checks }, { checks: compact.checks.slice(0, -1) }])
+    assert.throws(() => assertRuntimeControlEvidence({ ...compact, ...change }, release, 'compact'));
+});
+
+test('leaving a compact installation still needs compact mixed-image qualification before rollout', () => {
+  const f = fixture();
+  f.installed.availability = { gkeGateway: true, gkeGatewayProfile: 'compact' };
+  const proof = { protocol: 1, candidateSourceSha: f.release.source.sha, candidateImages: f.release.images,
+    chartDigest: f.release.chart.contentDigest, predecessorSourceSha: f.release.lineage.predecessor.sourceSha,
+    predecessorImages: f.release.lineage.predecessor.images, failedRequests: 0, requestSamples: 150,
+    checks: [...HA_RUNTIME_CONTROL_CHECKS] };
+  f.release.evidence.runtimeControl = proof; // regional-only, even if destination restores six proxies
+  assert.throws(() => assertHaUpgradeEvidence(f.release, f.installed), /edge profile/);
+  const sameImageInstalled = { ...f.installed, images: f.release.images,
+    release: { production: { ...f.installed.release.production, sourceSha: f.release.source.sha } } };
+  assert.throws(() => assertHaUpgradeEvidence(f.release, sameImageInstalled), /edge profile/);
+  f.release.evidence.runtimeControl = { ...proof, edgeProfiles: ['regional', 'compact'],
+    checks: [...proof.checks, ...HA_COMPACT_EDGE_CHECKS] };
+  assert.doesNotThrow(() => assertHaUpgradeEvidence(f.release, f.installed));
+  assert.doesNotThrow(() => assertHaUpgradeEvidence(f.release, sameImageInstalled));
+});
 function fixture() {
   const release = {
     source: { sha: 'b'.repeat(40) },

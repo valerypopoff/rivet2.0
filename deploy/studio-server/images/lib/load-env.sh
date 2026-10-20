@@ -34,6 +34,7 @@ load_optional_dotenv_preserving_deployment_storage() {
   ha_executor_port="${RIVET_BACKEND_EXECUTOR_PORT:-}"
   ha_deployment="${RIVET_HA_DEPLOYMENT:-}"
   ha_maintenance="${RIVET_HA_MAINTENANCE:-}"
+  ha_control_plane_mode="${RIVET_HA_CONTROL_PLANE_MODE:-}"
   ha_api_only="${RIVET_HA_API_ONLY:-}"
   ha_peer_limit="${RIVET_HA_PEER_LIMIT:-}"
   ha_maintenance_url="${RIVET_HA_MAINTENANCE_URL:-}"
@@ -62,6 +63,7 @@ load_optional_dotenv_preserving_deployment_storage() {
     export RIVET_BACKEND_API_PORT="$ha_api_port"
     export RIVET_BACKEND_EXECUTOR_PORT="$ha_executor_port"
     export RIVET_HA_DEPLOYMENT="$ha_deployment" RIVET_HA_MAINTENANCE="$ha_maintenance" RIVET_HA_API_ONLY="$ha_api_only"
+    if [ -n "$ha_control_plane_mode" ]; then export RIVET_HA_CONTROL_PLANE_MODE="$ha_control_plane_mode"; else unset RIVET_HA_CONTROL_PLANE_MODE; fi
     export RIVET_HA_PEER_LIMIT="$ha_peer_limit" RIVET_HA_MAINTENANCE_URL="$ha_maintenance_url"
     if [ "$deployment_topology" = "single-host" ]; then
       export RIVET_DEPLOYMENT_TOPOLOGY=single-host
@@ -126,6 +128,7 @@ load_optional_dotenv_preserving_deployment_storage() {
   export RIVET_BACKEND_API_PORT="$ha_api_port"
   export RIVET_BACKEND_EXECUTOR_PORT="$ha_executor_port"
   export RIVET_HA_DEPLOYMENT="$ha_deployment" RIVET_HA_MAINTENANCE="$ha_maintenance" RIVET_HA_API_ONLY="$ha_api_only"
+  if [ -n "$ha_control_plane_mode" ]; then export RIVET_HA_CONTROL_PLANE_MODE="$ha_control_plane_mode"; else unset RIVET_HA_CONTROL_PLANE_MODE; fi
   export RIVET_HA_PEER_LIMIT="$ha_peer_limit" RIVET_HA_MAINTENANCE_URL="$ha_maintenance_url"
 
   export RIVET_DEPLOYMENT_TOPOLOGY=replicated

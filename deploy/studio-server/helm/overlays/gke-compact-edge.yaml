@@ -1,0 +1,13 @@
+# Optional reduced-redundancy edge. Merge AFTER gke-ha.yaml and, for six total
+# steady-state pods, gke-runtime-ha.yaml. No production qualification implied.
+availability:
+  gkeGatewayProfile: compact
+  topologySpread:
+    minDomains: 2
+replicaCount:
+  proxy: 2
+autoscaling:
+  proxy:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 4

@@ -15,9 +15,16 @@ export function assertHaRetirement(status, incarnation, operationId) {
   return status;
 }
 
-export function assertHaRolloutPlan(workloads) {
-  if (!Array.isArray(workloads) || !workloads.some((w) => w.role === 'backend'))
+export function assertHaRolloutPlan(workloads, controlPlaneMode = 'replicated') {
+  if (!['replicated', 'singleton'].includes(controlPlaneMode)) throw new Error('Invalid HA control-plane mode.');
+  if (!Array.isArray(workloads) || workloads.some((w) => !w || typeof w !== 'object') || !workloads.some((w) => w.role === 'backend'))
     throw new Error('Missing HA backends.');
+  if (controlPlaneMode === 'singleton' && (
+    workloads.filter(w => w.role === 'backend').length !== 1 ||
+    workloads.find(w => w.role === 'backend')?.replicas !== 1 ||
+    workloads.some(w => w.role === 'maintenance') ||
+    !workloads.some(w => w.role === 'execution' && w.replicas >= 2)
+  )) throw new Error('Singleton HA requires one embedded backend and at least two execution owners.');
   const names = new Set();
   for (const w of workloads) {
     if (
@@ -25,12 +32,12 @@ export function assertHaRolloutPlan(workloads) {
       names.has(w.name) ||
       !/^[a-z0-9-]{1,63}$/.test(w.name ?? '') ||
       !Number.isInteger(w.replicas) ||
-      w.replicas < (w.role === 'backend' ? 2 : 1) ||
+      w.replicas < (w.role === 'execution' || (w.role === 'backend' && controlPlaneMode !== 'singleton') ? 2 : 1) ||
       w.replicas > 32 ||
       w.updateStrategy !== 'OnDelete' ||
       !/^.+@sha256:[a-f0-9]{64}$/.test(w.image ?? '')
     )
-      throw new Error('HA requires bounded OnDelete owners, immutable images and at least two ready backends.');
+      throw new Error('HA requires bounded OnDelete owners, immutable images and at least two owners in each replicated serving tier.');
     names.add(w.name);
   }
   return workloads;
@@ -67,7 +74,8 @@ export async function runHaRollingUpgrade({
   isCurrentPod = (pod, workload) => pod.image === workload.image,
   prepareRetirement = async () => {},
 }) {
-  assertHaRolloutPlan(workloads);
+  const controlPlaneMode = identity.controlPlaneMode ?? 'replicated';
+  assertHaRolloutPlan(workloads, controlPlaneMode);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Invalid HA deadline.');
   const runner = uuid();
   let record = await readJournal();
@@ -84,6 +92,8 @@ export async function runHaRollingUpgrade({
     throw new Error('Invalid HA rollout journal.');
   if (record?.leaseExpiresAt > now()) throw new Error('Another HA rollout owns this release.');
   if (record && record.phase !== 'complete') {
+    if ((record.controlPlaneMode ?? 'replicated') !== controlPlaneMode)
+      throw new Error('HA recovery control-plane mode changed.');
     if (resumeToken !== record.token || record.manifestDigest !== identity.manifestDigest)
       throw new Error(`Recover the exact HA release using --resume-ha ${record.token}.`);
     if (identity.configurationDigest && record.configurationDigest !== identity.configurationDigest)
@@ -150,12 +160,30 @@ export async function runHaRollingUpgrade({
     if (!stopping && !failure) void checkpoint({}).catch(() => {});
   }, 30_000);
   heartbeat.unref?.();
-  const startRetirement = async (pod) => {
+  const checkRetirementCapacity = async (pod, workload) => {
+    if (workload.role !== 'execution' && !(workload.role === 'backend' && controlPlaneMode !== 'singleton')) return;
+    let survivors = 0;
+    for (let i = 0; i <= workload.replicas && survivors < 2; i++) {
+      assertLease();
+      const name = `${workload.name}-${i}`;
+      if (name === pod.name) continue;
+      const peer = await observePod(name);
+      if (!peer?.ready) continue;
+      const state = assertHaRetirement(await status(peer));
+      if (state.state !== 'serving' || state.operationId) continue;
+      const confirmed = await observePod(name);
+      if (confirmed?.uid === peer.uid && confirmed.ready) survivors++;
+    }
+    if (survivors < 2)
+      throw new Error('HA replacement capacity requires two other ready, serving owners before withdrawal; resume after peers recover.');
+  };
+  const startRetirement = async (pod, workload) => {
     const owner = record.owner;
     if (owner.beginIssued && !owner.withdrawIssued)
       throw new Error('Legacy retirement journal lacks routing withdrawal proof.');
     if (!owner.withdrawIssued) {
       await prepareRetirement(pod);
+      await checkRetirementCapacity(pod, workload);
       await checkpoint({ owner: { ...record.owner, withdrawIssued: true } });
       assertLease();
       await withdraw(pod, owner.operationId, owner.incarnation);
@@ -192,7 +220,8 @@ export async function runHaRollingUpgrade({
       const w = workload;
       if (record.completed.includes(w.name)) continue;
       const surgeName = `${w.name}-${w.replicas}`;
-      if (w.role !== 'maintenance' && record.owner?.name !== surgeName) {
+      const serial = w.role === 'maintenance' || (controlPlaneMode === 'singleton' && w.role === 'backend');
+      if (!serial && record.owner?.name !== surgeName) {
         assertLease();
         await scale(w.name, w.replicas + 1, w.replicas);
         await waitForReady(surgeName, w.image);
@@ -221,7 +250,7 @@ export async function runHaRollingUpgrade({
           await checkpoint({ owner: null });
           continue;
         }
-        await startRetirement(pod);
+        await startRetirement(pod, w);
         const deadline = now() + timeoutMs;
         while (true) {
           assertLease();
@@ -239,7 +268,7 @@ export async function runHaRollingUpgrade({
         await waitForReady(name, w.image);
         await checkpoint({ owner: null });
       }
-      if (w.role !== 'maintenance') {
+      if (!serial) {
         // The surge may have accepted work. Retire it before scaling it away.
         const name = surgeName;
         if (!record.owner?.scaleDownIssued) {
@@ -254,7 +283,7 @@ export async function runHaRollingUpgrade({
           }
           const owner = record.owner;
           if (owner.name !== name || owner.uid !== pod.uid) throw new Error('HA surge owner changed.');
-          await startRetirement(pod);
+          await startRetirement(pod, w);
           const deadline = now() + timeoutMs;
           while (true) {
             assertLease();

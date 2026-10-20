@@ -278,6 +278,7 @@ test('Phase 4 route exposure matrix stays stable across API runtime profiles', (
     '/apps/:slug',
     '/apps/:slug/actions/ws',
     '/internal/workflows/:endpointName',
+    '/internal/app-settings/proxy-config',
   ]);
 
   assert.deepEqual(getApiRouteExposureMatrix('combined'), [
@@ -792,6 +793,12 @@ test('execution profile exposes published execution routes and hides control-pla
     await writeWorkflowEndpointAuthSettings({ requireBearerAuth: false });
     const server = await startServer('execution');
     try {
+      const unauthenticated = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`);
+      assert.equal(unauthenticated.status, 403);
+      const projection = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`, { headers: trustedProxyHeaders() });
+      assert.equal(projection.status, 200);
+      assert.equal(projection.headers.get('cache-control'), 'no-store');
+      assert.doesNotMatch(await projection.text(), /phase4-shared-key|clientSecret|storageAccessKey/);
       const configResponse = await fetch(`${server.baseUrl}/api/config`, {
         headers: trustedProxyHeaders(),
       });

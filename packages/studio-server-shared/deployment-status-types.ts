@@ -12,6 +12,12 @@ export type DeploymentApiProfile = 'combined' | 'control' | 'execution' | 'evalu
 export interface DeploymentStatus {
   topology: DeploymentTopology;
   apiProfile: DeploymentApiProfile;
+  /** Deployment policy, not a health observation or current Kubernetes count. */
+  controlPlaneAvailability?: {
+    mode: 'replicated' | 'singleton';
+    maintenance: 'dedicated' | 'embedded';
+    developerInterruptionAllowed: boolean;
+  };
   /**
    * Code-runtime synchronization is available only when replicas share the
    * managed runtime-library registry. It is not a Kubernetes pod-health API.

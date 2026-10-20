@@ -35,6 +35,7 @@ export const defaultApiTestFiles = [
   'src/tests/filesystem-recordings-root.test.ts',
   'src/tests/fixture-safety.test.ts',
   'src/tests/ha-bundle-archives.test.ts',
+  'src/tests/ha-control-plane.test.ts',
   'src/tests/ha-latest-peer-replay.test.ts',
   'src/tests/ha-latest-relay.test.ts',
   'src/tests/ha-latest-replay.test.ts',

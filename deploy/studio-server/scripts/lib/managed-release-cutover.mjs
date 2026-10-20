@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-const components = new Set(['backend', 'maintenance', 'api', 'executor', 'execution', 'evaluation', 'proxy', 'web']);
+const components = new Set(['backend', 'maintenance', 'api', 'executor', 'execution', 'evaluation', 'proxy', 'web', 'autoscaler']);
 const phases = new Set(['quiescing', 'quiesced', 'validating', 'resuming', 'complete']);
 const resourceName = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
 function checkedInventory(resources) {
@@ -21,6 +21,7 @@ function checkedInventory(resources) {
   return resources;
 }
 export const maintenanceValidationValues = {
+  ha: { enabled: false, controlPlane: { mode: 'replicated' } },
   workflowSchema: { maintenanceValidation: true },
   // HA adoption validates a fenced singleton before restoring the full HA
   // profile. The GKE HA-only guard cannot apply to that temporary singleton;
@@ -28,6 +29,7 @@ export const maintenanceValidationValues = {
   availability: { gkeGateway: false },
   replicaCount: { proxy: 0, web: 0, evaluation: 0 },
   autoscaling: {
+    executionController: { enabled: false },
     proxy: { enabled: false }, web: { enabled: false },
     backend: { enabled: false }, execution: { enabled: false },
   },

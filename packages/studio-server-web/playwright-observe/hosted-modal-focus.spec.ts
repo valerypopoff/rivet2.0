@@ -132,6 +132,44 @@ test('reloading an editor with an open menu releases its dashboard listeners', a
   await expect(listeners).toHaveAttribute('data-editor-menu-listeners', '0', { timeout: 2_000 });
 });
 
+test('alternating cross-surface right clicks preserve the new menu and the next control click', async ({ page }) => {
+  const writes = await setupFocusFixture(page);
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const canvas = editor.locator('.node-canvas');
+  const node = editor.locator('.node[data-nodeid="text-output"]');
+  const search = editor.locator('.context-menu-search input:visible');
+  const nodeEditor = editor.locator('.node-editor-width-resize-handle');
+
+  for (const [rowSelector, name] of [
+    ['.project-row', 'Focus fixture'],
+    ['.folder-row', 'Focus folder'],
+  ] as const) {
+    const row = page.locator(rowSelector, { hasText: name });
+    const menu = page.getByRole('menu', { name: `Actions for ${name}` });
+    await row.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    await canvas.click({ button: 'right', position: { x: 600, y: 300 } });
+    await expect(menu).toHaveCount(0);
+    await expect(search).toBeVisible();
+    await search.fill('Text');
+
+    // One physical right click closes the old menu and opens the other one.
+    await row.click({ button: 'right' });
+    await expect(search).not.toBeVisible();
+    await expect(menu).toBeVisible();
+
+    // Hover alone must not dismiss, and the first control click must still act.
+    await node.hover();
+    await expect(menu).toBeVisible();
+    await node.locator('.edit-button').click();
+    await expect(menu).toHaveCount(0);
+    await expect(nodeEditor).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(nodeEditor).toHaveCount(0);
+  }
+  expect(writes).toEqual([]);
+});
+
 for (const target of ['editor', 'dashboard'] as const) {
   test(`keyboard activation in ${target} dismisses the other surface's context menu`, async ({ page }) => {
     const writes = await setupFocusFixture(page);

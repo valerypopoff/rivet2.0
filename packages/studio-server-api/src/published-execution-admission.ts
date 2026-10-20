@@ -14,7 +14,7 @@ export const PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS_ENV = 'RIVET_PUBLISHED_EXECUTIO
 export const PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS_ENV = 'RIVET_PUBLISHED_EXECUTION_RETRY_AFTER_SECONDS';
 
 export type PublishedExecutionAdmissionMode = 'disabled' | 'observe' | 'enforce';
-export type PublishedExecutionSurface = 'workflow-endpoint' | 'web-app-action';
+export type PublishedExecutionSurface = 'workflow-endpoint' | 'web-app-action' | 'scheduled-run';
 
 export type PublishedExecutionAdmissionConfig = {
   maxActiveRuns: number;
@@ -98,6 +98,7 @@ export function createPublishedExecutionAdmission(
   const activeRunsBySurface: Record<PublishedExecutionSurface, number> = {
     'web-app-action': 0,
     'workflow-endpoint': 0,
+    'scheduled-run': 0,
   };
   let capacityExceeded = false;
   let draining = false;
@@ -265,7 +266,11 @@ export function getPublishedExecutionAdmission(): PublishedExecutionAdmission {
     onDecision(decision) {
       getStudioMetrics().recordPublishedExecutionAdmission(
         decision.kind === 'capacity-exceeded' ? 'capacity_exceeded' : decision.kind,
-        decision.surface === 'workflow-endpoint' ? 'workflow_endpoint' : 'web_app_action',
+        decision.surface === 'workflow-endpoint'
+          ? 'workflow_endpoint'
+          : decision.surface === 'scheduled-run'
+            ? 'scheduled_run'
+            : 'web_app_action',
       );
     },
     onEvent(event) {

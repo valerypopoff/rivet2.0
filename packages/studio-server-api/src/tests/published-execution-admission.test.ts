@@ -158,6 +158,7 @@ test('admission snapshots expose fixed public surfaces and never change permit d
   if (workflow.kind === 'accepted') workflow.permit.release();
   if (webApp.kind === 'accepted') webApp.permit.release();
   assert.deepEqual(admission.getSnapshot().activeRunsBySurface, {
+    'scheduled-run': 0,
     'web-app-action': 0,
     'workflow-endpoint': 0,
   });

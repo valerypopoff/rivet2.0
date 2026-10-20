@@ -1,0 +1,106 @@
+{{- if .Values.autoscaling.executionController.enabled }}
+{{- $name := printf "%s-autoscaler" (include "rivet.fullname" .) }}
+{{- $workload := include "rivet.executionName" . }}
+{{- $apiImage := include "rivet.image" (dict "root" . "image" .Values.images.api) }}
+{{- $manifestDigest := default (printf "local:%s" (sha256sum $apiImage)) .Values.release.production.manifestDigest }}
+{{- $journal := printf "%s-%s-cutover" (.Release.Name | trunc 32) (sha256sum .Release.Name | trunc 8) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    resourceNames: [{{ $workload | quote }}]
+    verbs: [get, patch] # exact StatefulSet startup fence, never a developer owner
+  - apiGroups: [apps]
+    resources: [statefulsets/scale]
+    resourceNames: [{{ $workload | quote }}]
+    verbs: [get, patch]
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: ['']
+    resources: [pods, pods/exec]
+    resourceNames:
+      {{- range $ordinal := until (add1 (int .Values.autoscaling.execution.maxReplicas) | int) }}
+      - {{ printf "%s-%d" $workload $ordinal | quote }}
+      {{- end }}
+    verbs: [get, patch, delete]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list]
+  - apiGroups: ['']
+    resources: [configmaps]
+    resourceNames: [{{ $journal | quote }}]
+    verbs: [get, update]
+  # Kubernetes cannot resourceNames-restrict create. The client only creates
+  # the exact journal above; it has no Secret/DB or developer-pod capability.
+  - apiGroups: ['']
+    resources: [configmaps]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }} }
+subjects:
+  - { kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: autoscaler
+spec:
+  replicas: {{ ternary 0 1 .Values.autoscaling.executionController.suspended }}
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "rivet.componentLabels" (dict "root" . "component" "autoscaler") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rivet.componentLabels" (dict "root" . "component" "autoscaler") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 60
+      {{- include "rivet.pod.imagePullSecrets" . | nindent 6 }}
+      {{- include "rivet.pod.workloadSecurityContext" . | nindent 6 }}
+      containers:
+        - name: autoscaler
+          image: {{ $apiImage }}
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          command: [node, /app/packages/studio-server-api/autoscaler/execution-autoscaler-entry.mjs]
+          {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
+          env:
+            - name: RIVET_AUTOSCALER_CONFIG
+              value: {{ dict "release" .Release.Name "namespace" .Release.Namespace "workload" $workload "service" (include "rivet.executionServiceName" .) "port" .Values.service.execution.targetPort "image" $apiImage "manifestDigest" $manifestDigest "policy" (dict "minReplicas" .Values.autoscaling.execution.minReplicas "maxReplicas" .Values.autoscaling.execution.maxReplicas "targetSlotsPercent" .Values.autoscaling.executionController.targetSlotsPercent "targetCpuPercent" .Values.autoscaling.execution.targetCPUUtilizationPercentage "stabilizationSeconds" .Values.autoscaling.executionController.stabilizationSeconds "cooldownSeconds" .Values.autoscaling.executionController.cooldownSeconds "withdrawalSeconds" .Values.autoscaling.executionController.withdrawalSeconds "pollSeconds" .Values.autoscaling.executionController.pollSeconds "metricsMaxAgeSeconds" .Values.autoscaling.executionController.metricsMaxAgeSeconds) | toJson | quote }}
+          ports: [{ name: health, containerPort: 9090 }]
+          readinessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 15 }
+          livenessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 30, failureThreshold: 6 }
+          resources:
+            {{- toYaml .Values.autoscaling.executionController.resources | nindent 12 }}
+{{- end }}

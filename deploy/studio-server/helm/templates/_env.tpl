@@ -179,10 +179,14 @@
   value: {{ .port | quote }}
 - name: RIVET_API_PROFILE
   value: {{ .profile | quote }}
+{{- if $root.Values.ha.enabled }}
+- name: RIVET_HA_CONTROL_PLANE_MODE
+  value: {{ $root.Values.ha.controlPlane.mode | quote }}
+{{- end }}
 {{ include "rivet.env.deploymentStorageBootstrap" (dict "root" $root "profile" .profile) }}
 {{- if eq .profile "control" }}
 - name: RIVET_PROJECT_BUNDLE_SCRATCH_ROOT
-  value: {{ ternary "/data/rivet-restore/bundles" "/data/project-bundles" (default false $root.haMaintenance) | quote }}
+  value: {{ ternary "/data/rivet-restore/bundles" "/data/project-bundles" (or (default false $root.haMaintenance) (eq $root.Values.ha.controlPlane.mode "singleton")) | quote }}
 - name: RIVET_INTERNAL_PUBLISHED_WORKFLOWS_BASE_URL
   value: {{ printf "http://%s:%v/internal/workflows" (include "rivet.serviceFqdn" (dict "root" $root "serviceName" (include "rivet.executionServiceName" $root))) $root.Values.service.execution.port | quote }}
 - name: RIVET_INTERNAL_LATEST_WORKFLOWS_BASE_URL

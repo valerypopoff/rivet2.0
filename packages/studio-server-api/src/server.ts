@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { getScheduledRunScope, ownsMaintenance } from './ha-control-plane.js';
 import { ServerResourceLifecycle, ServerStartupCancelledError } from './server-resource-lifecycle.js';
 import {
   initializeScheduledRuns,
@@ -346,7 +347,7 @@ async function initializeRestoreRole(): Promise<boolean> {
           setLegacyRestorePaused(true);
           if (
             (!isControlPlaneApiProfile(apiRuntimeProfile) ||
-              (process.env.RIVET_HA_DEPLOYMENT === '1' && process.env.RIVET_HA_MAINTENANCE !== '1')) &&
+              !ownsMaintenance()) &&
             !restoreControlOnly
           )
             void shutdown('legacy restore').then(() => process.exit(0));
@@ -354,7 +355,7 @@ async function initializeRestoreRole(): Promise<boolean> {
           ((operation?.phase === 'restarting' && restoreControlOnly) || !restoreBlocksServing(operation)) &&
           isLegacyRestorePaused() &&
           (!isControlPlaneApiProfile(apiRuntimeProfile) ||
-            (process.env.RIVET_HA_DEPLOYMENT === '1' && process.env.RIVET_HA_MAINTENANCE !== '1'))
+            !ownsMaintenance())
         ) {
           void shutdown('restore generation changed').then(() => process.exit(0));
         }
@@ -372,7 +373,7 @@ async function initializeRestoreRole(): Promise<boolean> {
 }
 
 async function configureRestoreService() {
-  if (process.env.RIVET_HA_DEPLOYMENT === '1' && process.env.RIVET_HA_MAINTENANCE !== '1') return;
+  if (!ownsMaintenance()) return;
   if (!legacyRestoreControl || !isControlPlaneApiProfile(apiRuntimeProfile)) return;
   if (!process.env.RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN) return;
   // Never adopt a UI-selected foreign namespace just because its database is reachable.
@@ -626,7 +627,7 @@ async function startServer(): Promise<void> {
       assertStartupActive();
       // Existing schedules may be due immediately. Do not start their execution
       // until runtime-library reconciliation and the rest of startup have finished.
-      if (isControlPlaneApiProfile(apiRuntimeProfile) && !isReleaseMaintenanceActive() && !isLegacyRestorePaused())
+      if (getScheduledRunScope(apiRuntimeProfile) && !isReleaseMaintenanceActive() && !isLegacyRestorePaused())
         await initializeScheduledRuns();
       assertStartupActive();
       if (!isLegacyRestorePaused() && getHostedEvaluationsCoordinatorConfig().workerEnabled) {
@@ -662,7 +663,7 @@ async function startServer(): Promise<void> {
     if (
       legacyRestoreControl &&
       isControlPlaneApiProfile(apiRuntimeProfile) &&
-      (process.env.RIVET_HA_DEPLOYMENT !== '1' || process.env.RIVET_HA_MAINTENANCE === '1') &&
+      ownsMaintenance() &&
       isLegacyRestorePaused() &&
       !(error instanceof ServerStartupCancelledError)
     ) {

@@ -132,6 +132,13 @@ Important local-Docker wiring note:
 
 ## Proxy address recovery and health
 
+The opt-in runtime-HA/singleton-control profile routes public proxy health to
+execution and cold-starts proxy configuration from execution's authenticated,
+read-only `/internal/app-settings/proxy-config`. Execution exposes no settings
+writes or developer routes. Replicated/default proxies keep their old health and
+configuration targets for mixed-image bridge compatibility. See the
+[profile and ownership transfer](runtime-ha-singleton-control-plan.md).
+
 All three shipped proxy templates route through named, shared-memory upstream
 groups with background DNS refresh (30-second validity, five-second resolver
 timeout). Known healthy peers remain usable through transient DNS outages, even

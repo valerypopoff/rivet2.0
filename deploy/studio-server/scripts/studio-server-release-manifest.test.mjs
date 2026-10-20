@@ -28,7 +28,7 @@ import {
   PRODUCTION_RELEASE_MANIFEST_REFERENCE,
 } from './release-manifest-oci.mjs';
 import { parseArgs, resolveDeploymentRelease } from './deploy-kubernetes-release.mjs';
-import { HA_REQUIRED_CHECKS } from './lib/ha-release-evidence.mjs';
+import { HA_REQUIRED_CHECKS, HA_AUTOSCALING_CHECKS } from './lib/ha-release-evidence.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
@@ -72,6 +72,19 @@ test('release manifest reads the source-owned managed schema contract', () => {
     version: 16,
     minimumRollbackCompatibleVersion: 15,
   });
+});
+
+test('promotion preserves exact autoscaling evidence in the immutable manifest digest', () => {
+  const release = candidate();
+  release.evidence.runtimeAutoscaling = { protocol: 1, candidateSourceSha: release.source.sha,
+    candidateImages: release.images, chartDigest: release.chart.contentDigest, policyDigest: 'e'.repeat(64),
+    provider: 'gke', requestSamples: 250, failedRequests: 0, checks: [...HA_AUTOSCALING_CHECKS] };
+  const normalized = assertStudioServerReleaseManifest(release);
+  assert.deepEqual(normalized.evidence.runtimeAutoscaling, release.evidence.runtimeAutoscaling);
+  const altered = structuredClone(release); altered.evidence.runtimeAutoscaling.policyDigest = 'f'.repeat(64);
+  assert.notEqual(getStudioServerReleaseManifestDigest(normalized), getStudioServerReleaseManifestDigest(altered));
+  altered.evidence.runtimeAutoscaling.candidateSourceSha = '0'.repeat(40);
+  assert.throws(() => assertStudioServerReleaseManifest(altered), /Automatic execution retirement/);
 });
 
 test('production values persist the certified browser baseline for subsequent rolling guards', () => {

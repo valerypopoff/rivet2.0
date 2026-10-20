@@ -19,6 +19,7 @@ type Row = Record<string, any>;
 type Query = (sql: string, parameters?: unknown[]) => Promise<Row[]>;
 type Tx = <T>(operation: (query: Query, now: number) => Promise<T>) => Promise<T>;
 export type ClaimedRun = { occurrence: ScheduledOccurrence; draft: ScheduledRunDraft };
+export type ScheduledRunScope = 'all' | 'latest' | 'published';
 const decode = <T>(row: Row): T => JSON.parse(row.json);
 const active = ['queued', 'claimed', 'running'];
 const sqliteQueues = new Map<string, { tail: Promise<unknown>; references: number }>();
@@ -30,6 +31,7 @@ export class ScheduledRunStore {
   constructor(
     private readonly transaction: Tx,
     readonly close: () => Promise<void>,
+    private readonly dialect: 'sqlite' | 'postgres' = 'sqlite',
   ) {}
   static sqlite(file: string, clock = Date.now): ScheduledRunStore {
     const existing = existsSync(file);
@@ -114,6 +116,7 @@ export class ScheduledRunStore {
         }
       },
       () => pool.end(),
+      'postgres',
     );
   }
   list(): Promise<ScheduledRunList> {
@@ -330,7 +333,12 @@ export class ScheduledRunStore {
         await this.writeRun(q, { ...run, cancelRequested: true }, row.draft_json, row.owner, Number(row.lease_until));
     });
   }
-  tick(owner: string, maxActive = 2): Promise<ClaimedRun | undefined> {
+  tick(owner: string, maxActive = 2, scope: ScheduledRunScope = 'all'): Promise<ClaimedRun | undefined> {
+    if (!['all', 'latest', 'published'].includes(scope)) throw new Error('Invalid scheduler scope.');
+    const predicate = (column: string) =>
+      scope === 'all'
+        ? '1=1'
+        : `${this.dialect === 'postgres' ? `(${column}::json->>'version')` : `json_extract(${column}, '$.version')`}='${scope}'`;
     return this.transaction(async (q, now) => {
       for (const row of await q(
         "SELECT * FROM rivet_schedule_runs WHERE status IN ('claimed','running') AND lease_until < $1",
@@ -352,7 +360,7 @@ export class ScheduledRunStore {
         );
       }
       for (const row of await q(
-        'SELECT json FROM rivet_schedules WHERE enabled=1 AND next_at <= $1 ORDER BY next_at LIMIT 100',
+        `SELECT json FROM rivet_schedules WHERE enabled=1 AND next_at <= $1 AND ${predicate('json')} ORDER BY next_at LIMIT 100`,
         [now],
       )) {
         const s = decode<ScheduledRun>(row);
@@ -403,7 +411,7 @@ export class ScheduledRunStore {
       // 1 MiB input snapshots just to discard their expired queue entries.
       let next: ScheduledOccurrence | undefined;
       for (const row of await q(
-        "SELECT json FROM rivet_schedule_runs WHERE status='queued' ORDER BY scheduled_at,id",
+        `SELECT json FROM rivet_schedule_runs WHERE status='queued' AND ${predicate('draft_json')} ORDER BY scheduled_at,id`,
       )) {
         const occurrence = decode<ScheduledOccurrence>(row);
         // Catch-up may refer to an old due instant, but capacity waiting still
@@ -431,8 +439,11 @@ export class ScheduledRunStore {
       if (
         !next ||
         Number(
-          (await q("SELECT COUNT(*) AS count FROM rivet_schedule_runs WHERE status IN ('claimed','running')"))[0]!
-            .count,
+          (
+            await q(
+              `SELECT COUNT(*) AS count FROM rivet_schedule_runs WHERE status IN ('claimed','running') AND ${predicate('draft_json')}`,
+            )
+          )[0]!.count,
         ) >= maxActive
       )
         return;

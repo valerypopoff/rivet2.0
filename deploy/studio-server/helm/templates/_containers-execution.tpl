@@ -14,6 +14,12 @@
   {{- include "rivet.pod.apiProbes" (dict "root" . "port" (ternary "exec-health" "execution-http" .Values.ha.enabled)) | nindent 2 }}
   {{- include "rivet.pod.preStop" . | nindent 2 }}
   env:
+    {{- if .Values.autoscaling.executionController.enabled }}
+    - name: RIVET_EXECUTION_STARTUP_FENCE
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.annotations['rivet.dev/execution-retirement-fence']
+    {{- end }}
 {{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.execution.targetPort "profile" "execution" "storageBackend" .Values.workflowStorage.backend "replicaTier" "endpoint" "jobWorkerEnabled" "false") | nindent 4 }}
 {{ include "rivet.haRoleEnv" (dict "root" . "port" .Values.service.execution.targetPort) | nindent 4 }}
     {{- if eq .Values.deploymentProfile "single-machine" }}

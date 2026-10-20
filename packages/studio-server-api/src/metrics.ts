@@ -40,7 +40,7 @@ export type MetricsHttpRoute =
   | 'published_web_app'
   | 'published_workflow';
 
-export type MetricsPublishedExecutionSurface = 'web_app_action' | 'workflow_endpoint';
+export type MetricsPublishedExecutionSurface = 'web_app_action' | 'workflow_endpoint' | 'scheduled_run';
 export type MetricsHttpBodyAdmissionOutcome =
   | 'capacity_exceeded'
   | 'receive_timeout'
@@ -171,7 +171,9 @@ export class StudioMetrics {
 
   setPublishedExecutionAdmission(input: {
     activeRuns: number;
-    activeRunsBySurface?: Readonly<Record<'web-app-action' | 'workflow-endpoint', number>>;
+    activeRunsBySurface?: Readonly<
+      Record<'web-app-action' | 'workflow-endpoint', number> & Partial<Record<'scheduled-run', number>>
+    >;
     draining: boolean;
     maxActiveRuns: number;
     mode: 'disabled' | 'enforce' | 'observe';
@@ -180,6 +182,11 @@ export class StudioMetrics {
     this.setGauge('rivet_published_execution_admission_limit', { mode: input.mode }, input.maxActiveRuns);
     this.setGauge('rivet_published_execution_draining', {}, input.draining ? 1 : 0);
     if (input.activeRunsBySurface) {
+      this.setGauge(
+        'rivet_published_execution_active_runs_by_surface',
+        { surface: 'scheduled_run' },
+        input.activeRunsBySurface['scheduled-run'] ?? 0,
+      );
       this.setGauge(
         'rivet_published_execution_active_runs_by_surface',
         { surface: 'workflow_endpoint' },

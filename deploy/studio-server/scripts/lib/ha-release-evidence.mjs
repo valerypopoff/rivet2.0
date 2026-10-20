@@ -17,6 +17,53 @@ export const HA_REQUIRED_CHECKS = [
 // even if wire messages remain compatible. Establish through maintenance.
 // Contract 2 keeps recording capture alive across resumable socket replacement.
 export const HA_BROWSER_CONTRACT = 2;
+export const HA_RUNTIME_CONTROL_CHECKS = [
+  'cold-runtime-without-developers', 'published-browser-oauth-actions',
+  'published-schedule-claims', 'recording-durability', 'embedded-maintenance-recovery', 'embedded-maintenance-capacity',
+  'exclusive-restore-volume-transfer', 'reverse-control-transfer',
+  'serial-developer-replacement', 'two-ready-execution-owners', 'mixed-version-runtime-upgrade',
+];
+
+/** Separate evidence is necessary: a two-editor/full-HA certificate is not
+ * qualification of a singleton developer/embedded-maintenance layout. */
+export const HA_COMPACT_EDGE_CHECKS = ['compact-proxy-rolling-upgrade', 'compact-proxy-eviction', 'edge-profile-transition'];
+export const HA_AUTOSCALING_CHECKS = ['slot-and-cpu-scale-up', 'stabilized-scale-down', 'long-run-and-recording-drain',
+  'traffic-return-during-drain', 'controller-restart-and-lost-ack', 'deployment-serialization',
+  'stale-metrics-fence', 'voluntary-eviction-fence', 'provider-node-capacity'];
+export function assertRuntimeAutoscalingEvidence(value, release, policyDigest) {
+  if (value?.protocol !== 1 || value.candidateSourceSha !== release.source.sha ||
+      !equal(value.candidateImages, release.images) || value.chartDigest !== release.chart.contentDigest ||
+      !/^[a-f0-9]{64}$/.test(value.policyDigest ?? '') || (policyDigest && value.policyDigest !== policyDigest) ||
+      value.failedRequests !== 0 || !Number.isSafeInteger(value.requestSamples) || value.requestSamples < 100 ||
+      value.provider !== 'gke' || !Array.isArray(value.checks) || value.checks.length !== HA_AUTOSCALING_CHECKS.length ||
+      new Set(value.checks).size !== HA_AUTOSCALING_CHECKS.length || !HA_AUTOSCALING_CHECKS.every(c => value.checks.includes(c)))
+    throw new Error('Automatic execution retirement requires exact image/chart/policy GKE qualification; previous HA evidence does not suffice.');
+  return { protocol: 1, candidateSourceSha: value.candidateSourceSha, candidateImages: release.images,
+    chartDigest: value.chartDigest, policyDigest: value.policyDigest, provider: 'gke', failedRequests: 0,
+    requestSamples: value.requestSamples, checks: [...HA_AUTOSCALING_CHECKS] };
+}
+export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile) {
+  const profiles = value?.edgeProfiles ?? ['regional'];
+  if (!Array.isArray(profiles) || !profiles.length || new Set(profiles).size !== profiles.length ||
+      profiles.some(p => !['regional', 'compact'].includes(p)) ||
+      (expectedEdgeProfile !== undefined && !profiles.includes(expectedEdgeProfile)))
+    throw new Error('Runtime HA evidence does not qualify the requested GKE edge profile.');
+  const required = [...HA_RUNTIME_CONTROL_CHECKS, ...(profiles.includes('compact') ? HA_COMPACT_EDGE_CHECKS : [])];
+  if (value?.protocol !== 1 || value.candidateSourceSha !== release.source.sha ||
+      !equal(value.candidateImages, release.images) || value.chartDigest !== release.chart.contentDigest ||
+      value.failedRequests !== 0 || !Number.isSafeInteger(value.requestSamples) || value.requestSamples < 100 ||
+      !Array.isArray(value.checks) || value.checks.length !== required.length ||
+      new Set(value.checks).size !== required.length ||
+      !required.every(c => value.checks.includes(c)) ||
+      !release.lineage?.predecessor || value.predecessorSourceSha !== release.lineage?.predecessor?.sourceSha ||
+      !equal(value.predecessorImages, release.lineage?.predecessor?.images) ||
+      equal(value.predecessorImages, release.images))
+    throw new Error('Singleton runtime HA requires its own exact mixed-image qualification; full-HA evidence does not suffice.');
+  return { protocol: 1, candidateSourceSha: value.candidateSourceSha, candidateImages: release.images,
+    chartDigest: value.chartDigest, failedRequests: 0, requestSamples: value.requestSamples,
+    predecessorSourceSha: value.predecessorSourceSha, predecessorImages: value.predecessorImages,
+    ...(value.edgeProfiles ? { edgeProfiles: [...profiles] } : {}), checks: required };
+}
 const legacyChecks = (version) =>
   HA_REQUIRED_CHECKS.filter(
     (check) =>
@@ -296,6 +343,10 @@ export function assertHaUpgradeEvidence(manifest, installed) {
       'Browser-continuous HA requires a v3 release certificate. Use a maintenance cutover for legacy HA.',
     );
   if (!installed) return;
+  // A larger destination does not qualify the smaller source while its owners
+  // are still serving during the roll. Check this before the same-image shortcut.
+  if (installed.availability?.gkeGatewayProfile === 'compact')
+    assertRuntimeControlEvidence(manifest.evidence?.runtimeControl, manifest, 'compact');
   if (!installed.ha?.enabled) throw new Error('First HA conversion requires an explicit maintenance cutover.');
   if (!equal(evidence.browserContract, installed.release?.production?.browserContract))
     throw Error('Changing the supported browser contract or baseline requires maintenance, not rolling HA.');

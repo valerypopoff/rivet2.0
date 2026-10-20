@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ScheduledOccurrence } from '../../../studio-server-shared/scheduled-run-types.js';
-import { ScheduledRunStore, type ClaimedRun } from './store.js';
+import { ScheduledRunStore, type ClaimedRun, type ScheduledRunScope } from './store.js';
 import { beginScheduledActivity } from './activity.js';
 import { settleBeforeDeadline } from '../shutdown-deadline.js';
 
@@ -26,6 +26,10 @@ export class ScheduledRunService {
     ) => Promise<Partial<ScheduledOccurrence>>,
     private readonly mayStart: () => boolean = () => true,
     private readonly maxConcurrent = 2,
+    private readonly options: {
+      scope?: ScheduledRunScope;
+      acquirePermit?: () => { release(): void } | undefined;
+    } = {},
   ) {}
   start() {
     if (this.started || this.stopping || this.draining) return;
@@ -53,19 +57,24 @@ export class ScheduledRunService {
   private async pollOnce() {
     if (this.stopping || this.draining || !this.mayStart()) return;
     const releaseActivity = beginScheduledActivity();
+    let permit: { release(): void } | undefined;
     let job: ClaimedRun | undefined;
     try {
+      permit = this.active.size < this.maxConcurrent ? this.options.acquirePermit?.() : undefined;
+      const capacity = this.active.size < this.maxConcurrent && (!this.options.acquirePermit || permit);
       // Keep due-time/lease reconciliation alive while every local slot is busy.
       // Zero permits housekeeping but never another claim, even if a locally
       // unwinding execution's durable lease has already expired.
-      job = await this.store.tick(this.owner, this.active.size >= this.maxConcurrent ? 0 : this.maxConcurrent);
+      job = await this.store.tick(this.owner, capacity ? this.maxConcurrent : 0, this.options.scope);
     } catch (error) {
       this.retirementFailure ??= new Error('Scheduled claim ownership is unconfirmed.');
       releaseActivity();
+      permit?.release();
       throw error;
     }
     if (!job) {
       releaseActivity();
+      permit?.release();
       return;
     }
     const claimed = job;
@@ -115,6 +124,7 @@ export class ScheduledRunService {
         await heartbeatPending;
         this.active.delete(claimed.occurrence.id);
         releaseActivity();
+        permit?.release();
       }
     })().catch(() => {
       this.retirementFailure ??= new Error('Scheduled outcome persistence is unconfirmed.');

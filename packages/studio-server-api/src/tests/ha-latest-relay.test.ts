@@ -6,6 +6,29 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { LatestDebuggerRelay } from '../ha-latest-relay.js';
 import type { OwnerRoutingConfig } from '../ha-owner-routing.js';
 
+test('singleton debugger readiness needs no absent neighbour and closes on disposal', async () => {
+  const previous = process.env.RIVET_HA_CONTROL_PLANE_MODE;
+  const server = new WebSocketServer({ noServer: true });
+  const relay = new LatestDebuggerRelay({ pod: 'backend-0', backendName: 'backend', headless: 'headless',
+    apiPort: 1, executorPort: 21889, installation: 'fixture', key: 'k'.repeat(32), incarnation: randomUUID() },
+    server, 2, (_url, options) => new WebSocket('ws://127.0.0.1:1/internal/ha/latest', options));
+  try {
+    process.env.RIVET_HA_CONTROL_PLANE_MODE = 'replicated';
+    assert.equal(relay.ready, false);
+    process.env.RIVET_HA_CONTROL_PLANE_MODE = 'singleton';
+    assert.equal(relay.ready, true);
+    const event = JSON.parse(relay.transformBroadcast(JSON.stringify({ message: 'start', data: { runId: 'local' } })));
+    assert.equal(event.data.runId, 'local');
+    relay.dispose();
+    assert.equal(relay.ready, false);
+  } finally {
+    relay.dispose();
+    if (previous === undefined) delete process.env.RIVET_HA_CONTROL_PLANE_MODE;
+    else process.env.RIVET_HA_CONTROL_PLANE_MODE = previous;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 test('HA latest observation is global, reconnect deduplicates identity, controls traverse each owner once', async () => {
   const servers = [createServer(), createServer()];
   const sockets = servers.map(() => new WebSocketServer({ noServer: true }));

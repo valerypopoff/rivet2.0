@@ -49,6 +49,16 @@ function fixture() {
   return { nodes, pods: [...nodes.map((_, i) => pod('proxy', i)), pod('web', 0), pod('web', 1)] };
 }
 
+test('provider observation allows one web only for explicit singleton control and never weakens the proxy floor', () => {
+  const state = fixture();
+  state.pods = state.pods.filter(p => p.metadata.name !== 'web-1');
+  assert.throws(() => assertGkeFrontendAvailability(state.pods, state.nodes, release));
+  assert.equal(assertGkeFrontendAvailability(state.pods, state.nodes, release, 'singleton').length, 7);
+  assert.throws(() => assertGkeFrontendAvailability(state.pods.slice(1), state.nodes, release, 'singleton'));
+  assert.throws(() => assertGkeFrontendAvailability(state.pods.filter(p => !p.metadata.name.startsWith('web')), state.nodes, release, 'singleton'));
+  assert.throws(() => assertGkeFrontendAvailability(state.pods, state.nodes, release, 'typo'));
+});
+
 function render(overrides = [], gke = true) {
   return execFileSync(resolveHelmBinOrThrow(rootDir), ['template', release, 'deploy/studio-server/helm',
     '-f', 'deploy/studio-server/helm/overlays/local-kubernetes.yaml',
@@ -56,6 +66,18 @@ function render(overrides = [], gke = true) {
     '--set', 'objectStorage.bucket=fixture', '--set', 'postgres.maxConnections=250',
     ...overrides.flatMap(value => ['--set', value])], { cwd: rootDir, encoding: 'utf8', stdio: 'pipe' });
 }
+
+test('HA PostgreSQL budgets include bounded scheduler pools and one eligible surge in both layouts', () => {
+  for (const [mode, backends, web, required, scheduler] of [
+    ['replicated', 2, 2, 133, 10], ['singleton', 1, 1, 101, 8],
+  ]) {
+    const settings = [`ha.controlPlane.mode=${mode}`, `replicaCount.backend=${backends}`, `replicaCount.web=${web}`,
+      'publishedExecutionAdmission.mode=enforce', 'publishedExecutionAdmission.maxActiveRunsPerPod=4'];
+    assert.doesNotThrow(() => render([...settings, `postgres.maxConnections=${required}`]));
+    assert.throws(() => render([...settings, `postgres.maxConnections=${required - 1}`]),
+      new RegExp(`requires ${required} connections.*\\+ ${scheduler} scheduler`));
+  }
+});
 
 test('GKE profile enforces six separated proxies, hard three-zone spread, PDB and surge', () => {
   const resources = parseAllDocuments(render()).map(doc => {
@@ -84,6 +106,106 @@ test('GKE profile enforces six separated proxies, hard three-zone spread, PDB an
   }
   const pdb = resources.find(r => r.kind === 'PodDisruptionBudget' && r.spec.selector.matchLabels['app.kubernetes.io/component'] === 'proxy');
   assert.equal(pdb.spec.maxUnavailable, 1);
+});
+
+test('compact singleton profile has six total pods, two separated proxies and unchanged safe surge', () => {
+  const settings = ['ha.controlPlane.mode=singleton', 'replicaCount.backend=1', 'replicaCount.web=1',
+    'publishedExecutionAdmission.mode=enforce', 'availability.gkeGatewayProfile=compact',
+    'availability.topologySpread.minDomains=2', 'replicaCount.proxy=2', 'autoscaling.proxy.minReplicas=2'];
+  const resources = parseAllDocuments(render(settings)).map(d => d.toJS()).filter(Boolean);
+  const workloads = resources.filter(r => ['Deployment', 'StatefulSet'].includes(r.kind));
+  assert.equal(workloads.reduce((n, r) => n + r.spec.replicas, 0), 6);
+  const proxy = workloads.find(r => r.metadata.labels['app.kubernetes.io/component'] === 'proxy');
+  assert.equal(proxy.metadata.annotations['rivet.studio/gke-edge-profile'], 'compact');
+  assert.equal(proxy.spec.replicas, 2);
+  assert.equal(proxy.spec.template.spec.topologySpreadConstraints[0].minDomains, 2);
+  assert.deepEqual(proxy.spec.strategy.rollingUpdate, { maxUnavailable: 0, maxSurge: 1 });
+  for (const invalid of ['replicaCount.proxy=1', 'rollout.maxUnavailable=1',
+    'availability.podAntiAffinity.required=false', 'availability.topologySpread.minDomains=1',
+    'availability.gkeGatewayProfile=unknown', 'availability.gkeGateway=false',
+    'autoscaling.proxy.enabled=true,autoscaling.proxy.minReplicas=1'])
+    assert.throws(() => render([...settings, invalid]));
+});
+
+test('compact observation still needs distinct zones, distinct nodes and positive NEG health', () => {
+  const f = fixture();
+  f.pods = f.pods.filter(p => ['proxy-0', 'proxy-1', 'web-0'].includes(p.metadata.name));
+  for (const p of f.pods) p.spec.topologySpreadConstraints[0].minDomains = 2;
+  assert.equal(assertGkeFrontendAvailability(f.pods, f.nodes, release, 'singleton', 'compact').length, 3);
+  assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'singleton'));
+  const clone = () => structuredClone(f);
+  for (const fault of ['zone', 'host', 'neg', 'count']) {
+    const state = clone();
+    if (fault === 'zone') state.nodes[1].metadata.labels['topology.kubernetes.io/zone'] = 'zone-0';
+    if (fault === 'host') state.nodes[1].metadata.labels['kubernetes.io/hostname'] = 'host-0';
+    if (fault === 'neg') state.pods[0].status.conditions[1].reason = 'LoadBalancerNegWithoutHealthCheck';
+    if (fault === 'count') state.pods.shift();
+    assert.throws(() => assertGkeFrontendAvailability(state.pods, state.nodes, release, 'singleton', 'compact'));
+  }
+});
+
+test('a compact minimum-capacity proof cannot borrow the headroom of six healthy proxies', () => {
+  const f = fixture();
+  for (const p of f.pods) p.spec.topologySpreadConstraints[0].minDomains = 2;
+  assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'compact'), /exactly two/);
+});
+
+test('GKE frontend HPA bounds cannot drop below the declared minimum', () => {
+  for (const tier of ['proxy', 'web']) {
+    const floor = tier === 'proxy' ? 6 : 2;
+    assert.throws(() => render([`autoscaling.${tier}.enabled=true`,
+      `autoscaling.${tier}.minReplicas=${floor}`, `autoscaling.${tier}.maxReplicas=${floor - 1}`]),
+    /autoscaling.*maximum|HPA.*bounds/);
+    assert.throws(() => render([`autoscaling.${tier}.enabled=true`,
+      `autoscaling.${tier}.minReplicas=${floor}`, `autoscaling.${tier}.maxReplicas=${floor}`,
+      `replicaCount.${tier}=${floor + 1}`]), /autoscaling.*maximum/);
+  }
+});
+
+test('both HA control modes retain two execution owners and coherent HPA bounds', () => {
+  for (const singleton of [false, true]) {
+    const settings = singleton ? ['ha.controlPlane.mode=singleton', 'replicaCount.backend=1', 'replicaCount.web=1',
+      'publishedExecutionAdmission.mode=enforce'] : [];
+    for (const invalid of [
+      ['replicaCount.execution=1', 'autoscaling.execution.enabled=false'],
+      ['autoscaling.execution.enabled=true', 'autoscaling.execution.minReplicas=1', 'autoscaling.execution.maxReplicas=2'],
+      ['autoscaling.execution.enabled=true', 'autoscaling.execution.minReplicas=3', 'autoscaling.execution.maxReplicas=2'],
+      ['replicaCount.execution=3', 'autoscaling.execution.enabled=true', 'autoscaling.execution.minReplicas=2', 'autoscaling.execution.maxReplicas=2'],
+    ]) assert.throws(() => render([...settings, ...invalid]), /execution.*minimum|two execution|singleton control requires/);
+  }
+});
+
+test('runtime HA profile renders exactly ten owners and exactly one existing restore claim mount', () => {
+  const resources = parseAllDocuments(render(['ha.controlPlane.mode=singleton', 'replicaCount.backend=1',
+    'replicaCount.web=1', 'publishedExecutionAdmission.mode=enforce'])).map(doc => doc.toJS());
+  const workloads = resources.filter(r => ['Deployment', 'StatefulSet'].includes(r.kind));
+  assert.equal(workloads.reduce((n, r) => n + r.spec.replicas, 0), 10);
+  assert.equal(workloads.some(r => r.metadata.labels['app.kubernetes.io/component'] === 'maintenance'), false);
+  const mounts = workloads.filter(r => r.spec.template.spec.volumes?.some(v => v.name === 'legacy-restore'));
+  assert.equal(mounts.length, 1);
+  assert.equal(mounts[0].metadata.labels['app.kubernetes.io/component'], 'backend');
+  assert.equal(mounts[0].spec.replicas, 1);
+  const env = mounts[0].spec.template.spec.containers[0].env;
+  assert.equal(env.find(e => e.name === 'RIVET_HA_MAINTENANCE').value, '0');
+  assert.equal(env.find(e => e.name === 'RIVET_HA_API_ONLY').value, '0');
+  assert.equal(env.find(e => e.name === 'RIVET_PROJECT_BUNDLE_SCRATCH_ROOT').value, '/data/rivet-restore/bundles');
+  const proxy = workloads.find(r => r.metadata.labels['app.kubernetes.io/component'] === 'proxy');
+  const proxyEnv = proxy.spec.template.spec.containers[0].env;
+  assert.equal(proxyEnv.find(e => e.name === 'RIVET_PROXY_HEALTH_OWNER').value, 'execution');
+  assert.match(proxyEnv.find(e => e.name === 'RIVET_PROXY_SETTINGS_URL').value, /execution.*\/internal\/app-settings\/proxy-config$/);
+  const pdb = resources.find(r => r.kind === 'PodDisruptionBudget' && r.metadata.name === mounts[0].metadata.name);
+  assert.equal(pdb.spec.maxUnavailable, 1);
+  assert.equal(pdb.spec.minAvailable, undefined);
+  for (const overrides of [ ['replicaCount.backend=2'], ['replicaCount.execution=1'], ['replicaCount.web=2'],
+    ['publishedExecutionAdmission.mode=observe'], ['autoscaling.web.enabled=true'],
+    ['autoscaling.execution.enabled=true', 'autoscaling.execution.minReplicas=1'],
+    ['autoscaling.execution.enabled=true', 'autoscaling.execution.minReplicas=1', 'autoscaling.execution.maxReplicas=1'] ]) {
+    assert.throws(() => render(['ha.controlPlane.mode=singleton', 'replicaCount.backend=1', 'replicaCount.web=1',
+      'publishedExecutionAdmission.mode=enforce', ...overrides]));
+  }
+  assert.doesNotThrow(() => render(['ha.controlPlane.mode=singleton', 'replicaCount.backend=1', 'replicaCount.web=1',
+    'publishedExecutionAdmission.mode=enforce', 'autoscaling.execution.enabled=true',
+    'autoscaling.execution.minReplicas=2', 'autoscaling.execution.maxReplicas=3']));
 });
 
 test('GKE policy cannot silently lose replicas, spread, isolation or PDB protection through installation overrides', () => {
@@ -250,6 +372,14 @@ test('frontend eviction proof uses policy Eviction with exact UIDs, checks actua
   assert.equal(result.workflow.failures.length + result.webApp.failures.length, 0);
   await assert.rejects(verifyGkeFrontendEvictions(f.gate, 'https://staging.example.test'), { code: 'EEXIST' });
   assert.equal(f.writes.length, 4, 'an admitted proof cannot replay evictions');
+});
+
+test('frontend proof cannot wait beyond its sampling deadline merely to collect enough successes', async t => {
+  const f = await proofFixture(t);
+  f.gate.config.deploymentTimeoutSeconds = 0.001;
+  await assert.rejects(verifyGkeFrontendEvictions(f.gate, 'https://staging.example.test'), /sampling deadline/);
+  assert.ok([...f.artifacts.values()].every(r => r.phase !== 'passed'));
+  assert.equal(f.artifacts.get('provider-frontend-evictions.json').phase, 'observed');
 });
 
 for (const failure of ['foreign-context', 'changed-uid', 'lost-ack', 'pdb-rejection', 'expired-before-write', 'web-failure']) {

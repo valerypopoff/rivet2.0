@@ -4,8 +4,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseAllDocuments } from 'yaml';
-import { assertHaUpgradeEvidence } from './lib/ha-release-evidence.mjs';
-import { runHaKubernetesRollout } from './lib/ha-kubernetes-rollout.mjs';
+import { assertHaUpgradeEvidence, assertRuntimeControlEvidence, assertRuntimeAutoscalingEvidence } from './lib/ha-release-evidence.mjs';
+import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import { runHaKubernetesRollout, haFrozenAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
+import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
 import { releaseOperationJournalName, journalForReleaseOperation } from './lib/release-operation-journal.mjs';
 import { parseEnvFile } from './lib/env.mjs';
 import { singleMachineConfig, singleMachineValues, prepareSingleMachine } from './lib/single-machine-kubernetes.mjs';
@@ -51,6 +53,7 @@ const supportedOptions = new Set([
   '--env-file',
   '--context',
   '--resume-ha',
+  '--ha-control-plane-transition',
 ]);
 
 export function parseArgs(argv) {
@@ -67,7 +70,7 @@ export function parseArgs(argv) {
     if (options.has(key)) {
       throw new Error(`${key} may only be supplied once`);
     }
-    if (key === '--dry-run' || key === '--maintenance-cutover' || key === '--single-machine') {
+    if (key === '--dry-run' || key === '--maintenance-cutover' || key === '--single-machine' || key === '--ha-control-plane-transition') {
       options.set(key, true);
       continue;
     }
@@ -430,9 +433,23 @@ async function main() {
     }).filter(Boolean);
     const haRequested = renderedResources.some(resource => resource.kind === 'StatefulSet' &&
       resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' && resource.spec.updateStrategy.type === 'OnDelete');
+    const singletonControlRequested = renderedResources.some(resource => resource.kind === 'StatefulSet' &&
+      resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' &&
+      resource.spec.template.spec.containers.some(c => c.env?.some(e => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton')));
+    const edgeProfile = renderedResources.find(resource => resource.kind === 'Deployment' &&
+      resource.metadata.labels?.['app.kubernetes.io/component'] === 'proxy')
+      ?.metadata.annotations?.['rivet.studio/gke-edge-profile'] ?? 'regional';
+    if (singletonControlRequested || options.has('--ha-control-plane-transition') || edgeProfile === 'compact')
+      assertRuntimeControlEvidence(manifest.evidence.runtimeControl, manifest, edgeProfile);
     if (haRequested && rollbackManifestPath)
       throw new Error('HA reverse-image replacement is not certified by a forward mixed-version certificate. Repair forward; no automatic image/schema rollback was attempted.');
     if (haRequested) assertHaUpgradeEvidence(manifest, null);
+    const autoscalerResource = renderedResources.find(r => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler');
+    if (autoscalerResource) {
+      if (options.has('--ha-control-plane-transition')) throw new Error('Disable automatic execution scaling in a separate settled release before changing control topology.');
+      const config = JSON.parse(autoscalerResource.spec.template.spec.containers[0].env.find(e => e.name === 'RIVET_AUTOSCALER_CONFIG').value);
+      assertRuntimeAutoscalingEvidence(manifest.evidence.runtimeAutoscaling, manifest, autoscalerPolicyDigest(config.policy));
+    }
 
     if (dryRun) {
       console.log(`[${runnerName}] Preflight passed. No cluster state was changed.`);
@@ -499,6 +516,9 @@ async function main() {
       );
     const cutover = options.has('--maintenance-cutover') || options.has('--resume-cutover');
     const haRollout = haRequested && exists && installed?.ha?.enabled && !cutover;
+    const controlTransition = options.has('--ha-control-plane-transition');
+    if (controlTransition && (!haRollout || installedDigest !== candidateDigest || rollbackManifestPath))
+      throw new Error('Control topology transfer requires the already installed same-image bridge manifest, HA, and no cutover/rollback.');
     if (options.has('--resume-ha') && (!haRollout || options.has('--resume-cutover')))
       throw new Error('--resume-ha requires an installed HA release and cannot be combined with maintenance cutover.');
     if (haRequested && !cutover) assertHaUpgradeEvidence(manifest, installed);
@@ -553,11 +573,17 @@ async function main() {
           // Capacity and its API-server preconditions travel in the same Helm update.
           await fs.writeFile(preservePath, JSON.stringify(guardedValues));
         };
-        await fs.writeFile(frozenPath, JSON.stringify({ autoscaling: { execution: { enabled: false }, backend: { enabled: false } } }));
-        await runHaKubernetesRollout({ kube, release, namespace, manifestDigest: candidateDigest, resources: renderedResources,
+        await fs.writeFile(frozenPath, JSON.stringify(haFrozenAutoscalingValues));
+        const rollout = controlTransition ? runHaKubernetesControlTopology : runHaKubernetesRollout;
+        await rollout({ kube, release, namespace, manifestDigest: candidateDigest, resources: renderedResources,
           resumeToken: options.get('--resume-ha'), timeoutMs: Number.parseInt(timeout, 10) * (timeout.endsWith('h') ? 3600000 : timeout.endsWith('m') ? 60000 : 1000),
           artifact: (name, value) => writeArtifact(artifactsDir, name, value),
           applyTemplates: async (_workloads, guardedValues) => {
+            if (controlTransition) {
+              await preserve(_workloads);
+              await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']);
+              return;
+            }
             await preserve(guardedValues);
             await upgrade(['--values', preservePath, '--values', frozenPath]);
           },
@@ -610,7 +636,7 @@ async function main() {
           return { ...data, resourceVersion: saved.metadata.resourceVersion };
         };
         const maintenancePath = path.join(generatedValuesDir, 'maintenance-validation.json');
-        await fs.writeFile(maintenancePath, JSON.stringify({ ...maintenanceValidationValues, ...(haRequested ? { ha: { enabled: false }, replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 } } : {}) }), 'utf8');
+        await fs.writeFile(maintenancePath, JSON.stringify({ ...maintenanceValidationValues, ...(haRequested ? { ha: { enabled: false, controlPlane: { mode: 'replicated' } }, replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 } } : {}) }), 'utf8');
         await runManagedReleaseCutover({
           release,
           namespace,

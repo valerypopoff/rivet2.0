@@ -3,6 +3,7 @@ import type { AcceptedWork, ProcessRetirement } from '../../studio-server-shared
 import { createRequestWorkBarrier } from './request-work.js';
 import { createProcessRetirementRouter } from './process-retirement-http.js';
 import { isLatestDebuggerRelayReady } from './latestWorkflowRemoteDebugger.js';
+import { getHaControlPlaneMode, getHaRuntimeContract } from './ha-control-plane.js';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { localUpgradeFailure } from './local-metadata/upgrade-diagnostics.js';
 
@@ -262,6 +263,8 @@ export function getApiRouteExposureMatrix(profile = getApiRuntimeProfile()): str
     );
   }
 
+  if (!isControlPlaneApiProfile(profile) && isPublishedExecutionApiProfile(profile))
+    surfaces.push('/internal/app-settings/proxy-config');
   return [...new Set(surfaces)];
 }
 
@@ -269,6 +272,7 @@ export function assertApiRuntimeProfileStartupPreconditions(profile = getApiRunt
   // Validate topology during startup rather than deferring a deployment typo
   // until an operator happens to open Settings -> Deployment.
   getDeploymentTopology();
+  getHaControlPlaneMode();
 
   if (isExecutionOnlyApiProfile(profile) && getWorkflowStorageBackendMode() !== 'managed') {
     throw new Error(`RIVET_API_PROFILE=${profile} requires Settings -> Storage to use Object storage`);
@@ -346,10 +350,6 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
         noProxy: proxy.noProxy,
       },
     });
-  });
-  app.get('/internal/app-settings/proxy-config', requireAuth, (_req, res) => {
-    res.set('Cache-Control', 'no-store');
-    res.json(createProxySettingsSnapshot());
   });
   app.use('/', uiAuthRouter);
   app.use(dispatchDynamicBasePath(getLatestWorkflowsBasePath, latestWorkflowsRouter));
@@ -441,6 +441,21 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   app.use(legacyRestoreRequestBarrier);
 
   app.use(captureAppSettingsSnapshot);
+
+  if (process.env.RIVET_HA_CONTROL_PLANE_MODE && profile !== 'evaluation') {
+    app.get('/internal/ha/runtime-contract', requireAuth, (_req, res) => {
+      res.set('Cache-Control', 'no-store').json(getHaRuntimeContract(profile));
+    });
+  }
+
+  // Non-secret, revisioned routing projection. Execution must cold-start without
+  // the developer API; this is not an administrative/settings write surface.
+  if (isControlPlaneApiProfile(profile) || isPublishedExecutionApiProfile(profile)) {
+    app.get('/internal/app-settings/proxy-config', requireAuth, (_req, res) => {
+      res.set('Cache-Control', 'no-store');
+      res.json(createProxySettingsSnapshot());
+    });
+  }
 
   if (isControlPlaneApiProfile(profile) || profile === 'execution') {
     app.use(dispatchDynamicBasePath(getPublishedWebAppsBasePath, webAppOAuthRouter));

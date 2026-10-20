@@ -120,6 +120,22 @@ hostedEvaluations:
     nodeSelector: {}
     priorityClassName: ''
 autoscaling:
+  # Opt-in single writer for execution replicas. Replaces execution HPA, never
+  # scales developer workloads. One separate API-image controller pod.
+  executionController:
+    enabled: false
+    # Operational pause: retain PDB and replacement-startup fencing during HA
+    # template updates, without running the controller or changing its policy.
+    suspended: false
+    targetSlotsPercent: 60
+    stabilizationSeconds: 300
+    cooldownSeconds: 60
+    withdrawalSeconds: 60
+    pollSeconds: 15
+    metricsMaxAgeSeconds: 90
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
   proxy:
     enabled: false
     minReplicas: 2
@@ -298,6 +314,9 @@ availability:
   # Opt-in regional GKE Gateway policy; see overlays/gke-ha.yaml. This is not
   # enabled by the local/single-machine or generic production profiles.
   gkeGateway: false
+  # Regional: six proxies across three zones. Compact: two across >=2 zones;
+  # reduced failure redundancy, separately qualified (not a regional proof).
+  gkeGatewayProfile: regional
   disruptionBudget:
     enabled: true
     maxUnavailable: 1
@@ -385,6 +404,9 @@ compatibility:
 # Durable upload/extraction scratch for the single control backend; not a new controller or Job.
 ha:
   enabled: false
+  controlPlane:
+    # Opt-in runtime HA; developer tools may pause during serial replacement.
+    mode: replicated
   protocol: 1
   peerLimit: 9
   # Private release-helper CAS guards; do not set in operator values.

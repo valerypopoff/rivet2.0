@@ -8,13 +8,16 @@ export function releaseOperationJournalName(release) {
 
 export function journalForReleaseOperation(record, kind, identity, now = Date.now) {
   if (!record) return null;
-  const actualKind = record.protocol === 1 && record.formatVersion === undefined ? 'ha'
+  const actualKind = record.autoscalingProtocol === 1 && record.protocol === undefined && record.formatVersion === undefined ? 'autoscaling'
+    : record.autoscalingProtocol !== undefined ? null
+    : record.protocol === 1 && record.formatVersion === undefined ? 'ha'
     : record.formatVersion === 1 && record.protocol === undefined ? 'cutover' : null;
   if (!actualKind || record.release !== identity.release || record.namespace !== identity.namespace ||
       !record.resourceVersion || !Number.isFinite(record.leaseExpiresAt) ||
       typeof record.token !== 'string' || !record.token || typeof record.runner !== 'string' || !record.runner ||
       typeof record.manifestDigest !== 'string' || !record.manifestDigest ||
-      !(actualKind === 'ha' ? ['preflight', 'templates', 'owners', 'complete'] :
+      !(actualKind === 'ha' ? ['preflight', 'templates', 'owners', 'complete'] : actualKind === 'autoscaling' ?
+        ['complete', 'scaling', 'fencing', 'withdrawing', 'draining', 'removing', 'unfencing'] :
         ['quiescing', 'quiesced', 'validating', 'resuming', 'complete']).includes(record.phase))
     throw new Error('Release operation journal identity or format is unconfirmed.');
   if (actualKind === kind) return record;

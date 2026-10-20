@@ -400,7 +400,14 @@ export class LatestDebuggerRelay {
     }
   }
   get ready(): boolean {
-    return [...this.#outbound.values()].some((socket) => socket.readyState === WebSocket.OPEN);
+    // The deliberate singleton has no ordinary neighbour. Its local debugger
+    // still records/replays normally; missing potential surge ordinals are not
+    // required dependencies. Replicated control keeps its peer-ready gate.
+    return (
+      !this.#closed &&
+      (process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton' ||
+        [...this.#outbound.values()].some((socket) => socket.readyState === WebSocket.OPEN))
+    );
   }
   dispose(): void {
     this.#closed = true;

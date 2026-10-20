@@ -13,6 +13,8 @@ metadata:
 data:
   release-manifest-digest: {{ .Values.release.production.manifestDigest | quote }}
   source-sha: {{ .Values.release.production.sourceSha | quote }}
+  ha-control-plane-mode: {{ .Values.ha.controlPlane.mode | quote }}
+  gke-edge-profile: {{ .Values.availability.gkeGatewayProfile | quote }}
   verification-workflow: {{ .Values.release.production.verification.workflow | quote }}
   verification-run-id: {{ .Values.release.production.verification.runId | quote }}
   verification-run-attempt: {{ .Values.release.production.verification.runAttempt | quote }}

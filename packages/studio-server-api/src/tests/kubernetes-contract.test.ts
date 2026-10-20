@@ -668,7 +668,7 @@ test('hosted Evaluations share the editor backend without a dedicated workload, 
     'metrics.enabled=true',
     'metrics.serviceMonitor.enabled=true',
     'replicaCount.evaluation=0',
-    'postgres.maxConnections=78',
+    'postgres.maxConnections=80',
   ]);
   const workloads = deploymentYaml.parseAllDocuments(renderedChart).map((document) => document.toJS());
   const backend = workloads
@@ -709,8 +709,8 @@ test('hosted Evaluations share the editor backend without a dedicated workload, 
     /env\.RIVET_HOSTED_EVALUATIONS_ENABLED is chart-owned; configure hostedEvaluations instead/,
   );
   await assertHelmTemplateFails(
-    ['hostedEvaluations.enabled=true', 'postgres.maxConnections=77'],
-    /requires 78 connections/,
+    ['hostedEvaluations.enabled=true', 'postgres.maxConnections=79'],
+    /requires 80 connections/,
   );
 });
 
@@ -1229,7 +1229,7 @@ test('chart budgets PostgreSQL connections against the maximum execution replica
 
   await assertHelmTemplateFails(
     ['postgres.maxConnections=100', 'autoscaling.execution.enabled=true', 'autoscaling.execution.maxReplicas=10'],
-    /requires 198 connections \(30 reserved \+ 11 API pods \* \(10 pooled \+ 3 LISTEN\) \+ 25 restore\), but postgres\.maxConnections is 100/,
+    /requires 200 connections \(30 reserved \+ 11 API pods \* \(10 pooled \+ 3 LISTEN\) \+ 25 restore \+ 2 scheduler\), but postgres\.maxConnections is 100/,
   );
   await assertHelmTemplateFails(
     ['env.RIVET_DEPLOYMENT_DATABASE_POOL_MAX=99'],

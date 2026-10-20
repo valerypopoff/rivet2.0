@@ -155,6 +155,20 @@ try {
   await a.delete(s.id, s.revision);
   await pool.query('DELETE FROM rivet_schedule_runs');
   await pool.query('DELETE FROM rivet_schedule_requests');
+  // Real PostgreSQL JSON predicates and advisory locks: no control process is
+  // needed to materialize or claim published work. Latest cannot steal it.
+  const latestScope = await a.save({ ...s, version: 'latest', name: 'Latest scope' });
+  const publishedScope = await a.save({ ...s, version: 'published', name: 'Published scope' });
+  await a.runNow(latestScope.id, latestScope.revision);
+  await a.runNow(publishedScope.id, publishedScope.revision);
+  const scoped = await Promise.all([a.tick('runtime-a', 1, 'published'), b.tick('runtime-b', 1, 'published')]);
+  assert.equal(scoped.filter(Boolean).length, 1);
+  assert.equal(scoped.find(Boolean)?.draft.version, 'published');
+  assert.equal((await b.tick('developer', 1, 'latest'))?.draft.version, 'latest');
+  await a.cancel(scoped.find(Boolean)!.occurrence.id);
+  await a.delete(latestScope.id, latestScope.revision);
+  await a.delete(publishedScope.id, publishedScope.revision);
+  await pool.query('DELETE FROM rivet_schedule_runs');
   const source = ScheduledRunStore.sqlite(path.join(root, 'scheduled-runs.sqlite'));
   try {
     const imported = await source.save({ ...s, enabled: true }, undefined, 0, randomUUID());
