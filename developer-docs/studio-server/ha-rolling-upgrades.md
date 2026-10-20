@@ -24,6 +24,13 @@ endpoint recording for that correlation; missing, duplicate, failed, foreign or
 child-only results still fail before owner deletion. This is a proof lookup fix,
 not a relaxation of recording durability or a production runtime change.
 
+The retained-browser proof likewise selects its exact fixture through the normal
+Run recordings workflow dropdown before opening either acknowledged recording.
+It must not assume that the default Any/page-one view contains its run while
+continuous endpoint traffic is active. `ha-recording-selection.spec.ts`, enrolled
+in the editor CI lane, exercises the shared probe action against 120 newer foreign
+runs and verifies both successful and failed fixture recordings remain reachable.
+
 ### Latest regional follow-up: DNS gap fixed locally, provider proof unchanged
 
 The same published pair's regional Gateway primary upgrade passed with 7,809
