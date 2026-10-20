@@ -79,6 +79,34 @@ Verify with that immutable install, `yarn security:audit`, Node package builds,
 and the MCP provider tests.
 This dependency-only change requires no UI or Kubernetes rehearsal.
 
+## 2026-10-21 redirect and development-server remediation
+
+The `develop` Build run for `f922f4263` failed its JavaScript audit on four newly
+reported findings, not compilation or the HA protocol tests. The fix uses the
+upstream patches, without adding exceptions or weakening the blocking gate:
+
+- Resolve all `follow-redirects` consumers to **1.16.1**, including Gentrace's
+  Axios dependency and the older documentation proxy path. This fixes
+  [GHSA-q3jh-wrc6-jgq8](https://github.com/advisories/GHSA-q3jh-wrc6-jgq8) and
+  [GHSA-8r9p-f939-6h3c](https://github.com/advisories/GHSA-8r9p-f939-6h3c): array-form
+  headers and custom sensitive names containing regex metacharacters must not
+  leak credentials across hosts.
+- Resolve Docusaurus/webpack's `launch-editor` to **2.14.2** and require **Vite
+  6.4.4 or newer within 6.x** in both desktop and hosted-web manifests. Vite embeds
+  its editor launcher, so updating the standalone transitive package alone does
+  not fix both development servers. These address
+  [GHSA-587h-7wmj-h5pm](https://github.com/advisories/GHSA-587h-7wmj-h5pm).
+
+`scripts/checks/dependency-security-regressions.test.mjs` exercises real
+loopback-only redirects through Gentrace's actual Axios dependency with object
+and array headers, asserting cross-host stripping and direct-request preservation.
+It also calls the documentation launcher's Windows argument validator directly
+(never a shell/editor) and checks both Vite consumers stay on the patched 6.x
+line. These join the normal `yarn test:style` gate. Verify with the focused audit
+tests, `yarn security:audit`, an immutable install/cache, frontend builds and
+headless hosted UI checks. Keep `.pnp.cjs`, `.pnp.loader.mjs`, `yarn.lock` and the
+tracked cache archives synchronized; no GCP deployment or rehearsal is needed.
+
 ## CI test contracts
 
 `yarn test:style` continues rejecting new production-source-reading tests. Static
