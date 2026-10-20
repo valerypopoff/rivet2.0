@@ -27,6 +27,13 @@ at each hop. Repositories with committed PnP loaders/caches can use those pinned
 dependencies directly; regenerating tracked dependency state can invalidate the
 clean-source guard.
 
+The optional [ten-pod runtime-HA profile](runtime-ha-singleton-control-plan.md)
+is a subsequent, same-image ownership transfer after a compatible 13-pod bridge,
+not this first-adoption maintenance conversion. It needs its own qualified
+runtime/control and embedded-maintenance capacity evidence and explicit rollout
+approval. Do not substitute a raw Helm scale, generic rollback, or the older
+full-HA receipt for that transfer.
+
 Maintain one operator and an exact resource inventory. Pin project number, cluster
 ID, namespace UID, release/manifest digest, route and policy UIDs, storage ownership
 and secret references. Stop on drift or an unfinished operation. No shared-node

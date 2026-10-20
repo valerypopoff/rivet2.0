@@ -29,7 +29,7 @@ function parseArgs(argv) {
           '--predecessor',
         ])
       : command === 'promote'
-        ? new Set(['--input', '--output', '--workflow', '--run-id', '--run-attempt', '--current', '--ha-evidence'])
+        ? new Set(['--input', '--output', '--workflow', '--run-id', '--run-attempt', '--current', '--ha-evidence', '--runtime-control-evidence', '--runtime-autoscaling-evidence'])
         : command === 'digest'
           ? new Set(['--input'])
           : null;
@@ -176,6 +176,12 @@ function main() {
     const haEvidencePath = optionalRepositoryPath(options, '--ha-evidence');
     if (haEvidencePath) candidate = assertStudioServerReleaseManifest({ ...candidate,
       evidence: { ...candidate.evidence, ha: JSON.parse(fs.readFileSync(haEvidencePath, 'utf8')) } });
+    const runtimeControlEvidencePath = optionalRepositoryPath(options, '--runtime-control-evidence');
+    if (runtimeControlEvidencePath) candidate = assertStudioServerReleaseManifest({ ...candidate,
+      evidence: { ...candidate.evidence, runtimeControl: JSON.parse(fs.readFileSync(runtimeControlEvidencePath, 'utf8')) } });
+    const runtimeAutoscalingEvidencePath = optionalRepositoryPath(options, '--runtime-autoscaling-evidence');
+    if (runtimeAutoscalingEvidencePath) candidate = assertStudioServerReleaseManifest({ ...candidate,
+      evidence: { ...candidate.evidence, runtimeAutoscaling: JSON.parse(fs.readFileSync(runtimeAutoscalingEvidencePath, 'utf8')) } });
     assertStudioServerReleasePredecessor(
       candidate,
       currentPath ? readManifest(currentPath, { requirePromoted: true }) : null,

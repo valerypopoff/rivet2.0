@@ -1,11 +1,12 @@
+import type { DeploymentStatus, DeploymentTopology } from '../../studio-server-shared/deployment-status-types.js';
 import type {
-  DeploymentStatus,
-  DeploymentTopology,
-} from '../../studio-server-shared/deployment-status-types.js';
-import type { RuntimeLibraryReplicaCleanupResult, RuntimeLibraryReplicaReadinessState } from '../../studio-server-shared/runtime-library-types.js';
+  RuntimeLibraryReplicaCleanupResult,
+  RuntimeLibraryReplicaReadinessState,
+} from '../../studio-server-shared/runtime-library-types.js';
 import { getApiRuntimeProfile } from './runtime-profile.js';
 import { getRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
 import { badRequest } from './utils/httpError.js';
+import { getHaControlPlaneMode } from './ha-control-plane.js';
 
 const DEPLOYMENT_TOPOLOGY_ENV_NAME = 'RIVET_DEPLOYMENT_TOPOLOGY';
 
@@ -34,10 +35,20 @@ export function buildDeploymentStatus(options: {
   topology: DeploymentTopology;
   apiProfile: DeploymentStatus['apiProfile'];
   replicaReadiness?: RuntimeLibraryReplicaReadinessState | null;
+  controlPlaneMode?: 'replicated' | 'singleton';
 }): DeploymentStatus {
   return {
     topology: options.topology,
     apiProfile: options.apiProfile,
+    ...(options.controlPlaneMode
+      ? {
+          controlPlaneAvailability: {
+            mode: options.controlPlaneMode,
+            maintenance: options.controlPlaneMode === 'singleton' ? ('embedded' as const) : ('dedicated' as const),
+            developerInterruptionAllowed: options.controlPlaneMode === 'singleton',
+          },
+        }
+      : {}),
     // A single-host deployment has no shared process registry. Do not expose
     // stale data merely because its storage backend was changed in preparation
     // for a future scale-out deployment.
@@ -49,11 +60,15 @@ export async function getDeploymentStatus(
   apiProfile: DeploymentStatus['apiProfile'] = getApiRuntimeProfile(),
 ): Promise<DeploymentStatus> {
   const topology = getDeploymentTopology();
-  const replicaReadiness = topology === 'replicated'
-    ? (await getRuntimeLibrariesBackend().getState()).replicaReadiness
-    : null;
+  const replicaReadiness =
+    topology === 'replicated' ? (await getRuntimeLibrariesBackend().getState()).replicaReadiness : null;
 
-  return buildDeploymentStatus({ topology, apiProfile, replicaReadiness });
+  return buildDeploymentStatus({
+    topology,
+    apiProfile,
+    replicaReadiness,
+    ...(process.env.RIVET_HA_CONTROL_PLANE_MODE ? { controlPlaneMode: getHaControlPlaneMode() } : {}),
+  });
 }
 
 export async function clearStaleDeploymentReplicaStatuses(): Promise<RuntimeLibraryReplicaCleanupResult> {

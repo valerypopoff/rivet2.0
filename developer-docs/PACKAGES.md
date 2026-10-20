@@ -2,6 +2,28 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-20 — debugger reliability and bundle lifecycle
+
+Every package track's latest version change is `c71d4b1dd`. This update covers
+the subsequent commits through `6e0e9b27e` and the debugger-information,
+desktop target-label and cross-surface context-menu changes. The explicit-bundle
+primitive itself was already included in that baseline.
+
+| Packages | Version | Changes since that track's last bump |
+| --- | --- | --- |
+| App | `2.28.0` → `2.28.1` | Repairs large-history HA Remote Debugger replay/reconnect handling and bundle observations; moves debugger details into a standard modal and resolves desktop bundle Subgraph names with wrapping and loading fallbacks. These fix/refine existing capabilities rather than adding a new desktop feature. |
+| Core, Node, CLI, Evaluations | `2.21.0` → `2.22.0` | Node adds the optional `startDebuggerServer.sendBroadcast` adapter hook for ordered live delivery through the bounded replay writer. This additive public API warrants a minor release. Core, CLI and Evaluations are required public-family companions with no package-local implementation changes. |
+| App Executor | `2.14.0` → `2.14.1` | Source-bundled Node debugger/runtime fix companion; no package-local implementation changes or new sidecar capability. |
+| All five Studio Server packages | `1.28.0` → `1.29.0` | Adds confirmed deletion of non-empty bundles and one-click saved-version duplication; removes separate New bundle actions. Repairs conversion reference guards, hosted same-bundle Subgraph authorization, large-history HA debugger delivery and recording-query/CI selection. Includes clearer conversion errors, compact confirmation UI and context-menu/focus isolation. API/Web/Executor changed; Shared/Bootstrap are lockstep companions. |
+| Docs | `2.21.0` → `2.22.0` | Updates user-facing bundle creation, immediate duplication, deletion confirmation and recovery guidance. |
+
+The four public npm packages and five private Studio Server packages remain
+lockstep within their separate families. Tauri/Cargo metadata follows App and
+the CLI Docker fallback follows the public family. Internal dependencies remain
+`workspace:` ranges; no dependency or Yarn lockfile changes are needed for these
+version edits. Helm metadata and the managed schema contract are unchanged.
+These versions prepare releases; they do not publish packages or deploy to GCP.
+
 ## Version update: 2026-10-20 — explicit bundles and guarded deployment
 
 Every package track was last bumped in `c2e1c3bc3`. This update covers the

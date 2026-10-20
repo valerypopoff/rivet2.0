@@ -1,0 +1,17 @@
+# Merge AFTER gke-ha.yaml and BEFORE installation values. Ten steady-state pods.
+# Requires the bridge and journaled ownership transition, NOT a direct Helm scale.
+ha:
+  enabled: true
+  controlPlane:
+    mode: singleton
+replicaCount:
+  proxy: 6
+  web: 1
+  backend: 1
+  execution: 2
+autoscaling:
+  web:
+    enabled: false
+publishedExecutionAdmission:
+  mode: enforce
+  maxActiveRunsPerPod: 4

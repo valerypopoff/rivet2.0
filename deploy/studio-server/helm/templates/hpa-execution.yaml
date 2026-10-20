@@ -1,4 +1,4 @@
-{{- if .Values.autoscaling.execution.enabled }}
+{{- if and .Values.autoscaling.execution.enabled (not .Values.autoscaling.executionController.enabled) }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

@@ -299,12 +299,14 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           onDrop={(event) => void handleRootDrop(event)}
         >
           {bodyContent}
+          {controller.bundleAction ? (
+            <div className="bundle-action-status" role="status" title={controller.bundleAction.name}>
+              {controller.bundleAction.kind === 'duplication'
+                ? `Duplicating ${controller.bundleAction.name} from saved versions…`
+                : `Converting ${controller.bundleAction.name}…`}
+            </div>
+          ) : null}
           <div className="body-actions">
-            {controller.explicitBundles ? (
-              <button type="button" className="link-button" onClick={() => controller.handleCreateBundle()}>
-                + New bundle
-              </button>
-            ) : null}
             <button type="button" className="link-button" onClick={() => void handleCreateFolder()}>
               + New folder
             </button>

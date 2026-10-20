@@ -2,13 +2,38 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { runHaRollingUpgrade, assertHaRolloutPlan, assertHaRetirement } from './lib/ha-rolling-upgrade.mjs';
+
 import {
   resolveHaWorkloadCapacity,
   hasSameHaOwnerIdentity,
   runHaKubernetesRollout,
   getHaConfigurationDigest,
   hasSameHaServiceRouting,
+  captureHaFrontendCapacity,
 } from './lib/ha-kubernetes-rollout.mjs';
+
+test('HA template updates preserve HPA-grown frontend capacity with UID and resourceVersion fencing', async () => {
+  const live = { metadata: { uid: 'proxy-uid', resourceVersion: '7', labels: {
+    'app.kubernetes.io/instance': 'rivet', 'app.kubernetes.io/component': 'proxy' } }, spec: { replicas: 4 } };
+  const resources = [
+    { kind: 'Deployment', metadata: { name: 'proxy', labels: { 'app.kubernetes.io/component': 'proxy' } }, spec: { replicas: 2 } },
+    { kind: 'HorizontalPodAutoscaler', spec: { scaleTargetRef: { kind: 'Deployment', name: 'proxy' } } },
+  ];
+  const kube = async args => { assert.deepEqual(args, ['get', 'deployment', 'proxy', '-o', 'json']); return { stdout: JSON.stringify(live) }; };
+  const guard = await captureHaFrontendCapacity(kube, resources, 'rivet');
+  assert.deepEqual(await guard(), { replicas: { proxy: 4 }, versions: { proxy: '7' } });
+  live.spec.replicas = 3; live.metadata.resourceVersion = '8';
+  assert.deepEqual(await guard(), { replicas: { proxy: 3 }, versions: { proxy: '8' } });
+  live.metadata.uid = 'replacement'; await assert.rejects(guard(), /frontend identity/);
+  await assert.rejects(captureHaFrontendCapacity(kube, resources, 'foreign'), /identity is unconfirmed/);
+  const unused = await captureHaFrontendCapacity(() => { throw new Error('No autoscaled frontend to inspect'); }, resources.slice(0, 1), 'rivet');
+  assert.deepEqual(await unused(), { replicas: {}, versions: {} });
+});
+
+test('singleton rollout rejects absent or malformed inventory through its validation boundary', () => {
+  for (const inventory of [undefined, null, {}, [], [null, { role: 'backend' }]])
+    assert.throws(() => assertHaRolloutPlan(inventory, 'singleton'), /Missing HA backends/);
+});
 import { journalForReleaseOperation, releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 
 test('API-server field ordering does not resemble a Secret identity change', () => {
@@ -44,6 +69,13 @@ test('owner identity accepts API-omitted empty literal values without hiding mis
   assert.equal(hasSameHaOwnerIdentity(current, template([
     { name, valueFrom: { secretKeyRef: { name: 'storage', key: 'endpoint' } } },
   ])), false);
+});
+
+test('bridge mode normalizes only an absent replicated literal, never secret-derived owner policy', () => {
+  const template = env => ({ spec: { containers: [{ name: 'backend', env }] } });
+  assert.equal(hasSameHaOwnerIdentity(template([]), template([{ name: 'RIVET_HA_CONTROL_PLANE_MODE', value: 'replicated' }])), true);
+  assert.equal(hasSameHaOwnerIdentity(template([]), template([{ name: 'RIVET_HA_CONTROL_PLANE_MODE', value: 'singleton' }])), false);
+  assert.equal(hasSameHaOwnerIdentity(template([]), template([{ name: 'RIVET_HA_CONTROL_PLANE_MODE', valueFrom: { secretKeyRef: { name: 'foreign', key: 'mode' } } }])), false);
 });
 
 test('owner identity includes Vault wiring, injected credentials and serving ports, but not ordinary tuning', () => {
@@ -194,6 +226,53 @@ function fixture() {
     },
   };
 }
+
+test('replicated HA also rejects an execution tier with only one owner', () => {
+  const f = fixture();
+  assert.throws(() => assertHaRolloutPlan([...f.options.workloads,
+    { ...f.options.workloads[0], name: 'fixture-execution', role: 'execution', replicas: 1 }]), /at least two|two.*owners/);
+});
+
+for (const role of ['backend', 'execution'])
+  for (const fault of ['not-ready', 'retiring', 'changed-uid'])
+  test(`a ${fault} peer after preflight blocks the next ${role} retirement before withdrawal`, async () => {
+    const f = fixture();
+    const name = `fixture-${role}`;
+    if (role === 'execution') {
+      f.options.workloads.push({ ...f.options.workloads[0], name, role });
+      for (let i = 0; i < 2; i++) f.pods.set(`${name}-${i}`,
+        { ...structuredClone(f.pods.get(`fixture-backend-${i}`)), name: `${name}-${i}`, uid: randomUUID(), incarnation: randomUUID() });
+    }
+    const waitReady = f.options.waitForReady;
+    const status = f.options.status;
+    let changed = false, armed = false;
+    f.options.waitForReady = async (...args) => {
+      await waitReady(...args);
+      if (args[0] !== `${name}-2`) return;
+      armed = true;
+      if (fault === 'not-ready') f.pods.get(`${name}-1`).ready = false;
+      if (fault === 'retiring') Object.assign(f.pods.get(`${name}-1`), { state: 'withdrawing', operationId: randomUUID() });
+    };
+    f.options.status = async (pod) => {
+      if (armed && fault === 'changed-uid' && pod.name === `${name}-1` && !changed) {
+        f.pods.get(pod.name).uid = randomUUID();
+        changed = true;
+      }
+      return status(pod);
+    };
+    await assert.rejects(runHaRollingUpgrade(f.options), /two.*serving|replacement capacity/);
+    assert.ok(!f.operations.some(o => new RegExp(`^(withdraw-command|begin|delete):${name}`).test(o)));
+    assert.equal([...f.pods.keys()].filter(n => n.startsWith(name)).length, 3,
+      'keep the surge; do not compensate by deleting an accepted owner');
+    Object.assign(f.pods.get(`${name}-1`), { ready: true, state: 'serving', operationId: null });
+    f.options.waitForReady = waitReady;
+    f.options.status = status;
+    f.advance(1);
+    assert.equal((await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token })).phase, 'complete');
+    const withdrawals = f.operations.filter(o => o.startsWith(`withdraw-command:${name}`));
+    assert.equal(withdrawals.length, 3);
+    assert.equal(new Set(withdrawals).size, 3, 'resume must not replay a retirement');
+  });
 test('maintenance and HA use one CAS journal and cannot take an unfinished or leased foreign operation', () => {
   const identity = { release: 'fixture', namespace: 'fixture' };
   const ownership = { token: randomUUID(), runner: randomUUID(), manifestDigest: 'candidate' };
@@ -520,6 +599,7 @@ for (const fault of [
   'service-routing-change',
   'recreated-statefulset-recovery',
   'missing-final-revision',
+  'foreign-pod-controller',
 ])
   test(`Kubernetes surge removal is capacity/UID guarded and recoverable: ${fault}`, async () => {
     const f = fixture(),
@@ -594,6 +674,8 @@ for (const fault of [
           metadata: {
             name: pod.name,
             uid: pod.uid,
+            ownerReferences: [{ kind: 'StatefulSet', controller: true,
+              uid: fault === 'foreign-pod-controller' ? 'foreign-controller' : current.metadata.uid }],
             labels: { 'app.kubernetes.io/instance': 'fixture', 'controller-revision-hash': 'candidate' },
           },
           spec: { containers: [{ name: 'backend', image: pod.image }] },
@@ -655,6 +737,12 @@ for (const fault of [
         restored = true;
       },
     };
+    if (fault === 'foreign-pod-controller') {
+      await assert.rejects(runHaKubernetesRollout(options), /pod controller ownership/);
+      assert.equal(cm, undefined, 'foreign pods must be rejected before journal ownership or Helm changes');
+      assert.equal(calls.filter(a => ['create', 'replace', 'patch', 'scale', 'delete', 'exec'].includes(a[0])).length, 0);
+      return;
+    }
     if (fault === 'missing-final-revision') {
       await assert.rejects(runHaKubernetesRollout(options), /completion is blocked/);
       assert.equal(restored, false);

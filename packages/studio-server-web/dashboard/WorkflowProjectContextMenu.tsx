@@ -12,6 +12,7 @@ import ArrowDownIcon from 'majesticons/line/arrow-down-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowProjectItem } from './types';
+import { useHostedSurfaceDismiss } from './useHostedSurfaceDismiss';
 
 type WorkflowProjectContextMenuProps = {
   isOpen: boolean;
@@ -63,6 +64,7 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   canDelete,
   onDelete,
 }) => {
+  useHostedSurfaceDismiss(onClose, isOpen);
   const { context, refs, floatingStyles, update } = useFloating({
     open: isOpen,
     onOpenChange(nextOpen) {

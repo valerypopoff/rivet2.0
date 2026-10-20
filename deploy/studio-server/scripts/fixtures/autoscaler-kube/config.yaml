@@ -1,0 +1,6 @@
+version: 1
+name: rivet-autoscaler-kube
+interceptRequests: true
+scenarios:
+  - name: default
+    path: default.js

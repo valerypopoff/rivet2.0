@@ -4,6 +4,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "rivet.webServiceName" . }}
+  {{- if .Values.ha.enabled }}
+  {{- with index .Values.ha.rolloutResourceVersions (include "rivet.webServiceName" .) }}
+  resourceVersion: {{ . | quote }}
+  {{- end }}
+  {{- end }}
   labels:
     {{- include "rivet.labels" . | nindent 4 }}
     app.kubernetes.io/component: web

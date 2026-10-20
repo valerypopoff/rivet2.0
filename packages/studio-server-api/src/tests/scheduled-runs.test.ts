@@ -16,6 +16,51 @@ import { assertLocalOperationalSchema } from '../local-metadata/operational-sche
 
 const initial = Date.parse('2026-01-01T00:00:00Z');
 
+test('scoped workers partition recurrence and claims before acceptance without starving other scopes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-scopes-'));
+  let now = initial;
+  const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => now);
+  t.after(async () => { await store.close(); await fs.rm(root, { recursive: true, force: true }); });
+  const latest = await store.save(draft({ version: 'latest', enabled: true }));
+  const published = await store.save(draft({ version: 'published', enabled: true }));
+  now = Math.max(latest.nextAt!, published.nextAt!);
+  const job = await store.tick('runtime', 1, 'published');
+  assert.equal(job?.draft.version, 'published');
+  assert.equal((await store.list()).schedules.find((s) => s.id === latest.id)?.nextAt, latest.nextAt);
+  const dev = await store.tick('developer', 1, 'latest');
+  assert.equal(dev?.draft.version, 'latest');
+  assert.equal(await store.accept(job!.occurrence.id, 'runtime', { graphId: 'g' }), true);
+  assert.equal(await store.tick('runtime-2', 1, 'published'), undefined);
+  now += 60_001;
+  await store.tick('runtime-2', 0, 'published');
+  assert.equal((await store.list()).history.find((r) => r.id === job!.occurrence.id)?.status, 'interrupted');
+});
+
+test('schedule admission reserves before claiming and holds its permit through durable outcome', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-permit-'));
+  const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => initial);
+  let capacity = false, released = 0;
+  let finish!: () => void;
+  const wait = new Promise<void>((r) => { finish = r; });
+  const schedule = await store.save(draft({ enabled: false, version: 'published' }));
+  const occurrence = await store.runNow(schedule.id, schedule.revision);
+  const service = new ScheduledRunService(store, async (job, owner) => {
+    assert.equal(await store.accept(job.occurrence.id, owner, { graphId: 'g' }), true);
+    await wait;
+    return { status: 'succeeded' };
+  }, () => true, 1, { scope: 'published', acquirePermit: () => capacity ? { release() { released++; } } : undefined });
+  t.after(async () => { finish(); await service.stop(1000); await fs.rm(root, { recursive: true, force: true }); });
+  await service.tick();
+  assert.equal((await store.list()).history.find((r) => r.id === occurrence.id)?.status, 'queued');
+  capacity = true;
+  await service.tick();
+  assert.equal(released, 0);
+  finish();
+  await service.drainAcceptedWork();
+  assert.equal(released, 1);
+  assert.equal((await store.list()).history.find((r) => r.id === occurrence.id)?.status, 'succeeded');
+});
+
 test('scheduled-run retirement lets accepted work finish without claiming another run or closing its store', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-schedule-drain-'));
   const store = ScheduledRunStore.sqlite(path.join(root, 's.sqlite'), () => initial);

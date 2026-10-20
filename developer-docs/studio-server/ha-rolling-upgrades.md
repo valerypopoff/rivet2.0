@@ -1,5 +1,19 @@
 # HA rolling-upgrade implementation status
 
+[Drain-aware autoscaling](runtime-autoscaling.md) adds opt-in automatic execution
+retirement using the same CAS operation journal. The HA runner temporarily
+freezes that controller while applying templates; unfinished retirements must
+settle first. Its startup fence closes replacement-versus-scale-down races.
+The freeze is an operational suspension, not disabling retirement protection.
+Execution PDB/startup fences remain enabled, and HPA-grown proxy/web counts are
+carried into Helm updates with API-server resourceVersion guards.
+
+The opt-in [runtime-HA implementation: ten-pod bridge and six-pod compact target](runtime-ha-singleton-control-plan.md)
+keeps production execution redundant while consolidating developer and maintenance
+roles. Implementation and qualification status are tracked there. It is not
+provider-qualified by the older replicated-control receipts below. Deployment
+requires separate exact-pair `evidence.runtimeControl`; no GCP change is authorized.
+
 For the first legacy/singleton production conversion, use the
 [maintenance cutover and consistent-backup runbook contract](production-ha-cutover.md).
 It distinguishes the pre-migration backup freeze from the release runner, requires
@@ -14,6 +28,24 @@ persisted once. Browser sockets may reconnect; reconnection must never replay an
 uncertain execution. A long-running or paused execution may block retirement.
 This is not a guarantee against simultaneous provider failure or arbitrary pod
 termination. Legacy restore remains an explicitly destructive maintenance task.
+
+Preflight readiness is not a reservation of future capacity. Before each new
+withdrawal in a replicated editor or published-execution tier, the runner checks
+that at least two other owners in that same tier are Ready and actually serving,
+not retiring. It rechecks their pod UIDs/readiness after reading retirement status;
+another tier's healthy pods do not count. A subsequent peer failure blocks the
+next withdrawal and retains the surge. Recover the peer, then resume the same
+journal token; never force-delete the accepted owner or replay its execution.
+An already-issued retirement is observed and settled, not undone or resubmitted
+because a peer later failed. Singleton developer/maintenance replacement remains
+serial and intentionally permits its documented developer-only interruption.
+
+The core runner, not just Helm, rejects an execution tier below two in either
+control mode. Ordinary Kubernetes rolls also verify each observed pod's controlling
+StatefulSet UID. Matching names/labels are insufficient to count a foreign pod as
+serving capacity or send it retirement commands. These safeguards reduce
+self-inflicted unavailability; they do not guarantee uptime through simultaneous
+external failures or replace exact-image provider qualification.
 
 The background-retirement certificate checks the recording catalog of its exact
 uploaded workflow, then matches the endpoint execution's correlation identity.

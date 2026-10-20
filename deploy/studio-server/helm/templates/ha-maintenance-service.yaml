@@ -1,4 +1,4 @@
-{{- if .Values.ha.enabled }}
+{{- if and .Values.ha.enabled (ne .Values.ha.controlPlane.mode "singleton") }}
 apiVersion: v1
 kind: Service
 metadata:

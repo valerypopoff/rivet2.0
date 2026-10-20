@@ -4,6 +4,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "rivet.proxyServiceName" . }}
+  {{- if .Values.ha.enabled }}
+  {{- with index .Values.ha.rolloutResourceVersions (include "rivet.proxyServiceName" .) }}
+  resourceVersion: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.availability.gkeGateway }}
+  annotations:
+    rivet.studio/gke-edge-profile: {{ .Values.availability.gkeGatewayProfile | quote }}
+  {{- end }}
   labels:
     {{- include "rivet.labels" . | nindent 4 }}
     app.kubernetes.io/component: proxy

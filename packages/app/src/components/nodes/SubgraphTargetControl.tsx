@@ -30,6 +30,10 @@ const controlCss = css`
   min-width: 0;
   width: 100%;
 
+  .target-label {
+    overflow-wrap: anywhere;
+  }
+
   .target-error {
     color: var(--error);
     font-size: var(--ui-font-size-sm);
@@ -38,11 +42,6 @@ const controlCss = css`
 
   .target-warning {
     color: var(--warning);
-    font-size: var(--ui-font-size-sm);
-    margin-top: 6px;
-  }
-
-  .target-help {
     font-size: var(--ui-font-size-sm);
     margin-top: 6px;
   }
@@ -175,7 +174,8 @@ export const SubgraphTargetControl: FC<{
   const store = useStore();
   const session = useNodeEditorSessionContext();
   const ownProject = useAtomValue(projectState);
-  const membershipKey = useAtomValue(projectsState).openedProjects[ownProject.metadata.id]?.hostedBundleKey;
+  const openedProjects = useAtomValue(projectsState).openedProjects;
+  const membershipKey = openedProjects[ownProject.metadata.id]?.hostedBundleKey;
   const graphId = useAtomValue(graphState).metadata?.id;
   const referencedProjects = useAtomValue(referencedProjectsState);
   const setReferencedProjects = useSetAtom(referencedProjectsState);
@@ -299,13 +299,13 @@ export const SubgraphTargetControl: FC<{
     if (!catalog && node.data.targetProjectId) {
       return (
         <div css={controlCss}>
-          <span>
-            {node.data.targetProjectId} / {node.data.graphId}
+          <span className="target-label">
+            {selectedPreview?.metadata.title ||
+              openedProjects[node.data.targetProjectId]?.title ||
+              node.data.targetProjectId}
+            {' / '}
+            {selectedPreview?.graphs[node.data.graphId]?.metadata?.name || node.data.graphId}
           </span>
-          <div className="target-help">
-            Run this target from an extracted bundle or a compatible project loader. Edit its project/graph binding in
-            Rivet Studio Server.
-          </div>
         </div>
       );
     }

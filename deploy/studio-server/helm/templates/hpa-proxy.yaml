@@ -13,6 +13,13 @@ spec:
     name: {{ include "rivet.proxyServiceName" . }}
   minReplicas: {{ .Values.autoscaling.proxy.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.proxy.maxReplicas }}
+  {{- if .Values.autoscaling.executionController.enabled }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - { type: Pods, value: 1, periodSeconds: 60 }
+  {{- end }}
   metrics:
     - type: Resource
       resource:

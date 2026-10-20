@@ -210,7 +210,7 @@ spec:
         {{- end }}
         {{- end }}
       volumes:
-        {{- if and (or (not .Values.ha.enabled) (default false .haMaintenance)) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
+        {{- if and (or (not .Values.ha.enabled) (default false .haMaintenance) (eq .Values.ha.controlPlane.mode "singleton")) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
         - name: legacy-restore
           persistentVolumeClaim:
             claimName: {{ include "rivet.fullname" . }}-legacy-restore

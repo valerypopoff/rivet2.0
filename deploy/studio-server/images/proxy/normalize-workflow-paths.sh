@@ -580,6 +580,11 @@ write_client_address_include "$RIVET_CLIENT_ADDRESS_INCLUDE_FILE" || exit 1
 export RIVET_PUBLIC_ROUTES_INCLUDE_FILE="${RIVET_PUBLIC_ROUTES_INCLUDE_FILE:-/tmp/nginx/rivet-public-routes.inc}"
 export RIVET_PROXY_TIMEOUT_INCLUDE_FILE="${RIVET_PROXY_TIMEOUT_INCLUDE_FILE:-/tmp/nginx/rivet-proxy-timeout.inc}"
 export RIVET_PROXY_AUTH_TOKEN="$(sha256_hex "${RIVET_KEY:-}:proxy-auth")"
+case "${RIVET_PROXY_HEALTH_OWNER:-control}" in
+  control) export RIVET_PROXY_HEALTH_UPSTREAM='http://rivet_api' ;;
+  execution) export RIVET_PROXY_HEALTH_UPSTREAM='http://rivet_execution' ;;
+  *) >&2 printf 'Error: invalid proxy health owner.\n'; exit 1 ;;
+esac
 RIVET_PROXY_INTERNAL_LISTEN="${RIVET_PROXY_INTERNAL_LISTEN:-8080}"
 case "$RIVET_PROXY_INTERNAL_LISTEN" in
   8080|127.0.0.1:18081) export RIVET_PROXY_INTERNAL_LISTEN ;;

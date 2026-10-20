@@ -28,7 +28,7 @@ import type { DebuggerPanelAnchor } from '../state/ui.js';
 import { NodeRunningIndicator } from './visualNode/NodeRunningIndicator.js';
 import { getActionBarRunButtonPresentation } from './actionBarRunButtons.js';
 import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
-import { RemoteObservationBanner } from './RemoteObservationBanner.js';
+import { RemoteDebuggerInfo } from './RemoteDebuggerInfo.js';
 import { remoteObservationReadOnlyState } from '../state/remoteObservation.js';
 
 const styles = css`
@@ -55,6 +55,7 @@ const styles = css`
   .save-recording-button button,
   .run-gentrace-button button,
   .more-menu,
+  .remote-debugger-info,
   .remote-debugger-button button {
     border: none;
     padding: 0.5rem 1rem;
@@ -130,16 +131,17 @@ const styles = css`
     }
   }
 
-  .more-menu {
+  .more-menu,
+  .remote-debugger-info {
     background-color: var(--grey-darker);
     border: 1px solid var(--grey-dark);
     box-shadow: 2px 1px 8px var(--shadow);
     color: var(--foreground);
-    font-size: var(--ui-font-size-icon-xl);
     height: var(--action-bar-height);
     line-height: 0;
     padding: 0;
     width: var(--action-bar-height);
+    justify-content: center;
 
     &:hover {
       background-color: var(--grey-darkish);
@@ -148,6 +150,10 @@ const styles = css`
     svg {
       color: currentColor;
     }
+  }
+
+  .more-menu {
+    font-size: var(--ui-font-size-icon-xl);
   }
 
   .remote-debugger-button.active button {
@@ -259,7 +265,10 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
 
   return (
     <div css={styles} ref={actionBarRef} data-node-editor-action-bar>
-      <RemoteObservationBanner />
+      <RemoteDebuggerInfo
+        key={`${projectMetadata.id}:${!!actionBarExecutionState.remoteDebuggerBanner}`}
+        connected={!!actionBarExecutionState.remoteDebuggerBanner}
+      />
       {actionBarExecutionState.remoteDebuggerBanner && (
         <div
           className={clsx('remote-debugger-button active', {

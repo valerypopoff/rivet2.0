@@ -14,6 +14,7 @@ import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowFolderItem } from './types';
 import { BundleTransferIcon } from './BundleTransferIcon';
 import { WorkflowBundleIcon } from './WorkflowBundleIcon';
+import { useHostedSurfaceDismiss } from './useHostedSurfaceDismiss';
 
 type WorkflowFolderContextMenuProps = {
   isOpen: boolean;
@@ -24,6 +25,7 @@ type WorkflowFolderContextMenuProps = {
   canDelete: boolean;
   bundleActions?: {
     canConvert: boolean;
+    busy: boolean;
     convert(): void;
     duplicate(): void;
     download(): void;
@@ -68,6 +70,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
   onUploadBundle,
   onDelete,
 }) => {
+  useHostedSurfaceDismiss(onClose, isOpen);
   const { context, refs, floatingStyles, update } = useFloating({
     open: isOpen,
     onOpenChange(nextOpen) {
@@ -120,6 +123,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               className="workflow-project-context-menu-item"
               role="menuitem"
               onClick={bundleActions.convert}
+              disabled={bundleActions.busy}
             >
               <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
               <span>{folder.bundleId ? 'Convert to ordinary folder' : 'Convert to bundle'}</span>
@@ -142,6 +146,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               className="workflow-project-context-menu-item"
               role="menuitem"
               onClick={bundleActions.duplicate}
+              disabled={bundleActions.busy}
             >
               Duplicate bundle
             </button>
@@ -172,7 +177,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
         onClick={onDelete}
       >
         <DeleteBinIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>Delete folder</span>
+        <span>{folder.bundleId ? 'Delete bundle' : 'Delete folder'}</span>
       </button>
     </div>
   );

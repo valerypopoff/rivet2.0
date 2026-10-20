@@ -324,7 +324,163 @@ export async function verifyExplicitBundleContract(
   });
   assert.equal((await processor.run())['result']?.value, 'child-result');
   processor.dispose();
+  // The UI's one-click mode chooses latest saved drafts and allocates sibling names
+  // inside the transaction, including simultaneous requests from different clients.
+  const sourceBundleId = source.bundleId;
+  assert.ok(sourceBundleId);
+  const automaticCopy = async () => {
+    if (!http) return backend.bundles.duplicate(sourceBundleId, { automatic: true });
+    const response = await fetch(`${http.baseUrl}/api/workflows/bundles/${sourceBundleId}/duplicate`, {
+      method: 'POST',
+      headers: { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+      body: JSON.stringify({ automatic: true }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    assert.equal(response.status, 201, await response.clone().text());
+    return response.json() as ReturnType<typeof backend.bundles.duplicate>;
+  };
+  const automaticCopies = await Promise.all([automaticCopy(), automaticCopy()]);
+  assert.deepEqual(automaticCopies.map((entry) => entry.folder.name).sort(), [
+    `${source.name} copy 2`,
+    `${source.name} copy 3`,
+  ]);
+  assert.equal(new Set([source.bundleId, copy.bundleId, ...automaticCopies.map((entry) => entry.bundleId)]).size, 4);
+  const automaticTree = await backend.getTree();
+  for (const automatic of automaticCopies) {
+    assert.equal(automatic.folder.relativePath, automatic.folder.name, 'the copy is a sibling, not nested');
+    const group = automaticTree.folders.find((folder) => folder.bundleId === automatic.bundleId)!;
+    const member = group.projects.find((project) => project.name === 'Caller')!;
+    const sibling = group.folders[0]!.projects[0]!;
+    const [saved] = loadProjectAndAttachedDataFromString(
+      (await backend.loadHostedProject(member.absolutePath)).contents,
+    );
+    assert.equal(
+      saved.metadata.description,
+      editedRoot.metadata.description,
+      'automatic copy selects the saved draft, not publication',
+    );
+    const subgraph = Object.values(saved.graphs)[0]!.nodes.find((node) => node.type === 'subGraph')!;
+    assert.equal((subgraph.data as { targetProjectId: string }).targetProjectId, sibling.projectMetadataId);
+    assert.equal(member.settings.status, 'unpublished');
+    assert.notEqual(member.projectMetadataId, root.projectMetadataId);
+  }
   if (http) await verifyExplicitBundleRoundtrip(backend, http, source, root, child, unused);
+  const victim = automaticCopies[0]!;
+  const confirmation = { name: victim.folder.name, relativePath: victim.folder.relativePath };
+  const victimRows = (
+    await pool.query('SELECT workflow_id FROM workflows WHERE left(relative_path,length($1)+1)=$1 || $2', [
+      victim.folder.relativePath,
+      '/',
+    ])
+  ).rows;
+  assert.ok(victimRows.length >= 3);
+  const victimKeys = (
+    await pool.query(
+      'SELECT project_blob_key, dataset_blob_key FROM workflow_revisions WHERE workflow_id=ANY($1::text[])',
+      [victimRows.map((row) => row.workflow_id)],
+    )
+  ).rows
+    .flatMap((row) => [row.project_blob_key, row.dataset_blob_key])
+    .filter((key): key is string => typeof key === 'string');
+  const queuedVictimKeys = async () =>
+    (
+      await pool.query('SELECT object_key FROM managed_object_deletion_outbox WHERE object_key=ANY($1::text[])', [
+        victimKeys,
+      ])
+    ).rows
+      .map((row) => row.object_key)
+      .sort();
+  const queuedBeforeDeletion = await queuedVictimKeys();
+  await assert.rejects(backend.deleteWorkflowFolderItem(victim.folder.relativePath), /Only empty folders/);
+  await assert.rejects(
+    backend.bundles.delete(victim.bundleId, { ...confirmation, name: 'wrong' }),
+    /name or location changed/,
+  );
+  await pool.query('UPDATE workflows SET published_revision_id=current_draft_revision_id WHERE workflow_id=$1', [
+    victimRows[0].workflow_id,
+  ]);
+  await assert.rejects(backend.bundles.delete(victim.bundleId, confirmation), /Unpublish/);
+  await pool.query('UPDATE workflows SET published_revision_id=NULL WHERE workflow_id=$1', [victimRows[0].workflow_id]);
+  // A failure after earlier member deletes must roll back metadata and the GC queue.
+  await pool.query(`CREATE FUNCTION fixture_bundle_delete_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF OLD.name='Unused' THEN RAISE EXCEPTION 'fixture bundle delete failure'; END IF; RETURN OLD; END; $$;
+    CREATE TRIGGER fixture_bundle_delete_failure BEFORE DELETE ON workflows FOR EACH ROW EXECUTE FUNCTION fixture_bundle_delete_failure();`);
+  try {
+    await assert.rejects(backend.bundles.delete(victim.bundleId, confirmation), /fixture bundle delete failure/);
+    assert.equal(
+      (
+        await pool.query('SELECT count(*)::int AS n FROM workflows WHERE workflow_id=ANY($1::text[])', [
+          victimRows.map((row) => row.workflow_id),
+        ])
+      ).rows[0].n,
+      victimRows.length,
+    );
+    assert.deepEqual(await queuedVictimKeys(), queuedBeforeDeletion, 'failed deletion rolls back artifact GC intents');
+  } finally {
+    await pool.query(
+      'DROP TRIGGER fixture_bundle_delete_failure ON workflows; DROP FUNCTION fixture_bundle_delete_failure()',
+    );
+  }
+  if (http) {
+    const url = `${http.baseUrl}/api/workflows/bundles/${victim.bundleId}/delete`;
+    const body = JSON.stringify(confirmation);
+    const headers = { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' };
+    assert.equal(
+      (
+        await fetch(url, {
+          method: 'POST',
+          headers: { ...headers, 'X-Rivet-Bundle-Intent': '0' },
+          body,
+          signal: AbortSignal.timeout(10_000),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(url, {
+          method: 'POST',
+          headers: { ...headers, 'Sec-Fetch-Site': 'cross-site' },
+          body,
+          signal: AbortSignal.timeout(10_000),
+        })
+      ).status,
+      403,
+    );
+    const response = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(30_000) });
+    assert.equal(response.status, 200, await response.clone().text());
+    const result = (await response.json()) as { deletedProjects: Array<{ projectId: string }> };
+    assert.deepEqual(
+      result.deletedProjects.map((p) => p.projectId).sort(),
+      victimRows.map((row) => row.workflow_id).sort(),
+    );
+  } else await backend.bundles.delete(victim.bundleId, confirmation);
+  assert.deepEqual(
+    await queuedVictimKeys(),
+    [...new Set(victimKeys)].sort(),
+    'committed deletion queues every owned revision artifact',
+  );
+  assert.equal(
+    (
+      await pool.query('SELECT count(*)::int AS n FROM workflows WHERE workflow_id=ANY($1::text[])', [
+        victimRows.map((row) => row.workflow_id),
+      ])
+    ).rows[0].n,
+    0,
+  );
+  assert.equal(
+    (
+      await pool.query(
+        'SELECT count(*)::int AS n FROM workflow_folders WHERE relative_path=$1 OR left(relative_path,length($1)+1)=$1 || $2',
+        [victim.folder.relativePath, '/'],
+      )
+    ).rows[0].n,
+    0,
+  );
+  assert.ok(
+    (await backend.getTree()).folders.some((folder) => folder.bundleId === automaticCopies[1]!.bundleId),
+    'similarly named sibling is untouched',
+  );
   const failName = `${source.name} rollback`;
   await pool.query(`CREATE FUNCTION fixture_bundle_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
     IF NEW.name='Unused' THEN RAISE EXCEPTION 'fixture bundle insert failure'; END IF; RETURN NEW; END; $$;

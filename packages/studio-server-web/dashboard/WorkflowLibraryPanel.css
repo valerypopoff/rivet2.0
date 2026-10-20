@@ -130,6 +130,7 @@
 [data-testid='workflow-project-bundle-modal--blanket'],
 [data-testid='workflow-bundle-upload-modal--blanket'],
 [data-testid='workflow-bundle-conversion-error-modal--blanket'],
+[data-testid='workflow-bundle-delete-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
 [data-testid='app-settings-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
@@ -146,6 +147,7 @@
 [data-testid='workflow-project-bundle-modal'],
 [data-testid='workflow-bundle-upload-modal'],
 [data-testid='workflow-bundle-conversion-error-modal'],
+[data-testid='workflow-bundle-delete-modal'],
 [data-testid='workflow-published-version-history-modal'],
 [data-testid='app-settings-modal'] {
   background: #1f1f22 !important;
@@ -178,6 +180,7 @@
 [data-testid='workflow-project-bundle-modal--header'],
 [data-testid='workflow-bundle-upload-modal--header'],
 [data-testid='workflow-bundle-conversion-error-modal--header'],
+[data-testid='workflow-bundle-delete-modal--header'],
 [data-testid='workflow-published-version-history-modal--header'],
 [data-testid='app-settings-modal--header'] {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -193,6 +196,7 @@
 [data-testid='workflow-project-bundle-modal--body'],
 [data-testid='workflow-bundle-upload-modal--body'],
 [data-testid='workflow-bundle-conversion-error-modal--body'],
+[data-testid='workflow-bundle-delete-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
 [data-testid='app-settings-modal--body'] {
   padding: 0 !important;
@@ -740,6 +744,14 @@
   pointer-events: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workflow-library-panel .bundle-action-status {
+  margin: 12px 13px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--workflow-library-font-size-s);
 }
 
 .workflow-library-panel .body-actions {

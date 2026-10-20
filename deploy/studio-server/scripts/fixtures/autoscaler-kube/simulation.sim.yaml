@@ -1,0 +1,5 @@
+simulation: rivet-autoscaler-kube
+routing: path
+mocks:
+  - routeKey: kube
+    path: ./config.yaml

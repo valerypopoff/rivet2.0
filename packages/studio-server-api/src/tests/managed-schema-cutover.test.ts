@@ -89,4 +89,21 @@ test('schema guard accepts bootstrap and compatible readers, not unknown or term
       release,
     ),
   );
+  // The standalone scaler has no database connection. It also refuses to
+  // resurrect a zero-replica execution workload, unlike an ordinary HPA.
+  const scaler = resource(undefined, 1, 'autoscaler');
+  assert.doesNotThrow(() =>
+    assertManagedSchemaReadersCompatible(
+      { ...empty, pods: list(scaler), deployments: list(scaler), statefulsets: list(resource(15, 2, 'execution')) },
+      release,
+    ),
+  );
+  assert.throws(
+    () =>
+      assertManagedSchemaReadersCompatible(
+        { ...empty, pods: list(scaler), deployments: list(scaler), statefulsets: list(resource(14, 2, 'execution')) },
+        release,
+      ),
+    /reader controller/,
+  );
 });

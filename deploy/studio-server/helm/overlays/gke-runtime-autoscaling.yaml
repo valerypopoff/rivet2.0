@@ -1,0 +1,15 @@
+# Apply after gke-ha + gke-runtime-ha + optionally gke-compact-edge.
+# Requires exact runtimeAutoscaling qualification in the promoted manifest.
+metrics:
+  enabled: true
+autoscaling:
+  execution:
+    enabled: false # Exactly one replica writer: the drain-aware controller.
+    minReplicas: 2
+    maxReplicas: 10 # Sized against DB/provider quotas by normal chart guards.
+  executionController:
+    enabled: true
+  proxy:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4

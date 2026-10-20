@@ -8,6 +8,7 @@ import {
   serializeProject,
   type PortId,
   type DatasetId,
+  type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 
@@ -15,10 +16,13 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   page,
 }) => {
   const fixture = projectBundleFixture();
+  const childGraph = fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!]!;
+  childGraph.metadata!.name = 'Utilities/generatePreflightAuditWithClassifierChainAndContextContracts';
   const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../app/src').replaceAll('\\', '/');
   const edited = structuredClone(fixture.root.project);
   const graph = edited.graphs[edited.metadata.mainGraphId!]!;
   const subgraph = graph.nodes.find((node) => node.type === 'subGraph')!;
+  subgraph.visualData.width = 300;
   const output = graph.nodes.find((node) => node.type === 'graphOutput')!;
   const suffix = TextNodeImpl.create();
   suffix.title = 'Visible unsaved edit';
@@ -162,9 +166,10 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   // Manifest opening creates every tab; called dataflow survives inactive/active switching.
   await expect(page.locator('.projects-container .project')).toHaveCount(2);
   await expect(page.locator(`.node[data-nodeid="${subgraph.id}"]`)).toBeVisible();
-  await expect(page.locator(`.node[data-nodeid="${subgraph.id}"]`)).toContainText(
-    'Run this target from an extracted bundle',
-  );
+  const targetLabel = page.locator(`.node[data-nodeid="${subgraph.id}"] .subgraph-node-body-select-wrap`);
+  await expect(targetLabel).toHaveText(`${fixture.child.project.metadata.title} / ${childGraph.metadata!.name}`);
+  expect(await targetLabel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await expect(page.getByText('Run this target from an extracted bundle', { exact: false })).toHaveCount(0);
   await expect(page.getByText('This project target can only be edited or run in Rivet Studio Server.')).toHaveCount(0);
   // Reference discovery must retain the same binding as execution. Verify it
   // before Run so its reads cannot accidentally satisfy the regression.
@@ -183,17 +188,33 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     await page.evaluate((id) => (window as any).bundleHost.activateProject(id), fixture.child.project.metadata.id),
   ).toBe(true);
   await expect(page.locator(`.node[data-nodeid="${childOutput.id}"]`)).toContainText('child-result');
+  // Desktop activation names this saved project after its file. The tab also
+  // displays the filename suffix, which is not part of the target label.
+  await expect(page.locator('.projects-container .project.active .project-name')).toHaveText(
+    'child [child.rivet-project]',
+  );
   expect(
     await page.evaluate((id) => (window as any).bundleHost.activateProject(id), fixture.root.project.metadata.id),
   ).toBe(true);
+  await expect(targetLabel).toHaveText(`${fixture.child.project.metadata.title} / ${childGraph.metadata!.name}`);
+  await page.evaluate(() => {
+    (window as any).bundleReadBlocked = false;
+    (window as any).blockNextBundleRead = true;
+  });
   expect(
     await page.evaluate(() =>
       (window as any).bundleHost.replaceProjectSnapshot((window as any).editedFixture.metadata.id, {
-        project: (window as any).editedFixture,
+        project: { ...(window as any).editedFixture, references: [] },
         path: '/bundle/projects/nested/root.rivet-project',
       }),
     ),
   ).toBe(true);
+  await page.waitForFunction(() => (window as any).bundleReadBlocked === true);
+  // Snapshot refresh clears the previous reference definitions. Pending
+  // discovery keeps the tab title without inventing a resolved graph name.
+  await expect(targetLabel).toHaveText(`child / ${(subgraph as SubGraphNode).data.graphId}`);
+  await page.evaluate(() => (window as any).releaseBundleRead());
+  await expect(targetLabel).toHaveText(`${fixture.child.project.metadata.title} / ${childGraph.metadata!.name}`);
   await expect(page.locator(`.node[data-nodeid="${suffix.id}"]`)).toBeVisible();
   await run.click();
   await expect(page.locator(`.node[data-nodeid="${output.id}"]`)).toContainText('child-result + unsaved');
@@ -201,6 +222,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   expect(await page.evaluate(() => (window as any).bundleHost.saveCurrentProject())).toBe(true);
   expect(await page.evaluate(() => (window as any).savedBundlePath)).toBe('/bundle/projects/nested/root.rivet-project');
   await page.evaluate(() => {
+    (window as any).bundleReadBlocked = false;
     (window as any).blockNextBundleRead = true;
   });
   await run.click();

@@ -2,9 +2,10 @@
 
 ## Explicit Studio Server containers
 
-PostgreSQL/S3 installations support **New bundle** and **Convert to bundle**.
-Creation is available through the library's **+ New bundle** action. Folder context
-menus offer **Convert to bundle**, not nested creation; the conversion action uses
+PostgreSQL/S3 installations create authored bundles by converting ordinary folders.
+Use **+ New folder**, arrange its projects, then choose **Convert to bundle** from
+the folder context menu. There is no **New bundle** action or creation dialog at
+the library root or in folder menus; the conversion action uses
 the same bundle icon as the project tree. **Upload bundle** is available only outside
 bundles. A bundle root and every ordinary folder beneath it hide that action;
 **Upload project** remains available there.
@@ -12,7 +13,40 @@ A bundle owns every descendant project, including disconnected projects and ordi
 subfolders. It has no entry/main project. Ordinary folders may contain bundles,
 but bundles cannot nest. Existing folders are not converted automatically.
 Conversion back to an ordinary folder removes grouping only. Projects, references
-and publications survive; only empty containers can be deleted.
+and publications survive. Ordinary folders must be empty to delete; bundles have
+a separate recursive deletion flow.
+
+**Delete bundle** is available for empty and non-empty bundles. The shared modal
+requires an exact, case-sensitive name match (no trimming) before enabling its
+destructive action. The displayed name is selectable/copyable text. The compact
+layout has no inner card or visible input label; the input retains its accessible
+name and confirmation description and uses a full-width 38px control. Register
+the dialog in the shared dashboard theme selectors, including the black
+translucent/blurred blanket and zero-padding Atlaskit body, rather than falling
+back to Atlaskit's tinted blanket and extra inner padding. Browser checks cover
+computed theme, input size, desktop compactness and narrow-view controls.
+Cancellation does not issue a write. Pending deletion disables dismissal and resubmission;
+errors retain the confirmation and explain lost-response recovery without an
+automatic retry. Open member tabs, including unsaved edits, are closed only after
+confirmed deletion. A failed follow-up tree read does not turn a committed delete
+into an error or trigger another delete.
+
+`POST /api/workflows/bundles/:id/delete` requires the existing authenticated,
+same-site bundle-intent guard and `{ name, relativePath }`. The managed service
+locks topology, verifies the current bundle identity/name/location, locks its
+subtree and project rows, and deletes the complete group in one transaction.
+The shared project-deletion helper retains publication safeguards (unpublish
+workflow endpoints and web apps first), transactional artifact-GC enqueueing,
+project health removal and execution-cache invalidation. Independent workflow
+recording history retains the existing project-deletion/retention semantics; no
+new recording purge is introduced. Any failure rolls back
+all members, folders and GC intents; unrelated/shared projects and similarly named
+siblings are untouched. No schema change or Kubernetes rehearsal is needed.
+Regression owners: `managed-bundles.test.ts`, `managed-catalog.test.ts`, the real
+PostgreSQL/MinIO explicit-bundle contract, and `explicit-bundles.spec.ts`.
+The managed contract injects a later-member deletion failure and checks both
+project metadata and exact artifact-GC intents roll back; successful deletion
+queues the member revision keys through the existing reference-aware outbox.
 
 **Convert to bundle** validates every descendant project's saved draft, endpoint
 publication and independently pinned published web-app snapshots before changing
@@ -46,8 +80,9 @@ source revisions fail closed; parse failures identify the project/version withou
 logging or returning snippets from its contents. Conversion back to ordinary
 folders and idempotent requests for an existing bundle do not scan project blobs.
 This guards new conversions, not an automatic repair of existing invalid bundles
-or a global reference lock on subsequent authoring/moves. Empty bundle creation is
-unchanged. Regression owners: `managed-bundles.test.ts`,
+or a global reference lock on subsequent authoring/moves. The existing empty-bundle
+API remains compatible, but is not used by the UI. Duplication and portable upload
+remain available. Regression owners: `managed-bundles.test.ts`,
 `remap-bundle-project.test.ts`, the real PostgreSQL/MinIO explicit-bundle contract,
 and the rejected-conversion case in headless `explicit-bundles.spec.ts`.
 
@@ -75,8 +110,19 @@ renaming folders. No database migration is needed for these checks.
 
 Desktop cross-project target bindings remain read-only in the editor, but are
 executable from an extracted portable bundle (or a compatible project loader).
-The node's helper text must not imply that Studio Server is required to run them.
-The desktop bundle Playwright check covers this message and actual child execution.
+Desktop target labels use the version-qualified referenced project snapshot to
+show the project title and full graph name, including graph folders. An opened
+project tab's title is a fallback while reference discovery is pending; unknown
+project/graph names fall back to their stored IDs. This is display-only: it does
+not rewrite bindings, choose another version or make cross-project targets editable.
+The old “Run this target from…” instruction is not shown in node bodies or settings.
+Read-only target labels wrap long/unbroken names inside the node rather than
+overflowing the canvas; full graph paths are preserved, not truncated or rewritten.
+The desktop bundle Playwright check covers readable labels before Run, absence of
+the instruction, long names in a narrow node, tab-name/graph-ID fallback while a
+snapshot refresh is loading, resolved names after completion, tab switching and
+actual child execution. Labels do not retain the previous tab's reference
+snapshot while discovery is pending.
 
 ### Subgraph encapsulation
 
@@ -257,15 +303,51 @@ Authenticated POST operations under `/api/workflows/bundles` provide creation
 requests and use maintenance-owner routing. Preview fingerprints hierarchy,
 membership and selected revisions; duplication rechecks under topology/member locks.
 
-**Duplicate bundle** copies all members and preserves subfolder layout. Saved latest
-is the default; Published selects published revisions with explicit saved-latest
-fallback for unpublished members. Opened unsaved members are identified; copying
-their saved versions requires acknowledgement, never an implicit editor save.
-An unavailable editor, predecessor browser, or capture omitting a saving/loading
-tab is not evidence of clean edits. The additive `editCheckComplete` capture flag
-must be true to skip that acknowledgement; otherwise the dialog explicitly asks
-to copy stored revisions without a complete edit check. Revision fingerprints
-still protect against source saves that finish before duplication commits.
+**Duplicate bundle** is one click, with no modal or confirmation. The UI sends
+`{ automatic: true }` to `/:id/duplicate`. The server copies every member's latest
+saved draft (not its published revision), including disconnected projects and
+subfolders. Unsaved editor content is never captured or saved. An inline status
+and disabled duplicate menu item identify the pending operation; long names are
+ellipsized without pushing the folder-creation control outside the sidebar. A synchronous
+guard also suppresses repeated clicks until it settles. Success names the copy
+and explicitly says it used saved versions and excluded unsaved edits. Retained
+definition warnings appear as a non-blocking warning instead of a preview dialog.
+The notification summarizes their count and a Unicode-safe, 160-code-point example;
+the API retains the complete warnings. Large warning arrays are not pasted into
+a screen-obscuring toast. Conversion and duplication share one visible operation
+state as well as the synchronous guard: both menu actions are disabled while either
+operation is pending, and the sidebar identifies the operation. Completion or
+failure clears both controls. There are no apparently enabled actions that the
+pending guard silently drops. Browser regressions hold each operation in turn,
+check another bundle's controls, and render 256 warnings on a short viewport.
+
+The server derives the destination from the source's captured parent. Under the
+existing topology lease, it allocates `Name copy`, `Name copy 2`, etc. using indexed
+exact-path checks, without overwriting an existing folder/bundle. Generated names
+retain the suffix within 255 UTF-16 code units without splitting a Unicode code
+point. Selection is bounded to 10,000 names; exhaustion fails with rename guidance.
+Concurrent copies serialize name allocation, but source blobs are still prepared
+outside SQL locks. The captured hierarchy/revision fingerprint is rechecked under
+the topology lease and source row locks before exposing any copied metadata.
+A concurrent source edit/move fails cleanly rather than mixing revisions.
+
+The previous explicit API (name, parent, version and reviewed fingerprint) and
+preview endpoint remain compatible for older clients; they are no longer used
+by the duplicate UI. They retain Published selection with saved-latest fallback.
+No automatic retry follows an error or lost response: refresh the tree before
+manually trying again. A committed copy is not undone by a failed tree refresh:
+the old tree stays visible, and the completion warning explicitly says the copy
+was created and asks for a tree refresh, not another duplicate. Superseded refreshes
+are not mistaken for failures. Expansion is applied after refresh so a preceding
+tree snapshot cannot clear the new copy's expanded state.
+Conversion in either direction uses the same post-commit refresh handling: a
+failed read preserves the last visible tree and warns that conversion completed,
+with instructions to refresh before trying again. It must not show the conversion
+failure modal for a successful write. Browser regressions cover both directions,
+one write only, retained tree rows and released operation controls.
+The headless explicit-bundle suite injects both an actual aborted duplicate response
+and a post-commit tree failure, checks there is one request with no automatic retry,
+retains the source row, and checks pending layout with a 245-character bundle name.
 The shared `remapBundleProject` helper assigns fresh project identities and remaps
 internal Subgraph/legacy references, prefab sources and saved variants. Graph/node/
 port IDs survive. Internal targets become saved-latest; external targets and their
@@ -295,6 +377,19 @@ archive's root artifact is only an initial Desktop/Node selection, not an
 entry-project property on the container.
 
 Remote Debugger grouping uses server-qualified explicit bundle identity only.
+The action bar shows one square **?** button immediately before **Stop Remote
+Debugger**, sharing the overflow button's dimensions but using the Stop button's
+text font and size (not the overflow icon's larger font). Observation statuses,
+runtime-version information, warnings and **Go to debugger source** actions live
+in the standard **Remote Debugger details** modal instead of inline banners.
+Details update while open; dismissing the modal never disconnects the session.
+The details retain their live `status` role for screen-reader announcements.
+Source navigation closes the modal, and switching projects resets its open state.
+Detached-session notices remain accessible through **?** even without a Stop button.
+`remote-bundle-observation.spec.ts` verifies button dimensions/placement, focus
+return, Escape/Done/close dismissal, source navigation, live terminal details,
+project switches through the outer dashboard and reconnects while open,
+alongside the existing streaming, mixed-version, membership and HA replay cases.
 Cross-project calls never expand membership; standalone projects stay independent.
 Explicit desktop manifest grouping remains supported. Start/stop from any opened
 member. Closed members are not opened automatically. Membership changes reconcile
@@ -360,7 +455,7 @@ implementation boundaries, not a claim that a deployment has already been upgrad
 | Explicit folder identity, derived membership, no entry projects or nesting                                                            | Migration 16, managed tree projection, schema tests and PostgreSQL integration                                   |
 | Create, convert, rename/move and empty-container deletion without rewriting references                                                | Existing folder operations plus bundle routes; integration and browser checks                                    |
 | Duplicate all members and subfolders with fresh identities, internal rewiring, shared external references and selected saved versions | Shared remapper, managed duplication service, copy-execution integration                                         |
-| Unpublished copies, no copied routes/schedules/history, no silent saving or partial group exposure                                    | Duplication preview/acknowledgement, rollback integration and preparation-failure tests                          |
+| Unpublished copies, no copied routes/schedules/history, no silent saving or partial group exposure                                    | One-click saved-copy UI, concurrent automatic naming, rollback integration and preparation-failure tests         |
 | One debugger session from any opened member; no grouping by inferred references                                                       | Explicit membership helper, registry/routing tests and browser streaming matrix                                  |
 | Membership changes/deletion retain edits and reject late events                                                                       | Guarded editor binding reconciliation, registry lifetime fences and deletion-during-streaming browser regression |
 | Keep existing portable artifacts, desktop runtimes and storage compatibility paths working                                            | Existing import/Node contracts retained; unsupported backends advertise no new container actions                 |

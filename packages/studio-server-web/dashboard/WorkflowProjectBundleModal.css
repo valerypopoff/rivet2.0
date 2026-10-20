@@ -1,4 +1,4 @@
-[data-testid='workflow-bundle-modal'],
+[data-testid='workflow-bundle-delete-modal'],
 [data-testid='workflow-bundle-conversion-error-modal'],
 [data-testid='workflow-project-bundle-modal'],
 [data-testid='workflow-bundle-upload-modal'] {
@@ -6,7 +6,7 @@
   flex-direction: column;
   max-height: calc(100dvh - 40px);
 }
-[data-testid='workflow-bundle-modal--body'],
+[data-testid='workflow-bundle-delete-modal--body'],
 [data-testid='workflow-bundle-conversion-error-modal--body'],
 [data-testid='workflow-project-bundle-modal--body'],
 [data-testid='workflow-bundle-upload-modal--body'] {
@@ -48,6 +48,28 @@
   margin: 0;
   font-size: 18px;
   overflow-wrap: anywhere;
+}
+.workflow-bundle-delete-name {
+  user-select: text;
+  cursor: text;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.workflow-bundle-delete-content {
+  gap: 12px;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
+}
+.workflow-bundle-delete-input {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  height: 38px;
+  min-height: 38px;
+  padding: 8px 12px;
+  line-height: 20px;
+}
+.workflow-bundle-delete-content [role='alert'] {
+  color: #ff8f8f;
 }
 .workflow-project-bundle-progress {
   display: flex;

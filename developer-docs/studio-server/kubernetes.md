@@ -6,6 +6,91 @@ is optional; single-machine commands use Docker Compose without starting a clust
 the shared release contract. Release commands require explicit `--context` and
 never change the current kubeconfig context.
 
+The opt-in [runtime-HA/singleton developer profile](runtime-ha-singleton-control-plan.md)
+keeps six proxies and two published execution pods, with one web and one combined
+editor/maintenance backend (ten steady-state pods). Existing replicated-control
+defaults are unchanged. Use a qualified same-image bridge and the journaled
+`--ha-control-plane-transition`, not a raw replica-count edit. The release command
+requires separate `evidence.runtimeControl` before either transition direction or
+singleton deployment. A developer-only pause is expected; destructive restores
+remain separately disruptive. Retired per-pod runtime-library cache claims are
+retained for recovery; they are not silently deleted or counted as storage savings.
+Runtime autoscaling remains opt-in, must retain at least two execution replicas,
+and may not set its maximum below the initial count. Native HA execution HPA
+scale-down stays disabled. The separate opt-in
+[drain-aware controller](runtime-autoscaling.md) enables automatic capacity
+removal through owned retirement rather than killing accepted runs; it requires
+its own qualification before production enablement.
+
+For an explicitly accepted lower-redundancy edge, compose
+`gke-compact-edge.yaml` after `gke-ha.yaml` and `gke-runtime-ha.yaml`. This sets
+`availability.gkeGatewayProfile: compact` and two proxy replicas: six total
+steady-state pods with singleton developer tools. Proxies must occupy distinct
+nodes and at least two zones. The regional default remains six proxies, two per
+zone across three zones; do not describe the compact profile as equivalent zonal
+fault tolerance. Rolling replacement still has zero unavailable, one surge,
+positive NEG-health observations and unchanged drain/stabilization windows.
+
+Prepare/qualify 13 -> 10 first, then reduce the proxies through the normal HA
+rollout with the same qualified images and reviewed compact values (10 -> 6).
+Do not combine proxy scaling with `--ha-control-plane-transition`. Reverse edge
+capacity first when returning to the regional ownership configuration. Deployment
+requires exact `evidence.runtimeControl.edgeProfiles` coverage, including compact
+rolling, eviction and cross-profile transition checks; old regional receipts
+cannot authorize compact. These are preparation instructions, not deployment
+approval or a claim that the new profile has passed GKE qualification.
+The source policy matters too: leaving a compact installation requires compact
+qualification even when restoring six proxies, including same-image changes.
+The compact provider qualification must observe exactly two settled proxy pods;
+surge or autoscaler headroom cannot stand in for a minimum-capacity test. Freeze
+the qualification fixture at that floor and wait for replacement/surge cleanup
+before its settled availability checkpoints. This restriction applies to the
+isolated proof, not an arbitrary two-pod ceiling on live scaling or rollout surge.
+Both HA control modes require at least two initial execution owners; enabled
+execution autoscaling must retain that minimum and have a maximum covering both
+its minimum and initial capacity. Enabled GKE frontend HPAs must also have maxima
+covering their minimum and initial counts. Invalid ranges fail Helm preflight,
+not partway through applying Kubernetes resources. The explicit temporary
+maintenance-validation mode retains its ability to stop public workloads.
+The isolated frontend eviction proof bounds its final minimum-sample collection
+by `deploymentTimeoutSeconds`, just like its availability waits. Timing out exports
+settled observations but cannot produce a passing receipt or replay evictions.
+
+Once separately qualified and approved, the topology-only command is:
+
+```bash
+yarn studio-server:kubernetes:release -- --context <context> --namespace <namespace> --release <release> --manifest <installed-promoted-manifest.json> --values <qualified-singleton-control-values.yaml> --ha-control-plane-transition --confirm <release>
+```
+
+The installation values must compose the GKE HA and runtime-HA overlays and retain
+the reviewed storage, Secret references and resource budgets. These overlays are
+composition references: pass one complete reviewed environment values file to
+`--values`, not repeated CLI `--values` options. First install that
+same manifest as a replicated-control bridge through the ordinary release command;
+do not add the transition flag to its version upgrade. For a reverse transfer,
+use the **currently installed** manifest and qualified replicated-control values,
+again with `--ha-control-plane-transition`. After a later ten-pod version upgrade,
+the original older bridge manifest is not a valid topology-only rollback target.
+An image rollback is a separate certified, schema-compatible operation. Neither
+command is deployment approval, and neither may be replaced by raw Helm scaling.
+
+The topology preflight requires read access to cluster-scoped
+`volumeattachments`, in addition to the exact restore PV/PVC. It checks that
+access before changing proxy health or withdrawing developers; it does not grant
+RBAC automatically. Every developer pod must match its recorded StatefulSet UID,
+ordinal name and role, both at preflight and at subsequent retirement reads.
+Matching release labels alone do not authorize retiring a replacement or foreign
+owner. If these checks fail, reconcile operator permissions or inventory first;
+do not bypass the storage-release or ownership gates.
+
+After a lost Helm acknowledgement, resume with the exact `--resume-ha` token.
+Recovery inspects the desired templates without rerunning Helm or retirement.
+During reverse-transfer verification, control-owned proxy health is the expected
+final configuration, not evidence that the earlier runtime-edge gate was skipped.
+Owner-phase recovery still requires execution-owned health. The surviving backend
+StatefulSet must retain its recorded UID even after templates have been applied;
+a same-name recreated controller is not accepted as the recorded owner.
+
 For a complete external PostgreSQL/S3 values example and first-install Secret
 commands, see [External storage deployment handoff](./external-storage-deployment.md).
 
@@ -1490,17 +1575,32 @@ The optional rule set is a conservative starting signal for an unready execution
 
 The number of registered or occasional endpoint users does not directly determine the database size. What matters is the peak number of requests running at the same time, how long their database work takes, and how many execution pods Kubernetes may create. Slow LLM calls do not hold a PostgreSQL connection for their whole duration; the pool checks connections out only for database operations.
 
-Each managed API process shares one query pool across workflow storage, runtime libraries, App Settings, and resumable web-app action state. `postgres.poolMaxPerApiPod` controls that pool and defaults to `10`. Each API pod may also own three dedicated `LISTEN` connections for settings invalidation, workflow cache invalidation, and web-app action coordination. The chart reserves separate headroom for migrations, provider maintenance, and emergency access.
+Each managed API process shares one query pool across workflow storage, runtime libraries, App Settings, and resumable web-app action state. `postgres.poolMaxPerApiPod` controls that pool and defaults to `10`. Each API pod may also own three dedicated `LISTEN` connections for settings invalidation, workflow cache invalidation, and web-app action coordination. The scheduler has a separate pool capped at two connections per eligible API owner; it is not part of the shared pool. The chart reserves separate headroom for migrations, provider maintenance, and emergency access.
 
 The chart validates this worst-case formula:
 
 ```text
 required connections = reservedConnections
-                     + (backend replicas + maximum execution replicas)
-                       * (poolMaxPerApiPod + 3 LISTEN connections)
+                     + apiPods * (poolMaxPerApiPod + 3 LISTEN connections)
+                     + schedulerPods * 2
+                     + restoreConnections
+
+apiPods = backend replicas + maximum execution replicas
+        + legacy Evaluation pods, when enabled
+        + (HA ? one surge + (replicated control ? one maintenance : zero) : zero)
+schedulerPods = backend replicas + (HA ? maximum execution replicas + one surge : zero)
+restoreConnections = managed restore enabled ? apiPods * 2 + 3 : zero
 ```
 
-The production starting point is `30 + (1 + 10) * (10 + 3) = 173`, declared against `postgres.maxConnections=200`. The backend remains one pod for the small editor audience; only `execution` scales for `/workflows/*` and `/apps/*` traffic. A provider capped at 100 connections can support at most four execution pods with the same 30/10 settings: `30 + (1 + 4) * 13 = 95`. Helm refuses an unsafe combination before deployment.
+With the generic non-HA production policy and execution HPA explicitly enabled
+up to ten, the budget is `30 + 11 * 13 + 2 + 25 = 200`, including managed restore.
+A provider capped at 100 supports at most three execution pods with that same
+30/10/restore policy: `30 + 4 * 13 + 2 + 11 = 95`. With two steady-state execution
+pods and default pool settings, full HA reserves 133 connections and the ten-pod
+profile reserves 101, both including their one eligible surge. These are declared
+connection ceilings, not measured usage or permission to raise a shared provider's
+limit. Helm refuses an unsafe combination before deployment. In particular, do
+not omit the new execution-owned scheduler pools when sizing the ten-pod profile.
 
 `postgres.maxConnections` is validation input only; Helm cannot change the provider's database setting. Confirm it on the target database or in the provider console. With sufficient privileges, the direct checks are:
 
@@ -2047,7 +2147,7 @@ The production contract today is:
 - `autoscaling.backend.enabled=false`
 - `autoscaling.execution.enabled=true`
 - `autoscaling.execution.maxReplicas=10`
-- `postgres.maxConnections=200`, `postgres.reservedConnections=30`, and `postgres.poolMaxPerApiPod=10`, which budget 173 worst-case connections for one backend plus ten execution pods
+- `postgres.maxConnections=200`, `postgres.reservedConnections=30`, and `postgres.poolMaxPerApiPod=10`, which budget 200 worst-case connections for the generic non-HA policy with one backend, ten execution pods, scheduler and managed restore
 - `env.RIVET_PUBLISHED_WORKFLOWS_BASE_PATH=/workflows`
 - `env.RIVET_LATEST_WORKFLOWS_BASE_PATH=/workflows-latest`
 - `env.RIVET_PUBLISHED_APPS_BASE_PATH=/apps`
@@ -2100,6 +2200,11 @@ Then validate the local embedded-mode rehearsal:
 - latest workflow runs and latest web-app action runs still debug through the singleton `backend`
 
 ## Operator checklist
+
+For opt-in automatic execution **scale-down**, see
+[drain-aware runtime autoscaling](runtime-autoscaling.md). It replaces execution
+HPA with one independent controller; the compact layout is seven baseline pods
+including that controller. Old HA receipts do not qualify it for production.
 
 - scale `execution` for endpoint demand
 - have DevOps keep the external gateway redundant; embedded installations must keep their proxy redundant

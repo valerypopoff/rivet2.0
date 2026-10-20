@@ -1,4 +1,11 @@
 {{- define "rivet.containers.proxy" -}}
+{{- $runtimeHealth := eq .Values.ha.controlPlane.mode "singleton" -}}
+{{- $settingsService := include "rivet.apiServiceName" . -}}
+{{- $settingsPort := .Values.service.api.port -}}
+{{- if $runtimeHealth -}}
+{{- $settingsService = include "rivet.executionServiceName" . -}}
+{{- $settingsPort = .Values.service.execution.port -}}
+{{- end -}}
 - name: proxy
   image: {{ include "rivet.image" (dict "root" . "image" .Values.images.proxy) }}
   imagePullPolicy: {{ .Values.images.proxy.pullPolicy }}
@@ -49,7 +56,9 @@
     - name: RIVET_EXECUTOR_UPSTREAM_PORT
       value: {{ .Values.service.executor.port | quote }}
     - name: RIVET_PROXY_SETTINGS_URL
-      value: {{ printf "http://%s:%v/internal/app-settings/proxy-config" (include "rivet.serviceFqdn" (dict "root" . "serviceName" (include "rivet.apiServiceName" .))) .Values.service.api.port | quote }}
+      value: {{ printf "http://%s:%v/internal/app-settings/proxy-config" (include "rivet.serviceFqdn" (dict "root" . "serviceName" $settingsService)) $settingsPort | quote }}
+    - name: RIVET_PROXY_HEALTH_OWNER
+      value: {{ ternary "execution" "control" (eq .Values.ha.controlPlane.mode "singleton") | quote }}
     {{- if .Values.auth.keySecretName }}
     - name: RIVET_KEY
       valueFrom:

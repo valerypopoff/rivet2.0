@@ -23,7 +23,7 @@ export function assertManagedSchemaReadersCompatible(
 ): void {
   const owned = (resource: Resource) => resource.metadata?.labels?.['app.kubernetes.io/instance'] === release;
   const reader = (resource: Resource) =>
-    !['proxy', 'web', 'workflow-schema-migration'].includes(
+    !['proxy', 'web', 'workflow-schema-migration', 'autoscaler'].includes(
       resource.metadata?.labels?.['app.kubernetes.io/component'] ?? '',
     );
   const compatible = (resource: Resource, pod: boolean) => {

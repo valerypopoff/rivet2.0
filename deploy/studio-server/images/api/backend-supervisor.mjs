@@ -32,6 +32,15 @@ function port(value, name) {
 }
 
 export function childEnvironments(env = process.env) {
+  // A controller-fenced ordinal must never accept work if Kubernetes replaces
+  // its drained pod between our status check and a guarded StatefulSet shrink.
+  // Downward-API fences cover both new pods and same-UID container restarts,
+  // without interrupting already-running accepted work.
+  if (
+    env.RIVET_EXECUTION_STARTUP_FENCE &&
+    (!env.RIVET_RUNNER_SLOT_ID || env.RIVET_EXECUTION_STARTUP_FENCE === env.RIVET_RUNNER_SLOT_ID)
+  )
+    throw new Error('This execution ordinal is startup-fenced for owned retirement.');
   const apiPort = port(env.RIVET_BACKEND_API_PORT, 'RIVET_BACKEND_API_PORT');
   const executorPort = port(env.RIVET_BACKEND_EXECUTOR_PORT, 'RIVET_BACKEND_EXECUTOR_PORT');
   port(env.RIVET_BACKEND_HEALTH_PORT, 'RIVET_BACKEND_HEALTH_PORT');

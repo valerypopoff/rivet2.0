@@ -40,7 +40,11 @@ export const WorkflowLibraryContextMenus: FC<{
           x={folderContextMenuState.x}
           y={folderContextMenuState.y}
           onClose={closeFolderContextMenu}
-          canDelete={isFolderEmpty(folderContextMenuState.folder)}
+          canDelete={
+            folderContextMenuState.folder.bundleId
+              ? !controller.bundleAction
+              : isFolderEmpty(folderContextMenuState.folder)
+          }
           bundleActions={
             controller.explicitBundles
               ? {
@@ -53,7 +57,8 @@ export const WorkflowLibraryContextMenus: FC<{
                           folder.relativePath.startsWith(`${folderContextMenuState.folder.relativePath}/`)),
                     ),
                   convert: () => void controller.handleToggleBundleKind(),
-                  duplicate: controller.handleDuplicateBundle,
+                  duplicate: () => void controller.handleDuplicateBundle(),
+                  busy: controller.bundleAction !== null,
                   download: controller.handleDownloadBundle,
                 }
               : undefined

@@ -4,7 +4,11 @@ kind: PodDisruptionBudget
 metadata:
   name: {{ include "rivet.backendName" . }}
 spec:
+  {{- if eq .Values.ha.controlPlane.mode "singleton" }}
+  maxUnavailable: 1
+  {{- else }}
   minAvailable: 2
+  {{- end }}
   selector:
     matchLabels:
       {{- include "rivet.componentLabels" (dict "root" . "component" "backend") | nindent 6 }}

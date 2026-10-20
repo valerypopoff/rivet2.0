@@ -222,6 +222,7 @@ http {
       RIVET_PROXY_INTERNAL_LISTEN: String(proxyPort),
       RIVET_TRUST_INCOMING_FORWARDED_HEADERS: '0',
       RIVET_PROXY_AUTH_TOKEN: 'fixture-secret',
+      RIVET_PROXY_HEALTH_UPSTREAM: 'http://rivet_api',
       RIVET_TRUSTED_HOSTS_INCLUDE_FILE: '/fixture/empty.inc',
       RIVET_CLIENT_ADDRESS_INCLUDE_FILE: '/fixture/client-address.inc',
       RIVET_PROXY_TIMEOUT_INCLUDE_FILE: '/fixture/empty.inc',
