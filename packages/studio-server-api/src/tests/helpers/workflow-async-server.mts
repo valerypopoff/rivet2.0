@@ -94,6 +94,7 @@ for (let attempt = 0; ; attempt++) {
   if (attempt === 300) throw new Error('Test API did not become ready');
   await delay(100);
 }
+let hostedSubgraphFixture: Awaited<ReturnType<typeof import('./hosted-subgraph-fixture.js').seedHostedSubgraphFixture>> | undefined;
 process.on('message', async (message: { id: number; command: string }) => {
   try {
     if (message.command === 'shutdown') {
@@ -103,7 +104,15 @@ process.on('message', async (message: { id: number; command: string }) => {
       process.send?.({ id: message.id, result: true });
       return;
     }
-    if (message.command === 'scheduled-recordings') {
+    if (message.command === 'seed-hosted-subgraph') {
+      const { seedHostedSubgraphFixture } = await import('./hosted-subgraph-fixture.js');
+      hostedSubgraphFixture = await seedHostedSubgraphFixture();
+      process.send?.({ id: message.id, result: hostedSubgraphFixture });
+    } else if (message.command === 'move-hosted-subgraph') {
+      if (!hostedSubgraphFixture) throw new Error('Seed the hosted fixture first');
+      await storage.moveWorkflowItemWithBackend('project', hostedSubgraphFixture.target.relativePath, hostedSubgraphFixture.foreignPath);
+      process.send?.({ id: message.id, result: true });
+    } else if (message.command === 'scheduled-recordings') {
       const { flushWorkflowExecutionRecordingPersistence } = await import('../../routes/workflows/recordings.js');
       await flushWorkflowExecutionRecordingPersistence();
       process.send?.({

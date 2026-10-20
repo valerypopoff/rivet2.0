@@ -305,6 +305,18 @@ assert.match(
   /studio-server:build && yarn studio-server:verify:executor-retirement/,
 );
 assert.equal(executorRetirement.run, 'yarn studio-server:verify:executor-retirement');
+const subgraphLoader = findStep(studioJobs['web-tests'], 'Verify hosted executor Subgraph loader', 'Web tests');
+assert.equal(subgraphLoader.run, 'yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime');
+assert.ok(
+  studioJobs['web-tests'].steps.indexOf(subgraphLoader) >
+    studioJobs['web-tests'].steps.indexOf(
+      findStep(studioJobs['web-tests'], 'Verify restored compiled workspace dependencies', 'Web tests'),
+    ),
+  'Hosted loader regressions require verified compiled Core/Node builds.',
+);
+assert.match(serverScripts['studio-server:verify:production-cutover'], /rivet-studio-server-executor run test:source$/);
+assert.doesNotMatch(serverScripts['studio-server:verify:production-cutover'], /test:runtime/);
+assert.match(serverScripts['studio-server:test'], /rivet-studio-server-executor run test:runtime/);
 assert.ok(
   studioJobs['editor-regression'].steps.indexOf(executorRetirement) >
     studioJobs['editor-regression'].steps.indexOf(

@@ -71,6 +71,94 @@ export async function verifyExplicitBundleContract(
   const outsider = await backend.createWorkflowProjectItem('', `Outside ${randomUUID()}`);
   const foreign = await backend.bundles.create(`Foreign ${randomUUID()}`, '');
   const foreignMember = await backend.createWorkflowProjectItem(foreign.relativePath, 'Foreign member');
+  // Conversion must reject existing cross-bundle bindings before assigning an identity.
+  const candidate = await backend.createWorkflowFolderItem(`Conversion ${randomUUID()}`, '');
+  const candidateNested = await backend.createWorkflowFolderItem('Nested', candidate.relativePath);
+  const caller = await backend.createWorkflowProjectItem(candidateNested.relativePath, 'Caller');
+  const candidateProject = projectBundleFixture().root.project;
+  candidateProject.uiGraphs = {
+    ui: { id: 'ui', name: 'Conversion app', components: [] },
+  } as typeof candidateProject.uiGraphs;
+  remapBundleProject(
+    candidateProject,
+    new Map([
+      ['bundle-root', caller.projectMetadataId! as ProjectId],
+      ['bundle-child', foreignMember.projectMetadataId! as ProjectId],
+    ]),
+  );
+  const saveCandidate = async () => {
+    const saved = await backend.loadHostedProject(caller.absolutePath);
+    await backend.saveHostedProject({
+      projectPath: caller.absolutePath,
+      projectId: caller.projectMetadataId,
+      contents: serializeProject(candidateProject) as string,
+      datasetsContents: saved.datasetsContents,
+      expectedRevisionId: saved.revisionId,
+      saveIntent: 'in-place',
+    });
+  };
+  await saveCandidate();
+  await assert.rejects(
+    backend.bundles.setKind(candidate.relativePath, true),
+    /Cannot convert to bundle:.*another bundle/,
+  );
+  if (http) {
+    const response = await fetch(`${http.baseUrl}/api/workflows/bundles/kind`, {
+      method: 'POST',
+      headers: { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+      body: JSON.stringify({ relativePath: candidate.relativePath, enabled: true }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(response.status, 409, await response.clone().text());
+    const failure = (await response.json()) as { error: string; code: string };
+    assert.match(failure.error, /Foreign member/);
+    assert.equal(failure.code, 'bundle_cross_bundle_reference');
+  }
+  assert.equal(
+    (await pool.query('SELECT bundle_id FROM workflow_folders WHERE relative_path=$1', [candidate.relativePath]))
+      .rows[0].bundle_id,
+    null,
+  );
+  const appReview = await backend.listWorkflowProjectWebApps(caller.relativePath);
+  await backend.publishWorkflowProjectWebApps(
+    caller.relativePath,
+    [{ uiGraphId: 'ui', slug: `conversion-${randomUUID()}`, allowedEmails: [] }],
+    {
+      expectedProjectId: appReview.projectId,
+      expectedPublicationVersion: appReview.publicationVersion,
+      expectedDraftRevisionId: appReview.draftRevisionId,
+    },
+  );
+  remapBundleProject(
+    candidateProject,
+    new Map([
+      [caller.projectMetadataId!, caller.projectMetadataId! as ProjectId],
+      [foreignMember.projectMetadataId!, outsider.projectMetadataId! as ProjectId],
+    ]),
+  );
+  await saveCandidate();
+  // The current draft is now valid, but the independently published app still
+  // pins the previous cross-bundle reference. Endpoint publication is absent.
+  await assert.rejects(backend.bundles.setKind(candidate.relativePath, true), /\(published web app\).*another bundle/);
+  assert.equal(
+    (await pool.query('SELECT bundle_id FROM workflow_folders WHERE relative_path=$1', [candidate.relativePath]))
+      .rows[0].bundle_id,
+    null,
+  );
+  const unpublishReview = await backend.listWorkflowProjectWebApps(caller.relativePath);
+  await backend.unpublishWorkflowProjectWebApp(caller.relativePath, 'ui', {
+    expectedProjectId: unpublishReview.projectId,
+    expectedPublicationVersion: unpublishReview.publicationVersion,
+  });
+  await backend.bundles.setKind(candidate.relativePath, true); // Ordinary external projects stay reusable.
+  assert.ok(
+    (await pool.query('SELECT bundle_id FROM workflow_folders WHERE relative_path=$1', [candidate.relativePath]))
+      .rows[0].bundle_id,
+  );
+  await backend.bundles.setKind(candidate.relativePath, false);
+  await backend.deleteWorkflowProjectItem(caller.relativePath);
+  await backend.deleteWorkflowFolderItem(candidateNested.relativePath);
+  await backend.deleteWorkflowFolderItem(candidate.relativePath);
   for (const [caller, target, allowed] of [
     [root, child, true],
     [root, outsider, true],

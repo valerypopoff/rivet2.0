@@ -12,6 +12,7 @@ type AsyncWorkflowOptions = {
   graceSeconds?: number;
   storage?: Record<string, unknown>;
   failure?: 'foreground' | 'serialization';
+  requireUiAuth?: boolean;
 };
 type AsyncWorkflowProcess = {
   baseUrl: string;
@@ -53,7 +54,9 @@ async function startOwnedProcess(
     RIVET_RUNTIME_LIBRARIES_ROOT: path.join(root, 'libraries'),
     RIVET_PROJECT_BUNDLE_SCRATCH_ROOT: path.join(root, 'exports'),
     RIVET_KEY: 'async-fixture-key',
-    RIVET_REQUIRE_UI_GATE_KEY: 'false',
+    RIVET_REQUIRE_UI_GATE_KEY: options.requireUiAuth ? 'true' : 'false',
+    RIVET_SERVER_UI_AUTH_MODE: options.requireUiAuth ? 'key' : 'none',
+    RIVET_ENABLE_DEVELOPMENT_AUTH: 'false',
     RIVET_API_PROFILE: 'combined',
     RIVET_RECORDINGS_ENABLED: 'true',
     RIVET_SHUTDOWN_GRACE_SECONDS: String(options.graceSeconds ?? 2),

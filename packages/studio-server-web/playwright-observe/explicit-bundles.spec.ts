@@ -234,6 +234,106 @@ test('old servers do not advertise explicit bundle actions', async ({ page }) =>
   await expect(page.getByRole('button', { name: '+ New bundle', exact: true })).toHaveCount(0);
 });
 
+test('rejected cross-bundle conversion opens an actionable modal and leaves an ordinary folder', async ({
+  page,
+}, testInfo) => {
+  const folder = {
+    id: 'Feature',
+    name: 'Feature',
+    relativePath: 'Feature',
+    absolutePath: '/workflows/Feature',
+    updatedAt: '',
+    bundleId: null,
+    folders: [],
+    projects: [],
+  };
+  let attempts = 0;
+  const error =
+    'Cannot convert to bundle: Feature/Caller.rivet-project (saved draft) references Other/Target.rivet-project in another bundle (Other). Retarget it to a project in this folder or to an ordinary project, then retry. Nothing was changed.';
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [folder], projects: [] },
+    }),
+  );
+  await page.route('**/api/workflows/bundles/kind', (route) => {
+    attempts++;
+    expect(route.request().postDataJSON()).toEqual({ relativePath: 'Feature', enabled: true });
+    return route.fulfill({ status: 409, json: { error, code: 'bundle_cross_bundle_reference' } });
+  });
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  page.on('dialog', (dialog) => void dialog.accept());
+  const row = page.getByRole('button', { name: 'Expand Feature', exact: true });
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
+  const modal = page.getByRole('dialog', { name: 'Could not create bundle', exact: true });
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole('alert')).toHaveText(error);
+  await expect(modal.getByRole('heading', { name: 'What to do next' })).toBeVisible();
+  await expect(modal).toContainText('republish the affected workflow endpoint or web app');
+  await expect(page.locator('.Toastify__toast').filter({ hasText: error })).toHaveCount(0);
+  await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
+  await page.screenshot({ path: testInfo.outputPath('bundle-conversion-error.png') });
+  expect(attempts).toBe(1);
+  await expect(row).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Expand Feature bundle', exact: true })).toHaveCount(0);
+  await modal.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await row.click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'Download bundle', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('menuitem', { name: 'Convert to bundle', exact: true })).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
+  await expect(modal).toBeVisible();
+  expect(attempts).toBe(2); // Closing never retries the write.
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
+});
+
+test('uncertain conversion failure shows connection guidance without claiming nothing changed', async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 430 });
+  const folder = {
+    id: 'Feature',
+    name: 'Feature',
+    relativePath: 'Feature',
+    absolutePath: '/workflows/Feature',
+    updatedAt: '',
+    bundleId: null,
+    folders: [],
+    projects: [],
+  };
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [folder], projects: [] },
+    }),
+  );
+  await page.route('**/api/workflows/bundles/kind', (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: 'Connection unavailable. ' + 'Long diagnostic detail. '.repeat(120) },
+    }),
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  page.on('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: 'Expand Feature', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
+  const modal = page.getByRole('dialog', { name: 'Could not create bundle', exact: true });
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText('check whether the conversion completed before retrying');
+  await expect(modal).not.toContainText('The folder has not been converted.');
+  const close = modal.getByRole('button', { name: 'Close', exact: true });
+  await expect(close).toBeInViewport();
+  const box = await modal.boundingBox();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(430);
+  await close.click();
+  await expect(modal).toHaveCount(0);
+});
+
 test('folder menus offer conversion, never nested creation or bundle upload', async ({ page }) => {
   const folder = (name: string, relativePath: string, bundleId: string | null): WorkflowFolderItem => ({
     id: relativePath,

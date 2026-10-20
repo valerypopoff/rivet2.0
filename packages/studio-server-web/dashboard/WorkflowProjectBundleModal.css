@@ -1,4 +1,5 @@
 [data-testid='workflow-bundle-modal'],
+[data-testid='workflow-bundle-conversion-error-modal'],
 [data-testid='workflow-project-bundle-modal'],
 [data-testid='workflow-bundle-upload-modal'] {
   display: flex;
@@ -6,6 +7,7 @@
   max-height: calc(100dvh - 40px);
 }
 [data-testid='workflow-bundle-modal--body'],
+[data-testid='workflow-bundle-conversion-error-modal--body'],
 [data-testid='workflow-project-bundle-modal--body'],
 [data-testid='workflow-bundle-upload-modal--body'] {
   display: flex;

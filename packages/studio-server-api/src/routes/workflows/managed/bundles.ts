@@ -22,6 +22,7 @@ import { sanitizeWorkflowName } from '../fs-helpers.js';
 import { remapBundleProject } from '../remap-bundle-project.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { FolderRow, RevisionRow, WorkflowRow } from './types.js';
+import { prepareBundleConversion, assertBundleConversion } from './bundle-conversion.js';
 
 export const lockBundleTopology = (client: PoolClient) => client.query('SELECT pg_advisory_xact_lock(8071, 24016)');
 
@@ -142,6 +143,7 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
     async setKind(relativePath: string, enabled: boolean) {
       const source = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: false });
       await context.initialize();
+      const conversion = enabled ? await prepareBundleConversion(context, source) : undefined;
       return context.withTransaction(async (client) => {
         await lockBundleTopology(client);
         const rows = await client.query<FolderRow>(
@@ -150,6 +152,7 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
         );
         const row = rows.rows[0];
         if (!row) throw createHttpError(404, 'Folder not found');
+        if (enabled && !row.bundle_id) await assertBundleConversion(client, source, conversion!);
         const id = enabled ? row.bundle_id ?? randomUUID() : null;
         const result = await client.query<FolderRow>(
           'UPDATE workflow_folders SET bundle_id=$2, updated_at=NOW() WHERE relative_path=$1 RETURNING *',

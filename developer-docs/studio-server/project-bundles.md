@@ -14,6 +14,57 @@ but bundles cannot nest. Existing folders are not converted automatically.
 Conversion back to an ordinary folder removes grouping only. Projects, references
 and publications survive; only empty containers can be deleted.
 
+**Convert to bundle** validates every descendant project's saved draft, endpoint
+publication and independently pinned published web-app snapshots before changing
+the folder. Each distinct revision is read once. Authored cross-project bindings
+(Subgraph nodes, legacy references/aliases, Library source nodes, disabled nodes and
+saved variants) cannot target a project in another explicit bundle. Internal targets
+and ordinary external projects remain allowed. A 409 response identifies the caller,
+saved version, target and other bundle. Conversion failures open a persistent,
+accessible modal, not a toast, without optimistically changing the tree. The
+`bundle_cross_bundle_reference` error code selects specific repair guidance:
+retarget calls, save drafts and republish/unpublish affected endpoint or web-app
+snapshots, then explicitly retry conversion. Other errors retain their details
+and warn that a lost response needs a tree refresh before retrying; they do not
+claim a write was rolled back. The shared modal provides backdrop, focus trapping,
+Escape/close actions and a scrolling body with a visible footer on short screens.
+Closing never retries a request. Local-upgrade prompts stay suppressed while it
+is open. The browser regression covers actionable errors, no duplicate toast,
+explicit retry/reopen, keyboard dismissal and long diagnostics on a short viewport.
+Unsaved editor content is not inspected or saved automatically; missing Library
+definitions do not hide other authored bindings.
+
+`managed/bundle-conversion.ts` reads immutable project blobs outside topology/row
+locks, with at most 256 members and 128 MiB across selected saved snapshots; datasets
+are not downloaded. Before assigning the bundle ID, the existing topology lease
+and member row locks protect a recheck of paths, draft/endpoint/web-app revisions and
+current target membership through commit. Concurrent source edits require a retry;
+concurrent target conversion/moves cannot bypass the final membership check.
+Web-app publication/unpublication also locks its workflow row, fencing changes to
+independent app revision bindings until conversion commits. Unreadable/mismatched
+source revisions fail closed; parse failures identify the project/version without
+logging or returning snippets from its contents. Conversion back to ordinary
+folders and idempotent requests for an existing bundle do not scan project blobs.
+This guards new conversions, not an automatic repair of existing invalid bundles
+or a global reference lock on subsequent authoring/moves. Empty bundle creation is
+unchanged. Regression owners: `managed-bundles.test.ts`,
+`remap-bundle-project.test.ts`, the real PostgreSQL/MinIO explicit-bundle contract,
+and the rejected-conversion case in headless `explicit-bundles.spec.ts`.
+
+Focused verification from the repository root:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/managed-bundles.test.ts src/tests/remap-bundle-project.test.ts src/tests/project-bundle-import.test.ts src/tests/project-bundle.test.ts src/tests/managed-subgraph-access.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api test:async-managed
+yarn studio-server:ui:observe explicit-bundles.spec.ts
+```
+
+The integration command provisions and removes only its own disposable local
+PostgreSQL/MinIO containers. The browser command uses the local application or
+preview at `PLAYWRIGHT_BASE_URL`; set `PLAYWRIGHT_HEADLESS=1` and
+`PLAYWRIGHT_SLOW_MO=0`. Its API fixtures do not send conversion writes to a live
+deployment. No Kubernetes rehearsal or database migration is required for this guard.
+
 Bundle creation/duplication and ordinary folder creation/rename validate their
 complete destination through the same folder-path rules used by later operations.
 In particular, folder names ending in `.rivet-project` are rejected before storage
@@ -79,6 +130,80 @@ loaders stay source compatible. Access checks are not cached across runs or topo
 changes. A move/conversion can therefore invalidate an old outside call; the next
 run fails clearly instead of selecting a different project. In-flight graph runs
 are not protected by a topology lock or retroactively aborted.
+
+Hosted Node permission checks are service requests, not browser operator sessions.
+The API operator gate admits only authenticated executor **GET** requests to
+`/api/workflows/subgraph-projects/:projectId/execution` and `/access` (in addition
+to the executor's other explicitly listed service routes). Both the proxy and
+executor tokens are required; this works with key or OAuth UI authentication,
+without a UI cookie or trusted-client bypass. The route still checks live bundle
+membership and caller identity. Do not replace this with a broad Subgraph-route
+or `/api` exemption, remove cached-target validation, or forward operator cookies
+from the executor.
+
+Managed bundle-policy denials carry `subgraph_bundle_scope_forbidden`. The hosted
+loader reports a same-bundle restriction only for that explicit 403 code; generic
+401/403 responses identify service authentication/access failures instead. Missing
+targets, service failures and connection failures are distinct. Permission checks
+require 204, use a deadline, and do not follow redirects. Error-body inspection is
+bounded and never displays raw upstream HTML, credentials or arbitrary messages.
+An unpublished target selected as **Published** returns the existing API status
+409 with `workflow_publication_missing`, not 404. The hosted loader recognizes
+that exact status/code/selection combination and asks the user to publish the
+target or choose **Saved latest**. Other conflicts stay generic; changing only
+an HTTP status or error message cannot masquerade as a bundle/publication decision.
+
+Regression ownership: `trusted-clients.test.ts` exercises the real operator gate
+in key and OAuth modes with no UI session/trusted IP, including wrong/missing
+service credentials and neighboring routes/methods. Executor
+`subgraphProjectLoader.test.mts` covers transport, domain-error classification,
+caller/version preservation, published snapshot datasets/revision identity,
+cancellation of oversized/stalled denial bodies, missing publication diagnostics
+and fail-closed responses. The required browser lane
+includes `hosted-subgraph-auth.spec.ts`: it creates its own local PostgreSQL and
+MinIO containers, an authenticated real API and the built hosted Node executor.
+Both single-host and replicated executor configurations are exercised; the latter
+uses the real HA session handshake and derives service URLs from its loopback
+runtime-config URL. This is a local protocol/auth proof, not a cluster-rollout test.
+Two Subgraphs call different graphs of one sibling and return distinct values;
+each cold single-node call, whole-graph runs, repeated runs and a warm single-node
+call must succeed. A never-published sibling is also exercised through the real
+API and editor, checking the actionable publication failure before returning to
+a valid graph. Moving the target to another bundle between its
+snapshot read and cached permission check must fail. Its internal `/access`
+requests are real HTTP requests, never Playwright mocks, and have no operator
+cookie. The test proxy preserves those actual service headers rather than repairing
+missing/wrong credentials; negative requests verify that distinction. Each repeated
+run must deliver fresh root completion and Subgraph result events, not merely retain
+the previous run's successful node styling. The fixture removes only its own child
+processes, exact containers and their image-created anonymous volumes, and verifies
+that the recorded test volumes are gone. It never prunes Docker or deletes unrelated
+volumes. Diagnostic attachment failures cannot skip runtime cleanup.
+
+To reproduce locally, build the API and hosted executor first, serve the web
+preview on loopback, then run:
+
+```powershell
+$env:PLAYWRIGHT_HEADLESS = '1'
+$env:PLAYWRIGHT_SLOW_MO = '0'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:5174'
+yarn studio-server:ui:observe hosted-subgraph-auth.spec.ts
+```
+
+Docker must be available for this fixture. No cluster, production credentials,
+ambient database/bucket or paid provider rehearsal is used. API test enrollment
+and the executor package test commands run the focused regressions in existing CI
+lanes. `test:source` remains safe for the source-only repository-contract lane;
+`test:runtime` runs after compiled Core/Node artifacts are restored in the web-test
+lane. The package's `test` runs both locally. No new deployment step or database
+migration is needed.
+
+A passing local proof does not update an installed server. Release the API and
+hosted executor together through the normal pinned-image CI/deployment workflow.
+This service-auth fix needs no project edits, bundle recreation or republishing;
+adding an operator cookie to executor requests is not a workaround. Until that
+release is deployed, an older server can still deny service-only `/access`
+requests even though an operator-authenticated request for the same caller passes.
 
 Capability-4 portable manifests enforce the same member/ordinary boundary during
 closure validation, including editable Desktop entry overrides. Server exports
