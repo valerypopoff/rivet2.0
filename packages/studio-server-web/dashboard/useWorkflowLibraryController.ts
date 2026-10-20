@@ -156,7 +156,7 @@ export function useWorkflowLibraryController(options: {
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [bundleUploadFolder, setBundleUploadFolder] = useState<WorkflowFolderItem | null>(null);
-  const [bundleDialog, setBundleDialog] = useState<{ source?: WorkflowFolderItem; parent: string } | null>(null);
+  const [bundleAction, setBundleAction] = useState<{ kind: 'conversion' | 'duplication'; name: string } | null>(null);
   const [bundleConversionFailure, setBundleConversionFailure] = useState<WorkflowBundleConversionFailure | null>(null);
   const bundleActionPending = useRef(false);
   const [projectContextMenuState, setProjectContextMenuState] = useState<WorkflowProjectContextMenuState | null>(null);
@@ -333,8 +333,7 @@ export function useWorkflowLibraryController(options: {
   } = versionActions;
 
   const projectTreeOverlayOpen = Boolean(
-    bundleDialog ||
-      bundleOpen ||
+    bundleOpen ||
       appSettingsOpen ||
       folderContextMenuState ||
       projectContextMenuState ||
@@ -503,9 +502,15 @@ export function useWorkflowLibraryController(options: {
     closeFolderContextMenu();
     setBundleUploadFolder(target);
   };
-  const startBundleCreate = () => {
-    closeFolderContextMenu();
-    setBundleDialog({ parent: '' });
+  const refreshTreeAfterBundleChange = async () => {
+    const outcome = { failed: false };
+    await refresh(false, {
+      preserveVisibleTreeOnError: true,
+      onError: () => {
+        outcome.failed = true;
+      },
+    });
+    return outcome;
   };
   const toggleBundleKind = async () => {
     const folder = folderContextMenuState?.folder;
@@ -520,10 +525,15 @@ export function useWorkflowLibraryController(options: {
     )
       return;
     bundleActionPending.current = true;
+    setBundleAction({ kind: 'conversion', name: folder.name });
     setBundleConversionFailure(null);
     try {
       await requestWorkflowBundle('/kind', { relativePath: folder.relativePath, enabled: !folder.bundleId });
-      await refresh(false);
+      const treeRefresh = await refreshTreeAfterBundleChange();
+      if (treeRefresh.failed)
+        toast.warn(
+          'Conversion completed, but the project list could not refresh. Refresh the tree to see the updated folder or bundle before trying again.',
+        );
     } catch (failure) {
       setBundleConversionFailure({
         folderPath: folder.relativePath,
@@ -534,18 +544,41 @@ export function useWorkflowLibraryController(options: {
       });
     } finally {
       bundleActionPending.current = false;
+      setBundleAction(null);
     }
   };
-  const duplicateBundle = () => {
+  const duplicateBundle = async () => {
     const source = folderContextMenuState?.folder;
-    if (!source?.bundleId) return;
+    if (!source?.bundleId || bundleActionPending.current) return;
     closeFolderContextMenu();
-    setBundleDialog({
-      source,
-      parent: source.relativePath.includes('/')
-        ? source.relativePath.slice(0, source.relativePath.lastIndexOf('/'))
-        : '',
-    });
+    bundleActionPending.current = true;
+    setBundleAction({ kind: 'duplication', name: source.name });
+    try {
+      const result = await requestWorkflowBundle<{ folder: WorkflowFolderItem; warnings?: string[] }>(
+        `/${source.bundleId}/duplicate`,
+        { automatic: true },
+      );
+      const treeRefresh = await refreshTreeAfterBundleChange();
+      setExpandedFolders((previous) => ({ ...previous, [result.folder.id]: true }));
+      const message = `${result.folder.name} duplicated from saved versions. Unsaved edits were not copied.`;
+      const firstWarning = result.warnings?.[0] ?? '';
+      const warningExample = Array.from(firstWarning).slice(0, 160).join('');
+      const definitionWarnings = result.warnings?.length
+        ? ` ${result.warnings.length} copied ${result.warnings.length === 1 ? 'project needs' : 'projects need'} definition review. ${warningExample}${warningExample.length < firstWarning.length ? '…' : ''}`
+        : '';
+      if (treeRefresh.failed || definitionWarnings)
+        toast.warn(
+          `${message}${treeRefresh.failed ? ' The copy was created, but the project list could not refresh. Refresh the tree to see it; do not duplicate again.' : ''}${definitionWarnings}`,
+        );
+      else toast.success(message);
+    } catch (failure) {
+      toast.error(
+        `${failure instanceof Error ? failure.message : 'Could not duplicate bundle.'} Refresh the tree before retrying if the response was lost.`,
+      );
+    } finally {
+      bundleActionPending.current = false;
+      setBundleAction(null);
+    }
   };
   const handleBundleImported = (folder: WorkflowFolderItem) => {
     setExpandedFolders((previous) => ({
@@ -751,20 +784,12 @@ export function useWorkflowLibraryController(options: {
 
   return {
     explicitBundles,
-    bundleDialog,
+    bundleAction,
     bundleConversionFailure,
     closeBundleConversionFailure: () => setBundleConversionFailure(null),
-    captureBundleEdits: onCaptureProjectReconciliation,
-    closeBundleDialog: () => setBundleDialog(null),
-    handleCreateBundle: startBundleCreate,
     handleToggleBundleKind: toggleBundleKind,
     handleDuplicateBundle: duplicateBundle,
     bundleFolders: flattenedFolders,
-    handleBundleCreated: (folder: WorkflowFolderItem) => {
-      setBundleDialog(null);
-      setExpandedFolders((previous) => ({ ...previous, [folder.id]: true }));
-      void refresh(false);
-    },
     bundleUploadFolder,
     closeBundleUpload: () => setBundleUploadFolder(null),
     handleUploadBundleFromFolder,

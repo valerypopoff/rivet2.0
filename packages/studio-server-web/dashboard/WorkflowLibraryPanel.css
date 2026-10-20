@@ -742,6 +742,14 @@
   white-space: nowrap;
 }
 
+.workflow-library-panel .bundle-action-status {
+  margin: 12px 13px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--workflow-library-font-size-s);
+}
+
 .workflow-library-panel .body-actions {
   display: flex;
   align-items: center;

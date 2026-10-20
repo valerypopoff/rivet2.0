@@ -324,6 +324,46 @@ export async function verifyExplicitBundleContract(
   });
   assert.equal((await processor.run())['result']?.value, 'child-result');
   processor.dispose();
+  // The UI's one-click mode chooses latest saved drafts and allocates sibling names
+  // inside the transaction, including simultaneous requests from different clients.
+  const sourceBundleId = source.bundleId;
+  assert.ok(sourceBundleId);
+  const automaticCopy = async () => {
+    if (!http) return backend.bundles.duplicate(sourceBundleId, { automatic: true });
+    const response = await fetch(`${http.baseUrl}/api/workflows/bundles/${sourceBundleId}/duplicate`, {
+      method: 'POST',
+      headers: { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+      body: JSON.stringify({ automatic: true }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    assert.equal(response.status, 201, await response.clone().text());
+    return response.json() as ReturnType<typeof backend.bundles.duplicate>;
+  };
+  const automaticCopies = await Promise.all([automaticCopy(), automaticCopy()]);
+  assert.deepEqual(automaticCopies.map((entry) => entry.folder.name).sort(), [
+    `${source.name} copy 2`,
+    `${source.name} copy 3`,
+  ]);
+  assert.equal(new Set([source.bundleId, copy.bundleId, ...automaticCopies.map((entry) => entry.bundleId)]).size, 4);
+  const automaticTree = await backend.getTree();
+  for (const automatic of automaticCopies) {
+    assert.equal(automatic.folder.relativePath, automatic.folder.name, 'the copy is a sibling, not nested');
+    const group = automaticTree.folders.find((folder) => folder.bundleId === automatic.bundleId)!;
+    const member = group.projects.find((project) => project.name === 'Caller')!;
+    const sibling = group.folders[0]!.projects[0]!;
+    const [saved] = loadProjectAndAttachedDataFromString(
+      (await backend.loadHostedProject(member.absolutePath)).contents,
+    );
+    assert.equal(
+      saved.metadata.description,
+      editedRoot.metadata.description,
+      'automatic copy selects the saved draft, not publication',
+    );
+    const subgraph = Object.values(saved.graphs)[0]!.nodes.find((node) => node.type === 'subGraph')!;
+    assert.equal((subgraph.data as { targetProjectId: string }).targetProjectId, sibling.projectMetadataId);
+    assert.equal(member.settings.status, 'unpublished');
+    assert.notEqual(member.projectMetadataId, root.projectMetadataId);
+  }
   if (http) await verifyExplicitBundleRoundtrip(backend, http, source, root, child, unused);
   const failName = `${source.name} rollback`;
   await pool.query(`CREATE FUNCTION fixture_bundle_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN

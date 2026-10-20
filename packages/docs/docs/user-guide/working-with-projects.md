@@ -133,11 +133,12 @@ request limits; large Desktop edits can exceed them.
 
 ### Studio Server bundles
 
-Use **+ New bundle** in the project tree, or **Convert to bundle** on an existing
-folder. A bundle is an explicit group of projects, not a graph entry point.
+Create an ordinary folder with **+ New folder** (or use an existing folder), arrange
+its projects, then right-click the folder and choose **Convert to bundle**.
+A bundle is an explicit group of projects, not a graph entry point.
 All projects underneath it, including ordinary subfolders and disconnected
-experiments, are members. Bundles cannot contain other bundles. Folder menus offer
-conversion rather than **New bundle**. **Upload bundle** is hidden on bundles and
+experiments, are members. Bundles cannot contain other bundles. There is no separate
+**New bundle** action. **Upload bundle** is hidden on bundles and
 their subfolders; **Upload project** is still available.
 
 Subgraph calls into a bundle are limited to members of that same bundle. Use
@@ -147,15 +148,20 @@ References into other bundles fail explicitly; moving or converting projects doe
 not silently rewrite existing calls. Bundles still have no entry project, and any
 published member may expose its own endpoint.
 
-**Duplicate bundle** copies every member, preserving internal references between
-the copies. References outside the bundle stay shared and are listed in the
-preview. Choose Saved latest or Published (with saved-latest fallback for members
-without a publication). Save unsaved edits first, or explicitly choose to copy
-their saved versions. Copies are unpublished; endpoint routes, schedules and run
-history are not activated/copied. Credentials and external services remain shared.
-If Rivet cannot fully check open edits (for example, while a project is saving),
-it asks you to acknowledge copying stored revisions without that check. It never
-silently includes unsaved editor content.
+**Duplicate bundle** immediately copies every member's latest saved version,
+preserving internal references between the copies. There is no dialog. The copy
+appears alongside the original as `Name copy`, `Name copy 2`, and so on.
+Save edits first if you want them included: unsaved editor changes are never
+saved automatically or copied, and remain untouched in the original tabs.
+References outside the bundle, credentials and external services stay shared;
+duplication does not create an isolated server environment. Copies are unpublished;
+endpoint routes, schedules and run history are not activated/copied. Progress and
+completion appear in the UI. Bundle conversion and duplication controls are disabled
+until the current operation finishes. Definition-review warnings show a count and
+short example without blocking the copy. If an error occurs after a connection loss, refresh
+the tree and check for the copy before trying again. If copying succeeded but the
+project list could not refresh, Rivet keeps the current list visible and tells you
+the copy was created. Refresh the list to see it instead of duplicating again.
 The operation is limited to 256 projects, 512 folders and 64 MiB of saved contents.
 
 Moving projects across the bundle boundary changes membership, not references.
@@ -165,6 +171,9 @@ Remote Debugger group without discarding unsaved content.
 Renaming/moving the whole bundle preserves membership. **Convert to ordinary folder**
 removes grouping without deleting projects or changing publications. Empty bundles
 can be deleted like empty folders. Release/merge-back remains project-owned.
+If conversion completes but the project list cannot refresh, the old list stays
+visible and a warning confirms conversion succeeded. Refresh the list before
+trying another conversion; the old icon does not mean the conversion failed.
 
 Opened members share Remote Debugger controls; cross-references outside the bundle
 do not extend that session. Existing folders are never converted automatically.
@@ -173,7 +182,7 @@ This feature requires PostgreSQL/S3 Studio Server storage.
 #### Trying changes without replacing the original
 
 1. Save the member projects you want to copy, then right-click the bundle and choose **Duplicate bundle**.
-2. Review the version selection and shared external dependencies, choose a name and destination, and duplicate it.
+2. Wait for the saved-version copy to appear alongside the original. Rename or move it afterward if needed.
 3. Edit and test the copied projects. Their internal calls target the copies, not the original bundle.
 4. Publish projects explicitly when ready. Duplication does not switch an existing endpoint, merge changes back, or replace the original projects.
 

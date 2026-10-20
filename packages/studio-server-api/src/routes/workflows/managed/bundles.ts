@@ -26,6 +26,27 @@ import { prepareBundleConversion, assertBundleConversion } from './bundle-conver
 
 export const lockBundleTopology = (client: PoolClient) => client.query('SELECT pg_advisory_xact_lock(8071, 24016)');
 
+type BundleDuplicateOptions =
+  | { automatic: true }
+  | { version: WorkflowBundleVersion; fingerprint: string; name: string; parentRelativePath: string };
+
+async function chooseBundleCopyDestination(client: PoolClient, root: FolderRow) {
+  const parent = root.parent_relative_path;
+  // The topology lease serializes name selection with folder creation and moves.
+  for (let index = 1; index <= 10_000; index++) {
+    const suffix = index === 1 ? ' copy' : ` copy ${index}`;
+    let base = root.name;
+    while (base.length + suffix.length > 255) base = Array.from(base).slice(0, -1).join('');
+    const name = sanitizeWorkflowName(`${base}${suffix}`, 'bundle name');
+    const target = normalizeManagedWorkflowRelativePath(parent ? `${parent}/${name}` : name, {
+      allowProjectFile: false,
+    });
+    if (!(await client.query('SELECT 1 FROM workflow_folders WHERE relative_path=$1', [target])).rowCount)
+      return { parent, name, target };
+  }
+  throw conflict('Too many bundle copies use this name. Rename the source bundle before duplicating again.');
+}
+
 export function createManagedBundleService(context: ManagedWorkflowContext) {
   async function capture(client: PoolClient, id: string, version: WorkflowBundleVersion, lock = false) {
     const root = (await client.query<FolderRow>('SELECT * FROM workflow_folders WHERE bundle_id = $1', [id])).rows[0];
@@ -186,20 +207,22 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
     async preview(id: string, version: WorkflowBundleVersion) {
       return (await read(id, version)).preview;
     },
-    async duplicate(
-      id: string,
-      options: { version: WorkflowBundleVersion; fingerprint: string; name: string; parentRelativePath: string },
-    ) {
-      const parent = normalizeManagedWorkflowRelativePath(options.parentRelativePath, {
+    async duplicate(id: string, options: BundleDuplicateOptions) {
+      const explicit = 'automatic' in options ? null : options;
+      const version = explicit?.version ?? 'latest';
+      const parent = normalizeManagedWorkflowRelativePath(explicit?.parentRelativePath ?? '', {
         allowProjectFile: false,
         allowEmpty: true,
       });
-      const name = sanitizeWorkflowName(options.name, 'bundle name');
-      const target = normalizeManagedWorkflowRelativePath(parent ? `${parent}/${name}` : name, {
-        allowProjectFile: false,
-      });
-      const { snapshot, projects, preview } = await read(id, options.version);
-      if (preview.fingerprint !== options.fingerprint)
+      const name = explicit ? sanitizeWorkflowName(explicit.name, 'bundle name') : '';
+      const target = explicit
+        ? normalizeManagedWorkflowRelativePath(parent ? `${parent}/${name}` : name, {
+            allowProjectFile: false,
+          })
+        : '';
+      const { snapshot, projects, preview } = await read(id, version);
+      const fingerprint = explicit?.fingerprint ?? snapshot.fingerprint;
+      if (preview.fingerprint !== fingerprint)
         throw conflict('The bundle changed. Review a fresh preview before duplicating.');
       const bundleId = randomUUID();
       const prepared: RevisionRow[] = [];
@@ -209,29 +232,32 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
           prepared.push(await context.revisions.createRevision(project.id, project.contents, project.datasetsContents));
         const result = await context.withTransaction(async (client) => {
           await lockBundleTopology(client);
-          const current = await capture(client, id, options.version, true);
-          if (current.fingerprint !== options.fingerprint)
-            throw conflict('The bundle changed during duplication. Review it again.');
-          await context.queries.assertFolderExists(client, parent);
+          const current = await capture(client, id, version, true);
+          if (current.fingerprint !== fingerprint)
+            throw conflict('The bundle changed during duplication. Try duplicating it again.');
+          const destination = explicit
+            ? { parent, name, target }
+            : await chooseBundleCopyDestination(client, current.root);
+          await context.queries.assertFolderExists(client, destination.parent);
           const containing = await client.query(
             `SELECT 1 FROM workflow_folders WHERE bundle_id IS NOT NULL AND (relative_path=$1 OR left($1,length(relative_path)+1)=relative_path || '/')`,
-            [parent],
+            [destination.parent],
           );
           if (containing.rowCount) throw conflict('A bundle cannot be duplicated inside another bundle.');
           let folder: FolderRow | undefined;
           for (const source of snapshot.folders) {
             const isRoot = source.relative_path === snapshot.root.relative_path;
-            const path = target + source.relative_path.slice(snapshot.root.relative_path.length);
+            const path = destination.target + source.relative_path.slice(snapshot.root.relative_path.length);
             const parentPath = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
             const created = await client.query<FolderRow>(
               `INSERT INTO workflow_folders(relative_path,name,parent_relative_path,bundle_id) VALUES($1,$2,$3,$4) RETURNING *`,
-              [path, isRoot ? name : source.name, parentPath, isRoot ? bundleId : null],
+              [path, isRoot ? destination.name : source.name, parentPath, isRoot ? bundleId : null],
             );
             if (isRoot) folder = created.rows[0];
           }
           for (const [index, project] of projects.entries()) {
             const source = snapshot.members[index]!;
-            const relativePath = target + source.relative_path.slice(snapshot.root.relative_path.length);
+            const relativePath = destination.target + source.relative_path.slice(snapshot.root.relative_path.length);
             const folderPath = relativePath.slice(0, relativePath.lastIndexOf('/'));
             await client.query(
               `INSERT INTO workflows(workflow_id,name,file_name,relative_path,folder_relative_path,current_draft_revision_id) VALUES($1,$2,$3,$4,$5,$6)`,
@@ -240,7 +266,7 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
             await context.revisions.insertRevision(client, prepared[index]!);
           }
           await context.executionInvalidationController.queueCatalogInvalidation(client);
-          return { folder: context.mappers.mapFolderRowToFolderItem(folder!), bundleId };
+          return { folder: context.mappers.mapFolderRowToFolderItem(folder!), bundleId, warnings: preview.warnings };
         });
         committed = true;
         return result;

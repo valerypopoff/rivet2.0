@@ -24,6 +24,7 @@ type WorkflowFolderContextMenuProps = {
   canDelete: boolean;
   bundleActions?: {
     canConvert: boolean;
+    busy: boolean;
     convert(): void;
     duplicate(): void;
     download(): void;
@@ -120,6 +121,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               className="workflow-project-context-menu-item"
               role="menuitem"
               onClick={bundleActions.convert}
+              disabled={bundleActions.busy}
             >
               <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
               <span>{folder.bundleId ? 'Convert to ordinary folder' : 'Convert to bundle'}</span>
@@ -142,6 +144,7 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               className="workflow-project-context-menu-item"
               role="menuitem"
               onClick={bundleActions.duplicate}
+              disabled={bundleActions.busy}
             >
               Duplicate bundle
             </button>

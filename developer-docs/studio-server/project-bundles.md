@@ -2,9 +2,10 @@
 
 ## Explicit Studio Server containers
 
-PostgreSQL/S3 installations support **New bundle** and **Convert to bundle**.
-Creation is available through the library's **+ New bundle** action. Folder context
-menus offer **Convert to bundle**, not nested creation; the conversion action uses
+PostgreSQL/S3 installations create authored bundles by converting ordinary folders.
+Use **+ New folder**, arrange its projects, then choose **Convert to bundle** from
+the folder context menu. There is no **New bundle** action or creation dialog at
+the library root or in folder menus; the conversion action uses
 the same bundle icon as the project tree. **Upload bundle** is available only outside
 bundles. A bundle root and every ordinary folder beneath it hide that action;
 **Upload project** remains available there.
@@ -46,8 +47,9 @@ source revisions fail closed; parse failures identify the project/version withou
 logging or returning snippets from its contents. Conversion back to ordinary
 folders and idempotent requests for an existing bundle do not scan project blobs.
 This guards new conversions, not an automatic repair of existing invalid bundles
-or a global reference lock on subsequent authoring/moves. Empty bundle creation is
-unchanged. Regression owners: `managed-bundles.test.ts`,
+or a global reference lock on subsequent authoring/moves. The existing empty-bundle
+API remains compatible, but is not used by the UI. Duplication and portable upload
+remain available. Regression owners: `managed-bundles.test.ts`,
 `remap-bundle-project.test.ts`, the real PostgreSQL/MinIO explicit-bundle contract,
 and the rejected-conversion case in headless `explicit-bundles.spec.ts`.
 
@@ -257,15 +259,51 @@ Authenticated POST operations under `/api/workflows/bundles` provide creation
 requests and use maintenance-owner routing. Preview fingerprints hierarchy,
 membership and selected revisions; duplication rechecks under topology/member locks.
 
-**Duplicate bundle** copies all members and preserves subfolder layout. Saved latest
-is the default; Published selects published revisions with explicit saved-latest
-fallback for unpublished members. Opened unsaved members are identified; copying
-their saved versions requires acknowledgement, never an implicit editor save.
-An unavailable editor, predecessor browser, or capture omitting a saving/loading
-tab is not evidence of clean edits. The additive `editCheckComplete` capture flag
-must be true to skip that acknowledgement; otherwise the dialog explicitly asks
-to copy stored revisions without a complete edit check. Revision fingerprints
-still protect against source saves that finish before duplication commits.
+**Duplicate bundle** is one click, with no modal or confirmation. The UI sends
+`{ automatic: true }` to `/:id/duplicate`. The server copies every member's latest
+saved draft (not its published revision), including disconnected projects and
+subfolders. Unsaved editor content is never captured or saved. An inline status
+and disabled duplicate menu item identify the pending operation; long names are
+ellipsized without pushing the folder-creation control outside the sidebar. A synchronous
+guard also suppresses repeated clicks until it settles. Success names the copy
+and explicitly says it used saved versions and excluded unsaved edits. Retained
+definition warnings appear as a non-blocking warning instead of a preview dialog.
+The notification summarizes their count and a Unicode-safe, 160-code-point example;
+the API retains the complete warnings. Large warning arrays are not pasted into
+a screen-obscuring toast. Conversion and duplication share one visible operation
+state as well as the synchronous guard: both menu actions are disabled while either
+operation is pending, and the sidebar identifies the operation. Completion or
+failure clears both controls. There are no apparently enabled actions that the
+pending guard silently drops. Browser regressions hold each operation in turn,
+check another bundle's controls, and render 256 warnings on a short viewport.
+
+The server derives the destination from the source's captured parent. Under the
+existing topology lease, it allocates `Name copy`, `Name copy 2`, etc. using indexed
+exact-path checks, without overwriting an existing folder/bundle. Generated names
+retain the suffix within 255 UTF-16 code units without splitting a Unicode code
+point. Selection is bounded to 10,000 names; exhaustion fails with rename guidance.
+Concurrent copies serialize name allocation, but source blobs are still prepared
+outside SQL locks. The captured hierarchy/revision fingerprint is rechecked under
+the topology lease and source row locks before exposing any copied metadata.
+A concurrent source edit/move fails cleanly rather than mixing revisions.
+
+The previous explicit API (name, parent, version and reviewed fingerprint) and
+preview endpoint remain compatible for older clients; they are no longer used
+by the duplicate UI. They retain Published selection with saved-latest fallback.
+No automatic retry follows an error or lost response: refresh the tree before
+manually trying again. A committed copy is not undone by a failed tree refresh:
+the old tree stays visible, and the completion warning explicitly says the copy
+was created and asks for a tree refresh, not another duplicate. Superseded refreshes
+are not mistaken for failures. Expansion is applied after refresh so a preceding
+tree snapshot cannot clear the new copy's expanded state.
+Conversion in either direction uses the same post-commit refresh handling: a
+failed read preserves the last visible tree and warns that conversion completed,
+with instructions to refresh before trying again. It must not show the conversion
+failure modal for a successful write. Browser regressions cover both directions,
+one write only, retained tree rows and released operation controls.
+The headless explicit-bundle suite injects both an actual aborted duplicate response
+and a post-commit tree failure, checks there is one request with no automatic retry,
+retains the source row, and checks pending layout with a 245-character bundle name.
 The shared `remapBundleProject` helper assigns fresh project identities and remaps
 internal Subgraph/legacy references, prefab sources and saved variants. Graph/node/
 port IDs survive. Internal targets become saved-latest; external targets and their
@@ -360,7 +398,7 @@ implementation boundaries, not a claim that a deployment has already been upgrad
 | Explicit folder identity, derived membership, no entry projects or nesting                                                            | Migration 16, managed tree projection, schema tests and PostgreSQL integration                                   |
 | Create, convert, rename/move and empty-container deletion without rewriting references                                                | Existing folder operations plus bundle routes; integration and browser checks                                    |
 | Duplicate all members and subfolders with fresh identities, internal rewiring, shared external references and selected saved versions | Shared remapper, managed duplication service, copy-execution integration                                         |
-| Unpublished copies, no copied routes/schedules/history, no silent saving or partial group exposure                                    | Duplication preview/acknowledgement, rollback integration and preparation-failure tests                          |
+| Unpublished copies, no copied routes/schedules/history, no silent saving or partial group exposure                                    | One-click saved-copy UI, concurrent automatic naming, rollback integration and preparation-failure tests         |
 | One debugger session from any opened member; no grouping by inferred references                                                       | Explicit membership helper, registry/routing tests and browser streaming matrix                                  |
 | Membership changes/deletion retain edits and reject late events                                                                       | Guarded editor binding reconciliation, registry lifetime fences and deletion-during-streaming browser regression |
 | Keep existing portable artifacts, desktop runtimes and storage compatibility paths working                                            | Existing import/Node contracts retained; unsupported backends advertise no new container actions                 |

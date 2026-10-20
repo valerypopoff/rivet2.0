@@ -124,7 +124,7 @@ test('opening a moved folder member uses its new bundle even when the tree refre
   ).toBeVisible();
 });
 
-test('explicit bundle creation, reviewed duplication and conversion preserve the tree', async ({ page }) => {
+test('folder conversion and one-click duplication preserve the tree without a modal', async ({ page }) => {
   const folders: WorkflowFolderItem[] = [];
   const bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
   const folder = (name: string, id: string | null): WorkflowFolderItem => ({
@@ -138,6 +138,12 @@ test('explicit bundle creation, reviewed duplication and conversion preserve the
     projects: [],
   });
   let duplicateAttempts = 0;
+  let directCreations = 0;
+  let previews = 0;
+  let releaseCopy!: () => void;
+  const copyReady = new Promise<void>((resolve) => {
+    releaseCopy = resolve;
+  });
   await page.route(
     (url) => url.pathname.startsWith('/api/'),
     async (route) => {
@@ -146,35 +152,27 @@ test('explicit bundle creation, reviewed duplication and conversion preserve the
         return route.fulfill({
           json: { root: '/managed/workflows', capabilities: { explicitBundles: true }, folders, projects: [] },
         });
+      if (path === '/api/workflows/folders' && route.request().method() === 'POST') {
+        const body = route.request().postDataJSON();
+        expect(body).toEqual({ name: 'Feature' });
+        const created = folder(body.name, null);
+        folders.push(created);
+        return route.fulfill({ status: 201, json: { folder: created } });
+      }
       if (path.startsWith('/api/workflows/bundles')) {
         expect(route.request().headers()['x-rivet-bundle-intent']).toBe('1');
         const body = route.request().postDataJSON();
-        if (path.endsWith('/preview'))
-          return route.fulfill({
-            json: {
-              bundleId,
-              name: 'Feature',
-              relativePath: 'Feature',
-              fingerprint: 'f'.repeat(64),
-              version: body.version,
-              members: [
-                {
-                  projectId: 'one',
-                  relativePath: 'Feature/One.rivet-project',
-                  revisionId: 'revision',
-                  selectedVersion: 'latest',
-                },
-              ],
-              externalProjectIds: ['shared-classifier'],
-              warnings: [],
-            },
-          });
+        if (path.endsWith('/preview')) {
+          previews++;
+          return route.fulfill({ status: 503, json: { error: 'No preview dialog is needed' } });
+        }
         if (path.endsWith('/duplicate')) {
           duplicateAttempts++;
-          expect(body.fingerprint).toBe('f'.repeat(64));
+          expect(body).toEqual({ automatic: true });
           if (duplicateAttempts === 1)
-            return route.fulfill({ status: 409, json: { error: 'The bundle changed. Review a fresh preview.' } });
-          const copy = folder(body.name, '85019223-bd4e-49c3-a042-321215efaa35');
+            return route.fulfill({ status: 409, json: { error: 'The bundle changed. Try duplicating it again.' } });
+          await copyReady;
+          const copy = folder('Feature copy', '85019223-bd4e-49c3-a042-321215efaa35');
           folders.push(copy);
           return route.fulfill({ status: 201, json: { folder: copy } });
         }
@@ -182,9 +180,8 @@ test('explicit bundle creation, reviewed duplication and conversion preserve the
           folders[0]!.bundleId = body.enabled ? bundleId : null;
           return route.fulfill({ json: { folder: folders[0] } });
         }
-        const created = folder(body.name, bundleId);
-        folders.push(created);
-        return route.fulfill({ status: 201, json: { folder: created } });
+        directCreations++;
+        return route.fulfill({ status: 503, json: { error: 'Direct bundle creation must not be used' } });
       }
       if (path.includes('local-upgrade')) return route.fulfill({ json: { available: false } });
       return route.fulfill({ status: 503, json: { error: 'No ambient API in bundle fixture' } });
@@ -194,33 +191,256 @@ test('explicit bundle creation, reviewed duplication and conversion preserve the
   await page.goto('/');
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await page.getByRole('button', { name: '+ New bundle', exact: true }).click();
-  let modal = page.getByRole('dialog', { name: 'New bundle', exact: true });
-  await modal.getByLabel('Bundle name').fill('Feature');
-  await modal.getByRole('button', { name: 'Create bundle', exact: true }).click();
-  await expect(modal).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '+ New bundle', exact: true })).toHaveCount(0);
+  page.once('dialog', (dialog) => dialog.accept('Feature'));
+  await page.getByRole('button', { name: '+ New folder', exact: true }).click();
+  await page.getByRole('button', { name: 'Collapse Feature', exact: true }).click();
+  await page.getByRole('button', { name: 'Expand Feature', exact: true }).click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'New bundle', exact: true })).toHaveCount(0);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
   const row = page.getByRole('button', { name: 'Expand Feature bundle', exact: true });
-  // A newly created group is expanded, unlike the pre-existing library folders.
-  await page.getByRole('button', { name: 'Collapse Feature bundle', exact: true }).click();
   await row.click({ button: 'right' });
   await expect(page.getByRole('menuitem', { name: 'New bundle', exact: true })).toHaveCount(0);
   await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
-  modal = page.getByRole('dialog', { name: 'Duplicate bundle', exact: true });
-  await expect(modal).toContainText('shared-classifier');
-  await modal.getByRole('button', { name: 'Published', exact: true }).click();
-  await expect(modal).toContainText('(no publication)');
-  await modal.getByRole('button', { name: 'Duplicate bundle', exact: true }).click();
-  await expect(modal.getByRole('alert')).toContainText('bundle changed');
-  await expect(modal.getByRole('button', { name: 'Duplicate bundle', exact: true })).toBeDisabled();
-  await modal.getByRole('button', { name: 'Refresh preview', exact: true }).click();
-  await expect(modal.getByRole('button', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
-  await modal.getByRole('button', { name: 'Duplicate bundle', exact: true }).click();
-  await expect(modal).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Duplicate bundle', exact: true })).toHaveCount(0);
+  await expect(page.locator('.Toastify__toast--error')).toContainText('The bundle changed');
+  expect(duplicateAttempts).toBe(1); // A failed or lost response is never automatically retried.
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Duplicating Feature from saved versions' })).toBeVisible();
+  await row.click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeDisabled();
+  expect(duplicateAttempts).toBe(2);
+  await page.keyboard.press('Escape');
+  releaseCopy();
   await expect(page.getByRole('button', { name: 'Collapse Feature copy bundle', exact: true })).toBeVisible();
+  await expect(page.locator('.Toastify__toast--success')).toContainText('duplicated from saved versions');
   page.once('dialog', (dialog) => dialog.accept());
   await row.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Expand Feature', exact: true })).toBeVisible();
+  expect(directCreations).toBe(0);
+  expect(previews).toBe(0);
+});
+
+for (const failure of ['tree refresh', 'lost response'] as const) {
+  test(`one-click duplicate handles ${failure} without hiding the source or retrying`, async ({ page }) => {
+    const name = failure === 'lost response' ? 'B'.repeat(245) : 'Feature';
+    const source: WorkflowFolderItem = {
+      id: name,
+      name,
+      relativePath: name,
+      absolutePath: `/workflows/${name}`,
+      bundleId: '58019223-bd4e-49c3-a042-321215efaa35',
+      updatedAt: '',
+      folders: [],
+      projects: [],
+    };
+    let committed = false;
+    let attempts = 0;
+    let release!: () => void;
+    const responseReady = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/workflows/tree', (route) =>
+      committed
+        ? route.fulfill({ status: 503, json: { error: 'Tree refresh unavailable' } })
+        : route.fulfill({
+            json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [source], projects: [] },
+          }),
+    );
+    await page.route('**/api/workflows/bundles/*/duplicate', async (route) => {
+      attempts++;
+      await responseReady;
+      if (failure === 'lost response') return route.abort('failed');
+      committed = true;
+      return route.fulfill({ status: 201, json: { folder: { ...source, id: 'copy', name: 'Feature copy' } } });
+    });
+    await mockHostedEditorBootstrap(page);
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    const row = page.getByRole('button', { name: `Expand ${name} bundle`, exact: true });
+    await row.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
+    try {
+      await expect(page.getByRole('status').filter({ hasText: `Duplicating ${name}` })).toBeVisible();
+      if (failure === 'lost response') {
+        const body = page.locator('.workflow-library-panel .body');
+        expect(await body.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+        await expect(page.getByRole('button', { name: '+ New folder', exact: true })).toBeInViewport();
+      }
+    } finally {
+      release();
+    }
+    if (failure === 'tree refresh') {
+      await expect(page.locator('.Toastify__toast--warning')).toContainText('copy was created');
+      await expect(page.locator('.Toastify__toast--warning')).toContainText('Refresh the tree');
+    } else await expect(page.locator('.Toastify__toast--error')).toContainText('Refresh the tree before retrying');
+    await expect(row).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: `Duplicating ${name}` })).toHaveCount(0);
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
+    expect(attempts).toBe(1);
+    await expect(page.getByRole('dialog', { name: 'Duplicate bundle', exact: true })).toHaveCount(0);
+  });
+}
+
+for (const enabled of [true, false]) {
+  test(`successful conversion ${enabled ? 'to bundle' : 'to folder'} survives a failed tree refresh`, async ({
+    page,
+  }) => {
+    const bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
+    const source: WorkflowFolderItem = {
+      id: 'Feature',
+      name: 'Feature',
+      relativePath: 'Feature',
+      absolutePath: '/workflows/Feature',
+      updatedAt: '',
+      bundleId: enabled ? null : bundleId,
+      folders: [],
+      projects: [],
+    };
+    let converted = false;
+    let attempts = 0;
+    await page.route('**/api/workflows/tree', (route) =>
+      converted
+        ? route.fulfill({ status: 503, json: { error: 'Tree refresh unavailable' } })
+        : route.fulfill({
+            json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [source], projects: [] },
+          }),
+    );
+    await page.route('**/api/workflows/bundles/kind', (route) => {
+      attempts++;
+      expect(route.request().postDataJSON()).toEqual({ relativePath: 'Feature', enabled });
+      converted = true;
+      return route.fulfill({ json: { folder: { ...source, bundleId: enabled ? bundleId : null } } });
+    });
+    await mockHostedEditorBootstrap(page);
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    const row = page.getByRole('button', { name: `Expand Feature${enabled ? '' : ' bundle'}`, exact: true });
+    await row.click({ button: 'right' });
+    page.once('dialog', (dialog) => dialog.accept());
+    await page
+      .getByRole('menuitem', { name: enabled ? 'Convert to bundle' : 'Convert to ordinary folder', exact: true })
+      .click();
+    const notification = page.locator('.Toastify__toast--warning');
+    await expect(notification).toContainText('Conversion completed');
+    await expect(notification).toContainText('Refresh the tree');
+    await expect(row).toBeVisible(); // The last authoritative tree remains visible, without pretending it refreshed.
+    await expect(page.getByRole('status').filter({ hasText: 'Converting Feature' })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: /Could not (create|convert) bundle/ })).toHaveCount(0);
+    expect(attempts).toBe(1);
+    await row.click({ button: 'right' });
+    await expect(
+      page.getByRole('menuitem', { name: enabled ? 'Convert to bundle' : 'Convert to ordinary folder', exact: true }),
+    ).toBeEnabled();
+  });
+}
+
+for (const pending of ['conversion', 'duplication'] as const) {
+  test(`bundle menus reflect the shared guard during ${pending}`, async ({ page }) => {
+    const source: WorkflowFolderItem = {
+      id: 'Source',
+      name: 'Source',
+      relativePath: 'Source',
+      absolutePath: '/workflows/Source',
+      updatedAt: '',
+      bundleId: pending === 'duplication' ? '58019223-bd4e-49c3-a042-321215efaa35' : null,
+      folders: [],
+      projects: [],
+    };
+    const other: WorkflowFolderItem = {
+      ...source,
+      id: 'Other',
+      name: 'Other',
+      relativePath: 'Other',
+      bundleId: '85019223-bd4e-49c3-a042-321215efaa35',
+    };
+    let requests = 0;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({
+        json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [source, other], projects: [] },
+      }),
+    );
+    await page.route('**/api/workflows/bundles/**', async (route) => {
+      requests++;
+      await ready;
+      source.bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
+      return route.fulfill({ status: pending === 'conversion' ? 200 : 201, json: { folder: source } });
+    });
+    await mockHostedEditorBootstrap(page);
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page
+      .getByRole('button', { name: `Expand Source${source.bundleId ? ' bundle' : ''}`, exact: true })
+      .click({ button: 'right' });
+    if (pending === 'conversion') page.once('dialog', (dialog) => dialog.accept());
+    await page
+      .getByRole('menuitem', { name: pending === 'conversion' ? 'Convert to bundle' : 'Duplicate bundle', exact: true })
+      .click();
+    try {
+      await expect.poll(() => requests).toBe(1);
+      await page.getByRole('button', { name: 'Expand Other bundle', exact: true }).click({ button: 'right' });
+      expect(await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).isEnabled()).toBe(false);
+      expect(await page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true }).isEnabled()).toBe(
+        false,
+      );
+      expect(requests).toBe(1);
+    } finally {
+      release();
+    }
+    await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
+    await expect(page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true })).toBeEnabled();
+    await page.keyboard.press('Escape');
+  });
+}
+
+test('large bundle definition warnings stay concise on a short screen', async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 430 });
+  const source = {
+    id: 'Feature',
+    name: 'Feature',
+    relativePath: 'Feature',
+    absolutePath: '/workflows/Feature',
+    updatedAt: '',
+    bundleId: '58019223-bd4e-49c3-a042-321215efaa35',
+    folders: [],
+    projects: [],
+  };
+  const warnings = Array.from(
+    { length: 256 },
+    (_, index) => `Member ${index}: unresolved saved graph definition. ${'Diagnostic detail. '.repeat(25)}`,
+  );
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [source], projects: [] },
+    }),
+  );
+  await page.route('**/api/workflows/bundles/*/duplicate', (route) =>
+    route.fulfill({ status: 201, json: { folder: { ...source, id: 'copy', name: 'Feature copy' }, warnings } }),
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.getByRole('button', { name: 'Expand Feature bundle', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
+  const notice = page.locator('.Toastify__toast--warning');
+  await expect(notice).toBeVisible();
+  expect((await notice.innerText()).length).toBeLessThan(1000);
+  await expect(notice).toContainText('256');
+  await expect(notice).toContainText('Member 0');
+  expect((await notice.boundingBox())!.height).toBeLessThanOrEqual(414);
+  await expect(notice).toBeInViewport();
 });
 
 test('old servers do not advertise explicit bundle actions', async ({ page }) => {
@@ -358,7 +578,7 @@ test('folder menus offer conversion, never nested creation or bundle upload', as
   await page.goto('/');
   await authenticateIfNeeded(page);
   await waitForDashboardReady(page);
-  await expect(page.getByRole('button', { name: '+ New bundle', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '+ New bundle', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Expand Parent', exact: true }).click();
   const bundlePath = await page.getByRole('img', { name: 'Bundle', exact: true }).locator('path').getAttribute('d');
   for (const name of ['Parent', 'Feature sibling']) {
@@ -387,7 +607,7 @@ test('folder menus offer conversion, never nested creation or bundle upload', as
 });
 
 for (const editCheck of ['complete', 'predecessor editor', 'saving project'] as const) {
-  test(`bundle duplication protects unsaved edits with ${editCheck}`, async ({ page }) => {
+  test(`one-click bundle duplication leaves unsaved edits untouched with ${editCheck}`, async ({ page }) => {
     if (editCheck !== 'complete')
       await page.addInitScript((mode) => {
         window.addEventListener(
@@ -432,6 +652,7 @@ for (const editCheck of ['complete', 'predecessor editor', 'saving project'] as 
       projects: [member],
     };
     let saves = 0;
+    let duplicates = 0;
     await page.route(
       (url) => url.pathname.startsWith('/api/'),
       async (route) => {
@@ -450,21 +671,17 @@ for (const editCheck of ['complete', 'predecessor editor', 'saving project'] as 
             json: { contents: serializeProject(project), datasetsContents: null, revisionId: null },
           });
         if (path === '/api/projects/save') saves++;
-        if (path.endsWith('/preview'))
+        if (path.endsWith('/duplicate')) {
+          duplicates++;
+          expect(route.request().postDataJSON()).toEqual({ automatic: true });
           return route.fulfill({
+            status: 201,
             json: {
-              bundleId,
-              name: 'Feature',
-              relativePath: 'Feature',
-              fingerprint: 'a'.repeat(64),
-              version: 'latest',
-              members: [
-                { projectId: 'one', relativePath: member.relativePath, revisionId: 'one', selectedVersion: 'latest' },
-              ],
-              externalProjectIds: [],
-              warnings: [],
+              folder: { ...folder, id: 'copy', name: 'Feature copy' },
+              warnings: editCheck === 'predecessor editor' ? ['Member: unresolved saved graph definition.'] : [],
             },
           });
+        }
         return route.fulfill({ status: 503, json: { error: 'No ambient API in fixture' } });
       },
     );
@@ -486,22 +703,15 @@ for (const editCheck of ['complete', 'predecessor editor', 'saving project'] as 
     await expect(tab).toHaveClass(/has-unsaved-changes/);
     await page.getByRole('button', { name: 'Collapse Feature bundle', exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).click();
-    const modal = page.getByRole('dialog', { name: 'Duplicate bundle', exact: true });
-    await expect(modal).toContainText(
-      editCheck === 'complete' ? 'These opened members have unsaved edits' : 'Open edits could not be fully checked.',
+    const notification = page.locator(
+      editCheck === 'predecessor editor' ? '.Toastify__toast--warning' : '.Toastify__toast--success',
     );
-    await expect(modal.getByRole('button', { name: 'Duplicate bundle', exact: true })).toBeDisabled();
-    await modal
-      .getByRole('checkbox', {
-        name:
-          editCheck === 'complete'
-            ? 'Copy saved versions without these unsaved edits'
-            : 'Copy saved versions without checking open edits',
-      })
-      .check();
-    await expect(modal.getByRole('button', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
-    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(notification).toContainText('Unsaved edits were not copied');
+    if (editCheck === 'predecessor editor')
+      await expect(notification).toContainText('unresolved saved graph definition');
+    await expect(page.getByRole('dialog', { name: 'Duplicate bundle', exact: true })).toHaveCount(0);
     await expect(tab).toHaveClass(/has-unsaved-changes/);
+    expect(duplicates).toBe(1);
     expect(saves).toBe(0);
   });
 }

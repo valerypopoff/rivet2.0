@@ -7,7 +7,6 @@ import { RunRecordingsModal } from './RunRecordingsModal';
 import { WorkflowProjectVersionModal } from './WorkflowProjectVersionModal';
 import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
 import { WorkflowBundleUploadModal } from './WorkflowBundleUploadModal';
-import { WorkflowBundleModal } from './WorkflowBundleModal';
 import { WorkflowBundleConversionErrorModal } from './WorkflowBundleConversionErrorModal';
 import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
@@ -76,17 +75,6 @@ export const WorkflowLibraryModals: FC<{
           onClose={controller.closeBundleConversionFailure}
         />
       ) : null}
-      {controller.bundleDialog ? (
-        <WorkflowBundleModal
-          key={`${controller.bundleDialog.source?.bundleId ?? 'new'}:${controller.bundleDialog.parent}`}
-          source={controller.bundleDialog.source}
-          parent={controller.bundleDialog.parent}
-          folders={controller.bundleFolders}
-          onClose={controller.closeBundleDialog}
-          inspectEdits={controller.captureBundleEdits}
-          onCreated={controller.handleBundleCreated}
-        />
-      ) : null}
       {controller.bundleUploadFolder ? (
         <WorkflowBundleUploadModal
           key={controller.bundleUploadFolder.id}
@@ -107,7 +95,6 @@ export const WorkflowLibraryModals: FC<{
         suppressed={
           scheduledRunsOpen ||
           controller.bundleConversionFailure != null ||
-          controller.bundleDialog != null ||
           controller.bundleOpen ||
           controller.bundleUploadFolder != null ||
           appSettingsOpen ||
