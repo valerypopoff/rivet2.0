@@ -60,8 +60,8 @@ export class HaReleaseGate extends ManagedReleaseGate {
       throw new Error('HA rehearsal requires at least 20 GiB free on the workspace drive before any cluster mutation.');
     await this.kubectl(['cluster-info'], { capture: true });
   }
-  values(images = this.config.images) {
-    const config = { ...this.config, images };
+  values(images = this.config.images, managedWorkflowSchema = this.config.managedWorkflowSchema) {
+    const config = { ...this.config, images, managedWorkflowSchema };
     return {
       ...renderManagedReleaseGateValues(config),
       ha: { enabled: true, protocol: 1, peerLimit: 4 },
@@ -107,7 +107,7 @@ export class HaReleaseGate extends ManagedReleaseGate {
     ]);
     return file;
   }
-  async prepare(images = this.config.images) {
+  async prepare(images = this.config.images, managedWorkflowSchema = this.config.managedWorkflowSchema) {
     await this.assertLocalContext();
     const existing = await this.kubectl(
       ['get', 'namespace', this.config.namespace, '--ignore-not-found', '-o', 'name'],
@@ -120,7 +120,7 @@ export class HaReleaseGate extends ManagedReleaseGate {
     await this.createNamespace();
     await this.createRegistrySecret();
     await this.installDependencies();
-    await this.apply(this.values(images));
+    await this.apply(this.values(images, managedWorkflowSchema));
     const baseUrl = await this.openProxy();
     const state = await this.exercisePersistence(baseUrl);
     await this.artifact('ha-persisted-state.json', JSON.stringify(state, null, 2));
@@ -449,7 +449,11 @@ async function main() {
         images: config.images,
         previous,
       });
-      const prepared = await gate.prepare(mode === 'mixed' ? previous.images : candidate.images);
+      // A predecessor image must migrate/serve its own schema, not the
+      // candidate source contract loaded by this runner. Candidate rollout
+      // retains the candidate's exact migration contract below.
+      const baseline = mode === 'mixed' ? previous : candidate;
+      const prepared = await gate.prepare(baseline.images, baseline.database.managedWorkflowSchema);
       const report = await gate.roll(prepared.baseUrl, config.images, browserContract);
       report.recovery = await verifyHaReleaseRecovery(gate, prepared.baseUrl, rootDir);
       await gate.artifact('ha-report.json', JSON.stringify(report, null, 2));

@@ -254,10 +254,13 @@ export const RivetAppLoader = ({
   children,
   loadingFallback = <div>Loading...</div>,
   storage,
+  wrapInitialized,
 }: {
   children?: ReactNode;
   loadingFallback?: ReactNode;
   storage?: AsyncStorageBackend;
+  /** Providers that read persisted atoms must mount after storage bootstrap. */
+  wrapInitialized?: (app: ReactNode) => ReactNode;
 }) => {
   const { loading, error, retry, canChooseRecovery } = useInitializeWorkspace(storage);
   if (loading) {
@@ -277,5 +280,6 @@ export const RivetAppLoader = ({
     );
   }
 
-  return <InitializedRivetApp>{children}</InitializedRivetApp>;
+  const app = <InitializedRivetApp>{children}</InitializedRivetApp>;
+  return wrapInitialized ? wrapInitialized(app) : app;
 };

@@ -889,7 +889,7 @@ test('temporarily blocked session-storage access restores the chosen workspace a
   const position = await editRecoveryNode(page, a.project.name);
   await waitForRecoveryCheckpoint(page);
   await page.addInitScript(() => {
-    if (!new URLSearchParams(location.search).has('editor')) return;
+    if (window.top === window) return;
     const storage = sessionStorage;
     let reads = 0;
     Object.defineProperty(window, 'sessionStorage', {
@@ -1066,7 +1066,9 @@ test('an unreadable reload reference blocks bootstrap rather than silently start
 
 test('blocked session-storage access cannot authorize importing an unknown legacy workspace', async ({ page }) => {
   await page.addInitScript(() => {
-    if (!new URLSearchParams(location.search).has('editor')) return;
+    // A newly attached editor iframe can still be about:blank when its init
+    // script runs. Scope by frame identity, not its eventual navigation URL.
+    if (window.top === window) return;
     Object.defineProperty(window, 'sessionStorage', {
       configurable: true,
       get() {

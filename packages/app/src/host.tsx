@@ -78,15 +78,17 @@ export function RivetAppHost({
       <HostCallbacksProvider callbacks={callbacks}>
         <HostUiConfigProvider config={ui}>
           <ProvidersProvider providers={runtimeProviders}>
-            <ExecutorSessionProvider hostConfig={executor}>
-              <RivetAppLoader loadingFallback={loadingFallback} storage={storage}>
-                <RivetAppHostLifecycle />
-                {onWorkspaceHostReady ? (
-                  <RivetWorkspaceHostBridge onReady={onWorkspaceHostReady} onDispose={onWorkspaceHostDisposed} />
-                ) : null}
-                {children}
-              </RivetAppLoader>
-            </ExecutorSessionProvider>
+            <RivetAppLoader
+              loadingFallback={loadingFallback}
+              storage={storage}
+              wrapInitialized={(app) => <ExecutorSessionProvider hostConfig={executor}>{app}</ExecutorSessionProvider>}
+            >
+              <RivetAppHostLifecycle />
+              {onWorkspaceHostReady ? (
+                <RivetWorkspaceHostBridge onReady={onWorkspaceHostReady} onDispose={onWorkspaceHostDisposed} />
+              ) : null}
+              {children}
+            </RivetAppLoader>
           </ProvidersProvider>
         </HostUiConfigProvider>
       </HostCallbacksProvider>

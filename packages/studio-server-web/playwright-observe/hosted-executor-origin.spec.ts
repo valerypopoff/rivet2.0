@@ -3,6 +3,22 @@ import { mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 import { ExecutionRecorder } from '@valerypopoff/rivet2-core';
 
+test('executor observers wait for saved workspace hydration before reading project tabs', async ({ page }) => {
+  await seedHostedEditorProject(page, {
+    graphId: 'restored-graph', projectId: 'restored-project',
+    projectPath: '/workflows/Restored.rivet-project', title: 'Restored workspace', loaded: true,
+  });
+  await page.addInitScript(() => localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser' })));
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }));
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.node-canvas').first()).toBeVisible();
+  await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.node-canvas').first()).toBeVisible();
+  await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
+});
+
 test('new HA executor keeps Run disabled until the complete session handshake', async ({ page }) => {
   await seedHostedEditorProject(page, {
     graphId: 'ha-handshake-graph', projectId: 'ha-handshake-project',

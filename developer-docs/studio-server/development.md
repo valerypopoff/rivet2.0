@@ -20,11 +20,20 @@ membership bugs. The bundle feature and modal/sidebar checks do not require a
 Kubernetes deployment or a cloud rehearsal.
 
 Streaming UI fixtures open their test-owned project through the mocked server
-tree/load routes and the real dashboard/editor bridge. Do not rely on legacy
-browser-storage seeds or a standalone `?editor` route to mount a server project:
-that can leave the welcome screen visible and fail before the behavior under test.
-`streaming-nodes.spec.ts` shares this setup across its ordinary-node and
-cross-project streaming-port checks, without changing production recovery behavior.
+tree/load routes and the real dashboard/editor bridge. `streaming-nodes.spec.ts`
+shares this setup across ordinary-node and cross-project streaming-port checks.
+Persisted workspace recovery is also supported and tested separately: executor
+and bundle observers must mount only after `RivetAppLoader` finishes storage
+initialization, through its `wrapInitialized` boundary. Otherwise an early
+`atomWithStorage` subscription can retain empty defaults despite valid recovered
+data. `hosted-executor-origin.spec.ts` verifies seeded project tabs on first open
+and reload, alongside executor origin/reconnection checks; the reload lifecycle
+suite covers durable unsaved edits. Run these against a fixed production preview
+when validating bootstrap changes, not a provider module changed mid-HMR session.
+For iframe-only browser-storage fault injection, select the child frame by
+`window.top !== window`, not its query string: an init script can run while the
+new iframe still has an `about:blank` URL. Keep the dashboard's storage available
+and assert the actual editor recovery controls rather than an invisible frame.
 
 The supported server development command is `yarn studio-server:dev:local-storage`
 (Docker Compose with PostgreSQL/MinIO; Kubernetes is not required). Start with

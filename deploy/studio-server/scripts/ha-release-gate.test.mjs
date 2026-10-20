@@ -259,6 +259,50 @@ test('rendered HA proof preserves endpoint withdrawal and the short shutdown cha
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('mixed HA baseline installs the predecessor exact schema without changing the candidate contract', async () => {
+  const images = Object.fromEntries(['api', 'web', 'proxy', 'executor'].map(role =>
+    [role, { repository: `registry/${role}`, digest: `sha256:${'a'.repeat(64)}` }]));
+  const candidateSchema = readManagedWorkflowSchemaReleaseContract(rootDir);
+  const previousSchema = { version: candidateSchema.version - 1, minimumRollbackCompatibleVersion: candidateSchema.version - 1 };
+  const previousImages = Object.fromEntries(Object.entries(images).map(([role, image]) =>
+    [role, { ...image, digest: `sha256:${'b'.repeat(64)}` }]));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-ha-baseline-'));
+  const config = { images, release: 'ha-fixture', namespace: 'ha-fixture', artifactsDir: dir,
+    imagePullPolicy: 'IfNotPresent', registry: { secretName: 'fixture-registry' }, managedWorkflowSchema: candidateSchema };
+  const gate = new HaReleaseGate(config, 'unused', 'unused');
+  let baseline;
+  gate.assertLocalContext = async () => {};
+  gate.kubectl = async () => ({ stdout: '' });
+  gate.createNamespace = async () => {};
+  gate.createRegistrySecret = async () => {};
+  gate.installDependencies = async () => {};
+  gate.apply = async values => { baseline = values; };
+  gate.openProxy = async () => 'http://fixture';
+  gate.exercisePersistence = async () => ({});
+  try {
+    await gate.prepare(previousImages, previousSchema);
+    assert.deepEqual(baseline.workflowSchema.compatibility, {
+      minimumVersion: previousSchema.version, maximumVersion: previousSchema.version,
+    });
+    assert.equal(baseline.images.api.digest, previousImages.api.digest);
+    const file = path.join(dir, 'baseline.json');
+    await fs.writeFile(file, JSON.stringify(baseline));
+    const rendered = execFileSync(resolveHelmBinOrThrow(rootDir), ['template', 'ha-fixture',
+      path.join(rootDir, 'deploy/studio-server/helm'), '-n', 'ha-fixture', '-f',
+      path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'), '-f', file], { encoding: 'utf8' });
+    const resources = parseAllDocuments(rendered).map(doc => doc.toJS());
+    const job = resources.find(value => value?.kind === 'Job' && value.metadata.name.endsWith('workflow-schema-migration'));
+    assert.match(job.spec.template.spec.containers[0].args.join(' '),
+      new RegExp(`RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="${previousSchema.version}" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="${previousSchema.version}"`));
+    assert.equal(job.spec.template.spec.containers[0].image, `${previousImages.api.repository}@${previousImages.api.digest}`);
+    assert.deepEqual(gate.values().workflowSchema.compatibility, {
+      minimumVersion: candidateSchema.version, maximumVersion: candidateSchema.version,
+    });
+    assert.deepEqual(config.managedWorkflowSchema, candidateSchema);
+    assert.deepEqual(config.images, images);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('paused browser proof waits for actual old web and proxy UID removal, not readiness withdrawal', async () => {
   const pod = (uid, component, extra = {}) => ({ metadata: { uid, labels: { 'app.kubernetes.io/component': component }, ...extra } });
   const before = [pod('old-web', 'web'), pod('old-proxy', 'proxy'), pod('unchanged-owner', 'backend')];
