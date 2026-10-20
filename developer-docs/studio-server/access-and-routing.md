@@ -392,6 +392,45 @@ Because `ui-gate` and `oauth` modes use browser cookies, app JSON and action req
 
 OAuth app HTML pages include a small wrapper-owned floating `Sign out` link after the generated Rivet renderer scripts. The wrapper inserts it at the document's final closing body tag, not at matching text inside packaged browser scripts. It calls `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}/auth/logout` and returns to the app path so users can switch accounts. That logout clears the Rivet web-app session cookie, not the upstream provider's own session. The returned app path carries an internal account-selection marker, and the next OAuth authorization request sends `prompt=select_account`; providers that support that standard prompt should show an account chooser instead of silently reusing the previous identity. If a signed-in user is not in a web app's allowed-email list, the HTML route returns a styled `Web app access denied` page with that same sign-out action; JSON and action routes continue to return `403` with `code: "oauth_forbidden"`.
 
+### Diagnosing web-app OAuth connection failures
+
+An `oauth_failed` page is not enough to identify a bad client secret or an
+application defect. The callback also uses that code when the token/profile
+request throws a network error. `oauth_state` identifies invalid or expired
+sign-in state; `oauth_token` covers HTTP/response failures during token exchange;
+`oauth_profile` identifies a missing configured email claim. A failed profile
+HTTP request can also produce `oauth_failed`.
+
+Before changing OAuth settings, compare credential-free HTTPS probes from every
+serving backend to the configured provider and an unrelated HTTPS control. Use
+an independent TLS client where available and retain certificate verification.
+Keep probes low-rate and time-bounded; do not install tools or restart serving
+pods just to diagnose connectivity. Record the probe method: a credential-free
+GET to a token endpoint may correctly return `401` or `405` rather than `200`.
+If connections reset before TLS completes, HTTP client credentials, form fields
+and profile parsing have not yet been exercised. A successful browser request
+from an operator's PC does not establish connectivity from the Kubernetes pods.
+Cloudflare's `/cdn-cgi/rum` analytics requests are not Rivet's server-side token
+or profile exchange.
+
+Record sanitized timestamps, destination, transport error and each backend's
+actual outbound address for the network/provider operator. Do not log cookies,
+authorization codes, tokens, client secrets or raw profiles. Identify the
+responsible policy or TLS endpoint before changing it; a reset alone does not
+prove that a particular WAF or firewall blocked the request. Finding no explicit
+VPC egress rule does not exclude hierarchical policies or other network layers.
+Keep corrections narrowly scoped, with the previous configuration and rollback
+recorded. Do not disable TLS verification, bypass the OAuth gate, retry one-time authorization
+codes, or modify shared NAT/routing as a speculative workaround. Node external
+addresses can change with autoscaling: a temporary allowlist is not a durable
+egress design. Shared egress changes require separate impact review.
+
+After connectivity is repaired, a fresh real sign-in must still verify token
+exchange, the configured email claim, the app allowlist and session acceptance
+across HA backends. Credential-free probes returning HTTP responses demonstrate
+connectivity only, not a successful authenticated journey. Preserve existing
+signing secrets and sessions unless rotation is explicitly required.
+
 ## Trusted proxy boundary
 
 The intended access path is:
