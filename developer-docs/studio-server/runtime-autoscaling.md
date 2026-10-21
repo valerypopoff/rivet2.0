@@ -18,8 +18,18 @@ and `gke-compact-edge.yaml` in a qualified installation. This policy enables
 proxy HPA (2–4), with a five-minute downscale window and at most one removal per
 minute, and execution controller scaling (2–10). These bounds are not measured
 throughput. Never raise `postgres.maxConnections` just to pass rendering: use the
-real provider limit. The chart budgets maximum execution capacity, deployment
-surge, scheduler pools and maintenance/restore connections.
+Rivet connection allowance within the real provider limit, preserving capacity
+reserved for other applications on a shared database/instance. The chart budgets
+maximum execution capacity, deployment surge, scheduler pools and
+maintenance/restore connections.
+
+The generic 2–10 overlay is not an installation-specific capacity approval.
+With singleton control, the default 30 reserved connections, query pool of 10 and
+the standard restore/scheduler/surge budget, a 200-connection Rivet allowance fits
+at most 7 execution owners (186 budgeted connections); 8 needs 203 and 10 needs 237.
+Set a lower reviewed `autoscaling.execution.maxReplicas` in installation values
+rather than consuming other applications' headroom. This arithmetic is a safety
+ceiling, not throughput or provider-capacity evidence.
 
 Production enablement requires `evidence.runtimeAutoscaling`, bound to exact
 source, images, chart and canonical controller-policy digest. Promotion accepts
@@ -172,6 +182,14 @@ logging or shell-evaluated command is used. Exec requires explicit successful
 exit status. HTTP loopback injection is a local-test seam, not a deployed env
 switch.
 
+The bounded `pods/exec` rule grants both `get` and `create`: Kubernetes 1.35+
+also checks CREATE for a WebSocket GET upgrade. Without it, all demand samples
+fail with 403 and the controller safely blocks instead of scaling. Keep this rule
+separate from Pod annotation/deletion permissions; it must not grant Pod creation,
+Secret access or exec outside the approved execution ordinals (plus HA surge).
+Do not disable the API-server authorization feature to work around the failure.
+See [the upstream WebSocket authorization contract](https://www.kubernetes.dev/resources/keps/4006/#proposal-synthetic-rbac-create-authorization-check).
+
 ## Verification
 
 `yarn studio-server:verify:kubernetes` includes core and real HTTP/exec-WebSocket
@@ -187,6 +205,13 @@ tail with a different UID and assert that completion remains blocked without
 clearing the template fence or deleting the unrecorded replacement. These run
 through both the reconciliation fixture and the actual HTTP/WebSocket adapter;
 they are local protocol evidence, not a GKE availability certificate.
+
+The gated `runtime-control-independence.spec.ts` browser journeys separately cover
+developer services being absent and the public web app after an owned real
+autoscaler shrink. Both verify uncached loading, OAuth, one completed action and
+no browser errors. The shrink runner must first establish drain/recording/pod
+evidence; browser success alone is not proof of safe retirement. Non-fixture
+invocations skip these tests rather than targeting another installation.
 
 Supplementary local Postman simulation:
 

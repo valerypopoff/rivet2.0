@@ -1,7 +1,6 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-test('published OAuth, uncached web-app assets and actions work without either developer service', async ({ page }) => {
-  test.skip(process.env.RIVET_RUNTIME_CONTROL_FIXTURE !== '1', 'Only the disposable local HA fixture owns this test');
+async function verifyPublishedJourney(page: Page) {
   expect(new URL(process.env.PLAYWRIGHT_BASE_URL!).hostname).toBe('127.0.0.1');
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -26,9 +25,23 @@ test('published OAuth, uncached web-app assets and actions work without either d
   await page.getByRole('button', { name: 'Run', exact: true }).click();
   await expect.poll(() => completed.length).toBe(1);
   expect(errors).toEqual([]);
+}
+
+test('published OAuth, uncached web-app assets and actions work without either developer service', async ({ page }) => {
+  test.skip(process.env.RIVET_RUNTIME_CONTROL_FIXTURE !== '1', 'Only the disposable local HA fixture owns this test');
+  await verifyPublishedJourney(page);
   const developer = await page.request.get('/api/config');
   // Nginx may return 500 (no live upstream) or a gateway 5xx, depending on
   // which empty-Service/DNS observation this fresh proxy has made.
   expect(developer.status()).toBeGreaterThanOrEqual(500);
   expect(developer.status()).toBeLessThan(600);
+});
+
+test('published OAuth and actions still work after real local autoscaler drain and shrink', async ({ page }) => {
+  test.skip(
+    process.env.RIVET_RUNTIME_AUTOSCALER_FIXTURE !== '1',
+    'Only the disposable local autoscaler fixture owns this test',
+  );
+  await verifyPublishedJourney(page);
+  expect((await page.request.get('/api/config')).status()).toBe(200);
 });
