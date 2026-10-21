@@ -29,6 +29,12 @@ as `HA_AUTOSCALING_CHECKS`; do not fabricate receipts from unit tests or reuse
 another image's results. Publication, provider tests and rollout need separate
 approval. None are performed by local verification.
 
+Use the separate [qualification publication workflow](runtime-ha-qualification.md)
+after the exact isolated experiment and cleanup. It attaches evidence to the
+original successful main candidate without rebuilding its tested images. It does
+not run GCP tests or deploy workloads; install the qualified replicated bridge
+before its separate same-image control ownership transition.
+
 ## Policy and demand
 
 Capacity remains in `autoscaling.execution.minReplicas`, `maxReplicas` and

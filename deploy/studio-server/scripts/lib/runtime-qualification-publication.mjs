@@ -1,0 +1,134 @@
+import assert from 'node:assert/strict';
+import { isDeepStrictEqual } from 'node:util';
+import {
+  assertStudioServerReleaseManifest,
+  getStudioServerReleaseManifestDigest,
+} from './studio-server-release-manifest.mjs';
+import { assertRuntimeControlEvidence, assertRuntimeAutoscalingEvidence } from './ha-release-evidence.mjs';
+import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
+
+/** Publication consumes an existing successful main build; it never rebuilds
+ * images, runs GCP tests, or turns a local functional report into a certificate.
+ * Declarations are operator attestations backed by retained provider reports.
+ * The report hash is provenance, not cryptographic proof of test execution. */
+export function assertRuntimeQualificationBuild(run, { repository, sourceSha, runId }) {
+  assert.match(String(runId), /^[1-9][0-9]*$/);
+  assert.match(sourceSha, /^[a-f0-9]{40}$/);
+  assert.equal(run.id.toString(), runId);
+  assert.equal(run.repository?.full_name, repository);
+  assert.equal(run.head_repository?.full_name, repository);
+  assert.equal(run.head_sha, sourceSha);
+  assert.equal(run.head_branch, 'main');
+  assert.equal(run.path, '.github/workflows/studio-server-images.yml');
+  assert.equal(run.status, 'completed');
+  assert.equal(run.conclusion, 'success');
+  assert.ok(['push', 'workflow_dispatch'].includes(run.event));
+  assert.ok(Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0);
+  return { runId, runAttempt: run.run_attempt };
+}
+
+function declaration(value, kind) {
+  const keys = [
+    'protocol',
+    'provider',
+    'scope',
+    'outcome',
+    'operationId',
+    'projectId',
+    'projectNumber',
+    'reportSha256',
+    'startedAt',
+    'finishedAt',
+    'cleanupVerified',
+    'evidence',
+    ...(kind === 'autoscaling' ? ['policy'] : []),
+  ];
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+  assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), 'Provider declaration has missing or unknown fields');
+  assert.equal(value.protocol, 1);
+  assert.equal(value.provider, 'gke');
+  assert.equal(value.scope, 'isolated-provider');
+  assert.equal(value.outcome, 'passed');
+  assert.equal(value.cleanupVerified, true, 'Settle and clean up the approved test operation before publication');
+  assert.match(value.operationId, /^[a-z0-9][a-z0-9-]{2,79}$/);
+  assert.match(value.projectId, /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/);
+  assert.match(value.projectNumber, /^[1-9][0-9]{5,20}$/);
+  assert.match(value.reportSha256, /^[a-f0-9]{64}$/);
+  assert.ok(
+    Number.isFinite(Date.parse(value.startedAt)) &&
+      Number.isFinite(Date.parse(value.finishedAt)) &&
+      Date.parse(value.startedAt) < Date.parse(value.finishedAt),
+    'Invalid provider observation window',
+  );
+  return value;
+}
+
+export function prepareRuntimeQualification({
+  candidate: input,
+  promoted: built,
+  control,
+  autoscaling,
+  repository,
+  sourceSha,
+  build,
+}) {
+  const candidate = assertStudioServerReleaseManifest(input);
+  const promoted = assertStudioServerReleaseManifest(built, { requirePromoted: true });
+  assert.equal(candidate.state, 'candidate');
+  for (const release of [candidate, promoted]) {
+    assert.equal(release.source.repository, repository);
+    assert.equal(release.source.ref, 'refs/heads/main');
+    assert.equal(release.source.sha, sourceSha);
+    assert.equal(release.evidence.candidate.runId, build.runId);
+    assert.equal(release.evidence.candidate.runAttempt, build.runAttempt);
+  }
+  for (const key of ['images', 'chart', 'lineage', 'database', 'createdAt'])
+    assert.ok(isDeepStrictEqual(candidate[key], promoted[key]), `Build artifact mismatch: ${key}`);
+  assert.equal(promoted.evidence.promotion.runId, build.runId);
+  assert.equal(promoted.evidence.promotion.runAttempt, build.runAttempt);
+  assert.ok(promoted.evidence.ha, 'Ordinary HA qualification must already have passed');
+  assert.ok(
+    !promoted.evidence.runtimeControl && !promoted.evidence.runtimeAutoscaling,
+    'This build is already qualified; inspect the existing publication instead of replacing it',
+  );
+  assert.match(candidate.lineage?.predecessor?.manifestDigest ?? '', /^sha256:[a-f0-9]{64}$/);
+  const c = declaration(control, 'control'),
+    a = declaration(autoscaling, 'autoscaling');
+  for (const key of ['operationId', 'projectId', 'projectNumber'])
+    assert.equal(c[key], a[key], 'Provider operations differ');
+  const runtimeControl = assertRuntimeControlEvidence(c.evidence, candidate, 'compact');
+  assert.ok(runtimeControl.edgeProfiles.includes('regional'), 'Forward/reverse regional transfer is required');
+  assert.deepEqual(
+    Object.keys(a.policy).sort(),
+    Object.keys(autoscalerPolicy({})).sort(),
+    'Declare the complete scaling policy',
+  );
+  const policy = autoscalerPolicy(a.policy);
+  const runtimeAutoscaling = assertRuntimeAutoscalingEvidence(a.evidence, candidate, autoscalerPolicyDigest(policy));
+  return {
+    candidate: assertStudioServerReleaseManifest({
+      ...candidate,
+      evidence: {
+        ...candidate.evidence,
+        ha: promoted.evidence.ha,
+        runtimeControl,
+        runtimeAutoscaling,
+      },
+    }),
+    expectedProductionDigest: getStudioServerReleaseManifestDigest(promoted, { requirePromoted: true }),
+    predecessorDigest: candidate.lineage.predecessor.manifestDigest,
+    declarations: {
+      control: { ...c, evidence: runtimeControl },
+      autoscaling: { ...a, evidence: runtimeAutoscaling, policy },
+    },
+  };
+}
+
+export function assertRuntimeQualificationPointer(current, expectedDigest) {
+  assert.match(expectedDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(
+    getStudioServerReleaseManifestDigest(current, { requirePromoted: true }),
+    expectedDigest,
+    'Production publication pointer changed; do not replace a newer or uncertain release',
+  );
+}

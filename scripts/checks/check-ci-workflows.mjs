@@ -41,6 +41,20 @@ function findActionStep(job, uses, label) {
 }
 
 const build = parseWorkflow('.github/workflows/build.yml');
+const runtimeQualification = parseWorkflow('.github/workflows/studio-server-runtime-qualification.yml').workflow;
+assert.deepEqual(Object.keys(runtimeQualification.on), ['workflow_dispatch']);
+assert.deepEqual(runtimeQualification.permissions, { actions: 'read', contents: 'read', packages: 'write' });
+assert.equal(runtimeQualification.concurrency.group, 'build-images-${{ github.ref }}');
+assert.equal(runtimeQualification.concurrency['cancel-in-progress'], false);
+assert.equal(runtimeQualification.jobs.publish.if, "${{ github.ref == 'refs/heads/main' }}");
+assert.equal(runtimeQualification.jobs.publish.environment, 'rivet-managed-staging');
+assert.ok(runtimeQualification.jobs.publish.steps.every((s) => !s.uses || /@[a-f0-9]{40}$/.test(s.uses)));
+const qualificationCommands = runtimeQualification.jobs.publish.steps.map((s) => s.run ?? '').join('\n');
+assert.doesNotMatch(qualificationCommands, /\bgcloud\b|\bkubectl\b|\bhelm\b|docker build\b/);
+assert.ok(
+  qualificationCommands.indexOf('verify-pointer') < qualificationCommands.indexOf('release-manifest-oci.mjs push'),
+);
+assert.ok(qualificationCommands.includes('verify-published'));
 const buildJobs = build.workflow.jobs;
 assert.deepEqual(build.workflow.on.push.branches, ['develop', 'main'], 'Build pushes must skip VM-only staging.');
 assert.deepEqual(

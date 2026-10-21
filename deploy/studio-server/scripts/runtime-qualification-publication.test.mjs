@@ -1,0 +1,220 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import {
+  createStudioServerReleaseManifest,
+  promoteStudioServerReleaseManifest,
+} from './lib/studio-server-release-manifest.mjs';
+import {
+  HA_REQUIRED_CHECKS,
+  HA_RUNTIME_CONTROL_CHECKS,
+  HA_COMPACT_EDGE_CHECKS,
+  HA_AUTOSCALING_CHECKS,
+} from './lib/ha-release-evidence.mjs';
+import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import {
+  assertRuntimeQualificationBuild,
+  prepareRuntimeQualification,
+  assertRuntimeQualificationPointer,
+} from './lib/runtime-qualification-publication.mjs';
+
+const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+const repository = 'valerypopoff/rivet2.0',
+  sourceSha = 'a'.repeat(40),
+  build = { runId: '123', runAttempt: 1 };
+const evidence = { workflow: 'Build Images', ...build };
+const images = (prefix) =>
+  Object.fromEntries(
+    ['api', 'web', 'proxy', 'executor'].map((role, i) => [
+      role,
+      { repository: `example.test/${prefix}/${role}`, digest: 'sha256:' + String(i + 1).repeat(64) },
+    ]),
+  );
+const create = (source, prefix, predecessorRelease = null) =>
+  createStudioServerReleaseManifest({
+    rootDir,
+    source: { repository, ref: 'refs/heads/main', sha: source },
+    images: images(prefix),
+    candidateEvidence: evidence,
+    predecessorRelease,
+  });
+function fixture() {
+  const prior = promoteStudioServerReleaseManifest(create('b'.repeat(40), 'prior'), { promotionEvidence: evidence });
+  const candidate = create(sourceSha, 'next', prior);
+  const ha = {
+    protocol: 3,
+    mode: 'bootstrap',
+    candidateSourceSha: sourceSha,
+    candidateImages: candidate.images,
+    chartDigest: candidate.chart.contentDigest,
+    requestSamples: 100,
+    failedRequests: 0,
+    checks: [...HA_REQUIRED_CHECKS],
+    browserContract: { protocol: 2, baseline: { sourceSha, image: candidate.images.web } },
+  };
+  const promoted = promoteStudioServerReleaseManifest(
+    { ...candidate, evidence: { ...candidate.evidence, ha } },
+    { promotionEvidence: evidence },
+  );
+  const common = {
+    protocol: 1,
+    provider: 'gke',
+    scope: 'isolated-provider',
+    outcome: 'passed',
+    operationId: 'rivet-runtime-proof-20261021',
+    projectId: 'test-project-123',
+    projectNumber: '123456789',
+    reportSha256: 'c'.repeat(64),
+    startedAt: '2026-10-21T00:00:00Z',
+    finishedAt: '2026-10-21T01:00:00Z',
+    cleanupVerified: true,
+  };
+  const policy = autoscalerPolicy({ maxReplicas: 7 });
+  return {
+    repository,
+    sourceSha,
+    build,
+    candidate,
+    promoted,
+    control: {
+      ...common,
+      evidence: {
+        protocol: 1,
+        candidateSourceSha: sourceSha,
+        candidateImages: candidate.images,
+        chartDigest: candidate.chart.contentDigest,
+        requestSamples: 250,
+        failedRequests: 0,
+        edgeProfiles: ['regional', 'compact'],
+        predecessorSourceSha: prior.source.sha,
+        predecessorImages: prior.images,
+        checks: [...HA_RUNTIME_CONTROL_CHECKS, ...HA_COMPACT_EDGE_CHECKS],
+      },
+    },
+    autoscaling: {
+      ...common,
+      policy,
+      evidence: {
+        protocol: 1,
+        provider: 'gke',
+        candidateSourceSha: sourceSha,
+        candidateImages: candidate.images,
+        chartDigest: candidate.chart.contentDigest,
+        policyDigest: autoscalerPolicyDigest(policy),
+        requestSamples: 250,
+        failedRequests: 0,
+        checks: [...HA_AUTOSCALING_CHECKS],
+      },
+    },
+  };
+}
+
+test('qualification publication requires the exact successful main image-build run, never a fork or PR', () => {
+  const run = {
+    id: 123,
+    repository: { full_name: repository },
+    head_repository: { full_name: repository },
+    head_sha: sourceSha,
+    head_branch: 'main',
+    path: '.github/workflows/studio-server-images.yml',
+    status: 'completed',
+    conclusion: 'success',
+    event: 'push',
+    run_attempt: 1,
+  };
+  assert.deepEqual(assertRuntimeQualificationBuild(run, { repository, sourceSha, runId: '123' }), build);
+  for (const change of [
+    { head_sha: 'd'.repeat(40) },
+    { head_branch: 'develop' },
+    { conclusion: 'failure' },
+    { path: '.github/workflows/other.yml' },
+    { head_repository: { full_name: 'fork/repo' } },
+    { event: 'pull_request' },
+  ])
+    assert.throws(() =>
+      assertRuntimeQualificationBuild({ ...run, ...change }, { repository, sourceSha, runId: '123' }),
+    );
+  for (const runId of ['../123', '123;echo bad', '', '0'])
+    assert.throws(() => assertRuntimeQualificationBuild(run, { repository, sourceSha, runId }));
+});
+
+test('qualification preserves candidate lineage/images/schema and binds both provider declarations and exact policy', () => {
+  const f = fixture(),
+    result = prepareRuntimeQualification(f);
+  assert.deepEqual(result.candidate.images, f.candidate.images);
+  assert.deepEqual(result.candidate.database, f.candidate.database);
+  assert.deepEqual(result.candidate.lineage, f.candidate.lineage);
+  assert.equal(result.candidate.evidence.runtimeAutoscaling.policyDigest, autoscalerPolicyDigest(f.autoscaling.policy));
+  assert.equal(result.candidate.state, 'candidate');
+  assertRuntimeQualificationPointer(f.promoted, result.expectedProductionDigest);
+  assert.throws(() => assertRuntimeQualificationPointer(f.promoted, 'sha256:' + 'f'.repeat(64)));
+  assert.equal(f.candidate.evidence.runtimeControl, undefined, 'input artifacts must not be modified');
+});
+
+test('local/failed/uncleaned or incomplete declarations cannot become provider evidence', () => {
+  for (const change of [
+    { provider: 'local' },
+    { scope: 'local-functional-only' },
+    { outcome: 'failed' },
+    { cleanupVerified: false },
+    { reportSha256: '' },
+    { projectId: '' },
+    { finishedAt: 'invalid' },
+    { secret: 'must-not-be-accepted' },
+  ]) {
+    const f = fixture();
+    Object.assign(f.control, change);
+    assert.throws(() => prepareRuntimeQualification(f));
+  }
+  const f = fixture();
+  f.control.evidence.checks.pop();
+  assert.throws(() => prepareRuntimeQualification(f));
+});
+
+test('changed build artifacts, source, operation, evidence identities and policy fail closed', () => {
+  for (const mutate of [
+    (f) => {
+      f.promoted.images.api.digest = 'sha256:' + 'e'.repeat(64);
+    },
+    (f) => {
+      f.promoted.evidence.promotion.runAttempt = 2;
+    },
+    (f) => {
+      f.sourceSha = 'd'.repeat(40);
+    },
+    (f) => {
+      f.autoscaling.operationId = 'another-proof';
+    },
+    (f) => {
+      f.autoscaling.policy.maxReplicas = 8;
+    },
+    (f) => {
+      f.autoscaling.evidence.candidateSourceSha = 'd'.repeat(40);
+    },
+    (f) => {
+      f.control.evidence.edgeProfiles = ['compact'];
+      f.control.evidence.checks = [...HA_RUNTIME_CONTROL_CHECKS, ...HA_COMPACT_EDGE_CHECKS];
+    },
+  ]) {
+    const f = fixture();
+    mutate(f);
+    assert.throws(() => prepareRuntimeQualification(f));
+  }
+});
+
+test('invalid publication input does not echo declaration values into CI logs', () => {
+  const marker = 'private-fixture-input-must-not-be-logged';
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL('./prepare-runtime-qualification.mjs', import.meta.url)), 'validate-run-id'],
+    {
+      cwd: rootDir,
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: repository, BUILD_RUN_ID: marker },
+    },
+  );
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stdout + result.stderr, new RegExp(marker));
+  assert.match(result.stderr, /No declaration values were logged/);
+});

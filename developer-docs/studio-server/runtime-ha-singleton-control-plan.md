@@ -5,6 +5,12 @@ No GCP changes, paid rehearsal, image publication or production rollout are
 authorized by this document. Existing HA and local development behavior remain
 the defaults; this profile requires explicit selection and qualification.
 
+The [qualification publication sequence](runtime-ha-qualification.md) keeps
+post-build provider evidence bound to the original candidate without rebuilding
+its images. An installed unqualified manifest cannot be enriched in place:
+produce a new compatible candidate naming it as predecessor, qualify that pair,
+then install the qualified bridge before transferring ownership.
+
 ## 1. Goal and exact availability contract
 
 Additional accepted scope: [automatic runtime scale-up and safe scale-down](runtime-autoscaling.md).
