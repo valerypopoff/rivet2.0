@@ -137,6 +137,8 @@ jobs:
         with:
           name: rivet-${{ inputs.channel }}-desktop-web-${{ github.sha }}
           path: packages/app
+      - name: Verify macOS packaging retry contracts
+        run: node --test .github/scripts/build-macos-dmg.test.mjs .github/scripts/staple-macos-dmg.test.mjs .github/scripts/verify-macos-sidecars.test.mjs
       - name: Prepare Apple signing and notarization
         run: bash .github/scripts/prepare-macos-signing-env.sh
         env:

@@ -30,6 +30,14 @@ errors retain the confirmation and explain lost-response recovery without an
 automatic retry. Open member tabs, including unsaved edits, are closed only after
 confirmed deletion. A failed follow-up tree read does not turn a committed delete
 into an error or trigger another delete.
+Bundle conversion, duplication and deletion report a successful list refresh only
+when their refresh returns an accepted tree. A request superseded by concurrent
+editor reconciliation returns no tree and is not proof of success, even when its
+error callback was suppressed. Keep the committed mutation separate from that
+unconfirmed refresh: warn that the list needs refreshing without repeating the
+write or restoring closed tabs. The deletion browser regression covers this race
+with the last member tab open, failed tree reads, retained sidebar and a warning
+rather than a green success notification.
 
 `POST /api/workflows/bundles/:id/delete` requires the existing authenticated,
 same-site bundle-intent guard and `{ name, relativePath }`. The managed service

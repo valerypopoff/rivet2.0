@@ -471,14 +471,12 @@ export function useWorkflowLibraryController(options: {
     setBundleUploadFolder(target);
   };
   const refreshTreeAfterBundleChange = async () => {
-    const outcome = { failed: false };
-    await refresh(false, {
+    const tree = await refresh(false, {
       preserveVisibleTreeOnError: true,
-      onError: () => {
-        outcome.failed = true;
-      },
     });
-    return outcome;
+    // A concurrent editor reconciliation can supersede this request without
+    // invoking onError. Only an accepted tree proves that the list refreshed.
+    return { failed: tree == null };
   };
   const toggleBundleKind = async () => {
     const folder = folderContextMenuState?.folder;

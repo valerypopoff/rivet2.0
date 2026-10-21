@@ -1538,18 +1538,32 @@ The behavioral retry/cleanup tests in `build-macos-dmg.test.mjs` exercise bounde
 retries, unrelated-image isolation, normal/forced detach, and fail-closed cleanup.
 They run on every host; actual `hdiutil`/`plutil` execution and finished-package
 verification require the native macOS release jobs.
-Developer release run 38370519350 exposed a separate earlier boundary: Tauri's
-own app stapling lost its Apple CloudKit connection (-1005) after notarization
-was accepted. Tauri wraps native stapler exit 68 as build exit 1. The build
-helper now also recognizes that exact combination: confirmed
-`Finished with status Accepted`, `failed to staple app`,
-`The staple and validate action failed! Error 68.`, and one of the existing
-explicit transient Apple network codes. It reuses the stapler classifier and
-the same bounded full-build retry/cleanup path; it does not treat arbitrary
-exit 1/68, certificate errors or uncertain notarization submission as retryable.
-Unlike the final-DMG retry below, this can repeat app signing/notarization through
-Tauri. All signing, stapling, packaged-executor and release validation still run.
-Regression tests cover the wrapped failure, permanent lookalikes and exhaustion.
+Developer release runs 38370519350 and
+[39686261579](https://github.com/valerypopoff/rivet2.0/actions/runs/39686261579)
+exposed a separate earlier boundary: Tauri's own app stapling lost its Apple
+CloudKit connection (-1005) after notarization was accepted. Tauri wraps native
+stapler exit 68 as build exit 1. The original full-build retry repeated signing
+and accepted notarization three times but never extended ticket retrieval itself.
+The child build now gets a scoped PATH adapter,
+[`.github/scripts/macos-build-tools/xcrun`](../.github/scripts/macos-build-tools/xcrun),
+which intercepts only `xcrun stapler staple` and delegates to
+[`.github/scripts/tauri-app-stapler.mjs`](../.github/scripts/tauri-app-stapler.mjs).
+That helper accepts Tauri v1's exact `stapler staple -v <app>` invocation and
+uses the six-attempt ticket retry budget below against the same signed app.
+Its native command is absolute `/usr/bin/xcrun`, preventing adapter recursion;
+argv (including spaces), cwd and final failure status are preserved. Other
+xcrun operations, including notarization submission, pass straight through to
+the native tool. The adapter's Node/helper paths are absolute and scoped to the
+Tauri child process; Apple credentials and the original PATH remain available.
+Exhausted app-ticket retrieval no longer qualifies for a full-build retry.
+All signing, stapling, packaged-executor and release validation still run.
+Regression tests cover three connection losses followed by recovery, permanent
+errors, exhaustion without resubmission and child environment isolation. A POSIX
+Bash fixture checks real adapter dispatch, quoting, cwd, output and exit status;
+the native macOS test also checks non-stapling xcrun pass-through. Both macOS
+release jobs run these contracts before signing. The extensionless
+adapter must retain executable Git mode and LF endings. Linux fixtures do not
+prove Apple availability or native release acceptance; those require macOS CI.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 
