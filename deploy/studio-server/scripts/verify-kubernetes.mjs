@@ -199,6 +199,7 @@ async function main() {
       'deploy/studio-server/scripts/ha-control-topology.test.mjs',
       'deploy/studio-server/scripts/ha-kubernetes-control-topology.test.mjs',
       'deploy/studio-server/scripts/runtime-control-local.test.mjs',
+      'deploy/studio-server/scripts/runtime-qualification-publication.test.mjs',
       'deploy/studio-server/scripts/execution-autoscaler.test.mjs',
       'deploy/studio-server/scripts/execution-autoscaler-kubernetes.test.mjs',
       'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',

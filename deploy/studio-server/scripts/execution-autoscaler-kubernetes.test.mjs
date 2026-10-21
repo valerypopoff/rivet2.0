@@ -80,8 +80,21 @@ test('chart has exactly one execution writer, seven baseline pods, fixed develop
     role.rules.some((rule) => rule.resources.includes('secrets')),
     false,
   );
-  const pods = role.rules.find((rule) => rule.resources.includes('pods/exec'));
-  assert.ok(pods.resourceNames.every((name) => name.startsWith(config.workload + '-')));
+  const exec = role.rules.find((rule) => rule.resources.includes('pods/exec'));
+  assert.deepEqual(exec.resources, ['pods/exec'], 'Exec CREATE must never grant Pod creation');
+  assert.deepEqual(exec.verbs, ['get', 'create'], 'Kubernetes 1.35+ authorizes WebSocket upgrades with CREATE too');
+  assert.deepEqual(
+    exec.resourceNames,
+    Array.from({ length: config.policy.maxReplicas + 1 }, (_, i) => `${config.workload}-${i}`),
+  );
+  assert.equal(
+    role.rules.some((rule) => rule.resources.includes('pods') && rule.verbs.includes('create')),
+    false,
+  );
+  assert.deepEqual(
+    role.rules.find((rule) => rule.resources.includes('pods') && rule.verbs.includes('patch')).resourceNames,
+    exec.resourceNames,
+  );
   assert.deepEqual(
     role.rules.find((rule) => rule.resources.includes('configmaps') && rule.verbs.includes('update')).resourceNames,
     [releaseOperationJournalName('rivet')],
@@ -156,6 +169,14 @@ test('chart rejects two replica writers, unsafe floors/targets/metrics and a DB 
     'postgres.maxConnections=100',
   ])
     assert.throws(() => render(bad), undefined, bad);
+});
+
+test('reviewed execution ceiling fits a shared 200-connection allowance without raising it', () => {
+  const resources = render('postgres.maxConnections=200', 'autoscaling.execution.maxReplicas=7');
+  const controller = resources.find((r) => r.kind === 'Deployment' && r.metadata.name.endsWith('-autoscaler'));
+  assert.equal(JSON.parse(controller.spec.template.spec.containers[0].env[0].value).policy.maxReplicas, 7);
+  for (const max of [8, 10])
+    assert.throws(() => render('postgres.maxConnections=200', `autoscaling.execution.maxReplicas=${max}`));
 });
 
 async function clusterFixture(t) {

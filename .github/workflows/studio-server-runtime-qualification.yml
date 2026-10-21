@@ -1,0 +1,119 @@
+name: Publish qualified runtime HA
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful main Build Images run whose exact candidate was qualified in isolated GKE.
+        required: true
+        type: string
+      runtime_control_declaration:
+        description: Sanitized provider declaration JSON for regional/compact control ownership; never credentials or project contents.
+        required: true
+        type: string
+      runtime_autoscaling_declaration:
+        description: Sanitized provider declaration JSON for the exact autoscaler policy; never credentials or project contents.
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+# Serialize with normal main promotion. A newer push may cancel this run;
+# never publish a stale candidate or race a second production pointer writer.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: rivet-managed-staging
+    env:
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      PACKET: artifacts/runtime-qualification-publication
+      RELEASE_MANIFEST_REPOSITORY: ghcr.io/${{ github.repository }}-studio-server/release-manifest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Validate run identifier before API access
+        id: input
+        run: node deploy/studio-server/scripts/prepare-runtime-qualification.mjs validate-run-id
+      - name: Verify successful exact-source main image build
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > "$PACKET/build-run.json"
+          node deploy/studio-server/scripts/prepare-runtime-qualification.mjs metadata
+      - name: Download original immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ inputs.build_run_id }}-${{ steps.build.outputs.run_attempt }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/runtime-qualification-publication/candidate
+      - name: Download original ordinary-HA promotion
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-release-manifest-${{ inputs.build_run_id }}-${{ steps.build.outputs.run_attempt }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/runtime-qualification-publication/original
+      - name: Bind isolated provider declarations without rebuilding images
+        id: qualification
+        env:
+          RUNTIME_CONTROL_DECLARATION: ${{ inputs.runtime_control_declaration }}
+          RUNTIME_AUTOSCALING_DECLARATION: ${{ inputs.runtime_autoscaling_declaration }}
+        run: node deploy/studio-server/scripts/prepare-runtime-qualification.mjs prepare
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Read the candidate's immutable predecessor
+        env:
+          PREDECESSOR_REFERENCE: ${{ steps.qualification.outputs.predecessor_reference }}
+        run: |
+          node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+            --reference "$PREDECESSOR_REFERENCE" --output "$PACKET/predecessor.json"
+      - name: Promote the same candidate with this publication's provenance
+        run: |
+          node deploy/studio-server/scripts/create-release-manifest.mjs promote \
+            --input "$PACKET/qualified-candidate.json" --current "$PACKET/predecessor.json" \
+            --output "$PACKET/promoted-release-manifest.json" \
+            --workflow "$GITHUB_WORKFLOW" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Publish qualified immutable manifest and advance the checked pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          [[ "$current_main" == "$GITHUB_SHA" ]] || { echo 'Main advanced; qualification publication stopped.' >&2; exit 1; }
+          node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+            --reference "$RELEASE_MANIFEST_REPOSITORY:production" --output "$PACKET/current-production.json"
+          node deploy/studio-server/scripts/prepare-runtime-qualification.mjs verify-pointer
+          digest="$(node deploy/studio-server/scripts/create-release-manifest.mjs digest --input "$PACKET/promoted-release-manifest.json")"
+          reference="$RELEASE_MANIFEST_REPOSITORY:manifest-${digest#sha256:}"
+          node deploy/studio-server/scripts/release-manifest-oci.mjs push --reference "$reference" --input "$PACKET/promoted-release-manifest.json"
+          node deploy/studio-server/scripts/release-manifest-oci.mjs retag --source "$reference" --destination "$RELEASE_MANIFEST_REPOSITORY:production"
+          node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$RELEASE_MANIFEST_REPOSITORY:production" --output "$PACKET/published-production.json"
+          node deploy/studio-server/scripts/prepare-runtime-qualification.mjs verify-published
+      - name: Retain the qualified manifest and sanitized declarations
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: studio-server-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/runtime-qualification-publication/promoted-release-manifest.json
+            artifacts/runtime-qualification-publication/provider-declarations.json
+            artifacts/runtime-qualification-publication/publication-plan.json
+          if-no-files-found: error
+          retention-days: 90

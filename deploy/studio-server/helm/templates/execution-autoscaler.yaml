@@ -31,12 +31,21 @@ rules:
     resources: [pods]
     verbs: [list]
   - apiGroups: ['']
-    resources: [pods, pods/exec]
+    resources: [pods]
     resourceNames:
       {{- range $ordinal := until (add1 (int .Values.autoscaling.execution.maxReplicas) | int) }}
       - {{ printf "%s-%d" $workload $ordinal | quote }}
       {{- end }}
     verbs: [get, patch, delete]
+  - apiGroups: ['']
+    resources: [pods/exec]
+    resourceNames:
+      {{- range $ordinal := until (add1 (int .Values.autoscaling.execution.maxReplicas) | int) }}
+      - {{ printf "%s-%d" $workload $ordinal | quote }}
+      {{- end }}
+    # WebSocket GET upgrades also require CREATE on Kubernetes 1.35+.
+    # Keep it separate: this does not grant creation of Pods.
+    verbs: [get, create]
   - apiGroups: [metrics.k8s.io]
     resources: [pods]
     verbs: [list]
