@@ -1447,16 +1447,18 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.29.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.30.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release adds confirmed deletion of non-empty bundles and one-click
-saved-version duplication, and fixes bundle conversion guards, hosted Subgraph
-authorization, HA debugger replay/reconnects and cross-surface context menus.
-The explicit-bundle primitive was already covered by `1.28.0`.
+This minor release covers changes since `216625246`: compact HA developer
+control with embedded maintenance, execution-owned published scheduling/runtime
+settings, additive availability reporting and drain-aware scaling/deployment
+support. It also includes routing-withdrawal convergence, hosted save-conflict
+and reconnect fixes, and publication-aware Delete navigation. Bundle lifecycle
+features were already covered by `1.29.0`.
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-20) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-22) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -2976,11 +2978,14 @@ For workflow-library project deletion behavior:
 1. `yarn studio-server:dev`
 2. validate the browser flow through `http://localhost:8080` by default, or your configured `RIVET_PORT`
 3. right-click a project with no workflow endpoint publication and no published web apps in the left panel and run `Delete project`
-4. confirm the context-menu action only opens Project Settings and does not delete immediately
+4. confirm the context-menu action opens Project Settings on `Danger zone` and does not delete immediately
 5. confirm the project is deleted only after clicking `Delete project` again inside Project Settings
 6. right-click a project that has a published workflow endpoint, unpublished workflow changes, or published web apps and run `Delete project`
-7. confirm the UI shows `To delete a project, unpublish its workflow endpoint and web apps first`
+7. confirm Project Settings opens on `Endpoint`, the UI shows `To delete a project, unpublish its workflow endpoint and web apps first`, and deletion remains disabled in `Danger zone`
 8. confirm the guarded delete action does not change selection, open a different tab, or delete anything directly from the context menu
+9. close the modal and open Settings normally; confirm it starts on `Endpoint` rather than remembering the Delete shortcut's tab
+10. confirm the context-menu action is enabled for published projects too (it only opens settings), and works with normal pointer clicks and keyboard activation; only the actual removal button in `Danger zone` is disabled by publication
+11. delay publication details while opening an unpublished project's Delete shortcut: removal must remain disabled until review succeeds; switching tabs manually must not be undone when details arrive, and a freshly discovered publication must keep removal disabled
 
 For workflow-library project rename entry behavior:
 

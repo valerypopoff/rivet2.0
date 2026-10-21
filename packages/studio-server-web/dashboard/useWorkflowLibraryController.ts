@@ -102,6 +102,7 @@ export function useWorkflowLibraryController(options: {
     folderIds,
     folders,
     loading,
+    localRefreshSequence,
     reconcileInBackground: reconcileWorkflowTreeInBackground,
     refresh,
     refreshFromRemoteChange,
@@ -110,48 +111,10 @@ export function useWorkflowLibraryController(options: {
     setFolders,
     setRootProjects,
     syncRef,
-  } = useWorkflowLibraryTree(projectSaveSequence);
+  } = useWorkflowLibraryTree();
   const runRecordings = useRunRecordingsModalState();
-  // Local tree mutations are deliberately excluded from the remote event echo.
-  // Reconcile explicit membership on refresh/open too, without replacing content.
-  useEffect(() => {
-    if (!editorReady || loading || error) return;
-    let cancelled = false;
-    void onCaptureProjectReconciliation()
-      .then((context) => {
-        if (!context || cancelled) return;
-        return onReconcileWorkflowProjectBindings(
-          allProjects.flatMap((project) =>
-            project.projectMetadataId
-              ? [
-                  {
-                    projectId: project.projectMetadataId,
-                    path: project.absolutePath,
-                    title: project.name,
-                    revisionId: project.revisionId,
-                    bundleId: project.bundleId ?? null,
-                  },
-                ]
-              : [],
-          ),
-          context,
-        );
-      })
-      .catch((failure) => console.error('Could not reconcile bundle membership', failure));
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    allProjects,
-    editorReady,
-    loading,
-    error,
-    openedProjectPath,
-    reconciliationSequence,
-    onCaptureProjectReconciliation,
-    onReconcileWorkflowProjectBindings,
-  ]);
   const [settingsModalProject, setSettingsModalProject] = useState<WorkflowProjectItem | null>(null);
+  const [settingsModalInitialTab, setSettingsModalInitialTab] = useState<'workflow' | 'danger'>('workflow');
   const [runStatisticsOpen, setRunStatisticsOpen] = useState(false);
   const [publishedItemsOpen, setPublishedItemsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
@@ -349,6 +312,8 @@ export function useWorkflowLibraryController(options: {
 
   useWorkflowLibraryTreeSync({
     currentSyncRef: syncRef,
+    localRefreshSequence,
+    projectSaveSequence,
     isLocalTreeInteractionActive: Boolean(
       draggedItem ||
         movePending ||
@@ -685,17 +650,21 @@ export function useWorkflowLibraryController(options: {
     });
   };
 
-  const openProjectSettingsModal = useCallback((project: WorkflowProjectItem) => {
-    setSettingsModalProject(project);
-  }, []);
+  const openProjectSettingsModal = useCallback(
+    (project: WorkflowProjectItem, initialTab: 'workflow' | 'danger' = 'workflow') => {
+      setSettingsModalInitialTab(initialTab);
+      setSettingsModalProject(project);
+    },
+    [],
+  );
 
   const handleOpenSettings = useCallback(() => {
     if (!activeProject) {
       return;
     }
 
-    setSettingsModalProject(activeProject);
-  }, [activeProject]);
+    openProjectSettingsModal(activeProject);
+  }, [activeProject, openProjectSettingsModal]);
 
   const handleDeleteProjectFromContextMenu = useCallback(() => {
     const targetProject = projectContextMenuState?.project;
@@ -703,15 +672,15 @@ export function useWorkflowLibraryController(options: {
       return;
     }
 
-    if (!isWorkflowProjectFullyUnpublished(targetProject)) {
+    const fullyUnpublished = isWorkflowProjectFullyUnpublished(targetProject);
+    if (!fullyUnpublished) {
       toast.error('To delete a project, unpublish its workflow endpoint and web apps first', {
         transition: instantWarningToastTransition,
       });
-      return;
     }
 
     closeProjectContextMenu();
-    openProjectSettingsModal(targetProject);
+    openProjectSettingsModal(targetProject, fullyUnpublished ? 'danger' : 'workflow');
   }, [
     closeProjectContextMenu,
     downloadingProjectPath,
@@ -844,6 +813,7 @@ export function useWorkflowLibraryController(options: {
     renamingProjectPath,
     settingsModalOpen,
     settingsModalProject,
+    settingsModalInitialTab,
     runRecordingsOpen: runRecordings.open,
     runRecordingsRetained: runRecordings.retained,
     runRecordingsFoundCount: runRecordings.foundCount,

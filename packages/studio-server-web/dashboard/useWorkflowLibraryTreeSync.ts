@@ -86,6 +86,8 @@ export function useWorkflowLibraryTreeSync(options: {
   openedProjectRef: MutableRefObject<WorkflowProjectItem | null>;
   editorReady: boolean;
   reconciliationSequence: number;
+  localRefreshSequence: number;
+  projectSaveSequence: number;
   captureReconciliation: () => Promise<HostedProjectReconciliationContext | null>;
   refreshFromRemoteChange: () => Promise<WorkflowTreeResponse | null>;
   reconcileProjectBindings: (
@@ -179,7 +181,9 @@ export function useWorkflowLibraryTreeSync(options: {
 
     const retry = () => {
       if (lifetimeRef.current !== lifetime) return;
-      pendingChangeRef.current ??= { ...pending, force: true };
+      // A current sidebar marker does not mean the editor accepted its bindings.
+      // Preserve a queued newer hint, but require the rejected check to retry.
+      pendingChangeRef.current = { ...(pendingChangeRef.current ?? pending), force: true };
       if (retryTimerRef.current == null) {
         retryTimerRef.current = window.setTimeout(() => {
           retryTimerRef.current = null;
@@ -250,9 +254,14 @@ export function useWorkflowLibraryTreeSync(options: {
 
   const enqueue = useCallback((pending: PendingTreeChange) => {
     const current = pendingChangeRef.current;
-    if (!current || isNewerTreeState(pending.state, current.state) || (pending.force && !current.force)) {
-      pendingChangeRef.current = pending;
-    }
+    // Reconnect hints may advance the marker, but cannot downgrade a required
+    // editor check that is already queued (including a delayed retry).
+    pendingChangeRef.current = current
+      ? {
+          state: isNewerTreeState(pending.state, current.state) ? pending.state : current.state,
+          force: current.force || pending.force,
+        }
+      : pending;
     drainRef.current();
   }, []);
 
@@ -264,13 +273,28 @@ export function useWorkflowLibraryTreeSync(options: {
 
   useEffect(() => {
     const currentState = currentSyncRef.current;
-    if (options.editorReady && currentState) {
+    if (options.editorReady && (currentState || options.localRefreshSequence > 0)) {
       // Tree events can arrive before the iframe finishes its bridge handshake.
       // Replaying the current authoritative state here ensures an open tab is
       // still rebound instead of leaving a stale path until another mutation.
-      enqueue({ state: currentState, force: true });
+      // Local mutations, completed saves and newly opened tabs share this owner.
+      // No independent delayed sidebar fetch can supersede its captured request.
+      // A local sequence is only a queue hint; the actual bindings come from
+      // the tree fetched after capturing editor revision authority.
+      enqueue({
+        state: currentState ?? { epoch: 'local-refresh', revision: options.localRefreshSequence },
+        force: true,
+      });
     }
-  }, [currentSyncRef, enqueue, options.editorReady, options.reconciliationSequence]);
+  }, [
+    currentSyncRef,
+    enqueue,
+    options.editorReady,
+    options.openedProjectPath,
+    options.reconciliationSequence,
+    options.localRefreshSequence,
+    options.projectSaveSequence,
+  ]);
 
   useEffect(() => {
     lifetimeRef.current++;

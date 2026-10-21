@@ -18,72 +18,83 @@ const docsRequire = createRequire(new URL('../../packages/docs/package.json', im
 const docsCoreRequire = createRequire(docsRequire.resolve('@docusaurus/core/package.json'));
 const webpackRequire = createRequire(docsCoreRequire.resolve('webpack-dev-server/package.json'));
 
-test('redirects strip array and literal-metacharacter credential headers only across hosts', async (t) => {
-  const gentraceRequire = createRequire(webRequire.resolve('@gentrace/core'));
-  const axiosRequire = createRequire(gentraceRequire.resolve('axios'));
-  const redirects = axiosRequire('follow-redirects');
-  const target = createServer((req, res) => res.end(JSON.stringify(req.headers)));
-  target.listen(0, '127.0.0.1');
-  await once(target, 'listening');
-  const source = createServer((req, res) => {
-    res.writeHead(302, { location: `http://127.0.0.1:${target.address().port}/` });
-    res.end();
-  });
-  source.listen(0, '127.0.0.1');
-  await once(source, 'listening');
-  t.after(async () => {
-    for (const server of [source, target]) {
+test(
+  'redirects strip array and literal-metacharacter credential headers only across hosts',
+  { timeout: 15_000 },
+  async (t) => {
+    const gentraceRequire = createRequire(webRequire.resolve('@gentrace/core'));
+    const axiosRequire = createRequire(gentraceRequire.resolve('axios'));
+    const redirects = axiosRequire('follow-redirects');
+    const server = createServer((req, res) => {
+      if (req.url === '/cross-host' || req.url === '/same-origin') {
+        const location = req.url === '/cross-host' ? `http://127.0.0.1:${server.address().port}/` : '/';
+        res.writeHead(302, { location });
+        res.end();
+      } else {
+        res.end(JSON.stringify(req.headers));
+      }
+    });
+    // Register cleanup before setup can fail; a broken fixture must not hold CI open.
+    t.after(async () => {
+      if (!server.listening) return;
       server.closeAllConnections();
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-    }
-  });
-  const credentials = {
-    Authorization: 'Bearer fixture-only',
-    Cookie: 'session=fixture-only',
-    'Proxy-Authorization': 'Basic fixture-only',
-    'X-Api^Key': 'caret-secret',
-    'X-Token|Secret': 'pipe-secret',
-    'X-Public': 'kept',
-  };
-  const request = (port, headers) =>
-    new Promise((resolve, reject) => {
-      const req = redirects.http.get(
-        {
-          hostname: 'localhost',
-          port,
-          path: '/',
-          family: 4,
-          headers,
-          sensitiveHeaders: ['X-Api^Key', 'X-Token|Secret'],
-        },
-        (res) => {
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk) => {
-            body += chunk;
-          });
-          res.on('error', reject);
-          res.on('end', () => {
-            try {
-              resolve(JSON.parse(body));
-            } catch (error) {
-              reject(error);
-            }
-          });
-        },
-      );
-      req.on('error', reject);
-      req.setTimeout(5000, () => req.destroy(new Error('Local redirect fixture timed out.')));
     });
-  for (const headers of [credentials, Object.entries(credentials).flat()]) {
-    const direct = await request(target.address().port, headers);
-    for (const [name, value] of Object.entries(credentials)) assert.equal(direct[name.toLowerCase()], value);
-    const redirected = await request(source.address().port, headers);
-    for (const name of Object.keys(credentials).filter((name) => name !== 'X-Public'))
-      assert.equal(redirected[name.toLowerCase()], undefined, `${name} must not cross hosts`);
-    assert.equal(redirected['x-public'], 'kept');
-  }
-});
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const credentials = {
+      Authorization: 'Bearer fixture-only',
+      Cookie: 'session=fixture-only',
+      'Proxy-Authorization': 'Basic fixture-only',
+      'X-Api^Key': 'caret-secret',
+      'X-Token|Secret': 'pipe-secret',
+    };
+    const ordinary = { 'X-Public': 'kept', 'X-ApiKey': 'no-caret', 'X-Token': 'prefix-only', Secret: 'suffix-only' };
+    const allHeaders = { ...credentials, ...ordinary };
+    const request = (path, headers) =>
+      new Promise((resolve, reject) => {
+        const req = redirects.http.get(
+          {
+            hostname: 'localhost',
+            port: server.address().port,
+            path,
+            family: 4,
+            // Keep the host-change test independent of machine DNS/hosts configuration.
+            lookup: (_hostname, _options, callback) => callback(null, '127.0.0.1', 4),
+            headers,
+            sensitiveHeaders: ['X-Api^Key', 'X-Token|Secret'],
+          },
+          (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+              body += chunk;
+            });
+            res.on('error', reject);
+            res.on('end', () => {
+              try {
+                resolve(JSON.parse(body));
+              } catch (error) {
+                reject(error);
+              }
+            });
+          },
+        );
+        req.on('error', reject);
+        req.setTimeout(5000, () => req.destroy(new Error('Local redirect fixture timed out.')));
+      });
+    for (const headers of [allHeaders, Object.entries(allHeaders).flat()]) {
+      for (const path of ['/', '/same-origin']) {
+        const response = await request(path, headers);
+        for (const [name, value] of Object.entries(allHeaders)) assert.equal(response[name.toLowerCase()], value);
+      }
+      const redirected = await request('/cross-host', headers);
+      for (const name of Object.keys(credentials))
+        assert.equal(redirected[name.toLowerCase()], undefined, `${name} must not cross hosts`);
+      for (const [name, value] of Object.entries(ordinary)) assert.equal(redirected[name.toLowerCase()], value);
+    }
+  },
+);
 
 test('documentation editor launcher rejects unsafe Windows arguments without launching a process', () => {
   const launcher = webpackRequire.resolve('launch-editor');

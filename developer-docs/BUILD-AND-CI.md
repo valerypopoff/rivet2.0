@@ -331,6 +331,10 @@ The web-app freshness check runs through the Node workspace's
 package-owned `esbuild` dependency. The generator uses `createRequire(...)` for
 that dependency for the same Yarn PnP ESM-loader compatibility reason as the Core
 CJS and app-executor bundlers.
+Freshness ignores only physical CRLF-versus-LF differences caused by Windows Git
+checkouts. Escaped newlines in the embedded JavaScript, source changes, whitespace
+and missing output still fail; `web-app-client-freshness.test.mjs` covers this
+boundary. Generation itself continues emitting the same canonical artifact.
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
 non-ignored test files. Source-reading candidates are controlled by the explicit shrinking
@@ -1712,7 +1716,26 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
-### Prepared release versions (2026-10-20)
+### Prepared release versions (2026-10-22)
+
+The last version change for every package track is `216625246`. Changes after
+that baseline through `4183e5fc5`, plus the pending fixes, prepare:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.28.1` → `2.28.2` | Build/security dependency fixes and the patched bundled sidecar. |
+| Public Core/Node/Evaluations/CLI | `2.22.0` → `2.22.1` | Transitive redirect security fix and Node's CRLF-safe generated-client check; public-family lockstep companions. |
+| App executor | `2.14.1` → `2.14.2` | Patched source-bundled Core/Node dependency companion. |
+| Documentation site | `2.22.0` (unchanged) | No package-local changes; developer-doc changes alone do not bump the site. |
+| Five private Studio Server packages | `1.29.0` → `1.30.0` | Additive compact HA/runtime ownership and drain-aware scaling support, plus rollout, hosted save-conflict and project-settings fixes. |
+
+The [package inventory](PACKAGES.md) separates package-local work from required
+release companions. Desktop Tauri/Cargo metadata and the CLI Docker fallback
+are synchronized. No dependency range, Yarn workspace lock entry, Helm version
+or database schema change is required for this bump. Publication, deployment
+and HA qualification remain separate actions.
+
+### Previous prepared release versions (2026-10-20)
 
 All tracks were last bumped in `c71d4b1dd`. Changes through `6e0e9b27e` and the
 debugger-information, desktop target-label and cross-surface context-menu

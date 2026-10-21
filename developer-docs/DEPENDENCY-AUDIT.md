@@ -99,13 +99,21 @@ upstream patches, without adding exceptions or weakening the blocking gate:
 
 `scripts/checks/dependency-security-regressions.test.mjs` exercises real
 loopback-only redirects through Gentrace's actual Axios dependency with object
-and array headers, asserting cross-host stripping and direct-request preservation.
+and array headers, asserting cross-host stripping, direct/same-origin credential
+preservation and literal (not regex) matching of custom sensitive names. One
+server handles all paths; local address lookup avoids DNS dependencies, cleanup
+is registered before binding, and request/test timeouts bound regressions.
 It also calls the documentation launcher's Windows argument validator directly
 (never a shell/editor) and checks both Vite consumers stay on the patched 6.x
 line. These join the normal `yarn test:style` gate. Verify with the focused audit
 tests, `yarn security:audit`, an immutable install/cache, frontend builds and
 headless hosted UI checks. Keep `.pnp.cjs`, `.pnp.loader.mjs`, `yarn.lock` and the
 tracked cache archives synchronized; no GCP deployment or rehearsal is needed.
+
+The follow-up full Windows gate also exposed a false stale-client failure caused
+solely by Git's CRLF checkout. The Node client's freshness comparison normalizes
+physical line endings only, with regressions that keep changed JavaScript and
+escaped string newlines blocking. No generated browser code was changed.
 
 ## CI test contracts
 

@@ -2,7 +2,10 @@
 
 ## Scope and delivery status
 
-Opt-in implementation, not a production deployment or GKE capacity certificate.
+Opt-in implementation, not a general GKE capacity certificate. One installation
+was enabled through the explicitly approved operation-scoped maintenance waiver
+recorded in [runtime qualification](runtime-ha-qualification.md); that exception
+does not manufacture provider qualification for this policy or other installs.
 Existing/local/non-HA installations keep their behavior. Ordinary HA execution
 HPA still adds capacity only. The new controller replaces that HPA when enabled;
 it is never a second writer of the same replica count.
@@ -228,13 +231,48 @@ consumed Kubernetes HTTP contract; owner-mock discovery was skipped because the
 CLI was signed out. Full stateful HTTP+exec coverage is in the Node fixtures.
 No paid mock, sign-in, workspace publication or GCP is needed.
 
-Still required before production: exact-image local Kubernetes autoscaling
+Still required for full provider qualification: exact-image local Kubernetes autoscaling
 exercise, representative protected capacity measurements, and separately approved
 GKE verification of node/quota headroom, Metrics API RBAC, startup-generation
 fencing, Gateway withdrawal and proxy connection drain. Include long/paused
 workflows, recordings, returned demand, controller death at each intent boundary,
 mixed-version upgrades and voluntary node maintenance. Mocks cannot certify
 these provider facts.
+
+## Read-only production review — 2026-10-21
+
+The installation-specific policy is execution2-7 and proxy2-4, not the generic
+execution2-10 overlay. At21:24UTC, seven pods were Ready with zero restarts; the
+controller produced40 valid low-demand decisions over ten minutes and its sample
+timestamp advanced across independent reads. Proxy HPA had valid CPU metrics and
+desired/current2. The execution startup-fence environment, OnDelete strategy,
+single replica writer and `minAvailable: "100%"` PDB were present; no unfinished
+retirement or stale startup fence was found. Fifty local controller, real local
+HTTP/exec-WebSocket and supervisor regressions passed; the optional Postman check
+was skipped. No production mutation, injected traffic or paid rehearsal occurred.
+
+No actual production execution scale cycle had occurred (`lastScaleAt=0`). These
+are healthy observation/configuration and local protocol results, not proof of a
+live production scale-up/long-run-drain/scale-down cycle.
+
+### Remaining proxy connection-continuity limitation
+
+Execution-owner drain and proxy HPA retirement are different mechanisms. The live
+proxy HPA can remove one pod per minute after five minutes of stabilization. Its
+load-balancer drain is60seconds, proxy preStop120seconds and pod termination grace
+270seconds, while the backend request timeout is3600seconds and the proxy supports
+long-lived streams. Therefore an in-flight long request/connection can be cut
+during proxy downscale even when the execution owner is protected from premature
+removal. This is a configuration-derived risk, not an induced/observed production
+incident. Do not claim uninterrupted long connections from the execution drain
+tests, and do not silently "fix" it by increasing only one timer.
+
+Plan proxy admission withdrawal, connection completion/reconnect behavior and
+consistent provider/pod time bounds as a separate change before claiming complete
+long-request continuity. Google documents that Application Load Balancers stop
+sending all traffic to a removed endpoint when its drain timeout expires; see
+[connection draining](https://docs.cloud.google.com/load-balancing/docs/enabling-connection-draining#how_connection_draining_works)
+and [GKE timeout guidance](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/load-balancing#customize_timeouts).
 
 Contract references: [HPA](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/),
 [disruptions/PDBs](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/),

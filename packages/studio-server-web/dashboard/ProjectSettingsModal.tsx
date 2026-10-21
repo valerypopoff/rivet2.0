@@ -123,6 +123,7 @@ type ProjectSettingsModalProps = {
   activeProject: WorkflowProjectItem;
   allProjects: WorkflowProjectItem[];
   isOpen: boolean;
+  initialTab?: ProjectSettingsTab;
   onClose: () => void;
   onRefresh: () => Promise<WorkflowTreeResponse | null>;
   onDeleteProject: (path: string, projectId?: string | null) => void;
@@ -136,6 +137,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   activeProject,
   allProjects,
   isOpen,
+  initialTab = 'workflow',
   onClose,
   onRefresh,
   onDeleteProject,
@@ -144,13 +146,13 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   onOpenRecording,
   routeConfig,
 }) => {
-  const [activeTab, setActiveTab] = useState<ProjectSettingsTab>('workflow');
+  const [activeTab, setActiveTab] = useState<ProjectSettingsTab>(initialTab);
   const [historyBusy, setHistoryBusy] = useState(false);
   useEffect(() => {
     if (isOpen) {
-      setActiveTab('workflow');
+      setActiveTab(initialTab);
     }
-  }, [activeProject.relativePath, isOpen]);
+  }, [activeProject.relativePath, initialTab, isOpen]);
   const {
     settingsDraft,
     snapshotProject,
