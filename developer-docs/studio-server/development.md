@@ -30,6 +30,16 @@ data. `hosted-executor-origin.spec.ts` verifies seeded project tabs on first ope
 and reload, alongside executor origin/reconnection checks; the reload lifecycle
 suite covers durable unsaved edits. Run these against a fixed production preview
 when validating bootstrap changes, not a provider module changed mid-HMR session.
+Isolated focus fixtures use `openHostedDashboardFixture` only before their scenario
+starts. It permits one reload when a same-origin main-frame script request fails
+with Chromium `ERR_NETWORK_CHANGED` or `ERR_CONNECTION_RESET` and the real frontend
+bootstrap-error screen is visible. It never retries assertions, API failures,
+missing modules or application exceptions, and removes its listener on every exit.
+`waitForDashboardReady` fails promptly on that error screen instead of waiting the
+full dashboard timeout. `hosted-dashboard-contracts.spec.ts` injects transient and
+persistent transport failures, a missing module and an application exception to
+keep the recovery bounded; `hosted-modal-focus.spec.ts` retains the actual focus
+and cross-frame context-menu assertions. No serving retry behavior is changed.
 For iframe-only browser-storage fault injection, select the child frame by
 `window.top !== window`, not its query string: an init script can run while the
 new iframe still has an `about:blank` URL. Keep the dashboard's storage available

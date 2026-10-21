@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { expect, type Locator, type Page, type Request, type TestInfo } from '@playwright/test';
 
 type ActiveElementDescriptor = {
   tag: string | null;
@@ -76,7 +76,44 @@ export async function mockHostedEditorBootstrap(page: Page): Promise<void> {
 
 export async function waitForDashboardReady(page: Page) {
   await page.locator('.dashboard-app-loading').waitFor({ state: 'hidden', timeout: 180_000 });
-  await page.locator('.workflow-library-panel').waitFor({ state: 'visible', timeout: 180_000 });
+  const bootstrapFailure = page.getByRole('heading', { name: 'Rivet could not finish loading', exact: true });
+  await page.locator('.workflow-library-panel').or(bootstrapFailure).first().waitFor({
+    state: 'visible',
+    timeout: 180_000,
+  });
+  if (await bootstrapFailure.isVisible()) {
+    throw new Error('Rivet frontend bootstrap failed before the dashboard was ready');
+  }
+}
+
+/** One transport-only recovery before an isolated fixture starts its scenario. */
+export async function openHostedDashboardFixture(page: Page): Promise<void> {
+  let interruptedScript = false;
+  const onRequestFailed = (request: Request) => {
+    if (
+      request.frame() === page.mainFrame() &&
+      request.resourceType() === 'script' &&
+      new URL(request.url()).origin === new URL(page.url()).origin &&
+      ['net::ERR_NETWORK_CHANGED', 'net::ERR_CONNECTION_RESET'].includes(request.failure()?.errorText ?? '')
+    ) {
+      interruptedScript = true;
+    }
+  };
+  page.on('requestfailed', onRequestFailed);
+  try {
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    try {
+      await waitForDashboardReady(page);
+    } catch (error) {
+      const bootstrapFailure = page.getByRole('heading', { name: 'Rivet could not finish loading', exact: true });
+      if (!interruptedScript || !(await bootstrapFailure.isVisible())) throw error;
+      console.warn('Fixture startup: reloading once after an interrupted main-frame script request');
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await waitForDashboardReady(page);
+    }
+  } finally {
+    page.off('requestfailed', onRequestFailed);
+  }
 }
 
 export async function describeActiveElement(page: Page): Promise<ActiveElementDescriptor> {

@@ -1,5 +1,43 @@
 import { expect, test, type Locator } from '@playwright/test';
-import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import {
+  authenticateIfNeeded,
+  mockHostedEditorBootstrap,
+  openHostedDashboardFixture,
+  waitForDashboardReady,
+} from './helpers/hostedEditorObserve';
+
+for (const failure of ['once', 'persistent', 'missing', 'application'] as const) {
+  test(`isolated dashboard startup handles ${failure} module failure without hiding defects`, async ({ page }) => {
+    await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({ json: { root: '/workflows', folders: [], projects: [] } }),
+    );
+    let requests = 0;
+    await page.route('**/assets/DashboardPage-*.js', async (route) => {
+      if (route.request().frame() !== page.mainFrame()) return route.continue();
+      requests += 1;
+      if (failure === 'once' && requests > 1) return route.continue();
+      if (failure === 'missing') return route.fulfill({ status: 404, body: 'Missing module' });
+      if (failure === 'application') {
+        return route.fulfill({
+          contentType: 'text/javascript',
+          body: 'throw new Error("Fixture application defect");',
+        });
+      }
+      return route.abort('connectionreset');
+    });
+    const listenersBefore = page.listenerCount('requestfailed');
+    if (failure === 'once') {
+      await openHostedDashboardFixture(page);
+      await expect(page.locator('.workflow-library-panel')).toBeVisible();
+    } else {
+      await expect(openHostedDashboardFixture(page)).rejects.toThrow('Rivet frontend bootstrap failed');
+      await expect(page.getByRole('heading', { name: 'Rivet could not finish loading', exact: true })).toBeVisible();
+    }
+    expect(requests).toBe(failure === 'once' || failure === 'persistent' ? 2 : 1);
+    expect(page.listenerCount('requestfailed')).toBe(listenersBefore);
+  });
+}
 
 test('editor startup feedback stays in the editor area, not the project tree', async ({ page }) => {
   await mockHostedEditorBootstrap(page);

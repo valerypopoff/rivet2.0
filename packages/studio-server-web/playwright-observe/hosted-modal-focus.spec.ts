@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { mockHostedEditorBootstrap, openHostedDashboardFixture } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 import { serializeProject } from '@valerypopoff/rivet2-core';
 
@@ -79,8 +79,7 @@ async function setupFocusFixture(page: Page): Promise<string[]> {
     const project = await page.evaluate(() => JSON.parse(localStorage.getItem('project')!).projectState);
     await route.fulfill({ json: { contents: serializeProject(project), datasetsContents: null, revisionId: null } });
   });
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await waitForDashboardReady(page);
+  await openHostedDashboardFixture(page);
   // Open through the real dashboard bridge rather than relying on legacy recovery state.
   await page.locator('.project-row', { hasText: 'Focus fixture' }).dblclick();
   await expect(
