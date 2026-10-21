@@ -108,6 +108,9 @@ jobs:
           node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$RELEASE_MANIFEST_REPOSITORY:production" --output "$PACKET/published-production.json"
           node deploy/studio-server/scripts/prepare-runtime-qualification.mjs verify-published
       - name: Retain the qualified manifest and sanitized declarations
+        # Retain recovery evidence even if a registry write/readback fails.
+        # Only prepare's validated, normalized packet is eligible for upload.
+        if: ${{ always() && steps.qualification.outcome == 'success' }}
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: studio-server-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
