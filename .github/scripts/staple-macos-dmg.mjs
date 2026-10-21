@@ -12,7 +12,7 @@ export function isTransientStaplerFailure({ status, output }) {
   return status === 68 && /Error Domain=NSURLErrorDomain Code=-(?:1001|1004|1005|1009)\b/.test(output);
 }
 
-function runStapler(program, args) {
+export function runStapler(program, args) {
   return new Promise((done) => {
     execFile(program, args, { timeout: 120_000, maxBuffer: 64 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
       done({
@@ -24,7 +24,7 @@ function runStapler(program, args) {
   });
 }
 
-/** Retry one stapler operation against the same DMG; never resubmit, rebuild or switch operations. */
+/** Retry one stapler operation against the same artifact; never resubmit, rebuild or switch operations. */
 export async function runMacDmgStaplerWithRetries(
   dmgPath,
   {
@@ -42,7 +42,7 @@ export async function runMacDmgStaplerWithRetries(
     const delay = retryDelaysMs[attempt];
     if (!isTransientStaplerFailure(result) || delay === undefined) return result;
     warn(
-      `Apple ticket ${action} hit a transient network failure; retrying the same DMG in ${delay / 1000}s (attempt ${attempt + 2}/${retryDelaysMs.length + 1}).`,
+      `Apple ticket ${action} hit a transient network failure; retrying the same artifact in ${delay / 1000}s (attempt ${attempt + 2}/${retryDelaysMs.length + 1}).`,
     );
     await wait(delay);
   }

@@ -6,3 +6,4 @@
 /.pnp.* binary linguist-generated
 /packages/app/sidecars/pnpm/pnpm-* binary linguist-vendored
 *.sh text eol=lf
+/.github/scripts/macos-build-tools/xcrun text eol=lf

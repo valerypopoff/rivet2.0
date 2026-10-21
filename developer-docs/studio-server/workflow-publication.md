@@ -522,7 +522,33 @@ Tree synchronization is intentionally content-non-destructive:
 
 Content reconciliation starts with an editor bridge capture **before** fetching the tree. The capture identifies the current iframe instance, an observation sequence, and the generation of each open editable project. The editor claims each observation once before applying its revision or structural binding. A local save beginning or settling, loading/reloading, accepting a conflict, restoring a failed reload, or closing/rebinding the project invalidates older observations. Ordinary unsaved graph edits do not. Revisions remain opaque: an earlier revision may legitimately return after an intentional server restore.
 
-The hosted IO provider fences the complete save preparation/request lifetime and always releases that fence in `finally`, including rejected requests and HTTP 409 conflicts. Projects currently saving or reloading are deferred independently of other open projects. Settlement requests a new capture and tree fetch. Remote reconciliation stays single-flight and coalesces retries; transport/bridge failures retry after the existing delay, while an active local operation wakes reconciliation when it settles. The delayed post-save sidebar refresh is only presentation, not a freshness guarantee.
+The hosted IO provider fences the complete save preparation/request lifetime and always releases that fence in `finally`, including rejected requests and HTTP 409 conflicts. Projects currently saving or reloading are deferred independently of other open projects. Settlement requests a new capture and tree fetch. Remote reconciliation stays single-flight and coalesces retries; transport/bridge failures retry after the existing delay, while an active local operation wakes reconciliation when it settles. Completed-save notifications enqueue that same guarded owner; there is no independent delayed sidebar refresh to supersede its in-flight request.
+
+Local bundle-membership changes, project opens and remote invalidations share
+the same `useWorkflowLibraryTreeSync` capture → fetch → reconcile owner. To
+request editor reconciliation, a settling local tree refresh only increments a
+wake-up sequence; its cached
+`allProjects` values are never paired with a newly captured revision context.
+Fetches performed by the reconciler do not increment that local sequence, so
+refreshing cannot recursively schedule another refresh. A failed local list
+refresh still wakes that owner so membership can recover through its existing
+fresh-fetch retry path. This prevents our own
+save from briefly conflicting with the sidebar's pre-save revision while still
+detecting a genuine later remote edit. Local conversion/moves continue to rebind
+open bundle members without reloading or replacing their content. Every entry
+point must preserve the capture-before-fetch contract: a fresh context does not
+make cached data fresh. Toast delays or bypassing revision checks are not a fix.
+A successful, non-superseded tree response also clears any earlier list-load
+error, including recovery by a quiet background retry. A failed background
+request retains the visible tree/error; merely starting a retry does not claim
+recovery, and a stale response cannot clear the current error.
+
+Queue coalescing preserves the newest tree hint and the requirement to reconcile
+the editor independently. A reconnect `tree-state` hint must never downgrade a
+forced content/membership check or its retry. If a capture, fetch or editor
+application requests a retry, promote any queued hint to forced: the sidebar's
+sync marker may already include that revision even though the editor rejected
+its observation. Freshness of the list alone cannot acknowledge editor delivery.
 
 The revision tracker owns conflict state. A valid observation matching the accepted revision clears an obsolete pending conflict; a repeated pending revision retains its conflict identity. Path rebinding does not authorize a differing saved revision: combined rename/move and content changes remain protected. The editor sends complete, versioned conflict snapshots to the dashboard. Every snapshot publication receives a new sequence, including presentation-only title updates that leave the conflict's `changeId` intact; the notice updates its displayed project without restarting the resolution action. A path move invalidates the old resolution identity and publishes the warning at the new path. Only snapshots from the current iframe instance with increasing sequence numbers can create, update, or dismiss warnings. A bridge timeout is an explicit retry outcome, never an authoritative empty list. Content and structural notices use neutral wording: the originating tree notification's browser ID does not establish who changed a particular project.
 
@@ -531,6 +557,25 @@ Reload and Keep mine carry the displayed conflict's opaque `changeId` as well as
 Regression coverage lives in the hosted revision-tracker, conflict-notice, and editor-bridge tests (`yarn workspace @valerypopoff/rivet-studio-server-web test`). Run `PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe workflow-tree-sync.spec.ts` for controlled tree/save response races and real dashboard/editor notification behavior. Hosted-project API tests retain filesystem and managed compare-and-swap coverage. No new storage schema or deployment setting is involved.
 
 The browser suite forwards API traffic to a disposable server and uses the checkout's hosted UI (`PLAYWRIGHT_BASE_URL` may point to its Vite server). It controls response release and observes bridge/save completion, rather than assuming a delay proves a race. The two-browser tree-refresh fixture finishes both initial tree responses before mutating its shared tree, so a first load cannot masquerade as a remote refresh. A separate opener-cloned-tab fixture proves a second tab does not inherit the first dashboard's event-suppression identity. Coverage includes an old tree arriving after the save acknowledgement, a tree explicitly deferred while the save response is held, genuine remote edits (including a move with a differing revision), rejected saves without an event, failed reloads/fetches, late resolution acknowledgements, inactive tabs, iframe replacement, and old snapshot delivery after closing/reopening. A separate pair of browser request contexts exercises real API revision rejection: the stale writer receives 409 and the winning revision remains stored. This fixture does not use or modify an operator's existing workflows.
+
+Post-save regressions hold the fresh tree response for both ordinary projects and
+bundle members, settle prior editor commands with a serialized bridge round trip,
+and inspect **every** conflict snapshot, not only eventual toast disappearance.
+Our own save must never publish a conflict. A real edit arriving after that save
+must remain visible across rechecks, and Keep mine must authorize only the shown
+remote revision for the next save. Local folder conversion also verifies that
+the open tab acquires its bundle binding without content reload or a false
+conflict, including recovery after a failed local list refresh, with bounded
+tree reads to catch recursive refresh scheduling. Initial list-load recovery
+holds the background response until the error is visible, then verifies the
+project list becomes usable without reloading the page or showing a conflict.
+Completed-save notification coverage settles initial reconciliation before
+adding a server-side project and sending the normal save acknowledgement, so
+Save As/list refresh does not depend on an incidental revision-tracker wake-up.
+Reconnect/retry regressions intercept one editor binding command before it is
+applied and return a real `retry` acknowledgement. With the sidebar already
+current, reconnect hints arriving both before and after that acknowledgement
+must still produce the genuine remote-change controls through a fresh retry.
 
 The Docker, development, and Kubernetes proxy templates define this stream as an exact authenticated `/api/workflows/tree/events` location before the generic `/api/` route. That location disables proxy buffering and uses long read/write timeouts so the stream is not delayed or cut off by ordinary API defaults. The notifier is intentionally API-process-local because the dashboard control plane is currently singleton. If control-plane API replicas become highly available later, replace it with shared fan-out (for example PostgreSQL `LISTEN/NOTIFY`) before claiming cross-replica tree updates.
 
@@ -560,8 +605,10 @@ The folder-row context menu exposes `Rename folder`, `New folder`, `New project`
 
 `Delete project` is still guarded:
 
-- for projects with no workflow endpoint publication and no published web apps, clicking it opens Project Settings; the user must select `Danger zone` and click `Delete project` there to complete deletion
-- for projects with a published workflow endpoint, unpublished workflow changes, or any published web apps, the dashboard shows a toast telling the user to unpublish the workflow endpoint and web apps first
+- for projects with no workflow endpoint publication and no published web apps, clicking it opens Project Settings directly on `Danger zone`; the user must still click `Delete project` there and confirm to complete deletion
+- for projects with a published workflow endpoint, unpublished workflow changes, or any published web apps, it opens Project Settings on `Endpoint` and shows the reminder to unpublish the workflow endpoint and web apps first
+- opening Settings normally still starts on `Endpoint`, including after closing a settings modal opened by Delete. The initial tab is navigation intent only, not permission to delete; verified publication reads and the existing final confirmation remain required
+- the context-menu action remains enabled for all publication states because it only navigates to settings; it must not advertise `aria-disabled` while retaining an active handler. Actual removal stays disabled in `Danger zone` until publication guards pass. Browser regressions use normal clicks and keyboard activation, never forced clicks to bypass disabled semantics
 
 The API delete route rejects direct deletion while a workflow endpoint or web app publication still exists. After the project is fully unpublished, deletion cleans up the project file, sidecars, recording references, and stored publication/history artifacts.
 

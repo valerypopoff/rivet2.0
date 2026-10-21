@@ -41,6 +41,7 @@ export const WorkflowLibraryModals: FC<{
   const {
     settingsModalOpen,
     settingsModalProject,
+    settingsModalInitialTab,
     allProjects,
     closeSettingsModal,
     refresh,
@@ -125,6 +126,7 @@ export const WorkflowLibraryModals: FC<{
           activeProject={settingsModalProject}
           allProjects={allProjects}
           isOpen={settingsModalOpen}
+          initialTab={settingsModalInitialTab}
           onClose={closeSettingsModal}
           onRefresh={() => refresh(false, { preserveVisibleTreeOnError: true })}
           onDeleteProject={onDeleteProject}

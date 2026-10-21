@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+if [[ "${1:-}" != stapler || "${2:-}" != staple ]]; then
+  exec /usr/bin/xcrun "$@"
+fi
+exec "${RIVET_MACOS_BUILD_NODE:?}" "${RIVET_MACOS_STAPLER_HELPER:?}" "$@"

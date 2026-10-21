@@ -2,6 +2,27 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-22 — compact HA and project-settings correctness
+
+All package tracks were last bumped in `216625246`. This update covers commits
+after that baseline through `4183e5fc5` and the pending save-conflict,
+project-settings navigation and generated-client freshness fixes.
+
+| Packages | Version | Changes since that track's last bump |
+| --- | --- | --- |
+| App | `2.28.1` → `2.28.2` | Vite/security dependency fixes and the patched source-bundled executor companion. No new desktop editor feature or package-local editor-source change. |
+| Core, Node, CLI, Evaluations | `2.22.0` → `2.22.1` | Core's transitive redirect dependency is patched; Node's generated web-app client freshness check tolerates physical CRLF without accepting real content changes. Core/Node receive compatible fixes; CLI and Evaluations are required public-family companions, not new feature implementations. |
+| App Executor | `2.14.1` → `2.14.2` | Rebuild companion for patched Core/Node dependency sources bundled into the sidecar; no new sidecar API or package-local implementation. |
+| All five Studio Server packages | `1.29.0` → `1.30.0` | Adds the compact singleton developer-control option with embedded maintenance, execution-owned published scheduling/runtime settings, additive availability status, and drain-aware automatic scaling/deployment support. Includes HA routing-withdrawal convergence, fixture recovery, post-save conflict/reconnect fixes and publication-aware Delete navigation with accessible menu actions. API/Web/Shared changed locally; Executor/Bootstrap are lockstep companions. |
+| Docs | `2.22.0` (unchanged) | No changes in the `packages/docs` site since its last bump; repository developer-doc updates are not changes to that package. |
+
+The root workspace has no package version. The public npm family and private
+Studio Server family remain separate lockstep tracks. Tauri/Cargo metadata and
+the CLI Docker fallback are synchronized. Workspace dependency ranges and Yarn
+workspace resolutions do not need changes for these version-only edits. Helm
+metadata and the managed database schema are unchanged. These versions are
+release preparation, not publication, deployment or additional HA qualification.
+
 ## Version update: 2026-10-20 — debugger reliability and bundle lifecycle
 
 Every package track's latest version change is `c71d4b1dd`. This update covers

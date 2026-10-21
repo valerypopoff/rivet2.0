@@ -645,6 +645,119 @@ async function openProjectSettingsModal(page: Page, project: WorkflowProjectItem
 }
 
 test.describe('Project settings modal', () => {
+  for (const publication of ['unpublished', 'published', 'unpublished_changes', 'web-app-only'] as const) {
+    test(`Delete project opens the appropriate settings tab for ${publication}`, async ({ page }) => {
+      const project = createProjectSettingsFixture(`delete-entry-${publication}`);
+      const fullyUnpublished = publication === 'unpublished';
+      if (publication === 'published' || publication === 'unpublished_changes') {
+        project.settings.status = publication;
+        project.settings.endpointName = 'delete-entry';
+        project.settings.publishedEndpointName = 'delete-entry';
+      } else if (publication === 'web-app-only') {
+        project.settings.publishedWebApps = [
+          {
+            uiGraphId: 'app',
+            uiGraphName: 'Published app',
+            slug: 'delete-entry-app',
+            allowedEmails: [],
+            publishedAt: '2026-04-08T10:30:00.000Z',
+            status: 'published',
+          },
+        ];
+        project.webApps = [
+          {
+            uiGraphId: 'app',
+            name: 'Published app',
+            publishedSlug: 'delete-entry-app',
+            publishedAt: '2026-04-08T10:30:00.000Z',
+            allowedEmails: [],
+            status: 'published',
+            isMissingFromProject: false,
+          },
+        ];
+      }
+      await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+      let deletes = 0;
+      await page.route('**/api/workflows/projects', async (route) => {
+        if (route.request().method() !== 'DELETE') return route.fallback();
+        deletes++;
+        await route.fulfill({ status: 500, json: { error: 'Unexpected deletion' } });
+      });
+      await page.goto('/');
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.locator('.project-row', { hasText: project.name }).click({ button: 'right' });
+      const deleteAction = page.getByRole('menuitem', { name: 'Delete project', exact: true });
+      await expect(deleteAction).toBeEnabled({ timeout: 2_000 });
+      if (publication === 'unpublished_changes') {
+        await deleteAction.focus();
+        await deleteAction.press('Enter');
+      } else {
+        await deleteAction.click();
+      }
+      const modal = page.getByTestId('workflow-project-settings-modal');
+      await expect(modal).toBeVisible();
+      await expect(
+        modal.getByRole('tab', { name: fullyUnpublished ? 'Danger zone' : 'Endpoint', exact: true }),
+      ).toHaveAttribute('aria-selected', 'true');
+      const deleteButton = modal.getByRole('button', { name: 'Delete project', exact: true });
+      if (fullyUnpublished) {
+        await expect(deleteButton).toBeEnabled();
+      } else {
+        await expect(deleteButton).toHaveCount(0);
+        await modal.getByRole('tab', { name: 'Danger zone', exact: true }).click();
+        await expect(deleteButton).toBeDisabled();
+      }
+      expect(deletes).toBe(0);
+      await modal.getByRole('button', { name: 'Close project settings' }).click();
+      await page.locator('.project-row', { hasText: project.name }).click();
+      await page.locator('.active-project-more-button').click();
+      await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toHaveAttribute('aria-selected', 'true');
+    });
+  }
+
+  test('Delete shortcut preserves review guards and manual tab choice while publication details load', async ({
+    page,
+  }) => {
+    const project = createProjectSettingsFixture('delete-entry-stale-tree');
+    await installProjectSettingsRoutes(page, project, createProjectSettingsRouteTrackers());
+    let releaseReview!: () => void;
+    const review = new Promise<void>((resolve) => {
+      releaseReview = resolve;
+    });
+    await page.route('**/api/workflows/projects/web-apps?**', async (route) => {
+      await review;
+      await route.fallback();
+    });
+    try {
+      await page.goto('/');
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.locator('.project-row', { hasText: project.name }).click({ button: 'right' });
+      await page.getByRole('menuitem', { name: 'Delete project', exact: true }).click();
+      const modal = page.getByTestId('workflow-project-settings-modal');
+      await expect(modal.getByRole('tab', { name: 'Danger zone', exact: true })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      await expect(modal.getByRole('button', { name: 'Delete project', exact: true })).toBeDisabled();
+      await modal.getByRole('tab', { name: 'Endpoint', exact: true }).click();
+      project.settings = {
+        ...project.settings,
+        status: 'published',
+        endpointName: 'now-published',
+        publishedEndpointName: 'now-published',
+      };
+      releaseReview();
+      await expect(modal.getByRole('button', { name: 'Unpublish', exact: true })).toBeEnabled();
+      await expect(modal.getByRole('tab', { name: 'Endpoint', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await modal.getByRole('tab', { name: 'Danger zone', exact: true }).click();
+      await expect(modal.getByRole('button', { name: 'Delete project', exact: true })).toBeDisabled();
+    } finally {
+      releaseReview();
+    }
+  });
+
   test('endpoint unpublish shows Unpublished while an independent web app remains published', async ({ page }) => {
     const project = createProjectSettingsFixture('endpoint-with-published-app');
     project.settings = {

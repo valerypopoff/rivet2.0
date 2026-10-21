@@ -1,5 +1,109 @@
 # Isolated GCP HA qualification plan
 
+## Compact-runtime attempt closure (2026-10-21)
+
+Operation `rivet-runtime-ha-20261021-a0d233f` is closed with **provider qualification
+incomplete**, not passed. Its operator failed in preparation because a formatted
+kubectl list omitted the watch cursor; no Rivet release, protected case or public
+observer window started. Keep the failed packet and terminal reports immutable.
+The local typed-list/cursor repair is not a replacement provider certificate.
+
+Independent cleanup verified zero billable resources: the exact cluster and SQL
+deletion operations completed, and Gateway children, Service NEGs, namespace,
+operator permissions, managed compute, bucket/object generations, address,
+NAT/router, subnets, firewall and new credentials/identities were removed.
+Autopilot managed compute is verified through its exact cluster deletion and
+recorded Kubernetes node identities; individual hidden boot-disk IDs are not
+claimed. Pre-existing networks, IAM/accounts/keys, project, billing and the
+NETWORKS quota preference7 were preserved; production was not accessed.
+The existing expiry-only automation was paused after this verification.
+
+Only the new non-billable VPC `rivet-runtime-ha-20261021-a0d233f` (ID
+`827910453193952740`), its private connection and internal range
+`rivet-rt-psa-1021-a0d233f` (ID `5483456548799073727`) remain under Google's SQL
+producer hold. Normal connection removal returned
+`FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION`; do not force or automatically
+retry it. `artifacts/gcp-runtime-ha-20261021-a0d233f/retained-networking.json`
+records the exact original failure and later review requirements. The normal
+deleted-DNS tombstone is retained too. Do not touch historical inventories or
+their held networks to remove these resources. No further rehearsal or production
+activation follows automatically from this closed attempt.
+
+### Faster preparation follow-up (local only)
+
+`artifacts/runtime-runner-preflight-20261021/preparation-result.json` binds the
+local follow-up receipts and slim payload. Real local Kubernetes reproduced the
+old watch-cursor failure (15.9 seconds including cleanup), then passed the
+corrected start/watch/reconnect/settle/export/cleanup path in 82.9 seconds. The
+existing protected local workload kept its exact UID. The exact slim helper
+packet restored on the pinned Linux image in 18.9 seconds with no network or
+credentials, and its temporary container is gone. Ten focused local regressions
+passed; transfer behavior was checked separately using a local API simulation.
+
+The payload omits the redundant 508.6 MB source archive (28.5% smaller transfer)
+while retaining source/tree/archive provenance. Its offline dispatch template
+also uses an exact-manifest boot-module renderer so new imports are available
+before the runtime download. The template deliberately refuses execution.
+
+This does not restart staging, qualify GCP or enable the compact production
+configuration. No new cloud calls/resources, release publication, production
+changes or automation were made by this follow-up. Before any further paid run,
+bind/review a fresh operation and its complete admission/cleanup packet locally,
+get a fresh budget/window approval, then execute the required provider cases
+once. Payload transfer should overlap independent cluster/SQL provisioning only
+with serialized inventory writes; that cloud orchestration overlap is planned,
+not already measured. Preserve all real policy timers and acceptance criteria.
+See [runtime qualification](runtime-ha-qualification.md#offline-runner-preparation-before-another-paid-window).
+
+### Fresh draft reviewed, not activated
+
+The next offline draft is `artifacts/gcp-runtime-ha-20261021-b7f9e2c/`.
+`offline-review-final.json` retains the new identities, exact helper/runtime
+hashes,65 focused passing regressions, fresh local Kubernetes smoke and isolated
+restore, plus the read-only staging baseline/key-metadata/quota observations.
+Upload staging and cluster-ready operator dispatch are separate, serialized
+actions; the dispatch only verifies previously recorded object identities and
+does not upload. Their destination-specific consent guards were tested by
+actually invoking the unapproved entry points and verifying refusal before any
+credential/cloud path. The local metadata simulation was stopped.
+
+Main still resolved to frozen source
+`a5153202380749298f46b64c7a3a4f0f58fffc6e` during this review. No CI rebuild,
+publication, production request, resource creation, quota change or automation
+change occurred. Existing network/IAM/key/billing metadata was read only.
+Seven protected networks currently exhaust NETWORKS7; a fresh eighth isolated
+network needs separate quota-limit approval. The first proposed IP ranges also
+overlapped the default network; those local draft bytes and their genuine
+restore receipt were preserved, and the corrected final packet passed restore.
+
+The fresh inventory has zero resources, no activation/expiry, no inherited
+approval and all creation/test gates false. Do not call it GCP qualification or
+start provisioning. See its `RUNBOOK.local.md` for the exact next approval and
+sequence. Old inventories and their non-billable holds remain excluded.
+
+The user subsequently approved the full fresh scope. The quota7->8 action was
+validated and dispatched once; its immediate response was unconfirmed, so no
+write was repeated. Independent inspection verified the exact historical
+preference at preferred/granted8 and effective NETWORKS8/usage7. Original intent
+and read-only reconciliation remain separate. The existing expiry-only monitor
+was rebound and activated, and protected identities/IAM/billing, current main,
+frozen release/local proofs and quota/range headroom were rechecked. Creation
+admission passed; tests still require actual cluster/storage/HTTPS/source checks.
+Production is excluded. Live state belongs to preflight/inventory, not this
+documentation; quota acknowledgement does not establish cleanup ownership.
+
+The initial foundation paused after an acknowledged node service-account create
+returned404 on its immediate read (IAM visibility delay). No create was repeated.
+Normal read-only observation later verified its exact unique ID. A tested,
+hash-reviewed host-only continuation admits only the initial three accepted,
+observed foundation identities before billable activation, with no private
+connection/IAM grants or test work started. It re-observes those three and creates
+only unissued tail resources; changed/unknown identities or a started clock are
+refused. A bounded45s read-only visibility wait for acknowledged new service
+accounts also covers later storage-identity setup. Runtime/source/chart and
+policy remain unchanged, and the original failed preparation observation and
+review packet are retained. This is not a provider availability result.
+
 ## Regional closure and DNS failure analysis (2026-10-19)
 
 The existing regional rehearsal is closed, not passed. No replacement rehearsal
@@ -1065,3 +1169,29 @@ storage, public addresses and NAT are gone, and no live producer instances remai
 before classifying these network-only residuals as non-billable. Keep this residual
 inventory distinct from the completed billable teardown, and never claim every
 network artifact was deleted. See [Google's VPC pricing](https://cloud.google.com/vpc/pricing).
+
+For a later, explicitly authorized residual-network cleanup:
+
+- Read each original inventory and its completed billable-cleanup receipt. Match
+  the project ID and number, exact network/range immutable IDs, original owner
+  description and the live connection's complete reserved-range set. Historical
+  actual resource metadata is identity evidence; a creation-operation response
+  without the resource ID is not. Never build deletion targets from a prefix scan.
+- Inspect the original deletion operation. Only a confirmed terminal failure can
+  admit a separately recorded follow-up; an unknown or still-running write must
+  be observed, not repeated. Preserve the original intent, operation and receipt
+  rather than clearing a replay guard. Serialize with the original inventory lock
+  and a separate follow-up journal; save each new intent before sending it.
+- Four days after recorded SQL deletion is an earliest review point, not proof
+  the producer released its resources. Leave newer holds alone. Recheck live SQL,
+  clusters and network dependencies; preserve unexpected or changed resources.
+- Request normal Service Networking connection deletion, await its successful
+  terminal operation and confirm both connection and VPC peering are absent.
+  Only then release the exact unused `INTERNAL`/`VPC_PEERING` range, await success
+  and absence, and delete the exact empty VPC. Do not use direct peering removal,
+  force flags or a forced producer cleanup. Persist operation identities before
+  polling; an uncertain response is not permission to send another delete.
+- Verify final absence, retain historical receipts and record the new result
+  separately. Preserve the default VPC, project, billing, quota preferences and
+  pre-existing IAM. Network-only residual cleanup does not authorize another test
+  environment, production access or a new scheduled task.

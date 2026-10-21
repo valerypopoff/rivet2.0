@@ -27,7 +27,6 @@ type WorkflowProjectContextMenuProps = {
   onCompare: () => void;
   canCompareToPublishedVersion: boolean;
   onCompareToPublishedVersion: () => void;
-  canDelete: boolean;
   onDelete: () => void;
 };
 
@@ -61,7 +60,6 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   onCompare,
   canCompareToPublishedVersion,
   onCompareToPublishedVersion,
-  canDelete,
   onDelete,
 }) => {
   useHostedSurfaceDismiss(onClose, isOpen);
@@ -134,9 +132,8 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button
         type="button"
-        className={`workflow-project-context-menu-item workflow-project-context-menu-item-danger${!canDelete ? ' workflow-project-context-menu-item-disabled' : ''}`}
+        className="workflow-project-context-menu-item workflow-project-context-menu-item-danger"
         role="menuitem"
-        aria-disabled={!canDelete}
         onClick={onDelete}
       >
         <DeleteBinIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />

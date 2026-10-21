@@ -331,6 +331,10 @@ The web-app freshness check runs through the Node workspace's
 package-owned `esbuild` dependency. The generator uses `createRequire(...)` for
 that dependency for the same Yarn PnP ESM-loader compatibility reason as the Core
 CJS and app-executor bundlers.
+Freshness ignores only physical CRLF-versus-LF differences caused by Windows Git
+checkouts. Escaped newlines in the embedded JavaScript, source changes, whitespace
+and missing output still fail; `web-app-client-freshness.test.mjs` covers this
+boundary. Generation itself continues emitting the same canonical artifact.
 The test-style script fails when `test.only`, `it.only`, `describe.only`,
 `suite.only`, or `context.only` calls are present in tracked or untracked
 non-ignored test files. Source-reading candidates are controlled by the explicit shrinking
@@ -1534,18 +1538,32 @@ The behavioral retry/cleanup tests in `build-macos-dmg.test.mjs` exercise bounde
 retries, unrelated-image isolation, normal/forced detach, and fail-closed cleanup.
 They run on every host; actual `hdiutil`/`plutil` execution and finished-package
 verification require the native macOS release jobs.
-Developer release run 38370519350 exposed a separate earlier boundary: Tauri's
-own app stapling lost its Apple CloudKit connection (-1005) after notarization
-was accepted. Tauri wraps native stapler exit 68 as build exit 1. The build
-helper now also recognizes that exact combination: confirmed
-`Finished with status Accepted`, `failed to staple app`,
-`The staple and validate action failed! Error 68.`, and one of the existing
-explicit transient Apple network codes. It reuses the stapler classifier and
-the same bounded full-build retry/cleanup path; it does not treat arbitrary
-exit 1/68, certificate errors or uncertain notarization submission as retryable.
-Unlike the final-DMG retry below, this can repeat app signing/notarization through
-Tauri. All signing, stapling, packaged-executor and release validation still run.
-Regression tests cover the wrapped failure, permanent lookalikes and exhaustion.
+Developer release runs 38370519350 and
+[39686261579](https://github.com/valerypopoff/rivet2.0/actions/runs/39686261579)
+exposed a separate earlier boundary: Tauri's own app stapling lost its Apple
+CloudKit connection (-1005) after notarization was accepted. Tauri wraps native
+stapler exit 68 as build exit 1. The original full-build retry repeated signing
+and accepted notarization three times but never extended ticket retrieval itself.
+The child build now gets a scoped PATH adapter,
+[`.github/scripts/macos-build-tools/xcrun`](../.github/scripts/macos-build-tools/xcrun),
+which intercepts only `xcrun stapler staple` and delegates to
+[`.github/scripts/tauri-app-stapler.mjs`](../.github/scripts/tauri-app-stapler.mjs).
+That helper accepts Tauri v1's exact `stapler staple -v <app>` invocation and
+uses the six-attempt ticket retry budget below against the same signed app.
+Its native command is absolute `/usr/bin/xcrun`, preventing adapter recursion;
+argv (including spaces), cwd and final failure status are preserved. Other
+xcrun operations, including notarization submission, pass straight through to
+the native tool. The adapter's Node/helper paths are absolute and scoped to the
+Tauri child process; Apple credentials and the original PATH remain available.
+Exhausted app-ticket retrieval no longer qualifies for a full-build retry.
+All signing, stapling, packaged-executor and release validation still run.
+Regression tests cover three connection losses followed by recovery, permanent
+errors, exhaustion without resubmission and child environment isolation. A POSIX
+Bash fixture checks real adapter dispatch, quoting, cwd, output and exit status;
+the native macOS test also checks non-stapling xcrun pass-through. Both macOS
+release jobs run these contracts before signing. The extensionless
+adapter must retain executable Git mode and LF endings. Linux fixtures do not
+prove Apple availability or native release acceptance; those require macOS CI.
 The complete failure history and the invariants that protect this path are
 recorded under [Apple Silicon packaging incident record and guardrails](#apple-silicon-packaging-incident-record-and-guardrails).
 
@@ -1712,7 +1730,26 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
-### Prepared release versions (2026-10-20)
+### Prepared release versions (2026-10-22)
+
+The last version change for every package track is `216625246`. Changes after
+that baseline through `4183e5fc5`, plus the pending fixes, prepare:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.28.1` → `2.28.2` | Build/security dependency fixes and the patched bundled sidecar. |
+| Public Core/Node/Evaluations/CLI | `2.22.0` → `2.22.1` | Transitive redirect security fix and Node's CRLF-safe generated-client check; public-family lockstep companions. |
+| App executor | `2.14.1` → `2.14.2` | Patched source-bundled Core/Node dependency companion. |
+| Documentation site | `2.22.0` (unchanged) | No package-local changes; developer-doc changes alone do not bump the site. |
+| Five private Studio Server packages | `1.29.0` → `1.30.0` | Additive compact HA/runtime ownership and drain-aware scaling support, plus rollout, hosted save-conflict and project-settings fixes. |
+
+The [package inventory](PACKAGES.md) separates package-local work from required
+release companions. Desktop Tauri/Cargo metadata and the CLI Docker fallback
+are synchronized. No dependency range, Yarn workspace lock entry, Helm version
+or database schema change is required for this bump. Publication, deployment
+and HA qualification remain separate actions.
+
+### Previous prepared release versions (2026-10-20)
 
 All tracks were last bumped in `c71d4b1dd`. Changes through `6e0e9b27e` and the
 debugger-information, desktop target-label and cross-surface context-menu

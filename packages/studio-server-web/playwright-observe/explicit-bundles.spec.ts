@@ -32,7 +32,8 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
     };
     const ordinary = { ...folder, id: 'Ordinary', name: 'Ordinary', relativePath: 'Ordinary', bundleId: null };
     let removed = false,
-      requests = 0;
+      requests = 0,
+      failedRefreshes = 0;
     let release!: () => void;
     const ready = new Promise<void>((resolve) => {
       release = resolve;
@@ -45,18 +46,20 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
         });
       }),
     );
-    await page.route('**/api/workflows/tree', (route) =>
-      removed && outcome === 'refresh failure'
-        ? route.fulfill({ status: 503, json: { error: 'Tree unavailable' } })
-        : route.fulfill({
-            json: {
-              root: '/managed/workflows',
-              capabilities: { explicitBundles: true },
-              folders: removed ? [ordinary] : [folder, ordinary],
-              projects: [],
-            },
-          }),
-    );
+    await page.route('**/api/workflows/tree', (route) => {
+      if (removed && outcome === 'refresh failure') {
+        failedRefreshes++;
+        return route.fulfill({ status: 503, json: { error: 'Tree unavailable' } });
+      }
+      return route.fulfill({
+        json: {
+          root: '/managed/workflows',
+          capabilities: { explicitBundles: true },
+          folders: removed ? [ordinary] : [folder, ordinary],
+          projects: [],
+        },
+      });
+    });
     await page.route('**/api/projects/load', (route) =>
       route.fulfill({ json: { contents: serializeProject(project), datasetsContents: null, revisionId: null } }),
     );
@@ -157,7 +160,12 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
       await expect(modal).toHaveCount(0);
       await expect(editorTab).toHaveCount(0);
       if (outcome === 'refresh failure') {
+        // Closing the last member tab also schedules editor reconciliation.
+        // A superseded refresh must not become a green success notification.
         await expect(page.locator('.Toastify__toast--warning')).toContainText('Bundle deleted');
+        await expect(page.locator('.Toastify__toast--success')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Collapse Feature bundle', exact: true })).toBeVisible();
+        expect(failedRefreshes).toBeGreaterThan(0);
       } else {
         await expect(page.getByRole('button', { name: 'Collapse Feature bundle', exact: true })).toHaveCount(0);
       }

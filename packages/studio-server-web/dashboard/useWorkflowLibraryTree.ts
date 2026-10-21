@@ -5,17 +5,15 @@ import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowTreeResponse, Wor
 import { fetchWorkflowTree } from './workflowApi';
 import { collectFolderIds, flattenFolders, flattenProjects } from './workflowLibraryHelpers';
 
-const PROJECT_SAVE_REFRESH_DELAY_MS = 150;
-
-export function useWorkflowLibraryTree(projectSaveSequence: number) {
+export function useWorkflowLibraryTree() {
   const [folders, setFolders] = useState<WorkflowFolderItem[]>([]);
   const [explicitBundles, setExplicitBundles] = useState(false);
   const [rootProjects, setRootProjects] = useState<WorkflowProjectItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [localRefreshSequence, setLocalRefreshSequence] = useState(0);
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
   const refreshRequestIdRef = useRef(0);
-  const projectSaveRefreshTimeoutRef = useRef<number | null>(null);
   const syncRef = useRef<WorkflowTreeSyncState | null>(null);
 
   const refresh = useCallback(
@@ -24,6 +22,7 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
       options?: {
         preserveVisibleTreeOnError?: boolean;
         onError?: (message: string) => void;
+        reconcileEditors?: boolean;
       },
     ): Promise<WorkflowTreeResponse | null> => {
       const requestId = ++refreshRequestIdRef.current;
@@ -41,6 +40,9 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
           return null;
         }
 
+        // A successful background retry also recovers an earlier foreground
+        // failure. Only an accepted response may clear that error.
+        setError(null);
         setFolders(tree.folders);
         setExplicitBundles(tree.capabilities?.explicitBundles === true);
         setRootProjects(tree.projects);
@@ -78,6 +80,10 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
       } finally {
         if (requestId === refreshRequestIdRef.current) {
           setLoading(false);
+          // A local mutation's event echo is suppressed. Wake the fresh-tree
+          // owner even if this list refresh failed, so membership can recover
+          // through its normal retry path without trusting cached revisions.
+          if (options?.reconcileEditors !== false) setLocalRefreshSequence((sequence) => sequence + 1);
         }
       }
     },
@@ -98,6 +104,7 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
     () =>
       refresh(false, {
         preserveVisibleTreeOnError: true,
+        reconcileEditors: false,
       }),
     [refresh],
   );
@@ -105,29 +112,6 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  useEffect(() => {
-    if (projectSaveSequence === 0) {
-      return;
-    }
-
-    if (projectSaveRefreshTimeoutRef.current != null) {
-      window.clearTimeout(projectSaveRefreshTimeoutRef.current);
-    }
-    projectSaveRefreshTimeoutRef.current = window.setTimeout(() => {
-      projectSaveRefreshTimeoutRef.current = null;
-      reconcileInBackground('Failed to refresh the project list after save.');
-    }, PROJECT_SAVE_REFRESH_DELAY_MS);
-  }, [projectSaveSequence, reconcileInBackground]);
-
-  useEffect(
-    () => () => {
-      if (projectSaveRefreshTimeoutRef.current != null) {
-        window.clearTimeout(projectSaveRefreshTimeoutRef.current);
-      }
-    },
-    [],
-  );
 
   const flattenedFolders = useMemo(() => flattenFolders(folders), [folders]);
   const folderIds = useMemo(() => flattenedFolders.map((folder) => folder.id), [flattenedFolders]);
@@ -142,6 +126,7 @@ export function useWorkflowLibraryTree(projectSaveSequence: number) {
     folderIds,
     folders,
     loading,
+    localRefreshSequence,
     reconcileInBackground,
     refresh,
     rootProjects,

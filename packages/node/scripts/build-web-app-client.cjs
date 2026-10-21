@@ -11,6 +11,12 @@ const generatedPath = resolve(packageDirectory, 'src/generated/webAppClient.gene
 const coreWebAppRuntimePath = resolve(packageDirectory, '../core/src/webAppRuntime.ts');
 const checkOnly = process.argv.slice(2).includes('--check');
 
+function isGeneratedClientFresh(existing, expected) {
+  // Git may check out this text artifact with CRLF on Windows. Normalize only
+  // physical line endings, not the escaped newlines inside the JavaScript string.
+  return existing.replaceAll('\r\n', '\n') === expected.replaceAll('\r\n', '\n');
+}
+
 async function main() {
   const result = await build({
     alias: {
@@ -34,7 +40,7 @@ async function main() {
 
   if (checkOnly) {
     const existing = await readFile(generatedPath, 'utf8');
-    if (existing !== output) {
+    if (!isGeneratedClientFresh(existing, output)) {
       throw new Error(
         'The generated hosted web-app client is stale. Run yarn workspace @valerypopoff/rivet2-node build:web-app-client.',
       );
@@ -46,7 +52,11 @@ async function main() {
   await writeFile(generatedPath, output);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+module.exports = { isGeneratedClientFresh };
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

@@ -1,7 +1,6 @@
 import type { FC } from 'react';
 import { WorkflowFolderContextMenu } from './WorkflowFolderContextMenu';
 import { WorkflowProjectContextMenu } from './WorkflowProjectContextMenu';
-import { isWorkflowProjectFullyUnpublished } from './projectSettingsForm';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
 type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>;
@@ -90,7 +89,6 @@ export const WorkflowLibraryContextMenus: FC<{
           onCompare={() => void handleCompareProjectFromContextMenu()}
           canCompareToPublishedVersion={canCompareOpenedProjectToPublishedVersion(projectContextMenuState.project)}
           onCompareToPublishedVersion={() => void handleCompareOpenedProjectToPublishedVersionFromContextMenu()}
-          canDelete={isWorkflowProjectFullyUnpublished(projectContextMenuState.project)}
           onDelete={() => void handleDeleteProjectFromContextMenu()}
         />
       ) : null}

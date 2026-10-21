@@ -17,6 +17,9 @@ declare global {
     __captures: number;
     __savedProjects: number;
     __reconciliationStatuses: string[];
+    __interceptRetry?: boolean;
+    __releaseRetry?: () => void;
+    __emitWorkflowTreeEvent?: (eventName: string, eventPayload: unknown) => void;
   }
 }
 
@@ -949,6 +952,303 @@ async function saveThroughEditor(page: Page) {
   await page.locator('.active-project-save-button').click();
 }
 
+/** A real serialized bridge round trip settles earlier revision publications. */
+async function flushConflictMessages(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const requestId = `test-conflict-barrier:${crypto.randomUUID()}`;
+        const frame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame')!;
+        const listener = (event: MessageEvent) => {
+          if (
+            event.source !== frame.contentWindow ||
+            event.data?.type !== 'workflow-project-reconciliation-captured' ||
+            event.data.requestId !== requestId
+          )
+            return;
+          window.removeEventListener('message', listener);
+          resolve();
+        };
+        window.addEventListener('message', listener);
+        frame.contentWindow!.postMessage(
+          { type: 'capture-workflow-project-reconciliation', requestId },
+          location.origin,
+        );
+      }),
+  );
+}
+
+for (const bundled of [false, true]) {
+  for (const remoteEdit of [false, true]) {
+    test(`post-save cached tree: ${bundled ? 'bundle member' : 'ordinary project'}, ${remoteEdit ? 'real remote conflict remains' : 'no false warning'}`, async ({
+      page,
+    }) => {
+      const name = 'Post-save freshness';
+      const project = createProjectFixture(name, 'revision-1');
+      const bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
+      if (bundled) {
+        project.bundleId = bundleId;
+        project.relativePath = `Feature/${project.fileName}`;
+        project.absolutePath = `/managed/workflows/${project.relativePath}`;
+      }
+      const state: TreeState = {
+        projects: bundled ? [] : [project],
+        revision: 0,
+        folders: bundled
+          ? [
+              {
+                id: 'Feature',
+                name: 'Feature',
+                relativePath: 'Feature',
+                absolutePath: '/managed/workflows/Feature',
+                updatedAt: '',
+                bundleId,
+                folders: [],
+                projects: [project],
+              },
+            ]
+          : [],
+      };
+      const treeStarted = deferred();
+      const releaseTree = deferred();
+      const expectedRevisions: string[] = [];
+      let holdTree = false;
+      let treeReads = 0;
+      await installMockEventSource(page);
+      await page.route('**/api/workflows/tree', async (route) => {
+        treeReads++;
+        if (holdTree) {
+          treeStarted.resolve();
+          await releaseTree.promise;
+        }
+        await route.fulfill({
+          json: {
+            root: '/managed/workflows',
+            capabilities: { explicitBundles: true },
+            folders: state.folders,
+            projects: state.projects,
+            sync: { epoch: 'playwright-tree-sync', revision: state.revision },
+          },
+        });
+      });
+      await page.route('**/api/projects/load', (route) =>
+        route.fulfill({
+          json: { contents: createProjectContents(name), datasetsContents: null, revisionId: 'revision-1' },
+        }),
+      );
+      await page.route('**/api/projects/save', async (route) => {
+        expectedRevisions.push(route.request().postDataJSON().expectedRevisionId);
+        project.revisionId = expectedRevisions.length === 1 ? 'revision-2' : 'revision-4';
+        state.revision++;
+        holdTree = expectedRevisions.length === 1;
+        await route.fulfill({ json: { path: project.absolutePath, revisionId: project.revisionId } });
+      });
+      await page.goto('/');
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      if (bundled) await page.getByRole('button', { name: 'Expand Feature bundle', exact: true }).click();
+      await page.locator('.project-row', { hasText: name }).dblclick();
+      await saveThroughEditor(page);
+      try {
+        await expect.poll(() => page.evaluate(() => window.__savedProjects)).toBe(1);
+        await withAsyncDeadline(treeStarted.promise, 'post-save fresh tree request');
+        await flushConflictMessages(page);
+        // Inspect every publication, not just the eventual disappearance of a
+        // toast. The old bundle effect publishes the cached revision here.
+        expect(
+          await page.evaluate(() => window.__conflictSnapshots.flatMap((snapshot) => snapshot.contentChanges)),
+        ).toEqual([]);
+        if (remoteEdit) {
+          project.revisionId = 'revision-3';
+          state.revision++;
+        }
+        holdTree = false;
+        releaseTree.resolve();
+        const warning = page.locator('.workflow-remote-project-change-notice');
+        if (remoteEdit) {
+          await expect(warning).toBeVisible();
+          const reads = treeReads;
+          await emitTreeChange(page, {
+            epoch: 'playwright-tree-sync',
+            revision: ++state.revision,
+            sourceClientId: 'other-browser',
+          });
+          await expect.poll(() => treeReads).toBeGreaterThan(reads);
+          await flushConflictMessages(page);
+          await expect(warning).toBeVisible();
+          await warning.getByRole('button', { name: 'Keep mine', exact: true }).click();
+          await expect(warning).toHaveCount(0);
+        }
+        await saveThroughEditor(page);
+        await expect.poll(() => expectedRevisions).toEqual(['revision-1', remoteEdit ? 'revision-3' : 'revision-2']);
+        await expect.poll(() => page.evaluate(() => window.__savedProjects)).toBe(2);
+        await flushConflictMessages(page);
+        await expect(warning).toHaveCount(0);
+        const conflicts = await page.evaluate(() =>
+          window.__conflictSnapshots.flatMap((snapshot) => snapshot.contentChanges),
+        );
+        expect(conflicts.map((change) => change.revisionId)).toEqual(
+          remoteEdit ? expect.arrayContaining(['revision-3']) : [],
+        );
+        if (remoteEdit) expect(conflicts.every((change) => change.revisionId === 'revision-3')).toBe(true);
+      } finally {
+        releaseTree.resolve();
+      }
+    });
+  }
+}
+
+for (const failedRefresh of [false, true]) {
+  test(`local folder conversion reconciles open bundle membership ${failedRefresh ? 'after a failed list refresh' : 'without a remote event or content reload'}`, async ({
+    page,
+  }) => {
+    const name = 'Locally converted member';
+    const project = createProjectFixture(name, 'unchanged-revision');
+    project.relativePath = `Feature/${project.fileName}`;
+    project.absolutePath = `/managed/workflows/${project.relativePath}`;
+    const folder: WorkflowFolderItem = {
+      id: 'Feature',
+      name: 'Feature',
+      relativePath: 'Feature',
+      absolutePath: '/managed/workflows/Feature',
+      updatedAt: '',
+      bundleId: null,
+      folders: [],
+      projects: [project],
+    };
+    const bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
+    let loads = 0;
+    let treeReads = 0;
+    let rejectNextTree = false;
+    await installMockEventSource(page);
+    await page.route('**/api/workflows/tree', async (route) => {
+      treeReads++;
+      if (rejectNextTree) {
+        rejectNextTree = false;
+        return route.fulfill({ status: 503, json: { error: 'Temporary list-refresh failure after conversion' } });
+      }
+      await route.fulfill({
+        json: {
+          root: '/managed/workflows',
+          capabilities: { explicitBundles: true },
+          folders: [folder],
+          projects: [],
+          sync: { epoch: 'playwright-tree-sync', revision: folder.bundleId ? 1 : 0 },
+        },
+      });
+    });
+    await page.route('**/api/projects/load', (route) => {
+      loads++;
+      return route.fulfill({
+        json: { contents: createProjectContents(name), datasetsContents: null, revisionId: project.revisionId },
+      });
+    });
+    await page.route('**/api/workflows/bundles/kind', (route) => {
+      expect(route.request().postDataJSON().enabled).toBe(true);
+      folder.bundleId = bundleId;
+      project.bundleId = bundleId;
+      rejectNextTree = failedRefresh;
+      return route.fulfill({ json: { folder } });
+    });
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.getByRole('button', { name: 'Expand Feature', exact: true }).click();
+    await page.locator('.project-row', { hasText: name }).dblclick();
+    await expect(
+      page.frameLocator('iframe.dashboard-editor-frame').locator('.node[data-nodeid="tree-sync-node"]'),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Collapse Feature', exact: true }).click({ button: 'right' });
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('menuitem', { name: 'Convert to bundle', exact: true }).click();
+    await expect
+      .poll(async () => {
+        const raw = await readCommittedWorkspaceCheckpoint(page);
+        return raw
+          ? JSON.parse(raw).groups.project?.projectsState?.openedProjects?.[project.projectMetadataId!]?.hostedBundleKey
+          : null;
+      })
+      .toContain(`#bundle:${bundleId}`);
+    await flushConflictMessages(page);
+    expect(loads).toBe(1);
+    expect(
+      await page.evaluate(() => window.__conflictSnapshots.flatMap((snapshot) => snapshot.contentChanges)),
+    ).toEqual([]);
+    // Remote-owner fetches must not recursively schedule local membership fetches.
+    expect(treeReads).toBeLessThan(20);
+  });
+}
+
+test('completed-save notifications refresh the tree without a revision-tracker wakeup', async ({ page }) => {
+  const state: TreeState = { folders: [], projects: [], revision: 0 };
+  const treeReads = { count: 0 };
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, treeReads);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await expect.poll(() => page.evaluate(() => window.__reconciliationStatuses.length)).toBeGreaterThan(0);
+  await flushConflictMessages(page);
+  const project = createProjectFixture('Saved new project', 'saved-revision');
+  state.projects = [project];
+  state.revision++;
+  await page.evaluate((path) => {
+    const frame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame')!;
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'project-saved', path },
+        origin: location.origin,
+        source: frame.contentWindow,
+      }),
+    );
+  }, project.absolutePath);
+  await expect(page.locator('.project-row', { hasText: project.name })).toBeVisible();
+  await flushConflictMessages(page);
+  expect(await page.evaluate(() => window.__conflictSnapshots.flatMap((snapshot) => snapshot.contentChanges))).toEqual(
+    [],
+  );
+  expect(treeReads.count).toBeLessThan(10);
+});
+
+test('a failed initial tree load recovers visibly through the guarded background refresh', async ({ page }) => {
+  const name = 'Recovered initial tree';
+  const project = createProjectFixture(name, 'initial-revision');
+  const retryStarted = deferred();
+  const releaseRetry = deferred();
+  let reads = 0;
+  await installMockEventSource(page);
+  await page.route('**/api/workflows/tree', async (route) => {
+    if (++reads === 1) return route.fulfill({ status: 503, json: { error: 'Initial tree unavailable' } });
+    retryStarted.resolve();
+    await releaseRetry.promise;
+    await route.fulfill({
+      json: {
+        root: '/managed/workflows',
+        folders: [],
+        projects: [project],
+        sync: { epoch: 'playwright-tree-sync', revision: 0 },
+      },
+    });
+  });
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  try {
+    await expect(page.locator('.workflow-library-panel .state')).toHaveText('Initial tree unavailable');
+    await withAsyncDeadline(retryStarted.promise, 'fresh retry after failed initial load');
+    releaseRetry.resolve();
+    await expect(page.locator('.project-row', { hasText: name })).toBeVisible();
+    await expect(page.locator('.workflow-library-panel .state')).toHaveCount(0);
+    await flushConflictMessages(page);
+    expect(
+      await page.evaluate(() => window.__conflictSnapshots.flatMap((snapshot) => snapshot.contentChanges)),
+    ).toEqual([]);
+    expect(reads).toBeLessThan(10);
+  } finally {
+    releaseRetry.resolve();
+  }
+});
+
 for (const race of ['old tree after save', 'tree before save response', 'remote edit during save'] as const) {
   test(`revision freshness: ${race}`, async ({ page }) => {
     const name = 'Save race';
@@ -1052,6 +1352,9 @@ for (const race of ['old tree after save', 'tree before save response', 'remote 
         await saveThroughEditor(page);
         await expect.poll(() => expectedRevisions).toEqual(['revision-1', 'revision-2']);
         await expect(warning).toHaveCount(0);
+        expect(
+          await page.evaluate(() => window.__conflictSnapshots.flatMap((snapshot) => snapshot.contentChanges)),
+        ).toEqual([]);
       }
     } finally {
       releaseTree.resolve();
@@ -1251,6 +1554,132 @@ test('two independent browsers retain the real API stale-overwrite protection', 
     await second.close();
   }
 });
+
+for (const reconnectTiming of ['before retry', 'after retry'] as const) {
+  test(`a reconnect state ${reconnectTiming} cannot consume a required editor reconciliation retry`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      if (window.parent === window) return;
+      window.addEventListener(
+        'message',
+        function once(event) {
+          if (
+            !window.__interceptRetry ||
+            event.source !== window.parent ||
+            event.data?.type !== 'reconcile-workflow-project-bindings' ||
+            !event.data.bindings.some((binding: { revisionId?: string }) => binding.revisionId === 'remote-revision')
+          )
+            return;
+          event.stopImmediatePropagation();
+          window.removeEventListener('message', once, true);
+          Object.assign(window, {
+            __releaseRetry: () =>
+              window.parent.postMessage(
+                {
+                  type: 'workflow-project-bindings-reconciled',
+                  requestId: event.data.requestId,
+                  changes: [],
+                  status: 'retry',
+                },
+                location.origin,
+              ),
+          });
+        },
+        true,
+      );
+    });
+    const name = 'Retry after reconnect';
+    const project = createProjectFixture(name, 'accepted');
+    const state: TreeState = { folders: [], projects: [project], revision: 0 };
+    const treeStarted = deferred();
+    const releaseTree = deferred();
+    let holdTree = false;
+    await installMockEventSource(page);
+    await page.route('**/api/workflows/tree', async (route) => {
+      if (holdTree) {
+        treeStarted.resolve();
+        await releaseTree.promise;
+      }
+      await route.fulfill({
+        json: {
+          root: '/managed/workflows',
+          folders: [],
+          projects: state.projects,
+          sync: { epoch: 'playwright-tree-sync', revision: state.revision },
+        },
+      });
+    });
+    await page.route('**/api/projects/load', (route) =>
+      route.fulfill({
+        json: { contents: createProjectContents(name), datasetsContents: null, revisionId: 'accepted' },
+      }),
+    );
+    await page.goto('/');
+    await authenticateIfNeeded(page);
+    await waitForDashboardReady(page);
+    await page.locator('.project-row', { hasText: name }).dblclick();
+    await expect(page.locator('.active-project-name')).toHaveText(name);
+    await expect.poll(() => page.evaluate(() => window.__reconciliationStatuses.length)).toBeGreaterThan(0);
+    await flushConflictMessages(page);
+    // Prime the initial SSE state so the later reconnect is an ordinary hint.
+    const previous = await page.evaluate(() => window.__reconciliationStatuses.length);
+    await page.evaluate(() =>
+      window.__emitWorkflowTreeEvent!('tree-state', { epoch: 'playwright-tree-sync', revision: 0 }),
+    );
+    await expect.poll(() => page.evaluate(() => window.__reconciliationStatuses.length)).toBeGreaterThan(previous);
+    await flushConflictMessages(page);
+    await page
+      .frameLocator('iframe.dashboard-editor-frame')
+      .locator('body')
+      .evaluate(() => {
+        // Model one legitimate stale-context/temporary-bridge retry without
+        // applying its bindings. The next real command uses the actual editor.
+        Object.assign(window, { __interceptRetry: true });
+      });
+    await page.evaluate(() => {
+      window.__reconciliationStatuses = [];
+    });
+    project.revisionId = 'remote-revision';
+    state.revision = 1;
+    holdTree = true;
+    try {
+      await emitTreeChange(page, { epoch: 'playwright-tree-sync', revision: 1, sourceClientId: 'other-browser' });
+      await withAsyncDeadline(treeStarted.promise, 'remote tree response before editor retry');
+      state.revision = 2;
+      holdTree = false;
+      releaseTree.resolve();
+      await expect
+        .poll(() =>
+          page
+            .frameLocator('iframe.dashboard-editor-frame')
+            .locator('body')
+            .evaluate(() => typeof window.__releaseRetry === 'function'),
+        )
+        .toBe(true);
+      const reconnect = () =>
+        page.evaluate(() =>
+          window.__emitWorkflowTreeEvent!('tree-state', { epoch: 'playwright-tree-sync', revision: 2 }),
+        );
+      if (reconnectTiming === 'before retry') await reconnect();
+      await page
+        .frameLocator('iframe.dashboard-editor-frame')
+        .locator('body')
+        .evaluate(() => window.__releaseRetry!());
+      await expect.poll(() => page.evaluate(() => window.__reconciliationStatuses.includes('retry'))).toBe(true);
+      if (reconnectTiming === 'after retry') {
+        await flushConflictMessages(page);
+        await reconnect();
+      }
+      const warning = page.locator('.workflow-remote-project-change-notice');
+      await expect(warning).toBeVisible();
+      await warning.getByRole('button', { name: 'Keep mine', exact: true }).click();
+      await expect(warning).toHaveCount(0);
+    } finally {
+      releaseTree.resolve();
+    }
+  });
+}
 
 test('a rejected save requests fresh conflict controls even without a tree event', async ({ page }) => {
   const name = 'Rejected save';
