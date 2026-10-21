@@ -2,6 +2,7 @@ import { runHaRollingUpgrade } from './ha-rolling-upgrade.mjs';
 import { releaseOperationJournalName, journalForReleaseOperation } from './release-operation-journal.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
+import { hasHaPublicEndpoint, waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
 
 export const haFrozenAutoscalingValues = {
   autoscaling: {
@@ -126,6 +127,7 @@ export async function runHaKubernetesRollout({
   artifact = async () => {},
   beforeRetirement = async () => {},
   afterWithdrawal = async () => {},
+  routingWithdrawalClock,
 }) {
   const name = releaseOperationJournalName(release);
   let observedJournalVersion;
@@ -225,17 +227,10 @@ export async function runHaKubernetesRollout({
       (await kube(['exec', pod.name, '-c', pod.container, '--', 'node', '/opt/rivet/retire-backend.mjs', ...args]))
         .stdout,
     );
-  const waitForRoutingWithdrawal = (pod) =>
-    deadlineWait(async () => {
-      const slices = JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items;
-      return !slices.some(
-        (s) =>
-          publicServices.has(s.metadata.labels?.['kubernetes.io/service-name']) &&
-          // Kubernetes treats omitted readiness as potentially ready. Only an
-          // explicit false (or removal) proves this endpoint has withdrawn.
-          s.endpoints?.some((e) => e.targetRef?.uid === pod.uid && e.conditions?.ready !== false),
-      );
-    }, `endpoint withdrawal for ${pod.name}`);
+  const waitForRoutingWithdrawal = (pod) => waitForHaRoutingWithdrawal({
+    pod, publicServices, observePod, timeoutMs, clock: routingWithdrawalClock,
+    readSlices: async () => JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items,
+  });
   const guardedTemplateValues = async () => {
     const versions = {};
     for (const w of workloads) {
@@ -338,7 +333,11 @@ export async function runHaKubernetesRollout({
         return !!revision && pod?.ready && pod.image === image && pod.revision === revision;
       }, `candidate owner ${podName}`),
     waitForWithdrawal: async (pod) => {
-      await waitForRoutingWithdrawal(pod);
+      // Propagation was observed before admission closed. Recheck the route,
+      // without needlessly waiting another full minute after work has drained.
+      await deadlineWait(async () => !hasHaPublicEndpoint(
+        JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items, publicServices, pod.uid,
+      ), `endpoint withdrawal for ${pod.name}`);
       await afterWithdrawal(pod);
     },
   });

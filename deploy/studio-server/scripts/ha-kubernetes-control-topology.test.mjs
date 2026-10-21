@@ -45,9 +45,11 @@ function fixture(from = false, compact = false) {
     live = render(from, compact),
     pods = new Map(),
     states = new Map(),
-    commands = [];
+    commands = [],
+    routingWithdrawals = new Map();
   let journal,
-    revision = 0;
+    revision = 0,
+    routingTime = 0;
   for (const r of live) {
     r.metadata.uid = randomUUID();
     r.metadata.resourceVersion = String(++revision);
@@ -91,6 +93,7 @@ function fixture(from = false, compact = false) {
     manifestDigest: 'same-bridge',
     resources,
     timeoutMs: 5,
+    routingWithdrawalClock: { now: () => routingTime, wait: async () => { routingTime += 1000; } },
     kube: async (args, extra = {}) => {
       commands.push(args.join(' '));
       const respond = (value) => ({ stdout: JSON.stringify(value) });
@@ -141,6 +144,8 @@ function fixture(from = false, compact = false) {
         const state = states.get(args[1]);
         if (args.includes('--withdraw-only') || args.includes('--begin-only')) {
           assert.equal(args.at(-2), state.incarnation);
+          if (args.includes('--withdraw-only')) routingWithdrawals.set(p.metadata.uid, routingTime);
+          else assert.ok(routingTime - routingWithdrawals.get(p.metadata.uid) >= 60_000, 'ownership transfer cannot close admission before routing propagates');
           Object.assign(state, {
             operationId: args.at(-3),
             state: args.includes('--begin-only') ? 'drained' : 'withdrawing',

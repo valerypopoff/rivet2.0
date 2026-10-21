@@ -3,12 +3,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { parse, stringify } from 'yaml';
+import { HA_ROUTING_PROPAGATION_MS } from './ha-routing-withdrawal.mjs';
 import {
   createHostedEvaluationSubmission,
   createHostedEvaluationFixtureContents,
 } from '../kubernetes-hosted-evaluation-gate.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export const haRetirementProbeDelayMs = HA_ROUTING_PROPAGATION_MS + 45_000;
 export function haProofTimeoutMs({ deploymentTimeoutSeconds = 600 }) {
   assert.ok(Number.isSafeInteger(deploymentTimeoutSeconds) && deploymentTimeoutSeconds > 0 &&
     Number.isSafeInteger(deploymentTimeoutSeconds * 1000), 'HA proof requires a positive whole-second deployment timeout');
@@ -90,7 +92,7 @@ export class HaReleaseProbes {
         outgoingConnections: ['output1->"Tail" tail/input1'],
         visualData: '200/0/300/null//',
       },
-      '[tail]:delay "Tail"': { data: { delay: 45_000, useDelayInput: false }, visualData: '400/0/300/null//' },
+      '[tail]:delay "Tail"': { data: { delay: haRetirementProbeDelayMs, useDelayInput: false }, visualData: '400/0/300/null//' },
     };
     const upload = await this.request('/api/workflows/projects/upload', {
       method: 'POST',
@@ -151,7 +153,7 @@ export class HaReleaseProbes {
       await this.startEditor(pod, pod.name.slice(0, -1) + (match[1] === '0' ? '1' : '0'));
       const runId = `ha-${randomUUID()}`;
       const submission = createHostedEvaluationSubmission({ runId, label: runId });
-      submission.projectContents = createHostedEvaluationFixtureContents(this.template, { trialDelayMs: 45_000 });
+      submission.projectContents = createHostedEvaluationFixtureContents(this.template, { trialDelayMs: haRetirementProbeDelayMs });
       submission.projectPath = this.projectPath;
       submission.dataset.projectId = this.projectId;
       submission.dataset.cases = Array.from({ length: 6 }, (_, index) => ({
@@ -251,7 +253,7 @@ export class HaReleaseProbes {
     const background = this.background.find((p) => p.uid === pod.uid);
     if (background) {
       assert.ok(background.workflowId, 'background proof must be bound to its stored workflow');
-      // Global traffic keeps creating newer recordings while this 45-second
+      // Global traffic keeps creating newer recordings while this delayed
       // background run settles. Its absence from the latest global page does
       // not mean it was lost. This owned fixture has only two retirement runs;
       // require a complete project-scoped page rather than relaxing durability.

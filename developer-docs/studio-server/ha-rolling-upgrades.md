@@ -22,6 +22,36 @@ HA-enabling hop still recovers with `--resume-cutover`, not `--resume-ha`.
 
 ## Required guarantee
 
+### Routing propagation before admission closes
+
+Ordinary rolling upgrades and same-image control ownership transfers retain
+admission for **60 continuous seconds after EndpointSlices exclude the exact
+owner UID from every public Service**. An absent/unknown readiness field remains
+routable; only explicit `ready: false` or removal counts. A returning endpoint
+resets this window without extending its bounded deadline. Pod ownership is
+checked throughout; read errors or a replaced owner block the drain command.
+The window is observed again on explicit recovery, never inferred from a stale
+sleep receipt. After drain, routing is rechecked without repeating the minute.
+
+EndpointSlice acknowledgement alone is not kube-proxy/NEG propagation proof.
+The local exact-image controller-enable roll reproduced one `server_retiring`
+503 when the runner closed admission immediately after that acknowledgement.
+The response body hash matched the request admission barrier; it was not an OAuth
+or load-capacity rejection. `ha-routing-withdrawal.test.mjs` covers timing,
+route reappearance, conservative readiness, owner changes, API errors and recovery;
+adapter regressions exercise the same helper with a deterministic clock. This
+operator-tool correction does not change application images, replay requests or
+qualify GKE by itself. Run the corrected local case and exact provider policy
+before claiming compact/autoscaling qualification. Retain the failed receipt.
+The early-response background and accepted Evaluation fixtures now wait 105 seconds
+(routing propagation plus 45 seconds), so work does not normally finish before admission is fenced.
+Paused editor probes already wait for the actual draining state before holding
+and resuming; their timing and non-replay checks are unchanged.
+The main disposable Kubernetes job allows 75 minutes rather than 55: its prior
+successful baseline took about 28 minutes, and the primary/recovery rolls add a
+minute per retired owner plus longer accepted-work probes. No checks are skipped
+or timings shortened to fit the old job deadline.
+
 The target is continuous request availability during planned upgrades, with
 accepted executions finishing on their existing owners and durable outcomes
 persisted once. Browser sockets may reconnect; reconnection must never replay an

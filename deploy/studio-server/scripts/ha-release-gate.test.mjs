@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest, withHaProofGeneration } from './kubernetes-ha-release-gate.mjs';
-import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
+import { HaReleaseProbes, haProofTimeoutMs, haRetirementProbeDelayMs } from './lib/ha-release-probes.mjs';
+import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
@@ -23,6 +24,11 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('background and Evaluation drain fixtures outlive the real routing propagation window', () => {
+  assert.equal(haRetirementProbeDelayMs - HA_ROUTING_PROPAGATION_MS, 45_000);
+  assert.ok(haRetirementProbeDelayMs < 180_000, 'bounded probes retain the normal API request deadline');
+});
 
 test('background retirement finds its recording outside the newest global page without weakening durability', async () => {
   const pod = { name: 'fixture-ha-execution-0', uid: 'retiring-owner' };

@@ -692,9 +692,14 @@ for (const fault of [
       }
       if (args[0] === 'exec') {
         const pod = f.pods.get(args[1]);
-        if (args.includes('--withdraw-only'))
+        if (args.includes('--withdraw-only')) {
+          routingWithdrawals.set(pod.uid, routingTime);
           Object.assign(pod, { state: 'withdrawing', operationId: args[7], ready: false });
-        if (args.includes('--begin-only')) Object.assign(pod, { state: 'drained', operationId: args[7], ready: false });
+        }
+        if (args.includes('--begin-only')) {
+          assert.ok(routingTime - routingWithdrawals.get(pod.uid) >= 60_000, 'ordinary roll cannot close admission on the control-plane acknowledgement alone');
+          Object.assign(pod, { state: 'drained', operationId: args[7], ready: false });
+        }
         return result({ protocol: 1, withdrawalProtocol: 1, ...pod });
       }
       if (args[0] === 'delete') {
@@ -718,6 +723,8 @@ for (const fault of [
       }
       throw Error(`Unexpected Kubernetes command: ${args}`);
     };
+    let routingTime = 0;
+    const routingWithdrawals = new Map();
     const options = {
       kube,
       release: 'fixture',
@@ -725,6 +732,7 @@ for (const fault of [
       manifestDigest: 'candidate',
       resources: [candidate, { kind: 'Service', metadata: { name: 'public' }, spec: {} }],
       timeoutMs: 1000,
+      routingWithdrawalClock: { now: () => routingTime, wait: async () => { routingTime += 1000; } },
       applyTemplates: async (_workloads, guardedValues) => {
         assert.deepEqual(guardedValues, { replicaCount: { backend: 2 }, ha: { rolloutResourceVersions: { [name]: 'observed-version' } } });
         if (fault === 'template-resource-version-race') throw Error('Helm resourceVersion conflict');
