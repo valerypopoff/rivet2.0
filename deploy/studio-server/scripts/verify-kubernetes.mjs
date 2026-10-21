@@ -196,6 +196,7 @@ async function main() {
       'deploy/studio-server/scripts/ha-release-gate.test.mjs',
       'deploy/studio-server/scripts/ha-gke-availability.test.mjs',
       'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
+      'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
       'deploy/studio-server/scripts/ha-control-topology.test.mjs',
       'deploy/studio-server/scripts/ha-kubernetes-control-topology.test.mjs',
       'deploy/studio-server/scripts/runtime-control-local.test.mjs',

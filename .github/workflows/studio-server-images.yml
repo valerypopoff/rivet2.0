@@ -472,7 +472,9 @@ jobs:
       - build-and-push
       - release-manifest
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    # Three real rolls plus recovery now observe 60s route propagation per owner.
+    # Keep the same checks/work; leave room beyond the former ~28-minute baseline.
+    timeout-minutes: 75
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json

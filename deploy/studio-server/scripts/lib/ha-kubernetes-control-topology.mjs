@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { runHaControlTopologyTransition } from './ha-control-topology.mjs';
 import { getHaConfigurationDigest, hasSameHaOwnerIdentity, hasSameHaServiceRouting } from './ha-kubernetes-rollout.mjs';
 import { releaseOperationJournalName, journalForReleaseOperation } from './release-operation-journal.mjs';
+import { waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
 
 const role = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
 const container = (r) => r.spec?.template?.spec?.containers?.find((c) => ['backend', 'api'].includes(c.name));
@@ -62,6 +63,7 @@ export async function runHaKubernetesControlTopology({
   applyTemplates,
   artifact = async () => {},
   timeoutMs = 900_000,
+  routingWithdrawalClock,
 }) {
   const selector = `app.kubernetes.io/instance=${release}`;
   const json = async (args) => JSON.parse((await kube(args)).stdout);
@@ -347,16 +349,10 @@ export async function runHaKubernetesControlTopology({
   const publicServices = new Set(
     resources.filter((r) => r.kind === 'Service' && !r.spec.publishNotReadyAddresses).map((r) => r.metadata.name),
   );
-  const routingGone = (p) =>
-    until(
-      async () =>
-        !(await json(['get', 'endpointslice', '-o', 'json'])).items.some(
-          (s) =>
-            publicServices.has(s.metadata.labels?.['kubernetes.io/service-name']) &&
-            s.endpoints?.some((e) => e.targetRef?.uid === p.uid && e.conditions?.ready !== false),
-        ),
-      'Routing withdrawal pending',
-    );
+  const routingGone = (target) => waitForHaRoutingWithdrawal({
+    pod: target, publicServices, observePod: pod, timeoutMs, clock: routingWithdrawalClock,
+    readSlices: async () => (await json(['get', 'endpointslice', '-o', 'json'])).items,
+  });
   const allPods = async () => (await json(['get', 'pods', '-o', 'json'])).items;
   const templatesApplied = async () => {
     const live = await list('statefulset');
