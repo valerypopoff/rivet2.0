@@ -27,6 +27,19 @@ export function assertRuntimeQualificationBuild(run, { repository, sourceSha, ru
   return { runId, runAttempt: run.run_attempt };
 }
 
+function observationTimestamp(value) {
+  assert.ok(
+    typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value),
+    'Provider timestamps must be UTC ISO strings',
+  );
+  const time = Date.parse(value);
+  assert.ok(
+    Number.isFinite(time) && new Date(time).toISOString().slice(0, 19) === value.slice(0, 19),
+    'Invalid provider timestamp',
+  );
+  return time;
+}
+
 function declaration(value, kind) {
   const keys = [
     'protocol',
@@ -55,9 +68,7 @@ function declaration(value, kind) {
   assert.match(value.projectNumber, /^[1-9][0-9]{5,20}$/);
   assert.match(value.reportSha256, /^[a-f0-9]{64}$/);
   assert.ok(
-    Number.isFinite(Date.parse(value.startedAt)) &&
-      Number.isFinite(Date.parse(value.finishedAt)) &&
-      Date.parse(value.startedAt) < Date.parse(value.finishedAt),
+    observationTimestamp(value.startedAt) < observationTimestamp(value.finishedAt),
     'Invalid provider observation window',
   );
   return value;

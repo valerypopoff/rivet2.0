@@ -172,6 +172,36 @@ test('local/failed/uncleaned or incomplete declarations cannot become provider e
   assert.throws(() => prepareRuntimeQualification(f));
 });
 
+test('provider windows require actual UTC timestamp strings, not coerced or normalized dates', () => {
+  for (const kind of ['control', 'autoscaling']) {
+    for (const key of ['startedAt', 'finishedAt']) {
+      for (const value of [
+        ['2026-10-21T00:30:00Z'],
+        '2026-10-21',
+        'October 21, 2026 00:30:00 GMT',
+        '2026-02-30T00:30:00Z',
+        null,
+        2026,
+      ]) {
+        const f = fixture();
+        f[kind][key] = value;
+        assert.throws(() => prepareRuntimeQualification(f), `${kind}.${key}: ${JSON.stringify(value)}`);
+      }
+    }
+    const f = fixture();
+    f[kind].finishedAt = f[kind].startedAt;
+    assert.throws(() => prepareRuntimeQualification(f), 'A completed window must end after it starts');
+    f[kind].finishedAt = '2026-10-20T23:00:00Z';
+    assert.throws(() => prepareRuntimeQualification(f), 'Reversed windows are invalid');
+  }
+  const f = fixture();
+  f.control.startedAt = '2026-10-21T00:00:00.1234567Z';
+  f.autoscaling.finishedAt = '2026-10-21T01:00:00.123Z';
+  const result = prepareRuntimeQualification(f);
+  assert.equal(result.declarations.control.startedAt, f.control.startedAt);
+  assert.equal(result.declarations.autoscaling.finishedAt, f.autoscaling.finishedAt);
+});
+
 test('changed build artifacts, source, operation, evidence identities and policy fail closed', () => {
   for (const mutate of [
     (f) => {

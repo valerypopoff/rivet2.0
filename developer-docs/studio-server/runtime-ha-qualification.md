@@ -41,7 +41,10 @@ Each JSON input is at most 16,384 characters with exactly these fields:
   `cleanupVerified`:true.
 - `operationId`, `projectId`, `projectNumber`: the same approved isolated operation
   in both declarations. Never use production resources as the test target.
-- `startedAt`, `finishedAt`: the actual completed ISO observation window.
+- `startedAt`, `finishedAt`: the actual completed UTC ISO observation window
+  (`YYYY-MM-DDTHH:mm:ssZ`, optionally with 1-9 fractional-second digits).
+  Both must be timestamp strings with valid calendar dates, with end after start;
+  date-only strings, locale dates and JavaScript-coerced arrays are rejected.
 - `reportSha256`: SHA-256 of the retained sanitized terminal provider report.
 - `evidence`: the exact runtimeControl/runtimeAutoscaling shape in
   `lib/ha-release-evidence.mjs`, constructed only after every required check passes.
@@ -74,6 +77,11 @@ If acknowledgement/upload fails, inspect the immutable artifact and pointer befo
 retrying publication. The registry write may already have succeeded. Do not start
 another paid rehearsal or replace already-qualified evidence to repair an artifact
 upload. Source/image/chart/policy changes require a new reviewed candidate.
+After declaration preparation succeeds, CI attempts to retain the sanitized packet
+even if a later registry operation fails or the job is cancelled. The promoted
+manifest is included if it was produced. Invalid or partially validated declaration
+inputs are never uploaded. Cancellation/runner loss can still prevent upload, so
+an absent artifact never proves that the registry write did not happen.
 
 `runtime-qualification-publication.test.mjs` covers source/build provenance,
 declaration rejection, release/policy binding, pointer identity and CLI input-log

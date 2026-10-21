@@ -55,6 +55,15 @@ assert.ok(
   qualificationCommands.indexOf('verify-pointer') < qualificationCommands.indexOf('release-manifest-oci.mjs push'),
 );
 assert.ok(qualificationCommands.includes('verify-published'));
+assert.equal(
+  findStep(
+    runtimeQualification.jobs.publish,
+    'Retain the qualified manifest and sanitized declarations',
+    'Runtime qualification',
+  ).if,
+  "${{ always() && steps.qualification.outcome == 'success' }}",
+  'A validated packet must survive publication failure or cancellation for unknown-outcome recovery.',
+);
 const buildJobs = build.workflow.jobs;
 assert.deepEqual(build.workflow.on.push.branches, ['develop', 'main'], 'Build pushes must skip VM-only staging.');
 assert.deepEqual(
