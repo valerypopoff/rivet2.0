@@ -30,6 +30,7 @@ import type {
   RunActivityViewModel,
 } from './types.js';
 import { previewStoredDataValue } from '../../features/runActivity/storedValuePreview.js';
+import { getNodeDisplayTitle } from '../../utils/nodeDisplayTitle.js';
 
 export {
   RUN_ACTIVITY_PREVIEW_MAX_CHARS,
@@ -164,11 +165,11 @@ function buildInvocationViewModel(
   const graphRun = root.graphRunsById[invocation.graphRunId];
   const resolved = resolveInvocation({ root, graphRun, invocation }) ?? {};
   const graphName = resolved.graphName ?? invocation.graphName ?? graphRun?.graphName ?? 'Unknown graph';
-  const nodeTitle =
-    normalizeNonEmptyLabel(resolved.nodeTitle) ??
-    normalizeNonEmptyLabel(invocation.nodeTitle) ??
-    'Deleted or unavailable node';
   const nodeType = resolved.nodeType ?? invocation.nodeType ?? 'Unknown node type';
+  const authoredTitle = normalizeNonEmptyLabel(resolved.nodeTitle) == null ? invocation.nodeTitle : resolved.nodeTitle;
+  const nodeTitle =
+    normalizeNonEmptyLabel(getNodeDisplayTitle({ type: nodeType, title: authoredTitle ?? '' })) ??
+    'Deleted or unavailable node';
   const category = resolveCategory(invocation, resolved.category);
   const status = mapNodeStatus(invocation.status);
   const preview = getInvocationPreview(invocation, resolved);

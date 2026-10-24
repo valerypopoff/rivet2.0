@@ -5,6 +5,7 @@ import { createStore } from 'jotai/vanilla';
 import {
   activateLoadedRecordingState,
   canChangeLoadedRecordingForTab,
+  canUnloadCurrentProjectRecordingState,
   clearLoadedRecordingForPathState,
   clearLoadedRecordingForTabState,
   currentProjectLoadedRecordingState,
@@ -28,6 +29,21 @@ const recording: LoadedRecording = {
   projectPath: 'recording://project-a/replay.rivet-project',
   recorder: { events: [] } as unknown as ExecutionRecorder,
 };
+
+test('only recordings layered onto an ordinary owning project can be unloaded', () => {
+  const store = createStore();
+  const project = store.get(projectState);
+  store.set(projectState, { ...project, metadata: { ...project.metadata, id: projectA } });
+  for (const path of ['recording://run/replay.rivet-project', '/projects/a.rivet-project', null]) {
+    store.set(loadedProjectState, { loaded: path != null, path });
+    store.set(activateLoadedRecordingState, { ...recording, projectPath: path });
+    assert.equal(store.get(canUnloadCurrentProjectRecordingState), !path?.startsWith('recording://'));
+    store.set(loadedRecordingState, { ...recording, projectId: projectB, projectPath: path });
+    assert.equal(store.get(canUnloadCurrentProjectRecordingState), false);
+    store.set(loadedRecordingState, null);
+    assert.equal(store.get(canUnloadCurrentProjectRecordingState), false);
+  }
+});
 
 test('loaded recordings are visible only to their owning editor tab', () => {
   assert.equal(getLoadedRecordingForTab(recording, projectA, recording.projectPath), recording);

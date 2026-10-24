@@ -1376,13 +1376,27 @@ The main recordings routes are:
 ### Loaded-recording presentation
 
 The editor action bar becomes a compact recording panel while the active tab owns
-a loaded recording. Its controls retain Play/Abort, Pause/Resume, Unload and the
-existing More menu. Unload uses a neutral background and hover state, not a warning
-color; Play retains its green action style. Primary controls align left; More stays
+a loaded recording. Its controls retain Play/Abort, Pause/Resume and the existing
+More menu. Standalone `recording://` tabs opened from Run recordings do not expose
+Unload: they have no ordinary project mode to return to. Close their project tab
+when finished. `canUnloadCurrentProjectRecordingState` is shared by the action bar
+and unload handler, so a stale or programmatic unload cannot detach their replay.
+Ordinary desktop/hosted projects with an overlaid recording still offer Unload,
+including pathless projects; it returns them to live mode. Unload uses a neutral
+background and hover state, not a warning color; Play retains its green action
+style. Primary controls align left; More stays
 at the right of the same row. The panel fits its contents, with a viewport-aware
 readable width cap for long text, and uses the evaluation panel's base typography,
-padding and outline. After a 12px gap below the controls, two simple rows show:
+padding and outline. The details area has 64px of font-scaled right padding,
+roughly half the Play Recording button width. This padding applies only to the
+content; buttons keep their existing alignment and the panel retains its width
+cap. After a 12px gap below the controls, two simple rows show:
 the colored outcome tag followed by saved date/time; and Endpoint at execution.
+The headless playback regression checks both panel and details-area overflow at
+14px, default 15px and maximum 20px UI sizes in a narrower window, using the real
+font-token generator and including long unbroken failure text. Padding remains
+font-scaled without adding resize observers or
+measuring button widths in application code.
 Duration and LATEST / LOCAL EDITOR / PUBLISHED tags remain in the recording browser,
 not this compact editor summary. Only an actual recorded endpoint is shown;
 missing endpoints and synthetic Subgraph graph labels display an em dash instead
@@ -1400,11 +1414,11 @@ across tab switches and opening another recording; they retain no event payloads
 Indicators are path-bound, follow path rebinding and clear on unload, replacement
 or close, including inactive-tab cleanup. Ordinary tabs have no recording icon.
 Recording tabs do not show the unsaved-changes dot. This includes detached
-`recording://` snapshots before activation and after Unload. Marker suppression
+`recording://` snapshots before activation. Marker suppression
 does not reset actual dirty flags, and ordinary editable projects
 without a loaded recording retain their marker. Closing a detached `recording://`
 snapshot skips the unsaved-changes dialog because its layout edits are disposable;
-this covers active/inactive tabs and unloaded snapshots. Editable source-project
+this covers active and inactive tabs. Editable source-project
 files still require confirmation for unsaved changes, even with a recording loaded.
 The shared `isRecordingSnapshotPath` predicate owns this distinction; a recording
 icon or global playback selection is not sufficient reason to discard source edits.
@@ -1416,7 +1430,7 @@ genuine save failures still produce error toasts. The provider's read-only guard
 remains as defense in depth; the warning does not mark the snapshot clean or emit
 a successful-save acknowledgement.
 When a successful Save As changes the tab binding, the loaded recording and its
-tab indicator follow the new path so Play/Unload stay reachable. This is scoped
+tab indicator follow the new path so playback controls stay reachable. This is scoped
 to that exact project, including pathless desktop projects; another active
 recording must not move with it. Failed/canceled saves and newer path changes
 never rebind playback from stale save results.
@@ -1430,6 +1444,9 @@ closes active/inactive snapshots, checks warning toasts and verifies actual Run
 Activity rows through repeated playback. `project-tab-shortcuts` separately
 checks that ordinary editable tabs still require unsaved-close confirmation.
 Save As is tested through the save hook, not the hosted menu that hides it.
+The recording-browser regression also verifies that standalone tabs have no
+Unload action, closing them restores the neighboring ordinary project, and a
+recording loaded from a file onto that ordinary project can still be unloaded.
 
 The canvas border follows the **original recording**: succeeded is green, failed
 is red, suspicious/control-flow-excluded is yellow. Replaying or aborting playback
@@ -1473,7 +1490,7 @@ and the node settings. It does not load the live catalog, preview a target or
 probe Published availability. A detached replay has a fresh project ID, which
 must never be passed as a live bundle caller or treated as bundle membership.
 The `recording://` path selects this presentation before recorder activation and
-keeps it after Unload; a local/desktop project uses it only while that exact tab
+keeps it until the tab closes; a local/desktop project uses it only while that exact tab
 owns a loaded recording. Switching to an ordinary tab restores its normal picker.
 Available cached/open-tab names are display hints only; targets without available
 names retain their IDs. No historical name is invented, no boundary is refreshed,

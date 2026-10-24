@@ -1,14 +1,41 @@
-# Classifier node family
+# Decision AI node family (internal Classifier contract)
 
-Classifier is a first-party Core node family, not a plugin. The canonical node types are `classifierQuestion`, `classifierProfile` and `classifierEvaluate`; they are registered by `registerBuiltInNodes` and appear only in the built-in **Classifier** context-menu group. The editor's fixed `addContextMenuGroups` list must include that group: registration and generated Graph Builder catalog entries alone do not make a node discoverable in the palette.
+Decision AI is the visible name of the first-party Classifier family, not a new
+runtime primitive or plugin. The palette group is **Decision AI**; nodes are
+**Decision AI Question**, **Decision AI Profile** and **Decision AI run**.
+Settings, port labels, profile suspension, Run Activity and the Response Inspector
+use the same terminology. The editor's fixed `addContextMenuGroups` list must
+include that group: registration alone does not make a node discoverable.
+
+This is a presentation-only rename. Keep `classifierQuestion`, `classifierProfile`,
+`classifierEvaluate`, `classifier-config`, port/data keys, provider settings,
+`classifier-settings`, health families, API paths, events and documentation URLs
+unchanged. No project or database migration is required. New nodes use the new
+default titles; the editor aliases exact old default titles by node type without
+rewriting saved projects. Custom titles are never renamed, and editing a title
+still edits the actual stored value. Legacy Jev migration retains its existing
+serialized behavior. User documentation keeps its existing `classifier-*` IDs
+and links while using Decision AI labels.
+
+The canvas, node-settings read view and Run Activity use the same exact-default
+display aliases. Run Activity search sees the displayed name; journals retain
+their original titles. The hosted suspension screen also aliases exact default
+profile names, including retained health records whose node is unavailable.
+Custom names (including whitespace-padded titles) and other node/family names
+are not rebranded. Reading labels never changes project contents or health keys.
+
+Regression coverage checks registered types, port IDs and configuration keys in
+Core, exact-title aliases and unchanged recorded journals in App, and retained
+profile names/health identities in the hosted UI. The headless node and recording
+observers exercise those labels through actual menus, settings and playback.
 
 ## Built-in type and documentation integration
 
 Evaluate's **Outputs** settings use concise labels: **Usage details**, **Request
-body**, **Response body**, **Classifier attempts**, and **Classifier profile
+body**, **Response body**, **Decision AI attempts**, and **Decision AI profile
 summary**. The section already communicates output intent; stored `output...`
 setting keys, visibility conditions and port IDs are unchanged. Newly added
-Classifier Evaluate nodes use the same header-only default palette color as LLM
+Decision AI run nodes use the same header-only default palette color as LLM
 Chat (`--node-color-6`) through the shared node-creation color map. Saved node
 colors and the editor's default-color opt-out are preserved; this does not recolor
 existing projects.

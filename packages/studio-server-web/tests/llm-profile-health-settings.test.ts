@@ -114,3 +114,39 @@ test('LLM profile suspension settings resolve retained profile nodes to friendly
     'Primary route',
   );
 });
+
+test('Decision AI suspension names cover saved defaults and missing nodes without changing health identities', () => {
+  const health = snapshot('legacy', 'project-a', 'open');
+  health.identity.family = 'classifier';
+  const original = structuredClone(health);
+  for (const [title, expected] of [
+    ['Classifier Profile', 'Decision AI Profile'],
+    ['My Classifier route', 'My Classifier route'],
+    [' Classifier Profile ', ' Classifier Profile '],
+    ['', 'Decision AI Profile'],
+  ]) {
+    const project = {
+      graphs: {
+        graph: {
+          metadata: { name: 'Decisions' },
+          nodes: [{ id: 'profile-node', type: 'classifierProfile', title }],
+        },
+      },
+    } as unknown as Project;
+    const saved = structuredClone(project);
+    assert.equal(getLLMProfileHealthDisplayName(project, health), `${expected} in Decisions`);
+    assert.deepEqual(project, saved);
+  }
+  assert.equal(getLLMProfileHealthDisplayName(undefined, health), 'Decision AI Profile profile-node');
+  for (const [profileName, expected] of [
+    ['Classifier Profile', 'Decision AI Profile'],
+    ['My Classifier route', 'My Classifier route'],
+    [' Classifier Profile ', 'Classifier Profile'],
+  ]) {
+    assert.equal(
+      getLLMProfileHealthDisplayName(undefined, { ...health, identity: { ...health.identity, profileName } }),
+      expected,
+    );
+  }
+  assert.deepEqual(health, original);
+});

@@ -39,7 +39,7 @@ export const addContextMenuGroups = [
   },
   {
     id: 'add-node-group:classifier',
-    label: 'Classifier',
+    label: 'Decision AI',
   },
   {
     id: 'add-node-group:knowledge',

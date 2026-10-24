@@ -16,18 +16,21 @@ export function getLLMProfileHealthDisplayName(
   snapshot: RivetLLMProfileHealthSnapshot,
 ): string {
   const profileNodeId = snapshot.identity.profileNodeId;
-  const label = snapshot.identity.family === 'classifier' ? 'Classifier Profile' : 'LLM Profile';
+  const classifier = snapshot.identity.family === 'classifier';
+  const label = classifier ? 'Decision AI Profile' : 'LLM Profile';
   if (project && profileNodeId != null) {
     for (const graph of Object.values(project.graphs)) {
       const node = graph.nodes.find((candidate) => candidate.id === profileNodeId);
       if (node) {
-        return `${node.title || label} in ${graph.metadata?.name || 'unnamed graph'}`;
+        const title =
+          classifier && node.type === 'classifierProfile' && node.title === 'Classifier Profile' ? label : node.title;
+        return `${title || label} in ${graph.metadata?.name || 'unnamed graph'}`;
       }
     }
   }
 
-  const profileName = snapshot.identity.profileName?.trim();
-  if (profileName) return profileName;
+  const profileName = snapshot.identity.profileName;
+  if (profileName?.trim()) return classifier && profileName === 'Classifier Profile' ? label : profileName.trim();
   return profileNodeId == null ? label : `${label} ${profileNodeId}`;
 }
 

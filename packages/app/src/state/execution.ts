@@ -62,9 +62,15 @@ export const currentProjectLoadedRecordingState = atom((get) =>
   getLoadedRecordingForTab(get(loadedRecordingState), get(projectState).metadata.id, get(loadedProjectState).path),
 );
 
+/** Standalone replay tabs have no live project mode to return to; close the tab instead. */
+export const canUnloadCurrentProjectRecordingState = atom((get) => {
+  const recording = get(currentProjectLoadedRecordingState);
+  return recording != null && !isRecordingSnapshotPath(recording.projectPath);
+});
+
 /**
  * A detached hosted replay is already a snapshot before its recording activates,
- * and remains detached after unloading. Local files use snapshot presentation
+ * and remains detached until its tab closes. Local files use snapshot presentation
  * only while their own tab has a recording loaded. Never use this as authority
  * to access a live project or infer bundle membership.
  */

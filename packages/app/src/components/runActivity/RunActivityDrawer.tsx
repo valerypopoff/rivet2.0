@@ -1575,7 +1575,7 @@ const ActivityDetails: FC<{ item: RunActivityItemViewModel }> = ({ item }) => {
     item.model && { label: 'Model', value: item.model },
     item.toolName && { label: 'Tool', value: item.toolName },
     item.modelCallCount != null && { label: 'Model calls', value: String(item.modelCallCount) },
-    item.classifierRequestCount != null && { label: 'Classifier requests', value: String(item.classifierRequestCount) },
+    item.classifierRequestCount != null && { label: 'Decision AI requests', value: String(item.classifierRequestCount) },
     item.toolCallCount != null && { label: 'Tool calls', value: String(item.toolCallCount) },
     item.splitCount != null && { label: 'Split results', value: String(item.splitCount) },
     ...(item.detailRows ?? []),
@@ -1657,7 +1657,7 @@ function formatAccounting(accounting: NonNullable<RunActivityViewModel['accounti
   ];
   if (accounting.classifierRequestCount != null) {
     parts.push(
-      `${accounting.classifierRequestCount} classifier ${accounting.classifierRequestCount === 1 ? 'request' : 'requests'}`,
+      `${accounting.classifierRequestCount} Decision AI ${accounting.classifierRequestCount === 1 ? 'request' : 'requests'}`,
     );
   }
   if (accounting.promptTokens != null || accounting.completionTokens != null) {

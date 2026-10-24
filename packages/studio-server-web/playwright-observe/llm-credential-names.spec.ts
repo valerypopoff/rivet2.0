@@ -46,11 +46,11 @@ async function expectOpenAiCredentialDefaults(editor: FrameLocator): Promise<voi
   await expect(environmentVariableName).toHaveValue('OPENAI_API_KEY');
 }
 
-test('new Classifier Evaluate and LLM Chat nodes share the default header color', async ({ page }) => {
+test('new Decision AI run and LLM Chat nodes share the default header color', async ({ page }) => {
   const editor = await openEmptyProject(page, 'default-model-colors');
-  await addNode(editor, 'Classifier Evaluate');
+  await addNode(editor, 'Decision AI run');
   const classifier = editor.locator('.node', {
-    has: editor.locator('.node-title', { hasText: /^Classifier Evaluate$/ }),
+    has: editor.locator('.node-title', { hasText: /^Decision AI run$/ }),
   });
   await expect(classifier).toBeVisible();
   expect(await classifier.evaluate((node) => (node as HTMLElement).style.getPropertyValue('--node-bg'))).toBe(

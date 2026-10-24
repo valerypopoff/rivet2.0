@@ -48,11 +48,11 @@ test('LLM Profile exposes suspension controls only in its dedicated group', asyn
   );
 });
 
-test('LLM and Classifier suspension use identical concise hints for their shared controls', async () => {
+test('LLM and Decision AI suspension use identical concise hints for their shared controls', async () => {
   const llmEditors = await getLLMProfileEditors(createLLMProfileNodeData(), {} as RivetUIContext);
   const llmGroup = llmEditors.find((editor) => editor.label === 'LLM profile suspension');
   const classifierEditors = new ClassifierProfileNodeImpl(ClassifierProfileNodeImpl.create()).getEditors();
-  const classifierGroup = classifierEditors.find((editor) => editor.label === 'Classifier profile suspension');
+  const classifierGroup = classifierEditors.find((editor) => editor.label === 'Decision AI profile suspension');
   assert.ok(llmGroup?.type === 'group');
   assert.ok(classifierGroup?.type === 'group');
   assert.deepEqual(
@@ -63,7 +63,7 @@ test('LLM and Classifier suspension use identical concise hints for their shared
         type: editor.type,
         label: editor.label === 'Useful output wait time, seconds' ? 'Response timeout, seconds' : editor.label,
       })),
-    'Classifier must mirror the LLM section order, with a batch deadline and no streaming field',
+    'Decision AI must mirror the LLM section order, with a batch deadline and no streaming field',
   );
   for (const classifierEditor of classifierGroup.editors) {
     if (classifierEditor.label === 'Response timeout, seconds') continue;

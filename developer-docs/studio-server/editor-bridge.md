@@ -119,6 +119,14 @@ shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ## Model-node error behavior
 
+The Classifier family is branded **Decision AI** in the editor: **Decision AI run**,
+**Decision AI Profile** and **Decision AI Question**, under the **Decision AI**
+palette group and Rivet Settings page. This changes labels only; saved node types,
+port IDs, credential keys, health families and API names remain `classifier*`.
+Exact legacy default titles are aliased for display without modifying project
+contents; authored titles remain untouched. See the
+[presentation compatibility contract](../CLASSIFIER-NODES.md).
+
 The shared Image file picker (`ImageBrowserEditor.tsx`) receives bytes and the
 selected filename from the IO provider. Infer its Media Type from that filename,
 not the editor's data-field key; `.jpg`/`.jpeg` files must be labeled `image/jpeg`.
@@ -130,10 +138,10 @@ Classifier validation must continue rejecting mismatched headers/media types.
 The headless classifier observer covers JPEG (including uppercase `.JPG`), PNG
 and GIF selections through the real Image editor and browser file-input path.
 
-Classifier Evaluate's built-in providers are Jev, Liquid AI (`d1`), and OpenAI
+Decision AI run's built-in providers are Jev, Liquid AI (`d1`), and OpenAI
 Decisions (`gpt-6-luna`). The hosted
 editor uses Core's ordered registry for provider/model defaults and the shared
-Settings → Classifier credentials page; its environment shim enumerates the
+Settings → Decision AI credentials page; its environment shim enumerates the
 registry's default names, including `LIQUID_API_KEY` and `OPENAI_API_KEY`, before Node execution.
 Evaluate's single State port accepts text, native images, base64 image strings,
 and assembled user messages or ordered mixed arrays. There is no separate Images
@@ -155,7 +163,7 @@ Each evaluation captures its request configuration once and uses one absolute
 deadline across request preparation, retries and response validation.
 Credentialed classifier requests never follow redirects.
 Classifier credential UI presents Automatic (legacy `configured`), strict
-Classifier settings, and Input port. Preserve existing source values; do not
+Decision AI settings, and Input port. Preserve existing source values; do not
 silently change old graphs' key precedence. Strict saved-key selection must not
 fall back through the hosted environment shim or general OpenAI credentials.
 The editor shows source policy, not secret values or guesses about remote state.

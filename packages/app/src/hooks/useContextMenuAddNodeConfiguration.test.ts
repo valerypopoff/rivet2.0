@@ -31,7 +31,7 @@ test('Add node menu keeps explicitly retired types and the Convenience category 
       'Text',
       'Code',
       'AI',
-      'Classifier',
+      'Decision AI',
       'Knowledge',
       'Lists',
       'Numbers',

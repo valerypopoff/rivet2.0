@@ -54,7 +54,13 @@ Deleting also stops an active input search and keeps its collected matches. If d
 Once you have a `rivet-recording` file, you can load it into Rivet using the `Load Recording` option in the action bar dropdown,
 or by pressing `Cmd/Ctrl + Shift + O` and selecting the file.
 
-When loaded, the border of Rivet will turn yellow, and an "Unload Recording" option will appear in the action bar.
+When loaded, the border reflects the recording's outcome: green for success, red
+for failure, and yellow for suspicious or unknown results. Loading a file over
+an ordinary project also shows **Unload Recording** in the action bar.
+
+Recordings opened from Studio Server's **Run recordings** modal have their own
+standalone tabs. These tabs do not show **Unload Recording**, because there is
+no ordinary project behind them. Close the recording tab when finished.
 
 If `Show node run durations` is enabled in Settings, replayed node outputs show `Duration: ...ms` when the recording contains timing metadata. Older recordings may also show approximate durations derived from their recorded start/finish event timestamps. If the same recorded node has multiple finished runs, including many parallel or sequential runs, Rivet shows the total duration plus one line per run. Turn the setting off to hide these duration lines.
 
@@ -79,4 +85,6 @@ During playback, you can press the `Pause` button in the action bar to pause the
 
 If a recording is aborted, you can click `Play Recording` again to restart it from the beginning.
 
-To unload the recording and return to normal execution, click the `Unload Recording` button in the action bar.
+For a recording loaded over an ordinary project, click **Unload Recording** in
+the action bar to return to normal execution. For a standalone tab opened from
+**Run recordings**, close the tab instead.

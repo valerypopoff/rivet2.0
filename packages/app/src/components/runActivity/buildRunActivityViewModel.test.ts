@@ -648,6 +648,41 @@ test('preserves the captured node title when the current graph title is blank', 
   assert.equal(viewModel.items[0]?.nodeTitle, 'Captured Text Title');
 });
 
+test('Decision AI activity titles alias legacy defaults without changing recorded titles or custom names', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const captured = invocation({
+    key: 'decision',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'evaluate',
+    processId: 'run',
+  });
+  selectedRoot.nodeInvocationsByKey[captured.key] = captured;
+  selectedRoot.nodeInvocationOrder = [captured.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+  for (const [nodeType, nodeTitle, expected] of [
+    ['classifierEvaluate', 'Classifier Evaluate', 'Decision AI run'],
+    ['classifierQuestion', 'Classifier Question', 'Decision AI Question'],
+    ['classifierProfile', 'Classifier Profile', 'Decision AI Profile'],
+    ['classifierEvaluate', 'My Classifier route', 'My Classifier route'],
+    ['classifierEvaluate', ' Classifier Evaluate ', 'Classifier Evaluate'],
+    ['text', 'Classifier Evaluate', 'Classifier Evaluate'],
+  ] as const) {
+    captured.nodeType = nodeType;
+    captured.nodeTitle = nodeTitle;
+    const before = structuredClone(journal);
+    for (const resolved of [undefined, { nodeType, nodeTitle }]) {
+      const model = buildRunActivityViewModel(journal, () => resolved);
+      assert.equal(model.items[0]?.nodeTitle, expected);
+      assert.equal(filterRunActivityItems(model.items, { filter: 'all', graphId: '', query: expected }).length, 1);
+    }
+    assert.deepEqual(journal, before);
+  }
+});
+
 test('searches every displayed model attempt and tool call instead of only row summaries', () => {
   const journal = createRunActivityJournal();
   const selectedRoot = root(newerActiveRootId, 1, 'completed');

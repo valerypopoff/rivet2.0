@@ -95,3 +95,22 @@ test('NodeTitleLabel leaves other node titles plain', () => {
   assert.doesNotMatch(html, /streaming-node-title-icon/);
   assert.match(html, /^<span class="title-text-label">Text<\/span>$/);
 });
+
+test('Decision AI aliases only exact legacy default titles without changing saved nodes or custom titles', () => {
+  for (const [type, oldTitle, newTitle] of [
+    ['classifierEvaluate', 'Classifier Evaluate', 'Decision AI run'],
+    ['classifierProfile', 'Classifier Profile', 'Decision AI Profile'],
+    ['classifierQuestion', 'Classifier Question', 'Decision AI Question'],
+  ] as const) {
+    const node = Object.freeze({ type, title: oldTitle });
+    assert.equal(
+      renderToStaticMarkup(createElement(NodeTitleLabel, { node })),
+      `<span class="title-text-label">${newTitle}</span>`,
+    );
+    assert.equal(node.title, oldTitle);
+    for (const title of ['My Classifier route', newTitle, '']) {
+      assert.equal(renderNodeTitle(type, title), `<span class="title-text-label">${title}</span>`);
+    }
+    assert.equal(renderNodeTitle('text', oldTitle), `<span class="title-text-label">${oldTitle}</span>`);
+  }
+});

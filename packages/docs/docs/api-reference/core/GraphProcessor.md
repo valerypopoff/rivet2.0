@@ -95,7 +95,7 @@ Runs the selected graph and resolves with graph outputs.
 When the run succeeds, GraphProcessor adds a `cost` output if the graph did not already produce one.
 
 `cost` stays a numeric DataValue containing known USD costs from LLMs,
-classifiers, and other cost-producing nodes. When known costs are accounted,
+Decision AI nodes, and other cost-producing nodes. When known costs are accounted,
 `costBreakdown` is also returned as an object DataValue:
 
 ```json

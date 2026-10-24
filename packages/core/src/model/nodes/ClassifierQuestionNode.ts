@@ -96,7 +96,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
   static create(): ClassifierQuestionNode {
     return {
       type: 'classifierQuestion',
-      title: 'Classifier Question',
+      title: 'Decision AI Question',
       id: nanoid() as NodeId,
       visualData: { x: 0, y: 0, width: 280 },
       data: {
@@ -381,10 +381,10 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
 
   static getUIData(): NodeUIData {
     return {
-      contextMenuTitle: 'Classifier Question',
-      infoBoxTitle: 'Classifier Question',
-      infoBoxBody: 'Builds one typed classifier question without making a network request.',
-      group: ['Classifier'],
+      contextMenuTitle: 'Decision AI Question',
+      infoBoxTitle: 'Decision AI Question',
+      infoBoxBody: 'Builds one typed Decision AI question without making a network request.',
+      group: ['Decision AI'],
     };
   }
 
@@ -459,7 +459,7 @@ function getQuestionTypeLabel(questionType: ClassifierQuestionType): string {
 }
 
 /**
- * Shared presentation model for the app's Classifier card. Keep this data-only
+ * Shared presentation model for the app's Decision AI card. Keep this data-only
  * so the Core Markdown fallback and the app's LLM-style React body cannot
  * disagree about what a saved question represents.
  */
@@ -750,4 +750,4 @@ function hasClassifierCriteriaValue(value: unknown): boolean {
   return Object.keys(value).length > 0;
 }
 
-export const classifierQuestionNode = nodeDefinition(ClassifierQuestionNodeImpl, 'Classifier Question');
+export const classifierQuestionNode = nodeDefinition(ClassifierQuestionNodeImpl, 'Decision AI Question');

@@ -66,7 +66,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     const outputLabels =
       type === 'llmChatV2'
         ? ['Reasoning', 'Usage details', 'LLM attempts', 'Request body', 'Response body']
-        : ['Usage details', 'Request body', 'Response body', 'Classifier attempts'];
+        : ['Usage details', 'Request body', 'Response body', 'Decision AI attempts'];
     for (const label of outputLabels) {
       await expect(outputControls.getByText(label, { exact: true })).toBeVisible();
     }
@@ -142,7 +142,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     await expect(card).not.toContainText('Throw on non-2XX:');
     await editor.getByText('Catch all exceptions', { exact: true }).click();
     await expect(card).not.toContainText('Catch all exceptions:');
-    // Classifier failure ports are opt-in via Catch; LLM also exposes them when
+    // Decision AI failure ports are opt-in via Catch; LLM also exposes them when
     // HTTP failures are suppressed. Preserve their existing runtime contracts.
     if (type === 'classifierEvaluate') await expect(card.getByText('Run failed', { exact: true })).toHaveCount(0);
     else await expect(card.getByText('Run failed', { exact: true })).toBeVisible();

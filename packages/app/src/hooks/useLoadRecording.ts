@@ -4,6 +4,7 @@ import { graphRunningState } from '../state/dataFlow.js';
 import {
   activateLoadedRecordingState,
   canChangeLoadedRecordingForTab,
+  canUnloadCurrentProjectRecordingState,
   clearLoadedRecordingForTabState,
   loadedRecordingState,
   recordingPlaybackStartingState,
@@ -86,6 +87,8 @@ export function useLoadRecording() {
       })) {
         return;
       }
+
+      if (!store.get(canUnloadCurrentProjectRecordingState)) return;
 
       store.set(clearLoadedRecordingForTabState, {
         projectId: project.metadata.id,

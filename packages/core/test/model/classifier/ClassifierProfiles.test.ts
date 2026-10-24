@@ -287,7 +287,7 @@ for (const phase of ['fetch', 'body'] as const) {
 
 for (const configurationMode of ['inline', 'profile'] as const) {
   for (const behavior of ['throw', 'catch', 'suppress'] as const) {
-    void test(`Classifier rejected bodies and failure reasons survive ${configurationMode}/${behavior}`, async () => {
+    void test(`Decision AI rejected bodies and failure reasons survive ${configurationMode}/${behavior}`, async () => {
       const responseBody = { error: { message: 'Model is unavailable' } };
       globalThis.fetch = async () => Response.json(responseBody, { status: 400 });
       const node = ClassifierEvaluateNodeImpl.create();
@@ -419,7 +419,7 @@ void test('Failure outputs are opt-in and diagnostic observers cannot replace th
 });
 
 for (const split of [false, true]) {
-  void test(`Classifier failure bodies reach terminal events and recordings (split=${split})`, async () => {
+  void test(`Decision AI failure bodies reach terminal events and recordings (split=${split})`, async () => {
     const candidate = ClassifierProfileNodeImpl.create();
     candidate.data.provider = 'perplexity';
     const questions = GraphInputNodeImpl.create();
@@ -480,14 +480,14 @@ for (const split of [false, true]) {
   });
 }
 
-void test('Classifier Profile suspension editors mirror the LLM structure with stored-unit timing defaults', () => {
+void test('Decision AI Profile suspension editors mirror the LLM structure with stored-unit timing defaults', () => {
   const node = ClassifierProfileNodeImpl.create();
   const originalData = structuredClone(node.data);
   assert.equal(node.data.responseTimeoutMs, 500);
   assert.equal(classifierProfileResponseTimeout({}), 500, 'Missing settings must use the same half-second default');
   assert.equal(classifierProfileResponseTimeout({ responseTimeoutMs: 30_000 }), 30_000, 'Keep explicit saved timeouts');
   const editors = new ClassifierProfileNodeImpl(node).getEditors();
-  const group = editors.find((editor) => editor.label === 'Classifier profile suspension');
+  const group = editors.find((editor) => editor.label === 'Decision AI profile suspension');
   assert.ok(group?.type === 'group');
   assert.deepEqual(
     group.editors.map((editor) => editor.label),
@@ -541,7 +541,7 @@ void test('Classifier Profile suspension editors mirror the LLM structure with s
   );
 });
 
-void test('Classifier Evaluate overall timeout editor uses milliseconds for defaults and constraints', () => {
+void test('Decision AI run overall timeout editor uses milliseconds for defaults and constraints', () => {
   for (const configurationMode of ['inline', 'profile'] as const) {
     const node = ClassifierEvaluateNodeImpl.create();
     node.data.configurationMode = configurationMode;
@@ -623,7 +623,7 @@ void test('Actual classifier retry and fallback events remain valid strict recor
   }
 });
 
-void test('Classifier Evaluate advertises model activity and Answers as its primary preview', () => {
+void test('Decision AI run advertises model activity and Answers as its primary preview', () => {
   const node = new ClassifierEvaluateNodeImpl(ClassifierEvaluateNodeImpl.create());
   assert.deepEqual(node.getRunActivityDescriptor(), { category: 'model', primaryOutputPortId: 'answers' });
 });
@@ -1077,7 +1077,7 @@ void test('Interrupted response receipt advances fallback and suspends the route
   assert.match(result.classifierProfileSummary!.value as string, /2\..*succeeded/);
 });
 
-void test('Classifier response deadlines are inert without enabled hosted suspension', async () => {
+void test('Decision AI response deadlines are inert without enabled hosted suspension', async () => {
   let now = originalNow();
   Date.now = () => now;
   for (const enableCircuitBreaker of [false, true]) {
@@ -1297,7 +1297,7 @@ for (const variant of ['authored', 'saved', 'prefab', 'bundle', 'cross-project']
       const wire = (from: string, outputId: string, to: string, inputId: string) =>
         ({ outputNodeId: from, outputId, inputNodeId: to, inputId }) as NodeConnection;
       const graph = {
-        metadata: { id: 'profile-graph', name: 'Classifier profiles', description: '' },
+        metadata: { id: 'profile-graph', name: 'Decision AI profiles', description: '' },
         nodes: [primary, secondary, array, state, questions, evaluateNode, output],
         connections: [
           wire(primary.id, 'profile', array.id, 'input1'),

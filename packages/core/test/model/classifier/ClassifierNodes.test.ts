@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import {
   ClassifierEvaluateNodeImpl,
+  ClassifierProfileNodeImpl,
   ClassifierQuestionNodeImpl,
   calculateClassifierUsageCost,
   classifierProviders,
@@ -51,12 +52,36 @@ function evaluateNode(data: Partial<ClassifierEvaluateNodeImpl['data']> = {}) {
   return new ClassifierEvaluateNodeImpl({ ...node, data: { ...node.data, ...data } });
 }
 
-test('Classifier nodes are first-party built-ins in the Classifier group', () => {
+test('Decision AI presentation preserves registered classifier primitives and saved configuration', () => {
   const registry = createBuiltInRegistry();
-  assert.equal(registry.getPluginFor('classifierQuestion'), undefined);
-  assert.equal(registry.getPluginFor('classifierEvaluate'), undefined);
-  assert.deepEqual(ClassifierQuestionNodeImpl.getUIData().group, ['Classifier']);
-  assert.deepEqual(ClassifierEvaluateNodeImpl.getUIData().group, ['Classifier']);
+  for (const [Impl, type, title] of [
+    [ClassifierQuestionNodeImpl, 'classifierQuestion', 'Decision AI Question'],
+    [ClassifierProfileNodeImpl, 'classifierProfile', 'Decision AI Profile'],
+    [ClassifierEvaluateNodeImpl, 'classifierEvaluate', 'Decision AI run'],
+  ] as const) {
+    const created = Impl.create();
+    assert.equal(registry.getPluginFor(type), undefined);
+    assert.equal(created.type, type);
+    assert.equal(created.title, title);
+    assert.equal(registry.getDynamicDisplayName(type), title);
+    assert.equal(Impl.getUIData().contextMenuTitle, title);
+    assert.deepEqual(Impl.getUIData().group, ['Decision AI']);
+  }
+  const node = ClassifierEvaluateNodeImpl.create();
+  node.title = 'Classifier Evaluate';
+  node.data.apiKeySource = 'classifier-settings';
+  node.data.configurationMode = 'profile';
+  node.data.outputClassifierAttempts = true;
+  node.data.outputClassifierProfileSummary = true;
+  const before = structuredClone(node);
+  const impl = new ClassifierEvaluateNodeImpl(node);
+  const profile = impl.getInputDefinitions([]).find((port) => port.id === 'classifierProfile');
+  assert.equal(profile?.title, 'Decision AI Profiles');
+  assert.deepEqual(profile?.dataType, ['classifier-config', 'classifier-config[]']);
+  assert.ok(impl.getOutputDefinitions().some((port) => port.id === 'classifierAttempts'));
+  assert.ok(impl.getOutputDefinitions().some((port) => port.id === 'classifierProfileSummary'));
+  impl.getEditors();
+  assert.deepEqual(node, before);
 });
 
 test('Classifier Question presents dimmed Type and ID fields before separated question and criteria summaries', () => {
@@ -533,7 +558,7 @@ test('Classifier Evaluate exposes provider HTTP body outputs only when enabled i
   assert.equal(outputsGroup.editors[0]?.label, 'Usage details');
   assert.deepEqual(
     outputsGroup.editors.map((editor: any) => editor.label),
-    ['Usage details', 'Request body', 'Response body', 'Classifier attempts', 'Classifier profile summary'],
+    ['Usage details', 'Request body', 'Response body', 'Decision AI attempts', 'Decision AI profile summary'],
   );
   assert.equal(
     outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label,

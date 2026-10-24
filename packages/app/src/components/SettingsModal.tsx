@@ -180,7 +180,7 @@ export const SettingsModal: FC<SettingsModalProps> = () => {
                     LLM
                   </SettingsNavButton>
                   <SettingsNavButton isSelected={page === 'classifier'} onClick={() => setPage('classifier')}>
-                    Classifier
+                    Decision AI
                   </SettingsNavButton>
                   <SettingsNavButton isSelected={page === 'plugins'} onClick={() => setPage('plugins')}>
                     Plugins

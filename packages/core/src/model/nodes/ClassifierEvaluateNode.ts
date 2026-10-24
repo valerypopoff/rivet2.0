@@ -83,7 +83,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   static create(): ClassifierEvaluateNode {
     return {
       type: 'classifierEvaluate',
-      title: 'Classifier Evaluate',
+      title: 'Decision AI run',
       id: nanoid() as NodeId,
       visualData: { x: 0, y: 0, width: 260 },
       // Keep the default model in the provider descriptor rather than
@@ -119,12 +119,12 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     if (this.data.configurationMode === 'profile') {
       inputs.unshift({
         id: 'classifierProfile' as PortId,
-        title: 'Classifier Profiles',
+        title: 'Decision AI Profiles',
         dataType: ['classifier-config', 'classifier-config[]'],
         required: true,
         coerced: true,
         splitRunBehavior: 'preserve-array',
-        description: 'One Classifier Profile or an ordered fallback chain.',
+        description: 'One Decision AI Profile or an ordered fallback chain.',
       });
     }
     if (this.data.configurationMode !== 'profile' && this.data.useModelInput) {
@@ -164,11 +164,11 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       outputs.push({ id: 'responseBody' as PortId, title: 'Response body', dataType: 'object' });
     }
     if (this.data.outputClassifierAttempts)
-      outputs.push({ id: 'classifierAttempts' as PortId, title: 'Classifier Attempts', dataType: 'object[]' });
+      outputs.push({ id: 'classifierAttempts' as PortId, title: 'Decision AI Attempts', dataType: 'object[]' });
     if (this.data.configurationMode === 'profile' && this.data.outputClassifierProfileSummary)
       outputs.push({
         id: 'classifierProfileSummary' as PortId,
-        title: 'Classifier Profile Summary',
+        title: 'Decision AI Profile Summary',
         dataType: 'string',
       });
     return [...outputs, ...getRunFailureOutputDefinitions({ catchRequestFailed: this.data.catchRequestFailed })];
@@ -194,7 +194,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             label: 'Request body',
             dataKey: 'outputRequestBody',
             helperMessage:
-              'Adds the exact classifier request JSON body sent to the provider. It excludes authorization headers and Rivet-managed API keys.',
+              'Adds the exact Decision AI request JSON body sent to the provider. It excludes authorization headers and Rivet-managed API keys.',
           },
           {
             type: 'toggle',
@@ -203,10 +203,10 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             helperMessage:
               'Shows the provider response, including rejected or invalid responses. Non-JSON responses appear as raw text. Captured content may contain sensitive input.',
           },
-          { type: 'toggle', label: 'Classifier attempts', dataKey: 'outputClassifierAttempts' },
+          { type: 'toggle', label: 'Decision AI attempts', dataKey: 'outputClassifierAttempts' },
           {
             type: 'toggle',
-            label: 'Classifier profile summary',
+            label: 'Decision AI profile summary',
             dataKey: 'outputClassifierProfileSummary',
             hideIf: (data) => data.configurationMode !== 'profile',
           },
@@ -297,11 +297,11 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
 
   static getUIData(): NodeUIData {
     return {
-      contextMenuTitle: 'Classifier Evaluate',
-      infoBoxTitle: 'Classifier Evaluate',
+      contextMenuTitle: 'Decision AI run',
+      infoBoxTitle: 'Decision AI run',
       infoBoxBody:
-        'Evaluates shared state and optional images against typed classifier questions. Images are shared evidence for every question.',
-      group: ['Classifier'],
+        'Evaluates shared state and optional images against typed Decision AI questions. Images are shared evidence for every question.',
+      group: ['Decision AI'],
     };
   }
 
@@ -624,7 +624,7 @@ export function getClassifierModelEditor(
         defaultValue: 'configured',
         options: [
           { value: 'configured', label: 'Automatic' },
-          { value: 'classifier-settings', label: 'Classifier settings' },
+          { value: 'classifier-settings', label: 'Decision AI settings' },
           { value: 'input', label: 'Input port' },
         ],
         helperMessage: getApiKeySourceHelperMessage,
@@ -651,7 +651,7 @@ function getStaticModel(model: string | undefined, defaultModel: string): string
   return typeof model === 'string' && model.trim() !== '' ? model.trim() : defaultModel;
 }
 
-/** Shared presentation model for the app's Classifier Evaluate card. */
+/** Shared presentation model for the app's Decision AI run card. */
 export function getClassifierEvaluateBodySections(
   data: ClassifierEvaluateNodeData,
 ): readonly ClassifierEvaluateBodySection[] {
@@ -702,8 +702,8 @@ function getApiKeySourceHelperMessage(data: ClassifierEvaluateNodeData): string 
   if (data.apiKeySource === 'input') return 'Uses the API Key input port instead of a configured provider key.';
   const provider = getProviderForDisplay(data.provider);
   if (data.apiKeySource === 'classifier-settings')
-    return `Uses only Settings > Classifier > ${provider.label} API Key on the executor. Does not fall back to named or environment credentials.`;
-  return 'Automatic checks the named programmatic setting, then the named environment variable, then the saved Classifier key (default names only). OpenAI also accepts its legacy general key; Jev accepts its legacy plugin key last. Resolution happens on the executor, not in this editor.';
+    return `Uses only Settings > Decision AI > ${provider.label} API Key on the executor. Does not fall back to named or environment credentials.`;
+  return 'Automatic checks the named programmatic setting, then the named environment variable, then the saved Decision AI key (default names only). OpenAI also accepts its legacy general key; Jev accepts its legacy plugin key last. Resolution happens on the executor, not in this editor.';
 }
 
 function flattenQuestions(
@@ -741,4 +741,4 @@ function normalizeTimeout(timeoutMs: number | undefined): number {
     : 30_000;
 }
 
-export const classifierEvaluateNode = nodeDefinition(ClassifierEvaluateNodeImpl, 'Classifier Evaluate');
+export const classifierEvaluateNode = nodeDefinition(ClassifierEvaluateNodeImpl, 'Decision AI run');

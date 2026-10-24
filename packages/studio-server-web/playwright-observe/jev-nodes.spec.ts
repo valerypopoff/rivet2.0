@@ -4,7 +4,7 @@ import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/typ
 
 test.use({ actionTimeout: 15_000 });
 
-const projectName = 'Hosted Classifier node migration';
+const projectName = 'Hosted Decision AI node migration';
 const projectPath = `/workflows/${projectName}.rivet-project`;
 
 const fixture = `version: 4
@@ -130,7 +130,7 @@ function classifierSection(editor: FrameLocator, heading: 'Instructions' | 'Crit
   return editor.getByRole('heading', { name: heading, exact: true }).locator('..');
 }
 
-test('Classifier Profile defaults to a half-second response deadline', async ({ page }) => {
+test('Decision AI Profile defaults to a half-second response deadline', async ({ page }) => {
   const contents = fixture.replace(
     "        '[evaluate]:jevEvaluate",
     `        '[default-profile]:classifierProfile "Classifier Profile"':
@@ -148,21 +148,21 @@ test('Classifier Profile defaults to a half-second response deadline', async ({ 
     .click();
   await editor
     .locator('button.collapsible-panel-toggle')
-    .filter({ hasText: /^Classifier profile suspension$/ })
+    .filter({ hasText: /^Decision AI profile suspension$/ })
     .click();
   await editor.getByText('Enable automatic suspension', { exact: true }).click();
   await expect(editor.getByRole('spinbutton', { name: 'Response timeout, seconds', exact: true })).toHaveValue('0.5');
 });
 
-test('Classifier configuration exports a wired profile and suspension administration is family scoped', async ({
+test('Decision AI configuration exports a wired profile and suspension administration is family scoped', async ({
   page,
 }) => {
   const editor = await openFixture(page);
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
   await evaluate.locator('button.edit-button').dispatchEvent('click');
-  await expect(editor.getByRole('group', { name: 'Classifier configuration source' })).toBeVisible();
+  await expect(editor.getByRole('group', { name: 'Decision AI configuration source' })).toBeVisible();
   await editor.getByRole('button', { name: 'From profile', exact: true }).click();
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier Profiles$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Decision AI Profiles$/ })).toHaveCount(1);
   await expect(editor.getByRole('group', { name: 'API key source' })).toHaveCount(0);
   await editor
     .locator('button.collapsible-panel-toggle')
@@ -179,21 +179,21 @@ test('Classifier configuration exports a wired profile and suspension administra
     .locator('button.collapsible-panel-toggle')
     .filter({ hasText: /^Advanced$/ })
     .click();
-  await editor.getByRole('button', { name: 'Export Classifier settings to profile node', exact: true }).click();
+  await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
   const profileNode = editor
     .locator('.node')
-    .filter({ hasText: 'Classifier Profile' })
+    .filter({ hasText: 'Decision AI Profile' })
     .filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
   await expect(profileNode).toHaveCount(1);
   await expect(evaluate).toContainText('From profile');
   const profileId = await profileNode.getAttribute('data-nodeid');
   await editor.locator('body').press('ControlOrMeta+z');
   await expect(profileNode).toHaveCount(0);
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier Profiles$/ })).toHaveCount(0);
+  await expect(evaluate.locator('.port-label', { hasText: /^Decision AI Profiles$/ })).toHaveCount(0);
   await editor.locator('body').press('ControlOrMeta+Shift+z');
   await expect(profileNode).toHaveCount(1);
   await expect(profileNode).toHaveAttribute('data-nodeid', profileId!);
-  await expect(evaluate.locator('.port-label', { hasText: /^Classifier Profiles$/ })).toHaveCount(1);
+  await expect(evaluate.locator('.port-label', { hasText: /^Decision AI Profiles$/ })).toHaveCount(1);
   await expect(profileNode).toContainText('Automatic suspension: Disabled');
   await profileNode.locator('button.edit-button').dispatchEvent('click');
   await expect(editor.getByRole('group', { name: 'API key source' })).toBeVisible();
@@ -203,7 +203,7 @@ test('Classifier configuration exports a wired profile and suspension administra
     .click();
   await editor
     .locator('button.collapsible-panel-toggle')
-    .filter({ hasText: /^Classifier profile suspension$/ })
+    .filter({ hasText: /^Decision AI profile suspension$/ })
     .click();
   await expect(editor.getByText("It's a hosted runtime capability", { exact: true })).toBeVisible();
   await expect(
@@ -223,7 +223,7 @@ test('Classifier configuration exports a wired profile and suspension administra
     ),
   ).toBeVisible();
   const suspensionSection = editor.locator('.Collapsible').filter({
-    has: editor.locator('button.collapsible-panel-toggle').filter({ hasText: /^Classifier profile suspension$/ }),
+    has: editor.locator('button.collapsible-panel-toggle').filter({ hasText: /^Decision AI profile suspension$/ }),
   });
   await expect(suspensionSection.getByRole('spinbutton')).toHaveCount(0);
   const responseTimeout = suspensionSection.getByRole('spinbutton', { name: 'Response timeout, seconds', exact: true });
@@ -289,35 +289,59 @@ test('Classifier configuration exports a wired profile and suspension administra
   await expect(suspensionDuration).toHaveValue('240');
   await editor
     .locator('button.collapsible-panel-toggle')
-    .filter({ hasText: /^Classifier profile suspension$/ })
+    .filter({ hasText: /^Decision AI profile suspension$/ })
     .click();
   await expect(suspensionSection.locator('button.collapsible-panel-toggle')).toHaveAttribute('aria-expanded', 'false');
   await expect(suspensionSection.locator('.Collapsible__contentOuter')).toHaveCSS('height', '0px');
   await editor
     .locator('button.collapsible-panel-toggle')
-    .filter({ hasText: /^Classifier profile suspension$/ })
+    .filter({ hasText: /^Decision AI profile suspension$/ })
     .click();
   await expect(responseTimeout).toHaveValue('0.25');
   await suspensionSection.screenshot({ path: test.info().outputPath('classifier-suspension-enabled.png') });
   await page.keyboard.press('Escape');
   const families: string[] = [];
+  let classifierHealth: unknown[] = [];
   await page.route('**/api/workflows/llm-profile-health/admin?**', async (route) => {
-    families.push(new URL(route.request().url()).searchParams.get('family')!);
-    await route.fulfill({ json: [] });
+    const family = new URL(route.request().url()).searchParams.get('family')!;
+    families.push(family);
+    await route.fulfill({ json: family === 'classifier' ? classifierHealth : [] });
   });
   await page.locator('.project-row', { hasText: projectName }).click();
   await page.locator('.active-project-more-button').click();
   const modal = page.locator('[data-testid="workflow-project-settings-modal"]');
-  await modal.getByRole('tab', { name: 'Classifier profile suspension', exact: true }).click();
+  await modal.getByRole('tab', { name: 'Decision AI profile suspension', exact: true }).click();
   await expect(
-    modal.getByText('No Classifier profiles are currently suspended or awaiting recovery.', { exact: true }),
+    modal.getByText('No Decision AI profiles are currently suspended or awaiting recovery.', { exact: true }),
   ).toBeVisible();
   await expect.poll(() => families).toEqual(['classifier']);
+  classifierHealth = [undefined, 'Classifier Profile', 'My Classifier route'].map((profileName, index) => ({
+    identity: {
+      key: `missing-${index}`,
+      family: 'classifier',
+      projectId: project.projectMetadataId,
+      profileNodeId: `missing-${index}`,
+      ...(profileName == null ? {} : { profileName }),
+      provider: 'jev',
+      model: 'jev-latest',
+      configurationFingerprint: 'fixture',
+    },
+    state: 'open',
+    failureCount: 3,
+    openUntil: Date.now() + 60_000,
+    updatedAt: Date.now(),
+  }));
+  await modal.getByRole('button', { name: 'Refresh', exact: true }).click();
+  const healthRows = modal.locator('.project-settings-llm-health-row-suspended');
+  await expect(healthRows).toHaveCount(3);
+  await expect(healthRows.filter({ hasText: 'Decision AI Profile missing-0' })).toHaveCount(1);
+  await expect(healthRows.filter({ hasText: 'Decision AI Profile' })).toHaveCount(2);
+  await expect(healthRows.filter({ hasText: 'My Classifier route' })).toHaveCount(1);
   await modal.getByRole('tab', { name: 'LLM profile suspension', exact: true }).click();
   await expect(
     modal.getByText('No LLM profiles are currently suspended or awaiting recovery.', { exact: true }),
   ).toBeVisible();
-  await expect.poll(() => families).toEqual(['classifier', 'llm']);
+  await expect.poll(() => families).toEqual(['classifier', 'classifier', 'llm']);
 });
 
 async function expectNoExtraEditorGap(control: Locator, content: Locator) {
@@ -329,12 +353,12 @@ async function expectNoExtraEditorGap(control: Locator, content: Locator) {
     .toBeLessThan(30);
 }
 
-test('Classifier Profile copy/paste preserves provider configuration and creates a new source identity', async ({
+test('Decision AI Profile copy/paste preserves provider configuration and creates a new source identity', async ({
   page,
 }) => {
   const editor = await openFixture(page);
   await editor.locator('.node[data-nodeid="evaluate"] button.edit-button').dispatchEvent('click');
-  await editor.getByRole('button', { name: 'Export Classifier settings to profile node', exact: true }).click();
+  await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
   const profiles = editor.locator('.node').filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
   await expect(profiles).toHaveCount(1);
   const first = profiles.first();
@@ -440,7 +464,7 @@ test('Choice selection persists and keeps both criteria columns usable', async (
   await expect(choice).toContainText('Instructions: 2 lines');
 });
 
-test('Classifier Criteria input-source control stays in the trailing grid column', async ({ page }) => {
+test('Decision AI Criteria input-source control stays in the trailing grid column', async ({ page }) => {
   const editor = await openFixture(page);
   const choice = editor.locator('.node[data-nodeid="choice"]');
   await choice.hover();
@@ -467,7 +491,7 @@ test('Classifier Criteria input-source control stays in the trailing grid column
   await expectInputToggleOnRight(scoreTextCriteria);
 });
 
-test('Classifier cards share the LLM Chat body layout', async ({ page }) => {
+test('Decision AI cards share the LLM Chat body layout', async ({ page }) => {
   const editor = await openFixture(page);
   const choice = editor.locator('.node[data-nodeid="choice"]');
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
@@ -482,7 +506,7 @@ test('Classifier cards share the LLM Chat body layout', async ({ page }) => {
   await expect(evaluate.locator('.llm-node-body-label').first()).toHaveCSS('opacity', '0.6');
 });
 
-test('legacy Jev projects migrate to built-in Classifier nodes without installing a plugin', async ({ page }) => {
+test('legacy Jev projects migrate to built-in Decision AI nodes without installing a plugin', async ({ page }) => {
   const editor = await openFixture(page);
   const choice = editor.locator('.node[data-nodeid="choice"]');
   await expect(choice).toContainText('Type: Choice');
@@ -602,13 +626,13 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText('Provider', { exact: true })).toBeVisible();
   await expect(editor.getByRole('button', { name: 'Automatic', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await editor.getByRole('button', { name: 'Classifier settings', exact: true }).click();
+  await editor.getByRole('button', { name: 'Decision AI settings', exact: true }).click();
   await expect(editor.locator('input[value="typesafeApiKey"]')).toHaveCount(0);
   await expect(editor.getByText(/Does not fall back to named or environment credentials/)).toBeVisible();
   await expect(evaluate.locator('.port-label', { hasText: /^API Key$/ })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await evaluate.locator('button.edit-button').dispatchEvent('click');
-  await expect(editor.getByRole('button', { name: 'Classifier settings', exact: true })).toHaveAttribute(
+  await expect(editor.getByRole('button', { name: 'Decision AI settings', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
@@ -645,8 +669,10 @@ test('legacy Jev projects migrate to built-in Classifier nodes without installin
   await page.keyboard.press('Escape');
 });
 
-test('Classifier nodes are available from the built-in Classifier add-node group', async ({ page }) => {
+test('Decision AI nodes are available from the built-in Decision AI add-node group', async ({ page }) => {
   const editor = await openFixture(page);
+  await expect(editor.locator('.node[data-nodeid="choice"] .node-title')).toContainText('Decision AI Question');
+  await expect(editor.locator('.node[data-nodeid="evaluate"] .node-title')).toContainText('Decision AI run');
   const canvas = editor.locator('.node-canvas');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -656,14 +682,17 @@ test('Classifier nodes are available from the built-in Classifier add-node group
   await expect(addNode).toHaveText('Add node');
   await addNode.hover();
 
-  const classifierGroup = editor.getByText('Classifier', { exact: true });
+  const classifierGroup = editor.getByText('Decision AI', { exact: true });
   await expect(classifierGroup).toBeVisible();
   await classifierGroup.hover();
-  await expect(editor.locator('.context-menu-label-text', { hasText: 'Classifier Question' })).toHaveText(
-    'Classifier Question',
+  await expect(editor.locator('.context-menu-label-text', { hasText: 'Decision AI Question' })).toHaveText(
+    'Decision AI Question',
   );
-  await expect(editor.locator('.context-menu-label-text', { hasText: 'Classifier Evaluate' })).toHaveText(
-    'Classifier Evaluate',
+  await expect(editor.locator('.context-menu-label-text', { hasText: 'Decision AI run' })).toHaveText(
+    'Decision AI run',
+  );
+  await expect(editor.locator('.context-menu-label-text', { hasText: 'Decision AI Profile' })).toHaveText(
+    'Decision AI Profile',
   );
 });
 
@@ -766,7 +795,7 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
     await model.fill(defaultModel);
     await model.blur();
     await expect(evaluate).toContainText(`Model: ${defaultModel}`);
-    await editor.getByRole('button', { name: 'Export Classifier settings to profile node', exact: true }).click();
+    await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
     const profile = editor.locator('.node').filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
     await expect(profile).toHaveCount(1);
     await expect(profile).toContainText(`Provider: ${label}`);
@@ -777,7 +806,7 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
     await editor.getByRole('button', { name: 'Menu', exact: true }).click();
     await editor.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
     const settings = editor.getByTestId('settings-modal');
-    await settings.getByRole('button', { name: 'Classifier', exact: true }).click();
+    await settings.getByRole('button', { name: 'Decision AI', exact: true }).click();
     const key = settings.getByLabel(`${label} API Key`, { exact: true });
     await expect(key).toHaveAttribute('type', 'password');
     await key.fill('fixture-key');
@@ -786,12 +815,12 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
     await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
     await editor.getByRole('button', { name: 'Menu', exact: true }).click();
     await editor.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
-    await settings.getByRole('button', { name: 'Classifier', exact: true }).click();
+    await settings.getByRole('button', { name: 'Decision AI', exact: true }).click();
     await expect(settings.getByLabel(`${label} API Key`, { exact: true })).toHaveValue('fixture-key');
     await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
   });
 
-test('Classifier failure ports follow Catch all exceptions independently of the HTTP status toggle', async ({
+test('Decision AI failure ports follow Catch all exceptions independently of the HTTP status toggle', async ({
   page,
 }) => {
   const editor = await openFixture(page);

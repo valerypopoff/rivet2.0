@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { getUiFontScale, getUiFontSizeCssVariables } from '../../app/src/utils/uiFontSize';
 import { serializeProject, ExecutionRecorder, type GraphId, type ProjectId } from '@valerypopoff/rivet2-core';
 import { createChildPlaybackFixture } from '../../app/src/hooks/fixtures/childPlaybackRecording.js';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
@@ -135,7 +136,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       status: kind === 'nested child' ? 'failed' : kind === 'legacy child' ? 'suspicious' : 'succeeded',
       durationMs: 1234,
       runKind: kind === 'prompt child' ? 'editor' : kind === 'legacy child' ? 'published' : 'latest',
-      errorMessage: kind === 'nested child' ? 'Historical run failure' : undefined,
+      errorMessage: kind === 'nested child' ? `Historical run failure: ${'long-unbroken-detail'.repeat(30)}` : undefined,
     };
     await page.route('**/api/workflows/recordings/**', (route) => {
       const url = new URL(route.request().url());
@@ -209,6 +210,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     await expect(modal).toBeHidden();
     const recordingInfo = editor.getByRole('region', { name: 'Loaded recording', exact: true });
     await expect(recordingInfo).toBeVisible();
+    await expect(recordingInfo.getByRole('button', { name: 'Unload Recording', exact: true })).toHaveCount(0);
     if (kind === 'child') {
       await editor.locator('body').press('Control+s');
       const warning = editor
@@ -228,19 +230,19 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     const panelLayout = await recordingInfo.evaluate((panel) => {
       const bounds = panel.getBoundingClientRect();
       const controls = panel.querySelector('.action-bar-controls')!;
-      const unload = controls.querySelector('.unload-recording-button')!.getBoundingClientRect();
       const play = controls.querySelector('.run-button')!.getBoundingClientRect();
       const more = controls.querySelector('.more-menu')!.getBoundingClientRect();
       return {
-        leftInset: unload.left - bounds.left,
+        leftInset: play.left - bounds.left,
         metadataInset: panel.querySelector('.loaded-recording-label')!.getBoundingClientRect().left - bounds.left,
         rightInset: bounds.right - more.right,
-        buttonGap: play.left - unload.right,
         contentGap:
           panel.querySelector('.loaded-recording-info')!.getBoundingClientRect().top -
           controls.getBoundingClientRect().bottom,
-        sameRow: unload.top === play.top && play.top === more.top,
+        sameRow: play.top === more.top,
         infoFont: getComputedStyle(panel.querySelector('.loaded-recording-info')!).fontSize,
+        contentRightPadding: parseFloat(getComputedStyle(panel.querySelector('.loaded-recording-info')!).paddingRight),
+        playWidth: play.width,
         panelFont: getComputedStyle(panel).fontSize,
         overflows: panel.scrollWidth > panel.clientWidth,
       };
@@ -248,25 +250,40 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     expect(panelLayout.leftInset).toBeCloseTo(9, 0);
     expect(panelLayout.metadataInset).toBeCloseTo(9, 0);
     expect(panelLayout.rightInset).toBeCloseTo(9, 0);
-    expect(panelLayout.buttonGap).toBeCloseTo(8, 0);
     expect(panelLayout.contentGap).toBeCloseTo(12, 0);
     expect(panelLayout.sameRow).toBe(true);
     expect(panelLayout.infoFont).toBe(panelLayout.panelFont);
+    expect(panelLayout.contentRightPadding).toBeGreaterThanOrEqual(panelLayout.playWidth * 0.4);
+    expect(panelLayout.contentRightPadding).toBeLessThanOrEqual(panelLayout.playWidth * 0.6);
     expect(panelLayout.overflows).toBe(false);
-    if (kind === 'child') {
-      const unload = recordingInfo.getByRole('button', { name: 'Unload Recording', exact: true });
-      await expect(unload).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.1)');
-      await unload.hover();
-      await expect(unload).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.2)');
+    if (kind === 'child' || kind === 'nested child') {
       await page.mouse.move(0, 0);
       await page.setViewportSize({ width: 900, height: 700 });
       await expect(recordingInfo).toBeVisible();
-      const fits = await recordingInfo.evaluate((panel) => {
-        const bounds = panel.getBoundingClientRect();
-        return bounds.left >= 0 && bounds.right <= window.innerWidth && panel.scrollWidth <= panel.clientWidth;
-      });
-      expect(fits).toBe(true);
-      await page.setViewportSize({ width: 1600, height: 1000 });
+      const originalStyle = await recordingInfo.getAttribute('style');
+      try {
+        for (const fontSize of [14, 15, 20]) {
+          const layout = await recordingInfo.evaluate((panel, variables) => {
+            for (const [name, value] of Object.entries(variables)) panel.style.setProperty(name, String(value));
+            const bounds = panel.getBoundingClientRect();
+            const info = panel.querySelector<HTMLElement>('.loaded-recording-info')!;
+            return {
+              fits: bounds.left >= 0 && bounds.right <= window.innerWidth && panel.scrollWidth <= panel.clientWidth,
+              contentFits: info.scrollWidth <= info.clientWidth,
+              padding: parseFloat(getComputedStyle(info).paddingRight),
+            };
+          }, getUiFontSizeCssVariables(fontSize));
+          expect(layout.fits, `recording panel at ${fontSize}px UI size`).toBe(true);
+          expect(layout.contentFits, `recording details at ${fontSize}px UI size`).toBe(true);
+          expect(layout.padding).toBeCloseTo(64 * getUiFontScale(fontSize), 2);
+        }
+      } finally {
+        await recordingInfo.evaluate((panel, originalStyle) => {
+          if (originalStyle == null) panel.removeAttribute('style');
+          else panel.setAttribute('style', originalStyle);
+        }, originalStyle);
+        await page.setViewportSize({ width: 1600, height: 1000 });
+      }
     }
     await expect(recordingInfo).not.toContainText('Details inferred from recording events');
     await expect(recordingInfo).not.toContainText('Project:');
@@ -525,9 +542,9 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(
         settings.getByText('Could not check this project’s published version.', { exact: true }),
       ).toHaveCount(0);
-      await recordingInfo.getByRole('button', { name: 'Unload Recording', exact: true }).click();
-      await expect(recordingInfo).toHaveCount(0);
-      await expect(editor.locator('.projects-container .project.active .recording-tab-icon')).toHaveCount(0);
+      await expect(recordingInfo.getByRole('button', { name: 'Unload Recording', exact: true })).toHaveCount(0);
+      await expect(recordingInfo).toBeVisible();
+      await expect(editor.locator('.projects-container .project.active .recording-tab-icon')).toHaveCount(1);
       await expect(call.locator('[data-recorded-target]')).toBeVisible();
       await expect(call.locator('.target-error')).toHaveCount(0);
       await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/has-unsaved-changes/);

@@ -5,7 +5,11 @@ import { useAtomValue } from 'jotai';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useSaveRecording } from '../hooks/useSaveRecording';
 import { graphRunningState, graphPausedState } from '../state/dataFlow';
-import { currentProjectLoadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
+import {
+  canUnloadCurrentProjectRecordingState,
+  currentProjectLoadedRecordingState,
+  recordingPlaybackStartingState,
+} from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
 import MultiplyIcon from 'majesticons/line/multiply-line.svg?react';
 import PauseIcon from 'majesticons/line/pause-circle-line.svg?react';
@@ -84,6 +88,7 @@ const styles = css`
     display: flex;
     flex-direction: column;
     gap: 6px;
+    padding-right: calc(64px * var(--ui-font-scale));
     line-height: 1.45;
     max-height: min(300px, 40vh);
     overflow: auto;
@@ -249,6 +254,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const graphPaused = useAtomValue(graphPausedState);
 
   const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
+  const canUnloadRecording = useAtomValue(canUnloadCurrentProjectRecordingState);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const { unloadRecording } = useLoadRecording();
   const [menuIsOpen, toggleMenuIsOpen] = useToggle();
@@ -350,7 +356,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
           </div>
         )}
 
-        {activeRecording && !graphRunning && (
+        {activeRecording && canUnloadRecording && !graphRunning && (
           <div className={clsx('unload-recording-button')}>
             <button onClick={() => unloadRecording()}>Unload Recording</button>
           </div>

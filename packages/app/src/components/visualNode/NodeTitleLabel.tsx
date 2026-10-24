@@ -2,6 +2,7 @@ import { type ChartNode } from '@valerypopoff/rivet2-core';
 import { type FC } from 'react';
 import { ToolCallContinuationIndicator } from './ToolCallContinuationIndicator.js';
 import { RemoteDebuggerBugIcon } from '../RemoteDebuggerBugIcon.js';
+import { getNodeDisplayTitle } from '../../utils/nodeDisplayTitle.js';
 
 const GlobalNodeTitleIcon: FC<{ direction: 'get' | 'set' }> = ({ direction }) => (
   <svg
@@ -77,7 +78,7 @@ export const NodeTitleLabel: FC<{ node: Pick<ChartNode, 'title' | 'type'> }> = (
       {hasStreamingIcon && <StreamingNodeTitleIcon />}
       {hasDebugIcon && <RemoteDebuggerBugIcon className="debug-node-title-icon" aria-hidden="true" focusable="false" />}
       {hasToolCallContinuationIcon && <ToolCallContinuationIndicator />}
-      {node.title}
+      {getNodeDisplayTitle(node)}
     </span>
   );
 };

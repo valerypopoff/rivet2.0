@@ -47,8 +47,8 @@ export const LLMChatV2ConfigurationEditor: FC<Props> = ({ editor, isDisabled, is
   const extractLLMChatProfile = useExtractLLMChatProfileCommand();
   const extractClassifierProfile = useExtractClassifierProfileCommand();
   const classifier = node.type === 'classifierEvaluate';
-  const label = classifier ? 'Classifier' : 'LLM';
-  const target = classifier ? 'Classifier Evaluate' : 'LLM Chat';
+  const label = classifier ? 'Decision AI' : 'LLM';
+  const target = classifier ? 'Decision AI run' : 'LLM Chat';
   const workspaceTarget = useProjectWorkspaceTarget();
   const data = node.data as { configurationMode?: 'inline' | 'profile' };
   const usesProfile = data.configurationMode === 'profile';

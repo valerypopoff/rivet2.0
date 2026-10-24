@@ -2403,7 +2403,7 @@ test.describe('Run recordings modal', () => {
     await expect(page.locator('.Toastify__toast', { hasText: 'Failed to open project' })).toHaveCount(0);
     const editorFrame = page.frameLocator('iframe.dashboard-editor-frame');
     await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toBeVisible();
-    await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toBeVisible();
+    await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toHaveCount(0);
     await expect(editorFrame.locator('.recording-border')).toBeVisible();
     await editorFrame.locator('.more-menu').click();
     await expect(editorFrame.getByText('Not used during recording playback', { exact: true })).toBeVisible();
@@ -2420,9 +2420,13 @@ test.describe('Run recordings modal', () => {
     await editorFrame.locator('.project').filter({ hasText: 'Replay recording-b-2' }).click();
     await expect(editorFrame.locator('.recording-border')).toBeVisible();
     await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toBeVisible();
-    await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toBeVisible();
+    await expect(editorFrame.getByRole('button', { name: 'Unload Recording', exact: true })).toHaveCount(0);
 
-    await editorFrame.getByRole('button', { name: 'Unload Recording', exact: true }).click();
+    const replayTab = editorFrame.locator('.project').filter({ hasText: 'Replay recording-b-2' });
+    await replayTab.hover();
+    await replayTab.locator('.close-project').click();
+    await expect(replayTab).toHaveCount(0);
+    await expect(ordinaryProjectTab).toHaveClass(/active/);
     await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toHaveCount(0);
     await editorFrame.locator('.more-menu').click();
     const executorMode = editorFrame.getByRole('group', { name: 'Executor mode' });
@@ -2431,6 +2435,29 @@ test.describe('Run recordings modal', () => {
       'aria-pressed',
       'true',
     );
+    await editorFrame.locator('.more-menu').click();
+    // A file loaded over an ordinary project still supports returning to live mode.
+    for (const frame of page.frames()) {
+      await frame.evaluate((recording) => {
+        Object.defineProperty(window, 'showOpenFilePicker', {
+          configurable: true,
+          value: async () => [
+            {
+              name: 'overlay.rivet-recording',
+              getFile: async () => new File([recording], 'overlay.rivet-recording'),
+            },
+          ],
+        });
+      }, createSerializedRecording('recording-b-2'));
+    }
+    await editorFrame.locator('.more-menu').click();
+    await editorFrame.getByRole('button', { name: 'Load Recording', exact: true }).click();
+    const unload = editorFrame.getByRole('button', { name: 'Unload Recording', exact: true });
+    await expect(unload).toBeVisible();
+    await unload.click();
+    await expect(unload).toHaveCount(0);
+    await expect(editorFrame.getByRole('button', { name: 'Play Recording', exact: true })).toHaveCount(0);
+    await expect(ordinaryProjectTab).toHaveClass(/active/);
     await expect(modal).toBeHidden();
     await expect(page.getByText('Found: 11')).toBeVisible();
 
