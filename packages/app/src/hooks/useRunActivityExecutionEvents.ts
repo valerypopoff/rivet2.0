@@ -1,28 +1,17 @@
 import type { ProcessEventMessageMap } from '@valerypopoff/rivet2-core';
-import { useSetAtom } from 'jotai';
-import { applyProcessEventToRunActivityJournal } from '../features/runActivity/runActivityProcessEvents.js';
-import { runActivityJournalState } from '../state/dataFlow.js';
-import { getEventOccurredAt } from '../utils/recordedNodeTiming.js';
 import { useStableCallback } from './useStableCallback.js';
+import { useExecutionSnapshotWriter } from './useExecutionSnapshotWriter.js';
 
 export type RunActivityExecutionEventsApi = {
   onRunActivityEvent: <K extends keyof ProcessEventMessageMap>(message: K, data: ProcessEventMessageMap[K]) => void;
 };
 
 export function useRunActivityExecutionEvents(): RunActivityExecutionEventsApi {
-  const setJournal = useSetAtom(runActivityJournalState);
+  const writer = useExecutionSnapshotWriter();
 
   const onRunActivityEvent = useStableCallback(
     <K extends keyof ProcessEventMessageMap>(message: K, data: ProcessEventMessageMap[K]) => {
-      const occurredAt = getEventOccurredAt(data) ?? Date.now();
-      setJournal((journal) =>
-        applyProcessEventToRunActivityJournal({
-          data,
-          journal,
-          message,
-          occurredAt,
-        }),
-      );
+      writer.event(message, data, { activityOnly: true, activityData: data });
     },
   );
 

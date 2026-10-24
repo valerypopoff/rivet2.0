@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useBundleExecutionRouting } from '../hooks/useBundleExecutionRouting.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
 import { isInternalExecutorTarget } from '../hooks/executorSessionTarget.js';
 import { useRemoteExecutionObservations } from '../hooks/useRemoteExecutionObservations.js';
 import { type ProcessEventMessageMap, type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
@@ -9,7 +10,9 @@ import {
   type ExecutorSessionLifecycleEvent,
   type ExecutorSessionRuntime,
   type RemoteEventAdmission,
+  type ExecutorSessionTarget,
 } from '../hooks/executorSession.js';
+import type { ExecutionSourceKind } from '../domain/execution/executionEventNormalization.js';
 import { releaseRuntimeExecutorResources } from '../hooks/executorSessionRuntimeResources.js';
 import { executorSessionRevisionState, getLoadedRecordingForTab, loadedRecordingState } from '../state/execution.js';
 import { projectsState, projectState } from '../state/savedGraphs.js';
@@ -19,12 +22,16 @@ import { graphRunningState, projectExecutionSnapshotsState } from '../state/data
 import { previousDataPerNodeToKeepState } from '../state/settings.js';
 import { shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent } from '../hooks/remoteExecutorHelpers.js';
 import {
-  applyExecutorDisconnectToProjectExecutionSnapshots,
-  applyProcessEventToProjectExecutionSnapshots,
-  shouldRouteProjectEventToSnapshot,
+  routeProjectExecutionDisplay,
+  routeExecutorDisconnectDisplay,
 } from '../hooks/projectExecutionSnapshotRouting.js';
 
 const FALLBACK_EXECUTOR_SESSION_PROJECT_ID = '__rivet_fallback_project__' as ProjectId;
+const executionKindByTarget = {
+  'internal-desktop': 'desktop-node',
+  'internal-hosted': 'hosted-node',
+  'external-debugger': 'remote-debugger',
+} satisfies Record<ExecutorSessionTarget['type'], ExecutionSourceKind>;
 
 export type ExecutorSessionRegistry = {
   connectBundleDebugger(projectId: ProjectId, members: ProjectId[], url?: string, scopeKey?: string): Promise<void>;
@@ -95,6 +102,7 @@ export function useExecutorSessionHostConfig(): ExecutorSessionHostConfig | unde
 
 export function createExecutorSessionRegistry(options: {
   onStateChange: () => void;
+  getProjectBindingLifetime?: (projectId: ProjectId) => string | undefined;
   resolveInternalHostedExecutorUrl?: () => Promise<string>;
 }): ExecutorSessionRegistry {
   const runtimes = new Map<ProjectId, ExecutorSessionRuntime>();
@@ -112,7 +120,8 @@ export function createExecutorSessionRegistry(options: {
   let currentDatasetProvider: AppDatasetProvider | null = null;
 
   function createRuntime(projectId: ProjectId, bundle?: DebuggerBundle) {
-    const getProjectLifetime = bundle ? (id: ProjectId) => bundle.members.get(id)?.toString() : undefined;
+    const getProjectLifetime =
+      options.getProjectBindingLifetime ?? (bundle ? (id: ProjectId) => bundle.members.get(id)?.toString() : undefined);
     const runtime = createExecutorSessionRuntime({
       projectId,
       // Root lifecycle can originate outside the container and call a member.
@@ -302,6 +311,16 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
   const registry = useMemo(
     () =>
       createExecutorSessionRegistry({
+        getProjectBindingLifetime: (id) => {
+          store.get(projectsState);
+          const bindings = store.get(projectBindingRegistryState);
+          return (
+            bindings.get(id)?.token.toString() ??
+            (store.get(projectState).metadata.id === id
+              ? `standalone:${id}:${bindings.getWorkspaceToken()}`
+              : undefined)
+          );
+        },
         resolveInternalHostedExecutorUrl: async () => {
           const resolve = hostConfigRef.current?.resolveInternalHostedExecutorUrl;
           if (!resolve) throw new Error('Fresh hosted executor discovery is unavailable.');
@@ -330,9 +349,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
         return members.filter(
           (member) =>
             registry.getRemoteDebuggerRuntime(member) ||
-            !(member === activeProject.metadata.id
-              ? store.get(graphRunningState)
-              : store.get(projectExecutionSnapshotsState)[member]?.graphRunning),
+            !store.get(projectExecutionSnapshotsState)[member]?.graphRunning,
         );
       },
       (id) => getRemoteDebuggerBundleKey(opened[id]) ?? `project:${id}`,
@@ -348,13 +365,6 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
   }, [datasetProvider, registry]);
 
   useEffect(() => {
-    const shouldRouteInactiveProjectEvent = (projectId: ProjectId) =>
-      shouldRouteProjectEventToSnapshot({
-        activeProjectId: store.get(projectState).metadata.id as ProjectId | undefined,
-        isProjectOpen: Boolean(store.get(projectsState).openedProjects[projectId]),
-        projectId,
-      });
-
     const unsubscribeMessages = registry.subscribeMessagesForAllProjects(
       (projectId, runtime, message, data, requestId, admission) => {
         const runtimeState = runtime.getRuntimeState();
@@ -381,9 +391,8 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
           )
         )
           return;
-        if (dispatchDecision.shouldDispatch && isInternalExecutorTarget(runtimeState.target))
-          routeBundleExecution(projectId, message, data);
-        if (!shouldRouteInactiveProjectEvent(projectId)) return;
+        if (dispatchDecision.shouldDispatch && runtimeState.target && isInternalExecutorTarget(runtimeState.target))
+          routeBundleExecution(projectId, message, data, runtime, executionKindByTarget[runtimeState.target.type]);
         const shouldFlushFrozenOutputs = shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({
           alreadyFlushed: false,
           message,
@@ -391,47 +400,45 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
           target: runtimeState.target,
         });
 
-        const shouldSettlePendingRequest = requestId != null || dispatchDecision.shouldDispatch;
-        if (message === 'progress') {
-          runtime.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
-        }
-        if (shouldSettlePendingRequest) {
-          if (message === 'graphOutputsReady') {
-            runtime.resolvePendingGraphExecution(requestId, (data as { outputs: unknown }).outputs as any);
-          } else if (message === 'done') {
-            runtime.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
-          } else if (message === 'error') {
-            runtime.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
+        const accountInactiveRequest = () => {
+          const shouldSettlePendingRequest = requestId != null || dispatchDecision.shouldDispatch;
+          if (message === 'progress') {
+            runtime.reportPendingGraphProgress(requestId, (data as ProcessEventMessageMap['progress']).progress);
           }
-        }
-
-        // Abort announces cancellation, but nodes can still be unwinding and
-        // producing their terminal diagnostics. Keep request routing alive
-        // until the root done/error event closes the invocation.
-        if (shouldSettlePendingRequest && (message === 'done' || message === 'error')) {
-          if (requestId === runtime.getActiveGraphRunRequestId()) {
-            runtime.setActiveGraphRunRequestId(null);
+          if (shouldSettlePendingRequest) {
+            if (message === 'graphOutputsReady') {
+              runtime.resolvePendingGraphExecution(requestId, (data as { outputs: unknown }).outputs as any);
+            } else if (message === 'done') {
+              runtime.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
+            } else if (message === 'error') {
+              runtime.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
+            }
           }
-        }
 
-        if (!dispatchDecision.shouldDispatch) {
-          return;
-        }
-
-        store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
-          applyProcessEventToProjectExecutionSnapshots({
-            data,
-            mapSnapshot: shouldFlushFrozenOutputs ? (snapshot) => ({ ...snapshot, frozenNodeOutputs: {} }) : undefined,
-            message,
-            projectId,
-            refStore: dataRefs,
-            snapshots: previousSnapshots,
-            previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
-          }),
-        );
+          // Abort announces cancellation, but nodes can still be unwinding and
+          // producing their terminal diagnostics. Keep request routing alive
+          // until the root done/error event closes the invocation.
+          if (shouldSettlePendingRequest && (message === 'done' || message === 'error')) {
+            if (requestId === runtime.getActiveGraphRunRequestId()) {
+              runtime.setActiveGraphRunRequestId(null);
+            }
+          }
+        };
+        routeProjectExecutionDisplay({
+          store,
+          data,
+          message,
+          projectId,
+          refStore: dataRefs,
+          mapSnapshot: shouldFlushFrozenOutputs ? (snapshot) => ({ ...snapshot, frozenNodeOutputs: {} }) : undefined,
+          previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
+          onInactive: accountInactiveRequest,
+          shouldApply: () => dispatchDecision.shouldDispatch,
+        });
       },
     );
     const unsubscribeDisconnects = registry.subscribeDisconnectsForAllProjects((projectId, runtime) => {
+      routeBundleExecution.settle(runtime);
       if (
         Object.keys(store.get(projectsState).openedProjects).some(
           (id) => registry.getRemoteDebuggerRuntime(id as ProjectId) === runtime,
@@ -448,18 +455,12 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
         )
       )
         return;
-      if (!shouldRouteInactiveProjectEvent(projectId)) {
-        return;
-      }
-
-      store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
-        applyExecutorDisconnectToProjectExecutionSnapshots({
-          errorMessage: 'Executor session disconnected',
-          projectId,
-          refStore: dataRefs,
-          snapshots: previousSnapshots,
-        }),
-      );
+      routeExecutorDisconnectDisplay({
+        store,
+        projectId,
+        refStore: dataRefs,
+        errorMessage: 'Executor session disconnected',
+      });
     });
 
     return () => {

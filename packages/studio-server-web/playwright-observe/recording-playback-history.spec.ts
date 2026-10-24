@@ -136,7 +136,8 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       status: kind === 'nested child' ? 'failed' : kind === 'legacy child' ? 'suspicious' : 'succeeded',
       durationMs: 1234,
       runKind: kind === 'prompt child' ? 'editor' : kind === 'legacy child' ? 'published' : 'latest',
-      errorMessage: kind === 'nested child' ? `Historical run failure: ${'long-unbroken-detail'.repeat(30)}` : undefined,
+      errorMessage:
+        kind === 'nested child' ? `Historical run failure: ${'long-unbroken-detail'.repeat(30)}` : undefined,
     };
     await page.route('**/api/workflows/recordings/**', (route) => {
       const url = new URL(route.request().url());
@@ -382,6 +383,11 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
         await page.mouse.move(title.x + title.width / 2 + 60, title.y + title.height / 2 + 30, { steps: 6 });
         await page.mouse.up();
         await expect.poll(() => node.evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(before);
+        // dnd-kit's pointer sensor deliberately captures clicks for 50 ms after
+        // drag end. Settle that exact quarantine before issuing a single Play /
+        // Close command in one task; otherwise the test never reaches the owner
+        // race it claims to verify. Do not conceal it by retrying either command.
+        await node.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 75)));
       };
       await editor.locator('.projects-container .project').filter({ hasText: 'Neighbor' }).click();
       await expect(play).toHaveCount(0);

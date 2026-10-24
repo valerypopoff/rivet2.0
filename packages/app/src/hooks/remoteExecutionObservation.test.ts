@@ -7,7 +7,9 @@ import { createRemoteExecutionObservationRouter, type RemoteObservation } from '
 const id = (value: string) => value as ProjectId;
 function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
   const source = {};
-  const opened = new Map(['a', 'b', 'c', 'd'].map((name) => [id(name), { token: 1 }]));
+  const opened = new Map<ProjectId, { token: number; path?: string | null; bundleKey?: string }>(
+    ['a', 'b', 'c', 'd'].map((name) => [id(name), { token: 1 }]),
+  );
   const conflicts = new Map<ProjectId, string>();
   const records = new Map<string, { project: ProjectId; observation: RemoteObservation }>();
   const projected: Array<{
@@ -406,6 +408,51 @@ test('receiver conflicts that start after admission interrupt that observation w
   assert.equal(f.projected.length, 1);
   assert.equal(f.settled[0]!.status, 'aborted');
   assert.equal([...f.records.values()][0]!.observation.status, 'blocked');
+});
+
+test('transient conflicts before a first child remain excluded, but a fresh root is admitted', () => {
+  const f = fixture();
+  f.conflicts.set(id('b'), 'Playback');
+  f.begin('initial');
+  f.conflicts.clear();
+  f.emit('graphStart', 'b', 'initial');
+  assert.equal(f.projected.length, 0, 'admission captures existing conflicts');
+  f.begin('between');
+  f.conflicts.set(id('b'), 'Local execution');
+  f.router.reconcileOwnership();
+  f.conflicts.clear();
+  f.emit('graphStart', 'b', 'between');
+  assert.equal(f.projected.length, 0, 'pre-child conflicts cannot disappear unnoticed');
+  f.begin('fresh');
+  f.emit('graphStart', 'b', 'fresh');
+  assert.equal(f.projected.length, 1);
+});
+
+test('explicit membership removal keeps a blocked explanation without transferring old event admission', () => {
+  for (const replacementPath of ['/b', '/different-file']) {
+    const eligible = new Set(['a', 'b', 'c']);
+    const f = fixture((id) => eligible.has(id));
+    f.opened.set(id('b'), { token: 1, path: '/b', bundleKey: 'bundle' });
+    f.begin();
+    f.emit('graphStart', 'b');
+    eligible.delete('b');
+    f.opened.set(id('b'), { token: 2, path: '/b' });
+    f.router.reconcileOwnership();
+    const record = [...f.records.values()].find((entry) => entry.project === 'b')!;
+    assert.equal(record.observation.status, 'blocked');
+    assert.equal(record.observation.message, 'This project no longer belongs to this Remote Debugger session.');
+    assert.equal(f.settled.at(-1)?.status, 'aborted');
+    const count = f.projected.length;
+    f.emit('nodeFinish', 'b');
+    assert.equal(f.projected.length, count);
+    f.opened.set(id('b'), { token: 3, path: replacementPath });
+    f.router.reconcileOwnership();
+    assert.equal(
+      [...f.records.values()].some((entry) => entry.project === 'b'),
+      false,
+      'actual file replacement removes old provenance, including a same-path reload',
+    );
+  }
 });
 
 test('user input is indicated and journaled without providing a control transport', () => {

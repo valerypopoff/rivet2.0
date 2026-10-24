@@ -34,7 +34,7 @@ import {
   projectState,
   savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
-import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
+import { renewProjectBindingState } from '../state/projectBindings.js';
 import { evaluationsState, resetEvaluationsForProjectLoad } from '../state/evaluations.js';
 import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph.js';
@@ -54,7 +54,6 @@ import { useCurrentProjectEditorSnapshot } from './useCurrentProjectEditorSnapsh
 import { canSaveProjectDataNoPrompt } from '../utils/projectSaveCapabilities.js';
 import { pluginsState, projectNodeRegistryState } from '../state/plugins.js';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
-import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
 import { getProjectContentDigest, markProjectClean, markProjectDirtyFlag } from '../utils/projectUnsavedChanges.js';
 import { useApplyProjectExecutorMode } from './useProjectExecutorMode.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
@@ -96,7 +95,6 @@ export function useWorkspaceTransitions() {
   const centerViewOnGraph = useCenterViewOnGraph();
   const saveCurrentGraph = useSaveCurrentGraph();
   const applyProjectExecutorMode = useApplyProjectExecutorMode();
-  const { persistCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
   const evaluations = useAtomValue(evaluationsState);
   const { persistOpenedProjectSnapshot, persistCurrentProjectEditorSnapshot } = useCurrentProjectEditorSnapshot();
 
@@ -190,11 +188,6 @@ export function useWorkspaceTransitions() {
         if (shouldPersistCurrentProject && currentProjectId) {
           persistOpenedProjectSnapshot();
         }
-        const currentProjectExecutionSnapshot =
-          shouldPersistCurrentProject && currentProjectId
-            ? persistCurrentProjectExecutionSnapshot(currentProjectId)
-            : undefined;
-
         const persistedProjectEditorState =
           targetProjectId === currentProjectId
             ? currentProjectEditorSnapshot ?? store.get(projectEditorStateByProjectIdState)[targetProjectId]
@@ -251,6 +244,7 @@ export function useWorkspaceTransitions() {
             [targetProjectId]: (revisions[targetProjectId] ?? 0) + 1,
           }));
         }
+        if (projectInfo.markClean && targetProjectHasOpenTab) store.set(renewProjectBindingState, targetProjectId);
         setProject(transition.project);
         if (projectInfo.markClean) {
           // Reloaded bytes must not inherit Undo/wire recovery from the content
@@ -272,12 +266,7 @@ export function useWorkspaceTransitions() {
         } else {
           setPosition({ x: 0, y: 0, zoom: 1 });
         }
-        const targetProjectExecutionSnapshot = store.get(projectExecutionSnapshotsState)[targetProjectId];
-        restoreProjectExecutionSnapshot(
-          targetProjectId === currentProjectId
-            ? currentProjectExecutionSnapshot ?? targetProjectExecutionSnapshot
-            : targetProjectExecutionSnapshot,
-        );
+        // Changing projectState selects that project's canonical execution view.
         applyProjectExecutorMode(projectInfo.executorMode, { projectId: targetProjectId });
         // Project identity and its path/Evaluation owner must change together.
         // Hydration yields to events such as a remote move; a delayed path

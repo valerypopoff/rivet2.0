@@ -780,9 +780,11 @@ Each run gets isolated dependency projects and datasets; mutations do not leak
 into another run or another version of the same project.
 Root runs project live dependency node/graph events into matching bundle tabs,
 including inactive tabs, in Browser, desktop Node and hosted Node editor mode.
-The proposed [execution-routing refactoring plan](./execution-routing-refactoring-plan.md)
+The [execution-routing refactoring plan](./execution-routing-refactoring-plan.md)
 consolidates identity, admission, lifetime and display-state ownership around this
-behavior. It is not implemented and does not change the current contract below.
+behavior. Its shared binding/admission/canonical-store implementation is described
+in [Execution coordination](../EXECUTION-COORDINATION.md); existing command and
+recording ownership remains unchanged.
 The dated [functional baseline](../EXECUTION-ROUTING-BEHAVIOR-BASELINE.md) is the
 pre-refactor comparison guide: stable behavior IDs, control ownership, lifecycle,
 playback/snapshot rules, mode-specific differences and test/evidence mapping.

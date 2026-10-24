@@ -2892,7 +2892,7 @@ test.describe('Run recordings modal', () => {
     await editor.getByRole('button', { name: 'Close modal', exact: true }).click();
     await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
     const drawer = editor.locator('[aria-label="Run Activity"]');
-    await expect(drawer).toContainText('1 classifier request');
+    await expect(drawer).toContainText('1 Decision AI request');
     await expect(drawer).toContainText('1000 in / 8 out tokens');
     await expect(drawer).toContainText('$0.000040');
     await drawer.getByRole('button', { name: 'Show Run Activity filters' }).click();

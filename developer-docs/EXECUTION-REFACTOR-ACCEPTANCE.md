@@ -3,8 +3,9 @@
 This guide describes the existing execution/Evaluation ownership work. For the
 2026-10-24 pre-refactor contract covering current bundle editor routing, Remote
 Debugger and playback, use the
-[functional baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md). The newly proposed
-coordination refactor is separate and has not started.
+[functional baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md). The implemented
+coordination refactor is documented in [Execution coordination](./EXECUTION-COORDINATION.md),
+including the canonical store, shared lifetime policy and local evidence limits.
 
 This refactor changes ownership, not execution semantics or transport policy.
 Browser repaint yields, local recording playback, supported frozen outputs,
@@ -33,7 +34,7 @@ The follow-up maintainability slices use the same owners:
 | --------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Chat provider metadata      | Closed `chatV2ProviderDescriptors`                                     | Credential resolution, SDK/protocol, dynamic catalog and pricing                                   |
 | Editor display updates      | `nodeExecutionData`, `executionDataTransitions`, graph-history helpers | Tab selection, replay, Evaluation/partial reruns, allocation/deletion and payload-retention policy |
-| Tab display capture/restore | Exhaustive `projectExecutionSnapshotBindings`                          | Authored workspace persistence and activation ownership                                            |
+| Tab display selection | Canonical `projectExecutionStore` and writable field lenses | Authored workspace persistence and activation ownership |
 | Core child mechanics        | Typed child construction and existing bridge adapters                  | Each invocation's identity, aliases, output commits, cost and cleanup lifetime                     |
 | Watch/async topology        | Lazy definition-only `SchedulerBoundaryPlanner`                        | Runtime installation, subscriptions, scheduling and root drain                                     |
 

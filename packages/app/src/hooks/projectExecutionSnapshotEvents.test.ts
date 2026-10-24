@@ -32,6 +32,34 @@ function createDataRefStore(): DataRefStore {
   };
 }
 
+test('identified inactive completion reconciles only its own root, matching active-source behavior', () => {
+  const snapshot = createEmptyProjectExecutionSnapshot();
+  const nodeId = 'node' as NodeId;
+  snapshot.lastRunDataByNode[nodeId] = ['root-a', 'root-b'].map((root) => ({
+    processId: root as ProcessId,
+    rootRunId: root as RootRunId,
+    data: { status: { type: 'running' } },
+  }));
+  const result = applyProcessEventToProjectExecutionSnapshot({
+    message: 'done',
+    projectId: 'project' as ProjectId,
+    refStore: createDataRefStore(),
+    snapshot,
+    data: {
+      results: {},
+      execution: {
+        projectId: 'project' as ProjectId,
+        rootRunId: 'root-b' as RootRunId,
+        graphRunId: 'b' as GraphRunId,
+        graphId: 'graph' as GraphId,
+      },
+    },
+  }).snapshot;
+  assert.equal(result.lastRunDataByNode[nodeId]![0]!.data.status?.type, 'running');
+  assert.notEqual(result.lastRunDataByNode[nodeId]![1]!.data.status?.type, 'running');
+  assert.equal(snapshot.lastRunDataByNode[nodeId]![1]!.data.status?.type, 'running', 'input snapshot is unchanged');
+});
+
 test('duplicate graph starts and abort cleanup terminals cannot consume a sibling running graph', () => {
   const projectId = 'b' as ProjectId;
   const refStore = createDataRefStore();

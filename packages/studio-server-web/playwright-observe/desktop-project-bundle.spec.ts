@@ -5,6 +5,7 @@ import {
   TextNodeImpl,
   GetDatasetRowNodeImpl,
   GraphOutputNodeImpl,
+  CodeNodeImpl,
   serializeProject,
   type PortId,
   type DatasetId,
@@ -335,4 +336,88 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   await run.click();
   await expect(page.locator(`.node[data-nodeid="${cancelledOutput.id}"]`)).toContainText('only-after-retry');
   await expect(run).not.toContainText('Abort');
+  // Display replacement must fence old events, not cancel an accepted live
+  // processor. The second code node proves execution continued after the gate.
+  const acceptedProject = structuredClone(cancelledProject);
+  const gate = CodeNodeImpl.create();
+  gate.data.code = `window.bindingRunSteps.push('accepted');
+    await window.bindingRunGate;
+    return { output: { type: 'string', value: 'old-binding-result' } };`;
+  gate.data.outputNames = ['output'];
+  const continued = CodeNodeImpl.create();
+  continued.data.code = `window.bindingRunSteps.push('continued'); return inputs;`;
+  continued.data.inputNames = ['output'];
+  continued.data.outputNames = ['output'];
+  continued.visualData.x = 350;
+  acceptedProject.graphs[acceptedProject.metadata.mainGraphId!]!.nodes = [gate, continued, cancelledOutput];
+  acceptedProject.graphs[acceptedProject.metadata.mainGraphId!]!.connections = [
+    { outputNodeId: gate.id, outputId: 'output' as PortId, inputNodeId: continued.id, inputId: 'output' as PortId },
+    {
+      outputNodeId: continued.id,
+      outputId: 'output' as PortId,
+      inputNodeId: cancelledOutput.id,
+      inputId: 'value' as PortId,
+    },
+  ];
+  await page.evaluate((project) => {
+    (window as any).bindingRunSteps = [];
+    (window as any).bindingRunGate = new Promise<void>((resolve) => {
+      (window as any).releaseBindingRun = resolve;
+    });
+    (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+      project,
+      path: '/bundle/projects/nested/root.rivet-project',
+    });
+  }, acceptedProject);
+  await run.click();
+  await expect.poll(() => page.evaluate(() => (window as any).bindingRunSteps)).toEqual(['accepted']);
+  expect(
+    await page.evaluate(
+      (project) =>
+        (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+          project,
+          path: '/bundle/projects/nested/root.rivet-project',
+        }),
+      cancelledProject,
+    ),
+  ).toBe(true);
+  await page.evaluate(() => (window as any).releaseBindingRun());
+  await expect.poll(() => page.evaluate(() => (window as any).bindingRunSteps)).toEqual(['accepted', 'continued']);
+  await expect(page.locator(`.node[data-nodeid="${cancelledOutput.id}"]`)).not.toContainText('old-binding-result');
+
+  // A stale *preparation* has not accepted execution yet. Replacing its binding
+  // while environment resolution is suspended must prevent it from starting.
+  await page.evaluate((project) => {
+    (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+      project,
+      path: '/bundle/projects/nested/root.rivet-project',
+    });
+    (window as any).bindingRunSteps = [];
+    (window as any).environmentReadBlocked = false;
+    (window as any).environmentReadGate = new Promise<void>((resolve) => {
+      (window as any).releaseEnvironmentRead = () => {
+        (window as any).blockEnvironmentReads = false;
+        resolve();
+      };
+    });
+    (window as any).blockEnvironmentReads = true;
+  }, acceptedProject);
+  await run.click();
+  await page.waitForFunction(() => (window as any).environmentReadBlocked === true);
+  expect(
+    await page.evaluate(
+      (project) =>
+        (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+          project,
+          path: '/bundle/projects/nested/root.rivet-project',
+        }),
+      cancelledProject,
+    ),
+  ).toBe(true);
+  await page.evaluate(() => (window as any).releaseEnvironmentRead());
+  // A fresh command succeeds on the replacement after the old preparation
+  // settles; none of the obsolete authored code may have run in the meantime.
+  await run.click();
+  await expect(page.locator(`.node[data-nodeid="${cancelledOutput.id}"]`)).toContainText('only-after-retry');
+  expect(await page.evaluate(() => (window as any).bindingRunSteps)).toEqual([]);
 });

@@ -29,15 +29,13 @@ import { loadedRecordingState } from '../state/execution.js';
 import { remoteObservationsState } from '../state/remoteObservation.js';
 import { configureHybridStorageBackend, MemoryAsyncStorage } from '../state/storage.js';
 import { createBlankProjectWithDefaultGraph } from '../utils/blankProject.js';
-import {
-  captureProjectExecutionSnapshot,
-  restoreProjectExecutionSnapshot,
-} from './projectExecutionSnapshotBindings.js';
+import { captureProjectExecutionSnapshot } from './projectExecutionSnapshotBindings.js';
 import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
 
 // Mount only the real routing hook. Workspace IO/activation integration remains
 // in useLoadProject.test.tsx and the real hosted/desktop Playwright scenarios.
-async function mountRouting(t: TestContext) {
+async function mountRouting(t: TestContext, ingressCount = 1) {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://rivet.test/' });
   const keys = ['React', 'document', 'localStorage', 'navigator', 'window', 'IS_REACT_ACT_ENVIRONMENT'] as const;
   const previous = keys.map((key) => Object.getOwnPropertyDescriptor(globalThis, key));
@@ -113,15 +111,17 @@ async function mountRouting(t: TestContext) {
   }
   const root = createRoot(dom.window.document.getElementById('root')!);
   unmount = () => root.unmount();
-  await act(async () =>
+  const renderIngress = (count: number) =>
     root.render(
       <Provider store={store}>
         <ProvidersProvider providers={providers}>
-          <Harness />
+          {Array.from({ length: count }, (_, index) => (
+            <Harness key={index} />
+          ))}
         </ProvidersProvider>
       </Provider>,
-    ),
-  );
+    );
+  await act(async () => renderIngress(ingressCount));
   const rootExecution = (run: string): GraphExecutionMetadata => ({
     projectId: a.metadata.id,
     rootRunId: run as RootRunId,
@@ -195,17 +195,61 @@ async function mountRouting(t: TestContext) {
     history,
     assertOutput,
     end,
+    async setIngressCount(count: number) {
+      await act(async () => renderIngress(count));
+    },
+    async dispose() {
+      const stop = unmount;
+      unmount = () => {};
+      await act(async () => stop());
+    },
     activate(id: ProjectId) {
-      const source = store.get(projectState).metadata.id;
-      store.set(projectExecutionSnapshotsState, (snapshots) => ({
-        ...snapshots,
-        [source]: captureProjectExecutionSnapshot(store),
-      }));
       store.set(projectState, projects.get(id)!);
-      restoreProjectExecutionSnapshot(store, store.get(projectExecutionSnapshotsState)[id]);
     },
   };
 }
+
+test('settled bundle roots release their terminal confirmations without consuming another root', async (t) => {
+  const f = await mountRouting(t);
+  const pendingSibling = 'pending-sibling' as RootRunId;
+  f.store.set(projectExecutionSnapshotsState, {
+    [f.b.metadata.id]: { ...createEmptyProjectExecutionSnapshot(), completedRootRunIds: [pendingSibling] },
+  });
+  for (let index = 0; index < 12; index++) {
+    const run = `completed-${index}`;
+    f.begin(run);
+    const execution = f.child(run);
+    f.paint(execution, run);
+    f.route(f.a.metadata.id, 'graphFinish', { graph: f.graph(f.b.metadata.id), execution, outputs: {} });
+    assert.deepEqual(f.snapshot()!.completedRootRunIds, [pendingSibling, run], 'child finish awaits root settlement');
+    if (index % 3 === 0) f.end(run);
+    else {
+      if (index % 3 === 2) f.route(f.a.metadata.id, 'abort', { execution: f.rootExecution(run), successful: true });
+      f.route(f.a.metadata.id, 'error', { execution: f.rootExecution(run), error: new Error('source failed') });
+    }
+    assert.deepEqual(f.snapshot()!.completedRootRunIds, [pendingSibling], 'settlement consumes only its exact root');
+    f.assertOutput(f.b.metadata.id, run, 'retained output survives metadata cleanup');
+  }
+});
+
+test('workspace disposal invalidates every captured binding while preserving retained output values', async (t) => {
+  const f = await mountRouting(t, 2);
+  f.begin('workspace');
+  f.paint(f.child('workspace'), 'retained result');
+  const registry = f.store.get(projectBindingRegistryState);
+  const captured = registry.capture();
+  const epoch = registry.getWorkspaceToken();
+  await f.setIngressCount(1);
+  for (const [id, binding] of captured) assert.equal(registry.isCurrent(id, binding.token), true);
+  assert.equal(registry.getWorkspaceToken(), epoch, 'one surviving ingress still owns the workspace');
+  const output = f.snapshot()!.lastRunDataByNode[f.node.id]!.at(-1)!.data.outputData;
+  await f.dispose();
+  for (const [id, binding] of captured) assert.equal(registry.isCurrent(id, binding.token), false);
+  assert.equal(f.snapshot()!.lastRunDataByNode[f.node.id]!.at(-1)!.data.outputData, output);
+  const before = f.snapshot();
+  f.finishChild(f.child('workspace'), 'stale after disposal');
+  assert.equal(f.snapshot(), before);
+});
 
 for (const active of [false, true])
   for (const timing of ['initial', 'between events', 'before child'] as const)
@@ -400,6 +444,26 @@ test('a newly opened receiver skips the in-flight root and joins the next root',
   f.begin('new');
   f.paint(f.child('new'), 'complete');
   f.assertOutput(f.b.metadata.id, 'complete', 'late-open exclusion is not permanent');
+});
+
+test('passive local canvas rebases ancestry while Run Activity keeps the real cross-project caller', async (t) => {
+  const f = await mountRouting(t);
+  f.begin('ancestry');
+  const execution = f.child('ancestry');
+  f.paint(execution, 'child value');
+  const snapshot = f.snapshot();
+  assert.ok(snapshot);
+  const canvasRun = Object.values(snapshot.graphRunHistoryByView)
+    .flat()
+    .find((run) => run.graphRunId === execution.graphRunId)!;
+  const activityRun = snapshot.runActivityJournal.rootsById[execution.rootRunId]!.graphRunsById[execution.graphRunId]!;
+  assert.equal(canvasRun.parentGraphRunId, undefined);
+  assert.equal(activityRun.parentGraphRunId, execution.parentGraphRunId);
+  assert.deepEqual(activityRun.executor, execution.executor);
+  assert.equal(activityRun.projectId, f.b.metadata.id);
+  f.end('ancestry');
+  assert.equal(f.snapshot()!.runActivityJournal.rootsById[execution.rootRunId]!.status, 'completed');
+  assert.deepEqual(f.snapshot()!.runActivityJournal.activeRootRunIds, []);
 });
 
 for (const complete of [true, false])

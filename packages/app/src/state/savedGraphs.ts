@@ -17,6 +17,8 @@ import { blankProject } from '../utils/blankProject.js';
 import { entries, values } from '../utils/typeSafety';
 import { createHybridStorage } from './storage.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
+import { getExecutionBundleKey } from '../domain/execution/bundleMembership.js';
+import { projectBindingRegistryState } from './projectBindings.js';
 
 /** Project context values stored in the IDE and not in the project file. Available in Context nodes. */
 export type ProjectContext = Record<
@@ -185,13 +187,39 @@ export type OpenedProjectsInfo = {
   openedProjectsSortedIds: ProjectId[];
 };
 
-export const projectsState = atomWithStorage<OpenedProjectsInfo>(
+const storedProjectsState = atomWithStorage<OpenedProjectsInfo>(
   'projectsState',
   {
     openedProjects: {},
     openedProjectsSortedIds: [],
   },
   storage,
+);
+
+function getProjectBindingSpecs(opened: OpenedProjectsInfo['openedProjects']) {
+  return Object.fromEntries(
+    Object.entries(opened).map(([id, info]) => [
+      id,
+      {
+        path: info.fsPath,
+        bundleKey: getExecutionBundleKey(info),
+      },
+    ]),
+  );
+}
+
+export const projectsState = atom(
+  (get) => {
+    const opened = get(storedProjectsState);
+    get(projectBindingRegistryState).reconcile(getProjectBindingSpecs(opened.openedProjects));
+    return opened;
+  },
+  (get, set, update: OpenedProjectsInfo | ((previous: OpenedProjectsInfo) => OpenedProjectsInfo)) => {
+    const next = typeof update === 'function' ? update(get(storedProjectsState)) : update;
+    // Reconcile at the actual write boundary, including close/reopen in one batch.
+    get(projectBindingRegistryState).reconcile(getProjectBindingSpecs(next.openedProjects));
+    set(storedProjectsState, next);
+  },
 );
 
 export const openedProjectSnapshotsState = atomWithStorage<Record<ProjectId, OpenedProjectSnapshot>>(

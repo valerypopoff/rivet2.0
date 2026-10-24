@@ -100,8 +100,9 @@ processors carry an isolated `projectScope`; same-project children inherit it.
 internal hosted Node events. It projects only to then-open tabs sharing the entry's
 explicit bundle key: server-qualified `hostedBundleKey`, or the desktop manifest
 binding when no authoritative hosted membership/detachment is present.
-It updates inactive project execution snapshots or restores the active target's
-snapshot. At a cross-project boundary it clears caller executor/parent identity
+It updates the target's canonical snapshot through the same writer whether that
+view is active or inactive; it never restores a second active copy. At a
+cross-project boundary it clears caller executor/parent identity
 for the target canvas; same-project nested graph identities are retained.
 
 This is display-only: entry run cancellation, prompts, recordings and terminal
@@ -109,14 +110,16 @@ errors stay with the entry tab. Root lifecycle events are not copied as independ
 dependency runs. Replay is not live execution and is excluded. Observer failures
 are non-terminal diagnostics. Older event producers without `projectId` keep their
 existing routing. Identified source-root graph finish/error (or identified
-done/error) releases local routing; unscoped Browser done/error cannot do that alone.
+done/error) finishes passive display. Browser routing fences remain until the
+captured processor's actual settlement; unscoped terminals never target the active tab.
 Child starts and late node completions cannot re-establish a closed observation.
-There is no arbitrary active-root eviction limit in this local map. Explicit
-disconnect/disposal and missing-terminal memory behavior remain separate
-characterization work, not a claim of a new shared lifetime owner.
+There is no arbitrary active-root eviction limit in the shared local adapter.
+Explicit source disposal releases metadata, and unknown-settlement Node producers
+retain only a bounded completed-display tail. See
+[Execution coordination](./EXECUTION-COORDINATION.md) for lifecycle and cleanup rules.
 
 Local receiver conflicts are sticky for that root, including before the first
-child event and between events. Captured paths/keys plus synchronous subscriptions
+child event and between events. Captured binding generations plus synchronous subscriptions
 exclude reopened/rebound/moved members and source bindings from old projection.
 The next root can observe an eligible tab normally. See LOC-01–08 and GAP-01–05
 in the baseline for the deliberate distinctions from the remote path.

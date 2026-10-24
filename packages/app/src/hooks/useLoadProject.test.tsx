@@ -49,6 +49,8 @@ import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
 import { useLoadProjectWithFileBrowser } from './useLoadProjectWithFileBrowser.js';
 import { useWorkspaceHostCloseProject } from './workspaceHost/useWorkspaceHostCloseProject.js';
 import { useWorkspaceHostOpenProject } from './workspaceHost/useWorkspaceHostOpenProject.js';
+import { useWorkspaceHostReplaceProjectSnapshot } from './workspaceHost/useWorkspaceHostReplaceProjectSnapshot.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
 import { useWorkspaceHostOpeningTabs } from './workspaceHost/useWorkspaceHostOpeningTabs.js';
 import { useWorkspaceHostProjectMetadata } from './workspaceHost/useWorkspaceHostProjectMetadata.js';
 import { useSyncProjectDirtyState } from './useSyncProjectDirtyState.js';
@@ -206,6 +208,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
   let openFile!: ReturnType<typeof useLoadProjectWithFileBrowser>;
   let closeProject!: ReturnType<typeof useWorkspaceHostCloseProject>;
   let open!: ReturnType<typeof useWorkspaceHostOpenProject>;
+  let replaceSnapshot!: ReturnType<typeof useWorkspaceHostReplaceProjectSnapshot>;
   let opening!: ReturnType<typeof useWorkspaceHostOpeningTabs>;
   let metadata!: ReturnType<typeof useWorkspaceHostProjectMetadata>;
   let baseline!: ReturnType<typeof useWorkspaceHostCleanBaseline>;
@@ -221,6 +224,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     openFile = useLoadProjectWithFileBrowser();
     closeProject = useWorkspaceHostCloseProject();
     open = useWorkspaceHostOpenProject();
+    replaceSnapshot = useWorkspaceHostReplaceProjectSnapshot(open.replaceCurrent);
     opening = useWorkspaceHostOpeningTabs(open.openProjectSnapshot);
     metadata = useWorkspaceHostProjectMetadata();
     baseline = useWorkspaceHostCleanBaseline();
@@ -270,6 +274,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     io,
     closeProject,
     open,
+    replaceSnapshot,
     opening,
     metadata,
     baseline,
@@ -290,6 +295,38 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     },
   };
 }
+
+test('same-path inactive snapshot replacement commits a new binding without selecting the tab', async () => {
+  const fixture = await mount(async () => {
+    throw new Error('Replacement must not read IO');
+  });
+  try {
+    const registry = fixture.store.get(projectBindingRegistryState);
+    const a = registry.get(fixture.a.metadata.id)!;
+    const b = registry.get(fixture.b.metadata.id)!;
+    const replacement = structuredClone(fixture.b);
+    replacement.metadata.description = 'Explicit remote reload';
+    await act(async () => {
+      assert.equal(
+        await fixture.replaceSnapshot(fixture.b.metadata.id, { project: replacement, path: 'b.rivet-project' }),
+        true,
+      );
+    });
+    assert.notEqual(registry.get(fixture.b.metadata.id)!.token, b.token);
+    assert.equal(registry.get(fixture.a.metadata.id), a);
+    assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
+    const current = registry.get(fixture.b.metadata.id)!;
+    await act(async () => {
+      assert.equal(
+        await fixture.replaceSnapshot(fixture.b.metadata.id, { project: fixture.a, path: 'b.rivet-project' }),
+        false,
+      );
+    });
+    assert.equal(registry.get(fixture.b.metadata.id), current, 'rejected replacement cannot renew a binding');
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
 const evaluation = { evaluationData: createEmptyEvaluationProjectData(), evaluationDatasets: [] };
 

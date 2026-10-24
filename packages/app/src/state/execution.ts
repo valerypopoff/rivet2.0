@@ -1,4 +1,5 @@
 import { atom } from 'jotai';
+import { executionSnapshotField } from './projectExecutionStore.js';
 import { type ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
 import { loadedProjectState, projectState } from './savedGraphs.js';
 import { getRecordingPresentation, type RecordingRunDetails } from '../utils/recordingPresentation.js';
@@ -192,4 +193,4 @@ export const clearLoadedRecordingForPathState = atom(
   },
 );
 
-export const lastRecordingState = atom<string | undefined>(undefined);
+export const lastRecordingState = executionSnapshotField('lastRecording');

@@ -1,6 +1,7 @@
 # Execution routing and display hardening plan
 
-Status: proposed; implementation has not started. Prepared 2026-10-24.
+Status: local implementation and completion audit on 2026-10-24; final verification
+receipts are recorded in [Execution coordination](../EXECUTION-COORDINATION.md).
 
 This plan follows the local bundle-execution display reviews recorded in
 [Project bundles](./project-bundles.md#desktop-opening-and-execution).
@@ -13,8 +14,52 @@ source-checked adapter differences/characterization debt from verified guarantee
 Documentation and the original 256-test baseline have been prepared. A test-only
 audit has since extracted local hook tests, retained real workspace integration,
 removed masked assertions and preserved the scenario matrix in 240 focused checks.
-P0's full writer inventory and cross-adapter comparison harness are still pending;
-this cleanup does not implement the production coordinator or store refactor.
+The implementation now includes the writer inventory, runtime binding generations,
+shared admission and normalization, workspace-scoped coordinator, canonical execution
+store/lenses, disposal/stress tests and domain import boundary. Existing source
+notification/preload/evaluation policies remain in their adapters; physical Node
+settlement is explicitly unknown when the existing protocol cannot prove it.
+No new wire contract or provider qualification is implied.
+
+## Local delivery map (2026-10-24)
+
+| Phase | Delivered boundary |
+| --- | --- |
+| P0 | Frozen behavior IDs and regression matrix; explicit writer/control/recording ownership inventory |
+| P1 | Shared per-store binding generations at workspace commits, including same-path replacement and final ingress disposal |
+| P2 | Exhaustive internal source/lifecycle classification; captured Browser terminal identity; actual cleanup remains distinct from outputs and abort notices |
+| P3 | One metadata coordinator and sticky admission policy; local and external-debugger adapters retain documented policy differences |
+| P4 | One snapshot map and shared event transitions/writer for interactive and inactive data; explicit presentation policies; tab-local legacy terminal queue |
+| P5 | Seeded lifetime sequences, 5,000-root retention/disposal, full-state/ref parity, adapter regressions, bounded rejection diagnostics and both domain/import and ingress/write CI guards |
+| P6 | Obsolete restore/persist, map-writing helpers and inferred-lifetime machinery removed; extension rules and local qualification receipts in the architecture guide |
+
+The initial implementation left a P4 gap: storage was canonical, but interactive
+mutation helpers and transport-side view routing still required consolidation.
+The completion audit closed that gap
+with `useExecutionSnapshotWriter`, shared event transitions, a per-project terminal
+FIFO and full-state/ref parity tests. The old map-writing API was removed instead
+of kept as a migration path. Notification/selection/control policies stay explicit.
+Browser evaluation activity additionally captures its originating binding before
+asynchronous preparation; late cleanup cannot journal to the selected neighbor or
+a same-ID replacement. Local test receipts and the four live-Compose setup checks
+that remain unverified are explicitly recorded in the architecture guide's
+completion audit; source implementation completion is not provider qualification.
+The subsequent review adds exact-root terminal-queue cleanup for passive settlement
+and fences inactive request callback re-entrancy before reference effects. Regression
+fixtures reproduce both failures before the fixes and retain positive delivery for
+an unchanged binding; see the architecture guide's local review receipts.
+The adjacent review also removes detached debugger provenance on subsequent
+same-path renewal and publishes completion diagnostics only after the snapshot
+commit. Listener faults/replacement cannot prevent or overwrite terminal state.
+
+The common write authority does not collapse source notifications, partial-run
+preservation, evaluation policy and passive projection into one universal reducer.
+They reuse existing transition helpers against the same canonical state. This is
+intentional policy separation, not a second active execution-state copy.
+The follow-up review keeps identified Node request accounting ahead of display
+fences: a replaced tab cannot discard accepted callbacks or release an early-output
+run's cancellation/cleanup owner. Real-hook and request-lifecycle regressions cover
+this separately from the passive projection matrix.
 
 ## Goal and scope
 
@@ -33,7 +78,8 @@ The recent defects are already fixed. Their regressions are the preservation
 contract, not a claim that those defects remain open. The saved baseline receipts
 are `artifacts/bundle-routing-admission-unit.log` (149 focused tests) and
 `artifacts/bundle-routing-admission-ui-final.log` (five headless UI checks).
-These are prior local evidence, not verification of this proposed refactor.
+These are historical baseline receipts. Current implementation verification is
+recorded in the execution-coordination guide linked above.
 
 ## What the failures tell us
 
@@ -86,7 +132,7 @@ intentional-change record rather than silently describing it as a code move.
 
 ## Target responsibilities
 
-Proposed modules under `packages/app/src/domain/execution/`:
+Implemented modules under `packages/app/src/domain/execution/`:
 
 - `bundleMembership.ts`: neutral membership resolution, reusing the current
   `remoteDebuggerBundle.ts` rules instead of redefining portable formats.

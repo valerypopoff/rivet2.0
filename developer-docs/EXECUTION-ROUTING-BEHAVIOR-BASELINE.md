@@ -1,5 +1,13 @@
 # Execution routing: pre-refactor functional baseline
 
+> Frozen pre-refactor behavior. The 2026-10-24 consolidation is documented in
+> [Execution coordination](./EXECUTION-COORDINATION.md), not silently substituted
+> into this baseline. Explicit corrections: GAP-01 now retains original local
+> activity ancestry and settles the exact passive root; GAP-02 captures remote
+> pre-child/transient conflicts; GAP-03 adds shared source disposal and 5,000-root
+> cleanup coverage; GAP-05 now has runtime binding tokens and a canonical store.
+> GAP-04's definition/caller checks remain intentional adapter-specific policy.
+
 Recorded: 2026-10-24. Status: current working-tree behavior, before the proposed
 [execution-routing refactor](./studio-server/execution-routing-refactoring-plan.md).
 

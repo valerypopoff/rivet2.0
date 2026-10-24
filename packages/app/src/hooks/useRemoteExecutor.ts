@@ -22,6 +22,7 @@ import { useCurrentExecution } from './useCurrentExecution';
 import { graphState } from '../state/graph';
 import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { useExecutorSessionRegistry, useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
 import { currentProjectLoadedRecordingState } from '../state/execution.js';
 import { useRemoteDebugger } from './useRemoteDebugger';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
@@ -77,7 +78,9 @@ import {
   uploadRemoteExecutorProjectIfNeeded,
 } from './remoteExecutorUploadCache.js';
 import type { ExecutorSessionRuntime } from './executorSession.js';
+import { isInternalExecutorTarget } from './executorSessionTarget.js';
 import {
+  accountRemoteRunSessionEvent,
   clearActiveRemoteRunRequest,
   clearActiveRemoteRunRequestIfMatches,
   sendPendingRemoteGraphRunRequest,
@@ -108,6 +111,7 @@ import {
   prepareEvaluationRun,
 } from './preparedEditorRun.js';
 import { EditorRunSession } from './editorRunSession.js';
+import { useExecutionSnapshotWriter } from './useExecutionSnapshotWriter.js';
 
 type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
 
@@ -231,7 +235,7 @@ export function useRemoteExecutor() {
   const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
   const lastRunData = useAtomValue(lastRunDataByNodeState);
   const frozenNodeOutputs = useAtomValue(frozenNodeOutputsState);
-  const setFrozenNodeOutputs = useSetAtom(frozenNodeOutputsState);
+  const snapshotWriter = useExecutionSnapshotWriter();
   const loadedProject = useAtomValue(loadedProjectState);
   const pluginStates = useAtomValue(pluginsState);
   const localExecutionRecordingPersistence = useLocalExecutionRecordingPersistence();
@@ -371,12 +375,15 @@ export function useRemoteExecutor() {
     const routingBefore = routing?.before;
     const eventSummary = externalDebuggerTarget ? summarizeRemoteDebuggerEvent(message, data) : undefined;
     if (!routing) return;
-    if (routing.sourceDisplayAllowed === false) return;
+    const sourceDisplayAllowed = routing.sourceDisplayAllowed !== false;
+    // Identified internal requests still own results, traces and callbacks after
+    // their canvas was replaced. Legacy/external frames cannot infer such an owner.
+    if (!sourceDisplayAllowed && (!requestId || !isInternalExecutorTarget(sessionState.target))) return;
     if (executorRegistry.isBundleDebuggerRuntime(executorSession) && store.get(currentProjectLoadedRecordingState))
       return;
     if (externalDebuggerTarget && routing.projectId != null && routing.projectId !== project.metadata.id) return;
     const dispatchDecision = routing.decision;
-    const shouldDispatchExecutionEvent = dispatchDecision.shouldDispatch;
+    const shouldDispatchExecutionEvent = sourceDisplayAllowed && dispatchDecision.shouldDispatch;
     // Legacy debuggers may omit request IDs. Release only the active request
     // whose terminal event the existing routing policy actually accepted.
     if (!requestId && shouldDispatchExecutionEvent && (message === 'done' || message === 'error')) {
@@ -398,7 +405,7 @@ export function useRemoteExecutor() {
       })
     ) {
       externalDebuggerRunFlushedFrozenOutputsRef.current = true;
-      setFrozenNodeOutputs({});
+      snapshotWriter.mutate((snapshot) => ({ ...snapshot, frozenNodeOutputs: {} }));
     }
 
     if (externalDebuggerTarget && routingBefore && routingAfter && eventSummary) {
@@ -457,7 +464,6 @@ export function useRemoteExecutor() {
       case 'done':
         executorSession.resolvePendingGraphExecution(requestId, (data as { results: unknown }).results as any);
         if (requestId) {
-          earlyResultRequestIdsRef.current.delete(requestId);
           webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
           responseTraceByRequestIdRef.current.delete(requestId);
         }
@@ -475,7 +481,6 @@ export function useRemoteExecutor() {
           eventDispatcher.graphOutputsReady(data);
         }
         if (requestId) {
-          earlyResultRequestIdsRef.current.add(requestId);
           webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
         }
         executorSession.resolvePendingGraphExecution(requestId, (data as { outputs: GraphOutputs }).outputs);
@@ -493,7 +498,6 @@ export function useRemoteExecutor() {
       }
       case 'abort':
         if (requestId) {
-          earlyResultRequestIdsRef.current.delete(requestId);
           webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
           emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'aborted');
           responseTraceByRequestIdRef.current.delete(requestId);
@@ -588,7 +592,6 @@ export function useRemoteExecutor() {
       case 'error':
         executorSession.rejectPendingGraphExecution(requestId, (data as { error: Error }).error);
         if (requestId) {
-          earlyResultRequestIdsRef.current.delete(requestId);
           webAppStoragePatchCallbacksByRequestIdRef.current.delete(requestId);
           emitRemoteResponseTrace(responseTraceByRequestIdRef.current, requestId, data, false, 'error');
           responseTraceByRequestIdRef.current.delete(requestId);
@@ -620,11 +623,7 @@ export function useRemoteExecutor() {
         (message, data, requestId, admission) => {
           // Request resources belong to the captured subscription, not the next
           // render's active canvas. Keep terminal accounting before the fence.
-          if (requestId && (message === 'done' || message === 'error')) {
-            const session = editorRunSessions.current.get(requestId);
-            editorRunSessions.current.delete(requestId);
-            session?.disposeInBackground();
-          }
+          accountRemoteRunSessionEvent(editorRunSessions.current, earlyResultRequestIdsRef.current, message, requestId);
           captureRemoteLocalExecutionTerminal(
             requestId == null ? undefined : localRecordingCapturesByRequestIdRef.current.get(requestId),
             message,
@@ -651,6 +650,9 @@ export function useRemoteExecutor() {
         plugins: { appPluginStates: pluginStates, currentGraph: graph, registry: projectNodeRegistry },
         options,
       });
+      store.get(projectsState);
+      const bindingToken = store.get(projectBindingRegistryState).get(captured.projectId)?.token;
+      const workspaceToken = store.get(projectBindingRegistryState).getWorkspaceToken();
       options = { ...captured.options, abortSignal: runSession.signal };
       const contextValues = getProjectContextValues(projectContext);
       const runSettings = structuredClone(savedSettings);
@@ -682,6 +684,12 @@ export function useRemoteExecutor() {
       );
       const assertPreparationCurrent = () => {
         runSession.signal.throwIfAborted();
+        if (
+          store.get(projectBindingRegistryState).getWorkspaceToken() !== workspaceToken ||
+          (bindingToken !== undefined &&
+            !store.get(projectBindingRegistryState).isCurrent(captured.projectId, bindingToken))
+        )
+          throw new Error('The project binding changed while preparing the run. Run it again from the current tab.');
         if (isProjectObservingRemote(store.get(remoteObservationsState)[captured.projectId] ?? [], captured.projectId))
           throw new Error('This project is observing a remote run. Stop Remote Debugger before starting a local run.');
         const current = executorSession.getRuntimeState();

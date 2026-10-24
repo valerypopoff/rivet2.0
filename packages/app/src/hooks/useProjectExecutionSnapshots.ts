@@ -20,22 +20,6 @@ export function useProjectExecutionSnapshots() {
     [store],
   );
 
-  const persistCurrentProjectExecutionSnapshot = useCallback(
-    (projectId: ProjectId | undefined) => {
-      if (!projectId) {
-        return undefined;
-      }
-
-      const snapshot = captureCurrentProjectExecutionSnapshot();
-      setProjectExecutionSnapshots((previousSnapshots) => ({
-        ...previousSnapshots,
-        [projectId]: snapshot,
-      }));
-      return snapshot;
-    },
-    [captureCurrentProjectExecutionSnapshot, setProjectExecutionSnapshots],
-  );
-
   const removeProjectExecutionSnapshot = useCallback(
     (projectId: ProjectId, options: { currentSnapshot?: ProjectExecutionSnapshot } = {}) => {
       const snapshot = options.currentSnapshot ?? store.get(projectExecutionSnapshotsState)[projectId];
@@ -58,7 +42,6 @@ export function useProjectExecutionSnapshots() {
 
   return {
     captureCurrentProjectExecutionSnapshot,
-    persistCurrentProjectExecutionSnapshot,
     removeProjectExecutionSnapshot,
     restoreProjectExecutionSnapshot: restoreSnapshot,
   };

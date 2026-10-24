@@ -2,6 +2,7 @@ import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 import { type NodeId, type ProcessId } from '@valerypopoff/rivet2-core';
 import { createHybridStorage } from '../storage.js';
+import { executionSnapshotField } from '../projectExecutionStore.js';
 
 const { storage } = createHybridStorage('userInput');
 
@@ -13,5 +14,5 @@ export type ProcessQuestions = {
   questions: string[];
 };
 
-export const userInputModalQuestionsState = atom<Record<NodeId, ProcessQuestions[]>>({});
+export const userInputModalQuestionsState = executionSnapshotField('userInputQuestions');
 export const lastAnswersState = atomWithStorage<Record<string, string>>('lastAnswers', {}, storage);
