@@ -17,6 +17,32 @@ import {
 } from '../hooks/projectExecutionSnapshotRouting.js';
 import { applyProcessEventToProjectExecutionSnapshot } from '../hooks/projectExecutionSnapshotEvents.js';
 
+test('binding capture leaves damaged tab records available to recovery without retaining execution ownership', () => {
+  for (const invalid of [null, undefined, false, 'damaged', []]) {
+    const store = createStore();
+    const active = store.get(projectState).metadata.id;
+    const broken = 'constructor' as ProjectId;
+    const opened = {
+      openedProjects: {
+        [active]: { projectId: active, title: 'Active', fsPath: '/active' },
+        [broken]: { projectId: broken, title: 'Recoverable', fsPath: '/broken' },
+      },
+      openedProjectsSortedIds: [active, broken],
+    };
+    store.set(projectsState, opened);
+    const registry = store.get(projectBindingRegistryState);
+    const before = registry.get(broken)!.token;
+    const activeToken = registry.get(active)!.token;
+    const damaged = { ...opened, openedProjects: { ...opened.openedProjects, [broken]: invalid } };
+    store.set(projectsState, damaged as never);
+    assert.equal(registry.get(broken), undefined, 'damaged metadata has no execution binding');
+    assert.equal(store.get(projectsState), damaged, 'binding derivation cannot discard saved recovery evidence');
+    assert.equal(registry.get(active)!.token, activeToken, 'valid neighboring bindings are unchanged');
+    store.set(projectsState, opened);
+    assert.notEqual(registry.get(broken)!.token, before, 'repair cannot inherit the retired lifetime');
+  }
+});
+
 test('legacy terminal confirmations stay with their project while tabs change', () => {
   const store = createStore(),
     project = store.get(projectState),

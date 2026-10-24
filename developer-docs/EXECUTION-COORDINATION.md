@@ -86,6 +86,11 @@ Actual clean file/snapshot replacement renews the token at the synchronous
 `useWorkspaceHostReplaceProjectSnapshot`). Failed asynchronous preparation does not publish
 a new binding. Ordinary save/title changes, graph navigation and tab selection do
 not renew a token. Rebinding a path or explicit bundle identity does.
+The recovery screen can read tab state after checkpoint validation fails. Binding
+derivation therefore ignores null, primitive and array-valued entries without
+mutating the saved record. These entries cannot retain an execution lifetime;
+valid neighbors retain theirs. The authoritative checkpoint validator still
+rejects malformed workspace identities, and recovery controls remain usable.
 
 Hosted null is authoritative detachment. Membership comes only from a hosted
 bundle identity or desktop manifest, never reference reachability or folder names.
@@ -152,6 +157,23 @@ project-list listener. Same-path replacement can renew a binding through executi
 state without changing the project list. All ownership subscriptions therefore
 use the same reconciliation entry point; no separate generation-cleanup path is
 required from callers.
+
+Observation publication and settlement can synchronously notify ownership
+subscribers. The run's member map remains the authority across those callbacks:
+cleanup clears membership before removal notifications, and an in-flight event
+cannot project or republish a removed member. Each member claims its terminal
+status before settlement callbacks, so a concurrent disconnect does not settle
+it again. Conflicts raised in another dependency during that callback remain
+blocked rather than being overwritten by the terminal event. This changes
+display retirement only; no execution command or recording write is replayed.
+Blocked and membership-detachment publication also capture the binding token
+before notifying subscribers. Their pending settlement rechecks that exact token
+after publication; a callback-created replacement cannot inherit the old write.
+When a passive project becomes a source, retiring its earlier observations can
+also synchronously disconnect the shared debugger. Finish removing that exact
+old observation, then compare the source object with the current registry entry
+before continuing admission. A disconnected or replaced source cannot capture
+an orphan root; reconnecting under the same runtime key is a new lifetime.
 
 `executionEventNormalization.ts` exhaustively classifies every protocol message.
 The internal envelope records adapter kind, source, project/request/binding hints,
@@ -356,8 +378,11 @@ from this completed local source refactor. No production or cloud changes occurr
 
 The later integrated qualification closed all four Compose gaps; see
 [the qualification follow-up](studio-server/feature-readiness-refactoring.md#integrated-qualification-follow-up-2026-10-24).
-Packaged Windows Browser execution was also exercised. Packaged desktop Node
-startup remains a separate unresolved check, not a passing source-fixture result.
+Packaged Windows Browser and Node execution were subsequently exercised through
+the native UI; see the
+[native qualification closure](studio-server/feature-readiness-refactoring.md#native-qualification-closure-and-delivery-review-2026-10-24).
+The initial Node startup failure was an occupied test port, not a passing source-fixture
+result or a demonstrated application defect. This does not qualify GKE deployment.
 
 ### Post-consolidation review (2026-10-24)
 

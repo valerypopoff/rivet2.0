@@ -28,8 +28,40 @@ for (const projectId of ['restored-project', 'constructor', '__proto__']) {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.locator('.node-canvas').first()).toBeVisible();
     await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
+    expect(await page.pageErrors()).toEqual([]);
   });
 }
+
+test('damaged saved tab identities fail closed before executor observers without discarding the record', async ({
+  page,
+}) => {
+  await seedHostedEditorProject(page, {
+    graphId: 'retained-graph',
+    projectId: 'retained-project',
+    projectPath: '/workflows/Retained.rivet-project',
+    title: 'Retained project',
+    loaded: true,
+    damagedOpenedProjects: { 'damaged-null': null, 'damaged-primitive': false, 'damaged-array': [] },
+  });
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }),
+  );
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+  const original = await page.evaluate(() => localStorage.getItem('project'));
+  expect(JSON.parse(original!).projectsState.openedProjects['damaged-null']).toBeNull();
+  for (const reload of [false, true]) {
+    if (reload) await page.reload({ waitUntil: 'domcontentloaded' });
+    const recovery = page.getByRole('region', { name: 'Workspace recovery' });
+    await expect(recovery).toContainText('Invalid workspace recovery tab identity');
+    await expect(recovery.getByRole('button', { name: 'Retry loading', exact: true })).toBeEnabled();
+    await expect(recovery.getByRole('button', { name: 'Recover workspace', exact: true })).toBeEnabled();
+    await expect(page.locator('.node-canvas')).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('project'))).toBe(original);
+    expect(await page.pageErrors()).toEqual([]);
+  }
+});
 
 for (const preference of ['missing', 'custom', 'invalid'] as const) {
   test(`hosted debugger preferences preserve ${preference} storage across panel opens and reload`, async ({ page }) => {

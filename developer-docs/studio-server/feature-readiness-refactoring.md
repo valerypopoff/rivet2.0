@@ -733,3 +733,200 @@ All 47 focused observation/registry tests and all 12 headless bundle-debugger
 scenarios passed after the fix. App TypeScript, focused lint, formatting,
 test-style and documentation-link checks passed. The three original browser
 failures are also rerun with the explicit uncaught-page-error assertion.
+
+## Holistic integration review (2026-10-24)
+
+The review traced binding capture, canonical snapshot writes, shared run and
+recording finalization, hosted policy adapters, engine child ownership, package
+resolution and managed resource shutdown together. It found one further
+callback-lifetime gap in Remote Debugger display retirement: disconnect during
+publication could still project data afterward, and disconnect during completion
+could republish the retired observation or settle its member twice. A version
+provenance update had the same late-projection path.
+
+The existing member map is now checked at update/projection boundaries and
+cleared before removal callbacks. Terminal member status is committed before
+external settlement, and only still-observing members are interrupted by cleanup.
+No new lifetime flag, coordinator or deferred retry was added. Regression cases
+reproduce publication, terminal-notification, settlement and version-update
+disconnects, requiring no resurrected state or late projection and exactly one
+settlement. A second case preserves another dependency's local-execution handoff
+raised during terminal callbacks. Actual processors and recording persistence
+remain outside this display-only cleanup.
+
+Receipts are kept in `artifacts/refactor-qualification/holistic-*`; the initial
+browser batch was intentionally interrupted before the final code adjustment and
+is not counted as a completed verification run. The final browser run uses stable
+sources and synthetic local fixtures. Existing historical native-qualification
+wording in the execution guide now points to the later resolved port-collision
+diagnosis. This review does not commit, push, deploy or change GCP resources.
+
+Verification passed: 82 execution/parity/registry tests, 102 host/run-policy
+tests, 76 managed resource/settings tests and 52 engine/CodeRunner tests. The
+full hosted-web suite passed 253 tests, including the separately run 38
+adapter/worker checks (overlapping counts, not additional coverage). All 36
+headless bundle/debugger/Evaluation/focus/tab journeys and 13 recording/playback
+journeys passed. App TypeScript, focused lint, source formatting, import/editor
+boundary guards, migration ledger, built ESM/CommonJS API smoke, test-style and
+documentation-link checks passed. The temporary frontend was stopped afterward.
+These are local synthetic-fixture results, not a new provider or production
+qualification; no new signed desktop package was built for this review.
+
+### Callback-fence reassessment
+
+A follow-up regression reproduced a missing final token check after publishing
+a blocked/conflict or bundle-detachment notice. A synchronous subscriber could
+replace the receiver while the notice was published; the original handler then
+settled display state using the new binding. Both paths now capture the token
+before publication and require that exact token immediately before settlement.
+The existing member map and lifetime registry remain authoritative; there is no
+new state, generic cleanup abstraction or retry. The regression covers both
+publication paths while retaining the existing same-binding and disconnect
+settlement checks. Receipts are `artifacts/refactor-qualification/reassessment-binding-*`.
+
+Verification passed: 83 focused execution/registry tests and six headless
+recording/bundle-debugger journeys, including source reopening, member deletion
+and HA replay. App TypeScript, focused lint, source formatting, documentation
+links, test-style and diff-whitespace checks passed. The temporary frontend was
+stopped afterward. These remain local synthetic-fixture results; this reassessment
+does not commit, publish, deploy or qualify production/GKE behavior.
+
+### Adjacent source-takeover review
+
+The next review traced local and remote settlement, the shared snapshot writer
+and source admission through their callback boundaries. A failing regression
+reproduced one further gap: while a formerly passive project became a source,
+its settlement/removal callbacks could disconnect the debugger, yet the in-flight
+start still registered a root on the detached source object. The coordinator
+then retained an unreachable admission after disconnect.
+
+The takeover now completes exact old-observation removal, then checks that its
+source object is still the current entry before continuing. Checking object
+identity, not just key presence, also fences a reconnect using the same runtime
+key. There is no new flag, registry or deferred work. The regression covers
+disconnect during settlement, disconnect during removal, immediate reconnection,
+no orphan admission or post-disconnect projection, and normal fresh admission.
+Receipts are `artifacts/refactor-qualification/adjacent-takeover-*`.
+
+Verification passed: 96 focused execution, binding, snapshot and registry tests;
+all 13 headless bundle-debugger/recording journeys; App TypeScript and focused
+lint; source formatting, documentation-link, test-style and diff-whitespace
+checks. The first browser batch was stopped after the restricted frontend could
+not be reached at loopback (navigation timeout, before Rivet loaded). Relaunching
+only the temporary frontend in the browser's execution context restored HTTP
+200; `adjacent-takeover-ui-final.log` is the complete passing receipt. The frontend
+was stopped afterward. These are local fixture results, not provider qualification;
+no commit, publication, GCP or production change was performed.
+
+## Whole-refactor comparison audit (2026-10-25)
+
+Comparison: committed pre-refactor tree `1ebeef366` to `4171c6ec0` plus the local
+review fixes. The earlier frozen functional baseline is still the behavioral
+contract; it is not rewritten to match the implementation. This audit includes
+both the execution-coordination and subsequent feature-readiness consolidation,
+not merely the latest observation-router diff.
+
+### Architectural assessment
+
+| Area                      | Before                                                                                                       | After and preservation check                                                                                                                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hosted editor             | Nine behavioral module replacements alongside two native transport aliases                                   | No behavioral replacements; two native transport aliases remain. Shared hooks own activation, clipboard, settings and synchronization; providers supply intentional host differences.                                          |
+| Execution display         | Active atoms and inactive snapshots needed capture/restore coordination and separate mutation paths          | One canonical snapshot map, field lenses and shared transitions. Full lifecycle/ref parity, inactive ownership and tab-switch tests retain presentation differences.                                                           |
+| Run artifacts             | Browser/Node duplicated capture metadata and Evaluation recording/result policy                              | Shared captured inputs, ordinary artifact persistence and write-once Evaluation persistence; adapters retain physical completion, cancellation and accepted request accounting.                                                |
+| Engine ownership          | Continuation/async/watch setup assigned interdependent private fields at each call site                      | One discriminated ownership policy applied at construction. Diff comparison retains aliasing, identity, output overlays and abort/lifecycle rules; schedulers and ordinary subgraphs are not rewritten.                        |
+| Server resources          | Managed persistence construction also created serving operations; failed close could release ownership early | Serving composition injects operational resources; narrow repository views reuse the same resource owner. Shutdown fences unconfirmed pool/listener termination instead of allowing overlapping owners or stale file fallback. |
+| Dependency/build boundary | CodeRunner imported the public barrel; source aliases were separately maintained                             | Public entrypoint installs the namespace into a leaf provider; source entrypoints have one declaration. Actual runtime import checks and exact-edge debt ratchets replace an ineffective aggregate count.                      |
+
+At review start, implementation/configuration changes were approximately +4,065/
+-3,675 lines; most repository growth was tests/fixtures/guards (+5,263/-245) and
+documentation (+1,600/-65). These are classified diff counts, not a performance
+benchmark or proof that every individual helper is simpler. The positive result
+is fewer competing policy/state owners, not fewer files or a rewritten engine.
+The remaining 355 exact import-debt edges are still debt, now visible and ratcheted.
+GraphProcessor and the executor hooks remain substantial orchestration facades.
+
+### Integration regression confirmed at the recovery screen
+
+The direct-store regression initially suggested a crash before workspace repair.
+Browser evidence refined the cause: checkpoint validation correctly rejects a
+malformed saved tab identity, but **WorkspaceRecoveryStatus itself reads
+projectsState**. The new binding wrapper dereferenced the null entry there and
+crashed the recovery screen into a blank page. The failing browser trace records
+`WorkspaceRecoveryStatus -> projectsState -> getProjectBindingSpecs -> fsPath`.
+
+The final fix filters non-object/array entries only while deriving execution
+bindings. It neither mutates the saved record nor weakens checkpoint validation.
+Invalid entries retire their execution token; valid neighbors retain theirs and
+repaired metadata gets a fresh lifetime. The correct UX remains fail-closed
+recovery with the original record preserved, not silent automatic repair.
+
+The new browser scenario asserts retained malformed metadata, no editor mount,
+usable recovery controls and no uncaught error, including after reload. Existing
+valid/prototype-named hydration checks retain their restored tabs and now also
+assert no uncaught page errors. The store regression covers null, undefined,
+primitive and array entries, exact record preservation and lifetime retirement.
+
+The intermediate `recovery-red`, `recovery-green` and interrupted `ui-final`,
+`ui-acceptance` and `app-final` logs are diagnostic history, not final acceptance
+receipts. The definitive follow-up receipts use the `*-acceptance` suffix for
+App/recovery and `ui-verified` for the final browser run, under
+`artifacts/refactor-qualification/baseline-comparison-*`.
+
+### Limits and interpretation
+
+This is evidence of improved ownership and locally verified compatibility, not
+a claim that no future defect is possible. No load/latency benchmark, new signed
+desktop installer, live-provider test or GKE deployment is implied. Existing
+bundle/chunk warnings and import debt remain separate work. Failure to confirm
+resource shutdown deliberately fails closed and may require process recovery;
+that availability tradeoff is not hidden as automatic retry/fallback.
+
+The initial API/web runs hit restricted Windows temporary-file rename/loopback
+failures; reruns in the unrestricted local test context passed unchanged. Core's
+existing all-files CLI exceeded Windows command length; explicit bounded batches
+ran the same discovered test files without dropping tests or changing assertions.
+
+### Final local evidence
+
+- Full App discovery: **2,791 passed**, zero failures/skips, on the final source
+  (`baseline-comparison-app-acceptance.log`).
+- Full Core discovery: **2,109 passed**, zero failures/skips, across all 183 test
+  files in eight bounded batches (`baseline-comparison-core-bounded.log`).
+- Full hosted-web suite: **253 passed**, zero failures/skips
+  (`baseline-comparison-web-final.log`).
+- Focused API settings, operational resources, listener/pool shutdown and storage
+  composition: **79 passed**, zero failures/skips
+  (`baseline-comparison-api-final.log`).
+- Recovery/state subset: **51 passed** (overlaps App; do not add to its count),
+  including the final record-preservation/lifetime regression
+  (`baseline-comparison-recovery-acceptance.log`).
+- Final stable-source headless matrix: **21 passed**, covering desktop bundle IO,
+  ordinary and failed Evaluation artifact storage, clipboard/focus, tab switching,
+  partial-run preload, saved-baseline/recovery, recordings and debugger reconnects
+  (`baseline-comparison-ui-verified.log`). Earlier interrupted/experimental browser
+  runs are not counted as successful acceptance.
+- Fresh Core ESM/CommonJS build and authored-code export smoke passed
+  (`baseline-comparison-core-build.log`). The final hosted production build passed
+  (`baseline-comparison-web-build-final.log`), retaining recorded non-fatal
+  bundling/annotation warnings.
+- App/API TypeScript, focused changed-App lint, source formatting, all seven
+  architecture/Vite-entrypoint regressions, exact-edge/import/editor guards,
+  migration ledger, test-style, documentation-link and diff-whitespace checks
+  passed. No direct standalone hosted-web `tsc` check is claimed; that workspace
+  owns its targeted override typecheck and production build instead.
+
+The temporary frontend was stopped after verification. No commit, push, source
+publication, paid rehearsal, production access or GCP change occurred. The result
+supports the refactor's net maintainability/reliability improvement, with the
+confirmed recovery-screen regression corrected and the limits above retained.
+
+### Develop delivery boundary (2026-10-25)
+
+The reviewed delivery combines callback-safe observation retirement, exact
+binding/source checks during handoff and the recovery-screen metadata guard.
+All authored implementation, regression fixtures and owning documentation ship
+together on `develop`; ignored qualification artifacts remain local. GitHub
+checks must be evaluated for the pushed commit itself, not an older green run.
+A CI failure requires diagnosis and a verified follow-up change (or an explicit
+infrastructure limitation), not weakened assertions or replayed application
+writes. This handoff does not authorize merging to `main` or deploying production.

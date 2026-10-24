@@ -198,13 +198,17 @@ const storedProjectsState = atomWithStorage<OpenedProjectsInfo>(
 
 function getProjectBindingSpecs(opened: OpenedProjectsInfo['openedProjects']) {
   return Object.fromEntries(
-    Object.entries(opened).map(([id, info]) => [
-      id,
-      {
-        path: info.fsPath,
-        bundleKey: getExecutionBundleKey(info),
-      },
-    ]),
+    Object.entries(opened)
+      // Recovery controls can read tab state after checkpoint validation fails.
+      // Derive no execution binding for damaged metadata; preserve the record.
+      .filter(([, info]) => info !== null && typeof info === 'object' && !Array.isArray(info))
+      .map(([id, info]) => [
+        id,
+        {
+          path: info.fsPath,
+          bundleKey: getExecutionBundleKey(info),
+        },
+      ]),
   );
 }
 

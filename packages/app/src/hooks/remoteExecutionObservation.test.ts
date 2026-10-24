@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { GraphExecutionMetadata, ProcessEventMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
 import { getSubgraphProjectKey } from '@valerypopoff/rivet2-core';
+import { createExecutionObservationCoordinator } from '../domain/execution/executionObservationCoordinator.js';
 import { createRemoteExecutionObservationRouter, type RemoteObservation } from './remoteExecutionObservation.js';
 
 const id = (value: string) => value as ProjectId;
@@ -20,7 +21,9 @@ function fixture(eligible?: (projectId: ProjectId, source: object) => boolean, a
   }> = [];
   const settled: Array<{ project: ProjectId; root: string; status: 'completed' | 'error' | 'aborted' }> = [];
   const notices: Array<string | undefined> = [];
+  const coordinator = createExecutionObservationCoordinator();
   const router = createRemoteExecutionObservationRouter({
+    coordinator,
     eligible,
     receivers: () => new Map(opened),
     conflict: (project) => conflicts.get(project),
@@ -82,7 +85,7 @@ function fixture(eligible?: (projectId: ProjectId, source: object) => boolean, a
     emit('start', 'a', root);
     emit('graphStart', 'a', root);
   };
-  return { router, source, opened, conflicts, records, projected, settled, notices, emit, begin };
+  return { router, coordinator, source, opened, conflicts, records, projected, settled, notices, emit, begin };
 }
 
 test('explicit eligibility prevents outsider projection without losing nested eligible children', () => {
@@ -485,6 +488,109 @@ test('synchronous store notifications cannot reenter unfinished observation reti
     assert.equal(f.settled.length, 1, `${transition} settles display once`);
     if (transition === 'disconnect') assert.equal(f.records.size, 0);
     else assert.equal([...f.records.values()][0]!.observation.status, 'blocked');
+  }
+});
+
+test('disconnect during publication or terminal settlement cannot resurrect observation state', () => {
+  for (const boundary of ['completion', 'completion-settle', 'publication', 'version'] as const) {
+    let disconnect = false;
+    const f = fixture(undefined, () => {
+      if (!disconnect) return;
+      if (boundary === 'completion-settle' && !f.settled.length) return;
+      disconnect = false;
+      f.router.disconnect(f.source);
+    });
+    f.begin();
+    if (boundary !== 'publication') f.emit('graphStart', 'b');
+    const projected = f.projected.length;
+    disconnect = true;
+    if (boundary === 'version') {
+      const original = f.projected[0]!.activityData as { execution: GraphExecutionMetadata };
+      f.emit('nodeFinish', 'b', 'root', {
+        execution: {
+          ...original.execution,
+          projectScope: getSubgraphProjectKey({ projectId: id('b'), version: 'published' }),
+        },
+      });
+    } else f.emit(boundary === 'publication' ? 'graphStart' : 'done', boundary === 'publication' ? 'b' : 'a');
+    assert.equal(f.records.size, 0, `${boundary} cannot republish a disconnected observation`);
+    assert.equal(f.projected.length, projected, `${boundary} cannot project after ownership is released`);
+    assert.equal(f.settled.length, 1, `${boundary} settles the member only once`);
+    assert.equal(f.settled[0]!.status, boundary.startsWith('completion') ? 'completed' : 'aborted');
+  }
+});
+
+test('terminal callbacks preserve an ownership handoff in another dependency tab', () => {
+  let handover = false;
+  const f = fixture(undefined, () => {
+    if (!handover || !f.settled.some((item) => item.project === 'b')) return;
+    handover = false;
+    f.conflicts.set(id('c'), 'A local execution owns this tab.');
+    f.router.reconcileOwnership();
+  });
+  f.begin();
+  f.emit('graphStart', 'b');
+  f.emit('graphStart', 'c');
+  handover = true;
+  f.emit('done', 'a');
+  assert.deepEqual(f.settled, [
+    { project: 'b', root: 'root', status: 'completed' },
+    { project: 'c', root: 'root', status: 'aborted' },
+  ]);
+  const c = [...f.records.values()].find((item) => item.project === 'c')!.observation;
+  assert.equal(c.status, 'blocked');
+  assert.match(c.message!, /local execution/);
+});
+
+test('blocked publication cannot settle a replacement binding created by its callback', () => {
+  for (const boundary of ['conflict', 'membership'] as const) {
+    let replace = false;
+    const f = fixture(undefined, () => {
+      if (!replace) return;
+      replace = false;
+      f.opened.set(id('b'), { token: 3, path: '/b', ...(boundary === 'conflict' ? { bundleKey: 'bundle' } : {}) });
+      f.router.reconcileOwnership();
+    });
+    f.opened.set(id('b'), { token: 1, path: '/b', bundleKey: 'bundle' });
+    f.begin();
+    f.emit('graphStart', 'b');
+    if (boundary === 'membership') f.opened.set(id('b'), { token: 2, path: '/b' });
+    else f.conflicts.set(id('b'), 'A local execution owns this tab.');
+    replace = true;
+    f.router.reconcileOwnership();
+    assert.equal(f.settled.length, 0, `${boundary} cannot settle the replacement's display`);
+    assert.equal(f.records.size, 0, `${boundary} cannot retain stale provenance after replacement`);
+  }
+});
+
+test('disconnect during source takeover cannot admit an orphan root or retain its metadata', () => {
+  for (const boundary of ['settle', 'remove', 'reconnect'] as const) {
+    let disconnect = false;
+    const f = fixture(undefined, () => {
+      if (!disconnect || (boundary === 'remove' && f.records.size)) return;
+      disconnect = false;
+      f.router.disconnect(f.source);
+      if (boundary === 'reconnect') f.begin('replacement');
+    });
+    f.begin();
+    f.emit('graphStart', 'b');
+    disconnect = true;
+    const execution = { projectId: id('b'), rootRunId: 'takeover', graphRunId: 'new-b', graphId: 'shared' };
+    f.router.receive(f.source, id('b'), 'Project B', 'start', { execution } as never, true);
+    assert.equal(f.records.size, 0);
+    assert.equal(
+      f.coordinator.inspect().roots,
+      boundary === 'reconnect' ? 1 : 0,
+      `${boundary} cannot retain a disconnected admission`,
+    );
+    const count = f.projected.length;
+    f.emit('graphStart', 'c', 'takeover');
+    assert.equal(f.projected.length, count, `${boundary} cannot enroll a child after disconnect`);
+    f.begin('fresh');
+    f.emit('graphStart', 'b', 'fresh');
+    assert.equal(f.projected.length, count + 1, `${boundary} permits a genuinely new source lifetime`);
+    f.router.dispose();
+    assert.equal(f.coordinator.inspect().roots, 0);
   }
 });
 

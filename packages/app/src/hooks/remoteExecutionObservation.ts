@@ -53,8 +53,9 @@ export function createRemoteExecutionObservationRouter(options: {
   function isCurrent(projectId: ProjectId, member: Member) {
     return options.receivers().get(projectId)?.token === member.token;
   }
-  function update(projectId: ProjectId, member: Member, patch: Partial<RemoteObservation>) {
+  function update(run: Run, projectId: ProjectId, member: Member, patch: Partial<RemoteObservation>) {
     if (
+      run.members.get(projectId) !== member ||
       !isCurrent(projectId, member) ||
       Object.keys(patch).every((key) =>
         Object.is(member.observation[key as keyof RemoteObservation], patch[key as keyof RemoteObservation]),
@@ -66,10 +67,13 @@ export function createRemoteExecutionObservationRouter(options: {
     options.publish(projectId, next);
   }
   function forget(run: Run) {
-    for (const [id, member] of run.members) options.remove(id, member.observation.id);
+    const members = [...run.members];
+    run.members.clear();
+    for (const [id, member] of members) options.remove(id, member.observation.id);
   }
   function blocked(key: object, run: Run, root: string, id: ProjectId, member: Member) {
-    if (!isCurrent(id, member) || member.observation.status === 'blocked') return true;
+    if (run.members.get(id) !== member || !isCurrent(id, member) || member.observation.status === 'blocked')
+      return true;
     const rejection = coordinator.check(
       run.admission,
       root,
@@ -83,10 +87,12 @@ export function createRemoteExecutionObservationRouter(options: {
         : options.conflict(id, key) ??
           (rejection ? 'This tab changed ownership during the run. Observe the next remote run.' : undefined);
     if (!conflict) return false;
+    const shouldSettle = !run.settled && member.observation.status === 'observing' && id !== run.projectId;
+    const bindingToken = member.token;
     // Store writes notify ownership subscribers synchronously. Commit the
     // blocked state before settlement can reenter this router.
-    update(id, member, { status: 'blocked', message: conflict, needsInput: false, paused: false });
-    if (!run.settled && id !== run.projectId) options.settle(id, root, 'aborted');
+    update(run, id, member, { status: 'blocked', message: conflict, needsInput: false, paused: false });
+    if (shouldSettle && options.receivers().get(id)?.token === bindingToken) options.settle(id, root, 'aborted');
     return true;
   }
   return {
@@ -148,9 +154,12 @@ export function createRemoteExecutionObservationRouter(options: {
             if (!member) continue;
             previous.members.delete(sourceProjectId);
             previous.receivers.delete(sourceProjectId);
-            if (!previous.settled && member.observation.status !== 'blocked' && isCurrent(sourceProjectId, member))
+            if (!previous.settled && member.observation.status === 'observing' && isCurrent(sourceProjectId, member))
               options.settle(sourceProjectId, root, 'aborted');
             options.remove(sourceProjectId, member.observation.id);
+            // Finish removing the detached member even after disconnect, but
+            // never let that old start capture an unreachable admission.
+            if (sources.get(key) !== source) return;
           }
         if ([...source.runs.values()].filter((item) => !item.settled).length >= 32) {
           options.notice(
@@ -194,7 +203,7 @@ export function createRemoteExecutionObservationRouter(options: {
       if (message === 'pause' || message === 'resume') {
         run.paused = message === 'pause';
         for (const [id, member] of run.members)
-          if (!blocked(key, run, execution.rootRunId, id, member)) update(id, member, { paused: run.paused });
+          if (!blocked(key, run, execution.rootRunId, id, member)) update(run, id, member, { paused: run.paused });
         return;
       }
       const isRootGraph = !execution.parentGraphRunId && execution.projectId === sourceProjectId;
@@ -208,13 +217,19 @@ export function createRemoteExecutionObservationRouter(options: {
         const successful = message === 'done' || message === 'graphFinish';
         for (const [id, member] of run.members) {
           if (blocked(key, run, execution.rootRunId, id, member)) continue;
-          if (id !== sourceProjectId)
+          // Claim this member's terminal state before store callbacks can
+          // disconnect the source or hand its tab to another owner.
+          update(run, id, member, {
+            status: successful ? 'complete' : 'interrupted',
+            needsInput: false,
+            paused: false,
+          });
+          if (id !== sourceProjectId && isCurrent(id, member))
             options.settle(
               id,
               execution.rootRunId,
               successful ? 'completed' : run.abortRequested ? 'aborted' : 'error',
             );
-          update(id, member, { status: successful ? 'complete' : 'interrupted', needsInput: false, paused: false });
         }
         run.settled = true;
         const completed = [...source.runs.entries()].filter(([, item]) => item.settled);
@@ -256,7 +271,7 @@ export function createRemoteExecutionObservationRouter(options: {
       if (pendingBefore !== run.pendingInputs.size)
         for (const [target, entry] of run.members)
           if (!blocked(key, run, execution.rootRunId, target, entry))
-            update(target, entry, { needsInput: run.pendingInputs.size > 0 });
+            update(run, target, entry, { needsInput: run.pendingInputs.size > 0 });
       if (execution.projectId === sourceProjectId && !execution.projectScope) return;
       const id = execution.projectId;
       const receiver = run.receivers.get(id);
@@ -299,9 +314,12 @@ export function createRemoteExecutionObservationRouter(options: {
       // starts after this root was admitted. Do not resume halfway through it.
       if (blocked(key, run, execution.rootRunId, id, member)) return;
       if (version)
-        update(id, member, {
+        update(run, id, member, {
           version: member.observation.version && member.observation.version !== version ? 'mixed' : version,
         });
+      // Publishing provenance can synchronously release or block this member.
+      // The old callback must not paint data after that ownership handoff.
+      if (run.members.get(id) !== member || member.observation.status === 'blocked') return;
       if (['start', 'abort', 'trace', 'codeConsole'].includes(message)) return;
       options.project(
         id,
@@ -330,7 +348,7 @@ export function createRemoteExecutionObservationRouter(options: {
           if (
             !run.settled &&
             id !== run.projectId &&
-            member.observation.status !== 'blocked' &&
+            member.observation.status === 'observing' &&
             options.receivers().get(id)?.token === member.token
           )
             options.settle(id, root, 'aborted');
@@ -359,15 +377,21 @@ export function createRemoteExecutionObservationRouter(options: {
                 // retains a blocked explanation, not admission to old events.
                 // Only that first transition can carry provenance forward; a
                 // later renewal is a new lifetime even at the identical path.
-                const shouldSettle = !run.settled && id !== run.projectId && !options.conflict(id, key);
+                const shouldSettle =
+                  !run.settled &&
+                  member.observation.status === 'observing' &&
+                  id !== run.projectId &&
+                  !options.conflict(id, key);
                 member.token = next.token;
-                update(id, member, {
+                const bindingToken = member.token;
+                update(run, id, member, {
                   status: 'blocked',
                   message: 'This project no longer belongs to this Remote Debugger session.',
                   needsInput: false,
                   paused: false,
                 });
-                if (shouldSettle) options.settle(id, member.observation.rootRunId, 'aborted');
+                if (shouldSettle && options.receivers().get(id)?.token === bindingToken)
+                  options.settle(id, member.observation.rootRunId, 'aborted');
                 continue;
               }
               run.members.delete(id);
