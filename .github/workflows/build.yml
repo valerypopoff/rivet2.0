@@ -116,14 +116,10 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - label: Node
-            command: test:node
-          - label: Evaluations
-            command: test:evaluations
-          - label: App Executor
-            command: test:app-executor
-          - label: CLI
-            command: test:cli
+          - label: Node and Evaluations
+            command: test:node && yarn test:evaluations
+          - label: App Executor and CLI
+            command: test:app-executor && yarn test:cli
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-yarn
@@ -168,6 +164,20 @@ jobs:
         run: yarn workspace @valerypopoff/rivet-app run build && yarn workspace @valerypopoff/rivet2-cli run build
         env:
           NODE_OPTIONS: --max_old_space_size=6000
+      - name: Seal desktop frontend artifact
+        if: github.event_name == 'push'
+        run: node scripts/ci/desktop-web-artifact.mjs create
+      - name: Upload desktop frontend
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rivet-desktop-web-${{ github.sha }}
+          path: |
+            packages/app/dist
+            packages/app/desktop-web-artifact.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Compile desktop frontend and CLI"
@@ -177,21 +187,19 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 2
       matrix:
         include:
-          - label: Core
-            workspace: '@valerypopoff/rivet2-core'
-          - label: Node
-            workspace: '@valerypopoff/rivet2-node'
-          - label: Evaluations
-            workspace: '@valerypopoff/rivet2-evaluations'
-          - label: App
-            workspace: '@valerypopoff/rivet-app'
-          - label: App Executor
-            workspace: '@valerypopoff/rivet-app-executor'
-          - label: CLI
-            workspace: '@valerypopoff/rivet2-cli'
+          - label: Runtime packages
+            command: >-
+              yarn workspace @valerypopoff/rivet2-core run lint &&
+              yarn workspace @valerypopoff/rivet2-node run lint &&
+              yarn workspace @valerypopoff/rivet2-evaluations run lint
+          - label: Editor and tooling
+            command: >-
+              yarn workspace @valerypopoff/rivet-app run lint &&
+              yarn workspace @valerypopoff/rivet-app-executor run lint &&
+              yarn workspace @valerypopoff/rivet2-cli run lint
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-yarn
@@ -201,7 +209,7 @@ jobs:
         run: node scripts/ci/install-dependencies.mjs
 
       - name: Lint ${{ matrix.label }}
-        run: yarn workspace ${{ matrix.workspace }} run lint
+        run: ${{ matrix.command }}
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Lint ${{ matrix.label }}"

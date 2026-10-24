@@ -1,42 +1,19 @@
 import { defineConfig } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { selectEditorCiSpecs } from '../../scripts/ci/editor-test-shards.mjs';
 
 const webRoot = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(webRoot, '../..');
 const port = Number.parseInt(process.env.PLAYWRIGHT_CI_PORT ?? '5174', 10);
 const baseURL = `http://127.0.0.1:${Number.isFinite(port) ? port : 5174}`;
+const shard = process.env.RIVET_EDITOR_TEST_SHARD;
+const testMatch = [...selectEditorCiSpecs(shard)];
+const suffix = shard === undefined ? '' : `-${shard[0]}`;
 
 export default defineConfig({
   testDir: './playwright-observe',
-  testMatch: [
-    'explicit-bundles.spec.ts',
-    'modal-sizing.spec.ts',
-    'scheduled-runs.spec.ts',
-    'fullscreen-output-search-paging.spec.ts',
-    'hosted-modal-focus.spec.ts',
-    'hosted-dashboard-contracts.spec.ts',
-    'hosted-executor-origin.spec.ts',
-    'project-bundle.spec.ts',
-    'project-bundle-upload.spec.ts',
-    'sidebar-name-wrapping.spec.ts',
-    'streaming-nodes.spec.ts',
-    'project-tree-activation.spec.ts',
-    'port-connection-warnings.spec.ts',
-    'cross-project-subgraph-loading.spec.ts',
-    'subgraph-bundle-scope.spec.ts',
-    'hosted-subgraph-auth.spec.ts',
-    'remote-bundle-observation.spec.ts',
-    'ha-latest-replay.spec.ts',
-    'ha-recording-selection.spec.ts',
-    'recording-playback-history.spec.ts',
-    'graph-deletion-references.spec.ts',
-    'node-editor-ownership.spec.ts',
-    'node-editor-lifecycle.spec.ts',
-    'llm-temperature.spec.ts',
-    'evaluation-history-paging.spec.ts',
-    'tunnel-cache-retention.spec.ts',
-  ],
+  testMatch,
   timeout: 180_000,
   expect: {
     timeout: 20_000,
@@ -45,8 +22,8 @@ export default defineConfig({
   // Files own browser contexts, mocked APIs and temporary artifacts. Preserve
   // serial scenarios within each file; use two independent files per runner.
   workers: 2,
-  outputDir: '../../artifacts/playwright/ci-test-results',
-  reporter: [['list'], ['html', { open: 'never', outputFolder: '../../artifacts/playwright/ci-report' }]],
+  outputDir: `../../artifacts/playwright/ci-test-results${suffix}`,
+  reporter: [['list'], ['html', { open: 'never', outputFolder: `../../artifacts/playwright/ci-report${suffix}` }]],
   use: {
     baseURL,
     headless: true,

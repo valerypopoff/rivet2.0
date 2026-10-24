@@ -1,0 +1,5 @@
+simulation: rivet-build-evidence
+routing: path
+mocks:
+  - routeKey: github
+    path: ../mocks/github-actions/config.yaml

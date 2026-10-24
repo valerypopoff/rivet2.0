@@ -3,12 +3,176 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { desktopWebArtifact, verifyDesktopWebArtifact } from './desktop-web-artifact.mjs';
 import { nodeTestPrerequisites } from '../../packages/node/scripts/prepare-tests.mjs';
 import { assertImageDependencyLayout } from '../../deploy/studio-server/scripts/lib/image-dependency-layout.mjs';
 import { installDependencies } from './install-dependencies.mjs';
 import { fileURLToPath } from 'node:url';
+import { editorCiSpecs, editorCiShards, selectEditorCiSpecs } from './editor-test-shards.mjs';
+import { desktopReleasePlan } from './desktop-release-plan.mjs';
+import { desktopBuildEvidence } from './desktop-build-evidence.mjs';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { createRequire } from 'node:module';
+
+const { createPagesHandler } = createRequire(import.meta.url)('../../postman/mocks/rivet-pages/contract.cjs');
+const { createGitHubActionsHandler } = createRequire(import.meta.url)(
+  '../../postman/mocks/github-actions/contract.cjs',
+);
+
+test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed publication', async (t) => {
+  const requests = [];
+  const server = createServer(createGitHubActionsHandler({ requests }));
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const options = {
+    repository: 'fixture/repo',
+    sha: 'a'.repeat(40),
+    ref: 'refs/heads/develop',
+    token: 'synthetic-fixture-token',
+    maxWaitMs: 300,
+    pollMs: 5,
+    requestTimeoutMs: 100,
+  };
+  const run = (mode, scenario = 'ok', extra = {}) =>
+    desktopBuildEvidence({
+      ...options,
+      mode,
+      apiUrl: `http://127.0.0.1:${server.address().port}/${scenario}/`,
+      ...extra,
+    });
+  assert.deepEqual(await run('artifact'), { runId: 101, runAttempt: 1, artifactId: 501 });
+  assert.deepEqual(await run('validated', 'ok', { runId: 101, runAttempt: 1 }), { runId: 101, runAttempt: 1 });
+  assert.deepEqual(await run('validated', 'advance'), { runId: 101, runAttempt: 1 });
+  assert.deepEqual(await run('artifact', 'pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
+  for (const scenario of [
+    'failed',
+    'cancelled',
+    'rerun',
+    'stale',
+    'wrongbranch',
+    'pr',
+    'fork',
+    'unavailable',
+    'malformed',
+    'redirect',
+    'hang',
+  ]) {
+    await assert.rejects(run('validated', scenario, { runId: 101, runAttempt: 1 }), undefined, scenario);
+  }
+  for (const scenario of ['expired', 'missing', 'duplicate', 'empty', 'foreign-artifact'])
+    await assert.rejects(run('artifact', scenario), undefined, scenario);
+  // The overall deadline may expire between polls or during a real HTTP read.
+  await assert.rejects(run('validated', 'pending'), /Timed out|operation was aborted due to timeout/);
+  await assert.rejects(run('validated', 'ok', { runId: 101 }), /Pinned/);
+  assert.ok(
+    requests.every((request) => request.startsWith('GET ')),
+    'Release evidence never dispatches/retries writes.',
+  );
+  assert.ok(requests.some((request) => request.includes('head_sha=' + options.sha)));
+  assert.ok(requests.some((request) => request.includes('/actions/runs/101/artifacts?per_page=100')));
+});
+
+// test-style: fixture-read: inspect only GitHub output generated in the owned temporary fixture.
+test('desktop docs planning compares the complete push and published baseline without hiding unpublished code', async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-desktop-plan-'));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+  git('init', '--quiet');
+  git('config', 'user.name', 'CI fixture');
+  git('config', 'user.email', 'fixture@example.invalid');
+  git('config', 'core.autocrlf', 'false');
+  const commit = async (file, text) => {
+    await fs.mkdir(path.dirname(path.join(cwd, file)), { recursive: true });
+    await fs.writeFile(path.join(cwd, file), text);
+    git('add', '.');
+    git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture');
+    return git('rev-parse', 'HEAD');
+  };
+  const published = await commit('packages/app/index.ts', 'original');
+  const docs = await commit('packages/docs/docs/intro.md', 'documentation');
+  const requests = [];
+  const server = createServer(createPagesHandler({ commit: published, requests }));
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const options = {
+    cwd,
+    eventName: 'push',
+    event: { before: published, after: docs },
+    sha: docs,
+    channel: 'developer',
+    allowDocsOnly: true,
+  };
+  const plan = (mode = 'ok', overrides = {}) =>
+    desktopReleasePlan({ ...options, siteUrl: `http://127.0.0.1:${server.address().port}/${mode}/`, ...overrides });
+  const reuse = await plan();
+  assert.equal(reuse.native, false);
+  assert.equal(reuse.desktopCommit, published);
+  assert.ok(requests.includes('GET /ok/developer-release.json'));
+  const eventPath = path.join(cwd, '.git', 'fixture-event.json');
+  const outputPath = path.join(cwd, '.git', 'fixture-github-output');
+  await fs.writeFile(eventPath, JSON.stringify(options.event));
+  await new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      [fileURLToPath(new URL('./desktop-release-plan.mjs', import.meta.url))],
+      {
+        cwd,
+        timeout: 15_000,
+        env: {
+          ...process.env,
+          GITHUB_EVENT_NAME: 'push',
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_SHA: docs,
+          RELEASE_CHANNEL: 'developer',
+          ALLOW_DOCS_ONLY: 'true',
+          PAGES_SITE_URL: `http://127.0.0.1:${server.address().port}/ok/`,
+          GITHUB_OUTPUT: outputPath,
+        },
+      },
+      (error) => (error ? reject(error) : resolve()),
+    );
+  });
+  assert.equal(await fs.readFile(outputPath, 'utf8'), `native=false\ndesktop_commit=${published}\n`);
+  for (const mode of ['missing', 'unavailable', 'malformed', 'changed']) assert.equal((await plan(mode)).native, true);
+  for (const overrides of [
+    { eventName: 'workflow_dispatch' },
+    { allowDocsOnly: false },
+    { event: { before: '0'.repeat(40), after: docs } },
+  ]) {
+    const before = requests.length;
+    assert.equal((await plan('ok', overrides)).native, true);
+    assert.equal(requests.length, before, 'explicit/full builds do not need Pages');
+  }
+  const code = await commit('packages/app/index.ts', 'unpublished change');
+  const laterDocs = await commit('packages/docs/docs/intro.md', 'later documentation');
+  assert.equal((await plan('ok', { sha: laterDocs, event: { before: code, after: laterDocs } })).native, true);
+  const mixed = await plan('ok', { sha: code, event: { before: docs, after: code } });
+  assert.equal(mixed.native, true);
+  await assert.rejects(plan('ok', { sha: docs, event: { before: published, after: code } }), /identity/);
+});
+
+test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
+  assert.equal(editorCiSpecs.length, 26);
+  assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
+  assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);
+  const selected = ['1/3', '2/3', '3/3'].flatMap(selectEditorCiSpecs);
+  assert.equal(new Set(selected).size, selected.length);
+  assert.deepEqual(selected.sort(), [...editorCiSpecs].sort());
+  const weights = editorCiShards.map((shard) => shard.seconds);
+  assert.ok(Math.max(...weights) <= Math.min(...weights) * 1.05);
+  for (const invalid of ['', '0/3', '4/3', '1/2', '1/4', '1/3extra', '1/3\n'])
+    assert.throws(() => selectEditorCiSpecs(invalid), /RIVET_EDITOR_TEST_SHARD/);
+});
 
 test('CI install CLI preserves inherited environment, flags, live diagnostics and bounded exit behavior', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-install-'));

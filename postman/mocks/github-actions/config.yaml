@@ -1,0 +1,10 @@
+version: 1
+name: GitHub Actions read-only Build evidence
+slug: github-actions
+protocol: http
+port: 4920
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

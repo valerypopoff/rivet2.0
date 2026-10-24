@@ -1,0 +1,10 @@
+version: 1
+name: Rivet published Pages contract
+slug: rivet-pages
+protocol: http
+port: 4919
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

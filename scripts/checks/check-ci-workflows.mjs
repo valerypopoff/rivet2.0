@@ -92,10 +92,24 @@ assert.equal(buildJobs['package-lint'].strategy['fail-fast'], false);
 assert.equal(buildJobs['package-lint'].needs, undefined, 'Source-only lint must not wait for compiled artifacts.');
 assert.deepEqual(asArray(buildJobs['package-tests'].needs), ['compiled-artifacts']);
 assert.equal(buildJobs['package-tests'].strategy['max-parallel'], 6);
-assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 6);
+assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 2);
+assert.deepEqual(
+  buildJobs['package-lint'].strategy.matrix.include.flatMap((entry) => entry.command.split(/\s*&&\s*/)).sort(),
+  [
+    '@valerypopoff/rivet2-core',
+    '@valerypopoff/rivet2-node',
+    '@valerypopoff/rivet2-evaluations',
+    '@valerypopoff/rivet-app',
+    '@valerypopoff/rivet-app-executor',
+    '@valerypopoff/rivet2-cli',
+  ]
+    .map((workspace) => `yarn workspace ${workspace} run lint`)
+    .sort(),
+  'Grouped lint retains all six workspaces exactly once.',
+);
 assert.deepEqual(
   [...buildJobs['package-tests'].strategy.matrix.include, ...buildJobs['supporting-tests'].strategy.matrix.include]
-    .map((entry) => entry.command)
+    .flatMap((entry) => entry.command.split(/\s*&&\s*yarn\s+/))
     .sort(),
   [
     'test:app --shard-index 0 --shard-count 4',
@@ -308,6 +322,22 @@ assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
+assert.deepEqual(studioJobs['editor-regression'].strategy.matrix.include, [
+  { shard: '1/3', label: 1 },
+  { shard: '2/3', label: 2 },
+  { shard: '3/3', label: 3 },
+]);
+assert.equal(studioJobs['editor-regression'].strategy['fail-fast'], false);
+assert.equal(studioJobs['editor-regression'].strategy['max-parallel'], 3);
+assert.equal(
+  findStep(studioJobs['editor-regression'], 'Run hosted editor regressions', 'Editor shards').env
+    .RIVET_EDITOR_TEST_SHARD,
+  '${{ matrix.shard }}',
+);
+assert.match(
+  findStep(studioJobs['editor-regression'], 'Upload Playwright failure artifacts', 'Editor shards').with.name,
+  /matrix\.label/,
+);
 const executorRetirement = findStep(
   studioJobs['editor-regression'],
   'Verify accepted executor retirement',
@@ -328,6 +358,11 @@ assert.match(
   /studio-server:build && yarn studio-server:verify:executor-retirement/,
 );
 assert.equal(executorRetirement.run, 'yarn studio-server:verify:executor-retirement');
+assert.equal(
+  executorRetirement.if,
+  'matrix.label == 1',
+  'Retirement coverage runs exactly once, not once per browser shard.',
+);
 const subgraphLoader = findStep(studioJobs['web-tests'], 'Verify hosted executor Subgraph loader', 'Web tests');
 assert.equal(subgraphLoader.run, 'yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime');
 assert.ok(
@@ -355,20 +390,19 @@ assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
 const deploymentContracts = studioJobs['deployment-contracts'];
-assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'gateway']);
+assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'deployment', 'gateway']);
 assert.equal(deploymentContracts.strategy['fail-fast'], false);
-assert.equal(deploymentContracts.strategy['max-parallel'], 2);
+assert.equal(deploymentContracts.strategy['max-parallel'], 3);
 for (const [lane, names] of [
   [
     'managed',
     [
-      'Set Up Kubernetes Tools',
       'Verify compiled migrations on PostgreSQL',
       'Verify async endpoint completion with managed storage',
       'Verify VM-to-managed copy, retry, and exact readback',
-      'Verify Kubernetes and deployment contracts',
     ],
   ],
+  ['deployment', ['Set Up Kubernetes Tools', 'Verify Kubernetes and deployment contracts']],
   [
     'gateway',
     [
@@ -971,11 +1005,59 @@ assert.match(
 
 const reusableDesktop = parseWorkflow('.github/workflows/desktop-release.yml');
 const reusableJobs = reusableDesktop.workflow.jobs;
+assert.equal(
+  reusableDesktop.workflow.on.workflow_call.inputs.allow_docs_only.default,
+  false,
+  'Stable/manual callers keep the full native-release behavior by default.',
+);
+const desktopPlan = reusableJobs['release-plan'];
+assert.equal(desktopPlan.permissions.contents, 'read');
+assert.equal(findActionStep(desktopPlan, 'actions/checkout@v6', 'Desktop planning').with['fetch-depth'], 1);
+const desktopPlanStep = findStep(
+  desktopPlan,
+  'Select native build or documentation-only publication',
+  'Desktop planning',
+);
+assert.equal(desktopPlanStep.run, 'node scripts/ci/desktop-release-plan.mjs');
+assert.equal(desktopPlanStep.env.ALLOW_DOCS_ONLY, '${{ inputs.allow_docs_only }}');
+for (const jobName of ['build-desktop-web', 'verify-ai-graph-builder-assets']) {
+  assert.equal(reusableJobs[jobName].needs, 'release-plan');
+  assert.match(reusableJobs[jobName].if, /needs\.release-plan\.outputs\.native == 'true'/);
+}
+const pagesGate = reusableJobs['publish-pages'].if;
+assert.match(pagesGate, /always\(\)/);
+assert.match(pagesGate, /!cancelled\(\)/, 'Skipped native jobs must not make canceled runs publish.');
+assert.match(pagesGate, /needs\.release-plan\.result == 'success'/);
+assert.match(pagesGate, /needs\.build-docs\.result == 'success'/);
+for (const jobName of ['build-desktop-web', 'verify-ai-graph-builder-assets', 'build-windows', 'build-macos']) {
+  assert.ok(pagesGate.includes(`needs.${jobName}.result == 'success'`));
+  assert.ok(pagesGate.includes(`needs.${jobName}.result == 'skipped'`));
+}
+const docsReuse = findStep(
+  reusableJobs['publish-pages'],
+  'Preserve published desktop downloads for documentation-only update',
+  'Docs-only Pages',
+);
+assert.match(docsReuse.if, /asset_freshness.*true.*native == 'false'/);
+assert.equal(docsReuse.env.REUSE_PUBLISHED_DESKTOP_RELEASE, '1');
+assert.equal(docsReuse.env.PRESERVED_DESKTOP_COMMIT, '${{ needs.release-plan.outputs.desktop_commit }}');
+for (const name of [
+  'Publish desktop release assets',
+  'Add release downloads to docs site',
+  'Download Windows bundles',
+  'Download Apple Silicon macOS bundles',
+  'Download Intel macOS bundles',
+]) {
+  assert.match(
+    findStep(reusableJobs['publish-pages'], name, 'Native desktop publication').if,
+    /needs\.release-plan\.outputs\.native == 'true'/,
+  );
+}
 for (const buildJob of ['build-desktop-web', 'build-docs']) {
   assert.equal(
     reusableJobs[buildJob].needs,
-    undefined,
-    `${buildJob} must run concurrently with graph asset verification.`,
+    'release-plan',
+    `${buildJob} must run concurrently after release planning.`,
   );
 }
 const desktopWebUpload = findStep(
@@ -987,9 +1069,58 @@ assert.equal(desktopWebUpload.with?.name, 'rivet-${{ inputs.channel }}-desktop-w
 assert.equal(desktopWebUpload.with?.overwrite, true);
 assert.equal(desktopWebUpload.with?.['if-no-files-found'], 'error');
 assert.ok(
-  reusableJobs['build-desktop-web'].steps.findIndex((step) => step.name === 'Seal desktop frontend artifact') <
+  reusableJobs['build-desktop-web'].steps.findIndex((step) => step.name === 'Verify exact Build frontend') <
     reusableJobs['build-desktop-web'].steps.indexOf(desktopWebUpload),
 );
+const buildFrontendUpload = findStep(
+  buildJobs['frontend-build'],
+  'Upload desktop frontend',
+  'Single frontend producer',
+);
+assert.equal(buildFrontendUpload.with.name, 'rivet-desktop-web-${{ github.sha }}');
+assert.equal(buildFrontendUpload.with.overwrite, true);
+assert.equal(buildFrontendUpload.with['if-no-files-found'], 'error');
+assert.equal(buildFrontendUpload.if, "github.event_name == 'push'", 'PRs must not publish unused release handoffs.');
+assert.equal(
+  findStep(buildJobs['frontend-build'], 'Seal desktop frontend artifact', 'Single frontend producer').run,
+  'node scripts/ci/desktop-web-artifact.mjs create',
+);
+assert.ok(
+  !reusableJobs['build-desktop-web'].steps.some((step) => /rivet-app run build/.test(step.run ?? '')),
+  'Desktop Release must not compile a second frontend.',
+);
+assert.equal(reusableJobs['build-desktop-web'].permissions.actions, 'read');
+assert.equal(reusableJobs['build-desktop-web'].permissions.contents, 'read');
+const exactFrontend = findStep(
+  reusableJobs['build-desktop-web'],
+  'Download exact Build frontend',
+  'Exact run consumer',
+);
+assert.equal(exactFrontend.with['run-id'], '${{ steps.build.outputs.run_id }}');
+assert.equal(exactFrontend.with['artifact-ids'], '${{ steps.build.outputs.artifact_id }}');
+assert.equal(exactFrontend.with['github-token'], '${{ github.token }}');
+assert.equal(exactFrontend.with.path, 'packages/app');
+const publicationSteps = reusableJobs['publish-pages'].steps;
+const successfulBuild = findStep(
+  reusableJobs['publish-pages'],
+  'Require successful exact Build before publication',
+  'Publication safety',
+);
+assert.equal(successfulBuild.run, 'node scripts/ci/desktop-build-evidence.mjs validated');
+assert.equal(successfulBuild.env.BUILD_RUN_ID, '${{ needs.build-desktop-web.outputs.build_run_id }}');
+assert.equal(successfulBuild.env.BUILD_RUN_ATTEMPT, '${{ needs.build-desktop-web.outputs.build_run_attempt }}');
+assert.equal(successfulBuild.if, "steps.asset_freshness.outputs.current == 'true'");
+assert.equal(successfulBuild['continue-on-error'], undefined, 'A failed Build gate must stop all publication.');
+for (const name of [
+  'Publish desktop release assets',
+  'Add release downloads to docs site',
+  'Preserve published desktop downloads for documentation-only update',
+  'Upload Pages artifact',
+]) {
+  const step = findStep(reusableJobs['publish-pages'], name, 'Build-gated publication');
+  assert.ok(publicationSteps.indexOf(successfulBuild) < publicationSteps.indexOf(step));
+  assert.doesNotMatch(step.if ?? '', /always\(\)|failure\(\)/, 'Publication must retain implicit success gating.');
+}
 for (const nativeJob of ['build-windows', 'build-macos']) {
   assert.deepEqual(asArray(reusableJobs[nativeJob].needs), ['build-desktop-web']);
   const download = findStep(reusableJobs[nativeJob], 'Download shared desktop frontend', nativeJob);
@@ -1008,7 +1139,7 @@ assert.match(
 assert.equal(reusableJobs['publish-pages'].concurrency.group, 'rivet-docs-pages');
 assertIncludesAll(
   asArray(reusableJobs['publish-pages'].needs),
-  ['verify-ai-graph-builder-assets', 'build-windows', 'build-macos', 'build-docs'],
+  ['release-plan', 'verify-ai-graph-builder-assets', 'build-windows', 'build-macos', 'build-docs'],
   'Desktop publication gate',
 );
 for (const [jobName, stepName] of [
@@ -1082,6 +1213,10 @@ for (const workflowPath of [
     `${workflowPath} must keep manual releases out of the push cancellation group.`,
   );
   assert.equal(caller.workflow.jobs.release.uses, './.github/workflows/desktop-release.yml');
+  assert.equal(
+    caller.workflow.jobs.release.with.allow_docs_only,
+    workflowPath.includes('developer-') ? true : undefined,
+  );
 }
 
 const taggedDesktopRelease = parseWorkflow('.github/workflows/release.yml');

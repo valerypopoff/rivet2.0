@@ -20,7 +20,7 @@ import {
 type IpcMessage = { type?: string; nonce?: string; state?: string };
 
 for (const resumable of [false, true])
-  test(
+  void test(
     `real editor executor retirement owns preparation and paused runs through terminal cleanup (resume=${resumable})`,
     { timeout: 30000 },
     async (t) => {

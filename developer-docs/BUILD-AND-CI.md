@@ -1512,11 +1512,26 @@ manifests. Studio Server-only and developer-documentation-only commits no longer
 consume signed desktop runners. Manual dispatch remains available and always
 runs the selected branch's release.
 
-Graph Builder validation, the shared desktop frontend build, and documentation
-building start concurrently. A Linux job typechecks and bundles the desktop
-frontend once, seals every output file with a SHA-256 inventory and the source
-commit, and uploads the same-commit artifact. Windows and both native macOS
-packaging jobs depend on that producer. Their explicit Tauri configuration
+The read-only publication planner runs first. Developer push callers opt into
+docs-only reuse: both the full push range and the range from the commit in the
+published `developer-release.json` must contain only `packages/docs/` changes.
+This second comparison is essential when a docs push cancels an earlier code
+push before its installers publish. Incomplete history, missing/unavailable or
+invalid metadata, or any other changed input retains the full native build.
+Manual dispatch and official releases always use the full build. This does not
+change native publication frequency for application changes or bypass the
+separate Build workflow's checks.
+
+In a full build, Graph Builder validation, frontend acquisition and documentation
+building start concurrently. Build's existing Node 22 `frontend-build` job is
+the single desktop compiler: it seals every output file with a SHA-256 inventory
+and the source commit and uploads `rivet-desktop-web-<full SHA>`. Desktop Release
+uses read-only Actions access to locate the exact same-repository, same-branch
+**push** Build run and download its exact artifact ID. It verifies the inventory
+without installing dependencies or recompiling, then hands that verified output
+to Windows and both native macOS consumers. No PR/fork artifact, branch-tip
+substitute, other SHA or unverified fallback build is accepted. Studio Server's
+Node 24 build remains separate. Their explicit Tauri configuration
 override verifies the complete restored inventory before preparing the native
 sidecars; it does not repeat the frontend build. Missing, changed, extra or
 non-regular files fail closed. Local Tauri builds keep their ordinary frontend
@@ -1531,6 +1546,69 @@ Code-to-Graph-Output execution through its worker, and runs the packaged pnpm
 `--version` command. The smoke graph uses an `any` Graph Output because the
 current Code node's whole-value output is intentionally an `any` DataValue; the
 assertion verifies both that type and the returned value.
+
+For docs-only reuse, native and Graph Builder jobs must be **skipped**, not
+failed; the publisher explicitly requires the planner and docs build to succeed.
+It downloads no new installers and publishes no release assets. Pages preparation
+requires the primary channel's existing metadata to still match the exact
+planned installer commit, preserves its bytes/URLs and same-site binaries, and
+preserves the other channel as before (a never-published other channel may be
+absent). A changed primary baseline fails preparation. Original version, label,
+commit and timestamps remain attached to the old installers, never the docs SHA.
+Existing branch freshness checks and serialized Pages publication remain active;
+the explicit skipped-job gate must not admit canceled workflows.
+
+Immediately before release assets or Pages preparation can be written, the
+publisher runs `scripts/ci/desktop-build-evidence.mjs validated`. Native releases
+pin both Build run ID and attempt from frontend acquisition. Docs-only releases
+resolve the exact current docs SHA's Build independently (not the old installer
+SHA). Only a completed, successful Build passes; failed/canceled runs, changed
+attempts, identity mismatch, API errors and timeouts stop publication. Signing
+and packaging can overlap the remaining Build checks; **publication cannot**.
+This is a point-in-time gate, not a lock against somebody subsequently rerunning
+Build. Branch freshness checks still apply afterward.
+
+Evidence waits are bounded to 20 minutes, with individual HTTP calls bounded to
+10 seconds and no redirect-following or modifying API calls. Missing or expired
+frontend artifacts require rerunning Build before the desktop workflow. Artifacts
+are retained seven days. Do not bypass the gate or rebuild an unqualified
+frontend inside Desktop Release. Existing workflow triggers, manual entry points,
+native release frequency, signing, audits and required aggregate job IDs remain
+unchanged. Six short lint jobs are grouped into two lanes; four supporting-suite
+jobs are grouped into two. Every original command remains required exactly once.
+
+`scripts/ci/desktop-release-plan.mjs` and the real Pages-preparation CLI have
+regression tests using disposable Git histories and actual local HTTP responses.
+They cover unpublished application changes, malformed/missing metadata,
+unavailable assets and a changed baseline without contacting the live site.
+The repo-owned synthetic Pages contract lives in `postman/mocks/rivet-pages/`.
+For an optional local CLI simulation (Postman CLI 1.70+), run:
+
+```sh
+postman simulation run postman/simulations/rivet-docs-publication.sim.yaml --port 4919 --no-history --output ndjson
+```
+
+Use `http://127.0.0.1:4919/pages/ok/` as `PAGES_SITE_URL`; the synthetic preserved
+commit is forty `a` characters. `/pages/changed/`, `/pages/missing/` and
+`/pages/asset-failure/` exercise rejection. No real credentials or release assets
+are used. The ordinary Node HTTP regression tests reuse this contract and do not
+require Postman or upload request history.
+
+The read-only GitHub gate has a separate synthetic contract and simulation:
+
+```sh
+postman simulation run postman/simulations/rivet-build-evidence.sim.yaml --port 4920 --no-history --output ndjson
+```
+
+Use `GITHUB_API_URL=http://127.0.0.1:4920/github/ok/`, repository `fixture/repo`,
+SHA of forty `a` characters, ref `refs/heads/develop` and a synthetic token. Run
+`node scripts/ci/desktop-build-evidence.mjs artifact` or `validated`. `/failed/`,
+`/rerun/` and `/unavailable/` replace `/ok/` for rejection checks. The fixture
+models the documented GitHub REST GET shapes; an owner-workspace mock was not
+used. Normal CI runs the same contract over disposable local HTTP without a
+Postman installation or provider credentials. Local tests do not certify actual
+cross-run artifact transport, native signing or hosted timing; verify those in
+the first complete hosted push run.
 
 Notarization also requires exactly one DMG before signing or submitting anything;
 it must never pick an arbitrary first artifact that differs from verification's
