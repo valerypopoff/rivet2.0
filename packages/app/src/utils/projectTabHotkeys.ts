@@ -11,36 +11,25 @@ export function getProjectTabHotkeyDirection(
   event: KeyboardShortcutEvent,
   platform: KeyboardShortcutPlatform,
 ): ProjectTabDirection | undefined {
-  // Browser tab shortcuts may never reach the page. Offer an alternative that
-  // does not require fullscreen, keyboard-lock permission, or a browser extension.
+  // Keep browser/OS tab shortcuts untouched. These bindings are the same on all platforms.
   for (const [key, direction] of [
-    ['PageUp', -1],
-    ['PageDown', 1],
+    ['PageUp', 1],
+    ['PageDown', -1],
   ] as const) {
     if (
-      matchesKeyboardShortcut(event, {
-        codes: [key],
-        keys: [key],
-        commandModifier: 'none',
-        shiftKey: false,
-        altKey: true,
-      })
+      matchesKeyboardShortcut(
+        event,
+        {
+          codes: [key],
+          keys: [key],
+          commandModifier: 'none',
+          shiftKey: true,
+          altKey: false,
+        },
+        { platform },
+      )
     )
       return direction;
-  }
-  const matches = (key: string, shiftKey: boolean, altKey: boolean) =>
-    matchesKeyboardShortcut(
-      event,
-      { codes: [key], keys: [key], commandModifier: 'platform-command', shiftKey, altKey },
-      { platform },
-    );
-
-  if (platform === 'macos') {
-    if (matches('ArrowLeft', false, true)) return -1;
-    if (matches('ArrowRight', false, true)) return 1;
-  } else {
-    if (matches('Tab', true, false) || matches('PageUp', false, false)) return -1;
-    if (matches('Tab', false, false) || matches('PageDown', false, false)) return 1;
   }
   return undefined;
 }
@@ -80,7 +69,7 @@ export function installProjectTabHotkeyListener(
 ): () => void {
   let requested: { tab: ProjectTabListItem; revision: number } | undefined;
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!event.ctrlKey && !event.metaKey && !event.altKey) return;
+    if (!event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.defaultPrevented || event.isComposing || event.getModifierState('AltGraph')) return;
     const state = getState();
     if (!state.enabled) return;

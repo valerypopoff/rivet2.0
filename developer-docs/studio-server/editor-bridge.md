@@ -336,10 +336,11 @@ Recovery checkpoint failure after a completed open is separate from open failure
 
 ## Project-tab keyboard navigation
 
-App's `ProjectSelector` owns adjacent project-tab shortcuts: Windows/Linux use
-Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+Page Down / Ctrl+Page Up; macOS uses
-Command+Option+Right / Left. Alt+Page Down / Alt+Page Up is also available on all
-platforms as a browser-friendly alternative. Navigation follows the visible project-tab order,
+App's `ProjectSelector` owns adjacent project-tab shortcuts on all platforms:
+**Shift+Page Up selects the tab to the right; Shift+Page Down selects the tab to
+the left.** These replace the previous Ctrl+Tab, Ctrl+Page, Command+Option+arrow
+and Alt+Page bindings. Plain Page Up / Down retain graph navigation, and ordinary
+Tab / Shift+Tab retain keyboard focus traversal. Navigation follows the visible project-tab order,
 including opening placeholders, wraps at either end, and leaves workspace
 navigation buttons (Settings, Plugins, etc.) outside the cycle. Selecting a
 project closes the current workspace overlay through the normal tab-click path.
@@ -363,15 +364,14 @@ must not independently load project bytes, replace snapshots or mark edits clean
 Keyboard handling does not alter hosted Save shortcut ownership or native menus.
 
 These shortcuts work when key events reach Rivet (including desktop webviews).
-Browsers may reserve them for their own tabs before a page/iframe can intercept
-them; no JavaScript listener or iframe forwarding can override that reservation.
-Do not request fullscreen or keyboard-lock permissions automatically to work
-around it. Use Alt+Page Up / Down when the browser reserves Chrome-style keys.
+They require Shift alone, without Ctrl, Command or Alt, and do not claim browser
+tab shortcuts. Focus must be within the editor document; no fullscreen or
+keyboard-lock permissions are needed.
 The headless `project-tab-shortcuts` observer exercises the real selector,
 wraparound, edited snapshots, opening tabs and modal blocking. Synthetic events
-cover OS/browser-reserved combinations without claiming to verify delivery by
-Chrome's browser chrome or native Windows/Linux/macOS webviews.
-The observer also sends real Alt+Page Up / Down key presses from a focused text
+cover platform variations and rapid activation sequences without claiming to
+verify native Windows/Linux/macOS webviews.
+The observer also sends real Shift+Page Up / Down key presses from a focused text
 input and verifies project selection and same-window listener suppression.
 
 ## Project loading performance

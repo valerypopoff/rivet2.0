@@ -74,6 +74,19 @@ test('missing recordings remain absent for every project', () => {
   assert.equal(getLoadedRecordingForTab(null, projectA, recording.projectPath), undefined);
 });
 
+test('saving a pathless recording tab rebinds only that project, not another pathless tab', () => {
+  const store = createStore();
+  store.set(activateLoadedRecordingState, { ...recording, projectPath: null });
+  const selected = { ...recording, projectId: projectB, projectPath: null };
+  store.set(activateLoadedRecordingState, selected);
+  store.set(rebindLoadedRecordingPathState, { projectId: projectA, fromPath: null, toPath: '/a' });
+  assert.equal(store.get(recordingTabIndicatorsState)[projectA]?.projectPath, '/a');
+  assert.equal(store.get(recordingTabIndicatorsState)[projectB]?.projectPath, null);
+  assert.equal(store.get(loadedRecordingState), selected);
+  store.set(rebindLoadedRecordingPathState, { projectId: projectB, fromPath: null, toPath: '/b' });
+  assert.equal(store.get(loadedRecordingState)?.projectPath, '/b');
+});
+
 test('only the owner can replace or unload a loaded recording', () => {
   assert.equal(canChangeLoadedRecordingForTab(recording, projectA, recording.projectPath), true);
   assert.equal(canChangeLoadedRecordingForTab(recording, projectA, 'C:/projects/project-a.rivet-project'), false);

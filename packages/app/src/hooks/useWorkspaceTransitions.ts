@@ -10,6 +10,8 @@ import {
   type UiGraphId,
 } from '@valerypopoff/rivet2-core';
 import { toast, type Id as ToastId } from 'react-toastify';
+import { isRecordingSnapshotPath } from '../utils/recordingPlayback.js';
+import { rebindLoadedRecordingPathState } from '../state/execution.js';
 import { useIOProvider } from '../providers/ProvidersContext.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
 import { cleanupNodeAtomFamilies, graphState, historicalGraphState, isReadOnlyGraphState } from '../state/graph.js';
@@ -433,6 +435,12 @@ export function useWorkspaceTransitions() {
           const loadedProjectPathAtSaveStart = latestLoadedProject.path;
           const savePath = resolveOpenedProjectSavePath(projectsAtSaveStart, projectId, latestLoadedProject.path);
           projectPath = savePath;
+          if (!options.forceSaveAs && isRecordingSnapshotPath(savePath)) {
+            toast.warn('Recording replay projects are read-only.', {
+              toastId: 'recording-read-only-save',
+            });
+            return false;
+          }
           const savedGraph = saveCurrentGraph();
           const projectToPersist = withDerivedProjectPluginSpecs(
             mergeCurrentGraphIntoProject(latestProject, savedGraph),
@@ -530,6 +538,18 @@ export function useWorkspaceTransitions() {
                   ? previousLoadedProject
                   : { loaded: true, path: savedPath },
               );
+            }
+
+            if (
+              loadedProjectPathAtSaveStart !== savedPath &&
+              !pathChangedWhileSaving &&
+              store.get(projectsState).openedProjects[projectId]?.fsPath === savedPath
+            ) {
+              store.set(rebindLoadedRecordingPathState, {
+                projectId,
+                fromPath: loadedProjectPathAtSaveStart,
+                toPath: savedPath,
+              });
             }
 
             setOpenedProjectSnapshots((snapshots) => {

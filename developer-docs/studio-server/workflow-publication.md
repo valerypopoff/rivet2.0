@@ -1399,6 +1399,37 @@ completion or abort. Small, non-persistent tab indicators retain this decoration
 across tab switches and opening another recording; they retain no event payloads.
 Indicators are path-bound, follow path rebinding and clear on unload, replacement
 or close, including inactive-tab cleanup. Ordinary tabs have no recording icon.
+Recording tabs do not show the unsaved-changes dot. This includes detached
+`recording://` snapshots before activation and after Unload. Marker suppression
+does not reset actual dirty flags, and ordinary editable projects
+without a loaded recording retain their marker. Closing a detached `recording://`
+snapshot skips the unsaved-changes dialog because its layout edits are disposable;
+this covers active/inactive tabs and unloaded snapshots. Editable source-project
+files still require confirmation for unsaved changes, even with a recording loaded.
+The shared `isRecordingSnapshotPath` predicate owns this distinction; a recording
+icon or global playback selection is not sufficient reason to discard source edits.
+Saving a detached recording in place returns `false` with a read-only warning toast,
+before any persistence is attempted. It does not recommend Save As, which the
+hosted editor's menu policy does not expose. Repeated Save presses reuse one
+warning toast. Where available, explicit Save As retains its normal new-file flow, while
+genuine save failures still produce error toasts. The provider's read-only guard
+remains as defense in depth; the warning does not mark the snapshot clean or emit
+a successful-save acknowledgement.
+When a successful Save As changes the tab binding, the loaded recording and its
+tab indicator follow the new path so Play/Unload stay reachable. This is scoped
+to that exact project, including pathless desktop projects; another active
+recording must not move with it. Failed/canceled saves and newer path changes
+never rebind playback from stale save results.
+An ordinary in-place save does not reselect the recording or reset a pending
+playback reservation; only an actual, accepted path change moves ownership.
+
+Regression coverage uses the public workspace-save hook for read-only warning
+severity, persistence failures and Save As ownership (including pathless desktop
+tabs). The headless `recording-playback-history` observer moves replay nodes and
+closes active/inactive snapshots, checks warning toasts and verifies actual Run
+Activity rows through repeated playback. `project-tab-shortcuts` separately
+checks that ordinary editable tabs still require unsaved-close confirmation.
+Save As is tested through the save hook, not the hosted menu that hides it.
 
 The canvas border follows the **original recording**: succeeded is green, failed
 is red, suspicious/control-flow-excluded is yellow. Replaying or aborting playback

@@ -6,17 +6,17 @@ title: 'Overview of the Interface'
 
 ### Switching project tabs
 
-Use Chrome-style shortcuts to select the neighboring open project tab:
+Use these shortcuts to select the neighboring open project tab on Windows, Linux
+and macOS:
 
-- **Windows and Linux:** Ctrl+Tab (right), Ctrl+Shift+Tab (left). Ctrl+Page Down and Ctrl+Page Up also work.
-- **macOS:** Command+Option+Right Arrow (right), Command+Option+Left Arrow (left).
-- **In a web browser, all platforms:** Alt+Page Down (right), Alt+Page Up (left).
+- **Shift+Page Up:** switch to the tab on the right.
+- **Shift+Page Down:** switch to the tab on the left.
 
 The shortcuts wrap from the last tab to the first and back, following the tab
 order. Unsaved edits stay in their tabs. Switching is disabled while a modal
-dialog is open. In Rivet Studio Server, your browser may reserve these shortcuts
-for its own browser tabs instead of delivering them to the editor. Use the
-Alt+Page Up / Page Down shortcuts instead, with focus inside the Rivet editor.
+dialog is open. In Rivet Studio Server, keep focus inside the Rivet editor.
+Plain Page Up / Page Down still navigate graph history. Tab / Shift+Tab still
+move keyboard focus; the previous project-tab bindings are no longer used.
 
 ### Project Settings
 

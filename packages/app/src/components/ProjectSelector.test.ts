@@ -10,6 +10,7 @@ import {
   resolveOpeningProjectTabPresentation,
   resolveProjectSelectorPlatformPolicy,
   resolveProjectTabPresentation,
+  shouldShowProjectTabChanges,
 } from './projectSelector/projectSelectorModel.js';
 import { ProjectTabSurface } from './projectSelector/ProjectTabSurface.js';
 
@@ -93,6 +94,14 @@ test('inactive project tabs retain a close escape hatch', async () => {
   }
 });
 test('project tab presentation owns active labels, unsaved state, and preview styling', () => {
+  for (const fsPath of [undefined, '/projects/normal.rivet-project', 'recording://run/replay.rivet-project']) {
+    assert.equal(shouldShowProjectTabChanges({ hasUnsavedChanges: true, recording: true, fsPath }), false);
+    assert.equal(shouldShowProjectTabChanges({ hasUnsavedChanges: false, recording: false, fsPath }), false);
+    assert.equal(
+      shouldShowProjectTabChanges({ hasUnsavedChanges: true, recording: false, fsPath }),
+      !fsPath?.startsWith('recording://'),
+    );
+  }
   assert.deepEqual(
     resolveProjectTabPresentation({
       title: 'Current project',

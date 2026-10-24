@@ -23,6 +23,7 @@ import {
   projectTabDragActivationConstraint,
   resolveOpeningProjectTabPresentation,
   resolveProjectTabPresentation,
+  shouldShowProjectTabChanges,
 } from './projectSelectorModel.js';
 import { ProjectTabSurface } from './ProjectTabSurface.js';
 import { recordingTabIndicatorsState } from '../../state/execution.js';
@@ -206,7 +207,11 @@ const ProjectTab: FC<{
         )
       }
       dragListeners={dragListeners}
-      hasUnsavedChanges={hasUnsavedChanges}
+      hasUnsavedChanges={shouldShowProjectTabChanges({
+        hasUnsavedChanges,
+        recording: !!recording,
+        fsPath: project?.fsPath,
+      })}
       preview={presentation.preview}
       unsaved={presentation.unsaved}
       onCloseProject={onCloseProject}

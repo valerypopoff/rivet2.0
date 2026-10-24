@@ -209,6 +209,17 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     await expect(modal).toBeHidden();
     const recordingInfo = editor.getByRole('region', { name: 'Loaded recording', exact: true });
     await expect(recordingInfo).toBeVisible();
+    if (kind === 'child') {
+      await editor.locator('body').press('Control+s');
+      const warning = editor
+        .locator('.Toastify__toast--warning')
+        .filter({ hasText: 'Recording replay projects are read-only' });
+      await expect(warning).toBeVisible();
+      await expect(warning).not.toContainText('Use Save As');
+      await expect(editor.locator('.Toastify__toast--error')).toHaveCount(0);
+      await warning.locator('.Toastify__close-button').click();
+      await expect(warning).toBeHidden();
+    }
     if (kind === 'root') {
       await expect(editor.locator('.node [data-recorded-target]')).toContainText('playback-child / main');
       await expect(editor.locator('.node .target-error')).toHaveCount(0);
@@ -277,6 +288,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     const color = child.status === 'failed' ? 'error' : child.status === 'suspicious' ? 'warning' : 'success';
     const recordingTabIcon = editor.locator('.projects-container .project.active .recording-tab-icon');
     await expect(recordingTabIcon).toHaveAttribute('data-recording-status', child.status);
+    await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/has-unsaved-changes/);
     await expect(recordingTabIcon).toHaveAttribute('style', `color: var(--${color});`);
     expect(
       await recordingTabIcon.evaluate((icon) => {
@@ -318,6 +330,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       }
     }
     await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
+    await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/has-unsaved-changes/);
     await expect(recordingTabIcon).toHaveAttribute('data-recording-status', child.status);
     await expect(editor.locator('[aria-label="Run Activity"]')).toContainText(
       kind === 'root' ? 'Parent' : 'Child main',
@@ -343,6 +356,16 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
         );
     await expect.poll(saved).toEqual([serializedRecording]);
     if (kind === 'child') {
+      const moveReplayNode = async () => {
+        const node = editor.locator('.node[data-nodeid="child-text"]');
+        const before = await node.evaluate((element) => (element as HTMLElement).style.transform);
+        const title = (await node.locator('.node-title').boundingBox())!;
+        await page.mouse.move(title.x + title.width / 2, title.y + title.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(title.x + title.width / 2 + 60, title.y + title.height / 2 + 30, { steps: 6 });
+        await page.mouse.up();
+        await expect.poll(() => node.evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(before);
+      };
       await editor.locator('.projects-container .project').filter({ hasText: 'Neighbor' }).click();
       await expect(play).toHaveCount(0);
       await expect(editor.getByRole('region', { name: 'Loaded recording', exact: true })).toHaveCount(0);
@@ -413,6 +436,8 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await editor.locator('.projects-container .project').filter({ hasText: 'Child replay' }).click();
       await expect(play).toBeEnabled();
       await expect(output).toContainText('child playback evidence');
+      // Disposable replay geometry must not trigger an unsaved-close dialog.
+      await moveReplayNode();
       await play.evaluate((button) => {
         (button as HTMLButtonElement).click();
         const close = document.querySelector<HTMLButtonElement>('.projects-container .project.active .close-project');
@@ -420,6 +445,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
         close.click();
       });
       await expect(editor.locator('.projects-container .project').filter({ hasText: 'Child replay' })).toHaveCount(0);
+      await expect(editor.getByRole('dialog', { name: 'Unsaved changes', exact: true })).toHaveCount(0);
       await expect(play).toHaveCount(0);
       await expect(editor.locator('.node[data-nodeid="child-text"] .node-output')).toContainText(
         'neighbor live evidence',
@@ -438,6 +464,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(play).toBeEnabled();
       await expect(output).toContainText('child playback evidence');
       await expect(editor.getByText(/^Execution: \d+\/\d+$/)).toHaveCount(0);
+      await moveReplayNode();
       // Keep a second recording open. Its activation changes the global loaded
       // recording, but must not strand the first tab's preparation reservation.
       await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
@@ -476,6 +503,13 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(play).toBeEnabled();
       await expect(output).toContainText('child playback evidence');
       await expect(editor.getByText(/^Execution: \d+\/\d+$/)).toHaveCount(0);
+      await parentTab.click();
+      const inactiveReplay = editor.locator('.projects-container .project').filter({ hasText: 'Child replay' });
+      await inactiveReplay.hover();
+      await inactiveReplay.locator('.close-project').click();
+      await expect(inactiveReplay).toHaveCount(0);
+      await expect(parentTab).toHaveClass(/active/);
+      await expect(editor.getByRole('dialog', { name: 'Unsaved changes', exact: true })).toHaveCount(0);
     }
     if (kind === 'root') {
       const call = editor
@@ -496,6 +530,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(editor.locator('.projects-container .project.active .recording-tab-icon')).toHaveCount(0);
       await expect(call.locator('[data-recorded-target]')).toBeVisible();
       await expect(call.locator('.target-error')).toHaveCount(0);
+      await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/has-unsaved-changes/);
     }
     expect(liveTargetReads).toEqual([]);
   });

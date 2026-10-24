@@ -1,7 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { GraphId, RecordedEvents } from '@valerypopoff/rivet2-core';
-import { getRecordingPlaybackGraphId, requireRecordingRootGraphId } from './recordingPlayback.js';
+import {
+  getRecordingPlaybackGraphId,
+  isRecordingSnapshotPath,
+  requireRecordingRootGraphId,
+} from './recordingPlayback.js';
+
+test('detached recording paths do not classify editable project files or imported recording files as snapshots', () => {
+  assert.equal(isRecordingSnapshotPath('recording://run/replay.rivet-project'), true);
+  for (const path of [
+    null,
+    undefined,
+    '',
+    'C:/projects/recording.rivet-project',
+    '/workflows/source.rivet-project',
+    '/files/run.rivet-recording',
+  ]) {
+    assert.equal(isRecordingSnapshotPath(path), false);
+  }
+});
 
 test('recording playback resolves the root start graph rather than an earlier nested graph event', () => {
   const targetGraphId = 'target' as GraphId;

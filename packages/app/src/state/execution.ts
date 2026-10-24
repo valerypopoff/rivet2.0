@@ -2,6 +2,7 @@ import { atom } from 'jotai';
 import { type ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
 import { loadedProjectState, projectState } from './savedGraphs.js';
 import { getRecordingPresentation, type RecordingRunDetails } from '../utils/recordingPresentation.js';
+import { isRecordingSnapshotPath } from '../utils/recordingPlayback.js';
 
 /** Transient render tick for the runtime-owned executor/debugger session. */
 export const executorSessionRevisionState = atom(0);
@@ -68,8 +69,7 @@ export const currentProjectLoadedRecordingState = atom((get) =>
  * to access a live project or infer bundle membership.
  */
 export const isRecordingProjectState = atom(
-  (get) =>
-    !!get(currentProjectLoadedRecordingState) || get(loadedProjectState).path?.startsWith('recording://') === true,
+  (get) => !!get(currentProjectLoadedRecordingState) || isRecordingSnapshotPath(get(loadedProjectState).path),
 );
 
 /**
@@ -110,20 +110,26 @@ export const activateLoadedRecordingState = atom(null, (_get, set, loadedRecordi
   set(recordingPlaybackStartingState, false);
 });
 
-/** Keeps a manually loaded recording attached when its owning tab is moved or renamed. */
+/** Keeps a loaded recording attached when its tab is moved, renamed or saved to a new file. */
 export const rebindLoadedRecordingPathState = atom(
   null,
-  (get, set, move: { fromPath: string; toPath: string }): boolean => {
+  (get, set, move: { fromPath: string | null; toPath: string; projectId?: ProjectId }): boolean => {
     set(recordingTabIndicatorsState, (current) =>
       Object.fromEntries(
         Object.entries(current).map(([id, indicator]) => [
           id,
-          indicator.projectPath === move.fromPath ? { ...indicator, projectPath: move.toPath } : indicator,
+          indicator.projectPath === move.fromPath && (move.projectId == null || id === move.projectId)
+            ? { ...indicator, projectPath: move.toPath }
+            : indicator,
         ]),
       ),
     );
     const loadedRecording = get(loadedRecordingState);
-    if (loadedRecording?.projectPath !== move.fromPath) {
+    if (
+      !loadedRecording ||
+      loadedRecording.projectPath !== move.fromPath ||
+      (move.projectId != null && loadedRecording.projectId !== move.projectId)
+    ) {
       return false;
     }
 
