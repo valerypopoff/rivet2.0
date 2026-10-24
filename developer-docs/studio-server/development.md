@@ -51,6 +51,62 @@ The supported server development command is `yarn studio-server:dev:local-storag
 retained for historical migration and isolated compatibility fixtures, not new
 server deployments.
 
+### Development frontend source-read failures
+
+The Docker development web service compiles read-only host source mounts into
+immutable generations. A Docker Desktop/host filesystem read failure can therefore
+fail the frontend even when the source is valid. An observed example was
+`[vite:load-fallback] EIO ... open /app/packages/evaluations/src/assertions.ts`.
+The host and a subsequent read-only container probe returned identical SHA-256
+content, and the normal production web build succeeded. Startup also reproduced
+EIO across other source files while host compilation continued normally. This
+establishes an unhealthy mount with intermittent individual read failures, not a
+TypeScript or missing-source fix; it does not identify the exact underlying
+Docker/Windows filesystem component. Bounded retries cannot repair a persistently
+unhealthy mount or establish that the Docker launcher started successfully.
+
+`dev/compile.mjs` classifies only EIO source reads in the watched application
+source directories. Vite-wrapped `PLUGIN_ERROR`/`pluginCode: EIO` must identify a
+load/open, or the syscall must be a read or source-metadata stat (also reproduced
+through `vite:esbuild` while resolving a source-directory tsconfig).
+Vite's CSS transform instead overwrites
+`pluginCode` with CSS source; its confirmed wrapper must preserve Linux EIO
+`errno: -5`, `plugin: vite:css`, `hook: transform` and an `open` syscall.
+Output/cache writes, unclassified opens,
+dependencies, syntax errors, missing files and permission failures do not acquire
+this retry behavior. `dev/builder.mjs` retries the unchanged source twice, after
+1s and 3s, using a fresh compiler **only after the failed child exits**. It never
+publishes failed/partial output or retries an application's API/write request.
+The previous good generation remains available; a first build remains unready
+until a complete generation is published. A real source edit or successful build
+resets the retry budget. Exhaustion leaves an actionable Docker file-sharing
+diagnostic and waits for an edit/restart; it does not spin indefinitely.
+The existing cache-busy five-minute policy is separate and unchanged.
+When an edit supersedes an active compiler, the watcher logs the first changed
+path/event so repeated supersession is distinguishable from an IO retry.
+
+For a persistent EIO, check that the host file is readable, inspect the web
+container logs and Docker Desktop file sharing, then rerun the local launcher.
+Do not delete PostgreSQL/MinIO volumes, change credentials or modify the reported
+source file merely to work around a mount failure. Restarting Docker Desktop can
+interrupt unrelated local containers and requires explicit user approval; it is
+not performed automatically by the launcher.
+This policy is development-only; release build errors are not hidden or retried.
+If Desktop itself fails to start (for example, its Secrets Engine cannot access
+`engine.sock`), stop at that separate platform failure. Do not factory-reset
+Docker, remove its credential storage or claim the Rivet stack is running.
+Host-only build/browser results must be recorded separately from Docker startup.
+
+Regression owners: `dev/build-failure.test.mjs` checks classification and budgets;
+`dev/build-retry-process.test.mjs` runs actual watcher/compiler children with a
+test-only Vite fault injector, checking transient recovery, persistent exhaustion,
+syntax rejection, edit recovery, single publication and non-overlapping compiler
+lifetimes. The regular web test command discovers both. Supervisor/generation
+tests continue to cover source supersession and last-good-bundle ownership.
+Local receipts are under `artifacts/local-web-build-*`; actual Docker/host source
+read agreement is diagnostic evidence, not a deterministic reproduction of the
+underlying Docker Desktop fault.
+
 The six `dev|staging|prod` × `local-storage|external-storage` commands share
 `container-server.mjs` and one normalized Compose model. Development builds source;
 staging consumes immutable candidates; both production choices require promoted

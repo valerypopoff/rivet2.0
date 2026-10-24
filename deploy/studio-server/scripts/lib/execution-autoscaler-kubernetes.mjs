@@ -396,6 +396,7 @@ export function createExecutionAutoscalerIO({
       }
       return {
         uid: owner.metadata.uid,
+        resourceVersion: owner.metadata.resourceVersion,
         replicas: owner.spec.replicas,
         pods: result.map((pod) => ({
           ...pod,
@@ -404,9 +405,11 @@ export function createExecutionAutoscalerIO({
         startupFence: owner.spec.template.metadata?.annotations?.[fenceAnnotation],
       };
     },
-    async scale(uid, from, to) {
+    async scale(uid, from, to, expectedResourceVersion) {
       const scale = await api.json('GET', `${sts}/scale`);
-      if (scale?.metadata.uid !== uid || scale.spec.replicas !== from) throw new Error('Scale precondition changed.');
+      if (scale?.metadata.uid !== uid || scale.spec.replicas !== from
+        || (expectedResourceVersion !== undefined && scale.metadata.resourceVersion !== expectedResourceVersion))
+        throw new Error('Scale precondition changed.');
       await api.json(
         'PATCH',
         `${sts}/scale`,

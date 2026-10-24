@@ -64,7 +64,7 @@ export class HaReleaseProbes {
     ]);
     return JSON.parse(result.stdout.trim());
   }
-  async prepare() {
+  async prepare({ embeddedMaintenance = false } = {}) {
     const state = JSON.parse(
       await fs.readFile(path.join(this.gate.config.artifactsDir, 'ha-persisted-state.json'), 'utf8'),
     );
@@ -135,7 +135,16 @@ export class HaReleaseProbes {
     ).items;
     const restoreOwners = pods.filter((p) => p.spec.volumes?.some((v) => v.persistentVolumeClaim));
     assert.equal(restoreOwners.length, 1, 'only the maintenance owner may mount restore data');
-    assert.match(restoreOwners[0].metadata.name, /-maintenance-backend-0$/);
+    if (embeddedMaintenance) {
+      const owner = restoreOwners[0];
+      assert.equal(owner.metadata.labels['app.kubernetes.io/component'], 'backend');
+      assert.ok(owner.spec.containers.find((c) => c.name === 'backend').env.some((e) =>
+        e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton-overlap'));
+      const observed = JSON.parse((await this.kube(['exec', owner.metadata.name, '-c', 'backend', '--',
+        'node', '/opt/rivet/retire-backend.mjs'])).stdout);
+      assert.equal(observed.housekeeping?.state, 'owner');
+      assert.equal(observed.housekeeping.podUid, owner.metadata.uid);
+    } else assert.match(restoreOwners[0].metadata.name, /-maintenance-backend-0$/);
   }
   async beforeRetirement(pod) {
     const match = /-ha-backend-([01])$/.exec(pod.name);

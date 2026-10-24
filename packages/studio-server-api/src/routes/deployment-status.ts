@@ -1,9 +1,6 @@
 import { Router } from 'express';
 
-import {
-  clearStaleDeploymentReplicaStatuses,
-  getDeploymentStatus,
-} from '../deployment-status.js';
+import { clearStaleDeploymentReplicaStatuses, getDeploymentStatus } from '../deployment-status.js';
 import type { DeploymentStatus } from '../../../studio-server-shared/deployment-status-types.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
@@ -14,16 +11,26 @@ import { asyncHandler } from '../utils/asyncHandler.js';
  */
 export function createDeploymentStatusRouter(
   apiProfile: DeploymentStatus['apiProfile'],
+  readServingReadiness?: () => NonNullable<DeploymentStatus['servingReadiness']>,
 ): Router {
   const router = Router();
 
-  router.get('/', asyncHandler(async (_req, res) => {
-    res.json(await getDeploymentStatus(apiProfile));
-  }));
+  router.get(
+    '/',
+    asyncHandler(async (_req, res) => {
+      const status = await getDeploymentStatus(apiProfile);
+      if (status.controlPlaneAvailability?.mode === 'singleton-overlap' && readServingReadiness)
+        status.servingReadiness = readServingReadiness();
+      res.set('Cache-Control', 'no-store').json(status);
+    }),
+  );
 
-  router.post('/replicas/cleanup', asyncHandler(async (_req, res) => {
-    res.json(await clearStaleDeploymentReplicaStatuses());
-  }));
+  router.post(
+    '/replicas/cleanup',
+    asyncHandler(async (_req, res) => {
+      res.json(await clearStaleDeploymentReplicaStatuses());
+    }),
+  );
 
   return router;
 }

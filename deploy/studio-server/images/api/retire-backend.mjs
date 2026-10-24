@@ -77,7 +77,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const [operationId, incarnation, seconds = '300'] = process.argv.slice(2);
     const socketPath = process.env.RIVET_ROLLING_RETIREMENT_SOCKET || '/tmp/rivet-retirement.sock';
     const status =
-      operationId && seconds === '--withdraw-only'
+      operationId && ['--housekeeping-acquire', '--housekeeping-release'].includes(seconds)
+        ? await requestBackendRetirement(socketPath, 'POST', { protocol: 1, action: seconds.slice(2), operationId, incarnation })
+        : operationId && seconds === '--withdraw-only'
         ? await requestBackendRetirement(socketPath, 'POST', {
             protocol: 1,
             action: 'withdraw',

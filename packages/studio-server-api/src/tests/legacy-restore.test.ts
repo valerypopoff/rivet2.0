@@ -131,6 +131,52 @@ test('planned retirement blocks every unfinished restore journal and late prepar
   await checking;
 });
 
+test('housekeeping handover fences only new uploads and preserves the accepted restore journal', async () => {
+  let operation = { id: randomUUID(), phase: 'awaiting-confirmation', destructive: false };
+  const service = new LegacyRestoreService(
+    { read: async () => operation } as unknown as LegacyRestoreControl,
+    {} as never,
+    '',
+    { drain: async () => {}, restart: async () => {} },
+  );
+  const id = randomUUID();
+  service.beginHousekeepingHandover(id);
+  service.beginHousekeepingHandover(id);
+  assert.throws(() => service.beginHousekeepingHandover(randomUUID()), /Another housekeeping/);
+  const upload = new PassThrough();
+  await assert.rejects(
+    service.upload(upload),
+    (error: any) => error.status === 503 && error.code === 'housekeeping_handover',
+  );
+  assert.equal(upload.destroyed, false, 'rejected admission never consumes or owns the upload');
+  assert.equal((await service.status()).operation?.id, operation.id);
+  await assert.rejects(service.assertMayRetire(), /blocks planned retirement/);
+  operation = { ...operation, phase: 'cancelled' };
+  await service.assertMayRetire();
+  await assert.rejects(service.assertMayRestart(), /not settled/);
+  (service as unknown as { restartRequested: boolean }).restartRequested = true;
+  await service.assertMayRestart();
+  operation = { ...operation, phase: 'clearing' };
+  await assert.rejects(service.assertMayRestart(), /does not permit/);
+});
+
+test('restore warmup does not hide the authenticated ownership contract needed to finish its restart', () => {
+  const before = process.env.RIVET_LEGACY_RESTORE_ENABLED;
+  process.env.RIVET_LEGACY_RESTORE_ENABLED = '1';
+  setLegacyRestorePaused(true);
+  try {
+    let passed = false;
+    legacyRestoreRequestBarrier({ path: '/internal/ha/runtime-contract', method: 'GET' } as never, {} as never, () => {
+      passed = true;
+    });
+    assert.equal(passed, true, 'the existing route authentication remains responsible for internal access');
+  } finally {
+    setLegacyRestorePaused(false);
+    if (before === undefined) delete process.env.RIVET_LEGACY_RESTORE_ENABLED;
+    else process.env.RIVET_LEGACY_RESTORE_ENABLED = before;
+  }
+});
+
 test('schema preparation checks existing installation ownership without changing DDL', async () => {
   for (const state of ['empty', 'owned', 'foreign', 'partial']) {
     const control = new LegacyRestoreControl({}, 'fixture');

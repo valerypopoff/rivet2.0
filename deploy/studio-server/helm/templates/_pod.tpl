@@ -118,7 +118,7 @@ securityContext:
 
 {{- define "rivet.pod.backendVolumeMounts" -}}
 {{- include "rivet.pod.apiVolumeMounts" . }}
-{{- if and (or (not .Values.ha.enabled) (default false .haMaintenance) (eq .Values.ha.controlPlane.mode "singleton")) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
+{{- if and (or (not .Values.ha.enabled) (default false .haMaintenance) (has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap"))) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
 - name: legacy-restore
   mountPath: /data/rivet-restore
 {{- end }}
@@ -129,6 +129,16 @@ securityContext:
 {{- define "rivet.pod.placement" -}}
 {{- $root := .root -}}
 {{- $component := .component -}}
+{{- $overlapBackend := and (eq $component "backend") (eq $root.Values.ha.controlPlane.mode "singleton-overlap") -}}
+{{- if $overlapBackend }}
+affinity:
+  podAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            {{- include "rivet.componentLabels" (dict "root" $root "component" "backend") | nindent 12 }}
+{{- else }}
 {{- if $root.Values.availability.topologySpread.enabled }}
 topologySpreadConstraints:
   - maxSkew: {{ $root.Values.availability.topologySpread.maxSkew }}
@@ -163,6 +173,7 @@ affinity:
               {{- include "rivet.componentLabels" (dict "root" $root "component" $component) | nindent 14 }}
     {{- end }}
 {{- end }}
+{{- end }}
 {{- end -}}
 
 {{- define "rivet.pod.apiProbes" -}}
@@ -193,5 +204,6 @@ readinessProbe:
 lifecycle:
   preStop:
     exec:
-      command: ["/bin/sh", "-c", {{ printf "sleep %v" .Values.lifecycle.preStopDelaySeconds | quote }}]
+      {{- /* Validation owners have never admitted work and have no public edge. */}}
+      command: ["/bin/sh", "-c", {{ printf "sleep %v" (ternary 0 .Values.lifecycle.preStopDelaySeconds .Values.workflowSchema.maintenanceValidation) | quote }}]
 {{- end -}}

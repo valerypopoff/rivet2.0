@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { getScheduledRunScope, ownsMaintenance } from './ha-control-plane.js';
+import { assertHousekeepingWorkerOwnership } from './housekeeping-owner.js';
 import { ServerResourceLifecycle, ServerStartupCancelledError } from './server-resource-lifecycle.js';
 import {
   initializeScheduledRuns,
@@ -297,6 +298,24 @@ async function requestRestoreRestart(): Promise<void> {
   if (response.status !== 202) throw new Error('Supervisor refused restore restart.');
 }
 
+async function restartRestoreConsumer(reason: string): Promise<void> {
+  await shutdown(reason);
+  if (
+    process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton-overlap' &&
+    isControlPlaneApiProfile(apiRuntimeProfile) &&
+    !ownsMaintenance() &&
+    process.send
+  ) {
+    await new Promise<void>((resolve, reject) =>
+      process.send!(
+        { type: 'rivet-restore-consumer-restart', incarnation: process.env.RIVET_PROCESS_INCARNATION },
+        (error: Error | null) => (error ? reject(error) : resolve()),
+      ),
+    );
+  }
+  process.exit(0);
+}
+
 async function initializeRestoreRole(): Promise<boolean> {
   if (process.env.RIVET_LEGACY_RESTORE_ENABLED !== '1' || process.env.RIVET_DEPLOYMENT_TOPOLOGY !== 'replicated')
     return false;
@@ -345,19 +364,18 @@ async function initializeRestoreRole(): Promise<boolean> {
         legacyRestoreService?.observe(operation);
         if (restoreBlocksServing(operation) && operation?.phase !== 'restarting') {
           setLegacyRestorePaused(true);
-          if (
-            (!isControlPlaneApiProfile(apiRuntimeProfile) ||
-              !ownsMaintenance()) &&
-            !restoreControlOnly
-          )
-            void shutdown('legacy restore').then(() => process.exit(0));
+          if ((!isControlPlaneApiProfile(apiRuntimeProfile) || !ownsMaintenance()) && !restoreControlOnly)
+            void restartRestoreConsumer('legacy restore').catch(() => {
+              process.exitCode = 1;
+            });
         } else if (
           ((operation?.phase === 'restarting' && restoreControlOnly) || !restoreBlocksServing(operation)) &&
           isLegacyRestorePaused() &&
-          (!isControlPlaneApiProfile(apiRuntimeProfile) ||
-            !ownsMaintenance())
+          (!isControlPlaneApiProfile(apiRuntimeProfile) || !ownsMaintenance())
         ) {
-          void shutdown('restore generation changed').then(() => process.exit(0));
+          void restartRestoreConsumer('restore generation changed').catch(() => {
+            process.exitCode = 1;
+          });
         }
       })
       .catch(() => {
@@ -534,6 +552,7 @@ process.once('SIGTERM', () => {
 
 async function startServer(): Promise<void> {
   try {
+    assertHousekeepingWorkerOwnership();
     if (await initializeRestoreRole()) {
       await listenHttpServer();
       await configureRestoreService();

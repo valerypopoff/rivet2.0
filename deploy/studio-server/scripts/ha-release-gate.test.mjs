@@ -1,13 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HaReleaseGate, runHaReleaseRollout, validateHaCertificationManifest, withHaProofGeneration } from './kubernetes-ha-release-gate.mjs';
+import {
+  HaReleaseGate,
+  runHaReleaseRollout,
+  validateHaCertificationManifest,
+  withHaProofGeneration,
+} from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs, haRetirementProbeDelayMs } from './lib/ha-release-probes.mjs';
 import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import { parseAllDocuments } from 'yaml';
-import { publishHaBrowserBaseline, waitForHaFrontendReplacement, hasHaBrowserReadyTransport } from './lib/ha-browser-probe.mjs';
+import {
+  publishHaBrowserBaseline,
+  waitForHaFrontendReplacement,
+  hasHaBrowserReadyTransport,
+  assertHaBrowserWebPods,
+} from './lib/ha-browser-probe.mjs';
+
+test('backend-only browser evidence retains web identity without weakening frontend replacement evidence', () => {
+  const before = [{ metadata: { uid: 'old-web', labels: { 'app.kubernetes.io/component': 'web' } } }];
+  const replaced = [{ metadata: { uid: 'new-web' } }];
+  assertHaBrowserWebPods(before, replaced);
+  assert.throws(() => assertHaBrowserWebPods(before, before), /must be gone/);
+  assertHaBrowserWebPods(before, before, false);
+  assert.throws(() => assertHaBrowserWebPods(before, replaced, false), /must retain/);
+  assert.throws(() => assertHaBrowserWebPods([], [], false), /inventory/);
+});
 import { ManagedReleaseGate } from './kubernetes-managed-release-gate.mjs';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
@@ -32,23 +52,42 @@ test('background and Evaluation drain fixtures outlive the real routing propagat
 
 test('background retirement finds its recording outside the newest global page without weakening durability', async () => {
   const pod = { name: 'fixture-ha-execution-0', uid: 'retiring-owner' };
-  const background = { pod: pod.name, uid: pod.uid, workflowId: 'owned/workflow', correlationId: 'background-correlation' };
-  const recording = { id: 'durable-recording', workflowId: background.workflowId, status: 'succeeded',
-    executionIdentity: { surface: 'workflow_endpoint', correlationId: background.correlationId } };
-  const globalNewest = Array.from({ length: 100 }, (_, i) => ({ ...recording, id: `newer-${i}`,
-    workflowId: 'traffic-workflow', executionIdentity: { ...recording.executionIdentity, correlationId: `traffic-${i}` } }));
+  const background = {
+    pod: pod.name,
+    uid: pod.uid,
+    workflowId: 'owned/workflow',
+    correlationId: 'background-correlation',
+  };
+  const recording = {
+    id: 'durable-recording',
+    workflowId: background.workflowId,
+    status: 'succeeded',
+    executionIdentity: { surface: 'workflow_endpoint', correlationId: background.correlationId },
+  };
+  const globalNewest = Array.from({ length: 100 }, (_, i) => ({
+    ...recording,
+    id: `newer-${i}`,
+    workflowId: 'traffic-workflow',
+    executionIdentity: { ...recording.executionIdentity, correlationId: `traffic-${i}` },
+  }));
   for (const scenario of ['durable', 'missing', 'duplicate', 'failed', 'incomplete', 'wrong workflow', 'child only']) {
     const calls = [];
-    const gate = { requestWorkflow: async (_base, route) => {
-      calls.push(route);
-      if (route === '/api/workflows/recordings/runs?page=1&pageSize=100&status=all') return { runs: globalNewest, hasMore: true };
-      assert.equal(route, '/api/workflows/recordings/workflows/owned%2Fworkflow/runs?page=1&pageSize=100&status=all');
-      const row = structuredClone(recording);
-      if (scenario === 'failed') row.status = 'failed';
-      if (scenario === 'wrong workflow') row.workflowId = 'foreign';
-      if (scenario === 'child only') row.executionIdentity.surface = 'subgraph_project';
-      return { runs: scenario === 'missing' ? [] : scenario === 'duplicate' ? [row, { ...row, id: 'duplicate' }] : [row], hasMore: scenario === 'incomplete' };
-    } };
+    const gate = {
+      requestWorkflow: async (_base, route) => {
+        calls.push(route);
+        if (route === '/api/workflows/recordings/runs?page=1&pageSize=100&status=all')
+          return { runs: globalNewest, hasMore: true };
+        assert.equal(route, '/api/workflows/recordings/workflows/owned%2Fworkflow/runs?page=1&pageSize=100&status=all');
+        const row = structuredClone(recording);
+        if (scenario === 'failed') row.status = 'failed';
+        if (scenario === 'wrong workflow') row.workflowId = 'foreign';
+        if (scenario === 'child only') row.executionIdentity.surface = 'subgraph_project';
+        return {
+          runs: scenario === 'missing' ? [] : scenario === 'duplicate' ? [row, { ...row, id: 'duplicate' }] : [row],
+          hasMore: scenario === 'incomplete',
+        };
+      },
+    };
     const probes = new HaReleaseProbes(gate, 'http://fixture', rootDir);
     probes.background.push({ ...background });
     if (scenario === 'durable') {
@@ -64,8 +103,15 @@ test('background retirement finds its recording outside the newest global page w
 
 function recoveryCasFixture() {
   let version = 7;
-  const record = { token: 'operation', runner: 'controller', owner: { name: 'owner-0', uid: 'original', beginIssued: true } };
-  let current = { metadata: { name: 'journal', resourceVersion: String(version) }, data: { record: JSON.stringify(record) } };
+  const record = {
+    token: 'operation',
+    runner: 'controller',
+    owner: { name: 'owner-0', uid: 'original', beginIssued: true },
+  };
+  let current = {
+    metadata: { name: 'journal', resourceVersion: String(version) },
+    data: { record: JSON.stringify(record) },
+  };
   const calls = [];
   const kube = async (args, extra) => {
     calls.push(args[0]);
@@ -76,20 +122,32 @@ function recoveryCasFixture() {
     current = { ...next, metadata: { ...next.metadata, resourceVersion: String(++version) } };
     return { stdout: JSON.stringify(current) };
   };
-  return { kube, calls, journal: async () => structuredClone(current), heartbeat: () => {
-    current.metadata.resourceVersion = String(++version);
-  } };
+  return {
+    kube,
+    calls,
+    journal: async () => structuredClone(current),
+    heartbeat: () => {
+      current.metadata.resourceVersion = String(++version);
+    },
+  };
 }
 
 test('lease-loss injection fences the serialized runner write, not a heartbeat racing the injector', async () => {
   const f = recoveryCasFixture();
   const fault = createHaRecoveryFaultTransport('leaseLoss', f.kube, f.journal, 'journal');
   await fault.send(['exec', 'owner-0', '--begin-only']);
-  assert.deepEqual(f.calls, ['exec'], 'begin acceptance must not race another controller heartbeat with an injector write');
+  assert.deepEqual(
+    f.calls,
+    ['exec'],
+    'begin acceptance must not race another controller heartbeat with an injector write',
+  );
   assert.equal(fault.state.injected, false);
   f.heartbeat(); // A real heartbeat may advance the API version before the next serialized write.
   const next = await f.journal();
-  await assert.rejects(fault.send(['replace', '-f', '-'], { input: JSON.stringify(next) }), /Error from server \(Conflict\)/);
+  await assert.rejects(
+    fault.send(['replace', '-f', '-'], { input: JSON.stringify(next) }),
+    /Error from server \(Conflict\)/,
+  );
   assert.deepEqual(f.calls, ['exec', 'replace', 'replace']);
   assert.equal(fault.state.injected, true);
   assert.equal(fault.state.conflictObserved, true);
@@ -98,7 +156,7 @@ test('lease-loss injection fences the serialized runner write, not a heartbeat r
   assert.ok(JSON.parse((await f.journal()).data.record).leaseExpiresAt < Date.now());
   const recovered = await f.journal();
   await fault.send(['replace', '-f', '-'], { input: JSON.stringify(recovered) });
-  assert.equal(f.calls.filter(value => value === 'exec').length, 1, 'recovery does not replay begin or reinject');
+  assert.equal(f.calls.filter((value) => value === 'exec').length, 1, 'recovery does not replay begin or reinject');
 });
 
 test('lease fault neither mutates a foreign journal nor treats unrelated failures as a confirmed API conflict', async () => {
@@ -116,12 +174,16 @@ test('lease fault neither mutates a foreign journal nor treats unrelated failure
     const fault = createHaRecoveryFaultTransport('leaseLoss', kube, f.journal, 'journal');
     await fault.send(['exec', 'owner-0', '--begin-only']);
     const next = await f.journal();
-    if (mode === 'foreign') next.data.record = JSON.stringify({ ...JSON.parse(next.data.record), token: 'another operation' });
+    if (mode === 'foreign')
+      next.data.record = JSON.stringify({ ...JSON.parse(next.data.record), token: 'another operation' });
     await assert.rejects(fault.send(['replace', '-f', '-'], { input: JSON.stringify(next) }));
     assert.equal(fault.state.conflictObserved, false);
     assert.equal(fault.state.injected, mode === 'unavailable');
-    assert.equal(replacements, mode === 'foreign' ? 0 : mode === 'unavailable' ? 2 : 1,
-      'unknown writes and foreign journal state are never retried');
+    assert.equal(
+      replacements,
+      mode === 'foreign' ? 0 : mode === 'unavailable' ? 2 : 1,
+      'unknown writes and foreign journal state are never retried',
+    );
   }
 });
 
@@ -136,10 +198,15 @@ test('lost-acknowledgement probe sends the accepted begin once and does not modi
 
 test('an unacknowledged begin cannot arm the lease-loss fault during runner cleanup', async () => {
   const f = recoveryCasFixture();
-  const fault = createHaRecoveryFaultTransport('leaseLoss', async (args, extra) => {
-    if (args[0] === 'exec') throw Error('begin outcome unknown');
-    return f.kube(args, extra);
-  }, f.journal, 'journal');
+  const fault = createHaRecoveryFaultTransport(
+    'leaseLoss',
+    async (args, extra) => {
+      if (args[0] === 'exec') throw Error('begin outcome unknown');
+      return f.kube(args, extra);
+    },
+    f.journal,
+    'journal',
+  );
   await assert.rejects(fault.send(['exec', 'owner-0', '--begin-only']), /begin outcome unknown/);
   await fault.send(['replace', '-f', '-'], { input: JSON.stringify(await f.journal()) });
   assert.equal(fault.state.beginAccepted, false);
@@ -153,18 +220,34 @@ test('retained browser waits for all old sockets to close and all replacement se
   const originals = [first, second];
   const replacement = { closed: false, ready: false, resumed: false };
   const sockets = new Set([first, second]);
-  assert.equal(hasHaBrowserReadyTransport(sockets.values(), originals), false, 'removed pods can still leave half-open browser sockets');
-  first.closed = true; sockets.delete(first); sockets.add(replacement);
-  replacement.ready = true; replacement.resumed = true;
-  assert.equal(hasHaBrowserReadyTransport(sockets, originals), false, 'another browser socket has not noticed the lost proxy');
-  second.closed = true; sockets.delete(second);
+  assert.equal(
+    hasHaBrowserReadyTransport(sockets.values(), originals),
+    false,
+    'removed pods can still leave half-open browser sockets',
+  );
+  first.closed = true;
+  sockets.delete(first);
+  sockets.add(replacement);
+  replacement.ready = true;
+  replacement.resumed = true;
+  assert.equal(
+    hasHaBrowserReadyTransport(sockets, originals),
+    false,
+    'another browser socket has not noticed the lost proxy',
+  );
+  second.closed = true;
+  sockets.delete(second);
   const replaying = { closed: false, ready: false, resumed: true };
   sockets.add(replaying);
   assert.equal(hasHaBrowserReadyTransport(sockets, originals), false, 'TCP open is not ordered session readiness');
   replaying.ready = true;
   assert.equal(hasHaBrowserReadyTransport(sockets, originals), true);
   replaying.resumed = false;
-  assert.equal(hasHaBrowserReadyTransport(sockets, originals), false, 'a new unrelated session cannot replace an accepted run');
+  assert.equal(
+    hasHaBrowserReadyTransport(sockets, originals),
+    false,
+    'a new unrelated session cannot replace an accepted run',
+  );
   assert.equal(hasHaBrowserReadyTransport([], originals), false);
 });
 
@@ -173,51 +256,76 @@ test('external gateway with only web replacement can retain a healthy unchanged 
   assert.equal(hasHaBrowserReadyTransport([socket]), true);
   socket.ready = false;
   assert.equal(hasHaBrowserReadyTransport([socket]), false);
-  socket.ready = true; socket.closed = true;
+  socket.ready = true;
+  socket.closed = true;
   assert.equal(hasHaBrowserReadyTransport([socket]), false);
   assert.equal(hasHaBrowserReadyTransport([]), false);
 });
 
-test('local test edge bounds stale WebSockets without changing the long HTTP observation timeout', async t => {
+test('local test edge bounds stale WebSockets without changing the long HTTP observation timeout', async (t) => {
   let resources;
   t.mock.method(ManagedReleaseGate.prototype, 'openProxy', async function (target) {
     assert.equal(target, 'service/proof-ha-edge-v2');
     return 'http://test-edge';
   });
-  const gate = new HaReleaseGate({ release: 'proof', namespace: 'fixture', images: {
-    proxy: { repository: 'fixture/proxy', digest: `sha256:${'a'.repeat(64)}` },
-  } }, 'unused', 'unused');
+  const gate = new HaReleaseGate(
+    {
+      release: 'proof',
+      namespace: 'fixture',
+      images: {
+        proxy: { repository: 'fixture/proxy', digest: `sha256:${'a'.repeat(64)}` },
+      },
+    },
+    'unused',
+    'unused',
+  );
   gate.kubectl = async (args, options) => {
     if (args.includes('apply')) resources = JSON.parse(options.input).items;
     return { stdout: '' };
   };
   assert.equal(await gate.openProxy(), 'http://test-edge');
-  const config = resources.find(resource => resource.kind === 'ConfigMap').data['nginx.conf'];
-  assert.equal(resources.find(resource => resource.kind === 'Pod').metadata.name, 'proof-ha-edge-v2');
+  const config = resources.find((resource) => resource.kind === 'ConfigMap').data['nginx.conf'];
+  assert.equal(resources.find((resource) => resource.kind === 'Pod').metadata.name, 'proof-ha-edge-v2');
   assert.match(config, /location \/ws\/ \{[^}]*proxy_read_timeout 45s;/);
   assert.match(config, /location \/ \{[^}]*proxy_read_timeout 600s;/);
-  assert.equal(resources.find(resource => resource.kind === 'Pod').metadata.labels['app.kubernetes.io/instance'], undefined);
+  assert.equal(
+    resources.find((resource) => resource.kind === 'Pod').metadata.labels['app.kubernetes.io/instance'],
+    undefined,
+  );
 });
 
 test('HA traffic stop includes a late in-flight failure without retrying or retaining secrets', async () => {
-  let rejectRequest, calls = 0, phase = 'leaseLoss:injecting';
-  const gate = { requestWorkflow: (url, route, options) => {
-    calls++;
-    assert.equal(url, 'https://staging.example.test');
-    assert.equal(route, '/workflows/managed-release-workflow');
-    assert.equal(options.timeoutMs, 15_000);
-    assert.match(options.headers['x-rivet-ha-probe-id'], /^[a-f0-9-]{36}$/);
-    return new Promise((_resolve, reject) => { rejectRequest = reject; });
-  } };
+  let rejectRequest,
+    calls = 0,
+    phase = 'leaseLoss:injecting';
+  const gate = {
+    requestWorkflow: (url, route, options) => {
+      calls++;
+      assert.equal(url, 'https://staging.example.test');
+      assert.equal(route, '/workflows/managed-release-workflow');
+      assert.equal(options.timeoutMs, 15_000);
+      assert.match(options.headers['x-rivet-ha-probe-id'], /^[a-f0-9-]{36}$/);
+      return new Promise((_resolve, reject) => {
+        rejectRequest = reject;
+      });
+    },
+  };
   const traffic = startHaWorkflowTraffic(gate, 'https://staging.example.test', () => phase);
   let settled = false;
-  const stop = traffic.stop().then(report => { settled = true; return report; });
+  const stop = traffic.stop().then((report) => {
+    settled = true;
+    return report;
+  });
   await Promise.resolve();
   assert.equal(settled, false, 'shutdown waits for the actual request');
   phase = 'leaseLoss:settling';
-  rejectRequest(Object.assign(Error('secret response body'), {
-    name: 'TimeoutError', cause: { code: 'UND_ERR_SOCKET', token: 'secret-key' }, status: 504,
-  }));
+  rejectRequest(
+    Object.assign(Error('secret response body'), {
+      name: 'TimeoutError',
+      cause: { code: 'UND_ERR_SOCKET', token: 'secret-key' },
+      status: 504,
+    }),
+  );
   const report = await stop;
   assert.equal(calls, 1, 'failed POST is never replayed');
   assert.equal(report.samples, 0);
@@ -236,8 +344,15 @@ test('HA traffic stop includes a late in-flight failure without retrying or reta
 test('HA traffic counts successful terminal requests and rejects empty execution responses', async () => {
   for (const result of [{ outputs: {} }, null]) {
     let resolveRequest;
-    const traffic = startHaWorkflowTraffic({ requestWorkflow: () => new Promise(resolve => { resolveRequest = resolve; }) },
-      'https://staging.example.test');
+    const traffic = startHaWorkflowTraffic(
+      {
+        requestWorkflow: () =>
+          new Promise((resolve) => {
+            resolveRequest = resolve;
+          }),
+      },
+      'https://staging.example.test',
+    );
     const stop = traffic.stop();
     resolveRequest(result);
     const report = await stop;
@@ -250,9 +365,13 @@ test('HA traffic counts successful terminal requests and rejects empty execution
 test('each disposable HA proof changes both frontend templates even when images are unchanged', () => {
   const base = {
     images: { web: { repository: 'registry/web', digest: `sha256:${'a'.repeat(64)}` } },
-    podAnnotations: { web: { 'operator/web': 'keep' }, proxy: { 'operator/proxy': 'keep' },
-      backend: { 'operator/backend': 'keep' }, execution: { 'operator/execution': 'keep' },
-      evaluation: { 'operator/evaluation': 'keep' } },
+    podAnnotations: {
+      web: { 'operator/web': 'keep' },
+      proxy: { 'operator/proxy': 'keep' },
+      backend: { 'operator/backend': 'keep' },
+      execution: { 'operator/execution': 'keep' },
+      evaluation: { 'operator/evaluation': 'keep' },
+    },
   };
   const snapshot = structuredClone(base);
   const first = withHaProofGeneration(base);
@@ -262,51 +381,103 @@ test('each disposable HA proof changes both frontend templates even when images 
   for (const role of ['web', 'proxy', 'backend', 'execution']) {
     assert.equal(first.podAnnotations[role][`operator/${role}`], 'keep');
     assert.match(first.podAnnotations[role]['rivet.dev/ha-proof-generation'], /^[a-f0-9-]{36}$/);
-    assert.notEqual(first.podAnnotations[role]['rivet.dev/ha-proof-generation'], second.podAnnotations[role]['rivet.dev/ha-proof-generation']);
+    assert.notEqual(
+      first.podAnnotations[role]['rivet.dev/ha-proof-generation'],
+      second.podAnnotations[role]['rivet.dev/ha-proof-generation'],
+    );
   }
   assert.deepEqual(first.podAnnotations.evaluation, base.podAnnotations.evaluation);
 });
 
 test('rendered HA proof preserves endpoint withdrawal and the short shutdown challenge', async () => {
-  const images = Object.fromEntries(['api', 'web', 'proxy', 'executor'].map(role =>
-    [role, { repository: `registry/${role}`, digest: `sha256:${'a'.repeat(64)}` }]));
-  const gate = new HaReleaseGate({ images, release: 'ha-fixture', imagePullPolicy: 'IfNotPresent',
-    registry: { secretName: 'fixture-registry' }, managedWorkflowSchema: readManagedWorkflowSchemaReleaseContract(rootDir) }, 'unused', 'unused');
+  const images = Object.fromEntries(
+    ['api', 'web', 'proxy', 'executor'].map((role) => [
+      role,
+      { repository: `registry/${role}`, digest: `sha256:${'a'.repeat(64)}` },
+    ]),
+  );
+  const gate = new HaReleaseGate(
+    {
+      images,
+      release: 'ha-fixture',
+      imagePullPolicy: 'IfNotPresent',
+      registry: { secretName: 'fixture-registry' },
+      managedWorkflowSchema: readManagedWorkflowSchemaReleaseContract(rootDir),
+    },
+    'unused',
+    'unused',
+  );
   const values = gate.values();
   assert.deepEqual(values.lifecycle, {
-    preStopDelaySeconds: 5, terminationGracePeriodSeconds: 45,
+    preStopDelaySeconds: 5,
+    terminationGracePeriodSeconds: 45,
   });
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-ha-render-'));
   try {
     const file = path.join(dir, 'values.json');
     await fs.writeFile(file, JSON.stringify(values));
-    const rendered = execFileSync(resolveHelmBinOrThrow(rootDir), ['template', 'ha-fixture',
-      path.join(rootDir, 'deploy/studio-server/helm'), '-n', 'ha-fixture', '-f',
-      path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'), '-f', file], { encoding: 'utf8' });
-    const workloads = parseAllDocuments(rendered).map(doc => {
-      assert.equal(doc.errors.length, 0);
-      return doc.toJSON();
-    }).filter(value => ['Deployment', 'StatefulSet'].includes(value?.kind));
-    const proxy = workloads.find(value => value.metadata.labels['app.kubernetes.io/component'] === 'proxy');
-    assert.deepEqual(proxy.spec.template.spec.containers[0].lifecycle.preStop.exec.command, ['/bin/sh', '-c', 'sleep 5']);
+    const rendered = execFileSync(
+      resolveHelmBinOrThrow(rootDir),
+      [
+        'template',
+        'ha-fixture',
+        path.join(rootDir, 'deploy/studio-server/helm'),
+        '-n',
+        'ha-fixture',
+        '-f',
+        path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'),
+        '-f',
+        file,
+      ],
+      { encoding: 'utf8' },
+    );
+    const workloads = parseAllDocuments(rendered)
+      .map((doc) => {
+        assert.equal(doc.errors.length, 0);
+        return doc.toJSON();
+      })
+      .filter((value) => ['Deployment', 'StatefulSet'].includes(value?.kind));
+    const proxy = workloads.find((value) => value.metadata.labels['app.kubernetes.io/component'] === 'proxy');
+    assert.deepEqual(proxy.spec.template.spec.containers[0].lifecycle.preStop.exec.command, [
+      '/bin/sh',
+      '-c',
+      'sleep 5',
+    ]);
     for (const workload of workloads) assert.equal(workload.spec.template.spec.terminationGracePeriodSeconds, 45);
-    const backend = workloads.find(value => value.metadata.labels['app.kubernetes.io/component'] === 'backend');
-    const env = backend.spec.template.spec.containers.find(value => value.name === 'backend').env;
-    assert.equal(env.find(value => value.name === 'RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS').value, '15');
-    assert.equal(env.find(value => value.name === 'RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS').value, '25000');
-  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    const backend = workloads.find((value) => value.metadata.labels['app.kubernetes.io/component'] === 'backend');
+    const env = backend.spec.template.spec.containers.find((value) => value.name === 'backend').env;
+    assert.equal(env.find((value) => value.name === 'RIVET_DEPLOYMENT_SHUTDOWN_GRACE_SECONDS').value, '15');
+    assert.equal(env.find((value) => value.name === 'RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS').value, '25000');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('mixed HA baseline installs the predecessor exact schema without changing the candidate contract', async () => {
-  const images = Object.fromEntries(['api', 'web', 'proxy', 'executor'].map(role =>
-    [role, { repository: `registry/${role}`, digest: `sha256:${'a'.repeat(64)}` }]));
+  const images = Object.fromEntries(
+    ['api', 'web', 'proxy', 'executor'].map((role) => [
+      role,
+      { repository: `registry/${role}`, digest: `sha256:${'a'.repeat(64)}` },
+    ]),
+  );
   const candidateSchema = readManagedWorkflowSchemaReleaseContract(rootDir);
-  const previousSchema = { version: candidateSchema.version - 1, minimumRollbackCompatibleVersion: candidateSchema.version - 1 };
-  const previousImages = Object.fromEntries(Object.entries(images).map(([role, image]) =>
-    [role, { ...image, digest: `sha256:${'b'.repeat(64)}` }]));
+  const previousSchema = {
+    version: candidateSchema.version - 1,
+    minimumRollbackCompatibleVersion: candidateSchema.version - 1,
+  };
+  const previousImages = Object.fromEntries(
+    Object.entries(images).map(([role, image]) => [role, { ...image, digest: `sha256:${'b'.repeat(64)}` }]),
+  );
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-ha-baseline-'));
-  const config = { images, release: 'ha-fixture', namespace: 'ha-fixture', artifactsDir: dir,
-    imagePullPolicy: 'IfNotPresent', registry: { secretName: 'fixture-registry' }, managedWorkflowSchema: candidateSchema };
+  const config = {
+    images,
+    release: 'ha-fixture',
+    namespace: 'ha-fixture',
+    artifactsDir: dir,
+    imagePullPolicy: 'IfNotPresent',
+    registry: { secretName: 'fixture-registry' },
+    managedWorkflowSchema: candidateSchema,
+  };
   const gate = new HaReleaseGate(config, 'unused', 'unused');
   let baseline;
   gate.assertLocalContext = async () => {};
@@ -314,39 +485,72 @@ test('mixed HA baseline installs the predecessor exact schema without changing t
   gate.createNamespace = async () => {};
   gate.createRegistrySecret = async () => {};
   gate.installDependencies = async () => {};
-  gate.apply = async values => { baseline = values; };
+  gate.apply = async (values) => {
+    baseline = values;
+  };
   gate.openProxy = async () => 'http://fixture';
   gate.exercisePersistence = async () => ({});
   try {
     await gate.prepare(previousImages, previousSchema);
     assert.deepEqual(baseline.workflowSchema.compatibility, {
-      minimumVersion: previousSchema.version, maximumVersion: previousSchema.version,
+      minimumVersion: previousSchema.version,
+      maximumVersion: previousSchema.version,
     });
     assert.equal(baseline.images.api.digest, previousImages.api.digest);
     const file = path.join(dir, 'baseline.json');
     await fs.writeFile(file, JSON.stringify(baseline));
-    const rendered = execFileSync(resolveHelmBinOrThrow(rootDir), ['template', 'ha-fixture',
-      path.join(rootDir, 'deploy/studio-server/helm'), '-n', 'ha-fixture', '-f',
-      path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'), '-f', file], { encoding: 'utf8' });
-    const resources = parseAllDocuments(rendered).map(doc => doc.toJS());
-    const job = resources.find(value => value?.kind === 'Job' && value.metadata.name.endsWith('workflow-schema-migration'));
-    assert.match(job.spec.template.spec.containers[0].args.join(' '),
-      new RegExp(`RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="${previousSchema.version}" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="${previousSchema.version}"`));
-    assert.equal(job.spec.template.spec.containers[0].image, `${previousImages.api.repository}@${previousImages.api.digest}`);
+    const rendered = execFileSync(
+      resolveHelmBinOrThrow(rootDir),
+      [
+        'template',
+        'ha-fixture',
+        path.join(rootDir, 'deploy/studio-server/helm'),
+        '-n',
+        'ha-fixture',
+        '-f',
+        path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'),
+        '-f',
+        file,
+      ],
+      { encoding: 'utf8' },
+    );
+    const resources = parseAllDocuments(rendered).map((doc) => doc.toJS());
+    const job = resources.find(
+      (value) => value?.kind === 'Job' && value.metadata.name.endsWith('workflow-schema-migration'),
+    );
+    assert.match(
+      job.spec.template.spec.containers[0].args.join(' '),
+      new RegExp(
+        `RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION="${previousSchema.version}" RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION="${previousSchema.version}"`,
+      ),
+    );
+    assert.equal(
+      job.spec.template.spec.containers[0].image,
+      `${previousImages.api.repository}@${previousImages.api.digest}`,
+    );
     assert.deepEqual(gate.values().workflowSchema.compatibility, {
-      minimumVersion: candidateSchema.version, maximumVersion: candidateSchema.version,
+      minimumVersion: candidateSchema.version,
+      maximumVersion: candidateSchema.version,
     });
     assert.deepEqual(config.managedWorkflowSchema, candidateSchema);
     assert.deepEqual(config.images, images);
-  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('paused browser proof waits for actual old web and proxy UID removal, not readiness withdrawal', async () => {
-  const pod = (uid, component, extra = {}) => ({ metadata: { uid, labels: { 'app.kubernetes.io/component': component }, ...extra } });
+  const pod = (uid, component, extra = {}) => ({
+    metadata: { uid, labels: { 'app.kubernetes.io/component': component }, ...extra },
+  });
   const before = [pod('old-web', 'web'), pod('old-proxy', 'proxy'), pod('unchanged-owner', 'backend')];
-  const snapshots = [before, [pod('old-proxy', 'proxy', { deletionTimestamp: '2026-10-17T12:00:00Z' })],
-    [pod('new-web', 'web'), pod('new-proxy', 'proxy'), before[2]]];
-  let reads = 0, waits = 0;
+  const snapshots = [
+    before,
+    [pod('old-proxy', 'proxy', { deletionTimestamp: '2026-10-17T12:00:00Z' })],
+    [pod('new-web', 'web'), pod('new-proxy', 'proxy'), before[2]],
+  ];
+  let reads = 0,
+    waits = 0;
   const gate = {
     config: { namespace: 'rivet-staging-proof', release: 'rivet-staging-proof' },
     kubectl: async (args) => {
@@ -354,7 +558,9 @@ test('paused browser proof waits for actual old web and proxy UID removal, not r
       return { stdout: JSON.stringify({ items: snapshots[reads++] }) };
     },
   };
-  await waitForHaFrontendReplacement(gate, before, 30_000, async () => { waits++; });
+  await waitForHaFrontendReplacement(gate, before, 30_000, async () => {
+    waits++;
+  });
   assert.equal(reads, 3);
   assert.equal(waits, 2);
 });
@@ -364,9 +570,19 @@ test('frontend replacement observation times out without mutating or fabricating
   t.mock.method(Date, 'now', () => now);
   const before = [{ metadata: { uid: 'old-web', labels: { 'app.kubernetes.io/component': 'web' } } }];
   let reads = 0;
-  const gate = { config: { namespace: 'rivet-staging-proof', release: 'rivet-staging-proof' },
-    kubectl: async () => { reads++; return { stdout: JSON.stringify({ items: before }) }; } };
-  await assert.rejects(waitForHaFrontendReplacement(gate, before, 1000, async ms => { now += ms; }), /Original frontend pods remain/);
+  const gate = {
+    config: { namespace: 'rivet-staging-proof', release: 'rivet-staging-proof' },
+    kubectl: async () => {
+      reads++;
+      return { stdout: JSON.stringify({ items: before }) };
+    },
+  };
+  await assert.rejects(
+    waitForHaFrontendReplacement(gate, before, 1000, async (ms) => {
+      now += ms;
+    }),
+    /Original frontend pods remain/,
+  );
   assert.equal(reads, 2);
   await assert.rejects(waitForHaFrontendReplacement(gate, [], 1000));
   assert.equal(reads, 2);
@@ -374,29 +590,68 @@ test('frontend replacement observation times out without mutating or fabricating
 
 test('provider transport retries only read-only TLS handshakes, never uncertain mutations', async () => {
   const timeout = Error('Unable to connect to the server: net/http: TLS handshake timeout');
-  for (const args of [['get', 'pods'], ['-n', 'staging', '--request-timeout=30s', 'get', 'namespace'], ['config', 'view']]) {
+  for (const args of [
+    ['get', 'pods'],
+    ['-n', 'staging', '--request-timeout=30s', 'get', 'namespace'],
+    ['config', 'view'],
+  ]) {
     let calls = 0;
     const waits = [];
-    assert.equal(await withProviderReadRetry(args, async () => {
-      if (++calls < 3) throw timeout;
-      return 'fresh observation';
-    }, async ms => { waits.push(ms); }), 'fresh observation');
+    assert.equal(
+      await withProviderReadRetry(
+        args,
+        async () => {
+          if (++calls < 3) throw timeout;
+          return 'fresh observation';
+        },
+        async (ms) => {
+          waits.push(ms);
+        },
+      ),
+      'fresh observation',
+    );
     assert.equal(calls, 3);
     assert.deepEqual(waits, [1000, 2000]);
   }
-  for (const args of [['exec', 'pod', '--', 'retire'], ['scale', 'statefulset/owner'], ['replace', '-f', '-'],
-    ['delete', '--raw', '/pod'], ['create', '-f', '-'], ['apply', '-f', '-'], ['config', 'set-context', 'get'],
-    ['--unknown-option', 'get', 'pods']]) {
+  for (const args of [
+    ['exec', 'pod', '--', 'retire'],
+    ['scale', 'statefulset/owner'],
+    ['replace', '-f', '-'],
+    ['delete', '--raw', '/pod'],
+    ['create', '-f', '-'],
+    ['apply', '-f', '-'],
+    ['config', 'set-context', 'get'],
+    ['--unknown-option', 'get', 'pods'],
+  ]) {
     let calls = 0;
-    await assert.rejects(withProviderReadRetry(args, async () => { calls++; throw timeout; }, async () => {
-      throw Error('must not wait before replaying a mutation');
-    }), error => error === timeout);
+    await assert.rejects(
+      withProviderReadRetry(
+        args,
+        async () => {
+          calls++;
+          throw timeout;
+        },
+        async () => {
+          throw Error('must not wait before replaying a mutation');
+        },
+      ),
+      (error) => error === timeout,
+    );
     assert.equal(calls, 1);
   }
   for (const error of [timeout, Error('Forbidden'), Error('namespace identity changed')]) {
     let calls = 0;
-    await assert.rejects(withProviderReadRetry(['get', 'pods'], async () => { calls++; throw error; }, async () => {}),
-      caught => caught === error);
+    await assert.rejects(
+      withProviderReadRetry(
+        ['get', 'pods'],
+        async () => {
+          calls++;
+          throw error;
+        },
+        async () => {},
+      ),
+      (caught) => caught === error,
+    );
     assert.equal(calls, error === timeout ? 3 : 1);
   }
 });
@@ -417,8 +672,10 @@ test('cross-owner notification fixture authenticates its streams and mutations a
   let library = { migratedLegacyProjectIds: [] };
   let authenticated = 0;
   const server = createServer(async (req, res) => {
-    if (req.headers['x-rivet-proxy-auth'] !== hash('proxy-auth') ||
-        req.headers.cookie !== `rivet_ui_token=${hash('ui-session')}`) {
+    if (
+      req.headers['x-rivet-proxy-auth'] !== hash('proxy-auth') ||
+      req.headers.cookie !== `rivet_ui_token=${hash('ui-session')}`
+    ) {
       res.writeHead(403).end();
       return;
     }
@@ -451,17 +708,27 @@ test('cross-owner notification fixture authenticates its streams and mutations a
   });
   await new Promise((resolve) => server.listen(0, resolve));
   try {
-    const child = spawn(process.execPath, [
-      path.join(rootDir, 'deploy/studio-server/scripts/fixtures/ha-notification-probe.mjs'), 'localhost',
-    ], {
-      env: { ...process.env, PORT: String(server.address().port), RIVET_KEY: key, RIVET_HA_HEADLESS_SERVICE: '' },
-      windowsHide: true,
-      timeout: 20_000,
+    const child = spawn(
+      process.execPath,
+      [path.join(rootDir, 'deploy/studio-server/scripts/fixtures/ha-notification-probe.mjs'), 'localhost'],
+      {
+        env: { ...process.env, PORT: String(server.address().port), RIVET_KEY: key, RIVET_HA_HEADLESS_SERVICE: '' },
+        windowsHide: true,
+        timeout: 20_000,
+      },
+    );
+    let stdout = '',
+      stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
     });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    const code = await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', resolve);
+    });
     assert.equal(code, 0, stderr);
     assert.equal(JSON.parse(stdout).directions.length, 2);
     assert.equal(authenticated, 14);
@@ -631,10 +898,14 @@ test('provider expiry during a read retry or identity check still fences the nex
   t.mock.method(Date, 'now', () => now);
   gate.assertContext = async () => {};
   gate.kubectl = async (args) => {
-    if (args[0] === 'config') return { stdout: JSON.stringify({ clusters: [{ cluster: { server: gate.identity.clusterServer } }] }) };
+    if (args[0] === 'config')
+      return { stdout: JSON.stringify({ clusters: [{ cluster: { server: gate.identity.clusterServer } }] }) };
     now = expiry;
-    return { stdout: JSON.stringify({ metadata: { uid: gate.identity.namespaceUid,
-      labels: { 'rivet.dev/ha-rehearsal': gate.identity.operation } } }) };
+    return {
+      stdout: JSON.stringify({
+        metadata: { uid: gate.identity.namespaceUid, labels: { 'rivet.dev/ha-rehearsal': gate.identity.operation } },
+      }),
+    };
   };
   await assert.rejects(gate.assertProofContext(), /expired during identity checks/);
 });

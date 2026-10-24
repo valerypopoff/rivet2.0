@@ -8,6 +8,9 @@ contracts, or source layout. User-facing docs live under `packages/docs/docs`.
 For a behavior-preserving refactor, start with the
 [Refactor Baseline And Verification](./REFACTOR-BASELINE.md). It maps ownership,
 observable invariants, regression suites, manual scenarios, and evidence limits.
+For the 2026-10-24 editor execution-routing consolidation specifically, use the
+[current functional baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md) before
+the [proposed plan](./studio-server/execution-routing-refactoring-plan.md).
 For the current editor, Evaluation workspace and Core execution-state owners,
 use [Execution And Evaluation Ownership](./EXECUTION-REFACTOR-ACCEPTANCE.md).
 Its inheritance matrix describes implemented boundaries, not a proposal to move
@@ -31,6 +34,7 @@ it is not a certificate that all current runtime/deployment gates passed.
 - [Monaco And Editor Surfaces](./MONACO-EDITOR-SURFACES.md)
 - [Canvas Interactions](./CANVAS-INTERACTIONS.md)
 - [Execution Identity And Snapshots](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md)
+- [Execution Routing: Pre-refactor Functional Baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md)
 - [Run Activity](./RUN-ACTIVITY.md)
 - [Hosted And Web App Contracts](./HOSTED-WEB-APP-CONTRACTS.md)
 - [Provider-neutral Knowledge Source API](./KNOWLEDGE-SOURCE-API.md)

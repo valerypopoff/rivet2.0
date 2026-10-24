@@ -2,13 +2,38 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseAllDocuments } from 'yaml';
-import { assertHaUpgradeEvidence, assertRuntimeControlEvidence, assertRuntimeAutoscalingEvidence } from './lib/ha-release-evidence.mjs';
+import {
+  assertHaUpgradeEvidence,
+  assertRuntimeControlEvidence,
+  assertCooperativeAutoscalingEvidence,
+} from './lib/ha-release-evidence.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
-import { runHaKubernetesRollout, haFrozenAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
+import { runHaKubernetesRollout, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
 import { releaseOperationJournalName, journalForReleaseOperation } from './lib/release-operation-journal.mjs';
+import {
+  readMaintenancePlan,
+  assertMaintenanceBaseline,
+  captureMaintenanceCheckpoint,
+} from './lib/maintenance-deployment-plan.mjs';
+import {
+  waitForReleaseSettlement,
+  waitForExecutionAutoscalerActivation,
+} from './lib/kubernetes-release-settlement.mjs';
+import { createMaintenanceValidationValues, getMaintenanceValidationTargets } from './lib/maintenance-validation.mjs';
+import { readDeploymentPolicy, runDeploymentStage, executeDeploymentWorkflow } from './lib/deployment-workflow.mjs';
+import { planInstalledUpgrade } from './lib/installed-upgrade-plan.mjs';
+import { preserveDeploymentFailure } from './lib/deployment-operation.mjs';
+import {
+  createDeploymentSafety,
+  deploymentRecoveryIdentity,
+  assertDeploymentBaseline,
+  retainedTopologyExecution,
+} from './lib/deployment-safety.mjs';
+import { randomUUID } from 'node:crypto';
 import { parseEnvFile } from './lib/env.mjs';
 import { singleMachineConfig, singleMachineValues, prepareSingleMachine } from './lib/single-machine-kubernetes.mjs';
 import { productionEnvironment, prepareProductionSecrets } from './lib/server-launch-mode.mjs';
@@ -48,6 +73,10 @@ const supportedOptions = new Set([
   '--timeout',
   '--artifacts',
   '--maintenance-cutover',
+  '--maintenance-plan',
+  '--deployment-policy',
+  '--plan-only',
+  '--acceptance-only',
   '--resume-cutover',
   '--single-machine',
   '--env-file',
@@ -70,7 +99,14 @@ export function parseArgs(argv) {
     if (options.has(key)) {
       throw new Error(`${key} may only be supplied once`);
     }
-    if (key === '--dry-run' || key === '--maintenance-cutover' || key === '--single-machine' || key === '--ha-control-plane-transition') {
+    if (
+      key === '--dry-run' ||
+      key === '--plan-only' ||
+      key === '--acceptance-only' ||
+      key === '--maintenance-cutover' ||
+      key === '--single-machine' ||
+      key === '--ha-control-plane-transition'
+    ) {
       options.set(key, true);
       continue;
     }
@@ -99,11 +135,16 @@ function dnsLabel(value, name) {
   return value;
 }
 
-function duration(value) {
-  if (!/^\d+(s|m|h)$/u.test(value)) {
-    throw new Error('--timeout must be a Helm duration such as 10m or 1h');
-  }
-  return value;
+export function parseDeploymentTimeout(value) {
+  const match = typeof value === 'string' && /^(\d+)(s|m|h)$/u.exec(value);
+  const timeoutMs = match ? Number(match[1]) * { s: 1000, m: 60000, h: 3600000 }[match[2]] : NaN;
+  // The same duration reaches Helm, observation loops and the backup timer.
+  // Node timers overflow beyond this bound and otherwise fire almost at once.
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647)
+    throw new Error(
+      '--timeout must be a positive whole-second duration such as 10m or 1h, within the supported timer range.',
+    );
+  return { timeout: value, timeoutMs };
 }
 
 function insideRepository(candidate, name) {
@@ -233,8 +274,8 @@ let selectedKubectl;
 let selectedHelm;
 
 async function writeArtifact(artifactsDir, fileName, contents) {
-  await fs.mkdir(artifactsDir, { recursive: true });
-  await fs.writeFile(path.join(artifactsDir, fileName), contents, 'utf8');
+  await fs.mkdir(artifactsDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(artifactsDir, fileName), contents, { encoding: 'utf8', mode: 0o600 });
 }
 
 /** Release selection is a preflight-only boundary: it has no cluster mutation capabilities. */
@@ -351,6 +392,18 @@ async function main() {
       '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
     );
   const singleMachine = options.get('--single-machine') === true;
+  const { timeout, timeoutMs } = parseDeploymentTimeout(options.get('--timeout') ?? '15m');
+  if (
+    options.has('--maintenance-plan') &&
+    (!(options.has('--maintenance-cutover') || options.has('--resume-cutover')) ||
+      singleMachine ||
+      options.has('--rollback-to') ||
+      options.has('--ha-control-plane-transition') ||
+      options.has('--resume-ha'))
+  )
+    throw new Error(
+      '--maintenance-plan requires an explicit maintenance cutover/recovery, not single-machine, rollback or rolling transfer.',
+    );
   if (options.has('--env-file') && options.has('--values'))
     throw new Error('Use either --env-file or --values, not both.');
   if (singleMachine && options.has('--values')) throw new Error('--single-machine uses --env-file, not --values.');
@@ -360,21 +413,22 @@ async function main() {
     : insideRepository(required(options, '--values'), '--values');
   if (options.has('--env-file') && !(await fs.lstat(valuesPath)).isFile())
     throw new Error('--env-file must be a regular file, not a symlink.');
-  const localConfig = singleMachine
-    ? singleMachineConfig(parseEnvFile(valuesPath), { release, namespace, context: selectedContext })
-    : null;
-  const productionConfig =
-    !singleMachine && options.has('--env-file')
-      ? productionEnvironment(parseEnvFile(valuesPath), { release, namespace, context: selectedContext })
-      : null;
+  // Every lint/template/upgrade must consume the same settings bytes, even if an
+  // operator edits the input while the release is waiting for a drain.
+  const operatorValues = await fs.readFile(valuesPath);
+  const valuesDigest = `sha256:${createHash('sha256').update(operatorValues).digest('hex')}`;
   const dryRun = options.get('--dry-run') === true;
-  const timeout = duration(options.get('--timeout') ?? '15m');
   const artifactsDir = insideRepository(
     options.get('--artifacts') ?? `artifacts/kubernetes-production-release/${release}`,
     '--artifacts',
   );
 
-  if (!dryRun && required(options, '--confirm') !== release) {
+  if (
+    !dryRun &&
+    !options.has('--plan-only') &&
+    !options.has('--acceptance-only') &&
+    required(options, '--confirm') !== release
+  ) {
     throw new Error(`--confirm must equal the release name (${release}) before a cluster upgrade is allowed`);
   }
 
@@ -385,15 +439,45 @@ async function main() {
     options,
     artifactsDir,
   );
+  const candidateDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+  const deploymentPolicy = options.has('--deployment-policy')
+    ? await readDeploymentPolicy(required(options, '--deployment-policy'), rootDir, {
+        release,
+        namespace,
+        context: selectedContext,
+      })
+    : null;
+  const maintenance = options.has('--maintenance-plan')
+    ? await readMaintenancePlan(required(options, '--maintenance-plan'), rootDir, {
+        release,
+        namespace,
+        context: selectedContext,
+        candidateDigest,
+        valuesDigest,
+        allowExpiredForRecovery: options.has('--resume-cutover'),
+      })
+    : null;
   let generatedValuesDir;
   try {
     generatedValuesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-production-release-'));
+    const frozenInput = path.join(
+      generatedValuesDir,
+      options.has('--env-file') ? 'operator.env' : 'operator-values.yaml',
+    );
+    await fs.writeFile(frozenInput, operatorValues, { mode: 0o600 });
+    const localConfig = singleMachine
+      ? singleMachineConfig(parseEnvFile(frozenInput), { release, namespace, context: selectedContext })
+      : null;
+    const productionConfig =
+      !singleMachine && options.has('--env-file')
+        ? productionEnvironment(parseEnvFile(frozenInput), { release, namespace, context: selectedContext })
+        : null;
     const generatedValuesPath = path.join(generatedValuesDir, 'immutable-release-values.json');
     await fs.writeFile(generatedValuesPath, `${JSON.stringify(generatedValues, null, 2)}\n`, 'utf8');
 
     const helmBin = resolveHelmBinOrThrow(rootDir, { env: process.env, launcherName: runnerName });
     selectedHelm = helmBin;
-    let effectiveValuesPath = valuesPath;
+    let effectiveValuesPath = frozenInput;
     if (localConfig) {
       effectiveValuesPath = path.join(generatedValuesDir, 'single-machine.yaml');
       await fs.writeFile(effectiveValuesPath, singleMachineValues(localConfig), { mode: 0o600 });
@@ -421,38 +505,111 @@ async function main() {
       timeout,
     });
     await writeArtifact(artifactsDir, 'operation.json', `${JSON.stringify(record, null, 2)}\n`);
+    if (maintenance)
+      await writeArtifact(
+        artifactsDir,
+        'maintenance-plan-binding.json',
+        JSON.stringify({
+          formatVersion: 1,
+          operationPlanDigest: maintenance.digest,
+          qualification: 'waived',
+          zeroDowntimeClaimed: false,
+          baselineManifestDigest: maintenance.plan.installedManifestDigest,
+          candidateDigest,
+        }),
+      );
     await writeArtifact(artifactsDir, 'immutable-release-values.json', `${JSON.stringify(generatedValues, null, 2)}\n`);
     await run(helmBin, ['lint', chartPath, ...valueArgs]);
     const rendered = await run(helmBin, ['template', release, chartPath, '--namespace', namespace, ...valueArgs], {
       capture: true,
     });
     await writeArtifact(artifactsDir, 'rendered.yaml', rendered.stdout);
-    const renderedResources = parseAllDocuments(rendered.stdout).map(document => {
-      if (document.errors.length) throw document.errors[0];
-      return document.toJSON();
-    }).filter(Boolean);
-    const haRequested = renderedResources.some(resource => resource.kind === 'StatefulSet' &&
-      resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' && resource.spec.updateStrategy.type === 'OnDelete');
-    const singletonControlRequested = renderedResources.some(resource => resource.kind === 'StatefulSet' &&
-      resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' &&
-      resource.spec.template.spec.containers.some(c => c.env?.some(e => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton')));
-    const edgeProfile = renderedResources.find(resource => resource.kind === 'Deployment' &&
-      resource.metadata.labels?.['app.kubernetes.io/component'] === 'proxy')
-      ?.metadata.annotations?.['rivet.studio/gke-edge-profile'] ?? 'regional';
-    if (singletonControlRequested || options.has('--ha-control-plane-transition') || edgeProfile === 'compact')
-      assertRuntimeControlEvidence(manifest.evidence.runtimeControl, manifest, edgeProfile);
+    const renderedResources = parseAllDocuments(rendered.stdout)
+      .map((document) => {
+        if (document.errors.length) throw document.errors[0];
+        return document.toJSON();
+      })
+      .filter(Boolean);
+    const haRequested = renderedResources.some(
+      (resource) =>
+        resource.kind === 'StatefulSet' &&
+        resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' &&
+        resource.spec.updateStrategy.type === 'OnDelete',
+    );
+    const singletonControlRequested = renderedResources.some(
+      (resource) =>
+        resource.kind === 'StatefulSet' &&
+        resource.metadata.labels?.['app.kubernetes.io/component'] === 'backend' &&
+        resource.spec.template.spec.containers.some((c) =>
+          c.env?.some(
+            (e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && ['singleton', 'singleton-overlap'].includes(e.value),
+          ),
+        ),
+    );
+    const edgeProfile =
+      renderedResources.find(
+        (resource) =>
+          resource.kind === 'Deployment' && resource.metadata.labels?.['app.kubernetes.io/component'] === 'proxy',
+      )?.metadata.annotations?.['rivet.studio/gke-edge-profile'] ?? 'regional';
+    if (
+      !maintenance &&
+      !options.has('--plan-only') &&
+      (singletonControlRequested || options.has('--ha-control-plane-transition') || edgeProfile === 'compact')
+    )
+      assertRuntimeControlEvidence(
+        manifest.evidence.runtimeControl,
+        manifest,
+        edgeProfile,
+        renderedResources.some(
+          (r) =>
+            r.kind === 'StatefulSet' &&
+            r.spec.template.spec.containers.some((c) =>
+              c.env?.some((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton-overlap'),
+            ),
+        ),
+      );
     if (haRequested && rollbackManifestPath)
-      throw new Error('HA reverse-image replacement is not certified by a forward mixed-version certificate. Repair forward; no automatic image/schema rollback was attempted.');
-    if (haRequested) assertHaUpgradeEvidence(manifest, null);
-    const autoscalerResource = renderedResources.find(r => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler');
+      throw new Error(
+        'HA reverse-image replacement is not certified by a forward mixed-version certificate. Repair forward; no automatic image/schema rollback was attempted.',
+      );
+    if (haRequested && !maintenance && !options.has('--plan-only')) assertHaUpgradeEvidence(manifest, null);
+    const autoscalerResource = renderedResources.find(
+      (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler',
+    );
+    let deploymentAutoscalingPolicyDigest;
     if (autoscalerResource) {
-      if (options.has('--ha-control-plane-transition')) throw new Error('Disable automatic execution scaling in a separate settled release before changing control topology.');
-      const config = JSON.parse(autoscalerResource.spec.template.spec.containers[0].env.find(e => e.name === 'RIVET_AUTOSCALER_CONFIG').value);
-      assertRuntimeAutoscalingEvidence(manifest.evidence.runtimeAutoscaling, manifest, autoscalerPolicyDigest(config.policy));
+      if (options.has('--ha-control-plane-transition'))
+        throw new Error(
+          'Disable automatic execution scaling in a separate settled release before changing control topology.',
+        );
+      const config = JSON.parse(
+        autoscalerResource.spec.template.spec.containers[0].env.find((e) => e.name === 'RIVET_AUTOSCALER_CONFIG').value,
+      );
+      deploymentAutoscalingPolicyDigest = autoscalerPolicyDigest(config.policy);
+      if (!maintenance && !options.has('--plan-only'))
+        assertCooperativeAutoscalingEvidence(
+          manifest.evidence.runtimeAutoscaling,
+          manifest,
+          autoscalerPolicyDigest(config.policy),
+        );
+      if (
+        !options.has('--plan-only') &&
+        renderedResources.some(
+          (r) =>
+            r.kind === 'HorizontalPodAutoscaler' &&
+            r.metadata.labels?.['app.kubernetes.io/component'] === 'proxy' &&
+            r.spec.behavior?.scaleDown?.selectPolicy === 'Disabled',
+        )
+      )
+        throw Error(
+          'Final installation values must restore proxy scale-down; scaleDownPaused is an upgrade-only overlay.',
+        );
     }
 
     if (dryRun) {
-      console.log(`[${runnerName}] Preflight passed. No cluster state was changed.`);
+      console.log(
+        `[${runnerName}] Offline render preflight passed. Live ownership, installed baseline, recovery backup and capacity have not been checked. No cluster state was changed.`,
+      );
       return;
     }
 
@@ -462,7 +619,7 @@ async function main() {
     await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
     const installedResult = await run(
       helmBin,
-      ['list', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
+      ['list', '--all', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
       { capture: true },
     );
     const exists = JSON.parse(installedResult.stdout).length > 0;
@@ -497,15 +654,177 @@ async function main() {
     const sharedJournal = journalResource
       ? { ...JSON.parse(journalResource.data.record), resourceVersion: journalResource.metadata.resourceVersion }
       : null;
-    const operationKind = haRequested && !options.has('--maintenance-cutover') && !options.has('--resume-cutover') ? 'ha' : 'cutover';
+    const operationKind =
+      haRequested && !options.has('--maintenance-cutover') && !options.has('--resume-cutover') ? 'ha' : 'cutover';
     const pendingJournal = journalForReleaseOperation(sharedJournal, operationKind, { release, namespace });
     if (operationKind === 'cutover') {
       assertCutoverJournal(pendingJournal, { release, namespace });
       if (!options.has('--resume-cutover')) assertOrdinaryReleaseAllowed(pendingJournal, { release, namespace });
     }
     const installedDigest = installed?.release?.production?.manifestDigest;
-    const candidateDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+    let workflowContext;
     if (
+      !maintenance &&
+      exists &&
+      (deploymentPolicy ||
+        options.has('--plan-only') ||
+        (installedDigest &&
+          installedDigest !== candidateDigest &&
+          installedDigest !== manifest.lineage?.predecessor?.manifestDigest))
+    ) {
+      const plan = await planInstalledUpgrade({
+        candidate: manifest,
+        installed,
+        haRequested,
+        autoscalingPolicyDigest: deploymentAutoscalingPolicyDigest,
+        fetchManifest: async (digest) => {
+          const output = path.join(artifactsDir, `predecessor-${digest.slice(7)}.json`);
+          await pullReleaseManifestArtifact(
+            PRODUCTION_RELEASE_MANIFEST_REFERENCE.replace(/:production$/, `:manifest-${digest.slice(7)}`),
+            output,
+          );
+          return readManifest(output, { requirePromoted: true });
+        },
+      });
+      await writeArtifact(artifactsDir, 'upgrade-plan.json', JSON.stringify(plan, null, 2));
+      if (options.has('--plan-only')) {
+        console.log(
+          `[${runnerName}] Installed-version plan: ${plan.status}; ${plan.steps.length} qualified hop(s). Inspect ${path.relative(rootDir, artifactsDir)}/upgrade-plan.json.`,
+        );
+        return;
+      }
+      if (!maintenance && (!['qualified-route', 'already-installed'].includes(plan.status) || plan.steps.length > 1))
+        throw Error(
+          'The installed version needs a qualified multi-hop route. Review upgrade-plan.json and use each pinned source/chart in order; no workloads were changed.',
+        );
+    }
+    if (options.has('--plan-only')) throw Error('An installed release is required for --plan-only.');
+    if (exists && !singleMachine && !deploymentPolicy)
+      throw Error(
+        'Production upgrades require --deployment-policy with reviewed recovery and application acceptance adapters. Run --plan-only to inspect the version route first.',
+      );
+    if (deploymentPolicy && exists) {
+      const ns = JSON.parse(
+        (await run(kubectl, ['get', 'namespace', namespace, '--request-timeout=30s', '-o', 'json'], { capture: true }))
+          .stdout,
+      );
+      const recovery = deploymentRecoveryIdentity(pendingJournal, {
+        resumeToken: options.get('--resume-ha') ?? options.get('--resume-cutover'),
+        policyDigest: deploymentPolicy.digest,
+        valuesDigest,
+      });
+      workflowContext = {
+        operationId: recovery?.operationId ?? randomUUID(),
+        recovering: Boolean(recovery),
+        release,
+        namespace,
+        context: selectedContext,
+        namespaceUid: ns.metadata.uid,
+        installedManifestDigest: recovery?.installedManifestDigest ?? installedDigest,
+        candidateManifestDigest: candidateDigest,
+        valuesDigest,
+      };
+      if (ns.metadata.uid !== deploymentPolicy.policy.namespaceUid)
+        throw Error('Deployment policy namespace identity changed.');
+    }
+    if (options.has('--acceptance-only')) {
+      if (
+        !workflowContext ||
+        installedDigest !== candidateDigest ||
+        options.has('--resume-ha') ||
+        options.has('--resume-cutover') ||
+        options.has('--maintenance-cutover') ||
+        options.has('--ha-control-plane-transition') ||
+        maintenance ||
+        (pendingJournal && (pendingJournal.phase !== 'complete' || pendingJournal.leaseExpiresAt > Date.now()))
+      )
+        throw Error(
+          'Acceptance-only verification requires the installed exact candidate, a deployment policy and no unfinished operation.',
+        );
+      const kube = (args) =>
+        run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true });
+      await executeDeploymentWorkflow({
+        approval: deploymentPolicy,
+        context: { ...workflowContext, recovering: true },
+        verificationOnly: true,
+        artifactsDir,
+        timeoutMs,
+        artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+        prepareSafety: () =>
+          createDeploymentSafety({
+            mode: 'verification',
+            context: { ...workflowContext, recovering: true },
+            policyDigest: deploymentPolicy.digest,
+            checkBaseline: async () => {
+              const ns = JSON.parse((await kube(['get', 'namespace', namespace, '-o', 'json'])).stdout);
+              const current = JSON.parse(
+                (
+                  await run(
+                    helmBin,
+                    ['get', 'values', release, '--namespace', namespace, '--all', '--output', 'json'],
+                    { capture: true },
+                  )
+                ).stdout,
+              );
+              assertDeploymentBaseline(
+                { installedManifestDigest: installedDigest, namespace, namespaceUid: workflowContext.namespaceUid },
+                current,
+                ns,
+              );
+            },
+          }),
+        run: async (safety) => {
+          await safety.checkBaseline();
+          const settlement = await waitForReleaseSettlement({
+            kube,
+            resources: renderedResources,
+            release,
+            namespace,
+            timeoutMs,
+            retainedExecution: retainedTopologyExecution(pendingJournal, workflowContext, deploymentPolicy.digest),
+            artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+          });
+          safety.confirmSettlement(settlement);
+          return settlement;
+        },
+        verifyActivation: async () => {
+          const activation = await waitForExecutionAutoscalerActivation({
+            kube,
+            resources: renderedResources,
+            release,
+            namespace,
+            timeoutMs,
+            artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+          });
+          if (!activation.activated) throw Error('Automatic execution scaling is not verified active.');
+          return activation;
+        },
+      });
+      console.log(
+        `[${runnerName}] Application acceptance passed. No release templates, migration or Secrets were applied.`,
+      );
+      return;
+    }
+    if (maintenance) {
+      const ns = JSON.parse(
+        (await run(kubectl, ['--request-timeout=30s', 'get', 'namespace', namespace, '-o', 'json'], { capture: true }))
+          .stdout,
+      );
+      assertMaintenanceBaseline(maintenance, {
+        installed,
+        manifest,
+        namespaceUid: ns.metadata.uid,
+        recoveryJournal: pendingJournal,
+        resumeToken: options.get('--resume-cutover'),
+        recovering:
+          pendingJournal?.phase !== 'complete' &&
+          pendingJournal?.token === options.get('--resume-cutover') &&
+          pendingJournal?.operationPlanDigest === maintenance.digest &&
+          pendingJournal?.manifestDigest === candidateDigest,
+      });
+    }
+    if (
+      !maintenance &&
       exists &&
       installedDigest &&
       installedDigest !== candidateDigest &&
@@ -518,7 +837,9 @@ async function main() {
     const haRollout = haRequested && exists && installed?.ha?.enabled && !cutover;
     const controlTransition = options.has('--ha-control-plane-transition');
     if (controlTransition && (!haRollout || installedDigest !== candidateDigest || rollbackManifestPath))
-      throw new Error('Control topology transfer requires the already installed same-image bridge manifest, HA, and no cutover/rollback.');
+      throw new Error(
+        'Control topology transfer requires the already installed same-image bridge manifest, HA, and no cutover/rollback.',
+      );
     if (options.has('--resume-ha') && (!haRollout || options.has('--resume-cutover')))
       throw new Error('--resume-ha requires an installed HA release and cannot be combined with maintenance cutover.');
     if (haRequested && !cutover) assertHaUpgradeEvidence(manifest, installed);
@@ -536,191 +857,344 @@ async function main() {
       throw new Error('Maintenance cutover cannot be combined with forward rollback.');
     if (cutover && !exists)
       throw new Error('Maintenance cutover requires an installed release. Bootstrap with the normal install path.');
-    if (localConfig && !haRollout && !cutover) {
-      await prepareSingleMachine(localConfig, (args, extra = {}) =>
-        run(selectedKubectl, args, { capture: true, ...extra }),
+    const assertInstalledBaseline = async () => {
+      if (!exists) return;
+      const current = JSON.parse(
+        (
+          await run(helmBin, ['get', 'values', release, '--namespace', namespace, '--all', '--output', 'json'], {
+            capture: true,
+          })
+        ).stdout,
       );
-    }
-    if (productionConfig && !haRollout && !cutover) {
-      await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
-        run(selectedKubectl, args, { capture: true, ...extra }),
-      );
-    }
-    if (productionConfig && haRollout) await prepareProductionSecrets(productionConfig,
-      (args, extra = {}) => run(selectedKubectl, args, { capture: true, ...extra }), { verifyOnly: true });
-    const upgrade = (extra = []) =>
-      run(helmBin, [
-        'upgrade',
-        '--install',
-        release,
-        chartPath,
-        '--namespace',
-        namespace,
-        ...valueArgs,
-        ...extra,
-        ...(rollbackManifestPath ? ['--atomic'] : []),
-        '--wait',
-        '--wait-for-jobs',
-        '--timeout',
-        timeout,
-      ]);
-    try {
-      if (haRollout) {
-        const kube = (args, extra = {}) => run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
-        const preservePath = path.join(generatedValuesDir, 'ha-preserved-capacity.json');
-        const frozenPath = path.join(generatedValuesDir, 'ha-frozen-autoscalers.json');
-        const preserve = async (guardedValues) => {
-          // Capacity and its API-server preconditions travel in the same Helm update.
-          await fs.writeFile(preservePath, JSON.stringify(guardedValues));
-        };
-        await fs.writeFile(frozenPath, JSON.stringify(haFrozenAutoscalingValues));
-        const rollout = controlTransition ? runHaKubernetesControlTopology : runHaKubernetesRollout;
-        await rollout({ kube, release, namespace, manifestDigest: candidateDigest, resources: renderedResources,
-          resumeToken: options.get('--resume-ha'), timeoutMs: Number.parseInt(timeout, 10) * (timeout.endsWith('h') ? 3600000 : timeout.endsWith('m') ? 60000 : 1000),
-          artifact: (name, value) => writeArtifact(artifactsDir, name, value),
-          applyTemplates: async (_workloads, guardedValues) => {
-            if (controlTransition) {
-              await preserve(_workloads);
-              await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']);
-              return;
-            }
-            await preserve(guardedValues);
-            await upgrade(['--values', preservePath, '--values', frozenPath]);
-          },
-          restoreAutoscalers: async (_workloads, guardedValues) => { await preserve(guardedValues); await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']); },
-        });
-      } else if (cutover) {
-        const kube = async (args, extra = {}) =>
-          run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
-        const name = journalName;
-        const selector = `app.kubernetes.io/instance=${release}`;
-        const inventory = async () => {
-          const resources = JSON.parse(
-            (await kube(['get', 'deployment,statefulset,hpa', '-l', selector, '-o', 'json'])).stdout,
-          ).items;
-          return {
-            workloads: resources
-              .filter((item) => item.kind !== 'HorizontalPodAutoscaler')
-              .map((item) => ({
-                kind: item.kind.toLowerCase(),
-                name: item.metadata.name,
-                component: item.metadata.labels?.['app.kubernetes.io/component'],
-                replicas: item.spec.replicas ?? 1,
-              })),
-            autoscalers: resources
-              .filter((item) => item.kind === 'HorizontalPodAutoscaler')
-              .map((item) => item.metadata.name),
-          };
-        };
-        const readJournal = async () => {
-          const result = await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json']);
-          if (!result.stdout.trim()) return null;
-          const resource = JSON.parse(result.stdout);
-          return journalForReleaseOperation({ ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion }, 'cutover', { release, namespace });
-        };
-        const saveJournal = async (record, resourceVersion) => {
-          const { resourceVersion: _discard, ...data } = record;
-          const resource = {
-            apiVersion: 'v1',
-            kind: 'ConfigMap',
-            metadata: { name, namespace, ...(resourceVersion ? { resourceVersion } : {}) },
-            data: { record: JSON.stringify(data) },
-          };
-          const saved = JSON.parse(
+      const liveNamespace = workflowContext
+        ? JSON.parse(
             (
-              await kube([resourceVersion ? 'replace' : 'create', '-f', '-', '-o', 'json'], {
-                input: JSON.stringify(resource),
+              await run(kubectl, ['get', 'namespace', namespace, '--request-timeout=30s', '-o', 'json'], {
+                capture: true,
               })
             ).stdout,
-          );
-          return { ...data, resourceVersion: saved.metadata.resourceVersion };
-        };
-        const maintenancePath = path.join(generatedValuesDir, 'maintenance-validation.json');
-        await fs.writeFile(maintenancePath, JSON.stringify({ ...maintenanceValidationValues, ...(haRequested ? { ha: { enabled: false, controlPlane: { mode: 'replicated' } }, replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 } } : {}) }), 'utf8');
-        await runManagedReleaseCutover({
-          release,
-          namespace,
-          manifestDigest: getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }),
-          resumeToken: options.get('--resume-cutover'),
-          inventory,
-          readJournal,
-          createJournal: (record) => saveJournal(record, sharedJournal?.resourceVersion),
-          replaceJournal: saveJournal,
-          scale: (item, replicas) => kube(['scale', `${item.kind}/${item.name}`, `--replicas=${replicas}`]),
-          removeAutoscaler: (hpa) => kube(['delete', 'hpa', hpa, '--ignore-not-found']),
-          waitForStopped: async () => {
-            const amount =
-              Number.parseInt(timeout, 10) *
-              (timeout.endsWith('h') ? 3_600_000 : timeout.endsWith('m') ? 60_000 : 1000);
-            const deadline = Date.now() + amount;
-            while (true) {
-              const pods = JSON.parse((await kube(['get', 'pods', '-l', selector, '-o', 'json'])).stdout).items;
-              if (!pods.some(blocksCutoverStop)) break;
-              if (Date.now() >= deadline)
-                throw new Error('Old pods have not stopped. No forced deletion was attempted.');
-              await new Promise((resolve) => setTimeout(resolve, 5000));
-            }
-          },
-          installValidation: async () => {
-            // A cutover must own the shared CAS journal and stop old readers
-            // before its environment-file preparation can rotate Secrets.
-            if (localConfig) await prepareSingleMachine(localConfig, (args, extra = {}) =>
-              run(selectedKubectl, args, { capture: true, ...extra }));
-            if (productionConfig) await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
-              run(selectedKubectl, args, { capture: true, ...extra }));
-            await upgrade(['--values', maintenancePath]);
-          },
-          validate: async () => {
-            const pods = JSON.parse(
-              (await kube(['get', 'pods', '-l', `${selector},app.kubernetes.io/component=backend`, '-o', 'json']))
-                .stdout,
-            ).items;
-            if (pods.length !== 1) throw new Error('Expected one validation backend.');
-            await kube([
-              'exec',
-              pods[0].metadata.name,
-              '-c',
-              'backend',
-              '--',
-              'node',
-              '-e',
-              'const base=`http://127.0.0.1:${process.env.RIVET_BACKEND_API_PORT || 80}`; Promise.all([fetch(`${base}/readyz`,{signal:AbortSignal.timeout(10000)}),fetch(`${base}/api/workflows/tree`,{signal:AbortSignal.timeout(10000)})]).then(async([health,traffic])=>{if(!health.ok||traffic.status!==503||(await traffic.json()).code!=="release_maintenance")throw Error("Validation readiness or maintenance admission failed")}).catch(e=>{console.error(e.message);process.exitCode=1})',
-            ]);
-          },
-          resume: () => upgrade(),
-        });
-      } else
-        await run(helmBin, [
-          'upgrade',
-          '--install',
-          release,
-          chartPath,
-          '--namespace',
-          namespace,
-          ...valueArgs,
-          // A candidate migration is not reversible. Do not let Helm silently
-          // restore the previous workloads after its migration Job has already
-          // advanced PostgreSQL; recovery must use the explicit forward
-          // rollback path below. A forward rollback itself does not mutate the
-          // schema, so Helm may safely make that one operation atomic.
-          ...(rollbackManifestPath ? ['--atomic'] : []),
-          '--wait',
-          '--wait-for-jobs',
-          '--timeout',
-          timeout,
-        ]);
-    } catch (error) {
-      await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
-      const recoveryGuidance = rollbackManifestPath
-        ? 'The forward rollback was atomic because it does not run a schema migration.'
-        : 'The candidate was intentionally not rolled back automatically because its schema migration may already have committed. Inspect the saved diagnostics, then repair forward or run the documented forward rollback; do not use helm rollback.';
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)}\n[${runnerName}] ${recoveryGuidance} Inspect ${path.relative(rootDir, artifactsDir)} before taking the next recovery action.`,
+          )
+        : null;
+      assertDeploymentBaseline(
+        { installedManifestDigest: installedDigest, namespace, namespaceUid: workflowContext?.namespaceUid },
+        current,
+        liveNamespace,
       );
-    }
-    await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
+    };
+    const kubeForRelease = (args, extra = {}) =>
+      run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+    const outcome = await executeDeploymentWorkflow({
+      approval: deploymentPolicy,
+      context: workflowContext,
+      maintenance: Boolean(cutover),
+      artifactsDir,
+      timeoutMs,
+      artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+      prepareSafety: ({ before, backup }) =>
+        createDeploymentSafety({
+          mode: cutover ? 'maintenance' : controlTransition ? 'topology' : haRollout ? 'rolling' : 'direct',
+          scope: workflowContext ? 'production' : singleMachine ? 'local' : 'bootstrap',
+          context: workflowContext,
+          localIdentity: { release, namespace, context: selectedContext, candidateManifestDigest: candidateDigest },
+          policyDigest: deploymentPolicy?.digest,
+          before,
+          backup,
+          checkBaseline: assertInstalledBaseline,
+          captureRecovery: maintenance
+            ? (context) => captureMaintenanceCheckpoint(maintenance, context, { artifactsDir, timeoutMs })
+            : workflowContext
+              ? (context) =>
+                  runDeploymentStage(
+                    deploymentPolicy,
+                    'backup',
+                    {
+                      ...workflowContext,
+                      consistency: 'quiesced',
+                      phase: context.phase,
+                      journalToken: context.token,
+                      leaseExpiresAt: context.leaseExpiresAt,
+                    },
+                    { artifactsDir, timeoutMs },
+                  )
+              : async () => ({ local: true }),
+        }),
+      verifyActivation: async () => {
+        await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
+        // This is post-deployment verification, not part of workload mutation.
+        // An error must never re-enter retirement or imply Helm needs replay.
+        const activation = await waitForExecutionAutoscalerActivation({
+          kube: kubeForRelease,
+          resources: renderedResources,
+          release,
+          namespace,
+          timeoutMs,
+          after: Date.now(),
+          artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+        });
+        if (!activation.activated)
+          throw new Error(
+            'Automatic execution scaling has not been verified active; inspect execution-autoscaler-activation.json.',
+          );
+        return activation;
+      },
+      run: async (safety) => {
+        await safety.checkBaseline();
+        if (localConfig && !haRollout && !cutover) {
+          await prepareSingleMachine(localConfig, (args, extra = {}) =>
+            run(selectedKubectl, args, { capture: true, ...extra }),
+          );
+        }
+        if (productionConfig && !haRollout && !cutover) {
+          await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
+            run(selectedKubectl, args, { capture: true, ...extra }),
+          );
+        }
+        if (productionConfig && haRollout)
+          await prepareProductionSecrets(
+            productionConfig,
+            (args, extra = {}) => run(selectedKubectl, args, { capture: true, ...extra }),
+            { verifyOnly: true },
+          );
+        const upgrade = (extra = []) =>
+          run(helmBin, [
+            'upgrade',
+            '--install',
+            release,
+            chartPath,
+            '--namespace',
+            namespace,
+            ...valueArgs,
+            ...extra,
+            // Candidate migrations may commit irreversibly. Atomic rollback is
+            // reserved for the explicit forward-rollback path, which skips them.
+            ...(rollbackManifestPath ? ['--atomic'] : []),
+            '--wait',
+            '--wait-for-jobs',
+            '--timeout',
+            timeout,
+          ]);
+        const settle = (resources = renderedResources, options = {}) =>
+          waitForReleaseSettlement({
+            kube: kubeForRelease,
+            resources,
+            release,
+            namespace,
+            timeoutMs,
+            ...options,
+            artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+          });
+        try {
+          if (haRollout) {
+            const kube = (args, extra = {}) =>
+              run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+            const preservePath = path.join(generatedValuesDir, 'ha-preserved-capacity.json');
+            const frozenPath = path.join(generatedValuesDir, 'ha-frozen-autoscalers.json');
+            const preserve = async (guardedValues) => {
+              // Capacity and its API-server preconditions travel in the same Helm update.
+              await fs.writeFile(preservePath, JSON.stringify(guardedValues));
+            };
+            await fs.writeFile(frozenPath, JSON.stringify(haRolloutAutoscalingValues(renderedResources)));
+            const rollout = controlTransition ? runHaKubernetesControlTopology : runHaKubernetesRollout;
+            return await rollout({
+              kube,
+              release,
+              namespace,
+              manifestDigest: candidateDigest,
+              resources: renderedResources,
+              safety,
+              previousManifestDigest: installedDigest,
+              resumeToken: options.get('--resume-ha'),
+              timeoutMs,
+              artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+              applyTemplates: async (_workloads, guardedValues) => {
+                if (controlTransition) {
+                  await preserve(_workloads);
+                  await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']);
+                  return;
+                }
+                await preserve(guardedValues);
+                await upgrade(['--values', preservePath, '--values', frozenPath]);
+              },
+              restoreAutoscalers: async (_workloads, guardedValues) => {
+                await preserve(guardedValues);
+                await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']);
+              },
+              settle: controlTransition ? (options) => settle(renderedResources, options) : settle,
+              verifyDeveloperReady: async (backendCandidate) => {
+                if (!deploymentPolicy || !workflowContext)
+                  throw Error('Developer overlap requires an installation acceptance policy.');
+                await runDeploymentStage(
+                  deploymentPolicy,
+                  'backend',
+                  { ...workflowContext, backendCandidate },
+                  { artifactsDir, timeoutMs },
+                );
+              },
+            });
+          } else if (cutover) {
+            const kube = async (args, extra = {}) =>
+              run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+            const name = journalName;
+            const selector = `app.kubernetes.io/instance=${release}`;
+            const inventory = async () => {
+              const resources = JSON.parse(
+                (await kube(['get', 'deployment,statefulset,hpa', '-l', selector, '-o', 'json'])).stdout,
+              ).items;
+              return {
+                workloads: resources
+                  .filter((item) => item.kind !== 'HorizontalPodAutoscaler')
+                  .map((item) => ({
+                    kind: item.kind.toLowerCase(),
+                    name: item.metadata.name,
+                    component: item.metadata.labels?.['app.kubernetes.io/component'],
+                    replicas: item.spec.replicas ?? 1,
+                  })),
+                autoscalers: resources
+                  .filter((item) => item.kind === 'HorizontalPodAutoscaler')
+                  .map((item) => item.metadata.name),
+              };
+            };
+            const readJournal = async () => {
+              const result = await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json']);
+              if (!result.stdout.trim()) return null;
+              const resource = JSON.parse(result.stdout);
+              return journalForReleaseOperation(
+                { ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion },
+                'cutover',
+                { release, namespace },
+              );
+            };
+            const saveJournal = async (record, resourceVersion) => {
+              const { resourceVersion: _discard, ...data } = record;
+              const resource = {
+                apiVersion: 'v1',
+                kind: 'ConfigMap',
+                metadata: { name, namespace, ...(resourceVersion ? { resourceVersion } : {}) },
+                data: { record: JSON.stringify(data) },
+              };
+              const saved = JSON.parse(
+                (
+                  await kube([resourceVersion ? 'replace' : 'create', '-f', '-', '-o', 'json'], {
+                    input: JSON.stringify(resource),
+                  })
+                ).stdout,
+              );
+              return { ...data, resourceVersion: saved.metadata.resourceVersion };
+            };
+            const maintenancePath = path.join(generatedValuesDir, 'maintenance-validation.json');
+            const sameLayout = Boolean(haRequested && installed?.ha?.enabled);
+            const validationValues = createMaintenanceValidationValues(maintenanceValidationValues, {
+              sameLayout,
+              haRequested,
+            });
+            await fs.writeFile(maintenancePath, JSON.stringify(validationValues), { mode: 0o600 });
+            await run(helmBin, ['lint', chartPath, ...valueArgs, '--values', maintenancePath]);
+            const validationRender = await run(
+              helmBin,
+              ['template', release, chartPath, '--namespace', namespace, ...valueArgs, '--values', maintenancePath],
+              { capture: true },
+            );
+            const validationResources = parseAllDocuments(validationRender.stdout)
+              .map((document) => {
+                if (document.errors.length) throw document.errors[0];
+                return document.toJSON();
+              })
+              .filter(Boolean);
+            const waitForStopped = async () => {
+              const deadline = Date.now() + timeoutMs;
+              while (true) {
+                const pods = JSON.parse((await kube(['get', 'pods', '-l', selector, '-o', 'json'])).stdout).items;
+                if (!pods.some(blocksCutoverStop)) return;
+                if (Date.now() >= deadline)
+                  throw new Error('Old pods have not stopped. No forced deletion was attempted.');
+                await new Promise((resolve) => setTimeout(resolve, 5000));
+              }
+            };
+            return await runManagedReleaseCutover({
+              release,
+              namespace,
+              manifestDigest: getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }),
+              operationPlanDigest: maintenance?.digest,
+              admissionExpiresAt: maintenance ? Date.parse(maintenance.plan.expiresAt) : undefined,
+              safety,
+              resumeToken: options.get('--resume-cutover'),
+              inventory,
+              readJournal,
+              createJournal: (record) => saveJournal(record, sharedJournal?.resourceVersion),
+              replaceJournal: saveJournal,
+              scale: (item, replicas) => kube(['scale', `${item.kind}/${item.name}`, `--replicas=${replicas}`]),
+              removeAutoscaler: (hpa) => kube(['delete', 'hpa', hpa, '--ignore-not-found']),
+              waitForStopped,
+              installValidation: async () => {
+                // A cutover must own the shared CAS journal and stop old readers
+                // before its environment-file preparation can rotate Secrets.
+                if (localConfig)
+                  await prepareSingleMachine(localConfig, (args, extra = {}) =>
+                    run(selectedKubectl, args, { capture: true, ...extra }),
+                  );
+                if (productionConfig)
+                  await prepareProductionSecrets(productionConfig, (args, extra = {}) =>
+                    run(selectedKubectl, args, { capture: true, ...extra }),
+                  );
+                await upgrade(['--values', maintenancePath]);
+              },
+              validate: async () => {
+                await waitForReleaseSettlement({
+                  kube,
+                  resources: validationResources,
+                  release,
+                  namespace,
+                  timeoutMs,
+                  stableMs: 0,
+                  artifact: (_name, value) =>
+                    writeArtifact(artifactsDir, 'maintenance-validation-settlement.json', value),
+                });
+                const pods = JSON.parse((await kube(['get', 'pods', '-l', selector, '-o', 'json'])).stdout).items;
+                for (const target of getMaintenanceValidationTargets(validationResources, pods))
+                  await kube([
+                    'exec',
+                    target.podName,
+                    '-c',
+                    target.container,
+                    '--',
+                    'node',
+                    '-e',
+                    `const base='http://127.0.0.1:${target.port}'; Promise.all([fetch(base+'/readyz',{signal:AbortSignal.timeout(10000)}),fetch(base+'/api/workflows/tree',{signal:AbortSignal.timeout(10000)})]).then(async([health,traffic])=>{if(!health.ok||traffic.status!==503||(await traffic.json()).code!=='release_maintenance')throw Error('Validation readiness or maintenance admission failed')}).catch(e=>{console.error(e.message);process.exitCode=1})`,
+                  ]);
+              },
+              stopValidationBeforeResume: sameLayout,
+              // Validation already ran and verified this exact schema migration.
+              resume: () => upgrade(['--set', 'workflowSchema.migrationJob.enabled=false']),
+              settle: () => settle(),
+            });
+          } else {
+            safety.assertReadyForTemplates();
+            await upgrade();
+            const settlement = await settle();
+            safety.confirmSettlement(settlement);
+            return settlement;
+          }
+        } catch (error) {
+          let cause = error;
+          try {
+            await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
+          } catch (diagnosticError) {
+            cause = preserveDeploymentFailure(error, diagnosticError);
+          }
+          const recoveryGuidance = rollbackManifestPath
+            ? 'The forward rollback was atomic because it does not run a schema migration.'
+            : 'The candidate was intentionally not rolled back automatically because its schema migration may already have committed. Inspect the saved diagnostics, then repair forward or run the documented forward rollback; do not use helm rollback.';
+          const failure = new Error(
+            `${cause instanceof Error ? cause.message : String(cause)}\n[${runnerName}] ${recoveryGuidance} Inspect ${path.relative(rootDir, artifactsDir)} before taking the next recovery action.`,
+            { cause },
+          );
+          if (error?.deploymentOperation) failure.deploymentOperation = error.deploymentOperation;
+          throw failure;
+        }
+      },
+    });
     console.log(
-      `[${runnerName}] ${rollbackManifestPath ? 'Forward rollback' : 'Production release'} completed. Diagnostics: ${path.relative(rootDir, artifactsDir)}.`,
+      `[${runnerName}] ${outcome.state === 'complete' ? (rollbackManifestPath ? 'Forward rollback' : 'Production release') + ' completed with application acceptance' : 'Infrastructure completed; application acceptance is not configured'}. Diagnostics: ${path.relative(rootDir, artifactsDir)}.`,
     );
   } finally {
     if (generatedValuesDir) {

@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, type FC, type ReactNode } from 'react';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { useBundleExecutionRouting } from '../hooks/useBundleExecutionRouting.js';
+import { isInternalExecutorTarget } from '../hooks/executorSessionTarget.js';
 import { useRemoteExecutionObservations } from '../hooks/useRemoteExecutionObservations.js';
 import { type ProcessEventMessageMap, type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
 import {
@@ -380,7 +381,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
           )
         )
           return;
-        if (dispatchDecision.shouldDispatch && runtimeState.target?.type === 'internal-desktop')
+        if (dispatchDecision.shouldDispatch && isInternalExecutorTarget(runtimeState.target))
           routeBundleExecution(projectId, message, data);
         if (!shouldRouteInactiveProjectEvent(projectId)) return;
         const shouldFlushFrozenOutputs = shouldFlushFrozenNodeOutputsForRemoteDebuggerEvent({

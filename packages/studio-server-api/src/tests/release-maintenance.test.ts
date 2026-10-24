@@ -44,6 +44,37 @@ test('release validation keeps probes available, denies application traffic and 
   });
 });
 
+test('cold HA validation keeps database health required while application admission stays closed', async () => {
+  await withEnvOverride('RIVET_RELEASE_MAINTENANCE', 'true', () =>
+    withEnvOverride('RIVET_HA_DEPLOYMENT', '1', async () => {
+      for (const profile of ['control', 'execution'] as const) {
+        const readiness = { ok: false, profile, state: 'starting' as const, checkedAt: null, checks: [] };
+        const server = http.createServer(createApiApp(profile, {
+          health: { getLiveness: () => ({ ...readiness, ok: true }), getReadiness: () => readiness },
+        }));
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        assert.ok(address && typeof address !== 'string');
+        const base = `http://127.0.0.1:${address.port}`;
+        try {
+          assert.equal((await fetch(`${base}/livez`)).status, 200);
+          assert.equal((await fetch(`${base}/readyz`)).status, 503, 'maintenance must not bypass failed DB/runtime health');
+          readiness.ok = true;
+          assert.equal((await fetch(`${base}/readyz`)).status, 200, 'cold maintenance does not require a debugger relay');
+          for (const pathname of ['/api/workflows/tree', '/workflows/never-run']) {
+            const response = await fetch(`${base}${pathname}`, { method: 'POST' });
+            assert.equal(response.status, 503);
+            assert.equal((await response.json()).code, 'release_maintenance');
+          }
+        } finally {
+          server.closeAllConnections();
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        }
+      }
+    }),
+  );
+});
+
 test('paused control API permits authenticated executor bootstrap without permitting executor clients', async (t) => {
   t.mock.method(deploymentStorageSettingsRepository, 'readSync', () => ({
     value: {

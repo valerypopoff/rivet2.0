@@ -2,6 +2,12 @@
 
 Canonical guide for execution lineage, event snapshots, and app-side run history.
 
+For the current bundle editor/debugger/playback behavior before the proposed
+coordination refactor, use the dated
+[functional baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md). It supplies stable
+comparison IDs, mode-specific differences, code/test owners and evidence limits.
+The proposed shared binding registry/coordinator is not implemented yet.
+
 ## Core Identity
 
 Every graph event carries `GraphExecutionMetadata`: `rootRunId` identifies one root
@@ -33,6 +39,28 @@ its stored outputs.
 Browser, Node sidecar, and Remote Debugger sessions are project-scoped. Routing keys
 include project/run ownership so runs in different tabs cannot replace each other.
 Terminal events and abort controls must resolve against the same owning session.
+
+### Ordinary editor bundle runs across open tabs
+
+Normal Browser, internal desktop Node and internal hosted Node runs project live
+called-project evidence into then-open members of the same explicit bundle.
+Hosted membership uses its server-qualified identity; desktop membership uses its
+explicit manifest binding, with authoritative hosted detachment taking precedence.
+The source keeps cancellation, prompts, root errors and recording. Local passive
+display does not create a Remote Debugger session or view-only lock.
+
+Independent runs, loaded recordings and passive Remote Debugger observations have
+display priority. Local conflict exclusions last for the root, including conflicts
+that end before the first child event or occur entirely between child events.
+Source/receiver close/reopen, file rebinding or bundle membership round-trips fence
+old projection; newly opened tabs wait for the next root. Only source-root start
+events establish routing; identified root terminals release it, and late child
+events cannot resurrect it. Active roots are not evicted at a 32-root limit.
+
+See baseline LOC-01–08 for exact rules and GAP-01–05 for the current journal,
+conflict-timing, cleanup and definition-check differences from Remote Debugger.
+Do not assume the remote ancestry/lifetime behavior below is already identical
+to the local adapter.
 
 ### Remote dependency observations across open tabs
 

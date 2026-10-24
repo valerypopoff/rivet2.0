@@ -110,6 +110,12 @@ Scale-down retires one highest ordinal at a time:
    loopback retirement endpoint or distribute its token. Wait for the public
    execution Service's EndpointSlices to exclude the UID, plus the withdrawal
    delay (chart minimum 60 seconds).
+   The delay starts at the first confirmed absence, **not** when withdrawal was
+   requested. Consecutive fresh samples must cover the full interval. A route
+   returning, failed observation (including journal access), controller restart,
+   backwards clock or gap greater than 2.5 polling intervals resets the proof.
+   Legacy journals without that proof restart it conservatively. This additive
+   journal field does not change the protocol version or database schema.
 3. Begin the existing API/executor drain once. Wait for actual `drained` status,
    including accepted runs and recording durability. Active counter zero is
    insufficient. No timeout force-kills accepted work, including paused runs.
@@ -147,24 +153,45 @@ logs, UIDs/incarnations, generation and EndpointSlices for recovery.
 
 ## Deployment and security
 
-The normal HA tool sets `autoscaling.executionController.suspended=true` during
-template application (zero controller replicas), then restores it under the HA
-journal. It keeps controller mode enabled so execution PDB and startup-fence
-environment remain intact. The controller cannot act until that operation
-finishes and releases its lease. Maintenance validation disables it; cutover
+The normal HA tool retains the controller during an autoscaled upgrade. The
+journal's exact `cooperativeScaling` binding permits bounded, monotonic growth
+without taking over the rollout. Execution scale-down remains paused, and the
+upgrader never scales execution down or removes a newly added ordinal; the
+ordinary controller retires surplus capacity after the journal completes.
+Both paths use API-server scale preconditions. A paused upgrade retains growth
+capability, subject to fresh metrics, valid identity and the approved cap.
+Maintenance validation disables it; cutover
 inventory includes its workload. Unfinished drain blocks these operations rather
 than being interrupted. An idle observation can briefly hold the lease: wait
 for it to settle, never delete its journal. Disable/settle autoscaling in a
 separate guarded release before a control-topology transfer. Do not use raw Helm
 to overwrite preserved runtime capacity or combine enablement and topology
 ownership transfer.
-Proxy/web HPAs are frozen for template replacement. Their live replica counts
+Proxy HPA permits growth with temporary downscale disabled. Fixed developer
+tiers do not gain an HPA. Live frontend replica counts
 are preserved, with UID checks and resourceVersion preconditions on the same
 Helm update, rather than resetting HPA-grown capacity to the static baseline.
 Restore the original autoscaling policy only after owned execution replacement
 settles. This operational pause does not change the qualified demand policy.
+The release tool checks fresh execution slot/CPU and proxy CPU headroom before
+template application, and again before owner withdrawal and admission fencing. It excludes
+the departing execution owner and does not count temporary proxy surge as durable
+capacity. Missing/stale metrics, foreign ownership or insufficient capacity stop
+further retirement. `ha-headroom-*.json` and `ha-proxy-headroom-*.json` are sanitized
+per-decision receipts. The operator therefore needs read access to PodMetrics as
+well as the existing workload/exec permissions.
+
+This remains a bounded-capacity rolling operation. Growth during deployment is
+permitted, but demand beyond the approved cap or missing metrics still pauses
+retirement. Preserve the journal and live work and resume the exact operation
+after capacity is healthy; never scale ordinals manually or delete the journal.
+Sampling cannot guarantee zero errors for arbitrary spikes after the last sample.
+Outside an owned deployment, normal automatic scale-up and safe retirement remain
+enabled. See [deployment operations](deployment-operations.md).
 Local rehearsal identity uses the API image reference, not only chart version;
-production continues to use the exact promoted manifest digest. Local mutable
+production continues to use the exact promoted manifest digest. V2 provider
+evidence additionally requires live and paused upgrade scale-up checks; v1
+evidence remains historical and readable. Local mutable
 tags are not equivalent to production immutable-image qualification.
 
 The schema migration guard explicitly treats this standalone controller as a

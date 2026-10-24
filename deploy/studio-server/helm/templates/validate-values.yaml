@@ -46,7 +46,7 @@
 {{- fail "managed-schema-reader-version is chart-owned; podAnnotations cannot override it" -}}
 {{- end -}}
 {{- end -}}
-{{- if and .Values.workflowSchema.maintenanceValidation (or .Values.autoscaling.execution.enabled .Values.autoscaling.proxy.enabled (ne (int .Values.replicaCount.proxy) 0) (ne (int .Values.replicaCount.web) 0) (and .Values.compatibility.legacyStartupSettingsFiles (ne (int .Values.replicaCount.evaluation) 0))) -}}
+{{- if and .Values.workflowSchema.maintenanceValidation (or .Values.autoscaling.execution.enabled .Values.autoscaling.proxy.enabled .Values.autoscaling.web.enabled (ne (int .Values.replicaCount.proxy) 0) (ne (int .Values.replicaCount.web) 0) (and .Values.compatibility.legacyStartupSettingsFiles (ne (int .Values.replicaCount.evaluation) 0))) -}}
 {{- fail "maintenance validation requires traffic and Evaluation replicas zero and autoscaling disabled" -}}
 {{- end -}}
 {{- $zeroKubernetesQuantityPattern := "^[+]?0+([.]0+)?([eE][+-]?[0-9]+)?([numkMGTPE]|[KMGTPE]i)?$" -}}
@@ -281,6 +281,9 @@
 {{- end -}}
 {{- else -}}
 {{- $resourceComponents = append $resourceComponents "backend" -}}
+{{- if eq .Values.ha.controlPlane.mode "singleton-overlap" -}}
+{{- $resourceComponents = append $resourceComponents "backendOverlap" -}}
+{{- end -}}
 {{- if hasKey .Values.resources "executor" -}}
 {{- fail "resources.executor is retired in the combined backend; move its budget to resources.backend" -}}
 {{- end -}}
@@ -533,11 +536,15 @@
 {{- end -}}
 {{- $apiPodConnections := add $poolMaxPerApiPod 3 -}}
 {{- $apiPods := add $backendReplicas $executionReplicas $evaluationReplicas -}}
+{{- if and (eq .Values.ha.controlPlane.mode "singleton-overlap") (not .Values.ha.enabled) -}}
+{{- fail "singleton-overlap requires ha.enabled=true" -}}
+{{- end -}}
 {{- if .Values.ha.enabled -}}
 {{- if gt (len (include "rivet.fullname" .)) 40 -}}
 {{- fail "HA fullname must be at most 40 characters so every owner pod has a valid DNS identity" -}}
 {{- end -}}
-{{- /* Embedded control has no extra maintenance process. Both modes need one runtime surge. */ -}}
+{{- /* Serial singleton embeds maintenance in its API. Replicated and overlap
+      need a separate maintenance process plus one backend/runtime surge. */ -}}
 {{- $apiPods = add $apiPods (ternary 1 2 (eq .Values.ha.controlPlane.mode "singleton")) -}}
 {{- end -}}
 {{- $requiredPostgresConnections := add $postgresReservedConnections (mul $apiPods $apiPodConnections) -}}
@@ -773,7 +780,7 @@
 {{- range $component := list "proxy" "web" -}}
 {{- $autoscaling := index $.Values.autoscaling $component -}}
 {{- $minimum := ternary (int $autoscaling.minReplicas) (int (index $.Values.replicaCount $component)) $autoscaling.enabled -}}
-{{- $webFloor := ternary 1 2 (eq $.Values.ha.controlPlane.mode "singleton") -}}
+{{- $webFloor := ternary 1 2 (has $.Values.ha.controlPlane.mode (list "singleton" "singleton-overlap")) -}}
 {{- $proxyFloor := ternary 2 6 (eq $.Values.availability.gkeGatewayProfile "compact") -}}
 {{- $floor := ternary $proxyFloor $webFloor (eq $component "proxy") -}}
 {{- if or (lt $minimum $floor) (lt (int (index $.Values.replicaCount $component)) $floor) -}}
@@ -826,13 +833,21 @@
 {{- end -}}
 
 {{- if .Values.ha.enabled -}}
-{{- if not (has .Values.ha.controlPlane.mode (list "replicated" "singleton")) -}}
-{{- fail "ha.controlPlane.mode must be replicated or singleton" -}}
+{{- if not (has .Values.ha.controlPlane.mode (list "replicated" "singleton" "singleton-overlap")) -}}
+{{- fail "ha.controlPlane.mode must be replicated, singleton or singleton-overlap" -}}
 {{- end -}}
-{{- $backendFloor := ternary 1 2 (eq .Values.ha.controlPlane.mode "singleton") -}}
-{{- if eq .Values.ha.controlPlane.mode "singleton" -}}
-{{- if or (ne (int .Values.replicaCount.backend) 1) (ne (int .Values.replicaCount.web) 1) (lt (int .Values.replicaCount.execution) 2) (not .Values.availability.gkeGateway) (ne .Values.publishedExecutionAdmission.mode "enforce") (lt (int .Values.publishedExecutionAdmission.maxActiveRunsPerPod) 2) .Values.autoscaling.web.enabled -}}
-{{- fail "singleton control requires one backend/web, GKE Gateway HA, >=2 execution pods, enforced admission >=2 and no web autoscaler" -}}
+{{- $backendFloor := ternary 1 2 (has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap")) -}}
+{{- if has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap") -}}
+{{- $webReplicas := ternary 0 1 .Values.workflowSchema.maintenanceValidation -}}
+{{- $overlapSurge := and (eq .Values.ha.controlPlane.mode "singleton-overlap") (eq (int .Values.replicaCount.backend) 2) (hasKey .Values.ha.rolloutResourceVersions (include "rivet.backendName" .)) -}}
+{{- if or (and (ne (int .Values.replicaCount.backend) 1) (not $overlapSurge)) (ne (int .Values.replicaCount.web) $webReplicas) (lt (int .Values.replicaCount.execution) 2) (not .Values.availability.gkeGateway) (ne .Values.publishedExecutionAdmission.mode "enforce") (lt (int .Values.publishedExecutionAdmission.maxActiveRunsPerPod) 2) .Values.autoscaling.web.enabled .Values.autoscaling.backend.enabled -}}
+{{- fail "singleton control requires one backend, one web (zero during maintenance validation), GKE Gateway HA, >=2 execution pods, enforced admission >=2 and no web autoscaler" -}}
+{{- end -}}
+{{- if and (eq .Values.ha.controlPlane.mode "singleton-overlap") (or (ne .Values.workflowStorage.backend "managed") (ne .Values.runtimeLibraries.backend "managed") .Values.runtimeLibraries.cache.enabled) -}}
+{{- fail "singleton-overlap requires managed storage and disposable per-pod runtime caches" -}}
+{{- end -}}
+{{- if and (eq .Values.ha.controlPlane.mode "singleton-overlap") (not (regexMatch "^[a-f0-9-]{36}$" .Values.ha.namespaceUid)) -}}
+{{- fail "singleton-overlap requires the exact installation namespace UID" -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.workflowSchema.maintenanceValidation -}}

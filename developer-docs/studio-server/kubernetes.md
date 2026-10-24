@@ -293,6 +293,14 @@ runtime-library jobs and managed background maintenance remain disabled.
 Validation checks both readiness and closed application admission before the
 helper applies the normal release values to resume. Chart-owned admission and
 migration identity survive stale Vault dotenv values.
+For an already-HA installation, validation preserves the HA controller names,
+kinds and storage identities. It does not switch to legacy Deployments and back.
+Every validation API is checked. Fenced validation owners are then stopped before
+restoring the normal OnDelete environment; they accept no work and alone skip the
+preStop propagation sleep. Ordinary serving pods retain the full drain timings.
+The command waits for actual final release settlement before completing its
+ownership journal, not merely Helm success. See the exact
+[maintenance-plan, backup and settlement contracts](deployment-operations.md).
 Only the co-located executor's exact GET bootstrap-configuration route passes
 the application barrier; its existing loopback and dual-token checks still
 apply. Client authorization and graph execution stay denied. Blocking bootstrap

@@ -1,10 +1,18 @@
 # HA rolling-upgrade implementation status
 
+The optional [developer-backend overlap protocol](developer-backend-overlap.md)
+adds `singleton-overlap` without changing serial `singleton` or replicated-control
+defaults. It retains seven normal compact pods and temporarily adds one backend,
+with kernel-exclusive in-pod housekeeping and same-node RWO placement. First
+adoption remains a separately approved serial bridge transition; local evidence
+is not provider qualification or whole-UI zero-downtime certification.
+
 [Drain-aware autoscaling](runtime-autoscaling.md) adds opt-in automatic execution
 retirement using the same CAS operation journal. The HA runner temporarily
-freezes that controller while applying templates; unfinished retirements must
-settle first. Its startup fence closes replacement-versus-scale-down races.
-The freeze is an operational suspension, not disabling retirement protection.
+permits bounded scale-up during live or paused upgrades through an exact journal
+capability; unfinished controller retirements must settle first. Execution
+scale-down waits for the rollout to finish. Its startup fence closes
+replacement-versus-scale-down races.
 Execution PDB/startup fences remain enabled, and HPA-grown proxy/web counts are
 carried into Helm updates with API-server resourceVersion guards.
 
@@ -864,6 +872,9 @@ process incarnation and Kubernetes pod UID before sending the command. Lost
 begins are observed during exact-token `--resume-ha` recovery, never replayed.
 Maintenance cutover and HA rollout CAS the same release-operation ConfigMap;
 neither can steal an unfinished operation, even after its runner lease expires.
+Autoscaled execution rollout growth is the narrow exception: it does not claim
+the journal, retire an ordinal or reduce replicas. Surge capacity remains for
+later normal retirement, and exact-token recovery accepts approved growth.
 After an explicitly completed foreign-kind operation, the new owner CAS-replaces
 its journal rather than deleting it. Recovery distinguishes original capacity
 from its own retained surge; it rejects unrecorded scaling or a different token.

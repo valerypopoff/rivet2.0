@@ -2,6 +2,7 @@ import { createServer } from 'vite';
 import { fork } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBuildFailurePolicy } from './build-failure.mjs';
 
 const webRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const workspace = path.resolve(webRoot, '../..');
@@ -57,9 +58,13 @@ let stopped = false;
 let dirty = false;
 let child;
 let timer;
+const failures = createBuildFailurePolicy();
 const send = (message) => process.send?.(message);
-function schedule() {
+function schedule(event, file) {
   if (stopped) return;
+  if (child && !dirty && typeof file === 'string')
+    console.log(`[tunnel-build] Source ${event}: ${path.relative(workspace, file)}; superseding active build.`);
+  failures.reset();
   dirty = true;
   if (child?.connected) {
     child.send({ type: 'source-changed' });
@@ -86,10 +91,15 @@ function compile() {
       else send({ type: 'publish-build', pid: compilerPid });
       return;
     }
-    if (message.phase === 'ready') published = true;
+    if (message.phase === 'ready') {
+      published = true;
+      if (!dirty) failures.reset();
+    }
     if (message.discarded) published = true; // completed, deliberately not selected
     if (message.phase === 'failed') {
       failed = true;
+      // A superseded build must not consume the new source revision's budget.
+      if (!dirty) message = failures.failed(message);
       retryAfterMs = message.retryAfterMs;
     }
     // A source edit observed during compilation/publication supersedes it.
@@ -107,7 +117,13 @@ function compile() {
         error: 'Frontend build failed. Check the web container logs; the previous bundle remains available.',
       });
     if (dirty) timer = setTimeout(compile, 350);
-    else if (retryAfterMs === 5 * 60_000) timer = setTimeout(schedule, retryAfterMs);
+    else if ([1_000, 3_000, 5 * 60_000].includes(retryAfterMs))
+      timer = setTimeout(() => {
+        // This path deliberately does not reset the unchanged-source retry budget.
+        // It runs only after the previous child exited and released its working tree.
+        dirty = true;
+        compile();
+      }, retryAfterMs);
   });
 }
 watcher.watcher.on('all', schedule);

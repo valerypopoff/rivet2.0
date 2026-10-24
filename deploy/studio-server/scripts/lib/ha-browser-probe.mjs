@@ -9,9 +9,12 @@ import { parse, stringify } from 'yaml';
 export async function selectHaBrowserRecordingWorkflow(page, workflowName, expect) {
   const modal = page.getByTestId('run-recordings-modal');
   await modal.locator('.run-recordings-selector-section .run-recordings-select__control').click();
-  await page.locator('.run-recordings-select__option').filter({
-    has: page.getByText(workflowName, { exact: true }),
-  }).click();
+  await page
+    .locator('.run-recordings-select__option')
+    .filter({
+      has: page.getByText(workflowName, { exact: true }),
+    })
+    .click();
   await expect(modal.locator('.run-recordings-workflow-name')).toHaveText(workflowName);
 }
 
@@ -19,23 +22,59 @@ export async function selectHaBrowserRecordingWorkflow(page, workflowName, expec
 // Wait for every original observer to leave and for ordered session replay on
 // its replacements before sending a control once. Never retry an uncertain send.
 export function hasHaBrowserReadyTransport(sockets, originals = []) {
-  const live = [...sockets].filter(socket => !socket.closed);
-  return originals.every(socket => socket.closed) &&
-    live.length > 0 && live.every(socket => socket.ready && (!originals.length || socket.resumed));
+  const live = [...sockets].filter((socket) => !socket.closed);
+  return (
+    originals.every((socket) => socket.closed) &&
+    live.length > 0 &&
+    live.every((socket) => socket.ready && (!originals.length || socket.resumed))
+  );
 }
 
-export async function waitForHaFrontendReplacement(gate, before, timeoutMs, wait = (ms) => new Promise(r => setTimeout(r, ms))) {
+/** Backend-only proofs must not claim web-pod replacement (or accept an
+ * unintended one). Ordinary frontend proofs retain the stricter default. */
+export function assertHaBrowserWebPods(before, pods, frontendReplacement = true) {
+  const originals = before.filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'web');
+  assert.ok(originals.length > 0, 'the original web inventory is required');
+  assert.ok(originals.every((p) => typeof p.metadata.uid === 'string' && p.metadata.uid));
+  assert.ok(
+    originals.every((p) => pods.some((current) => current.metadata.uid === p.metadata.uid) !== frontendReplacement),
+    frontendReplacement
+      ? 'all original web pods must be gone'
+      : 'backend-only qualification must retain the original web pods',
+  );
+}
+
+export async function waitForHaFrontendReplacement(
+  gate,
+  before,
+  timeoutMs,
+  wait = (ms) => new Promise((r) => setTimeout(r, ms)),
+) {
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
-  const originals = before.filter(p => ['web', 'proxy'].includes(p.metadata.labels?.['app.kubernetes.io/component']));
-  assert.ok(originals.some(p => p.metadata.labels['app.kubernetes.io/component'] === 'web'));
-  assert.ok(originals.every(p => typeof p.metadata.uid === 'string' && p.metadata.uid));
-  const uids = new Set(originals.map(p => p.metadata.uid));
+  const originals = before.filter((p) => ['web', 'proxy'].includes(p.metadata.labels?.['app.kubernetes.io/component']));
+  assert.ok(originals.some((p) => p.metadata.labels['app.kubernetes.io/component'] === 'web'));
+  assert.ok(originals.every((p) => typeof p.metadata.uid === 'string' && p.metadata.uid));
+  const uids = new Set(originals.map((p) => p.metadata.uid));
   const deadline = Date.now() + timeoutMs;
   while (true) {
-    const pods = JSON.parse((await gate.kubectl([
-      '-n', gate.config.namespace, 'get', 'pods', '-l', `app.kubernetes.io/instance=${gate.config.release}`, '-o', 'json',
-    ], { capture: true })).stdout).items;
-    if (pods.every(p => !uids.has(p.metadata.uid))) return;
+    const pods = JSON.parse(
+      (
+        await gate.kubectl(
+          [
+            '-n',
+            gate.config.namespace,
+            'get',
+            'pods',
+            '-l',
+            `app.kubernetes.io/instance=${gate.config.release}`,
+            '-o',
+            'json',
+          ],
+          { capture: true },
+        )
+      ).stdout,
+    ).items;
+    if (pods.every((p) => !uids.has(p.metadata.uid))) return;
     if (Date.now() >= deadline) throw Error('Original frontend pods remain; paused browser proof was not released');
     await wait(1000);
   }
@@ -118,7 +157,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
   const owners = [],
     events = [];
   const sockets = new Map();
-  const record = event => {
+  const record = (event) => {
     events.push({ at: Date.now(), ...event });
     if (events.length > 100) events.shift();
   };
@@ -135,12 +174,14 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
       sockets.delete(socket);
       record({ direction: 'closed', owner: parts[4] });
     });
-    socket.on('framesent', frame => {
+    socket.on('framesent', (frame) => {
       try {
         const message = JSON.parse(String(frame.payload));
         if (['run', 'pause', 'resume', 'abort'].includes(message.type))
           record({ direction: 'sent', message: message.type, requestId: message.data?.requestId });
-      } catch { /* Static-data frames are not control diagnostics. */ }
+      } catch {
+        /* Static-data frames are not control diagnostics. */
+      }
     });
     socket.on('framereceived', (frame) => {
       try {
@@ -149,7 +190,11 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
           state.ready = true;
           state.resumed = message.data?.resumed === true;
         }
-        if (['start', 'done', 'error', 'pause', 'resume', 'executor-owner-retiring', 'executor-session-ready'].includes(message.message)) {
+        if (
+          ['start', 'done', 'error', 'pause', 'resume', 'executor-owner-retiring', 'executor-session-ready'].includes(
+            message.message,
+          )
+        ) {
           record({
             direction: 'received',
             message: message.message,
@@ -269,7 +314,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     await expect(iframe.locator('.run-button')).toContainText('Abort', { timeout: 30_000 });
     await expect(value).toHaveClass(/success/, { timeout: 30_000 });
     cleanupPausedRun = async () => {
-      if (!resumeAttempted && await iframe.locator('.pause-button.paused').isVisible()) {
+      if (!resumeAttempted && (await iframe.locator('.pause-button.paused').isVisible())) {
         await expect.poll(() => hasHaBrowserReadyTransport(sockets.values()), { timeout: 60_000 }).toBe(true);
         resumeAttempted = true;
         await iframe.locator('.pause-button button').click();
@@ -287,7 +332,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     await page.keyboard.insertText(edited);
     await input.press('Escape');
     await expect(page.locator('.active-project-save-button')).toBeVisible({ timeout: 30_000 });
-    const originalSockets = [...sockets.values()].filter(socket => !socket.closed);
+    const originalSockets = [...sockets.values()].filter((socket) => !socket.closed);
     assert.ok(originalSockets.length > 0, 'the accepted Node run must have a physical executor observer');
     const capture = async (stage) => {
       const state = {
@@ -317,12 +362,14 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     };
     let resumedAfterFrontend = false;
     const resume = async (replacedProxy) => {
-      await expect.poll(() => hasHaBrowserReadyTransport(sockets.values(), replacedProxy ? originalSockets : []), {
-        timeout: 60_000,
-        message: replacedProxy
-          ? 'Original browser sockets must close and their retained sessions must finish replay before Resume'
-          : 'Retained API session must be ready before Resume',
-      }).toBe(true);
+      await expect
+        .poll(() => hasHaBrowserReadyTransport(sockets.values(), replacedProxy ? originalSockets : []), {
+          timeout: 60_000,
+          message: replacedProxy
+            ? 'Original browser sockets must close and their retained sessions must finish replay before Resume'
+            : 'Retained API session must be ready before Resume',
+        })
+        .toBe(true);
       await expect(iframe.locator('.run-button')).toContainText('Abort');
       await expect(iframe.locator('.pause-button')).toHaveClass(/paused/);
       assert.equal(recordings.length, 0, 'the initial browser run must still be accepted and paused');
@@ -340,15 +387,19 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
         try {
           // An external gateway may keep the API socket unchanged when only
           // web pods are replaced. Never force a healthy observer to reconnect.
-          await resume(before.some(p => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy'));
+          await resume(before.some((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy'));
         } catch (error) {
           await capture('resume-failed').catch(() => {});
           throw error;
         }
         resumedAfterFrontend = true;
       },
-      async finish(before) {
-        assert.equal(resumedAfterFrontend, true, 'a completed pre-upgrade run cannot stand in for public-edge continuity');
+      async finish(before, { frontendReplacement = true } = {}) {
+        assert.equal(
+          resumedAfterFrontend,
+          true,
+          'a completed pre-upgrade run cannot stand in for public-edge continuity',
+        );
         await capture('after-upgrade');
         await expect(result).toHaveClass(/success/, { timeout: 90_000 });
         await expect.poll(() => recordings.length, { timeout: 90_000 }).toBe(1);
@@ -428,12 +479,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
             )
           ).stdout,
         ).items;
-        const originals = before.filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'web');
-        assert.ok(originals.length > 0);
-        assert.ok(
-          originals.every((p) => !pods.some((current) => current.metadata.uid === p.metadata.uid)),
-          'all original web pods must be gone',
-        );
+        assertHaBrowserWebPods(before, pods, frontendReplacement);
         assert.deepEqual(failedAssets, []);
         assert.deepEqual(errors, []);
         await page.screenshot({ path: path.join(gate.config.artifactsDir, `ha-browser-${label}.png`) });
@@ -445,14 +491,14 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
           iframeReloads,
           lazyScreen: true,
           pinnedEditor: true,
-          oldWebPodsRemoved: true,
+          oldWebPodsRemoved: frontendReplacement,
           unsavedEdit: true,
           savedByCandidate: true,
           newRun: true,
           outputs: true,
           recordingOpened: true,
           recordingIds: ids,
-          pausedAcrossFrontendReplacement: true,
+          pausedAcrossFrontendReplacement: frontendReplacement,
         };
       },
       close,

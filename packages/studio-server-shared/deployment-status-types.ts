@@ -14,7 +14,7 @@ export interface DeploymentStatus {
   apiProfile: DeploymentApiProfile;
   /** Deployment policy, not a health observation or current Kubernetes count. */
   controlPlaneAvailability?: {
-    mode: 'replicated' | 'singleton';
+    mode: 'replicated' | 'singleton' | 'singleton-overlap';
     maintenance: 'dedicated' | 'embedded';
     developerInterruptionAllowed: boolean;
   };
@@ -23,4 +23,8 @@ export interface DeploymentStatus {
    * managed runtime-library registry. It is not a Kubernetes pod-health API.
    */
   replicaReadiness: RuntimeLibraryReplicaReadinessState | null;
+  /** Separate from developer serving readiness; only present in overlap mode. */
+  housekeepingReadiness?: { state: 'ready' | 'handover' | 'unavailable'; ownerPodUid?: string };
+  /** Observed developer API readiness, not the runtime-library synchronization registry. */
+  servingReadiness?: { ready: boolean; state: string; checkedAt: string | null; code?: string };
 }

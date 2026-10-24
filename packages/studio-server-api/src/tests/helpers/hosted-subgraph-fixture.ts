@@ -1,4 +1,5 @@
 import {
+  DelayNodeImpl,
   getGraphBoundary,
   serializeProject,
   type GraphId,
@@ -28,6 +29,22 @@ export async function seedHostedSubgraphFixture() {
   const child = fixture.child.project;
   remapBundleProject(root, ids);
   remapBundleProject(child, ids);
+  // Keep a real child run in flight long enough to close/reopen its editor tab.
+  const childMain = child.graphs['child-main' as GraphId]!;
+  const childDelay = DelayNodeImpl.create();
+  childDelay.id = 'bundle-child-delay' as NodeId;
+  childDelay.data.delay = 5000;
+  const connection = childMain.connections[0]!;
+  childMain.nodes.push(childDelay);
+  childMain.connections = [
+    { ...connection, inputNodeId: childDelay.id, inputId: 'input1' as PortId },
+    {
+      outputNodeId: childDelay.id,
+      outputId: 'output1' as PortId,
+      inputNodeId: connection.inputNodeId,
+      inputId: connection.inputId,
+    },
+  ];
   const secondGraph = structuredClone(child.graphs['child-main' as GraphId]!);
   secondGraph.metadata = { ...secondGraph.metadata, id: 'child-second' as GraphId, name: 'Second child' };
   (secondGraph.nodes.find((node) => node.type === 'text')! as TextNode).data.text = 'second-child-result';
@@ -43,12 +60,16 @@ export async function seedHostedSubgraphFixture() {
   second.data.targetBoundary = getGraphBoundary(child, 'child-second' as GraphId)!;
   const output = graph.nodes.find((node) => node.type === 'graphOutput')!;
   output.id = 'bundle-result' as NodeId;
-  graph.nodes = [first, second, output];
+  const delay = DelayNodeImpl.create();
+  delay.id = 'bundle-display-delay' as NodeId;
+  delay.data.delay = 5000;
+  graph.nodes = [first, second, delay, output];
   graph.nodes.forEach((node, index) => {
     node.visualData = { x: 100 + index * 360, y: 180, width: 260 };
   });
   graph.connections = [
-    { outputNodeId: first.id, outputId: 'result' as PortId, inputNodeId: output.id, inputId: 'value' as PortId },
+    { outputNodeId: first.id, outputId: 'result' as PortId, inputNodeId: delay.id, inputId: 'input1' as PortId },
+    { outputNodeId: delay.id, outputId: 'output1' as PortId, inputNodeId: output.id, inputId: 'value' as PortId },
   ];
   const unpublishedCall = structuredClone(first);
   unpublishedCall.id = 'unpublished-call' as NodeId;
@@ -71,5 +92,11 @@ export async function seedHostedSubgraphFixture() {
       expectedRevisionId: saved.revisionId,
     });
   }
-  return { caller, target, project: root, foreignPath: foreign.relativePath };
+  return {
+    caller,
+    target,
+    project: root,
+    foreignPath: foreign.relativePath,
+    childOutputId: child.graphs['child-main' as GraphId]!.nodes.find((node) => node.type === 'graphOutput')!.id,
+  };
 }

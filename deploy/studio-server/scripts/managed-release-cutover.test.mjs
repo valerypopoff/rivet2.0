@@ -4,9 +4,20 @@ import {
   blocksCutoverStop,
   assertOrdinaryReleaseAllowed,
   requiresMaintenanceCutover,
-  runManagedReleaseCutover,
+  runManagedReleaseCutover as runMaintenanceStrategy,
   maintenanceValidationValues,
 } from './lib/managed-release-cutover.mjs';
+import { fixtureDeploymentSafety } from './fixtures/deployment-safety.mjs';
+const runManagedReleaseCutover = (options) =>
+  runMaintenanceStrategy({
+    ...options,
+    safety:
+      options.safety ??
+      fixtureDeploymentSafety('maintenance', options, {
+        baseline: options.assertInstalledBaseline,
+        checkpoint: options.checkpoint,
+      }),
+  });
 
 test('validation cannot recreate any autoscaler after closing maintenance admission', () => {
   for (const role of ['proxy', 'web', 'backend', 'execution'])
@@ -93,6 +104,162 @@ test('cutover records ownership before stopping controllers, validates before re
   assert.equal(state.journal.phase, 'complete');
   assert.equal(state.journal.leaseExpiresAt, 1000);
 });
+
+test('a changed baseline aborts a fresh cutover without closing admission or stranding its journal', async () => {
+  const state = fixture();
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      assertInstalledBaseline: async () => {
+        throw new Error('installed version changed');
+      },
+    }),
+    /aborted before workload changes/,
+  );
+  assert.deepEqual(state.operations, []);
+  assert.equal(state.journal.phase, 'complete');
+  assert.equal(state.journal.abortedBeforeQuiescence, true);
+  assert.equal(state.journal.leaseExpiresAt, 1000);
+  await runManagedReleaseCutover(state.options);
+  assert.equal(state.journal.phase, 'complete');
+  assert.equal(state.journal.abortedBeforeQuiescence, undefined);
+  assert.ok(state.operations.includes('resume'));
+});
+
+test('a recovery baseline failure preserves its unfinished journal and never closes newly observed traffic', async () => {
+  const state = fixture(() => true);
+  await assert.rejects(runManagedReleaseCutover(state.options), /Cutover paused/);
+  const token = state.journal.token;
+  const count = state.operations.length;
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      resumeToken: token,
+      assertInstalledBaseline: async () => {
+        throw new Error('installed version changed');
+      },
+    }),
+    /recovery baseline is unconfirmed/,
+  );
+  assert.equal(state.operations.length, count);
+  assert.notEqual(state.journal.phase, 'complete');
+  assert.equal(state.journal.token, token);
+  assert.equal(state.journal.abortedBeforeQuiescence, undefined);
+});
+
+test('losing an untouched-abort acknowledgement never falls back to closing traffic', async () => {
+  const state = fixture();
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      assertInstalledBaseline: async () => {
+        throw Error('baseline changed');
+      },
+      replaceJournal: async (record, version) => {
+        const saved = await state.options.replaceJournal(record, version);
+        if (record.abortedBeforeQuiescence) throw Error('lost abort acknowledgement');
+        return saved;
+      },
+    }),
+    /recovery ownership is unconfirmed/,
+  );
+  assert.deepEqual(state.operations, []);
+  assert.equal(state.journal.phase, 'complete');
+  assert.equal(state.journal.abortedBeforeQuiescence, true);
+});
+
+test('cutover recovery preserves its application baseline policy and values identity', async () => {
+  let fail = true;
+  const f = fixture(() => fail);
+  const workflowIdentity = {
+    operationId: 'workflow',
+    policyDigest: 'sha256:' + 'a'.repeat(64),
+    valuesDigest: 'sha256:' + 'b'.repeat(64),
+    beforeVerified: true,
+  };
+  await assert.rejects(runManagedReleaseCutover({ ...f.options, workflowIdentity }), /Cutover paused/);
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...f.options,
+      workflowIdentity: { ...workflowIdentity, beforeVerified: false },
+      resumeToken: f.journal.token,
+    }),
+    /original deployment safety contract/,
+  );
+  fail = false;
+  await runManagedReleaseCutover({ ...f.options, workflowIdentity, resumeToken: f.journal.token });
+  assert.equal(f.journal.phase, 'complete');
+});
+
+test('maintenance approval expiry is rechecked after slow inventory before acquiring ownership', async () => {
+  const state = fixture();
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      admissionExpiresAt: 2_000,
+      inventory: async () => {
+        const inventory = await state.options.inventory();
+        state.setTime(2_000);
+        return inventory;
+      },
+    }),
+    /admission deadline/,
+  );
+  assert.equal(state.journal, undefined);
+  assert.deepEqual(state.operations, []);
+});
+
+test('malformed admission deadlines fail before reading or mutating the release', async () => {
+  for (const admissionExpiresAt of [null, 0, -1, NaN, Infinity, '2000']) {
+    const state = fixture();
+    await assert.rejects(
+      runManagedReleaseCutover({
+        ...state.options,
+        admissionExpiresAt,
+        readJournal: async () => assert.fail('invalid approval must not read the release'),
+      }),
+      /admission deadline/,
+    );
+    assert.equal(state.journal, undefined);
+    assert.deepEqual(state.operations, []);
+  }
+});
+
+test('an admitted operation and its exact-token recovery can finish after admission expiry', async () => {
+  let fail = true;
+  const state = fixture(() => fail);
+  const options = {
+    ...state.options,
+    admissionExpiresAt: 2_000,
+    waitForStopped: async () => {
+      state.setTime(3_000);
+      await state.options.waitForStopped();
+    },
+  };
+  await assert.rejects(runManagedReleaseCutover(options), /Cutover paused/);
+  const token = state.journal.token;
+  fail = false;
+  await runManagedReleaseCutover({ ...options, resumeToken: token });
+  assert.equal(state.journal.phase, 'complete');
+  await assert.rejects(runManagedReleaseCutover(options), /admission deadline/);
+});
+
+test('same-layout maintenance stops fenced validation owners before reopening OnDelete workloads', async () => {
+  const state = fixture();
+  await runManagedReleaseCutover({ ...state.options, stopValidationBeforeResume: true });
+  assert.deepEqual(state.operations, [
+    'hpa:off',
+    'scale:0',
+    'stopped',
+    'install',
+    'validated',
+    'hpa:off',
+    'scale:0',
+    'stopped',
+    'resume',
+  ]);
+  assert.equal(state.journal.phase, 'complete');
+});
 test('lost acknowledgement never resumes; exact-token recovery repeats paused validation', async () => {
   let fail = true;
   const state = fixture(() => fail);
@@ -102,7 +269,7 @@ test('lost acknowledgement never resumes; exact-token recovery repeats paused va
   await assert.rejects(runManagedReleaseCutover(state.options), /unfinished cutover/);
   await assert.rejects(
     runManagedReleaseCutover({ ...state.options, resumeToken: state.journal.token, manifestDigest: 'different' }),
-    /unfinished cutover/,
+    /does not belong/,
   );
   fail = false;
   await runManagedReleaseCutover({ ...state.options, resumeToken: state.journal.token });
@@ -355,4 +522,119 @@ test('a long operation cannot silently renew an expired lease and resume traffic
   assert.equal(state.journal.phase, 'validating');
   await runManagedReleaseCutover({ ...state.options, resumeToken: state.journal.token });
   assert.equal(state.journal.phase, 'complete');
+});
+
+test('a quiesced checkpoint precedes installation and settlement completes before the journal', async () => {
+  const state = fixture();
+  const operationPlanDigest = 'sha256:' + 'a'.repeat(64);
+  const contexts = [];
+  await runManagedReleaseCutover({
+    ...state.options,
+    operationPlanDigest,
+    checkpoint: async (context) => {
+      contexts.push(context);
+      assert.equal(state.journal.phase, 'quiesced');
+      state.operations.push('checkpoint');
+      context.token = 'modified-copy';
+    },
+    settle: async (context) => {
+      contexts.push(context);
+      assert.equal(state.journal.phase, 'resuming');
+      assert.notEqual(context.token, 'modified-copy');
+      state.operations.push('settled');
+    },
+  });
+  assert.deepEqual(state.operations, [
+    'hpa:off',
+    'scale:0',
+    'stopped',
+    'checkpoint',
+    'install',
+    'validated',
+    'resume',
+    'settled',
+  ]);
+  assert.equal(state.journal.phase, 'complete');
+  assert.equal(state.journal.operationPlanDigest, operationPlanDigest);
+  assert.equal(contexts[1].operationPlanDigest, operationPlanDigest);
+  assert.equal(Object.hasOwn(contexts[1], 'workloads'), false);
+});
+
+test('failed settlement closes admission again and cannot mark the journal complete', async () => {
+  const state = fixture();
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      settle: async () => {
+        state.operations.push('settlement-failed');
+        throw new Error('old owners remain');
+      },
+    }),
+    /Cutover paused/,
+  );
+  assert.equal(state.journal.phase, 'resuming');
+  assert.deepEqual(state.operations.slice(-4), ['resume', 'settlement-failed', 'hpa:off', 'scale:0']);
+  await runManagedReleaseCutover({ ...state.options, resumeToken: state.journal.token });
+  assert.equal(state.journal.phase, 'complete');
+});
+
+test('failed frozen checkpoint prevents candidate installation and retains exact-plan recovery', async () => {
+  const state = fixture();
+  const operationPlanDigest = 'sha256:' + 'a'.repeat(64);
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      operationPlanDigest,
+      checkpoint: async () => {
+        throw new Error('backup verification failed');
+      },
+    }),
+    /Cutover paused/,
+  );
+  assert.equal(state.operations.includes('install'), false);
+  assert.equal(state.journal.phase, 'quiesced');
+  for (const digest of [undefined, 'sha256:' + 'b'.repeat(64)]) {
+    const previous = [...state.operations];
+    await assert.rejects(
+      runManagedReleaseCutover({ ...state.options, operationPlanDigest: digest, resumeToken: state.journal.token }),
+      /exact manifest and operation plan/,
+    );
+    assert.deepEqual(state.operations, previous);
+  }
+  await runManagedReleaseCutover({ ...state.options, operationPlanDigest, resumeToken: state.journal.token });
+  assert.equal(state.journal.phase, 'complete');
+});
+
+test('legacy recovery does not silently adopt a new operation plan', async () => {
+  const state = fixture(() => true);
+  await assert.rejects(runManagedReleaseCutover(state.options), /Cutover paused/);
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      resumeToken: state.journal.token,
+      operationPlanDigest: 'sha256:' + 'a'.repeat(64),
+    }),
+    /exact manifest and operation plan/,
+  );
+});
+
+test('lease expiration during settlement cannot produce a completion acknowledgement', async () => {
+  const state = fixture();
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      settle: async () => {
+        state.setTime(200_000);
+      },
+    }),
+    /closing admission is unconfirmed/,
+  );
+  assert.equal(state.journal.phase, 'resuming');
+});
+
+test('malformed operation plan digests fail before recording ownership', async () => {
+  const state = fixture();
+  await assert.rejects(runManagedReleaseCutover({ ...state.options, operationPlanDigest: 'not-a-digest' }), /SHA-256/);
+  assert.equal(state.journal, undefined);
+  assert.deepEqual(state.operations, []);
 });

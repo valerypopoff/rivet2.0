@@ -1,8 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { runHaControlTopologyTransition } from './lib/ha-control-topology.mjs';
-import { runHaRollingUpgrade, assertHaRolloutPlan } from './lib/ha-rolling-upgrade.mjs';
+import { runHaControlTopologyTransition as runTopologyStrategy } from './lib/ha-control-topology.mjs';
+import { runHaRollingUpgrade as runRollingStrategy, assertHaRolloutPlan } from './lib/ha-rolling-upgrade.mjs';
+import { fixtureDeploymentSafety } from './fixtures/deployment-safety.mjs';
+const runHaControlTopologyTransition = (options) =>
+  runTopologyStrategy({
+    ...options,
+    safety:
+      options.safety ??
+      fixtureDeploymentSafety('topology', options.identity, { baseline: options.assertInstalledBaseline }),
+  });
+const runHaRollingUpgrade = (options) =>
+  runRollingStrategy({
+    ...options,
+    safety:
+      options.safety ??
+      fixtureDeploymentSafety('rolling', options.identity, { baseline: options.assertInstalledBaseline }),
+  });
 
 function fixture(from = 'replicated') {
   let journal,
@@ -145,6 +160,49 @@ for (const stage of ['edge', 'withdraw', 'begin', 'templates'])
     );
   });
 
+test('topology baseline is rechecked under ownership before any edge or owner command', async () => {
+  const f = fixture();
+  f.options.assertInstalledBaseline = async () => {
+    assert.equal(f.journal.phase, 'owners');
+    assert.equal(f.journal.edgePrepareIssued, undefined);
+    assert.deepEqual(f.operations, ['preflight']);
+    throw Error('installed baseline changed');
+  };
+  await assert.rejects(runHaControlTopologyTransition(f.options), /installed baseline changed/);
+  assert.deepEqual(f.operations, ['preflight']);
+  assert.equal(f.journal.phase, 'complete');
+  assert.equal(f.journal.abortedBeforeTopologyChanges, true);
+});
+
+test('topology recovery cannot drop or replace its recorded deployment workflow identity', async () => {
+  const f = fixture();
+  const workflowIdentity = {
+    operationId: 'operation',
+    policyDigest: 'policy',
+    valuesDigest: 'values',
+    installedManifestDigest: 'installed',
+    beforeVerified: true,
+  };
+  f.options.identity.workflowIdentity = workflowIdentity;
+  f.options.prepareRuntimeEdge = async () => {
+    throw Error('edge outcome unknown');
+  };
+  await assert.rejects(runHaControlTopologyTransition(f.options), /edge outcome unknown/);
+  const resumeToken = f.journal.token;
+  const originalOperations = [...f.operations];
+  f.advance();
+  for (const identity of [undefined, { ...workflowIdentity, policyDigest: 'changed' }])
+    await assert.rejects(
+      runHaControlTopologyTransition({
+        ...f.options,
+        resumeToken,
+        identity: { ...f.options.identity, workflowIdentity: identity },
+      }),
+      /original deployment safety contract/,
+    );
+  assert.deepEqual(f.operations, originalOperations);
+});
+
 test('active accepted work, changed incarnation or UID cannot be removed to meet a deadline', async () => {
   for (const fault of ['busy', 'incarnation', 'uid']) {
     const f = fixture();
@@ -181,7 +239,11 @@ test('unknown template result, changed configuration and CAS conflict fail close
   conflict.options.saveJournal = async () => {
     throw Error('CAS conflict');
   };
-  await assert.rejects(runHaControlTopologyTransition(conflict.options), /CAS conflict/);
+  await assert.rejects(runHaControlTopologyTransition(conflict.options), (error) => {
+    assert.match(error.message, /ownership write is unconfirmed/);
+    assert.match(error.cause.message, /CAS conflict/);
+    return true;
+  });
   assert.deepEqual(conflict.operations, ['preflight']);
 });
 

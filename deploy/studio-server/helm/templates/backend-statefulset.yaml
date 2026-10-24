@@ -1,5 +1,5 @@
 {{ include "rivet.backendWorkload" . }}
-{{- if and .Values.ha.enabled (ne .Values.ha.controlPlane.mode "singleton") }}
+{{- if and .Values.ha.enabled (eq .Values.ha.controlPlane.mode "replicated") }}
 {{- $maintenance := deepCopy . }}
 {{- $_ := set $maintenance "haMaintenance" true }}
 {{- $_ := set $maintenance.Values.replicaCount "backend" 1 }}

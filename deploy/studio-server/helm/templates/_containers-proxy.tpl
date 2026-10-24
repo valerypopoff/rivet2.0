@@ -1,5 +1,5 @@
 {{- define "rivet.containers.proxy" -}}
-{{- $runtimeHealth := eq .Values.ha.controlPlane.mode "singleton" -}}
+{{- $runtimeHealth := has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap") -}}
 {{- $settingsService := include "rivet.apiServiceName" . -}}
 {{- $settingsPort := .Values.service.api.port -}}
 {{- if $runtimeHealth -}}
@@ -58,7 +58,7 @@
     - name: RIVET_PROXY_SETTINGS_URL
       value: {{ printf "http://%s:%v/internal/app-settings/proxy-config" (include "rivet.serviceFqdn" (dict "root" . "serviceName" $settingsService)) $settingsPort | quote }}
     - name: RIVET_PROXY_HEALTH_OWNER
-      value: {{ ternary "execution" "control" (eq .Values.ha.controlPlane.mode "singleton") | quote }}
+      value: {{ ternary "execution" "control" (has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap")) | quote }}
     {{- if .Values.auth.keySecretName }}
     - name: RIVET_KEY
       valueFrom:

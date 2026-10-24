@@ -12,6 +12,7 @@ import {
 import { buildManagedReleaseGateConfig } from './lib/kubernetes-managed-release-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { runHaKubernetesRollout } from './lib/ha-kubernetes-rollout.mjs';
+import { createDeploymentSafety } from './lib/deployment-safety.mjs';
 import { assertHaRetirement } from './lib/ha-rolling-upgrade.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './lib/ha-workflow-traffic.mjs';
@@ -57,6 +58,11 @@ const until = async (name, check, timeout = 180_000) => {
 /** Local functional proof only, never a promoted manifest/provider certificate.
  * Reuses the real managed fixture and release/retirement adapters. */
 export class RuntimeControlLocalGate extends HaReleaseGate {
+  deploymentSafety(mode, manifestDigest) {
+    return createDeploymentSafety({ mode, scope: 'local', checkBaseline: () => this.assertLocalContext(),
+      localIdentity: { release: this.config.release, namespace: this.config.namespace,
+        context: this.config.context, namespaceUid: this.namespaceUid, candidateManifestDigest: manifestDigest } });
+  }
   get edgeProfile() {
     const profile = this.config.runtimeEdgeProfile ?? 'regional';
     assert.ok(['regional', 'compact'].includes(profile), 'unknown local GKE edge profile');
@@ -165,6 +171,7 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
     const values = this.values(this.config.images, singleton),
       resources = await this.resources(values, `target-${singleton}`);
     return runHaKubernetesControlTopology({
+      safety: this.deploymentSafety('topology', this.config.images.api.digest),
       kube: (...args) => this.kube(...args),
       release: this.config.release,
       namespace: this.config.namespace,
@@ -179,6 +186,7 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
     const values = this.values(images, singleton),
       resources = await this.resources(values, `roll-${singleton}`);
     return runHaKubernetesRollout({
+      safety: this.deploymentSafety('rolling', images.api.digest),
       kube: (...args) => this.kube(...args),
       release: this.config.release,
       namespace: this.config.namespace,
@@ -217,7 +225,7 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       `/tmp/hostpath-provisioner/${this.config.namespace}/${claim.metadata.name}`,
       'only the fresh fixture hostPath may be initialized',
     );
-    const owner = (await this.pods()).find((p) => role(p) === 'maintenance');
+    const owner = (await this.pods()).find((p) => p.spec.volumes?.some((v) => v.persistentVolumeClaim?.claimName === claim.metadata.name));
     assert.ok(owner?.spec.nodeName?.startsWith(this.config.context));
     assert.equal(volume.spec.nodeAffinity, undefined);
     await this.kube([
@@ -719,6 +727,7 @@ async function main() {
     };
     const resources = await gate.resources(annotated, 'serial-roll');
     await runHaKubernetesRollout({
+      safety: gate.deploymentSafety('rolling', config.images.api.digest),
       kube: (...args) => gate.kube(...args),
       release: config.release,
       namespace: config.namespace,

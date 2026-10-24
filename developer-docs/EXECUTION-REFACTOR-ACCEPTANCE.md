@@ -1,5 +1,11 @@
 # Execution and Evaluation ownership refactor
 
+This guide describes the existing execution/Evaluation ownership work. For the
+2026-10-24 pre-refactor contract covering current bundle editor routing, Remote
+Debugger and playback, use the
+[functional baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md). The newly proposed
+coordination refactor is separate and has not started.
+
 This refactor changes ownership, not execution semantics or transport policy.
 Browser repaint yields, local recording playback, supported frozen outputs,
 external debugger observation, hosted recording ownership and Evaluation-owned

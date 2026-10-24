@@ -16,8 +16,7 @@ function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
     data: { execution: GraphExecutionMetadata };
     activityData: unknown;
   }> = [];
-  const settled: Array<{ project: ProjectId; root: string; successful: boolean }> = [];
-  const outcomes: string[] = [];
+  const settled: Array<{ project: ProjectId; root: string; status: 'completed' | 'error' | 'aborted' }> = [];
   const notices: Array<string | undefined> = [];
   const router = createRemoteExecutionObservationRouter({
     eligible,
@@ -36,8 +35,7 @@ function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
       projected.push({ project, message, data: data as { execution: GraphExecutionMetadata }, activityData });
     },
     settle: (project, root, status) => {
-      settled.push({ project, root, successful: status === 'completed' });
-      outcomes.push(status);
+      settled.push({ project, root, status });
     },
   });
   const emit = (
@@ -79,7 +77,7 @@ function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
     emit('start', 'a', root);
     emit('graphStart', 'a', root);
   };
-  return { router, source, opened, conflicts, records, projected, settled, outcomes, notices, emit, begin };
+  return { router, source, opened, conflicts, records, projected, settled, notices, emit, begin };
 }
 
 test('explicit eligibility prevents outsider projection without losing nested eligible children', () => {
@@ -114,11 +112,38 @@ test('one admitted stream projects A → B → C into actual owners and retains 
     f.projected.map((event) => event.project),
     ['b', 'b', 'c', 'c'],
   );
-  assert.equal(f.projected[0]!.data.execution.parentGraphRunId, undefined);
-  assert.equal(f.projected[0]!.data.execution.projectScope, undefined);
-  assert.equal(f.projected[2]!.data.execution.executor, undefined);
+  for (const [index, owner, parent] of [
+    [0, 'b', 'a-root'],
+    [2, 'c', 'b-root'],
+  ] as const) {
+    const original = f.projected[index]!.activityData as { execution: GraphExecutionMetadata };
+    const expected = {
+      projectId: id(owner),
+      rootRunId: 'root',
+      graphRunId: `${owner}-root`,
+      graphId: 'shared',
+      parentGraphRunId: parent,
+      projectScope: getSubgraphProjectKey({ projectId: id(owner), version: 'latest' }),
+      executor: { nodeId: 'shared', parentGraphId: 'shared', processId: 'shared', splitIndex: 0 },
+    };
+    assert.deepEqual(
+      original.execution,
+      expected,
+      'Run Activity retains original ancestry while the canvas is rebased',
+    );
+    assert.deepEqual(
+      f.projected[index]!.data.execution,
+      {
+        ...expected,
+        projectScope: undefined,
+        parentGraphRunId: undefined,
+        executor: undefined,
+      },
+      'canvas rebasing changes only cross-project view identity',
+    );
+  }
   const nested = {
-    ...f.projected[0]!.data.execution,
+    ...(f.projected[0]!.activityData as { execution: GraphExecutionMetadata }).execution,
     graphRunId: 'b-nested',
     parentGraphRunId: 'b-root',
     projectScope: getSubgraphProjectKey({ projectId: id('b'), version: 'latest' }),
@@ -168,10 +193,9 @@ test('overlapping roots settle separately, ignore late starts and do not end at 
   f.emit('nodeFinish', 'b', 'two');
   f.emit('error', 'a', 'two');
   assert.deepEqual(
-    f.settled.map((entry) => entry.successful),
-    [true, false],
+    f.settled.map((entry) => entry.status),
+    ['completed', 'error'],
   );
-  assert.deepEqual(f.outcomes, ['completed', 'error']);
 });
 
 test('a dependency becoming the next actual root releases its old passive lock and cannot be repainted by the prior root', () => {
@@ -191,7 +215,10 @@ test('a dependency becoming the next actual root releases its old passive lock a
     true,
   );
   assert.equal(f.records.size, 0);
-  assert.deepEqual(f.outcomes, ['aborted']);
+  assert.deepEqual(
+    f.settled.map((entry) => entry.status),
+    ['aborted'],
+  );
   f.emit('nodeFinish', 'b');
   assert.equal(f.projected.length, count);
   f.emit('graphStart', 'c');
@@ -361,10 +388,10 @@ test('disconnect interrupts only unfinished members of its source and leaves com
   f.emit('graphStart', 'c', 'active');
   f.router.disconnect(f.source);
   assert.deepEqual(
-    f.settled.map((entry) => [entry.project, entry.root, entry.successful]),
+    f.settled.map((entry) => [entry.project, entry.root, entry.status]),
     [
-      ['b', 'done', true],
-      ['c', 'active', false],
+      ['b', 'done', 'completed'],
+      ['c', 'active', 'aborted'],
     ],
   );
   assert.equal(f.records.size, 0);
@@ -377,7 +404,7 @@ test('receiver conflicts that start after admission interrupt that observation w
   f.conflicts.set(id('b'), 'Playback');
   f.emit('nodeStart', 'b');
   assert.equal(f.projected.length, 1);
-  assert.equal(f.settled[0]!.successful, false);
+  assert.equal(f.settled[0]!.status, 'aborted');
   assert.equal([...f.records.values()][0]!.observation.status, 'blocked');
 });
 
@@ -468,7 +495,9 @@ test('older runtimes settle observers at the exact root completion without ident
     f.emit('graphFinish', 'b');
     assert.equal(f.settled.length, 0);
     f.emit(terminal, 'a');
-    assert.deepEqual(f.settled, [{ project: 'b', root: 'root', successful: terminal === 'graphFinish' }]);
+    assert.deepEqual(f.settled, [
+      { project: 'b', root: 'root', status: terminal === 'graphFinish' ? 'completed' : 'error' },
+    ]);
     f.emit('done', 'a', 'root', { execution: undefined });
     f.emit('done', 'a');
     assert.equal(f.settled.length, 1);
@@ -485,7 +514,10 @@ test('root graphAbort is a cancellation request, not the end of late dependency 
   f.emit('nodeError', 'b');
   assert.equal(f.projected.at(-1)!.message, 'nodeError');
   f.emit('graphError', 'a');
-  assert.deepEqual(f.outcomes, ['aborted']);
+  assert.deepEqual(
+    f.settled.map((entry) => entry.status),
+    ['aborted'],
+  );
   f.emit('error', 'a');
   assert.equal(f.settled.length, 1);
 });
@@ -497,7 +529,10 @@ test('a new owner wins even when the next received frame is the source terminal'
   f.conflicts.set(id('b'), 'Independent debugger');
   f.emit('done', 'a');
   assert.equal([...f.records.values()][0]!.observation.status, 'blocked');
-  assert.deepEqual(f.outcomes, ['aborted']);
+  assert.deepEqual(
+    f.settled.map((entry) => entry.status),
+    ['aborted'],
+  );
 });
 
 test('ownership changes release all old view-only locks without waiting for another remote event', () => {
@@ -513,11 +548,17 @@ test('ownership changes release all old view-only locks without waiting for anot
     [...f.records.values()].every((entry) => entry.observation.status === 'blocked'),
     true,
   );
-  assert.deepEqual(f.outcomes, ['completed', 'aborted']);
+  assert.deepEqual(
+    f.settled.map((entry) => entry.status),
+    ['completed', 'aborted'],
+  );
   f.conflicts.clear();
   f.router.reconcileOwnership();
   f.emit('done', 'a', 'active');
-  assert.deepEqual(f.outcomes, ['completed', 'aborted']);
+  assert.deepEqual(
+    f.settled.map((entry) => entry.status),
+    ['completed', 'aborted'],
+  );
   f.begin('next');
   f.emit('graphStart', 'b', 'next');
   assert.equal([...f.records.values()].at(-1)!.observation.status, 'observing');
@@ -564,7 +605,11 @@ test('provider disposal removes observations and interrupts only its unfinished 
   f.emit('graphStart', 'b');
   f.router.dispose();
   assert.equal(f.records.size, 0);
-  assert.deepEqual(f.settled, [{ project: 'b', root: 'root', successful: false }]);
+  assert.deepEqual(
+    f.settled,
+    [{ project: 'b', root: 'root', status: 'aborted' }],
+    'disposal aborts observation; it does not fabricate a runtime error',
+  );
 });
 
 test('a reused root ID without caller ancestry cannot enroll an unrelated project', () => {
@@ -602,7 +647,7 @@ test('A → B → A return calls paint the source canvas but never duplicate or 
   assert.equal(f.projected.at(-1)!.project, 'a');
   assert.equal(f.projected.at(-1)!.activityData, false);
   f.emit('graphFinish', 'a');
-  assert.deepEqual(f.settled, [{ project: 'b', root: 'root', successful: true }]);
+  assert.deepEqual(f.settled, [{ project: 'b', root: 'root', status: 'completed' }]);
   f.router.disconnect(f.source);
   assert.equal(f.settled.length, 1);
 });

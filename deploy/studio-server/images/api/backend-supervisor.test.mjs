@@ -481,6 +481,18 @@ function environment({ apiPort, executorPort, healthPort }) {
   return env;
 }
 
+test('execution-only overlap pods do not initialize developer housekeeping or require its disk identity', async () => {
+  const env = { ...environment(await ports()), RIVET_HA_API_ONLY: '1', RIVET_API_PROFILE: 'execution',
+    RIVET_HA_CONTROL_PLANE_MODE: 'singleton-overlap' };
+  const supervisor = await startBackendSupervisor({ env,
+    apiCommand: [process.execPath, '-e', 'setInterval(()=>{},1000)'],
+    executorCommand: [process.execPath, '-e', 'process.exit(99)'],
+    shutdownTimeoutMs: 1000,
+  });
+  assert.equal(supervisor.housekeeping, null);
+  await supervisor.stop();
+});
+
 test(
   'shutdown in the listener-opening gap cannot strand a newly started child supervisor',
   { timeout: 10_000 },

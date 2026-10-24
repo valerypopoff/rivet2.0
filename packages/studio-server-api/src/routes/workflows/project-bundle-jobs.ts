@@ -420,6 +420,38 @@ export class ProjectBundleJobs {
     await Promise.all([...this.#jobs.values()].map((job) => job.done));
     sharedBundleArchives?.dispose();
   }
+  /** Read-only bridge preflight; never recovers or deletes predecessor scratch. */
+  async assertMayTransfer(): Promise<void> {
+    if (
+      this.#starting ||
+      this.#disposed ||
+      this.#draining ||
+      this.#cleanup ||
+      this.#retirementFailure ||
+      [...this.#jobs.values()].some((job) => job.done || job.cancelling || job.readers || job.cleanupFailed)
+    )
+      throw new Error('Bundle work blocks maintenance transfer.');
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.#root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    for (const name of entries) {
+      if (!ID.test(name)) continue;
+      // Read-only: adoption must not turn uncertain predecessor work into an
+      // interrupted result or delete its scratch as a side effect of a probe.
+      const journal = path.join(this.#root, name, 'status.json');
+      const stat = await fs.lstat(path.dirname(journal));
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Bundle ownership is unconfirmed.');
+      const file = await fs.lstat(journal);
+      if (!file.isFile() || file.isSymbolicLink() || file.size > 4096) throw Error('Bundle journal is unconfirmed.');
+      const status = JSON.parse(await fs.readFile(journal, 'utf8')) as ProjectBundleJobStatus;
+      if (status.id !== name || !['ready', 'failed', 'cancelled', 'interrupted'].includes(status.phase))
+        throw Error('Unfinished bundle journal blocks maintenance transfer.');
+    }
+  }
   /** Called after request admission drains, so every accepted start has registered its job. */
   async drainAcceptedWork() {
     this.#draining = true;

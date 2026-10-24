@@ -6,7 +6,19 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { Provider, createStore } from 'jotai';
 import { createEmptyEvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
-import type { DataId, GraphId } from '@valerypopoff/rivet2-core';
+import {
+  TextNodeImpl,
+  getSubgraphProjectKey,
+  type DataId,
+  type GraphId,
+  type GraphRunId,
+  type RootRunId,
+  type NodeId,
+  type PortId,
+  type ProcessId,
+  type ProcessEvents,
+  type GraphExecutionMetadata,
+} from '@valerypopoff/rivet2-core';
 import type { PathBasedIOProvider } from '../io/IOProvider.js';
 import { ProvidersProvider } from '../providers/ProvidersContext.js';
 import { MemoryStaticDataStore } from '../providers/StaticDataStore.js';
@@ -241,6 +253,19 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     errors,
     activate,
     routeBundle,
+    startBundleRun: (rootRunId: string) =>
+      routeBundle(a.metadata.id, 'start', {
+        project: a,
+        startGraph: a.graphs[a.metadata.mainGraphId!]!,
+        inputs: {},
+        contextValues: {},
+        execution: {
+          projectId: a.metadata.id,
+          rootRunId: rootRunId as RootRunId,
+          graphRunId: `${rootRunId}:entry` as GraphRunId,
+          graphId: a.metadata.mainGraphId!,
+        },
+      }),
     openFile,
     io,
     closeProject,
@@ -374,104 +399,78 @@ test('rebinding a tab during baseline recovery discards the old bundle read', as
   }
 });
 
-test('bundle execution targets inactive and active dependency tabs without taking run ownership', async () => {
-  const fixture = await mount(async () => {
-    throw new Error('Unexpected read');
-  });
-  const childGraph = fixture.b.graphs[fixture.b.metadata.mainGraphId!]!;
-  const node = { id: 'shared-node', type: 'text', data: { text: 'result' } };
-  const execution = {
-    projectId: fixture.b.metadata.id,
-    graphId: childGraph.metadata!.id,
-    rootRunId: 'root-run',
-    graphRunId: 'child-run',
-    parentGraphRunId: 'entry-run',
-    projectScope: 'child:latest',
-  };
-  try {
-    await act(async () => fixture.baseline.markProjectClean(fixture.b.metadata.id, { project: fixture.b }));
-    fixture.store.set(projectsState, (previous) => ({
-      ...previous,
-      openedProjects: Object.fromEntries(
-        Object.entries(previous.openedProjects).map(([id, info]) => [
-          id,
-          { ...info, bundleManifestPath: 'rivet-bundle.json' },
-        ]),
-      ),
-    }));
-    await act(async () => {
-      fixture.routeBundle(fixture.a.metadata.id, 'graphStart', { graph: childGraph, execution } as never);
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
-        node,
-        processId: 'process',
-        outputs: { output: { type: 'string', value: 'first' } },
-        execution,
-      } as never);
+for (const membership of ['desktop', 'hosted'] as const)
+  test(`${membership} bundle results follow real tab activation without taking run ownership`, async () => {
+    const fixture = await mount(async () => {
+      throw new Error('Unexpected read');
     });
-    const inactive = fixture.store.get(projectExecutionSnapshotsState)[fixture.b.metadata.id]!;
-    assert.equal(inactive.lastRunDataByNode['shared-node' as never]![0]!.parentGraphRunId, undefined);
-    assert.equal(inactive.graphRunning, false, 'dependency display is not an independent root run');
-    assert.equal(
-      fixture.store.get(lastRunDataByNodeState)['shared-node' as never],
-      undefined,
-      'caller canvas remains isolated',
-    );
-    await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
-    await act(async () =>
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
+    try {
+      const node = TextNodeImpl.create();
+      node.id = 'shared-node' as NodeId;
+      fixture.b.graphs[fixture.b.metadata.mainGraphId!]!.nodes.push(node);
+      await act(async () => fixture.baseline.markProjectClean(fixture.b.metadata.id, { project: fixture.b }));
+      fixture.store.set(projectsState, (state) => ({
+        ...state,
+        openedProjects: Object.fromEntries(
+          Object.entries(state.openedProjects).map(([id, info]) => [
+            id,
+            {
+              ...info,
+              ...(membership === 'desktop'
+                ? { bundleManifestPath: 'rivet-bundle.json' }
+                : { hostedBundleKey: 'server:bundle' }),
+            },
+          ]),
+        ),
+      }));
+      const graph = fixture.b.graphs[fixture.b.metadata.mainGraphId!]!;
+      const execution: GraphExecutionMetadata = {
+        projectId: fixture.b.metadata.id,
+        graphId: graph.metadata!.id!,
+        rootRunId: 'root-run' as RootRunId,
+        graphRunId: 'child-run' as GraphRunId,
+        parentGraphRunId: 'root-run:entry' as GraphRunId,
+        projectScope: getSubgraphProjectKey({ projectId: fixture.b.metadata.id, version: 'latest' }),
+      };
+      const data: ProcessEvents['nodeFinish'] = {
         node,
-        processId: 'process',
-        outputs: { output: { type: 'string', value: 'second' } },
+        processId: 'process' as ProcessId,
         execution,
-      } as never),
-    );
-    assert.equal(fixture.store.get(lastRunDataByNodeState)['shared-node' as never]![0]!.data.status?.type, 'ok');
-    assert.deepEqual(
-      fixture.store.get(lastRunDataByNodeState)['shared-node' as never]![0]!.data.outputData?.['output' as never],
-      {
+        outputs: { ['output' as PortId]: { type: 'string', value: 'inactive' } },
+      };
+      await act(async () => {
+        fixture.startBundleRun(execution.rootRunId);
+        fixture.routeBundle(fixture.a.metadata.id, 'graphStart', { graph, inputs: {}, execution });
+        fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', data);
+      });
+      const inactive = fixture.store.get(projectExecutionSnapshotsState)[fixture.b.metadata.id]!;
+      assert.equal(inactive.graphRunning, false, 'display is not an independent root');
+      assert.equal(inactive.lastRunDataByNode[node.id]![0]!.parentGraphRunId, undefined);
+      assert.deepEqual(inactive.lastRunDataByNode[node.id]![0]!.data.outputData?.['output' as PortId], {
         type: 'string',
         storage: 'inline',
-        value: 'second',
-      },
-    );
-    const beforeReplay = fixture.store.get(lastRunDataByNodeState);
-    await act(async () =>
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
-        node,
-        processId: 'replay',
-        outputs: {},
-        execution,
-        replayRecordedAt: 1,
-      } as never),
-    );
-    assert.equal(
-      fixture.store.get(lastRunDataByNodeState),
-      beforeReplay,
-      'replay is not projected as a live bundle run',
-    );
-    fixture.store.set(projectsState, (previous) => ({
-      ...previous,
-      openedProjects: {
-        ...previous.openedProjects,
-        [fixture.b.metadata.id]: {
-          ...previous.openedProjects[fixture.b.metadata.id]!,
-          bundleManifestPath: 'other-bundle.json',
-        },
-      },
-    }));
-    await act(async () =>
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
-        node,
-        processId: 'foreign',
-        outputs: {},
-        execution,
-      } as never),
-    );
-    assert.equal(fixture.store.get(lastRunDataByNodeState), beforeReplay, 'unrelated bundles are excluded');
-  } finally {
-    await fixture.cleanup();
-  }
-});
+        value: 'inactive',
+      });
+      assert.equal(fixture.store.get(lastRunDataByNodeState)[node.id], undefined, 'source remains isolated');
+      await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
+      await act(async () =>
+        fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
+          ...data,
+          outputs: { ['output' as PortId]: { type: 'string', value: 'active' } },
+        }),
+      );
+      assert.deepEqual(fixture.store.get(lastRunDataByNodeState)[node.id]![0]!.data.outputData?.['output' as PortId], {
+        type: 'string',
+        storage: 'inline',
+        value: 'active',
+      });
+      await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.a.metadata.id)), true));
+      assert.equal(fixture.store.get(graphState).metadata?.description, 'Unsaved live edit');
+      assert.equal(fixture.store.get(lastRunDataByNodeState)[node.id], undefined);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 
 test('manifest opening adds every missing tab, selects root and preserves existing edits and baselines', async () => {
   const child = createBlankProjectWithDefaultGraph();

@@ -3,13 +3,14 @@ import { runHaControlTopologyTransition } from './ha-control-topology.mjs';
 import { getHaConfigurationDigest, hasSameHaOwnerIdentity, hasSameHaServiceRouting } from './ha-kubernetes-rollout.mjs';
 import { releaseOperationJournalName, journalForReleaseOperation } from './release-operation-journal.mjs';
 import { waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
+import { requireDeploymentSafety } from './deployment-safety.mjs';
 
 const role = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
 const container = (r) => r.spec?.template?.spec?.containers?.find((c) => ['backend', 'api'].includes(c.name));
 const mode = (r) => {
   const env = container(r)?.env?.find((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE');
   const value = env?.value ?? 'replicated';
-  if (env?.valueFrom || !['replicated', 'singleton'].includes(value))
+  if (env?.valueFrom || !['replicated', 'singleton', 'singleton-overlap'].includes(value))
     throw new Error('Control topology mode must be an explicit deployment-owned literal.');
   return value;
 };
@@ -64,7 +65,11 @@ export async function runHaKubernetesControlTopology({
   artifact = async () => {},
   timeoutMs = 900_000,
   routingWithdrawalClock,
+  safety,
+  settle,
 }) {
+  requireDeploymentSafety(safety, 'topology', { release, namespace, manifestDigest });
+  settle = safety.requireSettlement(settle);
   const selector = `app.kubernetes.io/instance=${release}`;
   const json = async (args) => JSON.parse((await kube(args)).stdout);
   const list = async (kind) => (await json(['get', kind, '-l', selector, '-o', 'json'])).items;
@@ -122,7 +127,7 @@ export async function runHaKubernetesControlTopology({
   const desiredOwner = target.filter((r) => r.spec.template.spec.volumes?.some((v) => v.name === 'legacy-restore'));
   if (
     desiredOwner.length !== 1 ||
-    role(desiredOwner[0]) !== (to === 'singleton' ? 'backend' : 'maintenance') ||
+    role(desiredOwner[0]) !== (to !== 'replicated' ? 'backend' : 'maintenance') ||
     desiredOwner[0].spec.replicas !== 1 ||
     target.some((r) => r.spec.updateStrategy?.type !== 'OnDelete')
   )
@@ -131,7 +136,7 @@ export async function runHaKubernetesControlTopology({
   const claimName = `${release}-legacy-restore`;
   // Fullname overrides are allowed; derive the authoritative claim from the
   // single source owner, not by discovering prefix matches.
-  const owner = current.find((r) => role(r) === (from === 'singleton' ? 'backend' : 'maintenance'));
+  const owner = current.find((r) => role(r) === (from !== 'replicated' ? 'backend' : 'maintenance'));
   const claims = owner?.spec.template.spec.volumes?.filter((v) => v.name === 'legacy-restore');
   const claim = await json([
     'get',
@@ -190,6 +195,10 @@ export async function runHaKubernetesControlTopology({
             replicas: r.spec.replicas,
           }))
           .sort((a, b) => (a.role === 'backend' ? -1 : 1) - (b.role === 'backend' ? -1 : 1));
+  const runtimePods =
+    safety.binding.scope === 'production' && !(saved?.phase !== 'complete' && saved?.topologyProtocol === 1)
+      ? (await json(['get', 'pods', '-o', 'json'])).items
+      : [];
   const runtime =
     saved?.phase !== 'complete' && saved?.topologyProtocol === 1
       ? saved.runtime
@@ -200,6 +209,15 @@ export async function runHaKubernetesControlTopology({
             uid: r.metadata.uid,
             replicas: r.spec.replicas,
             image: container(r)?.image,
+            ...(safety.binding.scope === 'production'
+              ? {
+                  revision: r.status?.updateRevision,
+                  pods: runtimePods
+                    .filter((p) => p.metadata.ownerReferences?.some((o) => o.controller && o.uid === r.metadata.uid))
+                    .map((p) => p.metadata.uid)
+                    .sort(),
+                }
+              : {}),
           }));
   const identity = {
     release,
@@ -217,6 +235,8 @@ export async function runHaKubernetesControlTopology({
     proxyUid: sourceProxy.metadata.uid,
     runtime,
   };
+  if (safety.binding.scope === 'production' && runtime.some((w) => !w.revision || w.pods?.length !== w.replicas))
+    throw Error('Topology transfer requires the exact original execution revision and pod UIDs.');
   const until = async (check, message) => {
     const deadline = Date.now() + timeoutMs;
     while (!(await check())) {
@@ -243,6 +263,17 @@ export async function runHaKubernetesControlTopology({
         throw new Error(
           'Two actually ready production execution pods are required; stale controller status is insufficient.',
         );
+      if (
+        w.pods &&
+        (runtimePods.length !== w.pods.length ||
+          runtimePods.some(
+            (p) =>
+              !w.pods.includes(p.metadata.uid) ||
+              !ready(p) ||
+              p.metadata.labels?.['controller-revision-hash'] !== w.revision,
+          ))
+      )
+        throw Error('Retained topology execution pod identities changed.');
     }
     const currentClaim = await json(['get', 'pvc', identity.claimName, '-o', 'json']);
     if (
@@ -349,10 +380,15 @@ export async function runHaKubernetesControlTopology({
   const publicServices = new Set(
     resources.filter((r) => r.kind === 'Service' && !r.spec.publishNotReadyAddresses).map((r) => r.metadata.name),
   );
-  const routingGone = (target) => waitForHaRoutingWithdrawal({
-    pod: target, publicServices, observePod: pod, timeoutMs, clock: routingWithdrawalClock,
-    readSlices: async () => (await json(['get', 'endpointslice', '-o', 'json'])).items,
-  });
+  const routingGone = (target) =>
+    waitForHaRoutingWithdrawal({
+      pod: target,
+      publicServices,
+      observePod: pod,
+      timeoutMs,
+      clock: routingWithdrawalClock,
+      readSlices: async () => (await json(['get', 'endpointslice', '-o', 'json'])).items,
+    });
   const allPods = async () => (await json(['get', 'pods', '-o', 'json'])).items;
   const templatesApplied = async () => {
     const live = await list('statefulset');
@@ -388,11 +424,19 @@ export async function runHaKubernetesControlTopology({
   };
   return runHaControlTopologyTransition({
     identity,
+    safety,
     inventory,
     resumeToken,
     timeoutMs,
     readJournal,
     saveJournal: async (record, rv) => {
+      if (!record.resourceVersion) {
+        // An idle autoscaler may advance a completed journal during preflight.
+        // Refresh before the first CAS; never retry an uncertain ownership write.
+        const latest = await readJournal();
+        if (latest && latest.phase !== 'complete') throw Error('Another release operation acquired the journal during preflight.');
+        rv = observedVersion;
+      }
       const { resourceVersion: _, ...data } = record;
       const version = rv ?? observedVersion;
       const cm = {
@@ -444,6 +488,12 @@ export async function runHaKubernetesControlTopology({
       const frontends = await list('deployment');
       for (const c of frontends) {
         const t = resources.find((r) => r.kind === 'Deployment' && r.metadata.name === c.metadata.name);
+        if (role(c) === 'autoscaler') {
+          if (!t || role(t) !== 'autoscaler' || c.spec.replicas !== t.spec.replicas ||
+              !matchesTopologyTemplate(c.spec.template, t.spec.template))
+            throw Error('Topology transfer may not change the independent autoscaler.');
+          continue;
+        }
         if (
           !t ||
           !['web', 'proxy'].includes(role(c)) ||
@@ -480,16 +530,20 @@ export async function runHaKubernetesControlTopology({
         );
         if (
           contract.protocol !== 1 ||
+          ((from === 'singleton-overlap' || to === 'singleton-overlap') &&
+            contract.housekeepingOverlapProtocol !== 1) ||
           (role(p) === 'backend' && contract.scheduledRunScope !== 'latest') ||
           (role(p) === 'execution' &&
             (!contract.executionOwnedProxySettings || contract.scheduledRunScope !== 'published'))
         )
           throw new Error('Bridge runtime contract is missing; no owner was changed.');
+        if (from === 'singleton' && to === 'singleton-overlap' && role(p) === 'backend' && contract.maintenanceIdle !== true)
+          throw Error('Bridge maintenance is busy or unconfirmed; no developer owner was withdrawn.');
       }
       await artifact('ha-control-topology-preflight.json', JSON.stringify(identity, null, 2));
     },
     prepareRuntimeEdge: async () => {
-      if (from === 'singleton') return; // Already runtime-owned; reverse switches back only after control recovers.
+      if (from !== 'replicated') return; // Already runtime-owned; reverse switches back only after control recovers.
       await checkRuntime();
       const live = await json(['get', 'deployment', sourceProxy.metadata.name, '-o', 'json']);
       if (live.metadata.uid !== identity.proxyUid || live.spec.replicas !== sourceProxy.spec.replicas)
@@ -557,7 +611,7 @@ export async function runHaKubernetesControlTopology({
         if (!recorded || recorded.uid !== w.metadata.uid || !w.metadata.resourceVersion)
           throw new Error('Topology workload UID changed before template transfer.');
         if (role(w) !== 'execution' && w.spec.replicas !== 0) throw new Error('Developer workload is not stopped.');
-        if (role(w) === 'maintenance' && to === 'singleton') {
+        if (role(w) === 'maintenance' && to !== 'replicated') {
           // Helm's omission must not delete an unobserved replacement object.
           await kube(
             ['delete', '--raw', `/apis/apps/v1/namespaces/${namespace}/statefulsets/${w.metadata.name}`, '-f', '-'],
@@ -607,15 +661,25 @@ export async function runHaKubernetesControlTopology({
           const mounts = pods.filter((p) =>
             p.spec.volumes?.some((v) => v.persistentVolumeClaim?.claimName === identity.claimName),
           );
-          if (mounts.length !== 1 || role(mounts[0]) !== (to === 'singleton' ? 'backend' : 'maintenance')) {
+          if (mounts.length !== 1 || role(mounts[0]) !== (to !== 'replicated' ? 'backend' : 'maintenance')) {
             pending = 'one maintenance volume owner';
             return false;
+          }
+          if (to === 'singleton-overlap') {
+            const owner = mounts[0];
+            const status = JSON.parse((await kube(['exec', owner.metadata.name, '-c', 'backend', '--', 'node', '/opt/rivet/retire-backend.mjs'])).stdout);
+            if (status.housekeeping?.state !== 'owner' || status.housekeeping.podUid !== owner.metadata.uid) {
+              pending = 'confirmed exclusive housekeeping worker'; return false;
+            }
           }
           return true;
         },
         () => `Final topology is pending ${pending}`,
       );
+      const settlement = await settle({ retainedExecution: runtime });
+      safety.confirmSettlement(settlement);
       await artifact('ha-control-topology-verified.json', JSON.stringify(identity, null, 2));
+      return settlement;
     },
   });
 }

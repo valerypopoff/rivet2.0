@@ -14,7 +14,7 @@ import {
 } from './lib/execution-autoscaler-kubernetes.mjs';
 import { autoscalerPolicy, reconcileExecutionAutoscaling } from './lib/execution-autoscaler.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
-import { haFrozenAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
+import { haFrozenAutoscalingValues, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
 import { childEnvironments } from '../images/api/backend-supervisor.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -148,6 +148,33 @@ test('HA operational pause retains execution retirement protection and fences pr
   );
 });
 
+test('cooperative rollout keeps execution and proxy growth active and pauses only proxy downscale', () => {
+  const overlay = haRolloutAutoscalingValues(render());
+  const overrides = Object.entries(overlay.autoscaling).flatMap(([role, fields]) =>
+    Object.entries(fields).map(([key, value]) => `autoscaling.${role}.${key}=${value}`));
+  const resources = render(...overrides);
+  assert.equal(resources.find(r => r.kind === 'Deployment' && r.metadata.labels['app.kubernetes.io/component'] === 'autoscaler').spec.replicas, 1);
+  const hpa = resources.find(r => r.kind === 'HorizontalPodAutoscaler');
+  assert.equal(hpa.metadata.labels['app.kubernetes.io/component'], 'proxy');
+  assert.equal(hpa.spec.behavior.scaleDown.selectPolicy, 'Disabled');
+  assert.notEqual(hpa.spec.behavior.scaleUp?.selectPolicy, 'Disabled');
+  assert.equal(render().find(r => r.kind === 'HorizontalPodAutoscaler').spec.behavior.scaleDown.selectPolicy, undefined);
+});
+
+test('cooperative scale-up cannot apply a demand sample after the workload configuration version changes', async () => {
+  const calls = [];
+  const io = createExecutionAutoscalerIO({ release: 'rivet', namespace: 'fixture', workload: 'execution', service: 'execution',
+    image: 'candidate', port: 8080, policy: autoscalerPolicy({}), transport: {
+      json: async (method, request) => {
+        calls.push([method, request]);
+        assert.equal(method, 'GET', 'No PATCH is allowed after a stale workload observation');
+        return { metadata: { uid: 'workload', resourceVersion: 'new-template' }, spec: { replicas: 3 } };
+      },
+    } });
+  await assert.rejects(io.scale('workload', 3, 4, 'sampled-old-template'), /precondition changed/);
+  assert.equal(calls.length, 1);
+});
+
 test('chart rejects two replica writers, unsafe floors/targets/metrics and a DB budget below the maximum', () => {
   for (const bad of [
     'ha.enabled=false',
@@ -179,7 +206,45 @@ test('reviewed execution ceiling fits a shared 200-connection allowance without 
     assert.throws(() => render('postgres.maxConnections=200', `autoscaling.execution.maxReplicas=${max}`));
 });
 
-async function clusterFixture(t) {
+test('compact HA maintenance validation preserves workload and storage identities while fencing traffic and timers', () => {
+  const serving = render();
+  const maintenance = [
+    'workflowSchema.maintenanceValidation=true',
+    'replicaCount.proxy=0', 'replicaCount.web=0', 'replicaCount.evaluation=0',
+    'autoscaling.execution.enabled=false', 'autoscaling.executionController.enabled=false',
+    'autoscaling.proxy.enabled=false', 'autoscaling.web.enabled=false', 'autoscaling.backend.enabled=false',
+  ];
+  const validation = render(...maintenance);
+  assert.equal(validation.some((resource) => resource.kind === 'HorizontalPodAutoscaler'), false);
+  assert.equal(validation.some((resource) => resource.metadata?.labels?.['app.kubernetes.io/component'] === 'autoscaler'), false);
+  for (const component of ['backend', 'execution', 'proxy', 'web']) {
+    const workload = (resources) => resources.find((resource) => ['StatefulSet', 'Deployment'].includes(resource.kind) &&
+      resource.metadata.labels?.['app.kubernetes.io/component'] === component);
+    const before = workload(serving), during = workload(validation);
+    assert.ok(before && during, component);
+    assert.equal(during.metadata.name, before.metadata.name, component);
+    assert.equal(during.kind, before.kind, component);
+    assert.deepEqual(during.spec.selector, before.spec.selector, component);
+    assert.equal(during.spec.serviceName, before.spec.serviceName, component);
+    assert.deepEqual(during.spec.template.spec.volumes, before.spec.template.spec.volumes, component);
+    assert.equal(during.spec.replicas, ['proxy', 'web'].includes(component) ? 0 : before.spec.replicas, component);
+    for (const container of during.spec.template.spec.containers) {
+      assert.equal(container.lifecycle.preStop.exec.command.at(-1), 'sleep 0');
+      if (['backend', 'execution'].includes(component)) {
+        assert.equal(container.env.find((entry) => entry.name === 'RIVET_RELEASE_MAINTENANCE')?.value, 'true');
+        assert.equal(container.env.find((entry) => entry.name === 'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED')?.value, 'false');
+        assert.equal(container.env.find((entry) => entry.name === 'RIVET_MANAGED_MAINTENANCE_ENABLED')?.value, 'false');
+      }
+    }
+    for (const container of before.spec.template.spec.containers)
+      assert.equal(container.lifecycle.preStop.exec.command.at(-1), 'sleep 120');
+  }
+  assert.throws(() => render('replicaCount.web=0'), /minimum|singleton control requires/);
+  assert.throws(() => render(...maintenance, 'replicaCount.web=1'), /maintenance validation requires/);
+  assert.throws(() => render(...maintenance, 'replicaCount.execution=1'), /singleton control requires/);
+});
+
+async function clusterFixture(t, policyOverrides = {}) {
   let time = Date.now(),
     journal = null,
     version = 1,
@@ -198,6 +263,7 @@ async function clusterFixture(t) {
     cooldownSeconds: 10,
     pollSeconds: 10,
     withdrawalSeconds: 1,
+    ...policyOverrides,
   });
   const pods = new Map(),
     logs = [];
@@ -429,6 +495,7 @@ test('actual HTTP/exec-WebSocket client observes admission demand, CAS scales, w
     await f.tick();
   }
   assert.equal(f.logs.filter((l) => l[0] === 'EXEC' && l[2] === '--withdraw-only').length, 1);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
   f.advance();
   assert.equal((await f.tick()).state, 'draining');
   assert.equal((await f.tick()).state, 'waiting-for-work');
@@ -451,6 +518,7 @@ test('issued retirement settles during a metrics outage without load sampling or
     f.advance();
     await f.tick();
   }
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
   f.advance();
   await f.tick();
   [...f.pods.values()].at(-1).retirement.state = 'drained';
@@ -473,6 +541,41 @@ test('issued retirement settles during a metrics outage without load sampling or
     false,
   );
   await assert.rejects(f.tick(), /Kubernetes/); // Missing metrics still fence a NEW load decision.
+});
+
+test('HTTP EndpointSlice delay and failed observation require a new full propagation window before exec begin', async (t) => {
+  const f = await clusterFixture(t, { withdrawalSeconds: 60 });
+  const targetUid = [...f.pods.values()].at(-1).metadata.uid;
+  f.fault((req, res) => {
+    if (!req.url.includes('/endpointslices')) return false;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ items: [{ endpoints: [{ targetRef: { uid: targetUid }, conditions: { ready: true } }] }] }));
+    return true;
+  });
+  await f.tick();
+  for (let i = 0; i < 4; i++) { f.advance(); await f.tick(); }
+  f.advance(61);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  f.fault(null);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  for (let i = 0; i < 3; i++) { f.advance(); await f.tick(); }
+  f.fault((req, res) => {
+    if (!req.url.includes('/endpointslices')) return false;
+    res.writeHead(503);
+    res.end('{}');
+    return true;
+  });
+  await assert.rejects(f.tick(), /Kubernetes/);
+  f.fault(null);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  for (let i = 0; i < 5; i++) {
+    f.advance();
+    assert.equal((await f.tick()).state, 'waiting-for-routing');
+  }
+  assert.equal(f.logs.filter((call) => call[0] === 'EXEC' && call[2] === '--begin-only').length, 0);
+  f.advance();
+  assert.equal((await f.tick()).state, 'draining');
+  assert.equal(f.logs.filter((call) => call[0] === 'EXEC' && call[2] === '--begin-only').length, 1);
 });
 
 test('lease expiry during real peer queries prevents subsequent Kubernetes fence writes', async (t) => {
@@ -502,6 +605,7 @@ test('an unrecorded replacement at a removed tail keeps the actual Kubernetes te
     f.advance();
     await f.tick();
   }
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
   f.advance();
   await f.tick();
   const tail = [...f.pods.values()].at(-1);

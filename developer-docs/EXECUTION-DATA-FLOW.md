@@ -13,6 +13,9 @@ tests are not a mixed-version deployment certificate.
 
 This is the detailed event/storage reference. The shorter canonical ownership guide
 is [Execution Identity And Snapshots](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md).
+For behavior-preserving changes to bundle execution routing, compare against the
+dated [functional baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md), including its
+explicit current differences and characterization gaps.
 
 > Internal reference for how graph execution, subgraph runs, navigation context,
 > and node data storage interact in the desktop app.
@@ -86,13 +89,17 @@ identical node/root messages within its five-second window. Cancellation uses
 `abort`, not a fabricated execution-error toast. This changes presentation only;
 it does not add desktop cross-project loading or suppress the Core loader guard.
 
-## Desktop bundle dataflow across tabs
+<a id="desktop-bundle-dataflow-across-tabs"></a>
+
+## Editor bundle dataflow across tabs
 
 Core `GraphExecutionMetadata.projectId` identifies the actual project owning a
 graph snapshot, including legacy referenced-graph aliases. Cross-project child
 processors carry an isolated `projectScope`; same-project children inherit it.
-`useBundleExecutionRouting` observes live Browser and internal desktop Node
-events and projects them only to open tabs sharing the entry's `bundleManifestPath`.
+`useBundleExecutionRouting` observes live Browser, internal desktop Node and
+internal hosted Node events. It projects only to then-open tabs sharing the entry's
+explicit bundle key: server-qualified `hostedBundleKey`, or the desktop manifest
+binding when no authoritative hosted membership/detachment is present.
 It updates inactive project execution snapshots or restores the active target's
 snapshot. At a cross-project boundary it clears caller executor/parent identity
 for the target canvas; same-project nested graph identities are retained.
@@ -101,7 +108,18 @@ This is display-only: entry run cancellation, prompts, recordings and terminal
 errors stay with the entry tab. Root lifecycle events are not copied as independent
 dependency runs. Replay is not live execution and is excluded. Observer failures
 are non-terminal diagnostics. Older event producers without `projectId` keep their
-existing routing. Root-run owner maps are bounded and released on completion/error.
+existing routing. Identified source-root graph finish/error (or identified
+done/error) releases local routing; unscoped Browser done/error cannot do that alone.
+Child starts and late node completions cannot re-establish a closed observation.
+There is no arbitrary active-root eviction limit in this local map. Explicit
+disconnect/disposal and missing-terminal memory behavior remain separate
+characterization work, not a claim of a new shared lifetime owner.
+
+Local receiver conflicts are sticky for that root, including before the first
+child event and between events. Captured paths/keys plus synchronous subscriptions
+exclude reopened/rebound/moved members and source bindings from old projection.
+The next root can observe an eligible tab normally. See LOC-01–08 and GAP-01–05
+in the baseline for the deliberate distinctions from the remote path.
 
 Both versioned cross-project Subgraphs and legacy referenced-graph aliases emit
 foreign-scoped live events. Root recorders exclude those child events because the
@@ -111,7 +129,7 @@ Do not confuse this recording boundary with missing live dataflow across bundle 
 ## Remote bundle dataflow across tabs
 
 External Remote Debugger has one shared bundle connection, startable/stoppable
-from any open member. Open-project references or an explicit bundle manifest bind
+from any open member. Explicit Server container membership or a desktop manifest binds
 its controls; runtime identity/ancestry still gates per-project display projection.
 Transient shared sessions never replace persisted local executor preferences. See
 [remote dependency observations](./EXECUTION-IDENTITY-AND-SNAPSHOTS.md#remote-dependency-observations-across-open-tabs)

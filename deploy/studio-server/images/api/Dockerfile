@@ -94,6 +94,7 @@ COPY --chown=10001:10001 deploy/studio-server/images/api/entrypoint.sh /opt/rive
 COPY --chown=10001:10001 deploy/studio-server/images/executor/entrypoint.sh /opt/rivet/executor-entrypoint.sh
 COPY --chown=10001:10001 deploy/studio-server/images/api/backend-supervisor.mjs /opt/rivet/backend-supervisor.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/backend-retirement.mjs /opt/rivet/backend-retirement.mjs
+COPY --chown=10001:10001 deploy/studio-server/images/api/housekeeping-supervisor.mjs deploy/studio-server/images/api/maintenance-lock.mjs deploy/studio-server/images/api/maintenance-lock-inherit.mjs /opt/rivet/
 COPY --chown=10001:10001 deploy/studio-server/images/api/retire-backend.mjs /opt/rivet/retire-backend.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/local-upgrade-ui.mjs /opt/rivet/local-upgrade-ui.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/local-metadata-owner-lease.mjs /opt/rivet/local-metadata-owner-lease.mjs

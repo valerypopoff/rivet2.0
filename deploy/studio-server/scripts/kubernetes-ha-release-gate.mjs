@@ -11,6 +11,7 @@ import {
 } from './lib/kubernetes-managed-release-gate-config.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { runHaKubernetesRollout } from './lib/ha-kubernetes-rollout.mjs';
+import { createDeploymentSafety } from './lib/deployment-safety.mjs';
 import { HaReleaseProbes, haProofTimeoutMs } from './lib/ha-release-probes.mjs';
 import {
   assertStudioServerReleaseManifest,
@@ -335,6 +336,9 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
     const kubectl = (args, extra = {}) =>
       gate.kubectl(['-n', gate.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
     rollout = await runHaKubernetesRollout({
+      safety: createDeploymentSafety({ mode: 'rolling', scope: 'rehearsal', checkBaseline: () => gate.assertProofContext(),
+        localIdentity: { release: gate.config.release, namespace: gate.config.namespace, context: gate.config.context,
+          candidateManifestDigest: images.api.digest } }),
       kube: kubectl,
       release: gate.config.release,
       namespace: gate.config.namespace,

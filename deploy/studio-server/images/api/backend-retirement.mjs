@@ -10,6 +10,7 @@ export function createBackendRetirement({
   available,
   wait = () => new Promise((resolve) => setTimeout(resolve, 250)),
   onRetiring = () => {},
+  beforeDrained = async () => {},
 }) {
   let state = 'serving';
   let operationId = null;
@@ -40,6 +41,7 @@ export function createBackendRetirement({
     state = 'draining';
     await drainParticipant(executor);
     await drainParticipant(api);
+    await beforeDrained(operationId);
     if (!available()) throw new Error('Participant ownership was lost during retirement.');
     state = 'drained';
   };

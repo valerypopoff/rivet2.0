@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { createServer, createConnection } from 'node:net';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -39,17 +39,168 @@ export async function verifySupervisedLegacyRestore({
   secret,
   installation,
   expectModifiedBackup = false,
+  overlap = process.env.RIVET_RESTORE_OVERLAP_LINUX === '1',
+  executorPath,
+  supervisorPath,
+  dockerServices,
+  networkForwards,
+  linuxSourceFixture = false,
 }) {
+  if (networkForwards) {
+    assert.equal(process.platform, 'linux');
+    const servers = [],
+      sockets = new Set();
+    try {
+      for (const forward of networkForwards) {
+        const server = createServer((client) => {
+          const upstream = createConnection({ host: forward.ip, port: forward.port });
+          for (const socket of [client, upstream]) {
+            sockets.add(socket);
+            socket.on('close', () => sockets.delete(socket));
+          }
+          client.on('error', () => upstream.destroy());
+          upstream.on('error', () => client.destroy());
+          client.on('close', () => upstream.destroy());
+          upstream.on('close', () => client.destroy());
+          client.pipe(upstream).pipe(client);
+        });
+        server.listen(forward.listenPort, '127.0.0.1');
+        await once(server, 'listening');
+        servers.push(server);
+      }
+      if (linuxSourceFixture) {
+        const sourceRoot = path.join(root, 'linux-source');
+        await fs.mkdir(sourceRoot);
+        await tar.x({ file: archive, cwd: sourceRoot });
+        const source = Object.fromEntries(
+          ['workflows', 'recordings', 'appData', 'runtimeLibraries'].map((name) => [name, path.join(sourceRoot, name)]),
+        );
+        const base = path.join(repoRoot, 'packages/studio-server-api/dist/studio-server-api/src');
+        const { createBrowserBackupArchive, browserBackupDirectory } = await import(
+          pathToFileURL(path.join(base, 'local-metadata/browser-backup.js')).href
+        );
+        const { fingerprintVmMigrationSource } = await import(
+          pathToFileURL(path.join(base, 'scripts/vm-migration-source-manifest.js')).href
+        );
+        const control = path.join(root, 'linux-backup'),
+          id = randomUUID(),
+          createdAt = new Date().toISOString();
+        await fs.mkdir(control);
+        await createBrowserBackupArchive({
+          control,
+          source,
+          assertFrozen: async () => {},
+          state: {
+            id,
+            revision: 1,
+            pausedAt: createdAt,
+            phase: 'creating',
+            archiveHash: null,
+            bytes: 0,
+            createdAt,
+            sourceFingerprint: await fingerprintVmMigrationSource(source),
+          },
+        });
+        archive = path.join(browserBackupDirectory(control, id), 'backup.tar.gz');
+        console.log(
+          'Linux restore fixture: generated a genuine Linux backup from synthetic source bytes; original integrity checks remain enabled.',
+        );
+      }
+      return await verifySupervisedLegacyRestore({
+        repoRoot,
+        root,
+        target,
+        archive,
+        secret,
+        installation,
+        expectModifiedBackup,
+        overlap,
+        executorPath,
+        supervisorPath,
+      });
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+    }
+  }
+  if (overlap && process.platform !== 'linux') {
+    // Keep Docker orchestration on the host. The actual owners/importer/editor
+    // run in Linux against only the fresh fixture's loopback-published services.
+    const local = structuredClone(target);
+    const forwards = [];
+    for (const field of ['databaseUrl', 'objectStorageEndpoint']) {
+      const url = new URL(local[field]);
+      assert.ok(['127.0.0.1', 'localhost'].includes(url.hostname));
+      const service = dockerServices?.[field === 'databaseUrl' ? 'database' : 'objects'];
+      assert.match(service?.ip ?? '', /^(?:172\.(?:1[6-9]|2\d|3[01])|192\.168|10)\./);
+      forwards.push({ listenPort: Number(url.port), ip: service.ip, port: service.port });
+    }
+    const token = randomUUID(),
+      name = `rivet-overlap-restore-${token}`;
+    const helper = path.join(repoRoot, 'packages/studio-server-api/src/tests/helpers/supervised-legacy-restore.mjs');
+    const runner = `const fs=await import('node:fs/promises');let s='';for await(const c of process.stdin)s+=c;const cfg=JSON.parse(s);const {verifySupervisedLegacyRestore}=await import('/app/packages/studio-server-api/src/tests/helpers/supervised-legacy-restore.mjs');await verifySupervisedLegacyRestore({...cfg,repoRoot:'/app',root:await fs.mkdtemp('/tmp/rivet-overlap-restore-'),archive:'/fixture/backup.tar.gz',overlap:true,executorPath:'/app/executor-bundle.cjs',supervisorPath:'/opt/rivet/backend-supervisor.mjs'});`;
+    try {
+      const result = spawnSync(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '-i',
+          '--name',
+          name,
+          '--label',
+          `rivet.overlap.restore=${token}`,
+          '--entrypoint',
+          'node',
+          '--mount',
+          `type=bind,source=${archive},target=/fixture/backup.tar.gz,readonly`,
+          '--mount',
+          `type=bind,source=${helper},target=/app/packages/studio-server-api/src/tests/helpers/supervised-legacy-restore.mjs,readonly`,
+          process.env.RIVET_HOUSEKEEPING_TEST_IMAGE || 'rivet-local/api:singleton-overlap-20261023',
+          '--input-type=module',
+          '-e',
+          runner,
+        ],
+        {
+          input: JSON.stringify({
+            target: local,
+            secret,
+            installation,
+            expectModifiedBackup,
+            networkForwards: forwards,
+            linuxSourceFixture: true,
+          }),
+          stdio: ['pipe', 'inherit', 'inherit'],
+          windowsHide: true,
+          timeout: 900000,
+        },
+      );
+      if (result.error) throw result.error;
+      assert.equal(result.status, 0, 'Linux overlap restore fixture failed');
+    } finally {
+      const exists = spawnSync(
+        'docker',
+        ['inspect', '--format', '{{index .Config.Labels "rivet.overlap.restore"}}', name],
+        { encoding: 'utf8', windowsHide: true },
+      );
+      if (exists.status === 0) {
+        assert.equal(exists.stdout.trim(), token);
+        execFileSync('docker', ['rm', '-f', name], { stdio: 'inherit', windowsHide: true });
+      }
+    }
+    return;
+  }
   const api = path.join(repoRoot, 'packages/studio-server-api/dist/studio-server-api/src/serve.js');
-  const executor = path.join(repoRoot, 'packages/studio-server-executor/dist/executor-bundle.cjs');
+  const executor = executorPath || path.join(repoRoot, 'packages/studio-server-executor/dist/executor-bundle.cjs');
   await fs.access(api);
   await fs.access(executor);
   const { runBackendSupervisor } = await import(
-    pathToFileURL(path.join(repoRoot, 'deploy/studio-server/images/api/backend-supervisor.mjs')).href
+    pathToFileURL(supervisorPath || path.join(repoRoot, 'deploy/studio-server/images/api/backend-supervisor.mjs')).href
   );
   const [apiPort, executorPort, healthPort, executionPort, evaluationPort] = await Promise.all(
     Array.from({ length: 5 }, port),
   );
+  const housekeepingPort = overlap ? await port() : undefined;
   assert.equal(new Set([apiPort, executorPort, healthPort, executionPort, evaluationPort]).size, 5);
   const scratch = path.join(root, 'supervised-restore');
   await fs.mkdir(scratch);
@@ -115,6 +266,19 @@ export async function verifySupervisedLegacyRestore({
     RIVET_LOCAL_METADATA_UI_ROOT: '',
     RIVET_LOCAL_METADATA_BOOT_GENERATION: '',
     RIVET_RELEASE_MAINTENANCE: 'false',
+    ...(overlap
+      ? {
+          RIVET_HA_CONTROL_PLANE_MODE: 'singleton-overlap',
+          RIVET_HA_DEPLOYMENT: '1',
+          RIVET_HA_PROTOCOL: '0',
+          RIVET_ROLLING_RETIREMENT_PROTOCOL: '1',
+          RIVET_POD_NAME: 'restore-control-0',
+          RIVET_POD_UID: randomUUID(),
+          RIVET_POD_IP: '127.0.0.1',
+          RIVET_NAMESPACE_UID: randomUUID(),
+          RIVET_HOUSEKEEPING_PORT: String(housekeepingPort),
+        }
+      : {}),
   };
   const peers = [];
   let stopping = false;
@@ -135,6 +299,9 @@ export async function verifySupervisedLegacyRestore({
             RIVET_APP_DATA_ROOT: directories[role],
             RIVET_RUNTIME_LIBRARIES_ROOT: path.join(directories[role], 'libraries'),
             RIVET_RUNNER_SLOT_ID: `restore-${role}`,
+            ...(overlap
+              ? { RIVET_PROCESS_INCARNATION: randomUUID(), RIVET_ROLLING_RETIREMENT_TOKEN: randomUUID() }
+              : {}),
           },
           stdio: 'inherit',
         });
@@ -158,7 +325,9 @@ export async function verifySupervisedLegacyRestore({
       RIVET_CODE_RUNNER_REQUIRE_ROOT: path.join(directories.editor, 'libraries/current/node_modules'),
     },
     signalSource: signals,
-    shutdownTimeoutMs: 15_000,
+    // Exercise the production supervisor envelope; restore disposal includes
+    // real database pools, WebSockets and executor children, not stub servers.
+    shutdownTimeoutMs: overlap ? 130_000 : 15_000,
   });
   // Attach immediately so a failed child cannot produce an unhandled rejection while polling.
   let supervisorError;
@@ -227,7 +396,18 @@ export async function verifySupervisedLegacyRestore({
   try {
     await eventually('initial server and editor readiness', async () => {
       if (supervisorError) throw supervisorError;
-      return (await healthy(healthPort)) && (await healthy(executionPort)) && (await healthy(evaluationPort));
+      if (!(await healthy(healthPort)) || !(await healthy(executionPort)) || !(await healthy(evaluationPort)))
+        return false;
+      if (overlap) {
+        try {
+          return (
+            JSON.parse(await fs.readFile(path.join(restoreRoot, 'housekeeping-owner.json'), 'utf8')).state === 'owner'
+          );
+        } catch {
+          return false;
+        }
+      }
+      return true;
     });
     const uploaded = await request(`${base}/api/legacy-restore/upload`, {
       method: 'POST',
@@ -297,7 +477,10 @@ export async function verifySupervisedLegacyRestore({
       peers.every((peer) => peer.starts >= 3),
       'each peer must restart through standby, warmup and normal serving',
     );
-    assert.deepEqual(await fs.readdir(restoreRoot), []);
+    assert.deepEqual(
+      (await fs.readdir(restoreRoot)).sort(),
+      overlap ? ['housekeeping-owner.json', 'housekeeping.lock'] : [],
+    );
     const config = await request(`${base}/api/config`, { headers }).then((res) => res.json());
     assert.equal(config.legacyRestoreEpoch, acceptedId);
     assert.equal(config.legacyRestoreMaintenance, false);
@@ -360,6 +543,10 @@ export async function verifySupervisedLegacyRestore({
       secret,
       installation,
       expectModifiedBackup: true,
+      overlap,
+      executorPath,
+      supervisorPath,
+      dockerServices,
     });
   }
 }
