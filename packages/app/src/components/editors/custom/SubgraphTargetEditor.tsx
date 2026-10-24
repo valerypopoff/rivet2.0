@@ -20,8 +20,9 @@ import {
 } from '../../../utils/subgraphBundleScope.js';
 import type { SharedEditorProps } from '../SharedEditorProps';
 import { SegmentedEditor } from '../SegmentedEditor';
-import { SubgraphTargetControl } from '../../nodes/SubgraphTargetControl';
+import { SubgraphTargetControl, SubgraphTargetLabel } from '../../nodes/SubgraphTargetControl';
 import { useNodeEditorSessionContext } from '../../nodeEditor/NodeEditorSessionContext.js';
+import { isRecordingProjectState } from '../../../state/execution.js';
 
 const versionWarningCss = css`
   color: var(--warning);
@@ -29,7 +30,18 @@ const versionWarningCss = css`
   margin-top: 6px;
 `;
 
-export const SubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onChange, isReadonly, isDisabled }) => {
+export const SubgraphTargetEditor: FC<SharedEditorProps> = (props) => {
+  const recording = useAtomValue(isRecordingProjectState);
+  return recording ? (
+    <Field name="graphId" label="Recorded graph">
+      {() => <SubgraphTargetLabel node={props.node as SubGraphNode} isRecording />}
+    </Field>
+  ) : (
+    <LiveSubgraphTargetEditor {...props} />
+  );
+};
+
+const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onChange, isReadonly, isDisabled }) => {
   const node = chartNode as SubGraphNode;
   const session = useNodeEditorSessionContext();
   const catalog = useSubgraphProjectCatalog();

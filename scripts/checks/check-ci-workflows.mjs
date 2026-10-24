@@ -1109,8 +1109,17 @@ const successfulBuild = findStep(
 assert.equal(successfulBuild.run, 'node scripts/ci/desktop-build-evidence.mjs validated');
 assert.equal(successfulBuild.env.BUILD_RUN_ID, '${{ needs.build-desktop-web.outputs.build_run_id }}');
 assert.equal(successfulBuild.env.BUILD_RUN_ATTEMPT, '${{ needs.build-desktop-web.outputs.build_run_attempt }}');
-assert.equal(successfulBuild.if, "steps.asset_freshness.outputs.current == 'true'");
+assert.equal(successfulBuild.if, "steps.freshness.outputs.current == 'true'");
 assert.equal(successfulBuild['continue-on-error'], undefined, 'A failed Build gate must stop all publication.');
+const assetFreshness = findStep(
+  reusableJobs['publish-pages'],
+  'Confirm release is still current before publishing assets',
+  'Post-wait branch freshness',
+);
+assert.ok(
+  publicationSteps.indexOf(successfulBuild) < publicationSteps.indexOf(assetFreshness),
+  'Recheck the branch after waiting for Build; manual releases can become stale during that wait.',
+);
 for (const name of [
   'Publish desktop release assets',
   'Add release downloads to docs site',
@@ -1119,6 +1128,7 @@ for (const name of [
 ]) {
   const step = findStep(reusableJobs['publish-pages'], name, 'Build-gated publication');
   assert.ok(publicationSteps.indexOf(successfulBuild) < publicationSteps.indexOf(step));
+  assert.ok(publicationSteps.indexOf(assetFreshness) < publicationSteps.indexOf(step));
   assert.doesNotMatch(step.if ?? '', /always\(\)|failure\(\)/, 'Publication must retain implicit success gating.');
 }
 for (const nativeJob of ['build-windows', 'build-macos']) {
@@ -1195,6 +1205,32 @@ assert.match(
   /id: pages_freshness[\s\S]*Upload Pages artifact[\s\S]*steps\.pages_freshness\.outputs\.current == 'true'/,
   'Pages publication must recheck the branch head immediately before its transaction.',
 );
+
+const pagesRetryFreshness = findStep(
+  reusableJobs['publish-pages'],
+  'Confirm release is still current before retrying Pages',
+  'Fresh Pages retry',
+);
+const pagesRetry = findStep(
+  reusableJobs['publish-pages'],
+  'Deploy to GitHub Pages (attempt 2 of 2)',
+  'Fresh Pages retry',
+);
+assert.equal(
+  pagesRetry.if,
+  "steps.retry_freshness.outputs.current == 'true' && steps.deployment_first_attempt.outcome == 'failure'",
+);
+assert.equal(pagesRetryFreshness.run, assetFreshness.run, 'Every retry must perform a real branch-head check.');
+assert.equal(
+  pagesRetryFreshness.if,
+  "steps.pages_freshness.outputs.current == 'true' && steps.deployment_first_attempt.outcome == 'failure'",
+);
+assert.ok(
+  publicationSteps.indexOf(
+    findStep(reusableJobs['publish-pages'], 'Wait for GitHub Pages cancellation to settle', 'Fresh Pages retry'),
+  ) < publicationSteps.indexOf(pagesRetryFreshness),
+);
+assert.ok(publicationSteps.indexOf(pagesRetryFreshness) < publicationSteps.indexOf(pagesRetry));
 
 for (const workflowPath of [
   '.github/workflows/developer-windows-release.yml',

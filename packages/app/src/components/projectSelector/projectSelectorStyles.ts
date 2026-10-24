@@ -382,6 +382,18 @@ export const projectSelectorStyles = css`
         min-width: 50px;
         flex-shrink: 1;
       }
+
+      > .recording-tab-icon {
+        display: inline-flex;
+        min-width: 0;
+        flex: 0 0 calc(14px * var(--ui-font-scale));
+        height: calc(14px * var(--ui-font-scale));
+
+        svg {
+          width: 100%;
+          height: 100%;
+        }
+      }
     }
 
     &.has-unsaved-changes .project-name::before {

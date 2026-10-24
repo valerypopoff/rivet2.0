@@ -1161,6 +1161,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     return contents;
   }
 
+  async getWorkflowRecordingSummary(id: string): Promise<WorkflowRecordingRunSummary> {
+    const row = (await this.#catalog.listRecordingMetadata({ recordingId: id, limit: 1 }))[0];
+    if (!row) throw createHttpError(404, 'Recording not found');
+    return this.#recordingSummary(row);
+  }
+
   async deleteWorkflowRecording(id: string): Promise<void> {
     await this.#withWrite(async () => {
       const row = (await this.#catalog.listRecordingMetadata({ recordingId: id, limit: 1 }))[0];

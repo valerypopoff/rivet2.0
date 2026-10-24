@@ -35,9 +35,9 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
     sha: 'a'.repeat(40),
     ref: 'refs/heads/develop',
     token: 'synthetic-fixture-token',
-    maxWaitMs: 300,
+    maxWaitMs: 2_000,
     pollMs: 5,
-    requestTimeoutMs: 100,
+    requestTimeoutMs: 1_000,
   };
   const run = (mode, scenario = 'ok', extra = {}) =>
     desktopBuildEvidence({
@@ -50,25 +50,34 @@ test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed
   assert.deepEqual(await run('validated', 'ok', { runId: 101, runAttempt: 1 }), { runId: 101, runAttempt: 1 });
   assert.deepEqual(await run('validated', 'advance'), { runId: 101, runAttempt: 1 });
   assert.deepEqual(await run('artifact', 'pending'), { runId: 101, runAttempt: 1, artifactId: 501 });
-  for (const scenario of [
-    'failed',
-    'cancelled',
-    'rerun',
-    'stale',
-    'wrongbranch',
-    'pr',
-    'fork',
-    'unavailable',
-    'malformed',
-    'redirect',
-    'hang',
+  for (const [scenario, failure] of [
+    ['failed', /did not succeed/],
+    ['cancelled', /did not succeed/],
+    ['rerun', /identity\/attempt changed/],
+    ['stale', /identity\/attempt changed/],
+    ['wrongbranch', /identity\/attempt changed/],
+    ['pr', /identity\/attempt changed/],
+    ['fork', /identity\/attempt changed/],
+    ['unavailable', /HTTP 503/],
+    ['malformed', SyntaxError],
+    ['redirect', TypeError],
   ]) {
-    await assert.rejects(run('validated', scenario, { runId: 101, runAttempt: 1 }), undefined, scenario);
+    await assert.rejects(run('validated', scenario, { runId: 101, runAttempt: 1 }), failure, scenario);
   }
-  for (const scenario of ['expired', 'missing', 'duplicate', 'empty', 'foreign-artifact'])
-    await assert.rejects(run('artifact', scenario), undefined, scenario);
+  for (const [scenario, failure] of [
+    ['expired', /expired or invalid/],
+    ['missing', /has no desktop artifact/],
+    ['duplicate', /Ambiguous desktop artifact/],
+    ['foreign-artifact', /ownership does not match/],
+  ])
+    await assert.rejects(run('artifact', scenario), failure, scenario);
+  await assert.rejects(run('validated', 'hang', { requestTimeoutMs: 60 }), { name: 'TimeoutError' });
   // The overall deadline may expire between polls or during a real HTTP read.
-  await assert.rejects(run('validated', 'pending'), /Timed out|operation was aborted due to timeout/);
+  for (const [mode, scenario] of [
+    ['validated', 'pending'],
+    ['artifact', 'empty'],
+  ])
+    await assert.rejects(run(mode, scenario, { maxWaitMs: 60 }), /Timed out|operation was aborted due to timeout/);
   await assert.rejects(run('validated', 'ok', { runId: 101 }), /Pinned/);
   assert.ok(
     requests.every((request) => request.startsWith('GET ')),

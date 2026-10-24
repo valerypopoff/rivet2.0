@@ -505,6 +505,10 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     return this.#recordings.readWorkflowRecordingArtifact(recordingId, artifact);
   }
 
+  async getWorkflowRecordingSummary(recordingId: string) {
+    return this.#recordings.getWorkflowRecordingSummary(recordingId);
+  }
+
   async deleteWorkflowRecording(recordingId: string): Promise<void> {
     return this.#recordings.deleteWorkflowRecording(recordingId);
   }

@@ -19,7 +19,12 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       for (const event of serialized.recording.events) if (event.data) delete event.data.execution;
       recorder = ExecutionRecorder.deserializeFromString(JSON.stringify(serialized));
     }
-    const project = kind === 'root' ? fixture.parent : fixture.child;
+    // Production replay artifacts have a new ID, not the original bundle caller ID.
+    const project =
+      kind === 'root'
+        ? { ...fixture.parent, metadata: { ...fixture.parent.metadata, id: 'detached-replay' as ProjectId } }
+        : fixture.child;
+    const liveTargetReads: string[] = [];
     const neighbor = {
       ...fixture.child,
       metadata: { ...fixture.child.metadata, id: 'neighbor' as ProjectId, title: 'Neighbor' },
@@ -62,6 +67,16 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       (route) => route.fulfill({ status: 503, json: { error: 'No ambient API in playback fixture' } }),
     );
     await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/subgraph-projects/**', (route) => {
+      liveTargetReads.push(route.request().url());
+      return route.fulfill({
+        status: 403,
+        json: {
+          error:
+            'This project belongs to a bundle. Only projects in the same bundle can reference it through a Subgraph node.',
+        },
+      });
+    });
     await page.route('**/api/workflows/tree', (route) =>
       route.fulfill({
         json: {
@@ -116,9 +131,23 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       endpointNameAtExecution: 'Subgraph: Child main',
       executionIdentity: { surface: 'subgraph_project', correlationId: 'playback-family', graphName: 'Child main' },
       sourceProjectName: 'Child replay',
+      sourceProjectRelativePath: 'Bundle/Child.rivet-project',
+      status: kind === 'nested child' ? 'failed' : kind === 'legacy child' ? 'suspicious' : 'succeeded',
+      durationMs: 1234,
+      runKind: kind === 'prompt child' ? 'editor' : kind === 'legacy child' ? 'published' : 'latest',
+      errorMessage: kind === 'nested child' ? 'Historical run failure' : undefined,
     };
     await page.route('**/api/workflows/recordings/**', (route) => {
       const url = new URL(route.request().url());
+      if (url.pathname.endsWith('/summary'))
+        return kind === 'root'
+          ? route.fulfill({ status: 404, json: { error: 'Older server without recording summaries' } })
+          : route.fulfill({
+              json:
+                kind === 'child'
+                  ? { ...child, executionIdentity: undefined, endpointNameAtExecution: 'Recorded endpoint' }
+                  : child,
+            });
       if (url.pathname.endsWith('/runs'))
         return route.fulfill({
           json: {
@@ -178,6 +207,88 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     await expect(childRow).toBeVisible();
     await childRow.locator('.run-recordings-run-open-button').click();
     await expect(modal).toBeHidden();
+    const recordingInfo = editor.getByRole('region', { name: 'Loaded recording', exact: true });
+    await expect(recordingInfo).toBeVisible();
+    if (kind === 'root') {
+      await expect(editor.locator('.node [data-recorded-target]')).toContainText('playback-child / main');
+      await expect(editor.locator('.node .target-error')).toHaveCount(0);
+      await expect(editor.getByRole('combobox', { name: 'Subgraph graph', exact: true })).toHaveCount(0);
+    }
+    const panelLayout = await recordingInfo.evaluate((panel) => {
+      const bounds = panel.getBoundingClientRect();
+      const controls = panel.querySelector('.action-bar-controls')!;
+      const unload = controls.querySelector('.unload-recording-button')!.getBoundingClientRect();
+      const play = controls.querySelector('.run-button')!.getBoundingClientRect();
+      const more = controls.querySelector('.more-menu')!.getBoundingClientRect();
+      return {
+        leftInset: unload.left - bounds.left,
+        metadataInset: panel.querySelector('.loaded-recording-label')!.getBoundingClientRect().left - bounds.left,
+        rightInset: bounds.right - more.right,
+        buttonGap: play.left - unload.right,
+        contentGap:
+          panel.querySelector('.loaded-recording-info')!.getBoundingClientRect().top -
+          controls.getBoundingClientRect().bottom,
+        sameRow: unload.top === play.top && play.top === more.top,
+        infoFont: getComputedStyle(panel.querySelector('.loaded-recording-info')!).fontSize,
+        panelFont: getComputedStyle(panel).fontSize,
+        overflows: panel.scrollWidth > panel.clientWidth,
+      };
+    });
+    expect(panelLayout.leftInset).toBeCloseTo(9, 0);
+    expect(panelLayout.metadataInset).toBeCloseTo(9, 0);
+    expect(panelLayout.rightInset).toBeCloseTo(9, 0);
+    expect(panelLayout.buttonGap).toBeCloseTo(8, 0);
+    expect(panelLayout.contentGap).toBeCloseTo(12, 0);
+    expect(panelLayout.sameRow).toBe(true);
+    expect(panelLayout.infoFont).toBe(panelLayout.panelFont);
+    expect(panelLayout.overflows).toBe(false);
+    if (kind === 'child') {
+      const unload = recordingInfo.getByRole('button', { name: 'Unload Recording', exact: true });
+      await expect(unload).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.1)');
+      await unload.hover();
+      await expect(unload).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.2)');
+      await page.mouse.move(0, 0);
+      await page.setViewportSize({ width: 900, height: 700 });
+      await expect(recordingInfo).toBeVisible();
+      const fits = await recordingInfo.evaluate((panel) => {
+        const bounds = panel.getBoundingClientRect();
+        return bounds.left >= 0 && bounds.right <= window.innerWidth && panel.scrollWidth <= panel.clientWidth;
+      });
+      expect(fits).toBe(true);
+      await page.setViewportSize({ width: 1600, height: 1000 });
+    }
+    await expect(recordingInfo).not.toContainText('Details inferred from recording events');
+    await expect(recordingInfo).not.toContainText('Project:');
+    await expect(recordingInfo).not.toContainText('Graph:');
+    await expect(recordingInfo).not.toContainText('Child main');
+    await expect(recordingInfo).not.toContainText('playback-family');
+    await expect(recordingInfo).toContainText(`Endpoint at execution: ${kind === 'child' ? 'Recorded endpoint' : '—'}`);
+    const rows = recordingInfo.locator('.loaded-recording-heading');
+    await expect(rows).toHaveCount(1);
+    await expect(recordingInfo.locator('.loaded-recording-tag')).toHaveCount(1);
+    await expect(rows.locator('.loaded-recording-tag')).toHaveText(
+      child.status === 'failed' ? 'Failed' : child.status === 'suspicious' ? 'Suspicious' : 'Succeeded',
+    );
+    expect(await rows.evaluate((row) => row.firstElementChild?.classList.contains('loaded-recording-tag'))).toBe(true);
+    await expect(rows.locator(':scope > span')).toContainText(/\d{4}/);
+    await expect(recordingInfo).not.toContainText('1.23 s');
+    if (kind === 'root') await expect(recordingInfo).not.toContainText('Parent');
+    await expect(editor.locator('.recording-border')).toHaveAttribute('data-recording-status', child.status);
+    const color = child.status === 'failed' ? 'error' : child.status === 'suspicious' ? 'warning' : 'success';
+    const recordingTabIcon = editor.locator('.projects-container .project.active .recording-tab-icon');
+    await expect(recordingTabIcon).toHaveAttribute('data-recording-status', child.status);
+    await expect(recordingTabIcon).toHaveAttribute('style', `color: var(--${color});`);
+    expect(
+      await recordingTabIcon.evaluate((icon) => {
+        const title = icon.nextElementSibling!.getBoundingClientRect();
+        const bounds = icon.getBoundingClientRect();
+        return bounds.width > 0 && bounds.width < 20 && bounds.right <= title.left;
+      }),
+    ).toBe(true);
+    await expect(editor.locator('.recording-border')).toHaveAttribute('style', `--recording-color: var(--${color});`);
+    if (child.errorMessage) await expect(recordingInfo).toContainText(child.errorMessage);
+    if (['child', 'nested child', 'legacy child'].includes(kind))
+      await recordingInfo.screenshot({ path: `../../artifacts/playwright/loaded-recording-${child.status}.png` });
     const play = editor.getByRole('button', { name: 'Play Recording', exact: true });
     const output = editor.locator('.node[data-nodeid="child-text"] .node-output');
     for (let iteration = 0; iteration < 3; iteration++) {
@@ -207,9 +318,16 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       }
     }
     await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
+    await expect(recordingTabIcon).toHaveAttribute('data-recording-status', child.status);
     await expect(editor.locator('[aria-label="Run Activity"]')).toContainText(
       kind === 'root' ? 'Parent' : 'Child main',
     );
+    // A graph name in the drawer header alone doesn't prove playback populated it.
+    const activityRows = editor.locator('[aria-label="Run Activity"] .run-activity-row');
+    await expect(activityRows.first()).toBeVisible();
+    await expect(
+      activityRows.filter({ hasText: kind === 'root' ? 'Subgraph' : 'Recorded child output' }).first(),
+    ).toBeVisible();
     await editor
       .locator('[aria-label="Run Activity"]')
       .getByRole('button', { name: 'Close Run Activity', exact: true })
@@ -227,6 +345,14 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     if (kind === 'child') {
       await editor.locator('.projects-container .project').filter({ hasText: 'Neighbor' }).click();
       await expect(play).toHaveCount(0);
+      await expect(editor.getByRole('region', { name: 'Loaded recording', exact: true })).toHaveCount(0);
+      await expect(editor.locator('.projects-container .project.active .recording-tab-icon')).toHaveCount(0);
+      await expect(
+        editor
+          .locator('.projects-container .project')
+          .filter({ hasText: 'Child replay' })
+          .locator('.recording-tab-icon'),
+      ).toHaveAttribute('data-recording-status', 'succeeded');
       await expect(editor.locator('.node[data-nodeid="child-text"] .node-output')).toContainText(
         'neighbor live evidence',
       );
@@ -324,6 +450,13 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(modal).toBeHidden();
       const parentTab = editor.locator('.projects-container .project').filter({ hasText: 'Parent' });
       await expect(parentTab).toBeVisible();
+      await expect(parentTab.locator('.recording-tab-icon')).toHaveAttribute('data-recording-status', 'succeeded');
+      await expect(
+        editor
+          .locator('.projects-container .project')
+          .filter({ hasText: 'Child replay' })
+          .locator('.recording-tab-icon'),
+      ).toHaveAttribute('data-recording-status', 'succeeded');
       await expect(play).toBeEnabled();
       await editor.locator('.projects-container .project').filter({ hasText: 'Child replay' }).click();
       await expect(play).toBeEnabled();
@@ -344,5 +477,26 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       await expect(output).toContainText('child playback evidence');
       await expect(editor.getByText(/^Execution: \d+\/\d+$/)).toHaveCount(0);
     }
+    if (kind === 'root') {
+      const call = editor
+        .locator('.node')
+        .filter({ has: editor.locator('[data-recorded-target]') })
+        .first();
+      await call.hover();
+      await call.locator('.edit-button').click();
+      const settings = editor.locator('.panel-container');
+      await expect(settings.locator('[data-recorded-target]')).toBeVisible();
+      await expect(settings).toContainText('Recorded graph');
+      await expect(settings.getByRole('group', { name: 'Subgraph graph source', exact: true })).toHaveCount(0);
+      await expect(
+        settings.getByText('Could not check this project’s published version.', { exact: true }),
+      ).toHaveCount(0);
+      await recordingInfo.getByRole('button', { name: 'Unload Recording', exact: true }).click();
+      await expect(recordingInfo).toHaveCount(0);
+      await expect(editor.locator('.projects-container .project.active .recording-tab-icon')).toHaveCount(0);
+      await expect(call.locator('[data-recorded-target]')).toBeVisible();
+      await expect(call.locator('.target-error')).toHaveCount(0);
+    }
+    expect(liveTargetReads).toEqual([]);
   });
 }

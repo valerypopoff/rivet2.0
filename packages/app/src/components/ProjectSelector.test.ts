@@ -27,6 +27,7 @@ test('project tabs select after click completion while preserving close and drag
           active: true,
           closeIcon: React.createElement('span', undefined, 'Close'),
           displayName: 'Project',
+          leadingIcon: React.createElement('span', { 'data-testid': 'recording-icon' }, 'recording'),
           dragListeners: { onPointerDown: () => undefined },
           onCloseProject: () => {
             closes += 1;
@@ -40,6 +41,7 @@ test('project tabs select after click completion while preserving close and drag
 
     const project = dom.window.document.querySelector<HTMLElement>('.project')!;
     const close = dom.window.document.querySelector<HTMLButtonElement>('.close-project')!;
+    assert.equal(project.querySelector('.project-name')!.firstElementChild!.textContent, 'recording');
 
     await act(async () => project.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true })));
     assert.equal(selections, 0);

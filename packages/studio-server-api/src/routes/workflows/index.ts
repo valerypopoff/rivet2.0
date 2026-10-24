@@ -51,6 +51,7 @@ import {
   readWorkflowPublishedVersionDownloadWithBackend,
   readWorkflowPublishedVersionPreviewWithBackend,
   readWorkflowRecordingArtifactWithBackend,
+  getWorkflowRecordingSummaryWithBackend,
   renameWorkflowFolderItemWithBackend,
   renameWorkflowProjectItemWithBackend,
   setWorkflowPublishedVersionCommentWithBackend,
@@ -613,6 +614,13 @@ workflowsRouter.get(
     res
       .type('text/plain; charset=utf-8')
       .send(await readWorkflowRecordingArtifactWithBackend(String(req.params.recordingId ?? ''), 'replay-dataset'));
+  }),
+);
+
+workflowsRouter.get(
+  '/recordings/:recordingId/summary',
+  asyncHandler(async (req, res) => {
+    res.json(await getWorkflowRecordingSummaryWithBackend(String(req.params.recordingId ?? '')));
   }),
 );
 

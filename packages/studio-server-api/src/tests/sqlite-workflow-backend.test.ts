@@ -1107,6 +1107,13 @@ test('SQLite recording workflow summaries aggregate in SQL and never load projec
       pageSize: 100,
     });
     const newest = page.runs[0]!.createdAt;
+    for (const run of page.runs) {
+      const summary = await backend.getWorkflowRecordingSummary(run.id);
+      assert.equal(summary.status, run.status);
+      assert.equal(summary.createdAt, run.createdAt);
+      assert.equal(summary.endpointNameAtExecution, run.endpointNameAtExecution);
+    }
+    await assert.rejects(backend.getWorkflowRecordingSummary('missing'), /Recording not found/);
     removeTreeIndexes(options.databasePath);
     t.mock.method(ImmutableLocalArtifactStore.prototype, 'read', () => {
       throw new Error('Artifact read');

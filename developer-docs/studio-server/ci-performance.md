@@ -130,7 +130,11 @@ reduce elapsed time while increasing total runner-minutes.
 Existing workflow graphs/triggers and required aggregate job IDs are retained.
 Desktop Release now consumes Build's exact-SHA frontend, then requires the
 matching Build run/attempt to succeed before any publication. Native packaging
-can overlap other checks. Docs-only publication also requires a successful Build
+can overlap other checks. Asset freshness is checked after the Build wait, so a
+manual release that becomes stale while waiting skips publication. An ordering
+guard protects this boundary. Pages retries likewise recheck the branch after
+the failed attempt and retry delay rather than trusting earlier freshness.
+Docs-only publication also requires a successful Build
 for its current SHA. Failed/canceled runs, stale ownership, expired artifacts,
 changed attempts and uncertain responses fail closed. Read-only polling is
 bounded; unlike a single-DAG rewrite, the handoff has some polling/transfer
@@ -164,6 +168,14 @@ real-process executor retirement regression passed both scenarios. Lint exposed 
 `node:test` registration promise in executor retirement coverage; marking that
 registration `void` preserves its assertions without disabling the lint rule.
 Cross-workflow artifact transport and hosted speed still need the next push run.
+
+The HTTP evidence regressions assert each rejection's specific cause, rather
+than accepting arbitrary network errors. Positive requests have ordinary local
+startup headroom; only timeout scenarios use short deadlines, keeping the suite
+fast without conflating identity validation with timing failures.
+Preserved same-site downloads also validate their declared byte count, rejecting
+shortened HTTP 200 bodies before writing assets/metadata. The actual Pages CLI
+regression uses synthetic HTTP responses, not a stubbed fetch.
 
 ## Verification
 

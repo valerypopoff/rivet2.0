@@ -126,6 +126,28 @@ function createRecordingRow(
   };
 }
 
+test('single recording summary uses its indexed identity without loading artifact bodies', async () => {
+  const row = createRecordingRow('selected', 'Original endpoint', '2026-10-01T00:00:00Z');
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    revisions: {},
+    db: {
+      queryOne: async (_pool: unknown, sql: string, values: unknown[]) => {
+        assert.match(sql, /WHERE recording_id = \$1/);
+        return values[0] === row.recording_id ? row : null;
+      },
+    },
+    mappers: { RECORDING_COLUMNS: 'recording_id', toIsoString: (value: string) => value },
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({ context });
+  const result = await service.getWorkflowRecordingSummary('selected');
+  assert.equal(result.endpointNameAtExecution, 'Original endpoint');
+  assert.equal(result.sourceProjectName, 'Project A');
+  assert.equal(result.status, 'succeeded');
+  await assert.rejects(service.getWorkflowRecordingSummary('missing'), /Recording not found/);
+});
+
 test('managed recording retention combines age, endpoint count, and total byte limits', () => {
   const now = Date.parse('2026-08-04T12:00:00.000Z');
   const rows = [

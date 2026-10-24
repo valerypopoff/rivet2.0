@@ -141,15 +141,6 @@ async function writeUnderPagesRoot(relativePath, bytes) {
   await writeFile(targetPath, bytes);
 }
 
-function releaseAssetUrls(metadata) {
-  return [
-    ...(Array.isArray(metadata.stableDownloads) ? metadata.stableDownloads : []),
-    ...(Array.isArray(metadata.artifacts) ? metadata.artifacts : []),
-  ]
-    .map((item) => item?.url)
-    .filter((url) => typeof url === 'string' && url.length > 0);
-}
-
 function assertPublishedReleaseMetadata(metadata, metadataFile) {
   if (metadata == null || typeof metadata !== 'object') {
     throw new Error(`Existing ${metadataFile} is not a release metadata object.`);
@@ -222,7 +213,7 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl, { requir
     );
   }
 
-  for (const assetUrl of releaseAssetUrls(metadata)) {
+  for (const { url: assetUrl, size } of [...metadata.stableDownloads, ...metadata.artifacts]) {
     const assetPath = normalizePublishedPath(assetUrl, publishedSiteUrl);
 
     if (!assetPath) {
@@ -238,6 +229,9 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl, { requir
       }
 
       const assetBytes = Buffer.from(await assetResponse.arrayBuffer());
+      if (assetBytes.length !== size) {
+        throw new Error(`Expected ${size} bytes, received ${assetBytes.length}.`);
+      }
       await writeUnderPagesRoot(assetPath, assetBytes);
     } catch (error) {
       throw new Error(

@@ -1,3 +1,9 @@
+import {
+  formatRecordingDuration,
+  formatRecordingTimestamp,
+  RECORDING_STATUS_LABELS,
+  SUSPICIOUS_RECORDING_DETAIL,
+} from '../../app/src/utils/recordingPresentation';
 import Select from '@atlaskit/select';
 import { type FC, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { VariableSizeList, type ListChildComponentProps } from 'react-window';
@@ -8,7 +14,6 @@ import {
   type WorkflowRecordingInputFilter,
   type WorkflowRecordingInputFilterOperator,
   type WorkflowRecordingRunSummary,
-  type WorkflowRecordingStatus,
   type WorkflowRecordingWorkflowSummary,
 } from './types';
 import { SegmentedControl, SegmentedControlButton } from './SegmentedControl';
@@ -21,21 +26,6 @@ import {
   type RecordingListRow,
   type RecordingRunFamily,
 } from './recording-run-hierarchy';
-
-const timestampFormatter = new Intl.DateTimeFormat(undefined, {
-  year: 'numeric',
-  month: 'short',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-});
-
-const RUN_STATUS_LABELS: Record<WorkflowRecordingStatus, string> = {
-  succeeded: 'Succeeded',
-  failed: 'Failed',
-  suspicious: 'Suspicious',
-};
 
 const runsPerPageOptions = [10, 20, 50, 100] as const;
 const INPUT_FILTER_OPERATOR_LABELS: Partial<Record<WorkflowRecordingInputFilterOperator, string>> = {
@@ -50,38 +40,6 @@ const inputFilterOperatorOptions: Array<{ value: WorkflowRecordingInputFilterOpe
 
 const ESTIMATED_RECORDING_ROW_HEIGHT = 138;
 const RECORDING_ROW_GAP = 8;
-
-function formatDuration(durationMs: number): string {
-  if (!Number.isFinite(durationMs) || durationMs < 0) {
-    return 'Unavailable';
-  }
-  if (durationMs < 1000) {
-    return `${durationMs.toFixed(2)} ms`;
-  }
-
-  // Split rounded centiseconds so minute boundaries never display 60.00s.
-  const centiseconds = Math.round(durationMs / 10);
-  if (centiseconds < 6000) {
-    return `${(centiseconds / 100).toFixed(2)} s`;
-  }
-
-  const minutes = Math.floor(centiseconds / 6000);
-  const remainderSeconds = ((centiseconds % 6000) / 100).toFixed(2);
-  return `${minutes}m ${remainderSeconds}s`;
-}
-
-function formatTimestamp(value: string | undefined): string {
-  if (!value) {
-    return 'Never';
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return timestampFormatter.format(date);
-}
 
 function RecordingRow({
   recording,
@@ -106,11 +64,7 @@ function RecordingRow({
   onDelete: (recordingId: string) => void;
   onOpen: (recordingId: string) => void;
 }) {
-  const detailText =
-    recording.errorMessage ??
-    (recording.status === 'suspicious'
-      ? 'Completed without throwing, but the final output was control-flow-excluded.'
-      : null);
+  const detailText = recording.errorMessage ?? (recording.status === 'suspicious' ? SUSPICIOUS_RECORDING_DETAIL : null);
   const endpointNameAtExecution = recording.endpointNameAtExecution?.trim() || 'Unknown';
   const isSubgraphRun = recording.executionIdentity?.surface === 'subgraph_project';
 
@@ -133,7 +87,7 @@ function RecordingRow({
                   <span>Scheduled · {recording.executionIdentity.scheduleName ?? 'Scheduled run'} · </span>
                 ) : null}
                 {isChild ? <span className="run-recordings-sub-run-label">Sub-run · </span> : null}
-                {formatTimestamp(recording.createdAt)}
+                {formatRecordingTimestamp(recording.createdAt)}
               </div>
               {isOpening ? (
                 <span className="run-recordings-badge opening" role="status" aria-live="polite">
@@ -159,8 +113,10 @@ function RecordingRow({
         </div>
         <div className="run-recordings-run-footer">
           <div className="run-recordings-run-meta">
-            <span className={`run-recordings-badge ${recording.status}`}>{RUN_STATUS_LABELS[recording.status]}</span>
-            <span className="run-recordings-run-duration">{formatDuration(recording.durationMs)}</span>
+            <span className={`run-recordings-badge ${recording.status}`}>
+              {RECORDING_STATUS_LABELS[recording.status]}
+            </span>
+            <span className="run-recordings-run-duration">{formatRecordingDuration(recording.durationMs)}</span>
           </div>
         </div>
         <div className="run-recordings-run-endpoint">

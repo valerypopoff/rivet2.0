@@ -29,6 +29,7 @@ import type {
   WorkflowRecordingFilterStatus,
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
+  WorkflowRecordingRunSummary,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
   WorkflowRunStatisticsQuery,
@@ -211,6 +212,7 @@ export type WorkflowRecordingPageQuery = {
 };
 
 export interface WorkflowRecordingRepository {
+  getWorkflowRecordingSummary(recordingId: string): Promise<WorkflowRecordingRunSummary>;
   listWorkflowRecordingWorkflows(): Promise<WorkflowRecordingWorkflowListResponse>;
   listWorkflowRecordingRunsPage(query: WorkflowRecordingPageQuery): Promise<WorkflowRecordingRunsPageResponse>;
   listWorkflowRunStatisticsCatalog(

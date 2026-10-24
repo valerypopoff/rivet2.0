@@ -73,9 +73,10 @@ test('docs-only Pages preparation preserves release identity and downloads, and 
     'GET /ok/official-release.json',
     'GET /ok/downloads/official/installer.msi',
   ]);
-  for (const mode of ['missing', 'unavailable', 'malformed', 'changed', 'asset-failure']) {
+  for (const mode of ['missing', 'unavailable', 'malformed', 'changed', 'asset-failure', 'wrong-size']) {
     const result = await run(mode);
     assert.notEqual(result.code, 0, mode);
+    if (mode === 'wrong-size') assert.match(result.output, /Expected 4 bytes, received 3/);
     await assert.rejects(stat(path.join(root, mode, 'developer-release.json')), { code: 'ENOENT' });
   }
   const optional = await run('optional-missing');

@@ -35,7 +35,16 @@ function createPagesHandler({ commit = 'a'.repeat(40), requests = [] } = {}) {
     const file = parts.join('/');
     if (
       req.method !== 'GET' ||
-      !['ok', 'missing', 'unavailable', 'malformed', 'changed', 'asset-failure', 'optional-missing'].includes(mode)
+      ![
+        'ok',
+        'missing',
+        'unavailable',
+        'malformed',
+        'changed',
+        'asset-failure',
+        'wrong-size',
+        'optional-missing',
+      ].includes(mode)
     ) {
       res.writeHead(501).end('Endpoint not defined by the Pages preservation contract.');
       return;
@@ -56,6 +65,7 @@ function createPagesHandler({ commit = 'a'.repeat(40), requests = [] } = {}) {
       }
     } else if (/^downloads\/(developer|official)\/installer\.msi$/.test(file)) {
       if (mode === 'asset-failure') res.writeHead(503).end('unavailable');
+      else if (mode === 'wrong-size') res.end('MSI');
       else res.end('MSI!');
     } else res.writeHead(501).end('Endpoint not defined by the Pages preservation contract.');
   };

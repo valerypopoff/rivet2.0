@@ -11,8 +11,10 @@ import {
   getLoadedRecordingForTab,
   isCurrentLoadedRecordingForTab,
   isLoadedRecordingOwnedByTab,
+  isRecordingProjectState,
   loadedRecordingState,
   recordingPlaybackStartingState,
+  recordingTabIndicatorsState,
   rebindLoadedRecordingPathState,
   type LoadedRecording,
 } from './execution.js';
@@ -24,7 +26,7 @@ const recording: LoadedRecording = {
   path: 'C:/recordings/project-a.rivet-recording',
   projectId: projectA,
   projectPath: 'recording://project-a/replay.rivet-project',
-  recorder: {} as ExecutionRecorder,
+  recorder: { events: [] } as unknown as ExecutionRecorder,
 };
 
 test('loaded recordings are visible only to their owning editor tab', () => {
@@ -35,6 +37,37 @@ test('loaded recordings are visible only to their owning editor tab', () => {
   assert.equal(isLoadedRecordingOwnedByTab(recording, projectA, recording.projectPath), true);
   assert.equal(isLoadedRecordingOwnedByTab(recording, projectA, 'C:/projects/project-a.rivet-project'), false);
   assert.equal(isLoadedRecordingOwnedByTab(recording, projectB, recording.projectPath), false);
+});
+
+test('recording tab indicators retain original outcomes across selection, rebinding and exact-owner cleanup', () => {
+  const store = createStore();
+  const a = { ...recording, summary: { status: 'failed' as const, createdAt: '', durationMs: 0 } };
+  const b = {
+    ...recording,
+    projectId: projectB,
+    projectPath: '/b',
+    summary: { status: 'succeeded' as const, createdAt: '', durationMs: 0 },
+  };
+  store.set(activateLoadedRecordingState, a);
+  store.set(activateLoadedRecordingState, b);
+  assert.equal(store.get(recordingTabIndicatorsState)[projectA]?.color, 'var(--error)');
+  assert.equal(store.get(recordingTabIndicatorsState)[projectB]?.color, 'var(--success)');
+  store.set(clearLoadedRecordingForTabState, { projectId: projectA, projectPath: '/wrong' });
+  assert.ok(store.get(recordingTabIndicatorsState)[projectA]);
+  store.set(clearLoadedRecordingForTabState, { projectId: projectA, projectPath: a.projectPath });
+  assert.equal(store.get(recordingTabIndicatorsState)[projectA], undefined);
+  assert.equal(store.get(loadedRecordingState), b);
+  store.set(rebindLoadedRecordingPathState, { fromPath: '/b', toPath: '/moved-b' });
+  assert.equal(store.get(recordingTabIndicatorsState)[projectB]?.projectPath, '/moved-b');
+  store.set(clearLoadedRecordingForPathState, '/b');
+  assert.ok(store.get(recordingTabIndicatorsState)[projectB]);
+  store.set(clearLoadedRecordingForPathState, '/moved-b');
+  assert.deepEqual(store.get(recordingTabIndicatorsState), {});
+  assert.equal(store.get(loadedRecordingState), null);
+  store.set(activateLoadedRecordingState, { ...a, summary: { ...a.summary, status: 'suspicious' } });
+  assert.equal(store.get(recordingTabIndicatorsState)[projectA]?.color, 'var(--warning)');
+  store.set(clearLoadedRecordingForPathState, a.projectPath);
+  assert.deepEqual(store.get(recordingTabIndicatorsState), {});
 });
 
 test('missing recordings remain absent for every project', () => {
@@ -88,16 +121,22 @@ test('moving an owner tab rebinds its recording path and clears a stale pre-star
   store.set(loadedRecordingState, localRecording);
   store.set(recordingPlaybackStartingState, true);
 
-  assert.equal(store.set(rebindLoadedRecordingPathState, {
-    fromPath: 'C:/projects/another-project.rivet-project',
-    toPath: movedPath,
-  }), false);
+  assert.equal(
+    store.set(rebindLoadedRecordingPathState, {
+      fromPath: 'C:/projects/another-project.rivet-project',
+      toPath: movedPath,
+    }),
+    false,
+  );
   assert.equal(store.get(loadedRecordingState), localRecording);
 
-  assert.equal(store.set(rebindLoadedRecordingPathState, {
-    fromPath: originalPath,
-    toPath: movedPath,
-  }), true);
+  assert.equal(
+    store.set(rebindLoadedRecordingPathState, {
+      fromPath: originalPath,
+      toPath: movedPath,
+    }),
+    true,
+  );
   assert.deepEqual(store.get(loadedRecordingState), { ...localRecording, projectPath: movedPath });
   assert.equal(store.get(recordingPlaybackStartingState), false);
 });
@@ -107,17 +146,23 @@ test('closing a recording owner clears the selection and pre-start playback stat
   store.set(loadedRecordingState, recording);
   store.set(recordingPlaybackStartingState, true);
 
-  assert.equal(store.set(clearLoadedRecordingForTabState, {
-    projectId: projectB,
-    projectPath: recording.projectPath,
-  }), false);
+  assert.equal(
+    store.set(clearLoadedRecordingForTabState, {
+      projectId: projectB,
+      projectPath: recording.projectPath,
+    }),
+    false,
+  );
   assert.equal(store.get(loadedRecordingState), recording);
   assert.equal(store.get(recordingPlaybackStartingState), true);
 
-  assert.equal(store.set(clearLoadedRecordingForTabState, {
-    projectId: projectA,
-    projectPath: recording.projectPath,
-  }), true);
+  assert.equal(
+    store.set(clearLoadedRecordingForTabState, {
+      projectId: projectA,
+      projectPath: recording.projectPath,
+    }),
+    true,
+  );
   assert.equal(store.get(loadedRecordingState), null);
   assert.equal(store.get(recordingPlaybackStartingState), false);
 });
@@ -152,4 +197,21 @@ test('the current-tab selector does not enter playback mode for another path wit
 
   store.set(loadedProjectState, { loaded: true, path: recording.projectPath });
   assert.equal(store.get(currentProjectLoadedRecordingState), recording);
+});
+
+test('recording target display covers detached replay startup and unload without leaking into live tabs', () => {
+  const store = createStore();
+  store.set(projectState, (current) => ({ ...current, metadata: { ...current.metadata, id: projectA } }));
+  const localPath = 'C:/projects/project-a.rivet-project';
+  store.set(loadedProjectState, { loaded: true, path: localPath });
+  assert.equal(store.get(isRecordingProjectState), false);
+  store.set(loadedRecordingState, { ...recording, projectPath: localPath });
+  assert.equal(store.get(isRecordingProjectState), true);
+  store.set(loadedProjectState, { loaded: true, path: 'C:/projects/another.rivet-project' });
+  assert.equal(store.get(isRecordingProjectState), false);
+  store.set(loadedRecordingState, null);
+  store.set(loadedProjectState, { loaded: true, path: recording.projectPath });
+  assert.equal(store.get(isRecordingProjectState), true); // Before activation, and after unload.
+  store.set(loadedProjectState, { loaded: true, path: localPath });
+  assert.equal(store.get(isRecordingProjectState), false);
 });

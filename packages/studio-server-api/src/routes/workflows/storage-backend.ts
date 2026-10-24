@@ -37,6 +37,7 @@ import type {
 import type {
   WorkflowRecordingExecutionIdentity,
   WorkflowRecordingRunsPageResponse,
+  WorkflowRecordingRunSummary,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
   WorkflowRunStatisticsQuery,
@@ -67,6 +68,7 @@ import {
   listWorkflowRecordingWorkflows,
   persistWorkflowExecutionRecording,
   readWorkflowRecordingArtifact,
+  getWorkflowRecordingSummary,
 } from './recordings.js';
 import { shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
 import {
@@ -766,6 +768,15 @@ export async function readWorkflowRecordingArtifactWithBackend(
   return delegateWithWorkflowsRoot(
     async (backend) => backend.readWorkflowRecordingArtifact(recordingId, artifact),
     async (root) => readWorkflowRecordingArtifact(root, recordingId, artifact),
+  );
+}
+
+export async function getWorkflowRecordingSummaryWithBackend(
+  recordingId: string,
+): Promise<WorkflowRecordingRunSummary> {
+  return delegateWithWorkflowsRoot(
+    async (backend) => backend.getWorkflowRecordingSummary(recordingId),
+    async (root) => getWorkflowRecordingSummary(root, recordingId),
   );
 }
 

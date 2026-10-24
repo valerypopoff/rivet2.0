@@ -11,6 +11,7 @@ import {
 } from '../../state/savedGraphs.js';
 import { projectCompareReferenceState, viewingProjectComparisonNodeState } from '../../state/projectComparison.js';
 import { removeProjectTabUiState, projectTabUiState } from '../../state/projectTabUi.js';
+import { recordingTabIndicatorsState } from '../../state/execution.js';
 import { useExecutorSessionRegistry } from '../../providers/ExecutorSessionContext.js';
 import { handleError } from '../../utils/errorHandling.js';
 import { removeProjectUnsavedState } from '../../utils/projectUnsavedChanges.js';
@@ -45,6 +46,7 @@ export function useWorkspaceHostProjectCleanup() {
   const setProjectUnsavedChanges = useSetAtom(projectUnsavedChangesState);
   const setProjectDataUnsavedChanges = useSetAtom(projectDataUnsavedChangesState);
   const setProjectTabUiStates = useSetAtom(projectTabUiState);
+  const setRecordingTabIndicators = useSetAtom(recordingTabIndicatorsState);
   const removeWorkspaceTarget = useSetAtom(removeProjectWorkspaceTargetState);
   const executorSessionRegistry = useExecutorSessionRegistry();
   const { removeProjectExecutionSnapshot } = useProjectExecutionSnapshots();
@@ -68,6 +70,12 @@ export function useWorkspaceHostProjectCleanup() {
       setProjectUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
       setProjectDataUnsavedChanges((flags) => removeProjectUnsavedState(flags, projectId));
       setProjectTabUiStates((states) => removeProjectTabUiState(states, projectId));
+      setRecordingTabIndicators((indicators) => {
+        if (!indicators[projectId]) return indicators;
+        const next = { ...indicators };
+        delete next[projectId];
+        return next;
+      });
       removeWorkspaceTarget(projectId);
       executorSessionRegistry.removeProject(projectId);
       releaseProjectContextState(projectId);

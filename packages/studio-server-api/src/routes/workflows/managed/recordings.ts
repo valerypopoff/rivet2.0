@@ -278,6 +278,29 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
     workflowColumnsQualified: options.context.mappers.WORKFLOW_COLUMNS_QUALIFIED,
     recordingColumns: options.context.mappers.RECORDING_COLUMNS,
   };
+  const toRunSummary = (row: RecordingRow): WorkflowRecordingRunSummary => {
+    return {
+      hasSubRuns: row.has_sub_runs,
+      id: row.recording_id,
+      workflowId: row.workflow_id,
+      sourceProjectName: row.source_project_name,
+      sourceProjectRelativePath: row.source_project_relative_path,
+      createdAt: deps.toIsoString(row.created_at) ?? new Date().toISOString(),
+      runKind: row.run_kind,
+      status: row.status,
+      durationMs: row.duration_ms,
+      endpointNameAtExecution: row.endpoint_name_at_execution,
+      executionIdentity: getExecutionIdentity(row),
+      errorMessage: row.error_message ?? undefined,
+      hasReplayDataset: row.has_replay_dataset,
+      recordingCompressedBytes: row.recording_compressed_bytes,
+      recordingUncompressedBytes: row.recording_uncompressed_bytes,
+      projectCompressedBytes: row.project_compressed_bytes,
+      projectUncompressedBytes: row.project_uncompressed_bytes,
+      datasetCompressedBytes: row.dataset_compressed_bytes,
+      datasetUncompressedBytes: row.dataset_uncompressed_bytes,
+    };
+  };
   const cleanupWorkflowRecordingStorage = async (lease: ManagedWorkflowMaintenanceLease): Promise<void> => {
     const config = options.getRecordingConfig?.() ?? getWorkflowRecordingConfig();
     if (config.retentionDays <= 0 && config.maxRunsPerEndpoint <= 0 && config.maxTotalBytes <= 0) {
@@ -677,29 +700,11 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
             : scopeCounts.totalRuns
           : countRow?.total_runs ?? 0;
 
-      const runs: WorkflowRecordingRunSummary[] = pageRows.map((row) => ({
-        hasSubRuns: row.has_sub_runs,
-        id: row.recording_id,
-        workflowId: row.workflow_id,
-        sourceProjectName: row.source_project_name,
-        sourceProjectRelativePath: row.source_project_relative_path,
-        createdAt: deps.toIsoString(row.created_at) ?? new Date().toISOString(),
-        runKind: row.run_kind,
-        status: row.status,
-        durationMs: row.duration_ms,
-        endpointNameAtExecution: row.endpoint_name_at_execution,
-        executionIdentity: getExecutionIdentity(row),
+      const runs = pageRows.map((row) => ({
+        ...toRunSummary(row),
         ...(runScope === 'families' && row.execution_surface === 'subgraph_project'
           ? { familyContext: true as const }
           : {}),
-        errorMessage: row.error_message ?? undefined,
-        hasReplayDataset: row.has_replay_dataset,
-        recordingCompressedBytes: row.recording_compressed_bytes,
-        recordingUncompressedBytes: row.recording_uncompressed_bytes,
-        projectCompressedBytes: row.project_compressed_bytes,
-        projectUncompressedBytes: row.project_uncompressed_bytes,
-        datasetCompressedBytes: row.dataset_compressed_bytes,
-        datasetUncompressedBytes: row.dataset_uncompressed_bytes,
       }));
 
       return {
@@ -733,6 +738,17 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       const statement = recordingStatisticsRowsSql('postgres', query);
       const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, statement.sql, statement.values);
       return buildWorkflowRunStatistics(rows.map(statisticsSqlRow), query);
+    },
+
+    async getWorkflowRecordingSummary(recordingId: string): Promise<WorkflowRecordingRunSummary> {
+      await deps.initialize();
+      const row = await deps.queryOne<RecordingRow>(
+        deps.pool,
+        `SELECT ${deps.recordingColumns} FROM workflow_recordings WHERE recording_id = $1`,
+        [recordingId],
+      );
+      if (!row) throw createHttpError(404, 'Recording not found');
+      return toRunSummary(row);
     },
 
     async readWorkflowRecordingArtifact(

@@ -335,6 +335,13 @@ jobs:
         with:
           name: rivet-${{ inputs.channel }}-macos-x86_64-bundles
           path: release-bundles/macos/x86_64
+      - name: Require successful exact Build before publication
+        if: steps.freshness.outputs.current == 'true'
+        run: node scripts/ci/desktop-build-evidence.mjs validated
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ needs.build-desktop-web.outputs.build_run_id }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build-desktop-web.outputs.build_run_attempt }}
       - name: Confirm release is still current before publishing assets
         id: asset_freshness
         if: steps.freshness.outputs.current == 'true'
@@ -348,13 +355,6 @@ jobs:
             echo "current=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Require successful exact Build before publication
-        if: steps.asset_freshness.outputs.current == 'true'
-        run: node scripts/ci/desktop-build-evidence.mjs validated
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ needs.build-desktop-web.outputs.build_run_id }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build-desktop-web.outputs.build_run_attempt }}
       - name: Publish desktop release assets
         if: steps.asset_freshness.outputs.current == 'true' && needs.release-plan.outputs.native == 'true'
         run: node .github/scripts/publish-desktop-release-assets.mjs
@@ -426,8 +426,22 @@ jobs:
       - name: Wait for GitHub Pages cancellation to settle
         if: steps.pages_freshness.outputs.current == 'true' && steps.deployment_first_attempt.outcome == 'failure'
         run: sleep 15
-      - name: Deploy to GitHub Pages (attempt 2 of 2)
+      # The first deployment can take five minutes. A retry is a new write:
+      # never authorize it with the head check from before that attempt.
+      - name: Confirm release is still current before retrying Pages
+        id: retry_freshness
         if: steps.pages_freshness.outputs.current == 'true' && steps.deployment_first_attempt.outcome == 'failure'
+        shell: bash
+        run: |
+          current_sha="$(git ls-remote origin "${{ inputs.branch_ref }}" | awk '{print $1}')"
+          if [[ "$current_sha" != "$GITHUB_SHA" ]]; then
+            echo "Current branch head is $current_sha; skipping stale release $GITHUB_SHA."
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy to GitHub Pages (attempt 2 of 2)
+        if: steps.retry_freshness.outputs.current == 'true' && steps.deployment_first_attempt.outcome == 'failure'
         id: deployment
         uses: actions/deploy-pages@v5
         with:

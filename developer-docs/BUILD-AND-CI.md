@@ -1553,7 +1553,10 @@ It downloads no new installers and publishes no release assets. Pages preparatio
 requires the primary channel's existing metadata to still match the exact
 planned installer commit, preserves its bytes/URLs and same-site binaries, and
 preserves the other channel as before (a never-published other channel may be
-absent). A changed primary baseline fails preparation. Original version, label,
+absent). Same-site downloads must match their recorded byte count before being
+written; a shortened HTTP 200 response fails preparation without publishing new
+metadata. This is a truncation check, not a substitute for signatures or a
+cryptographic digest. A changed primary baseline fails preparation. Original version, label,
 commit and timestamps remain attached to the old installers, never the docs SHA.
 Existing branch freshness checks and serialized Pages publication remain active;
 the explicit skipped-job gate must not admit canceled workflows.
@@ -1566,7 +1569,13 @@ SHA). Only a completed, successful Build passes; failed/canceled runs, changed
 attempts, identity mismatch, API errors and timeouts stop publication. Signing
 and packaging can overlap the remaining Build checks; **publication cannot**.
 This is a point-in-time gate, not a lock against somebody subsequently rerunning
-Build. Branch freshness checks still apply afterward.
+Build. The final asset branch-head check must run **after** this potentially long
+wait and immediately before asset publication. In particular, manual workflows
+are not canceled by newer pushes and must not publish using a head check from
+before the wait. Pages retains its own subsequent branch-head check. If its first
+deployment attempt fails, the retry rechecks the branch after that attempt and
+the cancellation-settlement delay. A stale or failed freshness check prevents
+the second deployment; the old check is never reused to authorize another write.
 
 Evidence waits are bounded to 20 minutes, with individual HTTP calls bounded to
 10 seconds and no redirect-following or modifying API calls. Missing or expired

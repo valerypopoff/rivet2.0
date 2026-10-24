@@ -8,6 +8,7 @@ export const ProjectTabSurface: FC<{
   className?: string;
   closeIcon: ReactNode;
   displayName?: string;
+  leadingIcon?: ReactNode;
   dragListeners?: SyntheticListenerMap;
   hasUnsavedChanges?: boolean;
   preview?: boolean;
@@ -19,6 +20,7 @@ export const ProjectTabSurface: FC<{
   className,
   closeIcon,
   displayName,
+  leadingIcon,
   dragListeners,
   hasUnsavedChanges = false,
   onCloseProject,
@@ -37,6 +39,7 @@ export const ProjectTabSurface: FC<{
       onClick={onSelectProject}
     >
       <div className="project-name" {...dragListeners}>
+        {leadingIcon}
         <span>{displayName}</span>
       </div>
       {onCloseProject && (
