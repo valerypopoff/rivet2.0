@@ -134,7 +134,7 @@ test('required response numbers cannot be missing, coerced from another type or 
     ];
     for (const [index, invalid] of patches.entries()) {
       assert.throws(() => validateApiCompatibleClassifierResponse(invalid, questions), {
-        message: `Classifier provider response has invalid ${labels[index]}.`,
+        message: `Decision AI provider response has invalid ${labels[index]}.`,
       });
     }
   }

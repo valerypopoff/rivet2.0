@@ -156,7 +156,7 @@ export function prepareClassifierImageText(
 ): PreparedClassifierImage | undefined {
   check?.();
   if (value.length > CLASSIFIER_LIMITS.requestBytes)
-    throw new Error('Classifier image/text exceeds the 32 MiB input limit.');
+    throw new Error('Decision AI image/text exceeds the 32 MiB input limit.');
   if (value.startsWith('data:image/')) {
     return { ...inspectClassifierImage(value, check), dataUrl: value };
   }

@@ -24,6 +24,35 @@ profile names, including retained health records whose node is unavailable.
 Custom names (including whitespace-padded titles) and other node/family names
 are not rebranded. Reading labels never changes project contents or health keys.
 
+Newly emitted first-party validation, credential, preparation, provider and
+profile-chain diagnostics also use Decision AI terminology at their source.
+The exported `ClassifierProfileExhaustedError` and `ClassifierProviderError`
+classes keep their names and `instanceof` behavior; their human-visible `name`
+prefixes are `DecisionAIProfileExhaustedError` and `DecisionAIProviderError`.
+Failure kinds, HTTP status, serialized family/port keys and error-cause behavior
+are unchanged. Default/unnamed profile labels use Decision AI in summaries and
+attempt details without rewriting recorded profile identities; authored names
+such as `My Classifier route` remain authored names. Never globally replace text
+in provider responses, custom titles, or saved recordings to achieve branding.
+Old recordings retain their original diagnostic text and remain replayable.
+
+`getProfileDisplayName` is the shared family-aware alias for profile summaries,
+Response Inspector, web-app traces and Run Activity labels/search. Alias only an
+exact `Classifier Profile` name in the `classifier` family. Preserve nonblank
+authored names during configuration normalization, including surrounding spaces;
+trimming before the alias check would incorrectly rebrand a custom title. Layout
+may trim after that check. Search includes both raw and displayed names without
+mutating journals, provider diagnostics or health identities.
+
+The missing-credential regression exercises the real Profile-chain failure:
+`Decision AI profile chain exhausted.` and `Decision AI Profile API key is not set.`
+must agree in the summary and attempt details, make no HTTP call and preserve
+internal class/family identity. The Node-hosted web-app inspector uses the same
+Decision AI request labels as the editor; rebuild/check its generated client after
+presentation changes. Browser replay covers both current and legacy errors,
+including full output, Response Inspector and Run Activity, while preserving
+authored profile names and raw diagnostic bodies.
+
 Regression coverage checks registered types, port IDs and configuration keys in
 Core, exact-title aliases and unchanged recorded journals in App, and retained
 profile names/health identities in the hosted UI. The headless node and recording
@@ -57,6 +86,27 @@ include them when validating a new built-in type, not only the node's own tests.
 
 ## Profiles and ordered fallback
 
+### Timeout ownership
+
+Decision AI run has no configurable or implicit overall execution deadline.
+`timeoutMs` and `profileChainTimeoutMs` are no longer read, defaulted or exposed
+by the node, even if old project data still contains them. There is no legacy
+timeout migration or fallback. Extracting a Profile no longer converts an old
+run timeout into its response timeout; new profiles keep their own 500 ms default.
+Only an enabled, host-backed Profile response timeout bounds a provider attempt,
+including its retries and waits. Inline calls and profiles without active
+suspension wait until completion, provider failure or explicit caller cancellation.
+Byte/work/depth limits, bounded health operations and the diagnostic-body cap
+remain independent safety mechanisms. Direct programmatic provider/fallback APIs
+may still receive an explicit deadline; the run node does not supply one.
+
+Unbounded requests still honor the complete configured retry cooldown or provider
+`Retry-After` delay. Waits longer than JavaScript's 2,147,483,647 ms timer limit
+use cancellable chunks; never clamp the requested wait or overflow it into an
+immediate retry. Active Profile response deadlines continue to bound retry waits.
+Regression coverage advances mock timers across the chunk boundary and verifies
+both exact retry admission and cancellation without contacting a provider.
+
 The Profile inspector mirrors the LLM Profile's collapsible suspension section:
 host-capability notice and enable toggle, followed by response timeout, failure
 threshold, rolling failure window and suspension duration only when enabled.
@@ -67,8 +117,7 @@ Classifiers are non-streaming, so there is no stream-inactivity field. Their
 response deadline sits inside the section, immediately after the toggle. The
 entire suspension policy, including response deadlines, is inert when disabled
 or without an executing project and host-supplied health store, matching LLM
-profiles. Saved values remain intact when disabled. Evaluate's separate overall
-execution deadline still bounds the run. Do not describe response deadlines as
+profiles. Saved profile values remain intact when disabled. Do not describe response deadlines as
 independent of suspension, or suspension itself as merely skipping a profile.
 
 Both families import the same concise notice, toggle and failure-policy hints
@@ -80,29 +129,27 @@ hints across both families to prevent wording drift.
 Timing editor defaults, bounds and steps use **stored milliseconds**, with
 `storageMultiplier: 1_000` converting to displayed seconds. Profile defaults
 come from the same constants as runtime resolution: 0.5 seconds for response,
-three failures, 300 seconds for the rolling window and suspension. Evaluate's
-overall timeout uses the same units (30 seconds inline, 180 seconds in profile
-mode). Reading defaults never writes them to the node or reinterprets explicit
+three failures, 300 seconds for the rolling window and suspension.
+Reading defaults never writes them to the node or reinterprets explicit
 saved values. The 500 ms response default applies to new profiles and absent
 settings; explicit saved timeouts remain unchanged. The profile response timeout
 accepts fractional seconds with millisecond precision (minimum and step: 0.001
-seconds); for example, 0.25 seconds stores 250 ms. The failure window, suspension
-duration and Evaluate overall
-timeout retain a one-second editing step. Tests cover native definitions and
+seconds); for example, 0.25 seconds stores 250 ms. The failure window and suspension
+duration retain a one-second editing step. Tests cover native definitions and
 rendered defaults, fractional response deadlines, constraints, hints and toggle
 behavior.
 
 `ClassifierProfileNode` produces a version-1 sensitive `classifier-config` value containing resolved provider/model/credentials and optional suspension policy. `classifier/profile.ts` owns selection, validation, cumulative chain limits (1–128 candidates), timing and route identity. Classifier and LLM configuration types are intentionally distinct. Missing credentials make a candidate unavailable; invalid authored configuration fails instead of being hidden by fallback.
 
-Evaluate keeps legacy Inline mode as the default. From profile hides inline configuration inputs and accepts one profile or a preserved ordered array (including Array's `any[]` output). Its total chain budget defaults to 180 seconds, independent of the retained inline 30-second setting. When hosted suspension is enabled, profile response budgets default to 0.5 seconds and include retries and their waits. These are repeated requests to the same provider (automatic transport/rate-limit retries and Evaluate's opt-in non-200 retries), not attempts of subsequent profiles. Each candidate gets one budget, not a fresh timeout per retry; a short budget may expire before a retry can occur. When suspension is inactive, only the remaining overall execution budget limits a candidate. Profiles use one cumulative deadline-aware validation/snapshot traversal, rather than a whole-chain scan plus fresh per-candidate scans. Shared State/questions are validated and detached before health or provider calls. A candidate's unsupported evidence fails that candidate without discarding content; malformed shared evidence fails the node before attempts. The first validated response wins. There is no cross-candidate answer merging, numerical reinterpretation or stream timing.
+Evaluate keeps legacy Inline mode as the default. From profile hides inline configuration inputs and accepts one profile or a preserved ordered array (including Array's `any[]` output). It has no total chain deadline and ignores old run-node timeout values. When hosted suspension is enabled, profile response budgets default to 0.5 seconds and include retries and their waits. These are repeated requests to the same provider (automatic transport/rate-limit retries and Evaluate's opt-in non-200 retries), not attempts of subsequent profiles. Each candidate gets one budget, not a fresh timeout per retry; a short budget may expire before a retry can occur. When suspension is inactive, no response timeout is applied; caller cancellation remains active. Profiles use one cumulative cancellation-aware validation/snapshot traversal, rather than a whole-chain scan plus fresh per-candidate scans. Shared State/questions are validated and detached before health or provider calls. A candidate's unsupported evidence fails that candidate without discarding content; malformed shared evidence fails the node before attempts. The first validated response wins. There is no cross-candidate answer merging, numerical reinterpretation or stream timing.
 
 `classifier/profileExecution.ts` runs classifier-specific fallback while reusing bounded health operations and atomic permits from the LLM reliability infrastructure. Transport/timeouts/408/429/5XX count once per failed candidate, not per physical retry. Non-cancellation response-body read failures are transport failures; invalid UTF-8/JSON is response parsing, while an invalid answer shape is response validation. Authentication, input/capability failures, malformed responses and cancellation finish permits as ignored. Suspension is opt-in and requires an injected `llmProfileHealthStore`; its absence disables durable suspension, not fallback. Health-service errors fail open with bounded diagnostics, and stale completions cannot resurrect cleared entries. Classifier keys use a separate namespace and `family: classifier`; legacy entries without a family are LLM. Provider/model/credential and project/source-node identity determine health; display-name/policy edits do not reset it.
 
 The non-2XX suppression switch applies only when all attempted candidates ended in HTTP rejection. Mixed configuration, transport, timeout or response-validation failures still throw unless Catch all exceptions is enabled. Classify terminal candidate errors rather than physical retries, and never infer the entire chain's failure category from its last diagnostic cause.
 
-The overall deadline is checked after provider completion and after bounded health completion. A response cannot become successful node output merely because it arrived before a slow health update exhausted the chain budget. Provider health still describes the validated provider response, not the speed of the health service. Health-service failures remain fail-open and their attempt diagnostics use a fixed safe message rather than an injected service's potentially sensitive exception text. Fully suspended chains make no provider calls; concurrent expired suspensions admit only one recovery probe through the shared atomic permit.
+Graph runs have no overall deadline to expire during health completion. Profile-owned provider response timeouts remain enforced through response validation. Direct programmatic fallback callers may still supply a deadline, which is checked after provider/health completion and cannot become a late successful result. Health-service failures remain fail-open, with fixed safe diagnostics rather than potentially sensitive service exceptions. Fully suspended chains make no provider calls; concurrent expired suspensions admit only one recovery probe.
 
-Failed-request health cleanup observes the same deadline: expiration overrides HTTP-only suppression, even on the final candidate, and records a timeout decision. Cancellation during admission or completion must never become caught outputs or advance fallback; a late admitted permit is finished as ignored without calling the provider. Regression tests cover these races using controlled clocks and promise gates, rather than timing-dependent sleeps.
+For direct callers that supply an explicit deadline, failed-request health cleanup observes that deadline: expiration overrides HTTP-only suppression, even on the final candidate, and records a timeout decision. Cancellation during admission or completion must never become caught outputs or advance fallback; a late admitted permit is finished as ignored without calling the provider. Regression tests cover these races using controlled clocks and promise gates, rather than timing-dependent sleeps.
 
 The existing `llmProfileAttempt` event gains an optional family discriminator and non-streaming `response` timeout kind. Existing recording/debugger/activity paths carry it without a second event bus. Provider-internal failure classifications are mapped to these public fields, not spread into strict recording events. Optional `classifierAttempts` and `classifierProfileSummary` outputs contain sanitized decisions, not bodies or credentials; caught exhaustion retains them. Summaries use the terminal execution outcome and its safe failure explanation, ignoring health-service observations: an earlier successful receipt cannot hide a later deadline failure, and a health-update failure cannot relabel a successful candidate. Successful native bodies and Evaluate's Usage/Cost outputs remain from the winner.
 
@@ -141,7 +188,7 @@ Response-body observers receive a detached copy of bounded decoded JSON. They
 cannot repair an invalid response, alter successful answers/usage, or affect
 pricing. This extra copy exists only for opted-in body diagnostics; request and
 response work remains bounded by the existing limits. Check the operation again
-after diagnostic collection: caller cancellation and overall deadline expiry
+after diagnostic collection: caller cancellation and active profile or explicit provider deadline expiry
 must not be converted into suppressible HTTP-only failures. The diagnostic-only
 one-second cap does not change the original HTTP failure while the overall
 operation remains active. Use the same retry decision for both diagnostic
@@ -329,7 +376,132 @@ OpenAI has stable provider ID `openai`, default model `gpt-6-luna`, fixed endpoi
 
 Classifier Evaluate has one optional multimodal **State** input, not a separate Images input. `classifier/state.ts` normalizes `string`, `string[]`, `image`, `image[]`, `chat-message`, `chat-message[]`, and mixed `any[]` containing native images or user messages. Assemble Message and Array nodes retain content order and message boundaries. Ordinary `object`/`object[]` inputs always remain structured JSON; pure JSON `any`/`any[]` arrays keep their legacy meaning. Use typed `string[]` or Assemble Message for an explicit sequence of text parts. Image data URLs and recognizable bare image base64 strings become image parts; ordinary base64-compatible text stays text. No recursive search of JSON fields or new conversation semantics is introduced. Non-user messages, documents, audio, tool calls and explicit URL parts fail rather than being silently flattened or dropped. URL/path strings are ordinary text, never fetched or read. The intermediate unreleased Images port is removed; a supplied old port fails with guidance to reconnect to State.
 
-`classifier/images.ts` validates base64 syntax, supported image headers and matching media type; native bytes are encoded synchronously. OpenAI maps ordered messages/parts to `input` user messages containing `input_text` and `input_image`; plain text and JSON retain the string request format. Liquid maps ordered parts to text with numbered `[Image N]` placeholders and a top-level ordered `images` array. Text-only message sequences are joined with newlines for System One. Images remain shared evidence for every question. Jev and Liquid `d1:free` reject images before IO. OpenAI `gpt-6-luna` allows 128 images; Liquid `d1` allows 8, a complete UTF-8 JSON body below 4.5 MB, at most 10,000 32-by-32 pixel patches, and aspect ratios at most 100:1. These are provider-boundary checks; never silently resize, discard, or split evidence. Header inspection is not a full image decoder; providers still validate encoded image content. Classifier Question has no image setting or field; ordinary `{{images}}` interpolation is unchanged.
+`classifier/images.ts` validates base64 syntax, supported image headers and matching media type; native bytes are encoded synchronously. OpenAI maps ordered messages/parts to `input` user messages containing `input_text` and `input_image`; plain text and JSON retain the string request format. Liquid maps ordered parts to text with numbered `[Image N]` placeholders and a top-level ordered `images` array. Text-only message sequences are joined with newlines for System One. Images remain shared evidence for every question. Jev uses its native assets protocol described below. Liquid `d1:free` rejects images before IO. OpenAI `gpt-6-luna` allows 128 images; Liquid `d1` allows 8, a complete UTF-8 JSON body below 4.5 MB, at most 10,000 32-by-32 pixel patches, and aspect ratios at most 100:1. These are provider-boundary checks; never silently resize, discard, or split evidence. Header inspection is not a full image decoder; providers still validate encoded image content. Classifier Question has no image setting or field; ordinary `{{images}}` interpolation is unchanged.
+
+### SubQ Snap Decisions
+
+`subq` is an appended provider ID (existing IDs/order/defaults are unchanged).
+Its default and only currently documented decision model is `subq-snap-1.1`,
+using `POST https://api.subq.ai/v1/systemone` with Bearer authentication. Do not
+send it to Chat Completions, or list `subq-preview` as a decision model: that
+model is early-access chat. The public preview may require account credits/access.
+Sources checked 2026-10-24: [API](https://docs.subq.ai/endpoints/decisions-api/),
+[models](https://docs.subq.ai/using-the-api/models/),
+[authentication](https://docs.subq.ai/using-the-api/authentication/).
+
+Credential defaults are `subqApiKey` / `SUBQ_API_KEY`; strict saved settings use
+`settings.classifierProviders.subq.apiKey`. Existing registry-driven settings,
+environment loading, node editors, extraction and profile fallback require no new
+host-specific branch. Node execution is required; credentials remain executor-owned.
+
+The native response matches the shared Choice/Score/Noul validator. `subq.ts`
+owns its request mapping and capabilities: 1–128 questions, names at most 100
+Unicode code points, PNG/JPEG/WebP only, at most 4 images, 4 MiB decoded each and
+8 MiB decoded total. Its JSON body stays below 13 MiB. The provider checks the
+393,216-token context limit; Rivet does not estimate it from character count or
+truncate/split evidence. Unsupported images fail as a capability error before
+HTTP and can select the next profile, not damage the whole bundle.
+
+Rivet-native images and User-message sequences use the shared numbered `[Image N]`
+text mapping, preserving captions and message boundaries. SubQ's `images` entries
+are `{ mediaType, base64 }`, not data URLs, bare string entries, Jev assets or
+OpenAI image parts. The base64 bytes are not inserted into textual State. Explicit
+JSON State remains unchanged, including fields that happen to look like images.
+No remote URLs/files are fetched. All existing cancellation, request snapshot,
+retry, redaction and opt-in body diagnostics remain shared.
+
+Pricing is **$0.04 / million input tokens**, free output, for the exact verified
+`subq-snap-1.1` requested/returned pair only. The current model catalog supersedes
+the launch article's $0.05 figure; record the discrepancy instead of guessing an
+alias or using a prefix match. Usage is aggregate: do not multiply by questions
+or add image tokens again. Unknown model pairs have unknown Cost. SubQ's documented
+400/401/402/403/422 statuses remain permanent per-request failures; 429 respects
+Retry-After, while 503 uses the explicit non-200 retry policy. Malformed 2XX
+responses fail validation without a retry. Existing profile fallback still applies.
+HTTP 401 keeps the invalid-credentials guidance; HTTP 403 instead explains denied
+access and points to key permissions/model access. Attempt traces and terminal
+errors use the same 403 message. Its `http` kind, status, no-retry policy and
+authentication failure classification remain unchanged; this is not an outage
+or a reason to suspend the profile. Do not infer errors by parsing provider bodies.
+
+SubQ stores Decisions inputs/outputs, including images, under its
+[retention policy](https://docs.subq.ai/using-the-api/data-retention/). Per-request
+`store: false` is documented for chat/Responses, not Decisions; do not invent that
+field or promise zero retention. Organization-level ZDR is provider-managed.
+
+`SubQDecisions.test.ts` covers native wire shapes, all question types, inline and
+profile calls, credential isolation, diagnostic privacy, image formats/boundaries,
+Unicode names, exact pricing, retry/permanent errors and fallback. The
+preflight table checks the specific rejection reason and an independent zero-HTTP
+counter; an assertion thrown inside a mock fetch can otherwise be mistaken for
+the expected provider failure. Remote-image rejection has the same guard.
+The existing parameterized `jev-nodes.spec.ts` additionally checks SubQ selection, extraction,
+model preservation and persisted saved credentials in the actual hosted editor.
+Local real-HTTP verification (no provider key or credits):
+
+```sh
+postman simulation run postman/simulations/rivet-subq-decisions.sim.yaml --port 4922 --no-history --output ndjson
+yarn workspace @valerypopoff/rivet2-core exec tsx scripts/check-subq-simulation.mts
+```
+
+The local mock is derived from the published contract; owner-mock search requires
+Postman sign-in and was unavailable. The API discovery index had no matching SubQ
+resource. Check its nine request receipts: two successful node calls, two 402s,
+two 403s, 429 then success, and a slow response after the caller's timeout. This exercises
+real HTTP/client parsing, not live model quality/access. Stop the simulation after
+verification. No mock or service publication is required.
+
+### Experimental Jev images
+
+[TypeSafe's image contract](https://docs.typesafe.ai/images), verified 2026-10-24,
+supports `jev-1.13.0`, `jev-1.14.0`, `jev-latest` and `jev-preview`. It is explicitly
+experimental, not a provider production-readiness guarantee. The shared Model
+inspector in run/Profile nodes displays this warning. Unknown models remain
+image-incapable until their contract is verified.
+
+`classifier/jev.ts` adapts the existing shared State only: native images, inline
+base64 and assembled user text/image messages. It creates per-request UUID asset
+references in the original part/message order, with one `assets` entry per distinct
+image. Each entry contains `type: image`, `format: png|jpg` and raw `data_base64`
+without a data-URL prefix. The HTTP runner adds `TypeSafe-Danger-Zone-Images: true`
+only for image requests, through a provider-owned header hook; no graph-authored
+headers or endpoints are accepted. Text-only JSON/message behavior stays unchanged.
+Build the wire once, so retries reuse identical asset references and bytes.
+
+Preflight accepts PNG/JPEG, 280–1568 pixels on each side and at most 16 MiB decoded
+per image. The shared 32 MiB request and resource limits still apply. Jev validates
+full image content (including animated PNG rejection), processed/expanded image
+size and token/context limits; Rivet's header inspection is not a decoder. No
+automatic resizing, format conversion or experimental long-context header is added.
+Usage already includes image input tokens: charge the ordinary Jev input rate once.
+Question-local image definitions and Box questions are outside this change.
+
+`JevImages.test.ts` covers inline/Profile use, aliases, ordered/repeated images,
+PNG/JPEG assets, retry stability, Cost, unchanged text requests and local limits.
+Its shared input matrix exercises ten State forms across Jev, Liquid, OpenAI and
+Perplexity, in inline mode and using actual Profile-node outputs (80 cases).
+It checks bytes, text/image order, decoded protocol shape, answers and numeric
+Cost, not just request counts. Native images/arrays, data URLs, bare base64,
+String Array, Assemble Message, message arrays, Any images and mixed Any Array
+are supported uniformly. Ordinary Object values keep image-looking strings as
+literal JSON. Provider-specific image limits and wire encodings remain intentional.
+`ClassifierState.test.ts` also runs real GraphProcessor graphs through Array and
+Assemble Prompt for all four providers, retaining unsupported-role and removed-port
+rejections. For a repeatable real-HTTP check using a synthetic, complete 280×280 PNG:
+
+```sh
+postman simulation run postman/simulations/rivet-jev-images.sim.yaml --port 4921 --no-history --output ndjson
+yarn workspace @valerypopoff/rivet2-core exec tsx scripts/check-jev-image-simulation.mts
+```
+
+Run the second command in another terminal. It uses only the loopback mock, fixture
+credentials and actual fetch/parser paths; it never calls Jev. The repo-owned mock
+models the verified Noul/image subset and rejects missing opt-in headers; unmatched
+paths/types return 501. The owner-mock lookup required unavailable Postman login,
+and Orbit discovery was unavailable, so this uses the primary documentation rather
+than claiming upstream-mock or live-account qualification. Check simulation request
+events for four 200s (native and real Assemble Message inputs in both modes) and
+two deliberate 400s. Stop the simulation afterward.
 
 The provider boundary snapshots all State/questions/shared images before IO and submits the complete question batch in one request per candidate, subject to the existing retry policy. There is no image-based grouping, repeated State for different question scopes, usage aggregation, or multi-request diagnostic envelope. Inline mode has one candidate; profile mode advances only after the previous candidate fails or is suspended. Request/response diagnostics retain the winning native single-call JSON shape and can contain full image data, so they must be treated as sensitive. A question definition containing an `images` field is rejected before network IO with guidance to connect images to Evaluate instead; never silently discard that evidence or promote it to shared State.
 
@@ -337,7 +509,7 @@ The provider boundary snapshots all State/questions/shared images before IO and 
 
 Inline image validation checks the base64 alphabet and padding geometry separately, rather than a repeated four-character regexp group that can exhaust regexp stack space on normal large images. PNG/GIF/WebP inspection decodes only the first 36 bytes while checking the complete base64 string. JPEG shares one segment parser for native bytes and base64, skipping metadata bodies and decoding a small cached byte window instead of the complete image; the cache also bounds decoder calls for repeated fill bytes. Coverage includes 4 MiB payloads, large JPEG metadata, bounded header decoding, truncated segments, malformed padding, MIME mismatches and PNG/JPEG/GIF/WebP dimension layouts.
 
-Evaluation captures credentials, model, retry settings and transport once, alongside the detached evidence. The node starts its absolute deadline before State normalization and image encoding; adapters cannot extend it. Preparation, serialization, retries and response validation share that budget. Inline-image arrays must be dense and match their declared Rivet data type; scalar string/image/message inputs and array inputs reject mismatched containers rather than silently reinterpreting them. The 128-item limit is checked before native image encoding. A complete GraphProcessor fixture connects Graph Input → Assemble Message → Array → Evaluate → Graph Output through both providers and proves one request without array splitting. Runtime validation checks old Images connections in the executing graph as well as supplied inputs: GraphProcessor omits unknown input ports, so a value-only check would silently lose that evidence. The shared HTTP boundary disallows redirects and initiates best-effort, non-blocking body cleanup when JSON reading fails or is cancelled.
+Evaluation captures credentials, model, retry settings and transport once, alongside the detached evidence. There is no node-wide deadline. Caller cancellation and resource checks cover State normalization/image encoding; an active Profile or explicit direct-provider deadline covers provider preparation, serialization, retries and response validation. Inline-image arrays must be dense and match their declared Rivet data type; scalar string/image/message inputs and array inputs reject mismatched containers rather than silently reinterpreting them. The 128-item limit is checked before native image encoding. A complete GraphProcessor fixture connects Graph Input → Assemble Message → Array → Evaluate → Graph Output through both providers and proves one request without array splitting. Runtime validation checks old Images connections in the executing graph as well as supplied inputs: GraphProcessor omits unknown input ports, so a value-only check would silently lose that evidence. The shared HTTP boundary disallows redirects and initiates best-effort, non-blocking body cleanup when JSON reading fails or is cancelled.
 
 Mixed arrays and user-message parts stop at the global image limit before encoding an excess native image, not just after constructing the complete State. Structured State and internal normalized messages reject callable `toJSON` hooks, including non-enumerable hooks and array hooks: serialization must not replace already-validated evidence. The provider checks unsupported question `images` fields before serialization, so undefined/function-valued fields cannot disappear and bypass the error. Ordinary JSON string fields named `toJSON` remain data.
 
@@ -558,7 +730,7 @@ authored metric-name overrides, and incomplete-pricing semantics.
 
 Rates were rechecked against the primary provider documentation on 2026-10-07. Charge the successful response's aggregate `usage.input_tokens` once: do not estimate tokens from text length/base64 bytes, multiply by question count, or add image tokens separately. [Liquid's usage contract](https://docs.liquid.ai/lfm/models/decision-models) already includes image tokens for every question (for example, two questions about a 1024×1024 image include 3,072 image tokens plus text). Jev reports request-level usage. OpenAI Decisions' cache-read, cache-write and output charges are zero; do not import Chat/Responses caching discounts or output rates even if those detail fields are present. Its long-context threshold uses `input_tokens`, not `total_tokens` or output tokens. `ClassifierCredentialsAndPricing.test.ts` exercises these rules through the calculator and real Evaluate nodes, with multi-question text/image evidence, diagnostics, Usage details on/off, tiny fractional USD costs, and both sides of the context threshold.
 
-Core's provider registry owns exact model-pricing groups. Both requested and returned model IDs must belong to the same verified group; do not infer rates from prefixes or treat aliases as proof about a future returned version. [TypeSafe's models](https://docs.typesafe.ai/models) currently document `jev-latest`, `jev-preview` and `jev-1.13.0` together at $0.042/MTok input. Liquid's documented paid `d1` rate is $0.04/MTok input; `d1:free` and unrecognized IDs have unknown pricing here, not assumed paid or zero. [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions) prices `gpt-6-luna` input at $0.10/MTok with no output/cache charges; its [model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna) doubles the input rate for the entire request above 272,000 input tokens. Regional/account-specific premiums are not inferred from token usage.
+Core's provider registry owns exact model-pricing groups. Both requested and returned model IDs must belong to the same verified group; do not infer rates from prefixes or treat aliases as proof about a future returned version. [TypeSafe's models](https://docs.typesafe.ai/models), rechecked on 2026-10-24, document `jev-1.13.0` and `jev-1.14.0` at $0.042/MTok input with free output. Both `jev-latest` and `jev-preview` currently resolve to 1.14.0. All four IDs belong to the verified Jev pricing group; an unlisted future version remains unpriced. Regression tests cover explicit 1.14.0 and alias requests through both inline and profile modes, with Usage details on/off. Liquid's documented paid `d1` rate is $0.04/MTok input; `d1:free` and unrecognized IDs have unknown pricing here, not assumed paid or zero. [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions) prices `gpt-6-luna` input at $0.10/MTok with no output/cache charges; its [model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna) doubles the input rate for the entire request above 272,000 input tokens. Regional/account-specific premiums are not inferred from token usage.
 
 `calculateClassifierUsageCost` receives requested/returned identities and safe successful-response usage. `modelPricing` supports explicit alias groups and long-context rates; the legacy descriptor `pricing` shorthand now applies only when both IDs exactly match `defaultModel`. No identities or unknown pricing returns `undefined`, excluding Cost and omitting Usage.totalCost while preserving Answers/Usage. The same result feeds both outputs and existing GraphProcessor accumulation. Tests cover strict credential selection with conflicting sources, new-node/legacy Automatic behavior, unpriced models, mismatched identities, aliases, threshold boundaries and real graph accounting.
 
@@ -568,11 +740,11 @@ Response chunks use intrinsic typed-array byte geometry too: an injected transpo
 
 `assertClassifierJson` returns its measured byte count and accepts an optional byte cap. Cumulative preparation uses `ClassifierValueBudget` directly across inputs. Validation and resource accounting share one traversal; snapshot preparation additionally copies within that walk, without JSON serialization. Provider JSON uses streaming, fatal UTF-8 decoding: malformed or truncated sequences fail as invalid JSON instead of silently replacing evidence. Malformed successful responses are not retried, including when the non-200 retry policy is enabled.
 
-`classifier/limits.ts` owns Core safety budgets: 32 MiB of expanded request content, 8 MiB of decoded response bytes, depth 64, 100,000 expanded values, 1,000 questions, 1,024 messages, and 4,096 content parts. These are Rivet resource limits, not provider capacity claims. Existing provider/image caps remain stricter where applicable. Preflight inspects own descriptors without invoking getters, counts every repeated occurrence (including shared-reference expansion), accounts for UTF-8 JSON escaping and native-image base64 expansion, and stops before expensive encoding/cloning. Question array flattening has the same work/depth guard, including empty repeated arrays. Preparation checks cancellation and the absolute deadline inside traversal/string scanning and between normalization/serialization steps. Bounded native JSON/base64 operations remain synchronous and cannot be preempted mid-operation; do not claim a hard wall-clock interrupt.
+`classifier/limits.ts` owns Core safety budgets: 32 MiB of expanded request content, 8 MiB of decoded response bytes, depth 64, 100,000 expanded values, 1,000 questions, 1,024 messages, and 4,096 content parts. These are Rivet resource limits, not provider capacity claims. Existing provider/image caps remain stricter where applicable. Preflight inspects own descriptors without invoking getters, counts every repeated occurrence (including shared-reference expansion), accounts for UTF-8 JSON escaping and native-image base64 expansion, and stops before expensive encoding/cloning. Question array flattening has the same work/depth guard, including empty repeated arrays. Preparation checks cancellation and any explicitly supplied provider deadline inside traversal/string scanning and between normalization/serialization steps. Bounded native JSON/base64 operations remain synchronous and cannot be preempted mid-operation; do not claim a hard wall-clock interrupt.
 
 Byte-limit overrides must be positive safe integers and cannot widen Core's cap; invalid limits fail closed. Native image preflight and encoding obtain real buffer/offset/length through intrinsic typed-array getters and use a plain byte view, not graph-authored accessors, methods or iterators. Ordinary Uint8Array and Node Buffer inputs remain supported. Long JPEG metadata/fill-byte scans check preparation deadlines and cancellation periodically, including during bare-base64 detection; those failures must propagate rather than being mistaken for unrecognized text or invalid image content.
 
-Successful responses use a byte-limited stream reader, never `Response.json()`. Content-Length can reject early but cannot bypass the measured decoded-byte cap. UTF-8 decoding preserves chunk boundaries, coalesces tiny chunks, checks the overall deadline on every read, and cancels failed/oversized streams without waiting for cleanup. A quote-aware structure scan bounds depth and parser allocation before `JSON.parse`; parsed responses also obey exact structural work/depth limits before adapter validation. Provider `maxRequestBytes` can tighten but never widen Core's cap; Liquid's stricter cap applies before native-image encoding. Never truncate content, drop questions, or split requests to fit these limits. `ClassifierResourceAndCost.test.ts` exercises real providers/nodes with bounded hostile fixtures and real GraphProcessor cost paths.
+Successful responses use a byte-limited stream reader, never `Response.json()`. Content-Length can reject early but cannot bypass the measured decoded-byte cap. UTF-8 decoding preserves chunk boundaries, coalesces tiny chunks, checks cancellation and any active per-request deadline on every read, and cancels failed/oversized streams without waiting for cleanup. A quote-aware structure scan bounds depth and parser allocation before `JSON.parse`; parsed responses also obey exact structural work/depth limits before adapter validation. Provider `maxRequestBytes` can tighten but never widen Core's cap; Liquid's stricter cap applies before native-image encoding. Never truncate content, drop questions, or split requests to fit these limits. `ClassifierResourceAndCost.test.ts` exercises real providers/nodes with bounded hostile fixtures and real GraphProcessor cost paths.
 
 Every successful evaluation computes base estimated USD cost independently of `outputUsage` and emits numeric `cost` for GraphProcessor's existing accumulator. `outputUsage` still controls only the optional `Usage.totalCost` projection. Unsafe token counts or unavailable pricing exclude Cost rather than fabricate zero; actual zero-token evaluations emit zero. Graph totals remain the existing sum of available numeric costs, not a guarantee that unpriced activity was free. Retries without successful usage do not manufacture charges; cost reflects the final successful response, not an authoritative provider invoice. Caught failures exclude Cost alongside other normal outputs. Normal, split, mixed-provider and subgraph tests prove exactly-once accumulation, including a retry and both Usage settings.
 
@@ -613,6 +785,6 @@ The same test suite exercises trusted, non-normalized responses through the actu
 
 ## Required verification
 
-Run `yarn test:style` first, then focused Core classifier/migration tests, affected app tests and builds, and the required headless Studio Server Playwright observer. The browser fixture must load a legacy Jev project without a missing-plugin modal, show the migrated built-in nodes under **Classifier**, and expose the Question type and Provider controls. Finish with documentation-link validation and `git diff --check`.
+Run `yarn test:style` first, then focused Core classifier/migration tests, affected app tests and builds, and the required headless Studio Server Playwright observer. The browser fixture must load a legacy Jev project without a missing-plugin modal, show the migrated built-in nodes under **Decision AI**, and expose the Question type and Provider controls. Finish with documentation-link validation and `git diff --check`.
 
 `ClassifierNodes.test.ts` exercises Liquid through real Question/Evaluate nodes with mixed Choice/Score/Noul batches, text/list/object entries, legacy criteria, the fixed endpoint and Bearer header, default/pinned/input models, isolated credentials and optional accounting/diagnostics. `jev-nodes.spec.ts` additionally switches the hosted inspector between providers, verifies d1's placeholder/default and retained custom credential names, and preserves the legacy project's explicit model until the author clears it. These tests mock the provider boundary; a live Liquid request requires an operator-supplied API key.

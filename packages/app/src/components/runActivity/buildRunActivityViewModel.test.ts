@@ -1117,6 +1117,16 @@ test('classifier activity includes winning routing, failed usage, physical reque
   assert.equal(model.accounting?.completionTokens, 5);
   assert.equal(model.accounting?.knownCostUsd, 0.00004 + 0.00002);
   assert.equal(model.accounting?.costStatus, 'known');
+  const retainedAttempt = classifier.profileAttempts[0]!;
+  for (const name of ['Classifier Profile', 'My Classifier route', ' Classifier Profile ']) {
+    retainedAttempt.profileName = name;
+    const renamed = buildRunActivityViewModel(journal, () => ({ inspectable: true }));
+    const displayed = name === 'Classifier Profile' ? 'Decision AI Profile' : name.trim();
+    assert.ok(renamed.items[0]!.children![0]!.label.startsWith(`Profile: ${displayed} · `));
+    assert.equal(filterRunActivityItems(renamed.items, { filter: 'all', graphId: '', query: displayed }).length, 1);
+    assert.equal(retainedAttempt.profileName, name, 'Presentation/search must not mutate the journal');
+  }
+  retainedAttempt.profileName = 'First classifier';
   selectedRoot.omittedNodeInvocationCount = 1;
   const cappedRoot = buildRunActivityViewModel(journal, () => undefined).accounting!;
   assert.equal(cappedRoot.incomplete, true);

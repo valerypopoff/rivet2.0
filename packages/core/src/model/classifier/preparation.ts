@@ -23,7 +23,7 @@ export class ClassifierQuestionPreparation implements InterpolationGuard {
   check = (): void => {
     this.deadlineCheck();
     if (++this.operations > CLASSIFIER_LIMITS.values * 10)
-      throw new ClassifierResourceLimitError('Classifier question preparation has too much expanded work.');
+      throw new ClassifierResourceLimitError('Decision AI question preparation has too much expanded work.');
   };
 
   capture(value: unknown): void {
@@ -49,7 +49,7 @@ export class ClassifierQuestionPreparation implements InterpolationGuard {
     // Reject before concatenation. Exact UTF-8/JSON bytes are charged when
     // the completed entry is captured; this bounds intermediate allocations.
     if (fragment.length + previousLength > this.budget.remainingBytes)
-      throw new ClassifierResourceLimitError('Classifier question interpolation exceeds its remaining byte budget.');
+      throw new ClassifierResourceLimitError('Decision AI question interpolation exceeds its remaining byte budget.');
   };
 
   processing = (input: string, name: string, parameter: number | undefined): void => {
@@ -66,7 +66,7 @@ export class ClassifierQuestionPreparation implements InterpolationGuard {
           (name !== 'chain' && name !== 'wrap' && input[i] === '\n')
         ) {
           if (++pieces > CLASSIFIER_LIMITS.values)
-            throw new ClassifierResourceLimitError('Classifier interpolation processor has too many expanded pieces.');
+            throw new ClassifierResourceLimitError('Decision AI interpolation processor has too many expanded pieces.');
         }
         whitespace = nextWhitespace;
       }
@@ -75,13 +75,13 @@ export class ClassifierQuestionPreparation implements InterpolationGuard {
     const value = parameter ?? (name === 'indent' ? 0 : 1);
     const prefix = name === 'indent' ? value : name === 'quote' ? value * 2 : (value - 1) * 2 + 2;
     if (!Number.isSafeInteger(value) || value < (name === 'list' ? 1 : 0))
-      throw new Error(`Invalid classifier interpolation ${name} parameter.`);
+      throw new Error(`Invalid Decision AI interpolation ${name} parameter.`);
     let lines = 1;
     for (let i = 0; i < input.length; i++) {
       if ((i & 4095) === 0) this.check();
       if (input[i] === '\n') lines++;
     }
     if (input.length + lines * prefix > this.budget.remainingBytes)
-      throw new ClassifierResourceLimitError('Classifier interpolation processor exceeds its remaining byte budget.');
+      throw new ClassifierResourceLimitError('Decision AI interpolation processor exceeds its remaining byte budget.');
   };
 }

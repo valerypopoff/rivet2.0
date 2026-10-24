@@ -657,7 +657,7 @@ void describe('createRivetWebAppHandler', () => {
             ...base,
             eventId: 'gate',
             profileIndex: 0,
-            profileName: 'Suspended classifier',
+            profileName: 'Classifier Profile',
             stage: 'health-gate',
             outcome: 'skipped',
             healthState: 'open',
@@ -730,13 +730,13 @@ void describe('createRivetWebAppHandler', () => {
         await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
         const inspector = dom.window.document.querySelector('.rivet-agent-response-inspector')!;
         const text = inspector.textContent!;
-        assert.match(text, /Classifier requests2 \(retained evidence only\)/);
+        assert.match(text, /Decision AI requests2 \(retained evidence only\)/);
         assert.match(text, /Profile fallbacks1/);
         assert.match(text, /Provider request retries1/);
         assert.match(text, /\$0\.000040 \(partial\)/);
         const sections = [...inspector.querySelectorAll('details')];
         const requests = sections.find(
-          (section) => section.querySelector('summary')?.textContent === 'Classifier requests',
+          (section) => section.querySelector('summary')?.textContent === 'Decision AI requests',
         )!;
         const decisions = sections.find(
           (section) => section.querySelector('summary')?.textContent === 'Profile attempts',
@@ -748,7 +748,8 @@ void describe('createRivetWebAppHandler', () => {
         assert.match(requests.textContent!, /1000 input \/ 8 output tokens/);
         assert.doesNotMatch(requests.textContent!, /round|suspended|not reached/);
         assert.equal(decisions.querySelectorAll('article').length, 2);
-        assert.match(decisions.textContent!, /Profile: Suspended classifier/);
+        assert.match(decisions.textContent!, /Profile: Decision AI Profile/);
+        assert.equal(trace.profileAttempts[0]!.profileName, 'Classifier Profile');
         assert.match(decisions.textContent!, /profile suspended; skipped/);
         assert.match(decisions.textContent!, /Profile: Unused classifier/);
         assert.match(decisions.textContent!, /not reached/);

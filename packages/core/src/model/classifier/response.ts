@@ -46,7 +46,7 @@ function requireProbabilityMap(value: unknown, keys: readonly string[], label: s
 export function validateApiCompatibleClassifierResponse(
   body: unknown,
   questions: readonly ClassifierQuestionDefinition[],
-  providerLabel = 'Classifier provider',
+  providerLabel = 'Decision AI provider',
 ): ClassifierEvaluationResponse {
   return validateClassifierEvaluationResponse(body, questions as readonly PreparedClassifierQuestion[], providerLabel);
 }
@@ -55,7 +55,7 @@ export function validateApiCompatibleClassifierResponse(
 export function validateClassifierEvaluationResponse(
   body: unknown,
   questions: readonly PreparedClassifierQuestion[],
-  providerLabel = 'Classifier provider',
+  providerLabel = 'Decision AI provider',
 ): ClassifierEvaluationResponse {
   const model = isRecord(body) ? responseField(body, 'model') : undefined;
   const answers = isRecord(body) ? responseField(body, 'answers') : undefined;

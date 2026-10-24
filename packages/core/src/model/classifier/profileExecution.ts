@@ -21,6 +21,7 @@ import {
 } from './profile.js';
 import type { ClassifierState } from './state.js';
 import type { ClassifierQuestionDefinition } from './types.js';
+import { getProfileDisplayName } from '../AgentResponseTracePresentation.js';
 
 export function classifierProfileSummary(
   profiles: readonly ClassifierProfileValue[],
@@ -64,7 +65,7 @@ export function classifierProfileSummary(
         outcome !== 'suspended' && healthState === 'open' ? '; profile is suspended' : '',
         healthState === 'half-open' ? '; recovery attempt in progress' : '',
       ].join('');
-      return `${index + 1}. ${profile.profileName || 'Classifier Profile'} (${profile.configuration.provider}/${profile.configuration.model}): ${outcome}${details}`;
+      return `${index + 1}. ${getProfileDisplayName(profile.profileName, 'classifier') || 'Decision AI Profile'} (${profile.configuration.provider}/${profile.configuration.model}): ${outcome}${details}`;
     })
     .join('\n');
 }
@@ -79,7 +80,7 @@ export class ClassifierProfileExhaustedError extends Error {
     const details = attempts
       .filter((attempt) => attempt.outcome === 'failure' || attempt.outcome === 'aborted')
       .map((attempt) => {
-        const profile = `Profile ${(attempt.profileIndex ?? 0) + 1}${attempt.profileName ? ` (${attempt.profileName})` : ''}`;
+        const profile = `Profile ${(attempt.profileIndex ?? 0) + 1}${attempt.profileName ? ` (${getProfileDisplayName(attempt.profileName, 'classifier')})` : ''}`;
         const request = attempt.attemptIndex === undefined ? '' : ` attempt ${attempt.attemptIndex + 1}`;
         const status = attempt.status === undefined ? '' : ` (HTTP ${attempt.status})`;
         const reason = attempt.error ? `: ${attempt.error.replace(/\r\n|\r|\n/g, '\n  ')}` : '';
@@ -87,10 +88,11 @@ export class ClassifierProfileExhaustedError extends Error {
       })
       .join('\n');
     super(
-      `Classifier profile chain exhausted.\n${summary}${details ? `\n\nAttempt details:\n${details}` : ''}`,
+      `Decision AI profile chain exhausted.\n${summary}${details ? `\n\nAttempt details:\n${details}` : ''}`,
       options,
     );
-    this.name = 'ClassifierProfileExhaustedError';
+    // Human-visible error prefix only; the exported class and instanceof contract stay unchanged.
+    this.name = 'DecisionAIProfileExhaustedError';
   }
 }
 
@@ -100,7 +102,7 @@ export async function runClassifierProfiles(input: {
   questions: ClassifierQuestionDefinition[];
   context: InternalProcessContext;
   nodeId: NodeId;
-  deadline: number;
+  deadline?: number;
   retryOnNon200?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
@@ -114,6 +116,7 @@ export async function runClassifierProfiles(input: {
 }> {
   const attempts: LLMAttempt[] = [];
   const { context } = input;
+  const deadline = input.deadline ?? Infinity;
   let lastError: unknown;
   let httpFailuresOnly = true;
   let lastHttpStatus: number | undefined;
@@ -121,7 +124,7 @@ export async function runClassifierProfiles(input: {
     const event = {
       ...attempt,
       ...(attempt.stage === 'health-update' && attempt.outcome === 'failure'
-        ? { error: 'Classifier profile health service unavailable.' }
+        ? { error: 'Decision AI profile health service unavailable.' }
         : {}),
       family: 'classifier' as const,
       profileName: input.profiles[attempt.profileIndex ?? 0]?.profileName,
@@ -135,8 +138,8 @@ export async function runClassifierProfiles(input: {
   };
   for (let profileIndex = 0; profileIndex < input.profiles.length; profileIndex++) {
     context.signal.throwIfAborted();
-    if (Date.now() >= input.deadline) {
-      lastError = new ClassifierProviderError('Classifier overall deadline expired.', 'timeout');
+    if (Date.now() >= deadline) {
+      lastError = new ClassifierProviderError('Decision AI overall deadline expired.', 'timeout');
       const profile = input.profiles[profileIndex]!;
       record({
         roundIndex: 0,
@@ -146,7 +149,7 @@ export async function runClassifierProfiles(input: {
         stage: 'request',
         outcome: 'failure',
         failureKind: 'timeout',
-        error: 'Classifier overall deadline expired.',
+        error: 'Decision AI overall deadline expired.',
       });
       httpFailuresOnly = false;
       break;
@@ -169,7 +172,7 @@ export async function runClassifierProfiles(input: {
       try {
         const begin = await runBoundedHealthOperation({
           operation: 'begin',
-          timeoutMs: Math.max(1, Math.min(2000, input.deadline - Date.now())),
+          timeoutMs: Math.max(1, Math.min(2000, deadline - Date.now())),
           signal: context.signal,
           run: () => store.begin(health),
           onLateResolve: async (late) => {
@@ -185,7 +188,7 @@ export async function runClassifierProfiles(input: {
             healthDisposition: 'deny',
             healthState: begin.state,
             retryAt: begin.retryAt,
-            error: 'Classifier profile is suspended.',
+            error: 'Decision AI profile is suspended.',
           });
           continue;
         }
@@ -216,28 +219,28 @@ export async function runClassifierProfiles(input: {
           stage: 'health-gate',
           outcome: 'failure',
           healthDisposition: 'fail-open',
-          error: 'Classifier profile health service unavailable.',
+          error: 'Decision AI profile health service unavailable.',
         });
       }
     }
     try {
       context.signal.throwIfAborted();
       if (!provider.browserExecutionSupported && context.executor === 'browser')
-        throw new ClassifierProviderError('Classifier provider requires the Node executor.', 'capability');
+        throw new ClassifierProviderError('Decision AI provider requires the Node executor.', 'capability');
       if (!profile.credential.value?.trim())
-        throw new ClassifierProviderError('Classifier Profile API key is not set.', 'configuration');
-      const remainingMs = input.deadline - Date.now();
+        throw new ClassifierProviderError('Decision AI Profile API key is not set.', 'configuration');
+      const remainingMs = deadline - Date.now();
       // Match LLM profiles: suspension deadlines require enabled, host-backed health.
       const timeoutMs = health
         ? Math.min(classifierProfileResponseTimeout(profile.configuration), remainingMs)
         : remainingMs;
-      if (timeoutMs <= 0) throw new ClassifierProviderError('Classifier overall deadline expired.', 'timeout');
+      if (timeoutMs <= 0) throw new ClassifierProviderError('Decision AI overall deadline expired.', 'timeout');
       const result = await provider.evaluate({
         ...input.state,
         questions: input.questions,
         apiKey: profile.credential.value,
         model,
-        timeoutMs,
+        ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
         deadline: input.deadline,
         signal: context.signal,
         retryOnNon200: input.retryOnNon200,
@@ -259,12 +262,10 @@ export async function runClassifierProfiles(input: {
         },
       });
       context.signal.throwIfAborted();
-      if (Date.now() >= input.deadline)
-        throw new ClassifierProviderError('Classifier overall deadline expired.', 'timeout');
+      if (Date.now() >= deadline) throw new ClassifierProviderError('Decision AI overall deadline expired.', 'timeout');
       await permit?.finish('healthy');
       context.signal.throwIfAborted();
-      if (Date.now() >= input.deadline)
-        throw new ClassifierProviderError('Classifier overall deadline expired.', 'timeout');
+      if (Date.now() >= deadline) throw new ClassifierProviderError('Decision AI overall deadline expired.', 'timeout');
       for (let unreached = profileIndex + 1; unreached < input.profiles.length; unreached++) {
         const candidate = input.profiles[unreached]!;
         record({
@@ -321,9 +322,9 @@ export async function runClassifierProfiles(input: {
             (providerError.statusCode ?? 0) >= 500));
       await permit?.finish(!context.signal.aborted && observedRequest && unhealthy ? 'unhealthy' : 'ignored');
       context.signal.throwIfAborted();
-      if (Date.now() >= input.deadline) {
+      if (Date.now() >= deadline) {
         httpFailuresOnly = false;
-        lastError = new ClassifierProviderError('Classifier overall deadline expired.', 'timeout', undefined, {
+        lastError = new ClassifierProviderError('Decision AI overall deadline expired.', 'timeout', undefined, {
           cause: error,
         });
         if (providerError?.kind !== 'timeout')
@@ -331,7 +332,7 @@ export async function runClassifierProfiles(input: {
             ...base,
             stage: 'request',
             outcome: 'failure',
-            error: 'Classifier overall deadline expired.',
+            error: 'Decision AI overall deadline expired.',
             failureKind: 'timeout',
           });
         break;

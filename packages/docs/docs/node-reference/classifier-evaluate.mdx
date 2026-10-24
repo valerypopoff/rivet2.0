@@ -12,15 +12,15 @@ Evaluates one shared state and optional images against a batch of independent ty
 
 **Configuration** selects **Inline** (the existing default) or **From profile**. Profile mode adds a required **Decision AI Profiles** input accepting one [Decision AI Profile](./classifier-profile.mdx) or an ordered Array of profiles. It hides inline model/credential inputs without deleting saved settings. **Export Decision AI settings to profile node** creates and wires a Profile, moves active model/key connections, and preserves evidence connections; the command supports Undo/Redo.
 
-In profile mode, the overall timeout defaults to 180 seconds. With automatic suspension enabled and supported by the host, each profile has a response deadline (0.5 seconds by default). Otherwise only the overall timeout applies. Retry controls remain owned by Decision AI run. Optional **Decision AI Attempts** and **Decision AI Profile Summary** outputs report candidate outcomes and failure reasons. On failure, enabled request/response diagnostics remain inspectable alongside the error; on caught exhaustion, Answers/Usage/Cost are excluded. Successful native bodies belong to the winning candidate, and Cost covers its successful usage only. Attempts also retain safe provider-reported usage from rejected answer batches; Response Inspector includes known failed-request estimates in its aggregate and marks unavailable charges partial/unknown.
+With automatic suspension enabled and supported by the host, each profile has a response deadline (0.5 seconds by default). There is no overall node or fallback-chain deadline. Retry controls remain owned by Decision AI run. Optional **Decision AI Attempts** and **Decision AI Profile Summary** outputs report candidate outcomes and failure reasons. On failure, enabled request/response diagnostics remain inspectable alongside the error; on caught exhaustion, Answers/Usage/Cost are excluded. Successful native bodies belong to the winning candidate, and Cost covers its successful usage only. Attempts also retain safe provider-reported usage from rejected answer batches; Response Inspector includes known failed-request estimates in its aggregate and marks unavailable charges partial/unknown.
 
 **Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
 
-- **Provider**: choose **Jev**, **Liquid AI**, **OpenAI**, **OpenRouter**, or **Perplexity**. All use the same Choice, Score, and Noul question definitions. OpenRouter defaults to Microsoft Decision-1.
-- **Model**: defaults to `jev-latest` for Jev, `d1` for Liquid AI, `gpt-6-luna` for OpenAI, `microsoft/microsoft-decision-1` for OpenRouter, and `pplx-decider-v1.1-27b` for Perplexity. Leave it blank to use the selected provider's default. An explicit saved model or Model input is preserved when you switch providers; clear an old model to use the new provider's default. Pin a version when downstream thresholds were calibrated against it, and recheck those thresholds when changing models.
-- **API key source**: **Automatic** checks the named programmatic key, then environment credentials, then the saved Decision AI key when using default names. Existing graphs retain this mode. **Decision AI settings** uses only Settings → Decision AI's key for the selected provider and fails if missing; it never falls back to a general OpenAI key or environment credentials. **Input port** uses only the API Key input. Jev defaults to `typesafeApiKey` / `TYPESAFE_API_KEY`; Liquid AI to `liquidApiKey` / `LIQUID_API_KEY`; OpenAI to `openAiApiKey` / `OPENAI_API_KEY` (with legacy `openAiKey` checked before environment credentials in Automatic). OpenRouter uses `openRouterApiKey` / `OPENROUTER_API_KEY`; Perplexity uses `perplexityApiKey` / `PERPLEXITY_API_KEY`. Custom key names are provider-scoped and available in Automatic. Credentials are resolved on the executor, which may be remote.
-- **Overall timeout**: defaults to 30 seconds and includes State preparation/image encoding, retries, backoff and response validation.
-- **Outputs**: enable **Output usage details** to add estimated cost to Usage. Rivet uses base rates of **$0.042 / MTok input** for Jev, **$0.04 / MTok input** for Liquid AI d1, **$0.10 / MTok input** for OpenAI Decisions, **$0.042 / MTok input** for Microsoft Decision-1 via OpenRouter, and **$0.02 / MTok input** for Perplexity Decisions, with **free output tokens**. Provider premiums are not included. Enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
+- **Provider**: choose **Jev**, **Liquid AI**, **OpenAI**, **OpenRouter**, **Perplexity**, or **SubQ**. All use the same Choice, Score, and Noul question definitions. OpenRouter defaults to Microsoft Decision-1.
+- **Model**: defaults to `jev-latest` for Jev, `d1` for Liquid AI, `gpt-6-luna` for OpenAI, `microsoft/microsoft-decision-1` for OpenRouter, `pplx-decider-v1.1-27b` for Perplexity, and `subq-snap-1.1` for SubQ. Leave it blank to use the selected provider's default. An explicit saved model or Model input is preserved when you switch providers; clear an old model to use the new provider's default. Pin a version when downstream thresholds were calibrated against it, and recheck those thresholds when changing models.
+- **API key source**: **Automatic** checks the named programmatic key, then environment credentials, then the saved Decision AI key when using default names. Existing graphs retain this mode. **Decision AI settings** uses only Settings → Decision AI's key for the selected provider and fails if missing; it never falls back to a general OpenAI key or environment credentials. **Input port** uses only the API Key input. Jev defaults to `typesafeApiKey` / `TYPESAFE_API_KEY`; Liquid AI to `liquidApiKey` / `LIQUID_API_KEY`; OpenAI to `openAiApiKey` / `OPENAI_API_KEY` (with legacy `openAiKey` checked before environment credentials in Automatic). OpenRouter uses `openRouterApiKey` / `OPENROUTER_API_KEY`; Perplexity uses `perplexityApiKey` / `PERPLEXITY_API_KEY`; SubQ uses `subqApiKey` / `SUBQ_API_KEY`. Custom key names are provider-scoped and available in Automatic. Credentials are resolved on the executor, which may be remote.
+- **Timeouts**: configured only in [Decision AI Profile](./classifier-profile.mdx), not on this node. There is no overall node or fallback-chain time limit. Old saved overall-timeout values are ignored. Inline calls and profiles without active automatic suspension wait until completion, provider failure or cancellation.
+- **Outputs**: enable **Output usage details** to add estimated cost to Usage. Rivet uses base rates of **$0.042 / MTok input** for Jev, **$0.04 / MTok input** for Liquid AI d1 and SubQ Snap, **$0.10 / MTok input** for OpenAI Decisions, **$0.042 / MTok input** for Microsoft Decision-1 via OpenRouter, and **$0.02 / MTok input** for Perplexity Decisions, with **free output tokens**. Provider premiums are not included. Enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
 - **Error behavior**: controls HTTP-status failures, catching other node failures, and retries. See the behavior below. **Repeat times** and **Cooldown, ms** use the same defaults and layout as LLM Chat.
 
 Changing Provider is an authored graph setting, not an input port. Providers added later use this same node and question contract.
@@ -48,6 +48,12 @@ An empty batch, malformed definition, duplicate Question ID, or invalid criteria
 - **Request body** (`object`): available when **Output request body** is enabled. This is the JSON body prepared for the provider after Rivet has resolved State, Model, and Questions; capture does not prove remote delivery. It excludes authorization headers and Rivet-managed API keys, but state and question content are intentionally visible.
 - **Response body** (`object`): available when **Output response body** is enabled, including HTTP rejection and invalid answers. JSON objects keep their native shape; non-JSON text or non-object JSON appears as `{ raw: value }`. Captured content is not redacted. Missing, interrupted or over-limit bodies are unavailable.
 - **Run failed** (`boolean`) and **Run error** (`string`): available only when **Catch all exceptions** is enabled, independently of **Throw exception on non-2XX status code**. On success, Run failed is `false` and Run error is excluded. On a caught failure, Run failed is `true`, Run error explains the failure, and Answers/Usage/Cost are excluded; enabled diagnostics remain available.
+
+Jev `jev-1.13.0` and `jev-1.14.0` are priced at **$0.042 per million input
+tokens**, with free output tokens. Their `jev-latest` and `jev-preview` aliases
+also have known pricing when the returned model is one of these verified versions.
+See [TypeSafe's model pricing](https://docs.typesafe.ai/models). Unrecognized future
+versions remain unpriced rather than being assumed free or assigned an older rate.
 
 When a chain fails, bodies describe its last prepared request, not a mixture of different profiles. Failed-node diagnostics are also retained in recordings. Enable body outputs only when needed: State, questions, images and provider error content may be sensitive. A missing API key before preparation produces no request body. No response body exists when a request never received one, such as a connection failure.
 
@@ -88,7 +94,7 @@ Rivet limits each evaluation to 32 MiB of expanded request content, 8 MiB of res
 
 The always-available **Cost** output is estimated USD cost and contributes to the graph's normal cost total even when **Output usage details** is off. Enabling that setting additionally puts the same estimate in `Usage.totalCost`. Cost is excluded when pricing or safe token counts are unavailable; a genuine zero-token result produces zero. Graph totals sum known costs and may be incomplete when any cost is unavailable. Estimates use successful-response usage and base rates, not an invoice for failed attempts or provider premiums.
 
-The overall timeout covers preparation, retries and response receipt. Preparation checks the deadline while traversing content; individual bounded JSON/base64 operations remain synchronous and cannot be interrupted mid-operation.
+Input and response processing retain byte, depth and work limits and check caller cancellation. Enabled profile response timeouts cover provider preparation, retries and response receipt. Individual bounded JSON/base64 operations remain synchronous and cannot be interrupted mid-operation.
 
 For OpenAI `gpt-6-luna` Decisions, requests with more than 272,000 input tokens use $0.20/MTok input for the whole request; smaller requests use $0.10/MTok. Output tokens remain free. Regional and account-specific premiums are not included. See [OpenAI's model pricing details](https://developers.openai.com/api/docs/models/gpt-6-luna).
 
@@ -104,7 +110,7 @@ Error diagnostics retain underlying causes for debugging and can include provide
 
 ## Execution requirements
 
-All providers require Node execution, Studio Server, the CLI/desktop sidecar, or remote debugging. Browser execution is rejected before any credential lookup. Transient transport failures and HTTP 429/529 share a budget of at most two automatic retries, bounded by the overall timeout and `Retry-After`, whether or not **Retry on non-200** is enabled. The Error behavior setting has a separate retry budget for other HTTP failures, so a mixed sequence can exceed three requests. Both budgets share the same overall timeout. Every retry resends the same captured request JSON; the response-body output contains the final successful response. Authentication, validation, insufficient-credit (402) and oversized-request (413) failures are not retried. A profile chain can still try another candidate.
+All providers require Node execution, Studio Server, the CLI/desktop sidecar, or remote debugging. Browser execution is rejected before any credential lookup. Transient transport failures and HTTP 429/529 share a budget of at most two automatic retries, respecting `Retry-After`, whether or not **Retry on non-200** is enabled. The Error behavior setting has a separate retry budget for other HTTP failures, so a mixed sequence can exceed three requests. An enabled profile response timeout covers all retries of that profile; there is no overall node deadline. Every retry resends the same captured request JSON; the response-body output contains the final successful response. Authentication, validation, insufficient-credit (402) and oversized-request (413) failures are not retried. A profile chain can still try another candidate.
 
 ## Using Liquid AI d1
 
@@ -144,6 +150,34 @@ Estimated cost is $0.02 / million input tokens with free output for both recogni
 models. See the [Perplexity Decisions guide](https://docs.perplexity.ai/docs/decisions/quickstart)
 for key creation, availability and current limits.
 
+## Using SubQ Snap
+
+Choose **SubQ** and clear Model to use `subq-snap-1.1`. Supply an executor key
+through **Settings → Decision AI → SubQ API Key**, `SUBQ_API_KEY`, programmatic
+`subqApiKey`, or the API Key input. It works in inline and Profile modes.
+`subq-preview` is a chat model, not a Decision AI model.
+
+Snap accepts shared text, structured JSON and PNG/JPEG/WebP images. Connect an
+Image or User-type Assemble Message to State as usual; Rivet converts images to
+SubQ's native payload and retains their order with numbered references in text.
+Limits: **128 questions**, **100 characters per question ID**, **4 images**,
+**4 MiB decoded per image**, **8 MiB decoded total**, and a JSON body below
+**13 MiB**. GIF, video and remote image URLs are not supported. Snap checks its
+**393,216-token** context limit; oversized inputs fail rather than being truncated
+or split into different decisions.
+
+Estimated cost is **$0.04 / million input tokens**, with free output, based on the
+current [model catalog](https://docs.subq.ai/using-the-api/models/). The older
+launch article lists $0.05; Rivet uses the current model documentation. Unknown
+future model IDs remain unpriced. Images are already included in reported Usage.
+See the [API reference](https://docs.subq.ai/endpoints/decisions-api/) for preview
+access and limits. A 402 response means the account lacks credits and is not
+retried. A 403 response means the key lacks access to the requested model; check
+key permissions and account model access rather than treating it as an invalid key
+(401). These failures can use the next configured Profile without suspending the
+unavailable candidate. Inputs/images follow SubQ's [retention policy](https://docs.subq.ai/using-the-api/data-retention/);
+zero retention requires provider-side organization settings.
+
 ## Multimodal shared State
 
 Connect an Image node directly to **State** for image-only evaluation. For text plus images, use **Assemble Message** with type **User**, just as with LLM Chat: connect text and images to its ordered Part inputs, then connect its Message output to State. Use **Array** to combine multiple user messages or a sequence mixing text with native images. Every question receives this entire shared context; images cannot be attached to individual questions.
@@ -159,7 +193,19 @@ Assemble Prompt combines messages into one ordered `chat-message[]` prompt, not 
 
 OpenAI keeps these as separate messages, including each message's ordered text and image parts. Its Decisions endpoint currently accepts **User only**, unlike LLM Chat; selecting System, Developer, Assistant or Function fails before a request instead of silently changing the role. Liquid does not have chat roles: accepted User messages are combined into shared state with blank lines between messages. See the [OpenAI Decisions message schema](https://developers.openai.com/api/reference/resources/decisions).
 
-OpenAI preserves ordered text/image parts in its native `input` messages. Liquid keeps images in its native `images` array and puts numbered `[Image N]` references in the shared text so captions stay associated with the right images. Perplexity keeps inline `image_url` parts in State alongside their captions. None turns image base64 into textual evidence. Jev, OpenRouter Microsoft Decision-1 and Liquid `d1:free` reject images; Liquid `d1`, OpenAI `gpt-6-luna` and both Perplexity models support them.
+OpenAI preserves ordered text/image parts in its native `input` messages. Liquid keeps images in its native `images` array and puts numbered `[Image N]` references in the shared text so captions stay associated with the right images. Perplexity keeps inline `image_url` parts in State alongside their captions. Jev uses native image assets with opaque references in the shared State. None turns image base64 into textual evidence. OpenRouter Microsoft Decision-1 and Liquid `d1:free` reject images.
+
+**Jev images are experimental.** `jev-1.14.0`, `jev-1.13.0`, `jev-latest` and
+`jev-preview` support still PNG/JPEG images. Connect them to **State**, directly or
+with text through Assemble Message. Use images sized **280–1568 pixels per side**,
+at most **16 MiB decoded per image**, within Rivet's **32 MiB request limit**.
+Rivet enables TypeSafe's experimental image header only when sending images;
+text-only calls are unchanged. GIF/WebP are not accepted by Jev: convert them
+upstream. Jev also rejects animated/damaged files and requests exceeding its
+processed-image or context limits. Input usage already includes image tokens,
+so no separate image charge is added. See [TypeSafe's image documentation](https://docs.typesafe.ai/images)
+for its experimental status and current limits. This does not add Box questions
+or images inside Question definitions.
 
 Use `data:image/png;base64,...` (or JPEG/GIF/WebP) when passing encoded images. Bare base64 is recognized only when decoded image headers identify a supported format; ordinary strings such as `test` remain text. Malformed explicitly marked images fail. Rivet never downloads image URLs or reads paths from State. System/developer/assistant/tool messages, document/audio parts, and explicit URL parts are not supported; use User messages containing text and inline images.
 

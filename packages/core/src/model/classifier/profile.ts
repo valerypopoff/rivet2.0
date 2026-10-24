@@ -70,7 +70,7 @@ export function pickClassifierProfileData(data: ClassifierProfileConfiguration):
 function positive(value: number | undefined, fallback: number, label: string, maximum = 600_000): number {
   const result = value ?? fallback;
   if (!Number.isSafeInteger(result) || result < 1 || result > maximum)
-    throw new Error(`Classifier Profile ${label} must be an integer between 1 and ${maximum}.`);
+    throw new Error(`Decision AI Profile ${label} must be an integer between 1 and ${maximum}.`);
   return result;
 }
 
@@ -107,7 +107,7 @@ export function classifierProfileHealthPolicy(
 
 export function normalizeClassifierProfileValue(value: unknown): ClassifierProfileValue {
   return normalizeDetachedProfile(
-    snapshotClassifierJson(value, 'Classifier Profile', new ClassifierValueBudget(), true),
+    snapshotClassifierJson(value, 'Decision AI Profile', new ClassifierValueBudget(), true),
   );
 }
 
@@ -123,34 +123,35 @@ function normalizeDetachedProfile(value: unknown): ClassifierProfileValue {
     typeof profile.credential !== 'object' ||
     Array.isArray(profile.credential)
   )
-    throw new Error('Classifier Profiles input requires a version 1 Classifier Profile.');
+    throw new Error('Decision AI Profiles input requires a version 1 Decision AI Profile.');
   const { configuration, credential } = profile;
   if (
     typeof configuration.provider !== 'string' ||
     typeof configuration.model !== 'string' ||
     !configuration.model.trim()
   )
-    throw new Error('Classifier Profile requires a provider and a nonblank model.');
+    throw new Error('Decision AI Profile requires a provider and a nonblank model.');
   getClassifierProvider(configuration.provider);
   if (credential.value !== undefined && (typeof credential.value !== 'string' || /[\r\n]/.test(credential.value)))
-    throw new Error('Classifier Profile credential must be a string without line breaks.');
+    throw new Error('Decision AI Profile credential must be a string without line breaks.');
   if (profile.profileName !== undefined && typeof profile.profileName !== 'string')
-    throw new Error('Invalid Classifier Profile name.');
+    throw new Error('Invalid Decision AI Profile name.');
   if (profile.sourceNodeId !== undefined && (typeof profile.sourceNodeId !== 'string' || !profile.sourceNodeId.trim()))
-    throw new Error('Invalid Classifier Profile source node.');
+    throw new Error('Invalid Decision AI Profile source node.');
   if (configuration.enableCircuitBreaker !== undefined && typeof configuration.enableCircuitBreaker !== 'boolean')
-    throw new Error('Classifier Profile automatic suspension must be a boolean.');
+    throw new Error('Decision AI Profile automatic suspension must be a boolean.');
   if (
     configuration.apiKeySource !== undefined &&
     !['configured', 'classifier-settings', 'input'].includes(configuration.apiKeySource)
   )
-    throw new Error('Unknown classifier API key source.');
+    throw new Error('Unknown Decision AI API key source.');
   classifierProfileResponseTimeout(configuration);
   classifierProfileHealthPolicy(configuration);
   return {
     version: 1,
     sourceNodeId: profile.sourceNodeId,
-    profileName: profile.profileName?.trim() || undefined,
+    // Blank names are absent, but authored whitespace must survive exact-default display aliases.
+    profileName: profile.profileName?.trim() ? profile.profileName : undefined,
     credential: credential.value === undefined ? {} : { value: credential.value.trim() },
     configuration: {
       ...pickClassifierProfileData(configuration),
@@ -166,10 +167,10 @@ export function normalizeClassifierProfiles(
   check?: ClassifierPreparationCheck,
 ): ClassifierProfileValue[] {
   if (Array.isArray(value) && (value.length === 0 || value.length > 128))
-    throw new Error('Classifier Profiles requires between 1 and 128 profiles.');
+    throw new Error('Decision AI Profiles requires between 1 and 128 profiles.');
   // One deadline-aware traversal bounds, validates and detaches the whole
   // chain. Do not rescan each candidate with a fresh resource budget.
-  const detached = snapshotClassifierJson(value, 'Classifier Profiles', new ClassifierValueBudget(check), true);
+  const detached = snapshotClassifierJson(value, 'Decision AI Profiles', new ClassifierValueBudget(check), true);
   return (Array.isArray(detached) ? detached : [detached]).map(normalizeDetachedProfile);
 }
 
@@ -182,7 +183,7 @@ export function resolveClassifierProfile(
   const model = data.useModelInput
     ? classifierInputDataValue(inputs, 'model')?.value
     : data.model?.trim() || provider.defaultModel;
-  if (typeof model !== 'string' || !model.trim()) throw new Error('Classifier Profile model is required.');
+  if (typeof model !== 'string' || !model.trim()) throw new Error('Decision AI Profile model is required.');
   let value: string | undefined;
   // Missing credentials are a candidate failure, not an upstream graph failure.
   // Invalid credential-name configuration still fails while authoring the profile.

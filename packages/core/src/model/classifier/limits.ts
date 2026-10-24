@@ -35,7 +35,7 @@ export function classifierPreparationCheck(
     signal.throwIfAborted();
     if (Date.now() >= deadline)
       throw new Error(
-        `Classifier preparation/request timed out${timeoutMs === undefined ? '' : ` after ${timeoutMs} ms`}.`,
+        `Decision AI preparation/request timed out${timeoutMs === undefined ? '' : ` after ${timeoutMs} ms`}.`,
       );
   };
 }
@@ -60,7 +60,7 @@ export class ClassifierValueBudget {
     maxBytes: number = CLASSIFIER_LIMITS.requestBytes,
   ) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0)
-      throw new ClassifierResourceLimitError('Classifier byte limit must be a positive safe integer.');
+      throw new ClassifierResourceLimitError('Decision AI byte limit must be a positive safe integer.');
     this.maxBytes = Math.min(maxBytes, CLASSIFIER_LIMITS.requestBytes);
   }
 
@@ -79,7 +79,7 @@ export class ClassifierValueBudget {
             : `${maxBytes / 1_000_000} MB`
           : `${maxBytes}-byte`;
       throw new ClassifierResourceLimitError(
-        `Classifier input exceeds the ${size} resource limit. Reduce input content or image size.`,
+        `Decision AI input exceeds the ${size} resource limit. Reduce input content or image size.`,
       );
     }
   }
@@ -107,9 +107,9 @@ export class ClassifierValueBudget {
   private value(depth: number): void {
     this.check();
     if (++this.values > CLASSIFIER_LIMITS.values)
-      throw new ClassifierResourceLimitError('Classifier input has too many expanded values.');
+      throw new ClassifierResourceLimitError('Decision AI input has too many expanded values.');
     if (depth > CLASSIFIER_LIMITS.depth)
-      throw new ClassifierResourceLimitError('Classifier input exceeds the maximum nesting depth of 64.');
+      throw new ClassifierResourceLimitError('Decision AI input exceeds the maximum nesting depth of 64.');
   }
 
   inspect(
@@ -146,13 +146,13 @@ export class ClassifierValueBudget {
         if (hook && (!('value' in hook) || typeof hook.value === 'function'))
           throw new Error(`${json.label} must not contain JSON serialization hooks.`);
       }
-      if (path.has(item)) throw new Error('Classifier input contains a circular reference.');
+      if (path.has(item)) throw new Error('Decision AI input contains a circular reference.');
       path.add(item);
       this.add(2);
       const copy = json?.copy ? (Array.isArray(item) ? [] : {}) : undefined;
       if (Array.isArray(item)) {
         if (item.length > CLASSIFIER_LIMITS.values)
-          throw new ClassifierResourceLimitError('Classifier input has too many expanded values.');
+          throw new ClassifierResourceLimitError('Decision AI input has too many expanded values.');
         for (let i = 0; i < item.length; i++) {
           if (i > 0) this.add(1);
           const descriptor = Object.getOwnPropertyDescriptor(item, String(i));
@@ -167,7 +167,7 @@ export class ClassifierValueBudget {
       } else {
         const keys = Object.keys(item);
         if (keys.length > CLASSIFIER_LIMITS.values)
-          throw new ClassifierResourceLimitError('Classifier input has too many expanded values.');
+          throw new ClassifierResourceLimitError('Decision AI input has too many expanded values.');
         let index = 0;
         for (const key of keys) {
           // Omitted wire fields still cost preparation work and snapshot memory.
@@ -218,14 +218,14 @@ export function checkClassifierJsonWork(text: string, check: ClassifierPreparati
     } else if (character === '"') quoted = true;
     else if (character === '{' || character === '[') {
       if (++depth > CLASSIFIER_LIMITS.depth)
-        throw new ClassifierResourceLimitError(`Classifier ${label} exceeds the maximum nesting depth of 64.`);
+        throw new ClassifierResourceLimitError(`Decision AI ${label} exceeds the maximum nesting depth of 64.`);
       separators++;
     } else if (character === '}' || character === ']') depth--;
     else if (character === ',' || character === ':') separators++;
     // A conservative token guard bounds JSON.parse allocation. The exact
     // expanded-value guard runs on the parsed object afterward.
     if (separators > CLASSIFIER_LIMITS.values * 2)
-      throw new ClassifierResourceLimitError(`Classifier ${label} has too many values.`);
+      throw new ClassifierResourceLimitError(`Decision AI ${label} has too many values.`);
   }
 }
 
@@ -238,7 +238,7 @@ export async function readClassifierResponse(
 ): Promise<unknown> {
   const length = response.headers.get('content-length');
   if (length && Number(length) > CLASSIFIER_LIMITS.responseBytes)
-    throw new ClassifierResourceLimitError('Classifier response exceeds the 8 MiB response limit.');
+    throw new ClassifierResourceLimitError('Decision AI response exceeds the 8 MiB response limit.');
   if (!response.body) return JSON.parse('');
   const reader = response.body.getReader();
   const cancel = () => {
@@ -253,14 +253,14 @@ export async function readClassifierResponse(
     for (;;) {
       check();
       const { done, value } = await reader.read().catch((cause: unknown) => {
-        throw new ClassifierResponseReadError('Classifier response body could not be read.', { cause });
+        throw new ClassifierResponseReadError('Decision AI response body could not be read.', { cause });
       });
       check();
       if (done) break;
       const chunk = classifierByteView(value);
       bytes += chunk.byteLength;
       if (bytes > CLASSIFIER_LIMITS.responseBytes)
-        throw new ClassifierResourceLimitError('Classifier response exceeds the 8 MiB response limit.');
+        throw new ClassifierResourceLimitError('Decision AI response exceeds the 8 MiB response limit.');
       pending += decoder.decode(chunk, { stream: true });
       if (pending.length >= 64 * 1024) {
         text.push(pending);

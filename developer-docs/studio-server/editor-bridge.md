@@ -138,8 +138,8 @@ Classifier validation must continue rejecting mismatched headers/media types.
 The headless classifier observer covers JPEG (including uppercase `.JPG`), PNG
 and GIF selections through the real Image editor and browser file-input path.
 
-Decision AI run's built-in providers are Jev, Liquid AI (`d1`), and OpenAI
-Decisions (`gpt-6-luna`). The hosted
+Decision AI run's built-in providers are Jev, Liquid AI (`d1`), OpenAI
+Decisions (`gpt-6-luna`), OpenRouter Microsoft Decision-1 and Perplexity Decisions. The hosted
 editor uses Core's ordered registry for provider/model defaults and the shared
 Settings → Decision AI credentials page; its environment shim enumerates the
 registry's default names, including `LIQUID_API_KEY` and `OPENAI_API_KEY`, before Node execution.
@@ -149,6 +149,18 @@ port. Question definitions remain text/JSON only; question-level image fields
 fail with guidance to use Evaluate's State. Unsupported models reject images rather than
 dropping them. OpenAI request/answer adaptation retains the existing node output
 and error contracts without image-based batching or aggregate diagnostic envelopes.
+Jev 1.13/1.14 and their verified aliases support experimental shared-State images.
+The shared Model inspector warns about this status. Core encodes PNG/JPEG into
+Jev-native assets with per-request UUID references, preserving order and retry
+payloads. Only image requests enable `TypeSafe-Danger-Zone-Images: true`; text-only
+requests and other providers are unchanged. Preflight enforces 280–1568 pixels per
+side and 16 MiB decoded per file, within the shared 32 MiB request cap. Providers
+still validate complete content and processed/context limits. See
+[the adapter and local HTTP simulation](../CLASSIFIER-NODES.md#experimental-jev-images).
+Cross-provider regressions verify identical accepted State forms in inline and
+Profile modes, while retaining each provider's own wire format and limits. Real
+GraphProcessor checks cover Graph Input → Assemble Message → Array/Assemble Prompt
+→ Decision AI run → Graph Output for Jev, Liquid, OpenAI and Perplexity.
 For a message array, wire text and image Parts into each Assemble Message, then
 combine its Message outputs with Assemble Prompt and connect Prompt directly to
 State (Array's Output is also supported). Assemble Prompt accepts scalar messages
@@ -159,14 +171,34 @@ User Type and input-supplied `user` roles are supported. OpenAI Decisions accept
 only User messages (not the Chat/Responses role set); unsupported assembled roles
 fail before HTTP. OpenAI retains each message boundary; System One flattens
 accepted message content without pretending it supports chat roles.
-Each evaluation captures its request configuration once and uses one absolute
-deadline across request preparation, retries and response validation.
+Each evaluation captures its request configuration once. Decision AI run has no
+overall timeout; enabled, hosted Profile response timeouts cover each provider
+attempt's preparation, retries and response validation. Old node-wide timeout
+fields are ignored, not migrated or retained as hidden safety deadlines.
+Retry cooldowns and provider `Retry-After` waits remain cancellable even without
+a deadline; Core chunks long waits instead of overflowing or shortening them.
 Credentialed classifier requests never follow redirects.
 Classifier credential UI presents Automatic (legacy `configured`), strict
 Decision AI settings, and Input port. Preserve existing source values; do not
 silently change old graphs' key precedence. Strict saved-key selection must not
 fall back through the hosted environment shim or general OpenAI credentials.
 The editor shows source policy, not secret values or guesses about remote state.
+Core-emitted Decision AI errors and profile summaries use the visible brand,
+including the displayed exception prefix. Internal Classifier class/node names,
+family keys and credential settings stay unchanged. Recording replay does not
+rewrite historical diagnostic text or authored profile names; current and legacy
+errors use the same node/full-output/inspector/activity paths.
+The shared family-aware profile display helper also keeps Run Activity search
+aligned with its labels. Only the exact legacy default in the classifier family
+is aliased; padded/custom names and raw recording metadata remain unchanged.
+SubQ Snap uses the same registry-driven provider/settings/environment controls,
+with `subqApiKey` / `SUBQ_API_KEY` on the executor and default model
+`subq-snap-1.1`. Core owns the separate typed-base64 image mapping and limits;
+hosted wrappers must not duplicate it. See [SubQ integration](../CLASSIFIER-NODES.md#subq-snap-decisions)
+for pricing, retention and local verification boundaries.
+Decision AI HTTP 403 diagnostics distinguish denied model/key access from HTTP
+401's invalid-credentials message. The host displays Core's explanation without
+rewriting recorded history; retry/fallback and failure categories are unchanged.
 Question preparation uses its own bounded, cancellation-aware interpolation
 path before JSON parsing. Hosted wrappers use the same Core behavior.
 Estimated Cost is available only for verified requested/returned model pairs,
@@ -229,7 +261,7 @@ run and does not emit a caught failure.
 
 Caller cancellation is checked before preparation and after asynchronous work;
 late successful LLM replies cannot publish successful activity or enter the cache.
-Classifier's overall deadline covers both headers and JSON receipt, including
+Decision AI Profile response deadlines cover both headers and JSON receipt, including
 injected transports that ignore abort signals. Waiting settles on cancellation;
 late replies are discarded and late rejections consumed. Response-read errors
 retain their underlying cause instead of reporting only an invalid-JSON summary.

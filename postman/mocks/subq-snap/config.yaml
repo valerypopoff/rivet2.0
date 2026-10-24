@@ -1,0 +1,10 @@
+version: 1
+name: SubQ Snap Decisions contract
+slug: subq-snap
+protocol: http
+port: 4922
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

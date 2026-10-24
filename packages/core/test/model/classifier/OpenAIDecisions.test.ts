@@ -279,13 +279,13 @@ test('Unsupported models, remote URLs, malformed images and excessive image batc
     timeoutMs: 1000,
   };
   for (const [provider, model] of [
-    ['jev', 'jev-latest'],
+    ['jev', 'jev-1.15.0'],
     ['liquid', 'd1:free'],
     ['openai', 'text-only'],
   ]) {
     await assert.rejects(
       getClassifierProvider(provider).evaluate({ ...args, model: model!, stateMessages: sharedImage() }),
-      /does not support classifier images/,
+      /does not support Decision AI images/,
     );
   }
   for (const invalid of [
@@ -570,11 +570,11 @@ test('Question-level image evidence fails with actionable guidance before any re
         signal: new AbortController().signal,
         questions: [question as ClassifierQuestionDefinition],
       }),
-      /Question-level images.*Evaluate's State input/,
+      /Question-level images.*Decision AI run's State input/,
     );
     await assert.rejects(
       evaluator({ provider }).process({ ['question1' as PortId]: { type: 'object', value: question } }, ctx()),
-      /Question-level images.*Evaluate's State input/,
+      /Question-level images.*Decision AI run's State input/,
     );
     assert.equal(calls, 0);
   }

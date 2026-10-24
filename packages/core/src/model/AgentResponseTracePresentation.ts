@@ -8,6 +8,14 @@ export type AgentProfileAttemptInspectorRow = Readonly<{
   providerAndModel: string;
 }>;
 
+/** Presentation only: family-scoped exact default alias, never a rewrite of authored/recorded names. */
+export function getProfileDisplayName(
+  name: string | undefined,
+  family: AgentLLMProfileAttemptTrace['family'],
+): string | undefined {
+  return family === 'classifier' && name === 'Classifier Profile' ? 'Decision AI Profile' : name;
+}
+
 export function buildAgentProfileAttemptInspectorRows(
   attempts: readonly AgentLLMProfileAttemptTrace[],
 ): AgentProfileAttemptInspectorRow[] {
@@ -16,7 +24,7 @@ export function buildAgentProfileAttemptInspectorRows(
     providerAndModel: [
       ...(attempt.profileName == null || attempt.profileName.trim() === ''
         ? []
-        : [`Profile: ${attempt.profileName.trim()}`]),
+        : [`Profile: ${getProfileDisplayName(attempt.profileName, attempt.family)!.trim()}`]),
       `${formatProvider(attempt)} / ${attempt.model}`,
     ].join(' · '),
     context: [

@@ -44,7 +44,7 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
         id: 'profile' as PortId,
         title: 'Profile',
         dataType: 'classifier-config',
-        description: 'Sensitive resolved classifier configuration. Combine profiles with Array for ordered fallback.',
+        description: 'Sensitive resolved Decision AI configuration. Combine profiles with Array for ordered fallback.',
       },
     ];
   }

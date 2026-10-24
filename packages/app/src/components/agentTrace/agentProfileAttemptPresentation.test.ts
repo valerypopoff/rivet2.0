@@ -21,6 +21,30 @@ const baseAttempt = {
   'roundIndex' | 'profileIndex' | 'profileName' | 'nodeId' | 'processId' | 'provider' | 'customProviderApi' | 'model'
 >;
 
+test('profile labels alias only exact Decision AI defaults and never mutate retained diagnostics or authored names', () => {
+  for (const [family, name, expected] of [
+    ['classifier', 'Classifier Profile', 'Decision AI Profile'],
+    ['classifier', 'My Classifier route', 'My Classifier route'],
+    ['classifier', ' Classifier Profile ', 'Classifier Profile'],
+    [undefined, 'Classifier Profile', 'Classifier Profile'],
+    ['llm', 'Classifier Profile', 'Classifier Profile'],
+  ] as const) {
+    const attempt: AgentLLMProfileAttemptTrace = {
+      ...baseAttempt,
+      family,
+      profileName: name,
+      eventId: 'name-check',
+      stage: 'configuration',
+      outcome: 'failure',
+      error: 'Classifier Profile: original provider diagnostic',
+    };
+    const [row] = buildAgentProfileAttemptInspectorRows([attempt]);
+    assert.equal(row!.providerAndModel, `Profile: ${expected} · Custom Responses / fast-provider`);
+    assert.equal(row!.error, attempt.error);
+    assert.equal(attempt.profileName, name);
+  }
+});
+
 test('presents classifier response timeouts without streaming terminology', () => {
   const [row] = buildAgentProfileAttemptInspectorRows([
     {

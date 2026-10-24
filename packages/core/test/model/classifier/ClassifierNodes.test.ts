@@ -379,6 +379,7 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     { value: 'openai', label: 'OpenAI' },
     { value: 'openrouter', label: 'OpenRouter' },
     { value: 'perplexity', label: 'Perplexity' },
+    { value: 'subq', label: 'SubQ' },
   ]);
   assert.deepEqual(
     instance.getOutputDefinitions().map((output) => output.id),
@@ -477,7 +478,7 @@ test('Classifier Evaluate groups provider, model and credentials in an initially
   );
   assert.deepEqual(
     editors.map((editor) => editor.label),
-    ['Configuration', 'Model', 'Outputs', 'Advanced', 'Error behavior'],
+    ['Configuration', 'Model', 'Outputs', 'Error behavior'],
   );
   const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
   assert.ok(modelEditor?.type === 'string');
@@ -805,6 +806,7 @@ test('Liquid AI evaluates existing text, list and object questions without rewri
     'OPENAI_API_KEY',
     'OPENROUTER_API_KEY',
     'PERPLEXITY_API_KEY',
+    'SUBQ_API_KEY',
   ]);
 });
 

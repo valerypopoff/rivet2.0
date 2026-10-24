@@ -12,18 +12,18 @@ export function prepareClassifierQuestion(value: unknown, budget: ClassifierValu
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Question inputs must contain question definition objects.');
   if ('images' in value)
-    throw new Error("Question-level images are not supported. Connect images to Classifier Evaluate's State input.");
+    throw new Error("Question-level images are not supported. Connect images to Decision AI run's State input.");
   for (const key of ['questionId', 'type', 'instructions']) {
     if (!Object.prototype.propertyIsEnumerable.call(value, key))
-      throw new Error(`Every classifier question must have an own, enumerable '${key}' field.`);
+      throw new Error(`Every Decision AI question must have an own, enumerable '${key}' field.`);
   }
   const criteriaProperty = Object.getOwnPropertyDescriptor(value, 'criteria');
   if (criteriaProperty && (!criteriaProperty.enumerable || !('value' in criteriaProperty)))
-    throw new Error('Classifier question criteria must be an own, enumerable field.');
+    throw new Error('Decision AI question criteria must be an own, enumerable field.');
   // Optional envelope properties may be undefined; structured entries themselves must be exact JSON.
   const question = snapshotClassifierJson(value, 'Question', budget, true) as ClassifierQuestionDefinition;
   if (typeof question.questionId !== 'string' || question.questionId.trim() === '')
-    throw new Error('Every classifier question must have a non-empty Question ID.');
+    throw new Error('Every Decision AI question must have a non-empty Question ID.');
   if (!['choice', 'score', 'noul'].includes(question.type))
     throw new Error(`Question '${question.questionId}' has an unsupported type.`);
   // The whole question has already passed recursive JSON/resource validation.

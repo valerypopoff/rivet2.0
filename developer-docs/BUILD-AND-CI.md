@@ -1843,6 +1843,29 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-10-24)
+
+Before this update, all tracks except Docs last changed versions in `18437156c`;
+Docs used `216625246`. Subsequent changes through `181b51496` plus this change set's Decision AI
+timeout, pricing/image work, SubQ Snap integration and diagnostic hardening prepare:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.28.2` → `2.29.0` | Bundle-wide local execution visibility and recording UI/status/tab capabilities, plus presentation and safety fixes. |
+| Public Core/Node/Evaluations/CLI | `2.22.1` → `2.23.0` | Jev image assets and 1.14 pricing, SubQ Snap Decisions integration, removed node-wide classifier timeout, long-retry hardening and consistent Decision AI diagnostics; Node security update and required family companions. |
+| App executor | `2.14.2` → `2.15.0` | Bundled Core/runtime companion for Jev/SubQ and timeout changes, not a new sidecar API. |
+| Documentation site | `2.22.0` → `2.23.0` | New bundle-execution, recording and Decision AI/Jev/SubQ guidance. |
+| Five private Studio Server packages | `1.30.0` → `1.31.0` | Opt-in backend overlap/housekeeping handover and readiness capabilities, recording/bundle routing refinements and hosted editor updates. |
+
+The [package inventory](PACKAGES.md#version-update-2026-10-24--backend-overlap-recording-ux-and-jev-images)
+distinguishes implementation work from required release companions. The old
+run-node timeout fields are deliberately ignored rather than migrated; call this
+out in release notes. Profile response deadlines and cancellation remain.
+Synchronize Tauri/Cargo from App and the CLI Docker fallback from the public
+family. Workspace dependency ranges, Helm metadata and schema versions do not
+change merely for these versions. Publication, GCP deployment and upstream/provider
+qualification remain separate actions.
+
 ### Prepared release versions (2026-10-22)
 
 The last version change for every package track is `216625246`. Changes after

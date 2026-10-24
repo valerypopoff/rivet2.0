@@ -31,7 +31,8 @@ test('Classifier extraction moves active model/key wires and midpoints, but not 
   });
   assert.equal(result.evaluateNode.data.configurationMode, 'profile');
   assert.equal(result.profileNode.data.provider, 'liquid');
-  assert.equal(result.profileNode.data.responseTimeoutMs, 90_000);
+  assert.equal(result.profileNode.data.responseTimeoutMs, profile.data.responseTimeoutMs);
+  assert.ok(!('timeoutMs' in result.profileNode.data));
   assert.ok(!('outputRequestBody' in result.profileNode.data));
   assert.ok(!('retryOnNon200' in result.profileNode.data));
   for (const port of ['model', 'apiKey']) {

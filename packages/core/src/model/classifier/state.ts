@@ -167,7 +167,7 @@ function prepareRivetState(input: DataValue, budget: ClassifierValueBudget): Pre
     } else if (message(item)) {
       if (classifierDataProperty(item, 'type') !== 'user' || 'function_call' in item || 'function_calls' in item)
         throw new Error(
-          'Classifier State supports only user messages, not system, developer, assistant, or tool messages.',
+          'Decision AI State supports only user messages, not system, developer, assistant, or tool messages.',
         );
       flush();
       if (messages.length >= CLASSIFIER_LIMITS.messages) throw new Error('State has too many messages.');

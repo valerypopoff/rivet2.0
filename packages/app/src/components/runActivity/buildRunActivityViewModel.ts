@@ -2,6 +2,7 @@ import {
   getCustomProviderApiContract,
   summarizeAgentResponseCalls,
   buildAgentProfileAttemptInspectorRows,
+  getProfileDisplayName,
   type PortId,
 } from '@valerypopoff/rivet2-core';
 import type {
@@ -247,6 +248,7 @@ function buildInvocationSearchTerms(
       attempt.model,
       attempt.family,
       attempt.profileName,
+      getProfileDisplayName(attempt.profileName, attempt.family),
       attempt.stage,
       attempt.failureKind,
       attempt.skipReason,
@@ -349,7 +351,7 @@ function profileAttemptToChild(attempt: RunActivityProfileAttempt): RunActivityC
 
   return {
     id: `profile-attempt:${attempt.eventId}`,
-    label: `${formatProfileTitle(attempt)}${formatModelCallProvider(attempt)} / ${attempt.model} - ${attempt.failureKind?.replaceAll('-', ' ') ?? describeProfileAttemptStage(attempt.stage)}`,
+    label: `${row.providerAndModel} - ${attempt.failureKind?.replaceAll('-', ' ') ?? describeProfileAttemptStage(attempt.stage)}`,
     secondaryText: `${row.context}${attempt.error ? `: ${attempt.error}` : ''}`,
     status: getProfileAttemptStatus(attempt),
     ...(attempt.durationMs == null ? {} : { durationMs: attempt.durationMs }),

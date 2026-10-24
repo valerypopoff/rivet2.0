@@ -1,0 +1,10 @@
+version: 1
+name: TypeSafe Jev image contract
+slug: typesafe-jev
+protocol: http
+port: 4921
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

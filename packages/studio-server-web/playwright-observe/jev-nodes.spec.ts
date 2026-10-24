@@ -146,6 +146,7 @@ test('Decision AI Profile defaults to a half-second response deadline', async ({
     .locator('button.collapsible-panel-toggle')
     .filter({ hasText: /^Model$/ })
     .click();
+  await expect(editor.getByText(/Jev images are experimental: use still PNG\/JPEG/)).toBeVisible();
   await editor
     .locator('button.collapsible-panel-toggle')
     .filter({ hasText: /^Decision AI profile suspension$/ })
@@ -164,21 +165,11 @@ test('Decision AI configuration exports a wired profile and suspension administr
   await editor.getByRole('button', { name: 'From profile', exact: true }).click();
   await expect(evaluate.locator('.port-label', { hasText: /^Decision AI Profiles$/ })).toHaveCount(1);
   await expect(editor.getByRole('group', { name: 'API key source' })).toHaveCount(0);
-  await editor
-    .locator('button.collapsible-panel-toggle')
-    .filter({ hasText: /^Advanced$/ })
-    .click();
   const overallTimeout = editor.getByRole('spinbutton', { name: 'Overall timeout (seconds)', exact: true });
-  await expect(overallTimeout).toHaveValue('180');
-  await expect(overallTimeout).toHaveAttribute('min', '1');
-  await expect(overallTimeout).toHaveAttribute('max', '600');
-  await expect(overallTimeout).toHaveAttribute('step', '1');
+  await expect(overallTimeout).toHaveCount(0);
   await editor.getByRole('button', { name: 'Inline', exact: true }).click();
-  await expect(overallTimeout).toHaveValue('30');
-  await editor
-    .locator('button.collapsible-panel-toggle')
-    .filter({ hasText: /^Advanced$/ })
-    .click();
+  await expect(overallTimeout).toHaveCount(0);
+  await expect(editor.locator('button.collapsible-panel-toggle').filter({ hasText: /^Advanced$/ })).toHaveCount(0);
   await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
   const profileNode = editor
     .locator('.node')
@@ -235,7 +226,7 @@ test('Decision AI configuration exports a wired profile and suspension administr
   await suspensionToggleLabel.click();
   await expect(automaticSuspension).toBeChecked();
   await expect(suspensionSection.getByRole('spinbutton')).toHaveCount(4);
-  await expect(responseTimeout).toHaveValue('30'); // Preserve the inline timeout from the legacy fixture.
+  await expect(responseTimeout).toHaveValue('0.5'); // The removed run-node timeout is not copied into a profile.
   const failureThreshold = editor.getByRole('spinbutton', { name: 'Failures before suspension', exact: true });
   const failureWindow = editor.getByRole('spinbutton', { name: 'Failure window, seconds', exact: true });
   const suspensionDuration = editor.getByRole('spinbutton', { name: 'Suspension duration, seconds', exact: true });
@@ -776,6 +767,12 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
     defaultModel: 'pplx-decider-v1.1-27b',
     keyName: 'perplexityApiKey',
     environmentVariable: 'PERPLEXITY_API_KEY',
+  },
+  {
+    label: 'SubQ',
+    defaultModel: 'subq-snap-1.1',
+    keyName: 'subqApiKey',
+    environmentVariable: 'SUBQ_API_KEY',
   },
 ])
   test(`${label} selection and extraction preserve model IDs and saved credentials`, async ({ page }) => {

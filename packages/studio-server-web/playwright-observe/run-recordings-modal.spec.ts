@@ -2603,157 +2603,178 @@ test.describe('Run recordings modal', () => {
     await expect(fullscreenOutput).toContainText('preserved-failure-attempt');
   });
 
-  test('shows classifier failure reason and enabled request/response bodies in node and full output replay', async ({
-    page,
-  }) => {
-    await installRunRecordingRoutes(page);
-    const failure =
-      'ClassifierProfileExhaustedError: Classifier profile chain exhausted.\n1. Some classifier profile (perplexity/pplx-decider-v1.1-27b): failed — Perplexity rejected the request (HTTP 400); 2 provider attempts\n2. Another classifier profile (perplexity/pplx-decider-v1.1-27b): failed — Perplexity rejected the request (HTTP 400).\n\nAttempt details:\nProfile 1 (Some classifier profile), http attempt 1 failure (HTTP 503): Perplexity rejected the request (HTTP 503).\nProfile 1 (Some classifier profile), http attempt 2 failure (HTTP 400): Perplexity rejected the request (HTTP 400).\nProfile 2 (Another classifier profile), http attempt 1 failure (HTTP 400): Perplexity rejected the request (HTTP 400).';
-    await page.route('**/api/workflows/recordings/recording-a-1/recording', async (route) => {
-      const recording = JSON.parse(createFailedLlmOutputRecording('recording-a-1'));
-      const event = recording.recording.events.find((item: any) => item.type === 'nodeError');
-      event.data.error = failure;
-      const requests = [
-        { profileIndex: 0, profileName: 'Some classifier profile', attemptIndex: 0, status: 503 },
-        { profileIndex: 0, profileName: 'Some classifier profile', attemptIndex: 1, status: 400 },
-        { profileIndex: 1, profileName: 'Another classifier profile', attemptIndex: 0, status: 400 },
-      ].map((request, index) => ({
-        type: 'llmProfileAttempt',
-        ts: event.ts - 3 + index,
-        data: {
-          ...request,
-          execution: event.data.execution,
-          nodeId: event.data.nodeId,
-          processId: event.data.processId,
-          eventId: `classifier-request-${index}`,
-          family: 'classifier',
-          roundIndex: 0,
-          provider: 'perplexity',
-          model: 'pplx-decider-v1.1-27b',
-          stage: 'request',
-          outcome: 'failure',
-          failureKind: 'http',
-          error: `Perplexity rejected the request (HTTP ${request.status}).`,
-        },
-      }));
-      // Older debugger transports may redeliver the same request without
-      // additive classifier fields. Both inspector and journal must retain
-      // the observed identity and report three requests, not two or four.
-      const legacyRedelivery = {
-        ...requests[0]!,
-        data: {
-          execution: event.data.execution,
-          nodeId: event.data.nodeId,
-          processId: event.data.processId,
-          eventId: requests[0]!.data.eventId,
-          roundIndex: 0,
-          provider: 'perplexity',
-          model: 'pplx-decider-v1.1-27b',
-          stage: 'request',
-          outcome: 'failure',
-        },
-      };
-      recording.recording.events.splice(3, 0, ...requests, legacyRedelivery);
-      event.data.outputs = {
-        requestBody: {
-          type: 'object',
-          value: { model: 'pplx-decider-v1.1-27b', state: 'captured-classifier-evidence' },
-        },
-        responseBody: { type: 'object', value: { error: { message: 'classifier-model-unavailable' } } },
-      };
-      await route.fulfill({ contentType: 'text/plain', body: JSON.stringify(recording) });
+  for (const diagnosticFormat of ['current', 'legacy'] as const) {
+    test(`shows ${diagnosticFormat} Decision AI failure reason and enabled request/response bodies in node and full output replay`, async ({
+      page,
+    }) => {
+      await installRunRecordingRoutes(page);
+      const firstProfileName = diagnosticFormat === 'current' ? 'Classifier Profile' : 'Some classifier profile';
+      const firstProfileLabel = diagnosticFormat === 'current' ? 'Decision AI Profile' : firstProfileName;
+      const recordedFailure =
+        'ClassifierProfileExhaustedError: Classifier profile chain exhausted.\n1. Some classifier profile (perplexity/pplx-decider-v1.1-27b): failed — Perplexity rejected the request (HTTP 400); 2 provider attempts\n2. Another classifier profile (perplexity/pplx-decider-v1.1-27b): failed — Perplexity rejected the request (HTTP 400).\n\nAttempt details:\nProfile 1 (Some classifier profile), http attempt 1 failure (HTTP 503): Perplexity rejected the request (HTTP 503).\nProfile 1 (Some classifier profile), http attempt 2 failure (HTTP 400): Perplexity rejected the request (HTTP 400).\nProfile 2 (Another classifier profile), http attempt 1 failure (HTTP 400): Perplexity rejected the request (HTTP 400).';
+      const failure =
+        diagnosticFormat === 'legacy'
+          ? recordedFailure
+          : recordedFailure
+              .replaceAll('Some classifier profile', firstProfileLabel)
+              .replace(
+                'ClassifierProfileExhaustedError: Classifier profile chain exhausted.',
+                'DecisionAIProfileExhaustedError: Decision AI profile chain exhausted.',
+              );
+      await page.route('**/api/workflows/recordings/recording-a-1/recording', async (route) => {
+        const recording = JSON.parse(createFailedLlmOutputRecording('recording-a-1'));
+        const event = recording.recording.events.find((item: any) => item.type === 'nodeError');
+        event.data.error = failure;
+        const requests = [
+          { profileIndex: 0, profileName: firstProfileName, attemptIndex: 0, status: 503 },
+          { profileIndex: 0, profileName: firstProfileName, attemptIndex: 1, status: 400 },
+          { profileIndex: 1, profileName: 'Another classifier profile', attemptIndex: 0, status: 400 },
+        ].map((request, index) => ({
+          type: 'llmProfileAttempt',
+          ts: event.ts - 3 + index,
+          data: {
+            ...request,
+            execution: event.data.execution,
+            nodeId: event.data.nodeId,
+            processId: event.data.processId,
+            eventId: `classifier-request-${index}`,
+            family: 'classifier',
+            roundIndex: 0,
+            provider: 'perplexity',
+            model: 'pplx-decider-v1.1-27b',
+            stage: 'request',
+            outcome: 'failure',
+            failureKind: 'http',
+            error: `Perplexity rejected the request (HTTP ${request.status}).`,
+          },
+        }));
+        // Older debugger transports may redeliver the same request without
+        // additive classifier fields. Both inspector and journal must retain
+        // the observed identity and report three requests, not two or four.
+        const legacyRedelivery = {
+          ...requests[0]!,
+          data: {
+            execution: event.data.execution,
+            nodeId: event.data.nodeId,
+            processId: event.data.processId,
+            eventId: requests[0]!.data.eventId,
+            roundIndex: 0,
+            provider: 'perplexity',
+            model: 'pplx-decider-v1.1-27b',
+            stage: 'request',
+            outcome: 'failure',
+          },
+        };
+        recording.recording.events.splice(3, 0, ...requests, legacyRedelivery);
+        event.data.outputs = {
+          requestBody: {
+            type: 'object',
+            value: { model: 'pplx-decider-v1.1-27b', state: 'captured-classifier-evidence' },
+          },
+          responseBody: { type: 'object', value: { error: { message: 'classifier-model-unavailable' } } },
+        };
+        await route.fulfill({ contentType: 'text/plain', body: JSON.stringify(recording) });
+      });
+      await page.route('**/api/workflows/recordings/recording-a-1/replay-project', (route) =>
+        route.fulfill({
+          contentType: 'text/plain',
+          body: createReplayProject('recording-a-1')
+            .replace(':llmChatV2', ':classifierEvaluate')
+            .replace('provider: openai', 'provider: perplexity')
+            .replace('model: gpt-5', 'model: pplx-decider-v1.1-27b'),
+        }),
+      );
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.getByRole('button', { name: 'Run recordings' }).click();
+      const modal = page.getByTestId('run-recordings-modal');
+      await modal.locator('.run-recordings-select__control').click();
+      await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
+      const failedRun = modal
+        .locator('.run-recordings-run')
+        .filter({ has: page.locator('.run-recordings-badge.failed', { hasText: 'Failed' }) });
+      await failedRun.locator('.run-recordings-run-open-button').click();
+      const editor = page.frameLocator('iframe.dashboard-editor-frame');
+      await editor.getByRole('button', { name: 'Play Recording', exact: true }).click();
+      const output = editor.locator('.node[data-nodeid="replay-llm"] .node-output');
+      await expect(output).toContainText(
+        diagnosticFormat === 'legacy' ? 'ClassifierProfileExhaustedError' : 'DecisionAIProfileExhaustedError',
+      );
+      await expect(output).toContainText('HTTP 400');
+      await expect(output).toContainText('HTTP 503');
+      await expect(output).toContainText(`Profile 1 (${firstProfileLabel}), http attempt 1 failure`);
+      await expect(output).toContainText('Profile 2 (Another classifier profile), http attempt 1 failure');
+      await expect(output).toContainText('captured-classifier-evidence');
+      await output.hover();
+      await output.locator('.response-inspector-button').click();
+      const inspector = editor.locator('.rivet-agent-response-inspector-content');
+      await expect(inspector).toContainText('Decision AI requests');
+      await expect(inspector).toContainText(`Profile: ${firstProfileLabel}`);
+      await expect(inspector).toContainText('Profile: Another classifier profile');
+      await expect(inspector).toContainText('HTTP 503');
+      await expect(inspector).toContainText('HTTP 400');
+      await expect(inspector).toContainText('usage not reported');
+      await expect(inspector).toContainText('cost unknown');
+      await expect(
+        inspector
+          .locator('dt')
+          .filter({ hasText: /^Decision AI requests$/ })
+          .locator('..'),
+      ).toContainText('3');
+      await expect(
+        inspector
+          .locator('dt')
+          .filter({ hasText: /^Provider request retries$/ })
+          .locator('..'),
+      ).toContainText('1');
+      await expect(
+        inspector
+          .locator('dt')
+          .filter({ hasText: /^Profile fallbacks$/ })
+          .locator('..'),
+      ).toContainText('1');
+      await expect(inspector).not.toContainText('round');
+      await expect(inspector).not.toContainText('Tool calls');
+      await expect(inspector).not.toContainText('captured-classifier-evidence');
+      await editor.getByRole('button', { name: 'Close modal', exact: true }).click();
+      await output.hover();
+      await output.locator('.expand-button').click();
+      const fullscreen = editor.getByTestId('fullscreen-output-modal');
+      await expect(fullscreen).toContainText('HTTP 400');
+      await expect(fullscreen).toContainText('Attempt details:');
+      await expect(fullscreen).toContainText(`Profile 1 (${firstProfileLabel}), http attempt 2 failure`);
+      await expect(fullscreen).toContainText('Profile 2 (Another classifier profile), http attempt 1 failure');
+      await expect(fullscreen).toContainText('HTTP 503');
+      await expect(fullscreen).toContainText('captured-classifier-evidence');
+      await expect(fullscreen).toContainText('classifier-model-unavailable');
+      await fullscreen.locator('.response-inspector-button').click();
+      await expect(inspector).toContainText('Profile: Another classifier profile');
+      await editor.getByRole('button', { name: 'Close modal', exact: true }).last().click();
+      await expect(inspector).not.toBeVisible();
+      await expect(fullscreen).toHaveAttribute('data-modal-stack', '0');
+      await fullscreen.focus();
+      await page.keyboard.press('Escape');
+      await expect(fullscreen).not.toBeVisible();
+      await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
+      const drawer = editor.locator('[aria-label="Run Activity"]');
+      await expect(drawer).toContainText('3 Decision AI requests');
+      const row = drawer.locator('.run-activity-row').filter({ hasText: 'Recorded response' });
+      await row.locator('.run-activity-row-toggle').click();
+      await expect(row).toContainText('Decision AI requests');
+      await expect(row).toContainText(`Profile: ${firstProfileLabel}`);
+      await expect(row).toContainText('HTTP 503');
+      await expect(row).toContainText('usage not reported');
+      await expect(row).toContainText('cost unknown');
+      await drawer.getByRole('button', { name: 'Show Run Activity filters' }).click();
+      const search = drawer.getByRole('searchbox', { name: 'Search Run Activity by node title or metadata' });
+      await search.fill(firstProfileLabel);
+      await expect(row).toBeVisible();
+      await search.fill('');
+      await row.getByRole('button', { name: 'Inspect response', exact: true }).click();
+      await expect(inspector).toContainText('Profile: Another classifier profile');
     });
-    await page.route('**/api/workflows/recordings/recording-a-1/replay-project', (route) =>
-      route.fulfill({
-        contentType: 'text/plain',
-        body: createReplayProject('recording-a-1')
-          .replace(':llmChatV2', ':classifierEvaluate')
-          .replace('provider: openai', 'provider: perplexity')
-          .replace('model: gpt-5', 'model: pplx-decider-v1.1-27b'),
-      }),
-    );
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await authenticateIfNeeded(page);
-    await waitForDashboardReady(page);
-    await page.getByRole('button', { name: 'Run recordings' }).click();
-    const modal = page.getByTestId('run-recordings-modal');
-    await modal.locator('.run-recordings-select__control').click();
-    await page.locator('.run-recordings-select__option', { hasText: 'Published Flow' }).click();
-    const failedRun = modal
-      .locator('.run-recordings-run')
-      .filter({ has: page.locator('.run-recordings-badge.failed', { hasText: 'Failed' }) });
-    await failedRun.locator('.run-recordings-run-open-button').click();
-    const editor = page.frameLocator('iframe.dashboard-editor-frame');
-    await editor.getByRole('button', { name: 'Play Recording', exact: true }).click();
-    const output = editor.locator('.node[data-nodeid="replay-llm"] .node-output');
-    await expect(output).toContainText('HTTP 400');
-    await expect(output).toContainText('HTTP 503');
-    await expect(output).toContainText('Profile 1 (Some classifier profile), http attempt 1 failure');
-    await expect(output).toContainText('Profile 2 (Another classifier profile), http attempt 1 failure');
-    await expect(output).toContainText('captured-classifier-evidence');
-    await output.hover();
-    await output.locator('.response-inspector-button').click();
-    const inspector = editor.locator('.rivet-agent-response-inspector-content');
-    await expect(inspector).toContainText('Classifier requests');
-    await expect(inspector).toContainText('Profile: Some classifier profile');
-    await expect(inspector).toContainText('Profile: Another classifier profile');
-    await expect(inspector).toContainText('HTTP 503');
-    await expect(inspector).toContainText('HTTP 400');
-    await expect(inspector).toContainText('usage not reported');
-    await expect(inspector).toContainText('cost unknown');
-    await expect(
-      inspector
-        .locator('dt')
-        .filter({ hasText: /^Classifier requests$/ })
-        .locator('..'),
-    ).toContainText('3');
-    await expect(
-      inspector
-        .locator('dt')
-        .filter({ hasText: /^Provider request retries$/ })
-        .locator('..'),
-    ).toContainText('1');
-    await expect(
-      inspector
-        .locator('dt')
-        .filter({ hasText: /^Profile fallbacks$/ })
-        .locator('..'),
-    ).toContainText('1');
-    await expect(inspector).not.toContainText('round');
-    await expect(inspector).not.toContainText('Tool calls');
-    await expect(inspector).not.toContainText('captured-classifier-evidence');
-    await editor.getByRole('button', { name: 'Close modal', exact: true }).click();
-    await output.hover();
-    await output.locator('.expand-button').click();
-    const fullscreen = editor.getByTestId('fullscreen-output-modal');
-    await expect(fullscreen).toContainText('HTTP 400');
-    await expect(fullscreen).toContainText('Attempt details:');
-    await expect(fullscreen).toContainText('Profile 1 (Some classifier profile), http attempt 2 failure');
-    await expect(fullscreen).toContainText('Profile 2 (Another classifier profile), http attempt 1 failure');
-    await expect(fullscreen).toContainText('HTTP 503');
-    await expect(fullscreen).toContainText('captured-classifier-evidence');
-    await expect(fullscreen).toContainText('classifier-model-unavailable');
-    await fullscreen.locator('.response-inspector-button').click();
-    await expect(inspector).toContainText('Profile: Another classifier profile');
-    await editor.getByRole('button', { name: 'Close modal', exact: true }).last().click();
-    await expect(inspector).not.toBeVisible();
-    await expect(fullscreen).toHaveAttribute('data-modal-stack', '0');
-    await fullscreen.focus();
-    await page.keyboard.press('Escape');
-    await expect(fullscreen).not.toBeVisible();
-    await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
-    const drawer = editor.locator('[aria-label="Run Activity"]');
-    await expect(drawer).toContainText('3 classifier requests');
-    const row = drawer.locator('.run-activity-row').filter({ hasText: 'Recorded response' });
-    await row.locator('.run-activity-row-toggle').click();
-    await expect(row).toContainText('Classifier requests');
-    await expect(row).toContainText('Profile: Some classifier profile');
-    await expect(row).toContainText('HTTP 503');
-    await expect(row).toContainText('usage not reported');
-    await expect(row).toContainText('cost unknown');
-    await row.getByRole('button', { name: 'Inspect response', exact: true }).click();
-    await expect(inspector).toContainText('Profile: Another classifier profile');
-  });
+  }
 
   test('classifier success inspector and model activity show suspension, fallback, usage and unreached profiles', async ({
     page,
@@ -2859,7 +2880,7 @@ test.describe('Run recordings modal', () => {
     await expect(
       inspector
         .locator('dt')
-        .filter({ hasText: /^Classifier requests$/ })
+        .filter({ hasText: /^Decision AI requests$/ })
         .locator('..'),
     ).toContainText('1');
     await expect(

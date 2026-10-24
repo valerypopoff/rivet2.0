@@ -16,7 +16,11 @@ import {
   calculateClassifierUsageCost,
   classifierErrorMessage,
 } from '../../../src/model/classifier/providers.js';
-import { classifierProfileSummary, runClassifierProfiles } from '../../../src/model/classifier/profileExecution.js';
+import {
+  ClassifierProfileExhaustedError,
+  classifierProfileSummary,
+  runClassifierProfiles,
+} from '../../../src/model/classifier/profileExecution.js';
 import type { InternalProcessContext, LLMProfileAttemptTraceEvent } from '../../../src/model/ProcessContext.js';
 import type { Inputs } from '../../../src/model/GraphProcessor.js';
 import {
@@ -72,6 +76,34 @@ const reply = (provider: string) =>
     }),
     { headers: { 'Content-Type': 'application/json' } },
   );
+
+void test('Missing profile credentials use Decision AI diagnostics without renaming classes or authored profile identities', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    throw new Error('Unexpected HTTP');
+  };
+  for (const name of ['Some profile', 'Classifier Profile', 'My Classifier route', ' Classifier Profile ']) {
+    const selected = { ...profile('liquid'), profileName: name, credential: {} };
+    const displayed = name === 'Classifier Profile' ? 'Decision AI Profile' : name;
+    await assert.rejects(evaluate([selected], context()), (error: unknown) => {
+      assert.ok(error instanceof ClassifierProfileExhaustedError);
+      assert.equal(error.constructor.name, 'ClassifierProfileExhaustedError');
+      assert.equal(error.name, 'DecisionAIProfileExhaustedError');
+      assert.equal(
+        String(error),
+        `DecisionAIProfileExhaustedError: Decision AI profile chain exhausted.\n1. ${displayed} (liquid/d1): failed — Decision AI Profile API key is not set.\n\nAttempt details:\nProfile 1 (${displayed}), configuration failure: Decision AI Profile API key is not set.`,
+      );
+      assert.match(error.stack!, /^DecisionAIProfileExhaustedError: Decision AI profile chain exhausted\./);
+      assert.equal(error.attempts[0]?.family, 'classifier');
+      assert.equal(error.attempts[0]?.profileName, name);
+      assert.equal(error.attempts[0]?.failureKind, 'configuration');
+      return true;
+    });
+    assert.equal(selected.profileName, name);
+  }
+  assert.equal(calls, 0);
+});
 
 void test('Chain exhaustion retains every physical retry reason even without optional diagnostic ports', async () => {
   const statuses = [429, 503, 400];
@@ -144,7 +176,7 @@ void test('Deadlines expiring before dispatch produce visible typed failure evid
       deadline: Date.now() - 1,
       onAttempt: (event) => attempts.push(event),
     }),
-    /Classifier overall deadline expired/,
+    /Decision AI overall deadline expired/,
   );
   assert.equal(calls, 0);
   assert.equal(attempts[0]?.failureKind, 'timeout');
@@ -162,7 +194,7 @@ void test('Preparation errors are visible, bounded, and credential-redacted even
       throw new Error('private-key');
     },
   });
-  assert.equal(classifierErrorMessage(unreadable), 'Classifier request failed with unreadable error metadata.');
+  assert.equal(classifierErrorMessage(unreadable), 'Decision AI request failed with unreadable error metadata.');
 });
 function evaluate(profiles: ClassifierProfileValue[], ctx = context(), extra: Inputs = {}, data = {}) {
   const node = ClassifierEvaluateNodeImpl.create();
@@ -541,19 +573,18 @@ void test('Decision AI Profile suspension editors mirror the LLM structure with 
   );
 });
 
-void test('Decision AI run overall timeout editor uses milliseconds for defaults and constraints', () => {
+void test('Decision AI run has no overall timeout editor or new-node timeout defaults', () => {
   for (const configurationMode of ['inline', 'profile'] as const) {
     const node = ClassifierEvaluateNodeImpl.create();
     node.data.configurationMode = configurationMode;
-    const group = new ClassifierEvaluateNodeImpl(node).getEditors().find((editor) => editor.label === 'Advanced');
-    assert.ok(group?.type === 'group');
-    const editor = group.editors.find((editor) => editor.label === 'Overall timeout (seconds)');
-    assert.ok(editor?.type === 'number');
-    assert.equal(editor.defaultValue, configurationMode === 'profile' ? 180_000 : 30_000);
-    assert.equal(editor.min, 1_000);
-    assert.equal(editor.max, 600_000);
-    assert.equal(editor.step, 1_000);
-    assert.equal(editor.storageMultiplier, 1_000);
+    assert.equal('timeoutMs' in node.data, false);
+    assert.equal('profileChainTimeoutMs' in node.data, false);
+    const editors = new ClassifierEvaluateNodeImpl(node).getEditors();
+    assert.equal(
+      editors.some((editor) => editor.label === 'Advanced'),
+      false,
+    );
+    assert.equal(JSON.stringify(editors).includes('Overall timeout'), false);
   }
 });
 
@@ -819,7 +850,7 @@ void test('Health-service failures are fail-open and never expose service diagno
   }
 });
 
-void test('Health completion cannot turn an expired overall deadline into successful node evidence', async () => {
+void test('Removed chain timeout values cannot turn successful health completion into node failure', async () => {
   let now = originalNow();
   Date.now = () => now;
   const store = new InMemoryRivetLLMProfileHealthStore();
@@ -841,9 +872,9 @@ void test('Health completion cannot turn an expired overall deadline into succes
     { profileChainTimeoutMs: 50, catchRequestFailed: true },
   );
   assert.equal(calls, 1);
-  assert.equal(result.runFailed!.value, true);
-  assert.equal(result.answers!.type, 'control-flow-excluded');
-  assert.match(result.classifierProfileSummary!.value as string, /1\..*failed/);
+  assert.equal(result.runFailed!.value, false);
+  assert.equal(result.answers!.type, 'object');
+  assert.match(result.classifierProfileSummary!.value as string, /1\..*succeeded/);
   assert.match(result.classifierProfileSummary!.value as string, /2\..*not reached/);
 });
 
@@ -896,7 +927,7 @@ void test('Fully suspended classifier chains do not call providers and concurren
   assert.equal(store.list()[0]!.state, 'closed');
 });
 
-void test('A deadline exhausted during rejected-request cleanup cannot be suppressed as an HTTP-only failure', async () => {
+void test('Removed chain deadlines do not change HTTP-only suppression during health cleanup', async () => {
   let now = originalNow();
   Date.now = () => now;
   const store = new InMemoryRivetLLMProfileHealthStore();
@@ -914,19 +945,14 @@ void test('A deadline exhausted during rejected-request cleanup cannot be suppre
       {},
       { profileChainTimeoutMs: 50, errorOnNon200: false, catchRequestFailed: caught },
     );
-  await assert.rejects(run(false), (error) => {
-    assert.match(String(error), /chain exhausted/);
-    assert.equal((error as any).statusCode, undefined);
-    assert.match(String((error as Error).cause), /overall deadline expired/);
-    return true;
-  });
+  assert.equal((await run(false)).answers!.type, 'control-flow-excluded');
   const caught = await run(true);
   assert.equal(caught.runFailed!.value, true);
   assert.equal(caught.answers!.type, 'control-flow-excluded');
   assert.equal(
     (caught.classifierAttempts!.value as any[]).at(-1).timeoutKind,
     undefined,
-    'Overall deadline expiry is not a suspension response timeout',
+    'The removed overall deadline must not produce timeout diagnostics',
   );
   assert.equal(store.list()[0]!.failureCount, 0);
 });
@@ -1099,15 +1125,21 @@ void test('Decision AI response deadlines are inert without enabled hosted suspe
   }
 });
 
-void test('Evaluate overall deadline still bounds runs with suspension disabled', async () => {
-  globalThis.fetch = async () => new Promise<Response>(() => {});
+void test('Saved chain timeout values are ignored when profile suspension is disabled', async () => {
+  let now = originalNow();
+  Date.now = () => now;
+  globalThis.fetch = async () => {
+    now += 600_000;
+    return reply('jev');
+  };
   const result = await evaluate(
     [profile('jev', { enableCircuitBreaker: false, responseTimeoutMs: 1 })],
     context({ llmProfileHealthStore: new InMemoryRivetLLMProfileHealthStore() }),
     {},
     { profileChainTimeoutMs: 30, catchRequestFailed: true },
   );
-  assert.equal(result.runFailed!.value, true);
+  assert.equal(result.runFailed!.value, false);
+  assert.equal(result.answers!.type, 'object');
   assert.ok(
     (result.classifierAttempts!.value as Array<{ timeoutKind?: string }>).every((attempt) => !attempt.timeoutKind),
   );

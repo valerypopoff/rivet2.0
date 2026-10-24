@@ -13,7 +13,7 @@ export function classifierDataProperty(value: object, key: string, label = 'Stat
 
 /** Snapshot only the selected port's wrapper; never read unrelated input getters. */
 export function classifierInputDataValue(inputs: Inputs, port: string): DataValue | undefined {
-  const label = `Classifier ${port} input`;
+  const label = `Decision AI ${port} input`;
   const input = classifierDataProperty(inputs, port, label);
   if (input === undefined) return undefined;
   if (input === null || typeof input !== 'object' || Array.isArray(input))
