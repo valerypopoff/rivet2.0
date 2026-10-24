@@ -5,7 +5,7 @@ import { getSubgraphProjectKey } from '@valerypopoff/rivet2-core';
 import { createRemoteExecutionObservationRouter, type RemoteObservation } from './remoteExecutionObservation.js';
 
 const id = (value: string) => value as ProjectId;
-function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
+function fixture(eligible?: (projectId: ProjectId, source: object) => boolean, afterEffect?: () => void) {
   const source = {};
   const opened = new Map<ProjectId, { token: number; path?: string | null; bundleKey?: string }>(
     ['a', 'b', 'c', 'd'].map((name) => [id(name), { token: 1 }]),
@@ -26,9 +26,11 @@ function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
     conflict: (project) => conflicts.get(project),
     publish: (project, observation) => {
       records.set(observation.id, { project, observation });
+      afterEffect?.();
     },
     remove: (_project, key) => {
       records.delete(key);
+      afterEffect?.();
     },
     notice: (_source, message) => {
       notices.push(message);
@@ -38,6 +40,7 @@ function fixture(eligible?: (projectId: ProjectId, source: object) => boolean) {
     },
     settle: (project, root, status) => {
       settled.push({ project, root, status });
+      afterEffect?.();
     },
   });
   const emit = (
@@ -452,6 +455,36 @@ test('explicit membership removal keeps a blocked explanation without transferri
       false,
       'actual file replacement removes old provenance, including a same-path reload',
     );
+  }
+});
+
+test('synchronous store notifications cannot reenter unfinished observation retirement', () => {
+  for (const transition of ['conflict', 'membership', 'disconnect'] as const) {
+    const eligible = new Set(['a', 'b', 'c']);
+    let notify = false;
+    let notifications = 0;
+    const f = fixture(
+      (id) => eligible.has(id),
+      () => {
+        if (!notify) return;
+        assert.ok(++notifications < 20, `${transition} recursively retires the same observation`);
+        f.router.reconcileOwnership();
+      },
+    );
+    f.opened.set(id('b'), { token: 1, path: '/b', bundleKey: 'bundle' });
+    f.begin();
+    f.emit('graphStart', 'b');
+    notify = true;
+    if (transition === 'conflict') f.conflicts.set(id('b'), 'Playback');
+    else {
+      eligible.delete('b');
+      if (transition === 'membership') f.opened.set(id('b'), { token: 2, path: '/b' });
+    }
+    if (transition === 'disconnect') f.router.disconnect(f.source);
+    else f.router.reconcileOwnership();
+    assert.equal(f.settled.length, 1, `${transition} settles display once`);
+    if (transition === 'disconnect') assert.equal(f.records.size, 0);
+    else assert.equal([...f.records.values()][0]!.observation.status, 'blocked');
   }
 });
 

@@ -712,3 +712,24 @@ runtime code changed during this closure. The test app was closed afterward;
 the original installed app was preserved. Test-only config, packages and fixtures
 remain ignored and must not be committed. The stale four-Compose-check status in
 the execution-routing plan was corrected to reference its passing receipts.
+
+### CI observation-retirement correction
+
+The first published CI run exposed synchronous reentrancy during Remote Debugger
+observation retirement. Publishing execution-state settlement synchronously
+notifies ownership subscribers; settling before recording the blocked/removed
+state could recursively settle the same member, exhaust the stack and blank the
+editor. Bundle-member removal also retained stale observation provenance.
+
+The router now commits its blocked state, member removal or source detachment
+before invoking external store callbacks. There is no deferred cleanup, retry or
+second coordinator. A callback-reentrancy regression covers conflict, explicit
+membership detachment and shared disconnect, requiring exactly one settlement.
+The real-browser bundle scenarios retain their controls, provenance and no-command
+assertions and additionally reject uncaught page errors, so a blank editor is
+reported directly instead of only as a missing button. CI artifacts and red/green
+local receipts are kept under `artifacts/refactor-qualification/ci-remote-*`.
+All 47 focused observation/registry tests and all 12 headless bundle-debugger
+scenarios passed after the fix. App TypeScript, focused lint, formatting,
+test-style and documentation-link checks passed. The three original browser
+failures are also rerun with the explicit uncaught-page-error assertion.

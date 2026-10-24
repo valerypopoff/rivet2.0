@@ -26,6 +26,11 @@ function gate() {
   return { promise, release };
 }
 
+test.afterEach(async ({ page }) => {
+  // Checking only buttons can obscure an editor crash behind a locator timeout.
+  expect(await page.pageErrors()).toEqual([]);
+});
+
 for (const outcome of [
   'completion',
   'failure',

@@ -83,8 +83,10 @@ export function createRemoteExecutionObservationRouter(options: {
         : options.conflict(id, key) ??
           (rejection ? 'This tab changed ownership during the run. Observe the next remote run.' : undefined);
     if (!conflict) return false;
-    if (!run.settled && id !== run.projectId) options.settle(id, root, 'aborted');
+    // Store writes notify ownership subscribers synchronously. Commit the
+    // blocked state before settlement can reenter this router.
     update(id, member, { status: 'blocked', message: conflict, needsInput: false, paused: false });
+    if (!run.settled && id !== run.projectId) options.settle(id, root, 'aborted');
     return true;
   }
   return {
@@ -144,11 +146,11 @@ export function createRemoteExecutionObservationRouter(options: {
               receivers.delete(previous.projectId);
             const member = previous.members.get(sourceProjectId);
             if (!member) continue;
+            previous.members.delete(sourceProjectId);
+            previous.receivers.delete(sourceProjectId);
             if (!previous.settled && member.observation.status !== 'blocked' && isCurrent(sourceProjectId, member))
               options.settle(sourceProjectId, root, 'aborted');
             options.remove(sourceProjectId, member.observation.id);
-            previous.members.delete(sourceProjectId);
-            previous.receivers.delete(sourceProjectId);
           }
         if ([...source.runs.values()].filter((item) => !item.settled).length >= 32) {
           options.notice(
@@ -319,6 +321,10 @@ export function createRemoteExecutionObservationRouter(options: {
     disconnect(key: object) {
       const source = sources.get(key);
       if (!source) return;
+      // Relinquish ownership before any external store callback. Otherwise its
+      // synchronous reconciliation can recursively settle the disconnecting run.
+      sources.delete(key);
+      coordinator.disconnect(key);
       for (const [root, run] of source.runs) {
         for (const [id, member] of run.members) {
           if (
@@ -333,8 +339,6 @@ export function createRemoteExecutionObservationRouter(options: {
         options.notice(run.projectId, undefined);
       }
       options.notice(source.projectId, undefined);
-      sources.delete(key);
-      coordinator.disconnect(key);
     },
     sweep() {
       const current = options.receivers();
@@ -355,8 +359,7 @@ export function createRemoteExecutionObservationRouter(options: {
                 // retains a blocked explanation, not admission to old events.
                 // Only that first transition can carry provenance forward; a
                 // later renewal is a new lifetime even at the identical path.
-                if (!run.settled && id !== run.projectId && !options.conflict(id, key))
-                  options.settle(id, member.observation.rootRunId, 'aborted');
+                const shouldSettle = !run.settled && id !== run.projectId && !options.conflict(id, key);
                 member.token = next.token;
                 update(id, member, {
                   status: 'blocked',
@@ -364,10 +367,11 @@ export function createRemoteExecutionObservationRouter(options: {
                   needsInput: false,
                   paused: false,
                 });
+                if (shouldSettle) options.settle(id, member.observation.rootRunId, 'aborted');
                 continue;
               }
-              options.remove(id, member.observation.id);
               run.members.delete(id);
+              options.remove(id, member.observation.id);
             }
         }
     },
