@@ -1,14 +1,7 @@
-import { getError, type CombinedDataset, type Project } from '@valerypopoff/rivet2-core';
+import type { CombinedDataset, Project } from '@valerypopoff/rivet2-core';
 import type { EvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
 import type { EvaluationProjectFileData } from '../../../app/src/io/IOProvider.js';
-import { nanoid } from 'nanoid';
-
-type PromiseResolvers<T> = {
-  resolve: (value: T) => void;
-  reject: (error: Error) => void;
-  responseType: string;
-  cleanup: () => void;
-};
+import { createWorkerRequests, type WorkerRequestOptions } from '../../../app/src/utils/workerRequests.js';
 
 type DeserializedHostedProjectPayload = {
   project: Project;
@@ -17,143 +10,26 @@ type DeserializedHostedProjectPayload = {
   evaluationDatasets: EvaluationProjectFileData['evaluationDatasets'];
 };
 
-const waiting = new Map<string, PromiseResolvers<unknown>>();
-let worker = createWorker();
-
-function rejectAllPendingRequests(error: unknown): void {
-  const normalizedError = getError(error);
-
-  for (const request of waiting.values()) {
-    request.cleanup();
-    request.reject(normalizedError);
-  }
-
-  waiting.clear();
-}
-
-function restartWorker(failedWorker: Worker, error: unknown, quiet = false): void {
-  if (worker !== failedWorker) {
-    return;
-  }
-
-  if (!quiet) console.error('Restarting project deserialize worker after fatal error');
-  rejectAllPendingRequests(error);
-
-  try {
-    failedWorker.terminate();
-  } catch {
-    // Ignore terminate failures during recovery.
-  }
-
-  worker = createWorker();
-}
-
-function createWorker(): Worker {
-  const nextWorker = new Worker(new URL('./deserializeProject.worker.ts', import.meta.url), { type: 'module' });
-
-  nextWorker.addEventListener('error', (event) => {
-    console.error('Worker error:', event);
-    restartWorker(nextWorker, new Error(event.message || 'Project deserialize worker failed'));
-  });
-
-  nextWorker.addEventListener('messageerror', (event) => {
-    console.error('Worker message error:', event);
-    restartWorker(nextWorker, new Error('Project deserialize worker returned an unreadable message'));
-  });
-
-  nextWorker.addEventListener('message', (event) => {
-    const { id, type, result, error } = event.data;
-    const request = waiting.get(id);
-
-    if (!request || request.responseType !== type) {
-      // Cancelled requests can still post a result before termination.
-      return;
-    }
-
-    waiting.delete(id);
-    request.cleanup();
-
-    if (error) {
-      request.reject(getError(error));
-      return;
-    }
-
-    request.resolve(result);
-  });
-
-  return nextWorker;
-}
-
-function enqueueWorkerRequest<T>(
-  type: 'deserializeProject' | 'deserializeHostedProjectPayload',
-  data: unknown,
-  responseType: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<T> {
-  const id = nanoid();
-  if (options.signal?.aborted) return Promise.reject(options.signal.reason);
-  const currentWorker = worker;
-  let timer: ReturnType<typeof setTimeout>;
-  const abort = () => {
-    waiting.delete(id);
-    resolvers.cleanup();
-    resolvers.reject(getError(options.signal?.reason ?? new DOMException('Project load cancelled', 'AbortError')));
-    // A worker cannot interrupt synchronous parsing. Once no other request
-    // owns it, terminate rather than make the next selection await that parse.
-    if (waiting.size === 0) restartWorker(currentWorker, new Error('Project load cancelled'), true);
-  };
-  const resolvers: PromiseResolvers<T> = {
-    resolve: undefined!,
-    reject: undefined!,
-    responseType,
-    cleanup: () => {
-      clearTimeout(timer);
-      options.signal?.removeEventListener('abort', abort);
-    },
-  };
-  const promise = new Promise<T>((res, rej) => {
-    resolvers.resolve = res;
-    resolvers.reject = rej;
-  });
-
-  waiting.set(id, resolvers as PromiseResolvers<unknown>);
-  options.signal?.addEventListener('abort', abort, { once: true });
-  timer = setTimeout(
-    () => restartWorker(currentWorker, new Error('Project parsing timed out. Please retry.')),
-    options.timeoutMs ?? 60_000,
-  );
-  try {
-    currentWorker.postMessage({ id, type, data });
-  } catch (error) {
-    waiting.delete(id);
-    resolvers.cleanup();
-    resolvers.reject(getError(error));
-  }
-  return promise;
-}
+const request = createWorkerRequests(
+  () => new Worker(new URL('./deserializeProject.worker.ts', import.meta.url), { type: 'module' }),
+);
 
 export function deserializeProjectAsync(
   serializedProject: unknown,
   path?: string,
-  options?: { signal?: AbortSignal; timeoutMs?: number },
+  options?: WorkerRequestOptions,
 ): Promise<Project> {
-  return enqueueWorkerRequest<Project>(
-    'deserializeProject',
-    { serializedProject, path },
-    'deserializeProject:result',
-    options,
-  );
+  return request('deserializeProject', { serializedProject, path }, options);
 }
 
 export function deserializeHostedProjectPayloadAsync(
   serializedProject: unknown,
   path?: string,
-  options?: { signal?: AbortSignal; timeoutMs?: number; datasetsContents?: string | null },
+  options?: WorkerRequestOptions & { datasetsContents?: string | null },
 ): Promise<DeserializedHostedProjectPayload> {
-  return enqueueWorkerRequest<DeserializedHostedProjectPayload>(
+  return request(
     'deserializeHostedProjectPayload',
     { serializedProject, path, datasetsContents: options?.datasetsContents },
-    'deserializeHostedProjectPayload:result',
     options,
   );
 }

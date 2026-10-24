@@ -151,10 +151,18 @@ test('repeated lease releases wait for the same confirmed pool close', async () 
   });
   await Promise.resolve();
   assert.equal(closed, false);
+  assert.equal(registry.getMetrics().pools, 1, 'closing resources remain visible until acknowledged');
+  assert.throws(() => registry.acquire({}), /clos|unconfirmed/i, 'do not replace an unconfirmed owner');
   finish();
   await second;
   assert.equal(closed, true);
   assert.equal(closes, 1);
+  const replacement = registry.acquire({});
+  assert.notEqual(replacement.pool, lease.pool);
+  const replacing = replacement.release();
+  await Promise.resolve();
+  finish();
+  await replacing;
 });
 
 test('a failed pool close cannot become successful through repeated release', async () => {
@@ -176,6 +184,25 @@ test('a failed pool close cannot become successful through repeated release', as
   assert.equal(lease.release(), first);
   await assert.rejects(lease.release(), (error) => error === failure);
   assert.equal(closes, 1, 'never retry an uncertain driver close');
+  assert.equal(registry.getMetrics().pools, 1);
+  assert.throws(() => registry.acquire({}), /clos|unconfirmed/i);
+});
+
+test('a synchronous driver close failure is fenced just like a rejected close acknowledgement', async () => {
+  const failure = new Error('driver close threw synchronously');
+  let constructions = 0;
+  const registry = new ManagedPostgresPoolRegistry(() => {
+    constructions++;
+    return {
+      end() {
+        throw failure;
+      },
+    } as unknown as Pool;
+  }, {});
+  const lease = registry.acquire({});
+  await assert.rejects(lease.release(), (error) => error === failure);
+  assert.throws(() => registry.acquire({}), /clos|unconfirmed/i);
+  assert.equal(constructions, 1);
 });
 
 test('managed PostgreSQL pool telemetry is an in-memory aggregate and tolerates an incomplete pool shim', async () => {

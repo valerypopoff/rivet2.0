@@ -121,7 +121,7 @@ test('Stop always displays its actual accepted output, never a speculative input
 });
 
 test('a loaded recording suppresses only its owning tab preview', () => {
-  const { store, preview } = fixture();
+  const { store, preview, process } = fixture();
   const project = store.get(projectState);
   store.set(loadedRecordingState, {
     path: '/recording',
@@ -131,6 +131,10 @@ test('a loaded recording suppresses only its owning tab preview', () => {
   });
   assert.equal(store.get(preview), undefined);
   store.set(projectState, { ...project, metadata: { ...project.metadata, id: 'another-project' as ProjectId } });
+  // A different project owns a different execution view; populate its live run,
+  // rather than relying on execution data leaking from the recording's project.
+  store.set(graphRunningState, true);
+  store.set(lastRunDataByNodeState, { [sourceId]: [process] });
   assert.ok(store.get(preview));
 });
 

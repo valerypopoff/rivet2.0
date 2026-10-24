@@ -11,7 +11,6 @@ import {
   pruneHostedProjectRevisions,
 } from '../io/hostedProjectRevisionTracker';
 import { clearOpenedProjectSession, remapOpenedProjectSessionPaths } from '../io/openedProjectSessionCache';
-import { deleteHostedProjectContextState } from '../overrides/state/savedGraphs';
 import {
   postMessageToDashboard,
   type DashboardToEditorCommand,
@@ -56,9 +55,16 @@ function getHostedProjectPathMoveInputs(moves: WorkflowProjectPathMove[]) {
   );
 }
 
-async function clearDeletedHostedProjectState(projectIds: Iterable<ProjectId>): Promise<void> {
+async function clearDeletedHostedProjectState(
+  context: EditorCommandBridgeContext,
+  projectIds: Iterable<ProjectId>,
+): Promise<void> {
   for (const projectId of projectIds) {
-    deleteHostedProjectContextState(projectId);
+    try {
+      await context.getWorkspace().deleteProjectContext(projectId);
+    } catch (error) {
+      console.error('Failed to clear local context for deleted project:', error);
+    }
     try {
       await clearHostedDatasetsForProject(projectId);
     } catch (error) {
@@ -393,7 +399,7 @@ export async function handleDeleteWorkflowProjectCommand(
       console.error('Failed to close deleted workflow project:', error);
     }
   }
-  await clearDeletedHostedProjectState(deletedProjectIds);
+  await clearDeletedHostedProjectState(context, deletedProjectIds);
   if (!closed && context.getLoadedProject().path === deletedPath) {
     context.markLoadedProjectClosed();
   }

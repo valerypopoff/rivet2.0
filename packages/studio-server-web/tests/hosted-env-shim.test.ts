@@ -196,7 +196,9 @@ test('fillMissingSettingsFromEnvironmentVariables resolves unique env lookups co
         'CUSTOM_ENV',
         'EXTRA_ENV',
         'OPENAI_API_KEY',
-        'OPENAI_ENDPOINT',
+        'ANTHROPIC_API_KEY',
+        'GOOGLE_GENERATIVE_AI_API_KEY',
+        'CUSTOM_PROVIDER_API_KEY',
         'OPENAI_ORG_ID',
         'PLUGIN_KEY',
         ...getClassifierProviderEnvironmentVariableNames(),
@@ -212,6 +214,9 @@ test('fillMissingSettingsFromEnvironmentVariables resolves unique env lookups co
   );
   const environmentValues = new Map([
     ['OPENAI_API_KEY', 'openai-key'],
+    ['ANTHROPIC_API_KEY', 'anthropic-key'],
+    ['GOOGLE_GENERATIVE_AI_API_KEY', 'google-key'],
+    ['CUSTOM_PROVIDER_API_KEY', 'custom-key'],
     ['CUSTOM_ENV', 'custom-value'],
     ['EXTRA_ENV', 'extra-value'],
     ...Object.entries(classifierEnvironmentValues),
@@ -226,6 +231,9 @@ test('fillMissingSettingsFromEnvironmentVariables resolves unique env lookups co
   assert.equal(settings.openAiKey, 'openai-key');
   assert.equal(settings.openAiOrganization, '');
   assert.equal(settings.openAiEndpoint, '');
+  assert.equal(settings.anthropicApiKey, 'anthropic-key');
+  assert.equal(settings.googleApiKey, 'google-key');
+  assert.equal(settings.customAiApiKey, 'custom-key');
   assert.deepEqual(settings.pluginEnv, {
     CUSTOM_ENV: 'custom-value',
     EXTRA_ENV: 'extra-value',

@@ -25,6 +25,38 @@ import {
   restoreProjectExecutionSnapshot,
 } from './projectExecutionSnapshotBindings.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import { currentRemoteObservationsState, remoteObservationsState } from '../state/remoteObservation.js';
+
+test('opaque prototype-named IDs use empty own execution/observation state and reject closed-tab writes', () => {
+  for (const key of ['constructor', '__proto__', 'toString']) {
+    const id = key as ProjectId;
+    const store = createStore();
+    const project = store.get(projectState);
+    try {
+      store.set(projectState, { ...project, metadata: { ...project.metadata, id } });
+      assert.deepEqual(captureProjectExecutionSnapshot(store), createEmptyProjectExecutionSnapshot());
+      assert.deepEqual(store.get(currentRemoteObservationsState), []);
+      store.set(remoteObservationsState, { [id]: [{ sourceProjectId: 'other' as ProjectId } as never] });
+      assert.equal(store.get(currentRemoteObservationsState).length, 1);
+      store.set(projectsState, {
+        openedProjects: { [id]: { projectId: id, title: key, fsPath: null } },
+        openedProjectsSortedIds: [id],
+      });
+      updateOpenProjectExecutionSnapshot(store, id, (before) => {
+        assert.deepEqual(before, createEmptyProjectExecutionSnapshot());
+        return { ...before, graphPaused: true };
+      });
+      assert.equal(store.get(projectExecutionSnapshotsState)[id]!.graphPaused, true);
+      store.set(projectsState, { openedProjects: {}, openedProjectsSortedIds: [] });
+      store.set(projectExecutionSnapshotsState, {});
+      updateOpenProjectExecutionSnapshot(store, id, () =>
+        assert.fail('A closed tab cannot acquire new execution state'),
+      );
+    } finally {
+      store.set(projectState, project);
+    }
+  }
+});
 
 test('every snapshot field round-trips across tab changes without replacing node-history identity', () => {
   const store = createStore();

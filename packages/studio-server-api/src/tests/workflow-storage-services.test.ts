@@ -90,6 +90,22 @@ function fixture(mode: WorkflowStorageServiceDependencies['mode'] = 'sqlite') {
   };
 }
 
+test('operation repositories share one resource owner without widening feature contracts', async () => {
+  for (const mode of ['sqlite', 'managed'] as const) {
+    const { owner, constructions } = fixture(mode);
+    const repositories = await Promise.all([
+      owner.getRepository('projects'),
+      owner.getRepository('publications'),
+      owner.getRepository('execution'),
+      owner.getRepository('recordings'),
+    ]);
+    assert.ok(repositories.every((repository) => repository === repositories[0]));
+    assert.equal(constructions(), 1);
+    await owner.dispose();
+    await assert.rejects(owner.getRepository('projects'), /shut|closed/i);
+  }
+});
+
 test('workflow services own single-flight construction and isolate independent installations', async () => {
   const first = fixture();
   const second = fixture();

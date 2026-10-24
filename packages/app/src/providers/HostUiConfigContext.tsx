@@ -1,6 +1,7 @@
 import { createContext, useContext, type FC, type ReactNode } from 'react';
 import type { FileMenuConfig } from '../utils/fileMenuConfiguration.js';
 import type { WorkspaceTabsConfig } from '../utils/workspaceTabs.js';
+import type { DebuggerConnectionPolicy } from '../utils/debuggerConnectionSettings.js';
 
 export type RivetAppHostCapability = 'aiAssist' | 'aiGraphBuilder' | 'recordings' | 'evaluationInputCopy';
 
@@ -11,6 +12,12 @@ export type RivetAppHostUiConfig = {
    */
   capabilities?: Partial<Record<RivetAppHostCapability, boolean>>;
   checkForUpdates?: boolean;
+  debuggerConnection?: DebuggerConnectionPolicy;
+  /** Cross-surface interaction only. The editor still owns menu state and positioning. */
+  contextMenu?: {
+    subscribeToExternalDismiss?: (owner: Document, dismiss: () => void) => () => void;
+    releaseFocus?: (menu: HTMLElement | null) => void;
+  };
   fileMenu?: FileMenuConfig;
   keyboardShortcuts?: {
     /**
@@ -22,6 +29,12 @@ export type RivetAppHostUiConfig = {
      * - `false` disables Rivet's save-project shortcut.
      */
     saveProject?: boolean;
+  };
+  nodeClipboard?: {
+    /** Copy/duplicate the hovered node when no nodes are selected. Cut remains selection-only. */
+    useHoveredNodeFallback?: boolean;
+    /** Handle browser clipboard events and capture shortcuts before iframe-local handlers. */
+    nativeEvents?: boolean;
   };
   preloadCodeEditor?: boolean;
   projectTabs?: {

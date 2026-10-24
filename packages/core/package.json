@@ -7,6 +7,13 @@
   "main": "dist/cjs/bundle.cjs",
   "module": "dist/esm/index.js",
   "src": "src/index.ts",
+  "rivetSourceEntrypoints": {
+    ".": "src/index.ts",
+    "./serialization": "src/serialization.ts",
+    "./web-app-runtime": "src/webAppRuntime.ts",
+    "./interpolation-runtime": "src/interpolationRuntime.ts",
+    "./interpolation-syntax": "src/utils/interpolationSyntax.ts"
+  },
   "type": "module",
   "types": "dist/types/index.d.ts",
   "exports": {
@@ -54,7 +61,7 @@
     "dist/types/**"
   ],
   "scripts": {
-    "build": "yarn build:esm && yarn build:cjs",
+    "build": "yarn build:esm && yarn build:cjs && node scripts/check-exports.mjs",
     "build:esm": "rimraf dist/esm dist/types dist/tsconfig.tsbuildinfo && tsc -b --verbose",
     "build:cjs": "rimraf dist/cjs && node bundle.esbuild.cjs",
     "prepack": "yarn build && cp -r ../../LICENSE ../../README.md .",

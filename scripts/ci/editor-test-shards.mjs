@@ -26,6 +26,10 @@ const weightedSpecs = [
   ['node-editor-lifecycle.spec.ts', 197],
   ['llm-temperature.spec.ts', 43],
   ['evaluation-history-paging.spec.ts', 41],
+  // Initial estimate for the isolated trial/recording integration fixture.
+  ['evaluation-trial-orchestration.spec.ts', 20],
+  // Initial estimate for the isolated history/preload regression.
+  ['partial-run-preload.spec.ts', 13],
   ['tunnel-cache-retention.spec.ts', 1],
 ];
 

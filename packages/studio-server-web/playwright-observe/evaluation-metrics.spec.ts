@@ -1,5 +1,6 @@
 import { expect, type FrameLocator, type Page, test } from '@playwright/test';
 import { createServer, type Server } from 'node:http';
+import { deserializeProject, serializeProject, type Project } from '@valerypopoff/rivet2-core';
 
 import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
@@ -12,6 +13,17 @@ import {
 
 type EditorRoot = Page | FrameLocator;
 type ExecutorMode = 'browser' | 'nodejs';
+const savedFixtures = new WeakMap<Page, { origin: string; relativePath: string }>();
+
+test.afterEach(async ({ page }) => {
+  const fixture = savedFixtures.get(page);
+  if (!fixture) return;
+  const response = await page.request.delete(`${fixture.origin}/api/workflows/projects`, {
+    data: { relativePath: fixture.relativePath },
+  });
+  expect(response.ok(), 'Remove only this test-created project').toBe(true);
+  savedFixtures.delete(page);
+});
 
 test('Browser evaluation retains provider-call metrics and full attempt evidence after reopening the run', async ({
   page,
@@ -23,7 +35,6 @@ test('Browser evaluation retains provider-call metrics and full attempt evidence
       executor: 'browser',
       page,
       projectId: 'browser-evaluation-metrics-project',
-      projectPath: '/workflows/Browser evaluation metrics.rivet-project',
       providerBaseUrl: `http://127.0.0.1:${provider.port}/v1`,
       suiteName,
     });
@@ -51,7 +62,6 @@ test('the hosted Node executor retains partial provider evidence after an unsucc
       executor: 'nodejs',
       page,
       projectId: 'node-evaluation-metrics-project',
-      projectPath: '/workflows/Node evaluation metrics.rivet-project',
       providerBaseUrl: `http://host.docker.internal:${provider.port}/v1`,
       suiteName,
     });
@@ -70,17 +80,45 @@ async function runAndVerifyEvaluation(options: {
   executor: ExecutorMode;
   page: Page;
   projectId: string;
-  projectPath: string;
   providerBaseUrl: string;
   suiteName: string;
 }) {
+  // The managed evaluation store correctly requires a real saved project. A
+  // browser-only seed used to work with SQLite but violates PostgreSQL's FK.
+  await options.page.goto('/', { waitUntil: 'domcontentloaded' });
+  expect(new URL(options.page.url()).hostname, 'These writable fixtures are local only').toMatch(
+    /^(127\.0\.0\.1|localhost|\[::1\])$/,
+  );
+  const origin = new URL(options.page.url()).origin;
+  await authenticateIfNeeded(options.page);
+  const graphId = 'evaluation-metrics-graph';
+  const graph = accountingGraph(options.providerBaseUrl);
+  const upload = await options.page.request.post(`${origin}/api/workflows/projects/upload`, {
+    data: {
+      folderRelativePath: '',
+      fileName: `${options.suiteName}.rivet-project`,
+      contents: serializeProject({
+        metadata: { id: options.projectId, title: options.suiteName, description: '', mainGraphId: graphId },
+        graphs: {
+          [graphId]: { ...graph, metadata: { id: graphId, name: 'Main Graph' } },
+          'accounting-tool': { ...accountingToolGraph, metadata: { id: 'accounting-tool', name: 'accounting-tool' } },
+        },
+      } as Project),
+    },
+  });
+  expect(upload.ok(), 'Save the evaluation fixture in the real local backend').toBe(true);
+  const { project: saved } = await upload.json();
+  savedFixtures.set(options.page, { origin, relativePath: saved.relativePath });
+  const loaded = await options.page.request.post(`${origin}/api/projects/load`, { data: { path: saved.absolutePath } });
+  expect(loaded.ok()).toBe(true);
+  const [project] = deserializeProject((await loaded.json()).contents);
   await seedHostedEditorProject(options.page, {
-    graph: accountingGraph(options.providerBaseUrl),
+    graph,
     extraGraphs: [{ ...accountingToolGraph, id: 'accounting-tool' }],
     graphId: 'evaluation-metrics-graph',
     loaded: true,
-    projectId: options.projectId,
-    projectPath: options.projectPath,
+    projectId: project.metadata.id,
+    projectPath: saved.absolutePath,
     title: options.suiteName,
   });
   await options.page.addInitScript((executor) => {
@@ -131,10 +169,10 @@ async function createBenchmarkAndRun(editor: EditorRoot, suiteName: string) {
 }
 
 async function openPersistedTrial(editor: EditorRoot, suiteName: string, options: { failure: boolean }) {
-  await editor
+  const evaluations = editor
     .getByRole('navigation', { name: 'Workspace navigation' })
-    .getByRole('button', { name: 'Evaluations' })
-    .click();
+    .getByRole('button', { name: 'Evaluations' });
+  if ((await evaluations.getAttribute('aria-pressed')) !== 'true') await evaluations.click();
   await getSuiteButton(editor, suiteName).click();
   await editor.getByRole('tab', { name: 'Runs' }).click();
   const trial = editor.locator('.evaluation-trial');
@@ -173,7 +211,9 @@ async function openPersistedTrial(editor: EditorRoot, suiteName: string, options
 
 function getSuiteButton(editor: EditorRoot, suiteName: string) {
   const escapedName = suiteName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return editor.getByRole('button', { name: new RegExp(`^${escapedName}(?: Main Graph)?$`) }).last();
+  return editor
+    .getByRole('complementary', { name: 'Evaluations resources' })
+    .getByRole('button', { name: new RegExp(`^${escapedName}(?: Main Graph)?$`) });
 }
 
 function getDatasetButton(editor: EditorRoot, suiteName: string) {

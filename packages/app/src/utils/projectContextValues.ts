@@ -4,11 +4,5 @@ import type { ProjectContext } from '../state/savedGraphs.js';
 import { entries } from './typeSafety.js';
 
 export function getProjectContextValues(projectContext: ProjectContext): Record<string, DataValue> {
-  const contextValues: Record<string, DataValue> = {};
-
-  for (const [id, contextValue] of entries(projectContext)) {
-    contextValues[id] = cloneDeep(contextValue.value);
-  }
-
-  return contextValues;
+  return Object.fromEntries(entries(projectContext).map(([id, contextValue]) => [id, cloneDeep(contextValue.value)]));
 }

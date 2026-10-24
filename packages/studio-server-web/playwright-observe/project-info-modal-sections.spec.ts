@@ -81,6 +81,39 @@ test('hosted project settings keeps the shared navigation and hides project refe
 
   await navigation.getByRole('button', { name: 'Context values' }).click();
   await expect(modal.getByRole('button', { name: 'Add Context Value' })).toBeVisible();
+  await modal.getByRole('button', { name: 'Add Context Value' }).click();
+  const contextId = editor.getByPlaceholder('Context ID');
+  const contextValue = editor.getByPlaceholder('Value', { exact: true });
+  await contextId.fill('keyboard-context');
+  await contextId.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true });
+  await expect(contextId).toBeVisible();
+  await contextValue.fill('draft context');
+  await contextValue.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true });
+  await expect(contextValue).toBeVisible();
+  await expect(modal.locator('.context-list .key')).toHaveCount(0);
+  await contextValue.press('Enter');
+  await expect(contextValue).toHaveCount(0);
+  await expect(modal.locator('.context-list .key')).toHaveText('keyboard-context');
+  await expect(modal.locator('.context-list .value')).toHaveText('draft context');
+  await modal.locator('.context-list').getByRole('button', { name: 'Edit', exact: true }).click();
+  await contextValue.fill('cancelled context edit');
+  await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(modal.locator('.context-list .value')).toHaveText('draft context');
+  await modal.locator('.context-list').getByRole('button', { name: 'Edit', exact: true }).click();
+  await editor.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(contextValue).toHaveCount(0);
+  await expect(modal.locator('.context-list .key')).toHaveCount(0);
+
+  await modal.getByRole('button', { name: 'Add Context Value' }).click();
+  await contextId.fill('__proto__');
+  await contextValue.fill('prototype-safe value');
+  await contextValue.press('Enter');
+  await expect(contextValue).toHaveCount(0);
+  await expect(modal.locator('.context-list .key')).toHaveText('__proto__');
+  await expect(modal.locator('.context-list .value')).toHaveText('prototype-safe value');
+  await modal.locator('.context-list').getByRole('button', { name: 'Edit', exact: true }).click();
+  await editor.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(modal.locator('.context-list .key')).toHaveCount(0);
 
   await navigation.getByRole('button', { name: 'Other' }).click();
   await expect(modal.getByText('Project References')).toHaveCount(0);

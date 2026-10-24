@@ -9,6 +9,7 @@ import { useWorkspaceHostReplaceProjectSnapshot } from './workspaceHost/useWorks
 import { useWorkspaceHostTabUi } from './workspaceHost/useWorkspaceHostTabUi.js';
 import { useWorkspaceHostSave } from './workspaceHost/useWorkspaceHostSave.js';
 import type { RivetWorkspaceHost } from './workspaceHost/types.js';
+import { useWorkspaceHostDeleteProjectContext } from './workspaceHost/useWorkspaceHostProjectCleanup.js';
 
 export { normalizeProjectSnapshot } from './workspaceHost/projectSnapshot.js';
 export type {
@@ -32,6 +33,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
   const { activateProject, openProjectSnapshot, openProjectPath, replaceCurrent } = useWorkspaceHostOpenProject();
   const replaceProjectSnapshot = useWorkspaceHostReplaceProjectSnapshot(replaceCurrent);
   const closeProject = useWorkspaceHostCloseProject();
+  const deleteProjectContext = useWorkspaceHostDeleteProjectContext();
   const { startOpeningProjectTab, finishOpeningProjectTab, cancelOpeningProjectTab } =
     useWorkspaceHostOpeningTabs(openProjectSnapshot);
   const { moveProjectPaths, updateProjectMetadata } = useWorkspaceHostProjectMetadata();
@@ -46,6 +48,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       openProjectSnapshot,
       openProjectPath,
       closeProject,
+      deleteProjectContext,
       moveProjectPaths,
       setProjectTabUiState,
       startOpeningProjectTab,
@@ -63,6 +66,7 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       activateProject,
       cancelOpeningProjectTab,
       closeProject,
+      deleteProjectContext,
       finishOpeningProjectTab,
       markCurrentProjectClean,
       markProjectClean,

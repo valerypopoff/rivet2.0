@@ -30,11 +30,7 @@ import type {
 } from '../../../../../studio-server-shared/workflow-recording-types.js';
 import type { RuntimeHealthCheckContext } from '../../../runtime-health.js';
 import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
-import { PostgresRivetLLMProfileHealthStore } from '../../../llm-profile-health/managed-store.js';
-import { PostgresRivetEvaluationStore } from '../../../evaluation-runs/managed-store.js';
-import { HostedEvaluationCoordinator } from '../../../evaluation-runs/hosted-coordinator.js';
-import { createHostedEvaluationGraphRunner } from '../../../evaluation-runs/hosted-execution.js';
-import { getHostedEvaluationsCoordinatorConfig } from '../../../hosted-evaluations-config.js';
+import type { ManagedWorkflowOperations, ManagedWorkflowOperationsFactory } from './operations.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { createManagedWorkflowCatalogService } from './catalog.js';
 import {
@@ -69,9 +65,9 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   readonly #revisions: ReturnType<typeof createManagedWorkflowRevisionService>;
   readonly #publication: ReturnType<typeof createManagedWorkflowPublicationService>;
   readonly #recordings: ReturnType<typeof createManagedWorkflowRecordingService>;
-  readonly #llmProfileHealthStore: PostgresRivetLLMProfileHealthStore;
-  readonly #evaluationStore: PostgresRivetEvaluationStore;
-  readonly #hostedEvaluationCoordinator?: HostedEvaluationCoordinator;
+  #operations?: ManagedWorkflowOperations;
+  readonly #createOperations?: ManagedWorkflowOperationsFactory;
+  #retiring = false;
   readonly #runBackgroundTasks: boolean;
   #phase: 'open' | 'draining' | 'closed' = 'open';
   #initializing?: Promise<void>;
@@ -81,7 +77,7 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   constructor(
     config: ManagedWorkflowStorageConfig,
     blobStore?: ManagedWorkflowBlobStore,
-    options?: { migrationMode?: 'copy' | 'verify' | 'restore' },
+    options?: { migrationMode?: 'copy' | 'verify' | 'restore'; createOperations?: ManagedWorkflowOperationsFactory },
   ) {
     this.#runBackgroundTasks = options?.migrationMode === undefined && !isLegacyRestorePaused();
     this.#context = createManagedWorkflowContext(config, blobStore, options);
@@ -102,24 +98,33 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     this.#recordings = createManagedWorkflowRecordingService({
       context: this.#context,
     });
-    this.#llmProfileHealthStore = new PostgresRivetLLMProfileHealthStore(this.#context.pool);
-    this.#evaluationStore = new PostgresRivetEvaluationStore(this.#context.pool);
-    if (this.#runBackgroundTasks) {
-      this.#hostedEvaluationCoordinator = new HostedEvaluationCoordinator({
-        pool: this.#context.pool,
-        runStore: this.#evaluationStore,
-        config: getHostedEvaluationsCoordinatorConfig(),
-        runGraph: createHostedEvaluationGraphRunner({
-          evaluationStore: this.#evaluationStore,
-          llmProfileHealthStore: this.#llmProfileHealthStore,
-          createProjectReferenceLoader: () => Promise.resolve(this.#executionService.createProjectReferenceLoader()),
-          createSubgraphProjectLoader: () => ({
-            loadTarget: (target) => this.#executionService.loadSubgraphTarget(target),
-            validateTarget: (target) => this.validateSubgraphTarget(target),
-          }),
-        }),
-      });
-    }
+    this.#createOperations = options?.createOperations;
+  }
+
+  async #getOperations(): Promise<ManagedWorkflowOperations> {
+    if (!this.#createOperations) throw new Error('Operational stores are unavailable outside serving composition.');
+    await this.initialize();
+    return this.#ensureOperations();
+  }
+
+  #ensureOperations(): ManagedWorkflowOperations {
+    if (this.#operations) return this.#operations;
+    // A late getter must not create producers after retirement has progressed
+    // to drain/disposal. The storage owner already holds this backend, so a
+    // factory failure cannot abandon its persistence resources.
+    if (this.#phase !== 'open') throw new Error('Managed workflow storage is shutting down.');
+    const operations = this.#createOperations!({
+      pool: this.#context.pool,
+      backgroundTasks: this.#runBackgroundTasks,
+      sources: {
+        createProjectReferenceLoader: () => this.#executionService.createProjectReferenceLoader(),
+        loadSubgraphTarget: (target) => this.#executionService.loadSubgraphTarget(target),
+        validateSubgraphTarget: (target) => this.validateSubgraphTarget(target),
+      },
+    });
+    this.#operations = operations;
+    if (this.#retiring) operations.coordinator?.beginRetirement();
+    return operations;
   }
 
   async initialize(): Promise<void> {
@@ -129,6 +134,10 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     // Migration verification must not run startup retention or start a
     // scheduler against an offline destination being compared byte-for-byte.
     return (this.#initializing ??= (async () => {
+      // The resource owner already holds this backend before initialize() is
+      // called. Keep serving stores available for accepted shutdown flushes,
+      // while making factory failures observable through owned initialization.
+      if (this.#createOperations) this.#ensureOperations();
       if (this.#runBackgroundTasks) await this.#recordings.initialize();
       else await this.#context.initialize();
       // The server starts workers after runtime libraries are ready. Opening
@@ -148,14 +157,15 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     this.#phase = this.#phase === 'closed' ? 'closed' : 'draining';
     return (this.#draining ??= (async () => {
       await this.#initializing?.catch(() => undefined);
-      await this.#hostedEvaluationCoordinator?.stop();
+      await this.#operations?.coordinator?.stop();
     })());
   }
   beginRetirement(): void {
-    this.#hostedEvaluationCoordinator?.beginRetirement();
+    this.#retiring = true;
+    this.#operations?.coordinator?.beginRetirement();
   }
   async drainAcceptedWork(): Promise<void> {
-    await this.#hostedEvaluationCoordinator?.drainAcceptedWork();
+    await this.#operations?.coordinator?.drainAcceptedWork();
   }
 
   async checkHealth(context?: RuntimeHealthCheckContext): Promise<void> {
@@ -279,9 +289,8 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     return this.#catalog.listWorkflowProjectReferenceCatalog();
   }
 
-  async getLLMProfileHealthStore(): Promise<PostgresRivetLLMProfileHealthStore> {
-    await this.initialize();
-    return this.#llmProfileHealthStore;
+  async getLLMProfileHealthStore() {
+    return (await this.#getOperations()).profileHealth;
   }
 
   async getManagedReconciliationStatus() {
@@ -294,17 +303,17 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     return listManagedReconciliationFindingDetails(this.#context.pool, query);
   }
 
-  async getEvaluationStore(): Promise<PostgresRivetEvaluationStore> {
-    await this.initialize();
-    return this.#evaluationStore;
+  async getEvaluationStore() {
+    return (await this.#getOperations()).evaluations;
   }
 
-  async getHostedEvaluationCoordinator(): Promise<HostedEvaluationCoordinator> {
-    await this.initialize();
-    if (!this.#hostedEvaluationCoordinator) {
+  async getHostedEvaluationCoordinator() {
+    if (!this.#createOperations) {
       throw new Error('Hosted Evaluation coordination is unavailable in migration mode.');
     }
-    return this.#hostedEvaluationCoordinator;
+    const { coordinator } = await this.#getOperations();
+    if (!coordinator) throw new Error('Hosted Evaluation coordination is unavailable in migration mode.');
+    return coordinator;
   }
 
   async listWorkflowPublishedVersions(relativePath: string): Promise<WorkflowPublishedVersionsResponse> {

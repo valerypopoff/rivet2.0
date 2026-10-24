@@ -20,16 +20,10 @@ export function createTauriShimAliases(shimDir: string) {
 export function createModuleOverrideAliases(overrideDir: string) {
   return [
     { find: /^\.\.?\/(?:.*\/)?tauri(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'utils/tauri.ts') },
-    { find: /^\.\.?\/(?:.*\/)?deserializeProject(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'utils/deserializeProject.ts') },
-    { find: /^\.\.?\/(?:.*\/)?savedGraphs(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'state/savedGraphs.ts') },
-    { find: /^\.\.?\/(?:.*\/)?settings(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'state/settings.ts') },
-    { find: /^\.\.?\/(?:.*\/)?useCheckForUpdate(\.js|\.ts|\.tsx)?$/, replacement: resolve(overrideDir, 'hooks/useCheckForUpdate.tsx') },
-    { find: /^\.\.?\/(?:.*\/)?useContextMenu(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useContextMenu.ts') },
-    { find: /^\.\.?\/(?:.*\/)?useCopyNodesHotkeys(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useCopyNodesHotkeys.ts') },
-    { find: /^\.\.?\/(?:.*\/)?useLoadProject(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useLoadProject.ts') },
-    { find: /^\.\.?\/(?:.*\/)?useLoadPackagePlugin(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useLoadPackagePlugin.ts') },
-    { find: /^\.\.?\/(?:.*\/)?useSyncCurrentStateIntoOpenedProjects(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'hooks/useSyncCurrentStateIntoOpenedProjects.ts') },
-    { find: /^\.\.?\/(?:.*\/)?TauriNativeApi(\.js|\.ts)?$/, replacement: resolve(overrideDir, 'model/native/TauriNativeApi.ts') },
+    {
+      find: /^\.\.?\/(?:.*\/)?TauriNativeApi(\.js|\.ts)?$/,
+      replacement: resolve(overrideDir, 'model/native/TauriNativeApi.ts'),
+    },
   ];
 }
 

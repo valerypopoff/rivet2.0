@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
 import type { OpenedProjectSnapshot, OpenedProjectsInfo } from '../../app/src/state/savedGraphs';
-import { normalizeHostedOpenedProjects } from '../overrides/hooks/useSyncCurrentStateIntoOpenedProjects';
+import { reconcileOpenedProjectRegistry } from '../../app/src/utils/openedProjectSynchronization';
 import {
   isHostedVirtualProjectPath,
   resolveHostedProjectMetadataUpdatesForPathMoves,
@@ -54,9 +54,10 @@ test('hosted tab normalization retains recoverable saved and draft tabs while dr
     [draftProjectId]: { project: makeProject('Unsaved draft', draftProjectId) },
   } as Record<ProjectId, OpenedProjectSnapshot>;
 
-  const normalized = normalizeHostedOpenedProjects(previous, {
+  const { projects: normalized } = reconcileOpenedProjectRegistry(previous, {
     currentProjectId: undefined,
     openedProjectSnapshots: snapshots,
+    resolveTitle: resolveHostedProjectTitle,
   });
 
   assert.deepEqual(normalized.openedProjectsSortedIds, [savedProjectId, draftProjectId]);
@@ -79,9 +80,10 @@ test('hosted tab normalization drops malformed legacy project payloads without t
     openedProjectsSortedIds: [brokenProjectId],
   } as unknown as OpenedProjectsInfo;
 
-  const normalized = normalizeHostedOpenedProjects(previous, {
+  const { projects: normalized } = reconcileOpenedProjectRegistry(previous, {
     currentProjectId: undefined,
     openedProjectSnapshots: {},
+    resolveTitle: resolveHostedProjectTitle,
   });
 
   assert.deepEqual(normalized, { openedProjects: {}, openedProjectsSortedIds: [] });

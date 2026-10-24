@@ -1,28 +1,28 @@
 import { type NodeId } from '@valerypopoff/rivet2-core';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useStore } from 'jotai';
 import { selectedNodesState } from '../state/graphBuilder';
-import { connectionsState, nodesByIdState } from '../state/graph';
+import { connectionsState, nodesState } from '../state/graph';
 import { clipboardState } from '../state/clipboard';
 import { isNotNull } from '../utils/genericUtilFunctions';
 
 export function useCopyNodes() {
-  const selectedNodeIds = useAtomValue(selectedNodesState);
-  const nodesById = useAtomValue(nodesByIdState);
-  const connections = useAtomValue(connectionsState);
-  const setClipboard = useSetAtom(clipboardState);
+  const store = useStore();
 
   return (additionalNodeId?: NodeId) => {
-    const nodeIds = (
-      selectedNodeIds.length > 0 ? [...new Set([...selectedNodeIds, additionalNodeId])] : [additionalNodeId]
-    ).filter(isNotNull);
+    const selectedNodeIds = store.get(selectedNodesState);
+    const nodesById = new Map(store.get(nodesState).map((node) => [node.id, node]));
+    const connections = store.get(connectionsState);
+    const nodes = [...new Set(additionalNodeId ? [...selectedNodeIds, additionalNodeId] : selectedNodeIds)]
+      .map((id) => nodesById.get(id))
+      .filter(isNotNull);
+    if (nodes.length === 0) return;
+    const nodeIds = new Set(nodes.map((node) => node.id));
 
-    const copiedConnections = connections.filter(
-      (c) => nodeIds.includes(c.inputNodeId) && nodeIds.includes(c.outputNodeId),
-    );
+    const copiedConnections = connections.filter((c) => nodeIds.has(c.inputNodeId) && nodeIds.has(c.outputNodeId));
 
-    setClipboard({
+    store.set(clipboardState, {
       type: 'nodes',
-      nodes: nodeIds.map((id) => nodesById[id]).filter(isNotNull),
+      nodes,
       connections: copiedConnections,
     });
   };

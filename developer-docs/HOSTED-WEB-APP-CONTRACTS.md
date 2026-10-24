@@ -75,6 +75,46 @@ This is a choice between saved versions, not a merge or live-collaboration featu
 throw or rejected promise from wrapper callback code is logged without changing a
 successfully persisted save into `false` or repeating the persistence operation.
 
+### Settings and project-context ownership
+
+`ui.debuggerConnection` optionally supplies `getDefaultUrl()` and `normalizeUrl()`;
+App's shared connection-settings hook owns the legacy stored preference, fallback
+and submission policy. Defaults are evaluated at use time, not cached at module
+import or persisted merely by opening the panel. Stored custom strings survive;
+invalid legacy values fall back without overwriting storage. Normalization is
+used for display, submission and explicit writes. A blank submission uses the
+current host default; desktop omission retains `ws://localhost:21888`. Typed
+drafts are not overwritten by preference hydration. The connection panel focuses
+its URL once on opening, keeps a hydrated default selected only while the field
+is focused and untouched, and does not steal focus or reset a typed draft's
+selection. Enter confirms a connection except during IME composition; Cancel
+and composition confirmation never connect or persist the draft. Hosted shells set
+`ui.checkForUpdates: false`; force does not bypass a host opt-out. Native/platform
+checks and the shared desktop updater remain intact.
+
+`workspace.deleteProjectContext(projectId)` removes editor-local context after
+the host confirms a project deletion. It resets live values and awaits the
+durable `project` recovery flush, rejecting a failed flush. It does not delete a
+project file, remote project, datasets or other projects' context. Ordinary tab
+close only releases context atom cache entries and retains persisted values.
+Hosts must pass the authoritative deleted project ID, not infer it from the
+currently active tab. This operation also works for closed tabs and needs no
+saved-project/database schema change.
+
+The Context Value editor ignores Enter while IME composition is active in either
+field. A single form-level handler owns ordinary Enter submission, preventing a
+second native submit; Save, Cancel and Delete retain their existing actions. If
+the edited key disappears (including public context cleanup), the dialog is
+immediately excluded from rendering and its edit state is closed, so the stale
+draft cannot be used to restore a deleted value. Project activation continues to
+close project settings through the existing workspace transition.
+
+Context cleanup failure does not imply durable deletion: the returned promise
+rejects, the last verified checkpoint remains intact, and the live context stays
+cleared. An explicit retry can commit that deletion without erasing another
+project's context. Do not silently restore the removed live values or claim a
+failed checkpoint write succeeded.
+
 ### Preparing and activating projects
 
 Selecting an open project activates its existing workspace rather than reopening
@@ -82,6 +122,38 @@ its saved file. It does not reset unsaved content or the saved baseline. Explici
 reload/replacement is a different operation, with identity/path checks and a new
 clean generation. Hosts must use `RivetWorkspaceHost` rather than implementing a
 second activation or dirty-state owner.
+
+Hosts pass optional `providers.projectActivation` to customize Evaluation-cache
+lookup/fill and executor-mode normalization. App's `useActivateOpenedProject`
+reads this policy directly: tab selections, file-picker activation and workspace
+commands all keep the same snapshot, identity, cancellation and saved-baseline
+rules. Do not alias `useLoadProject` or copy its activation logic into a wrapper.
+No policy means the ordinary Browser/desktop behavior is unchanged.
+An asynchronous activation captures the target's existing binding token as well
+as its path/membership. An explicit same-path snapshot replacement or bundle
+rebinding invalidates that preparation: its old Evaluation cache, saved baseline,
+selection and error notifications cannot be published into the new tab lifetime.
+
+`providers.openedProjectSync` selects `mode: 'explicit-tabs'` for hosts whose
+workspace commands own tab opening/closing. The shared editor synchronizer owns
+legacy registry/snapshot recovery, closed-tab suppression, path/graph isolation
+and executor metadata. The host supplies only title resolution and an optional
+open-ID notification for cache pruning; these callbacks never write editor atoms.
+Without this policy the standalone editor retains automatic scratch-tab
+registration and authored project titles. Dirty baselines remain exclusively
+owned by `useSyncProjectDirtyState`, never the title or recovery adapter.
+Normalization repairs metadata and legacy snapshots together, before dropping
+legacy embedded project payloads; a valid newer snapshot is never replaced.
+Project IDs remain opaque strings, not Object member names. Registry/snapshot
+recovery and observation state must distinguish own entries from inherited
+properties; do not reserve names or rewrite IDs to work around dictionary bugs.
+
+For context menus, `ui.contextMenu` supplies only an external-dismiss
+subscription and optional focus release. The shared App hook owns positioning,
+target traversal, open state, Escape and outside clicks. Hosted mode subscribes
+to the other same-origin surface only while a menu is open, removes listeners on
+closure/unmount, and releases focus only if the closing menu owns it. It must not
+forward input events, dismiss modals or steal focus from the other surface.
 
 `IOProvider` accepts optional `ProjectLoadOptions` (`signal`, `deferCommit`,
 `activateDatasets`) and may return a `LoadedProjectData.commit(isCurrent)` hook.
@@ -205,6 +277,14 @@ strict `script-src 'self'; style-src 'self'` policy. For self-contained pages,
 to every inline style/script tag (and external scripts for `strict-dynamic`
 policies), but the host owns nonce generation and the matching
 `Content-Security-Policy` response header. Never reuse a nonce between responses.
+Node clipboard behavior is owned by App's shared `useCopyNodesHotkeys`, not a
+hosted module replacement. Optional `ui.nodeClipboard.useHoveredNodeFallback`
+enables hover-only copy/duplicate; `nativeEvents` enables capture-phase browser
+clipboard events and shortcuts. Neither option changes cut's selection rule.
+Commands read the current provider store; text/modal/overlay input stays with
+its owner and no modifying request is replayed. See the
+[editor bridge clipboard contract](studio-server/editor-bridge.md#copypaste-behavior).
+
 The shared clipboard fallback uses a renderer CSS class rather than assigning DOM
 inline styles, so copying output does not weaken that policy after first paint.
 The packaged Markdown stylesheet uses a data-URL mask, so a complete host policy

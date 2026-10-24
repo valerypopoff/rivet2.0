@@ -27,6 +27,17 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
         });
         (window as any).shortcutProjects = projects;
         localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false }));
+        localStorage.setItem(
+          'project',
+          JSON.stringify({
+            'projectContext__"shortcut-project-0"': {
+              'Context Alpha': { value: { type: 'string', value: 'fixture-alpha' } },
+            },
+            'projectContext__"shortcut-project-1"': {
+              'Context Beta': { value: { type: 'string', value: 'fixture-beta' } },
+            },
+          }),
+        );
       },
       { platform, projects },
     );
@@ -217,5 +228,49 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
     expect(await switchTab('right')).toBe(true);
     await expect(active).toContainText('Alpha edited');
     await expect(page.locator('.Toastify__toast--error')).toHaveCount(0);
+    if (platform === 'windows') {
+      await page.locator('button.more-menu').click();
+      await page.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
+      await expect(page.getByPlaceholder('(Default)')).toHaveValue('ws://localhost:21888');
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      const showContext = async () => {
+        await page.getByRole('button', { name: 'Project settings', exact: true }).click();
+        const modal = page.getByTestId('project-settings-modal');
+        await modal.getByRole('button', { name: 'Context values', exact: true }).click();
+        return modal;
+      };
+      await page.evaluate(() =>
+        (window as any).shortcutHost.openProjectSnapshot({ project: (window as any).shortcutProjects[1] }),
+      );
+      let modal = await showContext();
+      await expect(modal.locator('.context-list .key')).toHaveText('Context Beta');
+      await modal.locator('.context-list').getByRole('button', { name: 'Edit', exact: true }).click();
+      await page.getByPlaceholder('Value', { exact: true }).fill('must not restore deleted context');
+      // Public deletion resets the already-mounted context view as well as durable storage.
+      await page.evaluate(() => (window as any).shortcutHost.deleteProjectContext('shortcut-project-1'));
+      await expect(modal.locator('.context-list .key')).toHaveCount(0);
+      await expect(page.getByPlaceholder('Value', { exact: true })).toHaveCount(0);
+      await modal.getByRole('button', { name: 'Close modal', exact: true }).click();
+      await page.evaluate(async () => {
+        await (window as any).shortcutHost.closeProject('shortcut-project-1');
+        await (window as any).shortcutHost.openProjectSnapshot({ project: (window as any).shortcutProjects[1] });
+      });
+      modal = await showContext();
+      await expect(modal.locator('.context-list .key')).toHaveCount(0);
+      await modal.getByRole('button', { name: 'Close modal', exact: true }).click();
+      await page.evaluate(() => (window as any).shortcutHost.activateProject('shortcut-project-0'));
+      modal = await showContext();
+      await expect(modal.locator('.context-list .key')).toHaveText('Context Alpha');
+      await modal.locator('.context-list').getByRole('button', { name: 'Edit', exact: true }).click();
+      await page.getByPlaceholder('Value', { exact: true }).fill('must not reach another project');
+      // Wrapper-driven activation can happen while a modal is open (e.g. deleting its project).
+      await page.evaluate(() => (window as any).shortcutHost.activateProject('shortcut-project-1'));
+      await expect(page.getByPlaceholder('Value', { exact: true })).toHaveCount(0);
+      await expect(modal).toHaveCount(0);
+      await page.evaluate(() => (window as any).shortcutHost.activateProject('shortcut-project-0'));
+      modal = await showContext();
+      await expect(modal.locator('.context-list .value')).toHaveText('fixture-alpha');
+      await modal.getByRole('button', { name: 'Close modal', exact: true }).click();
+    }
   });
 }

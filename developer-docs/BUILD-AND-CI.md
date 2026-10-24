@@ -588,8 +588,18 @@ node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app exec tsx -
 ```
 
 `yarn check:file-tree` rejects unignored generated paths and package source deep
-imports. The remaining production long-relative-import queue has a shrinking numeric
-baseline; increasing it fails so settled boundaries cannot silently regress.
+imports. Existing deep-relative dependency debt is recorded per source/specifier
+in `scripts/checks/import-boundary-debt.json`, not as a count ceiling. New edges,
+obsolete allowances and duplicates fail; line movement is harmless. The parser
+handles multiline, re-export, dynamic and type imports without reading comments
+or authored code strings as imports. The CodeRunner runtime graph must not reach
+Core's public barrels. The gate and its focused regressions run in `test:style`.
+
+Core source entrypoints are declared once in `package.json.rivetSourceEntrypoints`
+and consumed by Vite aliases and the CommonJS builder. Core's normal build also
+checks built ESM/CommonJS export parity and executes authored code against both
+public namespaces. Adding a public subpath requires matching source, ESM, types
+and CommonJS declarations; published runtime resolution remains unchanged.
 
 ### Yarn PnP install state
 

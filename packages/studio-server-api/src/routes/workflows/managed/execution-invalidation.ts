@@ -73,6 +73,8 @@ export class ManagedWorkflowExecutionInvalidationController {
   #listener: ManagedExecutionInvalidationListener | null = null;
   #listenerHealthy = false;
   #listenerPromise: Promise<void> | null = null;
+  #listenerClosePromise: Promise<void> | null = null;
+  #disposePromise: Promise<void> | null = null;
   #reconnectTimer: ManagedExecutionReconnectTimer | null = null;
   #disposed = false;
   #executionPointerAnyGeneration = 0;
@@ -110,9 +112,22 @@ export class ManagedWorkflowExecutionInvalidationController {
       await this.#listenerPromise;
       return;
     }
+    if (this.#listenerClosePromise) {
+      await this.#listenerClosePromise.catch(() => undefined);
+      // Another initializer may have acquired the next client while we waited.
+      if (this.#listenerPromise) {
+        await this.#listenerPromise;
+        return;
+      }
+      // Failed close retains the exact owner. Cache misses still use fresh SQL
+      // reads, but reconnecting must not allocate an overlapping listener.
+      if (this.#listener || this.#disposed) return;
+    }
 
     this.#listenerPromise = (async () => {
       const listener = this.#createListener();
+      this.#listener = listener;
+      this.#listenerClosePromise = null;
 
       try {
         await this.#withManagedDbRetry('managed execution invalidation listener connect', () => listener.connect());
@@ -125,8 +140,11 @@ export class ManagedWorkflowExecutionInvalidationController {
           );
         }
       } catch (error) {
-        listener.removeAllListeners();
-        await listener.end().catch(() => {});
+        try {
+          await this.#closeListener(listener);
+        } catch (cleanupError) {
+          throw new AggregateError([error, cleanupError], 'Execution invalidation startup and cleanup failed.');
+        }
         if (!this.#disposed) {
           this.#listenerHealthy = false;
           this.markAllChanged();
@@ -137,12 +155,9 @@ export class ManagedWorkflowExecutionInvalidationController {
       }
 
       if (this.#disposed) {
-        listener.removeAllListeners();
-        await listener.end().catch(() => {});
+        await this.#closeListener(listener);
         return;
       }
-
-      this.#listener = listener;
 
       listener.on('notification', (message) => {
         if (message.channel === EVALUATION_LIBRARY_INVALIDATION_CHANNEL && this.#onEvaluationLibraryChanged) {
@@ -172,7 +187,7 @@ export class ManagedWorkflowExecutionInvalidationController {
         }
       });
       listener.on('error', (error) => {
-        console.error('[managed-workflows] Execution invalidation listener error:', error);
+        this.#reportError('Execution invalidation listener error:', error);
         void this.#handleListenerFailure(listener);
       });
       listener.on('end', () => {
@@ -186,7 +201,7 @@ export class ManagedWorkflowExecutionInvalidationController {
     })()
       .catch((error) => {
         if (!this.#disposed) {
-          console.error('[managed-workflows] Execution invalidation listener initialization failed:', error);
+          this.#reportError('Execution invalidation listener initialization failed:', error);
         }
       })
       .finally(() => {
@@ -196,17 +211,35 @@ export class ManagedWorkflowExecutionInvalidationController {
     await this.#listenerPromise;
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.#disposePromise) return this.#disposePromise;
     this.#disposed = true;
     this.markAllChanged();
     this.#clearListenerReconnectTimer();
     this.#listenerHealthy = false;
-    const listener = this.#listener;
-    this.#listener = null;
-    this.#listenerPromise = null;
-    if (listener) {
+    return (this.#disposePromise = (async () => {
+      // An initializer owns its connecting client until it settles. Do not
+      // acknowledge shutdown while that client can still become connected.
+      await this.#listenerPromise;
+      if (this.#listener) await this.#closeListener(this.#listener);
+      else await this.#listenerClosePromise;
+    })());
+  }
+
+  #closeListener(listener: ManagedExecutionInvalidationListener): Promise<void> {
+    if (this.#listener !== listener) return Promise.resolve();
+    return (this.#listenerClosePromise ??= Promise.resolve().then(async () => {
       listener.removeAllListeners();
-      await listener.end().catch(() => {});
+      await listener.end();
+      if (this.#listener === listener) this.#listener = null;
+    }));
+  }
+
+  #reportError(message: string, error: unknown): void {
+    try {
+      console.error('[managed-workflows] ' + message, error);
+    } catch {
+      // Diagnostics cannot prevent retirement or alter its acknowledgement.
     }
   }
 
@@ -351,7 +384,7 @@ export class ManagedWorkflowExecutionInvalidationController {
   }
 
   async #handleListenerFailure(listener: ManagedExecutionInvalidationListener): Promise<void> {
-    if (this.#listener !== listener) {
+    if (this.#listener !== listener || this.#listenerClosePromise) {
       return;
     }
 
@@ -359,9 +392,12 @@ export class ManagedWorkflowExecutionInvalidationController {
     this.markAllChanged();
     this.#notifyExternal();
     this.#notifyEvaluationLibrary(null);
-    this.#listener = null;
-    listener.removeAllListeners();
-    await listener.end().catch(() => {});
+    try {
+      await this.#closeListener(listener);
+    } catch (error) {
+      this.#reportError('Execution invalidation listener close is unconfirmed:', error);
+      return;
+    }
     this.#scheduleListenerReconnect();
   }
 
@@ -382,7 +418,7 @@ export class ManagedWorkflowExecutionInvalidationController {
   }
 
   #scheduleListenerReconnect(): void {
-    if (this.#disposed || this.#reconnectTimer) {
+    if (this.#disposed || this.#reconnectTimer || this.#listener) {
       return;
     }
 

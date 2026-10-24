@@ -1,5 +1,5 @@
 import type { ProjectId } from '@valerypopoff/rivet2-node';
-import type { WorkflowDataBackend } from './data-backend.js';
+import type { WorkflowDataBackend, WorkflowRepositories } from './data-backend.js';
 import type { RuntimeHealthCheckContext } from '../../runtime-health.js';
 import type { RivetStudioLLMProfileHealthStore } from '../../llm-profile-health/store.js';
 import type { RivetStudioEvaluationStore } from '../../evaluation-runs/store.js';
@@ -184,6 +184,10 @@ export class WorkflowStorageServices {
   async getData(): Promise<WorkflowDataBackend> {
     if (this.mode === 'legacy') throw new Error('Legacy storage has no SQL data backend.');
     return this.mode === 'sqlite' ? this.getLocal() : this.getManaged();
+  }
+  /** Select an operation's dependency without constructing a second resource owner. */
+  async getRepository<K extends keyof WorkflowRepositories>(_kind: K): Promise<WorkflowRepositories[K]> {
+    return this.getData();
   }
   initialize(): Promise<void> {
     this.#allow(undefined);

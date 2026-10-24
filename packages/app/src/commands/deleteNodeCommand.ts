@@ -1,28 +1,29 @@
-import { useAtomValue, useSetAtom } from 'jotai';
-import { connectionsState, graphMetadataState, nodesState, removeGraphNodeStateFamilies } from '../state/graph';
-import { useCommand } from './Command';
+import { useSetAtom, useStore } from 'jotai';
+import { connectionsState, nodesState, removeGraphNodeStateFamilies } from '../state/graph';
+import { readGraphCommandState, useCommand } from './Command';
 import { editingNodeState, selectedNodesState, removeGraphBuilderNodeStateFamilies } from '../state/graphBuilder';
 import { type NodeConnection, type ChartNode, type NodeId } from '@valerypopoff/rivet2-core';
 import { frozenNodeOutputsState, removeExecutionNodeStateFamilies } from '../state/dataFlow';
 import { deleteNodesFromGraph } from '../domain/graphEditing/nodeActions.js';
-import { recoverableNodeConnectionsStatePerGraph, removeRecoverableNodeConnectionsForGraphNodes } from '../state/recoverableNodeConnections';
+import {
+  recoverableNodeConnectionsStatePerGraph,
+  removeRecoverableNodeConnectionsForGraphNodes,
+} from '../state/recoverableNodeConnections';
 import { findConnectedGraphInputUsages } from '../domain/graphEditing/graphInputUsage';
-import { projectState } from '../state/savedGraphs';
 import { useStableCallback } from '../hooks/useStableCallback';
-import { deleteGraphInputConfirmState } from '../state/ui';
+import { deleteGraphInputConfirmState, type GraphInputDeletionTarget } from '../state/ui';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
 import { removeFrozenNodeOutputsForNodes } from '../utils/frozenNodeOutputs';
 
 type DeleteNodesCommandArgs = {
   nodeIds: NodeId[];
   skipGraphInputUsageConfirm?: boolean;
+  /** Confirmation is valid only for the workspace/graph in which it was requested. */
+  expectedTarget?: GraphInputDeletionTarget;
 };
 
 export const useDeleteNodesCommand = () => {
-  const selectedNodeIds = useAtomValue(selectedNodesState);
-  const nodes = useAtomValue(nodesState);
-  const connections = useAtomValue(connectionsState);
-  const graphId = useAtomValue(graphMetadataState)?.id;
-  const project = useAtomValue(projectState);
+  const store = useStore();
 
   const setNodes = useSetAtom(nodesState);
   const setConnections = useSetAtom(connectionsState);
@@ -77,6 +78,24 @@ export const useDeleteNodesCommand = () => {
   });
 
   return useStableCallback((args: DeleteNodesCommandArgs) => {
+    const selectedNodeIds = store.get(selectedNodesState);
+    const { nodes, connections, graphId, project } = readGraphCommandState(store);
+    const bindings = store.get(projectBindingRegistryState);
+    const target: GraphInputDeletionTarget = {
+      projectId: project.metadata.id,
+      graphId,
+      workspaceToken: bindings.getWorkspaceToken(),
+      bindingToken: bindings.get(project.metadata.id)?.token,
+    };
+    const expected = args.expectedTarget;
+    if (
+      expected &&
+      (expected.projectId !== target.projectId ||
+        expected.graphId !== target.graphId ||
+        expected.workspaceToken !== target.workspaceToken ||
+        expected.bindingToken !== target.bindingToken)
+    )
+      return;
     const nodeIds = args.skipGraphInputUsageConfirm
       ? [...new Set(args.nodeIds)]
       : selectedNodeIds.length > 0
@@ -99,6 +118,7 @@ export const useDeleteNodesCommand = () => {
       setDeleteGraphInputConfirm({
         nodeIds,
         usages: graphInputUsages,
+        target,
       });
       return;
     }

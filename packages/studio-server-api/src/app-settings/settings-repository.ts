@@ -534,12 +534,14 @@ function subscribeToSharedBackend(backend: AppSettingsBackend): void {
   });
 }
 async function initializeSharedBackend(): Promise<void> {
+  if (sharedBackendInitialization) return sharedBackendInitialization;
   const local = getLocalMetadataServingSelection();
   if ((!local && !isPostgresAppSettingsBackendEnabled()) || sharedBackend) {
     return;
   }
 
-  sharedBackendInitialization ??= (async () => {
+  let retainFailedInitialization = false;
+  sharedBackendInitialization = (async () => {
     let convertLegacy = false;
     if (local) {
       try {
@@ -566,7 +568,15 @@ async function initializeSharedBackend(): Promise<void> {
       if (local) invalidateAppSettingsRepositories();
       subscribeToSharedBackend(backend);
     } catch (error) {
-      await backend.dispose().catch(() => undefined);
+      try {
+        await backend.dispose();
+      } catch (cleanupError) {
+        // Preserve the failed owner rather than allowing file fallback or a
+        // replacement while listener/pool termination is unconfirmed.
+        sharedBackend ??= backend;
+        retainFailedInitialization = true;
+        throw new AggregateError([error, cleanupError], 'Settings initialization and cleanup failed.');
+      }
       throw error;
     }
   })();
@@ -575,7 +585,7 @@ async function initializeSharedBackend(): Promise<void> {
   try {
     await initialization;
   } finally {
-    if (sharedBackendInitialization === initialization) {
+    if (!retainFailedInitialization && sharedBackendInitialization === initialization) {
       sharedBackendInitialization = null;
     }
   }
@@ -680,16 +690,14 @@ export async function disposeAppSettingsRepositories(): Promise<void> {
   }
   const initialization = sharedBackendInitialization;
   await initialization?.catch(() => undefined);
-  if (sharedBackendInitialization === initialization) sharedBackendInitialization = null;
   // Initialization can install the subscription while disposal is waiting.
   unsubscribeSharedBackend?.();
   unsubscribeSharedBackend = undefined;
   const backend = sharedBackend;
-  try {
-    // Queued post-commit refreshes must still resolve against the selected
-    // backend while it drains, never against stale retained JSON files.
-    await backend?.dispose();
-  } finally {
-    if (sharedBackend === backend) sharedBackend = null;
-  }
+  // Queued post-commit refreshes must still resolve against the selected
+  // backend while it drains, never against stale retained JSON files. Failed
+  // cleanup must keep that owner selected and must not enable file fallback.
+  await backend?.dispose();
+  if (sharedBackend === backend) sharedBackend = null;
+  if (sharedBackendInitialization === initialization) sharedBackendInitialization = null;
 }

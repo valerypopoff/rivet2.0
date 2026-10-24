@@ -8,7 +8,9 @@ import {
   projectsState,
   releaseProjectContextState,
   savedProjectContentDigestsState,
+  deleteProjectContextState,
 } from '../../state/savedGraphs.js';
+import { flushHybridStorageGroup } from '../../state/storage.js';
 import { projectCompareReferenceState, viewingProjectComparisonNodeState } from '../../state/projectComparison.js';
 import { removeProjectTabUiState, projectTabUiState } from '../../state/projectTabUi.js';
 import { recordingTabIndicatorsState } from '../../state/execution.js';
@@ -82,4 +84,12 @@ export function useWorkspaceHostProjectCleanup() {
       clearCodeEditorModelCacheForClosedProject(projectId, () => !store.get(projectsState).openedProjects[projectId]);
     },
   );
+}
+
+export function useWorkspaceHostDeleteProjectContext() {
+  const deleteContext = useSetAtom(deleteProjectContextState);
+  return useStableCallback(async (projectId: ProjectId): Promise<void> => {
+    deleteContext(projectId);
+    await flushHybridStorageGroup('project');
+  });
 }

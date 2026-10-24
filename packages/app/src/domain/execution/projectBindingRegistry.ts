@@ -8,7 +8,7 @@ export function createProjectBindingRegistry() {
   const bindings = new Map<string, ProjectBinding>();
   return {
     reconcile(opened: Record<string, ProjectBindingSpec>) {
-      for (const id of bindings.keys()) if (!opened[id]) bindings.delete(id);
+      for (const id of bindings.keys()) if (!Object.hasOwn(opened, id)) bindings.delete(id);
       for (const [id, spec] of Object.entries(opened)) {
         const old = bindings.get(id);
         if (!old || old.path !== spec.path || old.bundleKey !== spec.bundleKey)

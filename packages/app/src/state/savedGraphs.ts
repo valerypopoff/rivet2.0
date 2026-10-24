@@ -1,5 +1,5 @@
 import { atom } from 'jotai';
-import { atomWithStorage, atomFamily } from 'jotai/utils';
+import { atomWithStorage, atomFamily, RESET } from 'jotai/utils';
 import { nanoid } from 'nanoid/non-secure';
 import { produce } from 'immer';
 import {
@@ -283,3 +283,9 @@ export const projectContextState = atomFamily((projectId: ProjectId) =>
 export function releaseProjectContextState(projectId: ProjectId): void {
   projectContextState.remove(projectId);
 }
+
+/** Reset any live view before releasing its family entry and removing its persisted key. */
+export const deleteProjectContextState = atom(null, (_get, set, projectId: ProjectId) => {
+  set(projectContextState(projectId), RESET);
+  releaseProjectContextState(projectId);
+});

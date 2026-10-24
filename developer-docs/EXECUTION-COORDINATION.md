@@ -21,10 +21,64 @@ coordinator cannot run, cancel, pause, resume, upload or resend a command. Exist
 source handlers keep their intentional notification/preload/evaluation policies;
 they are not replaced with a generic passive reducer.
 
+## Shared run preparation and artifact policy
+
+`hooks/preparedEditorRun.ts` synchronously captures the authored project/current
+graph, static data, inputs, settings and project-context values before awaited
+preparation. Callback and runtime handles remain references, not cloned objects.
+Browser and Node consume this same snapshot; environment resolution, bundle
+loading and transport admission still run at their existing adapter boundaries.
+Context extraction creates own properties even for IDs such as `__proto__`,
+`constructor` and `toString`, retaining deep-copy isolation and JSON portability.
+The Context Value editor likewise uses immutable own-property map updates rather
+than invoking prototype setters through a draft.
+
+`utils/editorRunRecording.ts` owns capability-approved recording destinations,
+correlation IDs, artifact serialization and the single persistence attempt. The
+adapter supplies its eligibility policy: Browser excludes playback; Node permits
+hosted local runs but excludes desktop/external targets and web-app requests.
+Capability failure disables hosted artifact storage, not execution. Browser can
+still retain its in-memory replay without serializing a project or exporting
+datasets when no hosted destination exists.
+
+The adapter, not the artifact helper, owns settlement and exactly-once ingress:
+Browser calls through `EditorRunSession` disposal only after processor completion;
+Node removes its request-scoped capture once and requires terminal evidence before
+calling persistence. Early outputs, abort notifications, tab replacement and
+recoverable socket reconnects do not become permission to finalize or rerun work.
+Incomplete Node capture keeps its existing unavailable-reporting path. Creation
+time and final status are captured by the run owner; duration is measured before
+asynchronous artifact IO. Dataset export still happens at finalization for the
+captured project ID. Artifact failures mark that correlation unavailable without
+retrying an uncertain write or changing graph results. Observation/display guards
+remain outside persistence, so stale canvas admission cannot discard an accepted
+run's recording. Evaluation verdict/temporary-recording policies remain in their
+separate, already-shared helpers.
+The in-memory replay notification is a separate failure boundary: a throwing
+display observer is logged but cannot skip the hosted write or falsely mark its
+otherwise valid artifact unavailable. Serialization, dataset and actual storage
+failures retain the existing one-attempt/unavailable policy.
+
+Output normalization, inline/ref history storage, strict and best-effort
+restoration, partial-run preloads and reset partitions preserve own-key
+semantics. User-defined port/node IDs such as `__proto__` must not become
+prototype assignments or vanish from JSON. Missing-ref handling and retained
+payload identities remain unchanged. The isolated Browser preload test runs a
+Code node with such an output port, then invokes **Run from here** on its
+consumer. Recorded `resultOrigin: preloaded` source events and the final output
+prove that retained evidence was reused rather than physically executing the
+source. The fixture is included in the balanced CI browser shards.
+
 ## Runtime binding generations
 
 `state/projectBindings.ts` holds one registry per Jotai store. The pure
 `domain/execution/projectBindingRegistry.ts` assigns monotonic, non-recycled tokens.
+Reconciliation checks own keys, not inherited Object properties. Closing an
+opaque project ID such as `constructor` must retire its binding just like any
+other ID; reopening always gets a fresh token.
+Execution snapshot and observation readers also require own entries. Inherited
+Object members are not a snapshot, observer list or notice. The central snapshot
+writer rejects absent own tab metadata before running update/reference effects.
 `projectsState` reconciles at every write, including close/reopen in one synchronous
 turn; hydration is reconciled on read. Project IDs and paths alone are not lifetimes.
 Actual clean file/snapshot replacement renews the token at the synchronous
@@ -290,7 +344,7 @@ and workspace retirement fence as the other asynchronous display adapters.
   The protected benchmark preserves outputs and ordered events in
   `execution-p4-benchmark.log`; concurrent local timings do not establish a speedup.
 
-Four additional legacy checks (`evaluation-metrics`, prompt cancellation and Node
+At this audit, four additional legacy checks (`evaluation-metrics`, prompt cancellation and Node
 pruning) require a live local Compose backend. The isolated Vite fixture environment
 cannot initialize their persistent evaluation storage (HTTP 500) or enable their
 project rows, so they fail before exercising execution. These checks are unverified,
@@ -299,6 +353,11 @@ Receipts and startup traces are in `execution-p4-adjacent-ui.log` and
 `artifacts/playwright/p4-adjacent/`. Running those checks with their required backend,
 packaged desktop verification and any provider/release qualification remain distinct
 from this completed local source refactor. No production or cloud changes occurred.
+
+The later integrated qualification closed all four Compose gaps; see
+[the qualification follow-up](studio-server/feature-readiness-refactoring.md#integrated-qualification-follow-up-2026-10-24).
+Packaged Windows Browser execution was also exercised. Packaged desktop Node
+startup remains a separate unresolved check, not a passing source-fixture result.
 
 ### Post-consolidation review (2026-10-24)
 

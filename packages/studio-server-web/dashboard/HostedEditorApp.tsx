@@ -8,11 +8,16 @@ import {
   type RivetWorkspaceHost,
 } from '../../app/src/host';
 import { EditorMessageBridge, type SavedProjectSignal } from './EditorMessageBridge';
-import { RIVET_EXECUTOR_WS_URL } from '../../studio-server-shared/hosted-env';
+import {
+  RIVET_EXECUTOR_WS_URL,
+  RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
+  normalizeRuntimeWebSocketUrl,
+} from '../../studio-server-shared/hosted-env';
 import { fetchHostedConfig } from './workflowApi';
 import { postMessageToDashboard } from '../../studio-server-shared/editor-bridge';
 import { hostedRivetProviders } from './hostedRivetProviders';
 import { useReconcileHostedProjectTitleAfterSave } from './useReconcileHostedProjectTitleAfterSave';
+import { subscribeToOtherHostedSurface } from './useHostedSurfaceDismiss';
 
 const HOSTED_FILE_MENU_VISIBLE_ITEMS = [
   'import_graph',
@@ -22,6 +27,21 @@ const HOSTED_FILE_MENU_VISIBLE_ITEMS = [
 ] as const satisfies readonly FileMenuItemId[];
 
 const HOSTED_RIVET_UI = {
+  checkForUpdates: false,
+  debuggerConnection: {
+    getDefaultUrl: () => RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
+    normalizeUrl: normalizeRuntimeWebSocketUrl,
+  },
+  nodeClipboard: { useHoveredNodeFallback: true, nativeEvents: true },
+  contextMenu: {
+    subscribeToExternalDismiss: subscribeToOtherHostedSurface,
+    releaseFocus: (menu) => {
+      const activeElement = menu?.ownerDocument.activeElement;
+      if (activeElement && menu?.contains(activeElement) && 'blur' in activeElement) {
+        (activeElement as HTMLElement).blur();
+      }
+    },
+  },
   fileMenu: {
     visibleItems: HOSTED_FILE_MENU_VISIBLE_ITEMS,
   },
@@ -42,7 +62,8 @@ const HOSTED_RIVET_UI = {
 export const HostedEditorApp: FC = () => {
   const resolveInternalHostedExecutorUrl = useCallback(async () => {
     const config = await fetchHostedConfig({ signal: AbortSignal.timeout(10_000) });
-    if (config.executorWsUrlIsOverride !== false || !config.executorWsUrl) throw new Error('Automatic executor owner discovery unavailable.');
+    if (config.executorWsUrlIsOverride !== false || !config.executorWsUrl)
+      throw new Error('Automatic executor owner discovery unavailable.');
     return config.executorWsUrl;
   }, []);
   const [workspaceHost, setWorkspaceHost] = useState<RivetWorkspaceHost | null>(null);

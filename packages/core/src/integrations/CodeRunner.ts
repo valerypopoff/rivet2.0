@@ -1,10 +1,9 @@
-import type { Inputs, Outputs } from '../index.js';
+import type { NodeInputs as Inputs, NodeOutputs as Outputs } from '../model/NodeIO.js';
 import type { DataValue } from '../model/DataValue.js';
 import type { CodeRunnerOptions } from './CodeRunnerOptions.js';
 import { resolveCodeInterpolationExpression } from '../utils/interpolation.js';
 
-// eslint-disable-next-line import/no-cycle -- Authored code receives the complete public Rivet namespace at execution time.
-import * as Rivet from '../exports.js';
+import { getCodeRunnerNamespace, type CodeRunnerNamespace } from './CodeRunnerNamespace.js';
 
 export { ALL_CODE_RUNNER_OPTIONS } from './CodeRunnerOptions.js';
 export type { CodeRunnerOptions } from './CodeRunnerOptions.js';
@@ -29,6 +28,8 @@ export interface CodeRunner {
 }
 
 export class IsomorphicCodeRunner implements CodeRunner {
+  constructor(private readonly resolveNamespace: () => CodeRunnerNamespace = getCodeRunnerNamespace) {}
+
   async runCode(
     code: string,
     inputs: Inputs,
@@ -52,7 +53,7 @@ export class IsomorphicCodeRunner implements CodeRunner {
 
     if (options.includeRivet) {
       argNames.push('Rivet');
-      args.push(Rivet);
+      args.push(this.resolveNamespace());
     }
 
     if (graphInputs) {

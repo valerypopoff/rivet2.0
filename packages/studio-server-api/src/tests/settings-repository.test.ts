@@ -7,6 +7,8 @@ import test from 'node:test';
 
 import {
   configureAppSettingsBackendForTests,
+  disposeAppSettingsRepositories,
+  getAppSettingsBackendKind,
   runWithAppSettingsSnapshot,
   SettingsRevisionConflictError,
   VersionedSettingsRepository,
@@ -297,6 +299,25 @@ class InMemoryAppSettingsBackend implements AppSettingsBackend {
     this.listeners.clear();
   }
 }
+
+test('an unconfirmed settings backend close cannot detach the owner and select file fallback', async () => {
+  const backend = new InMemoryAppSettingsBackend();
+  const failure = new Error('settings owner still closing');
+  let confirmed = false;
+  backend.dispose = async () => {
+    if (!confirmed) throw failure;
+  };
+  await configureAppSettingsBackendForTests(backend);
+  try {
+    await assert.rejects(disposeAppSettingsRepositories(), (error) => error === failure);
+    assert.equal(getAppSettingsBackendKind(), 'postgres', 'keep the selected owner until its close is confirmed');
+    await assert.rejects(configureAppSettingsBackendForTests(null), (error) => error === failure);
+  } finally {
+    confirmed = true;
+    await configureAppSettingsBackendForTests(null);
+  }
+  assert.equal(getAppSettingsBackendKind(), 'file');
+});
 
 function createManagedTestRepository(key: string, filePath: string): VersionedSettingsRepository<TestSettings> {
   return new VersionedSettingsRepository<TestSettings>({

@@ -1,4 +1,4 @@
-import type { WorkflowDataBackend } from './data-backend.js';
+import type { WorkflowProjectRepository, WorkflowPublicationRepository } from './data-backend.js';
 import type {
   WorkflowProjectDownloadVersion,
   WorkflowPublicationPreconditions,
@@ -49,7 +49,7 @@ import {
 } from './filesystem-project-transactions.js';
 import type { RivetStudioEvaluationStore } from '../../evaluation-runs/store.js';
 export type LegacyWorkflowCommands = Pick<
-  WorkflowDataBackend,
+  WorkflowProjectRepository & WorkflowPublicationRepository,
   | 'createWorkflowFolderItem'
   | 'renameWorkflowFolderItem'
   | 'deleteWorkflowFolderItem'

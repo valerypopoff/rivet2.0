@@ -7,7 +7,11 @@ export { executionSnapshotsState } from './projectExecutionSnapshot.js';
 /** Sole execution-state authority. Active atoms below are lenses, not second copies. */
 export const emptyExecutionSnapshotState = atom(() => createEmptyProjectExecutionSnapshot());
 export const activeExecutionSnapshotState = atom(
-  (get) => get(executionSnapshotsState)[get(projectState).metadata.id] ?? get(emptyExecutionSnapshotState),
+  (get) => {
+    const snapshots = get(executionSnapshotsState);
+    const id = get(projectState).metadata.id;
+    return (Object.hasOwn(snapshots, id) ? snapshots[id] : undefined) ?? get(emptyExecutionSnapshotState);
+  },
   (get, set, snapshot: ProjectExecutionSnapshot) => {
     const id = get(projectState).metadata.id;
     if (get(executionSnapshotsState)[id] !== snapshot)

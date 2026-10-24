@@ -5,8 +5,8 @@ import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { Provider, createStore } from 'jotai';
-import { InMemoryDatasetProvider } from '@valerypopoff/rivet2-core';
-import { ProvidersProvider } from '../providers/ProvidersContext.js';
+import { ExecutionRecorder, InMemoryDatasetProvider, TextNodeImpl } from '@valerypopoff/rivet2-core';
+import { ProvidersProvider, type LocalExecutionRecordingPersistenceProvider } from '../providers/ProvidersContext.js';
 import { ExecutorSessionProvider, useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
 import { projectState, projectsState, loadedProjectState } from '../state/savedGraphs.js';
 import { graphState } from '../state/graph.js';
@@ -63,6 +63,8 @@ test(
     const project = createBlankProjectWithDefaultGraph();
     const id = project.metadata.id;
     const graph = project.graphs[project.metadata.mainGraphId!]!;
+    const progressNode = TextNodeImpl.create();
+    graph.nodes.push(progressNode);
     store.set(projectState, project);
     store.set(graphState, graph);
     store.set(loadedProjectState, { loaded: true, path: '/a.rivet-project' });
@@ -70,7 +72,9 @@ test(
       openedProjects: { [id]: { projectId: id, title: 'A', fsPath: '/a.rivet-project' } },
       openedProjectsSortedIds: [id],
     });
-    store.set(recordExecutionsState, false);
+    store.set(recordExecutionsState, true);
+    const recordings: Array<Parameters<LocalExecutionRecordingPersistenceProvider['persist']>[0]> = [];
+    const unavailable: string[] = [];
     let executor!: ReturnType<typeof useRemoteExecutor>;
     let runtime!: ReturnType<typeof useExecutorSessionRuntime>;
     function Harness() {
@@ -82,7 +86,19 @@ test(
       root.render(
         <Provider store={store}>
           <ProvidersProvider
-            providers={{ datasets: new InMemoryDatasetProvider([]), environment: { getEnvVar: async () => undefined } }}
+            providers={{
+              datasets: new InMemoryDatasetProvider([]),
+              environment: { getEnvVar: async () => undefined },
+              localExecutionRecordingPersistence: {
+                getCapability: async () => true,
+                persist: async (recording) => {
+                  recordings.push(recording);
+                },
+                markUnavailable: async (id) => {
+                  unavailable.push(id);
+                },
+              },
+            }}
           >
             <ExecutorSessionProvider>
               <Harness />
@@ -137,18 +153,23 @@ test(
         requestId,
         data: { execution, project, startGraph: graph, inputs: {}, contextValues: {} },
       });
-      socket.emitMessage({ message: 'progress', requestId, data: { execution, progress: { completed: 1, total: 2 } } });
+      socket.emitMessage({
+        message: 'progress',
+        requestId,
+        data: { execution, node: progressNode, processId: 'progress', progress: { completed: 1, total: 2 } },
+      });
       socket.emitMessage({
         message: 'webAppStoragePatch',
         requestId,
         data: { storagePatch: { key: 'accepted write' } },
       });
-      socket.emitMessage({ message: 'graphOutputsReady', requestId, data: { execution, outputs } });
+      socket.emitMessage({ message: 'graphOutputsReady', requestId, data: { execution, graph, outputs } });
       assert.deepEqual(await result, outputs);
     });
     assert.equal(progress.length, 1);
     assert.deepEqual(patches, [{ key: 'accepted write' }]);
     assert.equal(traces.length, 1);
+    assert.equal(recordings.length, 0, 'Early outputs must not finalize a recording before execution settles');
     assert.equal(store.get(projectExecutionSnapshotsState)[id], retained);
     await act(async () => controller.abort());
     const aborts = socket.sent.map((raw) => JSON.parse(raw)).filter((frame) => frame.type === 'abort');
@@ -158,5 +179,15 @@ test(
     assert.equal(runtime.getActiveGraphRunRequestId(), null);
     assert.equal(store.get(projectExecutionSnapshotsState)[id], retained);
     assert.equal(traces.length, 1, 'late terminal delivery cannot duplicate an early response trace');
+    assert.equal(recordings.length, 1, 'The accepted run retains artifact ownership after tab replacement');
+    assert.equal(recordings[0]!.projectId, id);
+    assert.equal(recordings[0]!.projectPath, '/a.rivet-project');
+    assert.equal(recordings[0]!.status, 'failed');
+    assert.deepEqual(unavailable, []);
+    assert.ok(
+      ExecutionRecorder.deserializeFromString(recordings[0]!.recordingSerialized).events.some(
+        (event) => event.type === 'error',
+      ),
+    );
   },
 );

@@ -268,8 +268,7 @@ test('listener degradation disables pointer-cache health until a fresh listener 
   assert.equal(controller.isPointerCacheHealthy(), true);
 
   listenerOne.emitError(new Error('boom'));
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(controller.isPointerCacheHealthy(), false);
   assert.equal(cleared.count >= 1, true);
@@ -341,7 +340,7 @@ test('a notification from another managed instance notifies the affected web-app
   assert.deepEqual(policyInvalidated, ['workflow-on-another-instance']);
 });
 
-test('dispose keeps an in-flight listener startup from becoming healthy afterward', async () => {
+test('dispose waits for in-flight listener startup and confirmed closure without becoming healthy afterward', async () => {
   const listener = new DeferredConnectListener();
   let reconnectScheduled = 0;
   const { controller } = createController({
@@ -355,13 +354,105 @@ test('dispose keeps an in-flight listener startup from becoming healthy afterwar
   const initializePromise = controller.initialize();
   await Promise.resolve();
 
-  await controller.dispose();
-  listener.resolveConnect();
-  await initializePromise;
+  let disposed = false;
+  const closing = controller.dispose().then(() => {
+    disposed = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    assert.equal(disposed, false, 'shutdown cannot acknowledge a listener which is still connecting');
+  } finally {
+    listener.resolveConnect();
+    await Promise.all([initializePromise, closing]);
+  }
 
   assert.equal(controller.isPointerCacheHealthy(), false);
   assert.equal(listener.ended, true);
   assert.equal(reconnectScheduled, 0);
+});
+
+for (const phase of ['ready', 'startup', 'runtime'] as const) {
+  test(`an unconfirmed ${phase} listener close fences replacement and remains visible during disposal`, async (t) => {
+    t.mock.method(console, 'error', () => {
+      if (phase === 'runtime') throw new Error('Diagnostic output unavailable');
+    });
+    const listener = new FakeListener();
+    const closeFailure = new Error('Listener close acknowledgement unavailable');
+    let closes = 0;
+    listener.end = async () => {
+      closes++;
+      throw closeFailure;
+    };
+    if (phase === 'startup')
+      listener.connect = async () => {
+        throw new Error('Connect failed');
+      };
+    let creations = 0;
+    let reconnects = 0;
+    const { controller } = createController({
+      createListener: () => {
+        creations++;
+        return listener;
+      },
+      scheduleReconnect: () => {
+        reconnects++;
+        return {};
+      },
+    });
+    await controller.initialize();
+    if (phase === 'runtime') {
+      listener.emitError(new Error('Connection interrupted'));
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (phase !== 'ready') {
+      await controller.initialize();
+      assert.equal(creations, 1, 'a lost close acknowledgement must not create overlapping listener owners');
+    }
+    const first = controller.dispose();
+    const second = controller.dispose();
+    const results = await Promise.allSettled([first, second]);
+    assert.ok(results.every((result) => result.status === 'rejected' && result.reason === closeFailure));
+    assert.equal(first, second, 'disposal shares its actual close acknowledgement');
+    assert.equal(closes, 1, 'an unconfirmed close is not replayed');
+    assert.equal(reconnects, 0);
+    assert.equal(controller.isPointerCacheHealthy(), false);
+  });
+}
+
+test('concurrent reconnect callers await the same replacement after the previous close settles', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const previous = new FakeListener();
+  let close!: () => void;
+  previous.end = () =>
+    new Promise<void>((resolve) => {
+      close = resolve;
+    });
+  const replacement = new DeferredConnectListener();
+  let creations = 0;
+  const { controller } = createController({
+    createListener: () => (++creations === 1 ? previous : replacement),
+    scheduleReconnect: () => ({}),
+  });
+  await controller.initialize();
+  previous.emitError(new Error('Connection interrupted'));
+  await new Promise((resolve) => setImmediate(resolve));
+  let completions = 0;
+  const callers = [controller.initialize(), controller.initialize()].map((pending) =>
+    pending.then(() => {
+      completions++;
+    }),
+  );
+  close();
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    assert.equal(creations, 2);
+    assert.equal(completions, 0, 'neither caller can acknowledge a still-connecting replacement');
+  } finally {
+    replacement.resolveConnect();
+    await Promise.all(callers);
+    await controller.dispose();
+  }
+  assert.equal(completions, 2);
 });
 
 test('queueWorkflowInvalidation emits pg_notify inside the transaction and invalidates locally on commit', async () => {

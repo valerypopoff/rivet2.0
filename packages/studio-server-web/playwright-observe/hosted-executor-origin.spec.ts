@@ -3,21 +3,141 @@ import { mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 import { ExecutionRecorder } from '@valerypopoff/rivet2-core';
 
-test('executor observers wait for saved workspace hydration before reading project tabs', async ({ page }) => {
-  await seedHostedEditorProject(page, {
-    graphId: 'restored-graph', projectId: 'restored-project',
-    projectPath: '/workflows/Restored.rivet-project', title: 'Restored workspace', loaded: true,
+for (const projectId of ['restored-project', 'constructor', '__proto__']) {
+  test(`executor observers wait for saved workspace hydration before reading project tabs (${projectId})`, async ({
+    page,
+  }) => {
+    await seedHostedEditorProject(page, {
+      graphId: 'restored-graph',
+      projectId,
+      projectPath: '/workflows/Restored.rivet-project',
+      title: 'Restored workspace',
+      loaded: true,
+    });
+    await page.addInitScript(() =>
+      localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser' })),
+    );
+    await page.route(
+      (url) => url.pathname.startsWith('/api/'),
+      (route) => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }),
+    );
+    await mockHostedEditorBootstrap(page);
+    await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('.node-canvas').first()).toBeVisible();
+    await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('.node-canvas').first()).toBeVisible();
+    await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
   });
-  await page.addInitScript(() => localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser' })));
-  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }));
-  await mockHostedEditorBootstrap(page);
-  await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.node-canvas').first()).toBeVisible();
-  await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.node-canvas').first()).toBeVisible();
-  await expect(page.locator('.projects-container .project .project-name')).toHaveText(['Restored']);
-});
+}
+
+for (const preference of ['missing', 'custom', 'invalid'] as const) {
+  test(`hosted debugger preferences preserve ${preference} storage across panel opens and reload`, async ({ page }) => {
+    await seedHostedEditorProject(page, {
+      graphId: 'debugger-preferences-graph',
+      projectId: 'debugger-preferences-project',
+      projectPath: '/workflows/Debugger Preferences.rivet-project',
+      title: 'Debugger Preferences',
+      loaded: true,
+    });
+    await page.addInitScript((preference) => {
+      localStorage.setItem(
+        'recoil-persist',
+        JSON.stringify({
+          defaultExecutor: 'browser',
+          ...(preference === 'custom'
+            ? { debuggerDefaultUrl: 'ws://custom.example/custom-debugger/with-a-very-long-saved-project-specific-path' }
+            : preference === 'invalid'
+              ? { debuggerDefaultUrl: { stale: true } }
+              : {}),
+        }),
+      );
+    }, preference);
+    await page.route(
+      (url) => url.pathname.startsWith('/api/'),
+      (route) => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }),
+    );
+    await mockHostedEditorBootstrap(page);
+    const unexpectedConnections: string[] = [];
+    await page.routeWebSocket('**/not-saved', (socket) => unexpectedConnections.push(socket.url()));
+    await page.route('**/api/config', (route) =>
+      route.fulfill({
+        json: {
+          executorWsUrl: 'ws://internal:8181/ws/executor/internal',
+          executorWsUrlIsOverride: false,
+          remoteDebuggerDefaultWs: 'ws://internal:8181/ws/latest-debugger',
+          remoteDebuggerDefaultWsIsOverride: false,
+        },
+      }),
+    );
+    await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+    const runtimeDefault = new URL('/ws/latest-debugger', page.url());
+    runtimeDefault.protocol = runtimeDefault.protocol === 'https:' ? 'wss:' : 'ws:';
+    for (const reload of [false, true]) {
+      if (reload) await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect(page.locator('.node-canvas').first()).toBeVisible();
+      await page.locator('button.more-menu').click();
+      await page.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
+      const expected =
+        preference === 'custom'
+          ? 'ws://custom.example/custom-debugger/with-a-very-long-saved-project-specific-path'
+          : runtimeDefault.toString();
+      const urlInput = page.getByPlaceholder('(Default)');
+      await expect(urlInput).toHaveValue(expected);
+      await expect
+        .poll(() => urlInput.evaluate((element: HTMLInputElement) => [element.selectionStart, element.selectionEnd]))
+        .toEqual([0, expected.length]);
+      await urlInput.fill('ws://draft.example/not-saved');
+      await urlInput.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true });
+      await page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+      );
+      await expect(urlInput).toHaveValue('ws://draft.example/not-saved');
+      expect(unexpectedConnections).toEqual([]);
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      if (preference === 'missing') {
+        expect(
+          await page.evaluate(() =>
+            Object.hasOwn(JSON.parse(localStorage.getItem('recoil-persist')!), 'debuggerDefaultUrl'),
+          ),
+        ).toBe(false);
+      }
+      await expect(page.locator('.Toastify__toast--error')).toHaveCount(0);
+    }
+    // Cancel/IME did not persist the draft; ordinary Enter still connects once.
+    await page.locator('button.more-menu').click();
+    await page.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
+    const urlInput = page.getByPlaceholder('(Default)');
+    await urlInput.fill('ws://draft.example/not-saved');
+    await urlInput.press('Enter');
+    await expect(urlInput).toHaveCount(0);
+    await expect.poll(() => unexpectedConnections).toEqual(['ws://draft.example/not-saved']);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            new Promise<unknown>((resolve, reject) => {
+              // New writes use IndexedDB; localStorage above is only legacy seed data.
+              const open = indexedDB.open('jotai-store', 1);
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const read = database.transaction('state', 'readonly').objectStore('state').get('recoil-persist');
+                read.onerror = () => {
+                  database.close();
+                  reject(read.error);
+                };
+                read.onsuccess = () => {
+                  database.close();
+                  resolve(JSON.parse(read.result ?? '{}').debuggerDefaultUrl);
+                };
+              };
+            }),
+        ),
+      )
+      .toBe('ws://draft.example/not-saved');
+  });
+}
 
 test('new HA executor keeps Run disabled until the complete session handshake', async ({ page }) => {
   await seedHostedEditorProject(page, {
@@ -123,6 +243,14 @@ test('HA reconnect settles an IndexedDB dataset write and records once without r
     remoteDebuggerDefaultWs: '',
   } }));
   const uploads: Array<{ recordingSerialized: string; status: string }> = [];
+  await page.addInitScript(() => {
+    const group = JSON.parse(localStorage.getItem('project') ?? '{}');
+    group['projectContext__"ha-recording-project"'] = Object.fromEntries([
+      ['__proto__', { value: { type: 'string', value: 'portable-context' } }],
+    ]);
+    localStorage.setItem('project', JSON.stringify(group));
+  });
+  let sentContext: Record<string, unknown> | undefined;
   const unavailable: unknown[] = [];
   await page.route('**/api/workflows/local-editor-recordings**', async route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { supported: true } });
@@ -163,6 +291,7 @@ test('HA reconnect settles an IndexedDB dataset write and records once without r
       const payload = JSON.parse(message);
       if (payload.type !== 'run') return;
       runCommands++;
+      sentContext = payload.data.contextValues;
       requestId = payload.data.requestId;
       socket.send(JSON.stringify(start()));
       socket.send(JSON.stringify(datasetRequest));
@@ -176,6 +305,8 @@ test('HA reconnect settles an IndexedDB dataset write and records once without r
   await expect.poll(() => uploads.length).toBe(1);
   expect(connections).toBe(2);
   expect(runCommands).toBe(1);
+  expect(Object.hasOwn(sentContext!, '__proto__')).toBe(true);
+  expect(sentContext!['__proto__']).toEqual({ type: 'string', value: 'portable-context' });
   expect(datasetResponses).toBe(1);
   expect(unavailable).toEqual([]);
   expect(uploads[0]!.status).toBe('succeeded');

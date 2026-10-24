@@ -82,6 +82,7 @@ export const defaultApiTestFiles = [
   'src/tests/managed-health.test.ts',
   'src/tests/managed-maintenance.test.ts',
   'src/tests/managed-mappers.test.ts',
+  'src/tests/managed-operations.test.ts',
   'src/tests/managed-postgres-pool.test.ts',
   'src/tests/managed-publication-history.test.ts',
   'src/tests/managed-reconciliation.test.ts',

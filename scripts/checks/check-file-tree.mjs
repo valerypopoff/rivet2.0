@@ -2,6 +2,14 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  edgeKey,
+  findImportEdges,
+  findRuntimeDependencyPath,
+  isLongRelativeImport,
+  isPackageDeepImport,
+  reviewImportDebt,
+} from './import-boundaries.mjs';
 
 const repoRoot = dirname(fileURLToPath(new URL('../../package.json', import.meta.url)));
 const sourceFilePattern = /\.(?:mts|ts|tsx)$/;
@@ -18,8 +26,8 @@ const generatedPathPatterns = [
   /^tmp-macos-signing-test\//,
   /^tmp-rivet-icon-test\//,
 ];
-// Shrink this as legacy deep relative imports are moved behind local barrels.
-const longRelativeImportBaseline = 154;
+// Existing debt is explicit per source/specifier. No count-based grandfathering.
+const importDebt = JSON.parse(readFileSync(new URL('./import-boundary-debt.json', import.meta.url), 'utf8'));
 
 function git(args) {
   return execFileSync('git', args, {
@@ -65,16 +73,7 @@ function findImportBoundaryReports(files) {
       continue;
     }
 
-    const lines = readFileSync(absolutePath, 'utf8').split(/\r?\n/);
-    for (const [index, line] of lines.entries()) {
-      if (/from\s+['"]@valerypopoff\/[^'"]+\/src(?:\/[^'"]*)?['"]/.test(line)) {
-        reports.push(`${file}:${index + 1}: package deep import`);
-      }
-
-      if (!/\.(?:test|spec)\.[^.]+$/.test(file) && /from\s+['"](?:\.\.\/){3,}[^'"]*['"]/.test(line)) {
-        reports.push(`${file}:${index + 1}: long relative import`);
-      }
-    }
+    reports.push(...findImportEdges(file, readFileSync(absolutePath, 'utf8')));
   }
 
   return reports;
@@ -109,33 +108,46 @@ if (generatedFiles.length > 0) {
 }
 
 const importBoundaryReports = findImportBoundaryReports(repoFiles);
-const packageDeepImports = importBoundaryReports.filter((report) => report.endsWith('package deep import'));
-const longRelativeImports = importBoundaryReports.filter((report) => report.endsWith('long relative import'));
+const packageDeepImports = importBoundaryReports.filter(isPackageDeepImport);
+const longRelativeImports = importBoundaryReports.filter(isLongRelativeImport);
+const formatEdge = (edge) => `${edge.file}:${edge.line}: ${edge.specifier}`;
+const debt = reviewImportDebt(importBoundaryReports, importDebt.edges);
+const codeRunnerBarrelPath = findRuntimeDependencyPath(
+  importBoundaryReports,
+  'packages/core/src/integrations/CodeRunner.ts',
+  new Set(['packages/core/src/index.ts', 'packages/core/src/exports.ts']),
+  { '@valerypopoff/rivet2-core': 'packages/core/src/index.ts' },
+);
+if (codeRunnerBarrelPath) {
+  console.error(
+    `CodeRunner must receive its public namespace at composition, not import it: ${codeRunnerBarrelPath.join(' -> ')}`,
+  );
+  process.exitCode = 1;
+}
 
 if (packageDeepImports.length > 0) {
   console.error('Package source deep imports are not allowed:');
-  for (const report of packageDeepImports) console.error(`  - ${report}`);
+  for (const report of packageDeepImports) console.error(`  - ${formatEdge(report)}`);
   process.exitCode = 1;
 }
-if (longRelativeImports.length > longRelativeImportBaseline) {
-  console.error(
-    `Long relative imports grew from the reviewed baseline (${longRelativeImportBaseline}) to ${longRelativeImports.length}:`,
-  );
-  for (const report of longRelativeImports.slice(longRelativeImportBaseline)) console.error(`  - ${report}`);
+if (debt.added.length || debt.removed.length || debt.duplicates.length) {
+  for (const key of debt.added) console.error(`Unreviewed deep relative dependency: ${key}`);
+  for (const key of debt.removed) console.error(`Remove obsolete dependency allowance: ${key}`);
+  for (const key of debt.duplicates) console.error(`Duplicate dependency allowance: ${key}`);
   process.exitCode = 1;
 }
 
-if (importBoundaryReports.length > 0) {
+if (longRelativeImports.length > 0) {
   console.log('');
   console.log(
-    `Import-boundary review queue (${longRelativeImports.length}/${longRelativeImportBaseline} long relative imports; new package deep imports fail):`,
+    `Import-boundary debt (${new Set(longRelativeImports.map(edgeKey)).size} exact dependencies; new or stale allowances fail):`,
   );
-  for (const report of importBoundaryReports.slice(0, 100)) {
-    console.log(`  - ${report}`);
+  for (const report of longRelativeImports.slice(0, 20)) {
+    console.log(`  - ${formatEdge(report)}`);
   }
 
-  if (importBoundaryReports.length > 100) {
-    console.log(`  ... ${importBoundaryReports.length - 100} more`);
+  if (longRelativeImports.length > 20) {
+    console.log(`  ... remaining entries are recorded in scripts/checks/import-boundary-debt.json`);
   }
 } else {
   console.log('No package deep imports or long relative imports found.');

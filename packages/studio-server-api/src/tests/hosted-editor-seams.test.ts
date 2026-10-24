@@ -72,11 +72,7 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   const titleAfterSaveReconciler = readRepoFile(
     'packages/studio-server-web/dashboard/useReconcileHostedProjectTitleAfterSave.ts',
   );
-  const savedGraphsOverride = readRepoFile('packages/studio-server-web/overrides/state/savedGraphs.ts');
-  const loadProjectOverride = readRepoFile('packages/studio-server-web/overrides/hooks/useLoadProject.ts');
-  const syncOpenedProjectsOverride = readRepoFile(
-    'packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts',
-  );
+  const hostedProviders = readRepoFile('packages/studio-server-web/dashboard/hostedRivetProviders.ts');
   const hostedIOProvider = readRepoFile('packages/studio-server-web/io/HostedIOProvider.ts');
 
   assert.match(editorBridgeTypes, /projectId\?: string \| null/);
@@ -96,7 +92,8 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   assert.match(editorProjectLifecycleCommands, /context\.getWorkspace\(\)\.updateProjectMetadata/);
   assert.match(editorProjectLifecycleCommands, /persistedExternally: true/);
   assert.match(editorProjectLifecycleCommands, /changeSource: 'external-wrapper-rename'/);
-  assert.match(editorProjectLifecycleCommands, /deleteHostedProjectContextState\(projectId\)/);
+  assert.match(editorProjectLifecycleCommands, /await context\.getWorkspace\(\)\.deleteProjectContext\(projectId\)/);
+  assert.doesNotMatch(editorProjectLifecycleCommands, /overrides\/state\/savedGraphs|projectContext__|projectStorage/);
   assert.match(editorProjectLifecycleCommands, /await clearHostedDatasetsForProject\(projectId\)/);
   assert.match(editorProjectOpenCommands, /replaceProjectSnapshot\(openedProject\.projectId/);
   assert.doesNotMatch(editorProjectOpenCommands, /removeOpenedProjectSnapshot/);
@@ -131,34 +128,24 @@ test('hosted project IO keeps app-state cleanup and workspace commands on wrappe
   );
   assert.doesNotMatch(editorMessageBridge, /markProjectDirtyFlag|markProjectClean/);
 
-  assert.match(loadProjectOverride, /return useActivateOpenedProject\(/);
-  assert.match(loadProjectOverride, /getEvaluation:/);
-  assert.match(loadProjectOverride, /cacheEvaluation:/);
-  assert.match(loadProjectOverride, /normalizeExecutorMode: normalizeHostedProjectExecutorMode/);
+  assert.match(hostedProviders, /projectActivation:/);
+  assert.match(hostedProviders, /getEvaluation:/);
+  assert.match(hostedProviders, /cacheEvaluation:/);
+  assert.match(hostedProviders, /normalizeExecutorMode: normalizeHostedProjectExecutorMode/);
   assert.doesNotMatch(
-    loadProjectOverride,
+    hostedProviders,
     /openedProjectSnapshotsState|useWorkspaceTransitions|savedProjectContentDigestsState/,
   );
-  assert.match(syncOpenedProjectsOverride, /normalizeHostedOpenedProjects/);
-  assert.match(syncOpenedProjectsOverride, /openedProjectSnapshotsState/);
-  assert.match(syncOpenedProjectsOverride, /useSyncProjectDirtyState\(enabled\)/);
-  assert.doesNotMatch(
-    syncOpenedProjectsOverride,
-    /savedProjectContentDigestsState|projectUnsavedChangesState|resolveProjectContentDirtyState|markProjectClean|markProjectDirtyFlag/,
-  );
-  assert.doesNotMatch(syncOpenedProjectsOverride, /evaluationsState|primeOpenedProjectSession/);
-  assert.match(loadProjectOverride, /primeOpenedProjectSession\(info\.projectId/);
-  assert.match(loadProjectOverride, /fsPath: info\.fsPath, evaluation/);
-  assert.match(savedGraphsOverride, /createHybridStorage\('project'\)/);
-  assert.match(
-    savedGraphsOverride,
-    /export function clearProjectContextState\(projectId: ProjectId\): void \{\s*\/\/[^\n]*\n\s*releaseProjectContextState\(projectId\);\s*\}/,
-  );
-  assert.match(
-    savedGraphsOverride,
-    /export function deleteHostedProjectContextState\(projectId: ProjectId\): void \{\s*clearProjectContextState\(projectId\);\s*projectStorage\.removeItem\(`projectContext__"\$\{projectId\}"`\);\s*\}/,
-  );
-  assert.doesNotMatch(savedGraphsOverride, /clearProjectContextState as/);
+  assert.match(hostedProviders, /openedProjectSync:/);
+  assert.match(hostedProviders, /mode: 'explicit-tabs'/);
+  assert.match(hostedProviders, /resolveTitle: resolveHostedProjectTitle/);
+  assert.match(hostedProviders, /onOpenProjectIdsChanged: syncOpenedProjectSessionIds/);
+  expectRepoFileMissing('packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts');
+  assert.match(hostedProviders, /primeOpenedProjectSession\(info\.projectId/);
+  assert.match(hostedProviders, /fsPath: info\.fsPath, evaluation/);
+  expectRepoFileMissing('packages/studio-server-web/overrides/state/savedGraphs.ts');
+  expectRepoFileMissing('packages/studio-server-web/overrides/state/settings.ts');
+  expectRepoFileMissing('packages/studio-server-web/overrides/hooks/useCheckForUpdate.tsx');
 
   assert.match(hostedIOProvider, /this\.#evaluationStore\.putLibrary/);
   assert.match(hostedIOProvider, /jotaiStore\.get\(evaluationLibraryState\)/);
@@ -179,7 +166,6 @@ test('hosted executor, save, find, and clipboard seams keep clear ownership', ()
   const editorCommandBridge = readRepoFile('packages/studio-server-web/dashboard/useEditorCommandBridge.ts');
   const editorBridgeInteractions = readRepoFile('packages/studio-server-web/dashboard/useEditorBridgeInteractions.ts');
   const previewProjectLifecycle = readRepoFile('packages/studio-server-web/dashboard/usePreviewProjectLifecycle.ts');
-  const clipboardHotkeys = readRepoFile('packages/studio-server-web/overrides/hooks/useCopyNodesHotkeys.ts');
   const packageJson = readRepoFile('package.json');
 
   assert.match(hostedEditorApp, /const resolveInternalHostedExecutorUrl = useCallback/);
@@ -214,10 +200,8 @@ test('hosted executor, save, find, and clipboard seams keep clear ownership', ()
   assert.match(editorBridgeInteractions, /function replayEditorDuplicateShortcut/);
   assert.match(editorBridgeInteractions, /MOUNTED_EDITOR_SEARCH_INPUT_SELECTORS/);
   assert.match(editorMessageBridge, /setSearching\(openOrFocusGraphSearchState\)/);
-  assert.match(viteAliases, /useCopyNodesHotkeys/);
-  assert.match(clipboardHotkeys, /function handleCut/);
-  assert.match(clipboardHotkeys, /handleCopy\(event\);\s*deleteNodes\(\{ nodeIds: selectedNodeIds \}\)/);
-  assert.match(clipboardHotkeys, /window\.addEventListener\('cut', cutListener, true\)/);
+  assert.doesNotMatch(viteAliases, /useCopyNodesHotkeys/);
+  assert.match(hostedEditorApp, /nodeClipboard: \{ useHoveredNodeFallback: true, nativeEvents: true \}/);
 
   for (const stalePath of [
     'packages/studio-server-web/overrides/hooks/hostedInternalExecutorSession.ts',

@@ -52,40 +52,23 @@ const upstreamNodePackageJson = JSON.parse(
 ) as {
   dependencies?: Record<string, string>;
 };
-const settingsOverride = readFileSync(new URL('../overrides/state/settings.ts', import.meta.url), 'utf8');
-const contextMenuOverride = readFileSync(new URL('../overrides/hooks/useContextMenu.ts', import.meta.url), 'utf8');
-const loadProjectOverride = readFileSync(new URL('../overrides/hooks/useLoadProject.ts', import.meta.url), 'utf8');
-const syncOpenedProjectsOverride = readFileSync(
-  new URL('../overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts', import.meta.url),
-  'utf8',
-);
 
 function replacementFor(source: string): string | null {
   const alias = createModuleOverrideAliases(overrideDir).find((candidate) => candidate.find.test(source));
   return alias?.replacement.replace(/\\/g, '/') ?? null;
 }
 
-function collectSettingsOverrideExports(sourceFile: string): Set<string> {
-  const exports = new Set<string>();
-  const namedExportPattern = /export\s+(?:const|function|type)\s+([A-Za-z_$][\w$]*)/g;
-
-  for (const match of sourceFile.matchAll(namedExportPattern)) {
-    exports.add(match[1]);
-  }
-
-  return exports;
-}
-
 test('module override aliases keep only wrapper-owned Rivet app seams', () => {
-  assert.match(replacementFor('../state/savedGraphs') ?? '', /\/overrides\/state\/savedGraphs\.ts$/);
-  assert.match(replacementFor('../hooks/useLoadProject') ?? '', /\/overrides\/hooks\/useLoadProject\.ts$/);
-  assert.match(
-    replacementFor('../hooks/useSyncCurrentStateIntoOpenedProjects') ?? '',
-    /\/overrides\/hooks\/useSyncCurrentStateIntoOpenedProjects\.ts$/,
-  );
-  assert.match(replacementFor('../hooks/useCopyNodesHotkeys') ?? '', /\/overrides\/hooks\/useCopyNodesHotkeys\.ts$/);
-
   for (const retiredOverride of [
+    '../state/savedGraphs',
+    '../hooks/useLoadPackagePlugin',
+    '../utils/deserializeProject',
+    '../state/settings',
+    '../hooks/useCheckForUpdate',
+    '../hooks/useCopyNodesHotkeys',
+    '../hooks/useSyncCurrentStateIntoOpenedProjects',
+    '../hooks/useLoadProject',
+    '../hooks/useContextMenu',
     '../model/TauriProjectReferenceLoader',
     '../io/datasets',
     '../io/TauriIOProvider',
@@ -173,45 +156,9 @@ test('hosted Vite config resolves workspace-source Zod imports to the V4 API sur
   assert.match(zodAlias?.replacement.replace(/\\/g, '/') ?? '', /\/node_modules\/zod\/v4\/index\.js$/);
 });
 
-test('settings override delegates upstream settings and keeps hosted-only exports narrow', () => {
-  const overrideExports = collectSettingsOverrideExports(settingsOverride);
-
-  assert.match(settingsOverride, /export\s+\*\s+from\s+['"][^'"]*\/state\/settings\.js['"]/);
-  assert.deepEqual([...overrideExports].sort(), ['debuggerDefaultUrlState', 'updateModalOpenState']);
-  assert.match(settingsOverride, /RIVET_REMOTE_DEBUGGER_DEFAULT_WS/);
-  assert.match(settingsOverride, /normalizeRuntimeWebSocketUrl/);
-});
-
-test('context menu override keeps upstream virtual anchor contract and hosted focus cleanup', () => {
-  const floatingHookIndex = contextMenuOverride.indexOf('const { refs, floatingStyles, update } = useFloating');
-  const virtualReferenceIndex = contextMenuOverride.indexOf('refs.setReference(createContextMenuVirtualElement');
-
-  assert.ok(floatingHookIndex >= 0, 'context menu override should create floating refs before using them');
-  assert.ok(
-    virtualReferenceIndex > floatingHookIndex,
-    'context menu override should not read refs before useFloating runs',
-  );
-  assert.match(contextMenuOverride, /createContextMenuVirtualElement/);
-  assert.match(
-    contextMenuOverride,
-    /refs\.setReference\(createContextMenuVirtualElement\(event\.clientX, event\.clientY\)\)/,
-  );
-  assert.match(contextMenuOverride, /const setFloatingMenu = useMergeRefs\(\[refs\.setFloating, contextMenuRef\]\);/);
-  assert.match(contextMenuOverride, /setFloatingMenu,/);
-  assert.match(contextMenuOverride, /blurContextMenuFocus\(\);/);
-  assert.doesNotMatch(contextMenuOverride, /refs\.setReference\s*=/);
-});
-
-test('hosted opened-project overrides preserve upstream project executor mode contract', () => {
-  assert.match(syncOpenedProjectsOverride, /resolveCurrentProjectExecutorMode/);
-  assert.match(syncOpenedProjectsOverride, /normalizeHostedProjectExecutorMode/);
-  assert.match(syncOpenedProjectsOverride, /executorMode:\s*currentExecutorMode/);
-  assert.match(
-    syncOpenedProjectsOverride,
-    /projectExecutorModesEqual\(existingProject\?\.executorMode,\s*currentExecutorMode\)/,
-  );
-  assert.match(syncOpenedProjectsOverride, /useSyncCurrentStateIntoOpenedProjects\(\{ enabled = true \}/);
-  assert.match(loadProjectOverride, /useActivateOpenedProject/);
-  assert.match(loadProjectOverride, /normalizeExecutorMode:\s*normalizeHostedProjectExecutorMode/);
-  assert.match(syncOpenedProjectsOverride, /useSyncProjectDirtyState/);
+test('hosted debugger defaults and update capability use explicit host policy', () => {
+  const source = readFileSync(new URL('../dashboard/HostedEditorApp.tsx', import.meta.url), 'utf8');
+  assert.match(source, /getDefaultUrl: \(\) => RIVET_REMOTE_DEBUGGER_DEFAULT_WS/);
+  assert.match(source, /normalizeUrl: normalizeRuntimeWebSocketUrl/);
+  assert.match(source, /checkForUpdates: false/);
 });

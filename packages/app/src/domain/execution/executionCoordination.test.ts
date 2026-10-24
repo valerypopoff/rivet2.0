@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { GraphExecutionMetadata, ProcessEventMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
 import { createProjectBindingRegistry, type ProjectBindingSpec } from './projectBindingRegistry.js';
+
 import { getExecutionBundleKey } from './bundleMembership.js';
 import {
   bindExecutionTerminal,
@@ -10,6 +11,19 @@ import {
 } from './executionEventNormalization.js';
 import { createExecutionObservationCoordinator } from './executionObservationCoordinator.js';
 import { createLocalExecutionObservationRouter } from './localExecutionObservation.js';
+
+test('closing prototype-named IDs removes their binding and reopening cannot inherit its token', () => {
+  for (const id of ['constructor', '__proto__', 'toString']) {
+    const registry = createProjectBindingRegistry();
+    registry.reconcile({ [id]: { path: 'project.rivet-project' } });
+    const old = registry.get(id)!;
+    registry.reconcile({});
+    assert.equal(registry.get(id), undefined);
+    assert.equal(registry.isCurrent(id, old.token), false);
+    registry.reconcile({ [id]: { path: 'project.rivet-project' } });
+    assert.notEqual(registry.get(id)!.token, old.token);
+  }
+});
 
 test('binding lifetimes change only at close, rebind, membership or explicit replacement boundaries', () => {
   const registry = createProjectBindingRegistry();

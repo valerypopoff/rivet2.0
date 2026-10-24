@@ -32,9 +32,17 @@ export const overlayOpenState = atom<OverlayKey | undefined>(undefined);
 
 export const newProjectModalOpenState = atom<boolean>(false);
 
+export type GraphInputDeletionTarget = {
+  projectId: ProjectId;
+  graphId: GraphId | undefined;
+  workspaceToken: number;
+  bindingToken: number | undefined;
+};
+
 export type DeleteGraphInputConfirmState = {
   nodeIds: NodeId[];
   usages: ConnectedGraphInputUsage[];
+  target: GraphInputDeletionTarget;
 };
 
 export const deleteGraphInputConfirmState = atom<DeleteGraphInputConfirmState | null>(null);

@@ -231,3 +231,11 @@ export interface WorkflowDataBackend
     WorkflowPublicationRepository,
     WorkflowExecutionSources,
     WorkflowRecordingRepository {}
+
+/** Feature dependencies; the combined adapter is reserved for resource composition/migration. */
+export type WorkflowRepositories = {
+  projects: WorkflowProjectRepository;
+  publications: WorkflowPublicationRepository;
+  execution: WorkflowExecutionSources;
+  recordings: WorkflowRecordingRepository;
+};

@@ -86,6 +86,8 @@ export type RivetWorkspaceHost = {
   openProjectSnapshot(snapshot: RivetProjectSnapshotInput, options?: RivetProjectOpenOptions): Promise<boolean>;
   openProjectPath(path: string): Promise<boolean>;
   closeProject(projectId?: ProjectId): Promise<boolean>;
+  /** Remove editor-local context only, after the host has confirmed project deletion. Tab close retains it. */
+  deleteProjectContext(projectId: ProjectId): Promise<void>;
   moveProjectPaths(moves: MoveProjectPathsInput): void;
   setProjectTabUiState(projectId: ProjectId, state?: RivetProjectTabUiState): Promise<boolean>;
   startOpeningProjectTab(

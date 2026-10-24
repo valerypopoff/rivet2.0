@@ -5995,7 +5995,9 @@
         {
           "path": "packages/studio-server-web/overrides/hooks/useCheckForUpdate.tsx",
           "migrationMode": "100644",
-          "migrationBlob": "e4b74e010b578f6bd8e1d790316e2ecd1d2ee6bd"
+          "migrationBlob": "e4b74e010b578f6bd8e1d790316e2ecd1d2ee6bd",
+          "currentPath": "packages/app/src/hooks/useCheckForUpdate.tsx",
+          "currentReason": "The shared updater respects explicit host capability while keeping the standalone desktop update flow."
         }
       ]
     },
@@ -6009,7 +6011,9 @@
         {
           "path": "packages/studio-server-web/overrides/hooks/useContextMenu.ts",
           "migrationMode": "100644",
-          "migrationBlob": "18a957dfbb40a43317a32187d1e903ecc4c97756"
+          "migrationBlob": "18a957dfbb40a43317a32187d1e903ecc4c97756",
+          "currentPath": "packages/app/src/hooks/useContextMenu.ts",
+          "currentReason": "The shared editor owns menu state and positioning; the host supplies only external dismissal and focus cleanup."
         }
       ]
     },
@@ -6023,7 +6027,9 @@
         {
           "path": "packages/studio-server-web/overrides/hooks/useCopyNodesHotkeys.ts",
           "migrationMode": "100644",
-          "migrationBlob": "a20c0836d6f5606ebf69a1af2b0330c0e94330ce"
+          "migrationBlob": "a20c0836d6f5606ebf69a1af2b0330c0e94330ce",
+          "currentPath": "packages/app/src/hooks/useCopyNodesHotkeys.ts",
+          "currentReason": "The shared clipboard owner reads its provider store at event time; the host supplies hovered fallback and native clipboard event policy."
         }
       ]
     },
@@ -6051,7 +6057,9 @@
         {
           "path": "packages/studio-server-web/overrides/hooks/useLoadProject.ts",
           "migrationMode": "100644",
-          "migrationBlob": "ba7f0e5279e1676c69f22407b68ac95e7527f295"
+          "migrationBlob": "ba7f0e5279e1676c69f22407b68ac95e7527f295",
+          "currentPath": "packages/app/src/hooks/useActivateOpenedProject.ts",
+          "currentReason": "The shared activation owner consumes host-provided Evaluation cache and executor policy without a module replacement."
         }
       ]
     },
@@ -6065,7 +6073,9 @@
         {
           "path": "packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts",
           "migrationMode": "100644",
-          "migrationBlob": "2d5a91b5bee78fdf3cf818d50af171520a2f88be"
+          "migrationBlob": "2d5a91b5bee78fdf3cf818d50af171520a2f88be",
+          "currentPath": "packages/app/src/hooks/useSyncCurrentStateIntoOpenedProjects.ts",
+          "currentReason": "The shared editor synchronizer owns metadata, legacy recovery and close suppression; the host supplies explicit tab and title/cache policy."
         }
       ]
     },
@@ -6093,7 +6103,9 @@
         {
           "path": "packages/studio-server-web/overrides/state/savedGraphs.ts",
           "migrationMode": "100644",
-          "migrationBlob": "94c91ad268e843e89712bfaf56770258bfb509bc"
+          "migrationBlob": "94c91ad268e843e89712bfaf56770258bfb509bc",
+          "currentPath": "packages/app/src/hooks/workspaceHost/useWorkspaceHostProjectCleanup.ts",
+          "currentReason": "Workspace cleanup owns tab release and explicit durable project-context deletion; the host no longer reaches into editor storage."
         }
       ]
     },
@@ -6107,7 +6119,9 @@
         {
           "path": "packages/studio-server-web/overrides/state/settings.ts",
           "migrationMode": "100644",
-          "migrationBlob": "65f4cc0e8667412b2bf8c32337b8f95558e7585d"
+          "migrationBlob": "65f4cc0e8667412b2bf8c32337b8f95558e7585d",
+          "currentPath": "packages/app/src/state/settings.ts",
+          "currentReason": "The shared editor owns stored debugger preferences; explicit host UI policy supplies defaults and URL normalization."
         }
       ]
     },

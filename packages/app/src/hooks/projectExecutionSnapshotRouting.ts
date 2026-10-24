@@ -16,12 +16,14 @@ export function updateOpenProjectExecutionSnapshot(
   allowStandaloneActive = false,
 ): void {
   if (
-    !store.get(projectsState).openedProjects[projectId] &&
+    !Object.hasOwn(store.get(projectsState).openedProjects, projectId) &&
     !(allowStandaloneActive && store.get(projectState).metadata.id === projectId)
   )
     return;
   if (bindingToken !== undefined && !store.get(projectBindingRegistryState).isCurrent(projectId, bindingToken)) return;
-  const before = store.get(projectExecutionSnapshotsState)[projectId] ?? store.get(emptyExecutionSnapshotState);
+  const snapshots = store.get(projectExecutionSnapshotsState);
+  const before =
+    (Object.hasOwn(snapshots, projectId) ? snapshots[projectId] : undefined) ?? store.get(emptyExecutionSnapshotState);
   const after = update(before);
   if (before === after) return;
   store.set(projectExecutionSnapshotsState, { ...store.get(projectExecutionSnapshotsState), [projectId]: after });

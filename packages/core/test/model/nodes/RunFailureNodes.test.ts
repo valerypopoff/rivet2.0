@@ -16,6 +16,7 @@ import type { PortId } from '../../../src/model/NodeBase.js';
 import { createCaughtRunFailureOutputs, shouldCatchRunFailure } from '../../../src/model/nodeRunFailure.js';
 import { formatCaughtRunError } from '../../../src/utils/errors.js';
 import { testProcessContext } from '../../testUtils.js';
+import { InMemoryRivetLLMProfileHealthStore } from '../../../src/model/chat-v2/llmProfileHealthStore.js';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -63,6 +64,33 @@ const questions = {
   ['question1' as PortId]: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Question?' } },
 } as Inputs;
 const get = (outputs: Outputs, key: string) => outputs[key as PortId];
+
+// Deadlines belong to host-backed profiles, not the inline Decision AI run node.
+function runTimedClassifier(timeoutMs: number, ctx = context()) {
+  return classifier({ configurationMode: 'profile', catchRequestFailed: true }).process(
+    {
+      ...questions,
+      ['classifierProfile' as PortId]: {
+        type: 'classifier-config',
+        value: {
+          version: 1,
+          configuration: {
+            provider: 'jev',
+            model: 'jev-1.13.0',
+            enableCircuitBreaker: true,
+            responseTimeoutMs: timeoutMs,
+          },
+          credential: { value: 'test-key' },
+        },
+      },
+    } as Inputs,
+    {
+      ...ctx,
+      project: ctx.project ?? ({ metadata: { id: 'deadline-test-project' }, graphs: {} } as Project),
+      llmProfileHealthStore: new InMemoryRivetLLMProfileHealthStore(),
+    },
+  );
+}
 
 function successfulResponse(type: 'llm' | 'classifier', status = 200) {
   return new Response(
@@ -431,7 +459,7 @@ test('LLM catches structured-response validation after a successful HTTP request
 });
 
 for (const phase of ['headers', 'body'] as const) {
-  test(`Classifier rejects late successful ${phase} after its overall deadline`, async () => {
+  test(`Decision AI rejects late successful ${phase} after its profile deadline`, async () => {
     globalThis.fetch = async () => {
       const response = successfulResponse('classifier');
       if (phase === 'headers') await new Promise((resolve) => setTimeout(resolve, 40));
@@ -452,7 +480,7 @@ for (const phase of ['headers', 'body'] as const) {
       }
       return response;
     };
-    const outputs = await classifier({ timeoutMs: 10, catchRequestFailed: true }).process(questions, context());
+    const outputs = await runTimedClassifier(10);
     assert.equal(get(outputs, 'runFailed')?.value, true);
     assert.match(String(get(outputs, 'runError')?.value), /timed out/);
     assert.equal(get(outputs, 'answers')?.type, 'control-flow-excluded');
@@ -529,25 +557,25 @@ test('Classifier caught response-read errors retain the underlying cause', async
 });
 
 for (const phase of ['headers', 'body'] as const) {
-  test(`Classifier timeout settles when ${phase} ignores the abort signal`, { timeout: 1_000 }, async () => {
+  test(`Decision AI profile timeout settles when ${phase} ignores the abort signal`, { timeout: 1_000 }, async () => {
     globalThis.fetch = async () => {
       if (phase === 'headers') return new Promise<Response>(() => undefined);
       return new Response(new ReadableStream({ pull: () => new Promise(() => undefined) }));
     };
-    const outputs = await classifier({ timeoutMs: 10, catchRequestFailed: true }).process(questions, context());
+    const outputs = await runTimedClassifier(10);
     assert.equal(get(outputs, 'runFailed')?.value, true);
     assert.match(String(get(outputs, 'runError')?.value), /timed out/);
   });
 }
 
-test('Classifier disposes a late response after timeout instead of accepting it', async () => {
+test('Decision AI profile disposes a late response after timeout instead of accepting it', async () => {
   let completeRequest!: (response: Response) => void;
   let disposed = false;
   globalThis.fetch = () =>
     new Promise((resolve) => {
       completeRequest = resolve;
     });
-  const outputs = await classifier({ timeoutMs: 10, catchRequestFailed: true }).process(questions, context());
+  const outputs = await runTimedClassifier(10);
   completeRequest(
     new Response(
       new ReadableStream({
@@ -575,13 +603,13 @@ test('Classifier body cleanup throwing synchronously cannot mask the HTTP status
   assert.match(String(get(outputs, 'runError')?.value), /HTTP 418/);
 });
 
-test('Classifier catches its own request timeout while the graph signal remains live', async () => {
+test('Decision AI profile catches its request timeout while the graph signal remains live', async () => {
   globalThis.fetch = async (_url, options) =>
     new Promise<Response>((_resolve, reject) => {
       options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true });
     });
   const ctx = context();
-  const outputs = await classifier({ timeoutMs: 20, catchRequestFailed: true }).process(questions, ctx);
+  const outputs = await runTimedClassifier(20, ctx);
   assert.equal(ctx.signal.aborted, false);
   assert.equal(get(outputs, 'runFailed')?.value, true);
   assert.match(String(get(outputs, 'runError')?.value), /timed out/);

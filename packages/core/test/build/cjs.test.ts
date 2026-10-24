@@ -15,6 +15,25 @@ for (const hasSerialization of [false, true]) {
     const directory = mkdtempSync(path.join(tmpdir(), 'rivet-cjs-build-'));
     try {
       mkdirSync(path.join(directory, 'src'));
+      const sources = {
+        '.': 'src/index.ts',
+        ...(hasSerialization ? { './serialization': 'src/serialization.ts' } : {}),
+      };
+      writeFileSync(
+        path.join(directory, 'package.json'),
+        JSON.stringify({
+          src: 'src/index.ts',
+          ...(hasSerialization
+            ? {
+                rivetSourceEntrypoints: sources,
+                exports: {
+                  '.': { require: './dist/cjs/bundle.cjs' },
+                  './serialization': { node: { require: './dist/cjs/serialization.cjs' } },
+                },
+              }
+            : {}),
+        }),
+      );
       writeFileSync(path.join(directory, 'src/index.ts'), 'export const main = "workspace";');
       if (hasSerialization) {
         writeFileSync(path.join(directory, 'src/serialization.ts'), 'export const serialize = JSON.stringify;');

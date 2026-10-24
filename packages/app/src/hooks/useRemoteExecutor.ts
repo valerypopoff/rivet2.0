@@ -1,4 +1,8 @@
-import { isProjectObservingRemote, remoteObservationsState } from '../state/remoteObservation.js';
+import {
+  getProjectRemoteObservations,
+  isProjectObservingRemote,
+  remoteObservationsState,
+} from '../state/remoteObservation.js';
 import {
   logRuntimeDebug,
   logRuntimeInfo,
@@ -40,10 +44,8 @@ import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState }
 import {
   assertPortableJson,
   createEvaluationEventCollector,
-  EvaluationGraphExecutionError,
   type EvaluationEventCollector,
   type EvaluationRun,
-  type EvaluationRecordingReference,
   type EvaluationRunPurpose,
   type PortableJson,
 } from '@valerypopoff/rivet2-evaluations';
@@ -68,7 +70,6 @@ import {
   useEvaluationRunStore,
   useHostedEvaluationCoordinator,
   useLocalExecutionRecordingPersistence,
-  type LocalExecutionRecordingPersistenceProvider,
 } from '../providers/ProvidersContext.js';
 import { pluginsState } from '../state/plugins.js';
 import { getProjectContextValues } from '../utils/projectContextValues.js';
@@ -96,6 +97,13 @@ import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { bindExecutorSessionRun, waitForExecutorSessionRunCapability } from './executorSessionRunReadiness.js';
 import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
 import { executeEvaluationRunLifecycle } from '../utils/evaluationExecutionLifecycle.js';
+import { createEvaluationRecordingPersistence } from '../utils/evaluationRecordingPersistence.js';
+import { executeEvaluationGraph } from '../utils/evaluationGraphExecution.js';
+import {
+  prepareEditorRecordingPersistence,
+  persistEditorRunRecording,
+  type EditorRecordingPersistenceTarget,
+} from '../utils/editorRunRecording.js';
 import {
   captureRemoteResponseTraceRootExecution,
   collectRemoteAgentTraceEvent,
@@ -115,27 +123,19 @@ import { useExecutionSnapshotWriter } from './useExecutionSnapshotWriter.js';
 
 type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
 
-type RemoteLocalExecutionRecordingCapture = {
+type RemoteLocalExecutionRecordingCapture = EditorRecordingPersistenceTarget & {
   abortRequested: boolean;
-  correlationId: string;
   errorMessage?: string;
   graphId: GraphId;
   isTerminal: boolean;
   project: Project;
   projectId: ProjectId;
-  projectPath: string;
-  provider: LocalExecutionRecordingPersistenceProvider;
   recorder: ExecutionRecorder;
   recorderAbortController: AbortController;
   startedAt: number;
   createdAt: string;
   status: 'succeeded' | 'failed' | 'suspicious';
 };
-
-function createLocalExecutionRecordingCorrelationId(): string {
-  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  return `rvt-local-${id}`;
-}
 
 function getRemoteExecutionErrorMessage(data: unknown): string | undefined {
   const error = (data as { error?: unknown } | undefined)?.error;
@@ -173,15 +173,6 @@ function captureRemoteLocalExecutionTerminal(
   if (message === 'done' || message === 'error') {
     capture.isTerminal = true;
   }
-}
-
-function createRemoteEvaluationRecordingReference(): EvaluationRecordingReference {
-  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  return {
-    id: `evaluation-recording-${id}`,
-    retention: 'temporary',
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-  };
 }
 
 export function useRemoteExecutor() {
@@ -268,40 +259,18 @@ export function useRemoteExecutor() {
       return;
     }
 
-    try {
-      const durationMs = Math.max(0, performance.now() - capture.startedAt);
-      const projectContents = serializeProject(capture.project) as string;
-      const recordingSerialized = capture.recorder.serialize();
-      const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(capture.projectId));
-      await capture.provider.persist({
-        createdAt: capture.createdAt,
-        projectId: capture.projectId,
-        projectPath: capture.projectPath,
-        projectContents,
-        datasetsContents,
-        recordingSerialized,
-        status: capture.status,
-        durationMs,
-        errorMessage: capture.errorMessage,
-        executionIdentity: {
-          correlationId: capture.correlationId,
-          graphId: capture.graphId,
-        },
-      });
-    } catch (error) {
-      await capture.provider.markUnavailable(capture.correlationId).catch((outcomeError) => {
-        logRuntimeDebug('Remote editor run could not report a failed local recording.', {
-          error: outcomeError,
-          graphId: capture.graphId,
-          projectId: capture.projectId,
-        });
-      });
-      logRuntimeDebug('Remote editor recording was not retained by the hosted server.', {
-        error,
-        graphId: capture.graphId,
-        projectId: capture.projectId,
-      });
-    }
+    await persistEditorRunRecording({
+      source: 'node',
+      recorder: capture.recorder,
+      project: capture.project,
+      graphId: capture.graphId,
+      startedAt: capture.startedAt,
+      createdAt: capture.createdAt,
+      status: capture.status,
+      errorMessage: capture.errorMessage,
+      persistence: capture,
+      exportDatasets: () => datasetProvider.exportDatasetsForProject(capture.projectId),
+    });
   });
 
   const remoteDebugger = useRemoteDebugger({
@@ -649,13 +618,14 @@ export function useRemoteExecutor() {
         projectData,
         plugins: { appPluginStates: pluginStates, currentGraph: graph, registry: projectNodeRegistry },
         options,
+        settings: savedSettings,
+        context: projectContext,
       });
       store.get(projectsState);
       const bindingToken = store.get(projectBindingRegistryState).get(captured.projectId)?.token;
       const workspaceToken = store.get(projectBindingRegistryState).getWorkspaceToken();
       options = { ...captured.options, abortSignal: runSession.signal };
-      const contextValues = getProjectContextValues(projectContext);
-      const runSettings = structuredClone(savedSettings);
+      const { contextValues, settings: runSettings } = captured;
       let sessionState = executorSession.getRuntimeState();
       const selectedTargetKey = getRemoteExecutorUploadSessionKey(sessionState);
       if (!sessionState.capabilities.canSendRun && options.waitForResults) {
@@ -690,7 +660,12 @@ export function useRemoteExecutor() {
             !store.get(projectBindingRegistryState).isCurrent(captured.projectId, bindingToken))
         )
           throw new Error('The project binding changed while preparing the run. Run it again from the current tab.');
-        if (isProjectObservingRemote(store.get(remoteObservationsState)[captured.projectId] ?? [], captured.projectId))
+        if (
+          isProjectObservingRemote(
+            getProjectRemoteObservations(store.get(remoteObservationsState), captured.projectId),
+            captured.projectId,
+          )
+        )
           throw new Error('This project is observing a remote run. Stop Remote Debugger before starting a local run.');
         const current = executorSession.getRuntimeState();
         if (getRemoteExecutorUploadSessionKey(current) !== selectedTargetKey)
@@ -738,39 +713,23 @@ export function useRemoteExecutor() {
           });
       }
 
-      const remoteLocalRecordingProjectPath =
-        recordExecutions &&
-        sessionState.target?.type === 'internal-hosted' &&
-        options.webAppStorage === undefined &&
-        loadedProject.path &&
-        localExecutionRecordingPersistence
-          ? loadedProject.path
-          : undefined;
-      const remoteLocalRecordingProvider =
-        remoteLocalRecordingProjectPath &&
-        localExecutionRecordingPersistence &&
-        (await localExecutionRecordingPersistence.getCapability().catch(() => false))
-          ? localExecutionRecordingPersistence
-          : undefined;
-      const remoteLocalRecordingCorrelationId = remoteLocalRecordingProvider
-        ? createLocalExecutionRecordingCorrelationId()
-        : undefined;
-      const remoteLocalRecordingProject = projectWithCurrentGraph;
+      const remoteLocalRecordingPersistence = await prepareEditorRecordingPersistence({
+        eligible:
+          recordExecutions && sessionState.target?.type === 'internal-hosted' && options.webAppStorage === undefined,
+        projectPath: loadedProject.path,
+        provider: localExecutionRecordingPersistence,
+      });
       let remoteLocalRecordingRequestId: RemoteRunRequestId | undefined;
       const startRemoteLocalExecutionRecording = (requestId: RemoteRunRequestId) => {
-        if (!remoteLocalRecordingProvider || !remoteLocalRecordingCorrelationId || !remoteLocalRecordingProjectPath) {
-          return;
-        }
+        if (!remoteLocalRecordingPersistence) return;
 
         const capture: RemoteLocalExecutionRecordingCapture = {
           abortRequested: false,
-          correlationId: remoteLocalRecordingCorrelationId,
+          ...remoteLocalRecordingPersistence,
           graphId: graphToRun,
           isTerminal: false,
-          project: remoteLocalRecordingProject,
+          project: projectWithCurrentGraph,
           projectId: project.metadata.id,
-          projectPath: remoteLocalRecordingProjectPath,
-          provider: remoteLocalRecordingProvider,
           recorder: new ExecutionRecorder(),
           recorderAbortController: new AbortController(),
           startedAt: performance.now(),
@@ -851,11 +810,11 @@ export function useRemoteExecutor() {
         projectBundle: await getDesktopBundleRunLocation(loadedProject.path, entryDatasets, bundleManifestPath),
         useEditorCache: true,
         captureNodeTimings: showNodeRunDurations,
-        recordSubgraphProjectRuns: Boolean(remoteLocalRecordingProvider),
+        recordSubgraphProjectRuns: Boolean(remoteLocalRecordingPersistence),
         returnWhenGraphOutputsReady: options.returnWhenGraphOutputsReady,
-        ...(remoteLocalRecordingCorrelationId == null
+        ...(remoteLocalRecordingPersistence == null
           ? {}
-          : { llmProfileHealthExecutionCorrelationId: remoteLocalRecordingCorrelationId }),
+          : { llmProfileHealthExecutionCorrelationId: remoteLocalRecordingPersistence.correlationId }),
         ...(options.webAppStorage === undefined ? {} : { webAppStorage: options.webAppStorage }),
       };
       options.abortSignal?.throwIfAborted();
@@ -1111,7 +1070,10 @@ export function useRemoteExecutor() {
       const ensureActiveEvaluationProject = () => {
         if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
         if (
-          isProjectObservingRemote(store.get(remoteObservationsState)[evaluationProjectId] ?? [], evaluationProjectId)
+          isProjectObservingRemote(
+            getProjectRemoteObservations(store.get(remoteObservationsState), evaluationProjectId),
+            evaluationProjectId,
+          )
         )
           throw new Error(
             'This project is observing a remote run. Stop Remote Debugger before starting an evaluation.',
@@ -1205,7 +1167,6 @@ export function useRemoteExecutor() {
             let requestId: RemoteRunRequestId | undefined;
             const captured = createEvaluationEventCollector('full');
             const recorder = new ExecutionRecorder();
-            const recording = createRemoteEvaluationRecordingReference();
             const recordingAbortController = new AbortController();
             let recorderPromise: Promise<void> | undefined;
             const disposeIncompleteRecordingCapture = () => {
@@ -1220,88 +1181,70 @@ export function useRemoteExecutor() {
                 recordingAbortController.abort();
               }
             };
-            const persistRecording = async (): Promise<EvaluationRecordingReference | undefined> => {
-              if (recorder.events.length === 0) return undefined;
-              try {
-                await evaluationRunStore.putRecording({
-                  projectId: evaluationProjectId,
-                  runId: metadata.evaluationRunId,
-                  trialId: `${metadata.caseId}:${metadata.trialIndex}`,
-                  reference: recording,
-                  serialized: recorder.serialize(),
-                  createdAt: new Date().toISOString(),
-                });
-                return recording;
-              } catch (error) {
+            const persistRecording = createEvaluationRecordingPersistence({
+              recorder,
+              store: evaluationRunStore,
+              projectId: evaluationProjectId,
+              metadata,
+              onFailure: (error) => {
                 recordingPersistenceFailureCount += 1;
                 logRuntimeDebug('Remote evaluation recording was not retained.', {
                   error,
                   graphId,
                   evaluationRunId: metadata.evaluationRunId,
                 });
-                return undefined;
-              }
-            };
+              },
+            });
             try {
-              const outputs = await sendPendingRemoteGraphRunRequest({
-                abortSignal: signal,
-                disconnectErrorMessage: 'Remote executor disconnected before the evaluation graph run could be sent.',
-                executorSession,
-                onRequestCreated: (createdRequestId) => {
-                  ensureActiveEvaluationProject();
-                  requestId = createdRequestId;
-                  evaluationEventCollectorsByRequestIdRef.current.set(createdRequestId, captured);
-                  recorderPromise = executorSession.recordSocketEvents((socket) =>
-                    recorder.recordSocket(socket, {
-                      requestId: createdRequestId,
-                      signal: recordingAbortController.signal,
-                    }),
-                  );
+              return await executeEvaluationGraph({
+                captured,
+                startedAt,
+                signal,
+                persistRecording,
+                settleCapture: async (failed) => {
+                  if (failed) disposeIncompleteRecordingCapture();
+                  await recorderPromise;
                 },
-                payload: {
-                  graphId,
-                  inputs: evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
-                  contextValues: getProjectContextValues(projectContext),
-                  projectPath: loadedProject.path,
-                  projectBundle: await getDesktopBundleRunLocation(
-                    loadedProject.path,
-                    entryDatasets,
-                    bundleManifestPath,
-                  ),
-                  captureNodeTimings: showNodeRunDurations,
-                  evaluation: metadata,
-                },
-                sendAbort: (createdRequestId) =>
-                  evaluationConnection.isCurrent() && remoteDebugger.send('abort', { requestId: createdRequestId }),
-                sendRun: (payload) => {
-                  ensureActiveEvaluationProject();
-                  // No await between restoring this prepared definition and
-                  // dispatch. Other requests may have replaced the upload slot.
-                  uploadPreparedEvaluation?.();
-                  return remoteDebugger.send('run', payload);
-                },
-              });
-              captured.metrics.durationMs = Date.now() - startedAt;
-              await recorderPromise;
-              const persistedRecording = await persistRecording();
-              return {
-                outputs: Object.fromEntries(
-                  Object.entries(outputs).map(([key, value]) => [key, value.value as PortableJson]),
-                ),
-                metrics: captured.metrics,
-                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
-                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
-              };
-            } catch (error) {
-              captured.metrics.durationMs = Math.max(captured.metrics.durationMs, Date.now() - startedAt);
-              disposeIncompleteRecordingCapture();
-              await recorderPromise;
-              const persistedRecording = await persistRecording();
-              if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-              throw new EvaluationGraphExecutionError(error instanceof Error ? error.message : String(error), {
-                metrics: captured.metrics,
-                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
-                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
+                execute: async () =>
+                  sendPendingRemoteGraphRunRequest({
+                    abortSignal: signal,
+                    disconnectErrorMessage:
+                      'Remote executor disconnected before the evaluation graph run could be sent.',
+                    executorSession,
+                    onRequestCreated: (createdRequestId) => {
+                      ensureActiveEvaluationProject();
+                      requestId = createdRequestId;
+                      evaluationEventCollectorsByRequestIdRef.current.set(createdRequestId, captured);
+                      recorderPromise = executorSession.recordSocketEvents((socket) =>
+                        recorder.recordSocket(socket, {
+                          requestId: createdRequestId,
+                          signal: recordingAbortController.signal,
+                        }),
+                      );
+                    },
+                    payload: {
+                      graphId,
+                      inputs: evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
+                      contextValues: getProjectContextValues(projectContext),
+                      projectPath: loadedProject.path,
+                      projectBundle: await getDesktopBundleRunLocation(
+                        loadedProject.path,
+                        entryDatasets,
+                        bundleManifestPath,
+                      ),
+                      captureNodeTimings: showNodeRunDurations,
+                      evaluation: metadata,
+                    },
+                    sendAbort: (createdRequestId) =>
+                      evaluationConnection.isCurrent() && remoteDebugger.send('abort', { requestId: createdRequestId }),
+                    sendRun: (payload) => {
+                      ensureActiveEvaluationProject();
+                      // No await between restoring this prepared definition and
+                      // dispatch. Other requests may have replaced the upload slot.
+                      uploadPreparedEvaluation?.();
+                      return remoteDebugger.send('run', payload);
+                    },
+                  }),
               });
             } finally {
               disposeIncompleteRecordingCapture();

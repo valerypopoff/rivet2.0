@@ -74,6 +74,59 @@ test.describe('Hosted editor File menu', () => {
     await expect(modal).toBeVisible();
   });
 
+  test('uses the shared package loader UI with hosted transport and never replays a failed install', async ({
+    page,
+  }) => {
+    await seedFileMenuProject(page, 'hosted-plugin-provider');
+    await mockHostedEditorBootstrap(page);
+    const requests: Array<{ path: string; package: string }> = [];
+    await page.route('**/api/plugins/*', async (route) => {
+      const body = route.request().postDataJSON();
+      const path = new URL(route.request().url()).pathname;
+      requests.push({ path, package: body.package });
+      if (body.package === 'fixture-failure') {
+        await route.fulfill({ status: 503, body: 'Fixture install unavailable' });
+      } else if (path.endsWith('/install-package')) {
+        await route.fulfill({ json: { success: true, log: 'Fixture installed\n' } });
+      } else {
+        await route.fulfill({
+          json: {
+            contents:
+              'export default Rivet => ({ id: "fixture-package", name: Rivet.coerceType({type:"number",value:42}, "string") });',
+          },
+        });
+      }
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    const { editorFrame, fileMenu } = await openHostedFileMenu(page);
+    await fileMenu.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
+    const settings = editorFrame.getByTestId('settings-modal');
+    await settings.getByRole('button', { name: 'Plugins', exact: true }).click();
+    const add = async (name: string) => {
+      await settings
+        .locator('.plugin')
+        .filter({ hasText: 'Add a plugin from NPM manually' })
+        .getByRole('button', { name: 'Add', exact: true })
+        .click();
+      const modal = editorFrame.getByRole('dialog').filter({ hasText: 'Add NPM Plugin' });
+      await modal.getByPlaceholder('Package Name').fill(name);
+      await modal.getByRole('button', { name: 'Add', exact: true }).click();
+    };
+    await add('fixture-package');
+    await expect(
+      settings
+        .locator('.plugin')
+        .filter({ hasText: 'fixture-package' })
+        .getByRole('button', { name: 'Remove', exact: true }),
+    ).toBeVisible();
+    expect(requests.some((request) => request.path.endsWith('/load-package-main'))).toBe(true);
+    await add('fixture-failure');
+    const log = editorFrame.getByRole('dialog').filter({ hasText: 'Installing...' });
+    await expect(log).toContainText('Fixture install unavailable');
+    await log.getByRole('button', { name: 'Close', exact: true }).click();
+    expect(requests.filter((request) => request.package === 'fixture-failure')).toHaveLength(1);
+  });
+
   test('keeps the Plugins catalog identity column compact', async ({ page }) => {
     await seedFileMenuProject(page, 'plugin-catalog-layout');
 

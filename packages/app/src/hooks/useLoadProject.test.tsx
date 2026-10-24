@@ -20,7 +20,7 @@ import {
   type GraphExecutionMetadata,
 } from '@valerypopoff/rivet2-core';
 import type { PathBasedIOProvider } from '../io/IOProvider.js';
-import { ProvidersProvider } from '../providers/ProvidersContext.js';
+import { ProvidersProvider, type ProjectActivationPolicy } from '../providers/ProvidersContext.js';
 import { MemoryStaticDataStore } from '../providers/StaticDataStore.js';
 import { ExecutorSessionProvider } from '../providers/ExecutorSessionContext.js';
 import { HostCallbacksProvider } from '../providers/HostCallbacksContext.js';
@@ -35,7 +35,9 @@ import {
   projectsState,
   projectUnsavedChangesState,
   savedProjectContentDigestsState,
+  projectContextState,
 } from '../state/savedGraphs.js';
+import { useWorkspaceHostDeleteProjectContext } from './workspaceHost/useWorkspaceHostProjectCleanup.js';
 import {
   configureHybridStorageBackend,
   flushHybridStorageGroup,
@@ -140,7 +142,10 @@ test('a file-picker result after a newer tab selection cannot import or open its
   }
 });
 
-async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
+async function mount(
+  load: PathBasedIOProvider['loadProjectDataNoPrompt'],
+  projectActivation?: ProjectActivationPolicy,
+) {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://rivet.test/' });
   const keys = ['React', 'document', 'localStorage', 'navigator', 'window', 'IS_REACT_ACT_ENVIRONMENT'] as const;
   const previous = keys.map((key) => Object.getOwnPropertyDescriptor(globalThis, key));
@@ -207,6 +212,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
   let routeBundle!: ReturnType<typeof useBundleExecutionRouting>;
   let openFile!: ReturnType<typeof useLoadProjectWithFileBrowser>;
   let closeProject!: ReturnType<typeof useWorkspaceHostCloseProject>;
+  let deleteProjectContext!: ReturnType<typeof useWorkspaceHostDeleteProjectContext>;
   let open!: ReturnType<typeof useWorkspaceHostOpenProject>;
   let replaceSnapshot!: ReturnType<typeof useWorkspaceHostReplaceProjectSnapshot>;
   let opening!: ReturnType<typeof useWorkspaceHostOpeningTabs>;
@@ -223,6 +229,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     routeBundle = useBundleExecutionRouting();
     openFile = useLoadProjectWithFileBrowser();
     closeProject = useWorkspaceHostCloseProject();
+    deleteProjectContext = useWorkspaceHostDeleteProjectContext();
     open = useWorkspaceHostOpenProject();
     replaceSnapshot = useWorkspaceHostReplaceProjectSnapshot(open.replaceCurrent);
     opening = useWorkspaceHostOpeningTabs(open.openProjectSnapshot);
@@ -236,7 +243,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
   const render = (recoverStaticData = false) =>
     root.render(
       <Provider store={store}>
-        <ProvidersProvider providers={{ io, staticData }}>
+        <ProvidersProvider providers={{ io, staticData, projectActivation }}>
           <HostCallbacksProvider callbacks={{ onOpenError: (event) => errors.push(event.error) }}>
             <ExecutorSessionProvider>
               <Harness />
@@ -273,6 +280,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     openFile,
     io,
     closeProject,
+    deleteProjectContext,
     open,
     replaceSnapshot,
     opening,
@@ -295,6 +303,63 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     },
   };
 }
+
+test('tab close retains context while explicit project deletion clears only its durable local context', async () => {
+  const fixture = await mount(async () => {
+    throw new Error('Snapshots should avoid disk reads');
+  });
+  const { store, a, b } = fixture;
+  const aValue = { token: { value: { type: 'string', value: 'fixture-a' } } } as const;
+  const bValue = { token: { value: { type: 'string', value: 'fixture-b' } } } as const;
+  try {
+    act(() => {
+      store.set(projectContextState(a.metadata.id), aValue);
+      store.set(projectContextState(b.metadata.id), bValue);
+    });
+    await act(async () => {
+      assert.equal(await fixture.closeProject(b.metadata.id), true);
+    });
+    const afterClose = JSON.parse((await fixture.storage.getItem(getWorkspaceRecoveryStorage().key))!);
+    assert.deepEqual(afterClose.groups.project[`projectContext__"${b.metadata.id}"`], bValue);
+    const reopenedContext = projectContextState(b.metadata.id);
+    const stopObserving = store.sub(reopenedContext, () => {});
+    assert.deepEqual(store.get(reopenedContext), bValue, 'A fresh mounted context reads the retained close value');
+    stopObserving();
+    const checkpointKey = getWorkspaceRecoveryStorage().key;
+    const durableBeforeFailure = await fixture.storage.getItem(checkpointKey);
+    const persist = fixture.storage.setItem.bind(fixture.storage);
+    try {
+      fixture.storage.setItem = async () => {
+        throw new Error('fixture context quota exceeded');
+      };
+      await act(async () =>
+        assert.rejects(fixture.deleteProjectContext(b.metadata.id), /fixture context quota exceeded/),
+      );
+      assert.equal(
+        await fixture.storage.getItem(checkpointKey),
+        durableBeforeFailure,
+        'A rejected flush must not pretend the old checkpoint changed',
+      );
+      assert.deepEqual(store.get(projectContextState(a.metadata.id)), aValue);
+      assert.deepEqual(store.get(reopenedContext), {}, 'Deletion still clears its live value when persistence fails');
+    } finally {
+      fixture.storage.setItem = persist;
+    }
+    // Explicit retry commits the deletion without erasing another project's context.
+    await act(async () => fixture.deleteProjectContext(b.metadata.id));
+    const afterDelete = JSON.parse((await fixture.storage.getItem(getWorkspaceRecoveryStorage().key))!);
+    assert.equal(Object.hasOwn(afterDelete.groups.project, `projectContext__"${b.metadata.id}"`), false);
+    assert.deepEqual(afterDelete.groups.project[`projectContext__"${a.metadata.id}"`], aValue);
+    assert.deepEqual(store.get(projectContextState(a.metadata.id)), aValue);
+    assert.deepEqual(store.get(projectContextState(b.metadata.id)), {});
+    const liveContext = projectContextState(a.metadata.id);
+    await act(async () => fixture.deleteProjectContext(a.metadata.id));
+    assert.deepEqual(store.get(liveContext), {}, 'Already-mounted context atoms must not retain deleted values');
+    assert.deepEqual(store.get(projectContextState(a.metadata.id)), {}, 'Live context views are reset too');
+  } finally {
+    await fixture.cleanup();
+  }
+});
 
 test('same-path inactive snapshot replacement commits a new binding without selecting the tab', async () => {
   const fixture = await mount(async () => {
@@ -329,6 +394,136 @@ test('same-path inactive snapshot replacement commits a new binding without sele
 });
 
 const evaluation = { evaluationData: createEmptyEvaluationProjectData(), evaluationDatasets: [] };
+
+test('host activation policy supplies cached evaluations without replacing live snapshots or rereading saved data', async () => {
+  const normalized: unknown[] = [];
+  const fixture = await mount(
+    async () => {
+      throw new Error('Cached activation must not read IO');
+    },
+    {
+      getEvaluation: () => evaluation,
+      cacheEvaluation: () => assert.fail('A cache hit must not be imported again'),
+      normalizeExecutorMode: (mode) => {
+        normalized.push(mode);
+        return { type: 'local', executor: 'browser' };
+      },
+    },
+  );
+  try {
+    fixture.store.set(savedProjectContentDigestsState, (digests) => markProjectClean(digests, { project: fixture.b }));
+    const snapshot = structuredClone(fixture.b);
+    snapshot.metadata.description = 'Unsaved inactive content';
+    fixture.store.set(openedProjectSnapshotsState, { [fixture.b.metadata.id]: { project: snapshot, data: undefined } });
+    await act(async () => {
+      assert.equal(
+        await fixture.activate(fixture.store.get(projectsState).openedProjects[fixture.b.metadata.id]!),
+        true,
+      );
+    });
+    assert.equal(fixture.store.get(projectState).metadata.description, 'Unsaved inactive content');
+    assert.equal(normalized.length, 1);
+    assert.deepEqual(fixture.store.get(evaluationLibraryState).data, evaluation.evaluationData);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('a host evaluation-cache miss is filled from guarded IO without committing over an open snapshot', async () => {
+  const cached: unknown[] = [];
+  let commits = 0;
+  const fixture = await mount(
+    async () => ({
+      project: fixture.b,
+      evaluation,
+      commit: async () => {
+        commits++;
+        return true;
+      },
+    }),
+    {
+      getEvaluation: () => undefined,
+      cacheEvaluation: (info, value) => cached.push([info.projectId, info.fsPath, value]),
+    },
+  );
+  try {
+    await act(async () => {
+      assert.equal(
+        await fixture.activate(fixture.store.get(projectsState).openedProjects[fixture.b.metadata.id]!),
+        true,
+      );
+    });
+    assert.equal(commits, 0);
+    assert.deepEqual(cached, [[fixture.b.metadata.id, 'b.rivet-project', evaluation]]);
+    assert.equal(fixture.store.get(projectState).metadata.id, fixture.b.metadata.id);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+for (const change of ['snapshot replacement', 'bundle rebinding'] as const) {
+  for (const outcome of ['loaded', 'failed'] as const) {
+    test(`delayed host activation (${outcome}) is ignored after ${change}`, async () => {
+      const started = deferred();
+      const release = deferred();
+      const cached: unknown[] = [];
+      const fixture = await mount(
+        async () => {
+          started.resolve();
+          await release.promise;
+          if (outcome === 'failed') throw new Error('Obsolete read failed');
+          return { project: fixture.b, evaluation };
+        },
+        {
+          getEvaluation: () => undefined,
+          cacheEvaluation: (_info, value) => cached.push(value),
+        },
+      );
+      try {
+        let activation!: Promise<boolean>;
+        await act(async () => {
+          activation = fixture.activate(fixture.store.get(projectsState).openedProjects[fixture.b.metadata.id]!);
+          await started.promise;
+        });
+        await act(async () => {
+          if (change === 'snapshot replacement') {
+            const replacement = structuredClone(fixture.b);
+            replacement.metadata.description = 'New authoritative snapshot';
+            assert.equal(
+              await fixture.replaceSnapshot(fixture.b.metadata.id, { project: replacement, path: 'b.rivet-project' }),
+              true,
+            );
+          } else {
+            fixture.store.set(projectsState, (state) => ({
+              ...state,
+              openedProjects: {
+                ...state.openedProjects,
+                [fixture.b.metadata.id]: {
+                  ...state.openedProjects[fixture.b.metadata.id]!,
+                  hostedBundleKey: 'server:new-bundle',
+                },
+              },
+            }));
+          }
+        });
+        release.resolve();
+        await act(async () => assert.equal(await activation, false));
+        assert.deepEqual(cached, []);
+        assert.deepEqual(fixture.errors, []);
+        assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
+        if (change === 'snapshot replacement') {
+          assert.equal(
+            fixture.store.get(openedProjectSnapshotsState)[fixture.b.metadata.id]!.project.metadata.description,
+            'New authoritative snapshot',
+          );
+        }
+      } finally {
+        release.resolve();
+        await fixture.cleanup();
+      }
+    });
+  }
+}
 
 test('reopening an existing bundle member retains membership without importing over live data', async () => {
   for (const entry of ['active', 'inactive'] as const) {

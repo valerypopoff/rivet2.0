@@ -23,15 +23,15 @@ No new wire contract or provider qualification is implied.
 
 ## Local delivery map (2026-10-24)
 
-| Phase | Delivered boundary |
-| --- | --- |
-| P0 | Frozen behavior IDs and regression matrix; explicit writer/control/recording ownership inventory |
-| P1 | Shared per-store binding generations at workspace commits, including same-path replacement and final ingress disposal |
-| P2 | Exhaustive internal source/lifecycle classification; captured Browser terminal identity; actual cleanup remains distinct from outputs and abort notices |
-| P3 | One metadata coordinator and sticky admission policy; local and external-debugger adapters retain documented policy differences |
-| P4 | One snapshot map and shared event transitions/writer for interactive and inactive data; explicit presentation policies; tab-local legacy terminal queue |
-| P5 | Seeded lifetime sequences, 5,000-root retention/disposal, full-state/ref parity, adapter regressions, bounded rejection diagnostics and both domain/import and ingress/write CI guards |
-| P6 | Obsolete restore/persist, map-writing helpers and inferred-lifetime machinery removed; extension rules and local qualification receipts in the architecture guide |
+| Phase | Delivered boundary                                                                                                                                                                     |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0    | Frozen behavior IDs and regression matrix; explicit writer/control/recording ownership inventory                                                                                       |
+| P1    | Shared per-store binding generations at workspace commits, including same-path replacement and final ingress disposal                                                                  |
+| P2    | Exhaustive internal source/lifecycle classification; captured Browser terminal identity; actual cleanup remains distinct from outputs and abort notices                                |
+| P3    | One metadata coordinator and sticky admission policy; local and external-debugger adapters retain documented policy differences                                                        |
+| P4    | One snapshot map and shared event transitions/writer for interactive and inactive data; explicit presentation policies; tab-local legacy terminal queue                                |
+| P5    | Seeded lifetime sequences, 5,000-root retention/disposal, full-state/ref parity, adapter regressions, bounded rejection diagnostics and both domain/import and ingress/write CI guards |
+| P6    | Obsolete restore/persist, map-writing helpers and inferred-lifetime machinery removed; extension rules and local qualification receipts in the architecture guide                      |
 
 The initial implementation left a P4 gap: storage was canonical, but interactive
 mutation helpers and transport-side view routing still required consolidation.
@@ -41,9 +41,11 @@ FIFO and full-state/ref parity tests. The old map-writing API was removed instea
 of kept as a migration path. Notification/selection/control policies stay explicit.
 Browser evaluation activity additionally captures its originating binding before
 asynchronous preparation; late cleanup cannot journal to the selected neighbor or
-a same-ID replacement. Local test receipts and the four live-Compose setup checks
-that remain unverified are explicitly recorded in the architecture guide's
-completion audit; source implementation completion is not provider qualification.
+a same-ID replacement. Local test receipts are recorded in the architecture
+guide's completion audit. The four real-Compose checks subsequently passed after
+repairing their saved-project fixture; see the
+[integrated qualification receipts](./feature-readiness-refactoring.md#integrated-qualification-follow-up-2026-10-24).
+Local completion is not provider qualification.
 The subsequent review adds exact-root terminal-queue cleanup for passive settlement
 and fences inactive request callback re-entrancy before reference effects. Regression
 fixtures reproduce both failures before the fixes and retain positive delivery for
@@ -83,13 +85,13 @@ recorded in the execution-coordination guide linked above.
 
 ## What the failures tell us
 
-| Findings from the reviews | Structural cause | Refactoring boundary |
-| --- | --- | --- |
-| Desktop/Server membership and executor-target omissions | Mode-specific integration knows too much about routing | Neutral membership contract and explicit source adapters |
-| Independent runs, playback and debugger data overwritten; conflicts missed before/between child events | Display ownership is inferred repeatedly from scattered mutable atoms | One display-admission policy using authoritative ownership transitions |
-| Reopened, rebound, moved or newly opened tabs receiving partial/stale data | Project ID and path are being used as substitutes for a tab lifetime | Explicit in-memory binding generation |
-| Browser terminal cleanup, late-child resurrection and active-state eviction | Transport messages, display outcome and actual execution settlement are conflated | Normalized lifecycle and lifecycle-owned retention |
-| Redundant restoration and active/inactive special cases | More than one route can update equivalent execution state | One write boundary, then one canonical per-binding execution state |
+| Findings from the reviews                                                                              | Structural cause                                                                  | Refactoring boundary                                                   |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Desktop/Server membership and executor-target omissions                                                | Mode-specific integration knows too much about routing                            | Neutral membership contract and explicit source adapters               |
+| Independent runs, playback and debugger data overwritten; conflicts missed before/between child events | Display ownership is inferred repeatedly from scattered mutable atoms             | One display-admission policy using authoritative ownership transitions |
+| Reopened, rebound, moved or newly opened tabs receiving partial/stale data                             | Project ID and path are being used as substitutes for a tab lifetime              | Explicit in-memory binding generation                                  |
+| Browser terminal cleanup, late-child resurrection and active-state eviction                            | Transport messages, display outcome and actual execution settlement are conflated | Normalized lifecycle and lifecycle-owned retention                     |
+| Redundant restoration and active/inactive special cases                                                | More than one route can update equivalent execution state                         | One write boundary, then one canonical per-binding execution state     |
 
 There are already useful foundations. Reuse `ExecutorSessionRegistry` and its
 message admission, `createRemoteExecutionObservationRouter`,

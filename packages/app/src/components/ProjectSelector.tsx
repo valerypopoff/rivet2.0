@@ -21,6 +21,7 @@ import { leftSidebarLiveWidthState, overlayOpenState } from '../state/ui.js';
 import { buildProjectTabListItems } from '../utils/openingProjectTabs.js';
 import { isMacOSPlatform, isWindowsPlatform } from '../utils/platform/os.js';
 import { isInTauri } from '../utils/tauri.js';
+import { isEditorInputLocked } from '../utils/editorInputLock.js';
 import { OverlayTabs } from './OverlayTabs.js';
 import { GraphHistoryControls, GraphTreeSidebarToggle } from './projectSelector/GraphTopBarControls.js';
 import { ProjectFileMenu } from './projectSelector/ProjectFileMenu.js';
@@ -130,11 +131,7 @@ export const ProjectSelector: FC<{
       return {
         // Respect host input locks as well as dialogs, including alert dialogs.
         // Ordinary text inputs still support tab navigation.
-        enabled:
-          projectMode &&
-          !document.documentElement.inert &&
-          !document.body.inert &&
-          !document.querySelector('[aria-modal="true"], dialog[open], .app[inert], [inert] .app'),
+        enabled: projectMode && !isEditorInputLocked(document) && !document.querySelector('dialog[open]'),
         platform: isMacOSPlatform() ? 'macos' : isWindowsPlatform() ? 'windows' : 'linux',
         tabs: buildProjectTabListItems({
           openedProjectIds: store.get(openedProjectsSortedIdsState).filter((id) => projects[id] != null),

@@ -1,5 +1,6 @@
 const esbuild = require('esbuild');
-const { existsSync } = require('node:fs');
+const { readFileSync } = require('node:fs');
+const { basename } = require('node:path');
 
 const aliasModule = (moduleFrom, moduleTo) => ({
   name: 'alias-module',
@@ -22,27 +23,21 @@ const aliasModule = (moduleFrom, moduleTo) => ({
 
 // Several dependencies ship as ESM-only in their latest versions. The CJS
 // bundle aliases them to installed CJS-compatible versions so require() works.
-const hasWebAppRuntimeEntry = existsSync('src/webAppRuntime.ts');
-const hasInterpolationRuntimeEntry = existsSync('src/interpolationRuntime.ts');
-const hasInterpolationSyntaxEntry = existsSync('src/utils/interpolationSyntax.ts');
-// This builder also runs from packages/node, which has no serialization entry.
-const entryPoints = { bundle: 'src/index.ts' };
-
-if (existsSync('src/serialization.ts')) {
-  entryPoints.serialization = 'src/serialization.ts';
-}
-
-if (hasWebAppRuntimeEntry) {
-  entryPoints.webAppRuntime = 'src/webAppRuntime.ts';
-}
-
-if (hasInterpolationRuntimeEntry) {
-  entryPoints.interpolationRuntime = 'src/interpolationRuntime.ts';
-}
-
-if (hasInterpolationSyntaxEntry) {
-  entryPoints.interpolationSyntax = 'src/utils/interpolationSyntax.ts';
-}
+// Core owns one source declaration beside its public built exports. Node
+// reuses this builder and intentionally has only its root entrypoint.
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+const entryPoints = Object.fromEntries(
+  packageJson.rivetSourceEntrypoints
+    ? Object.entries(packageJson.rivetSourceEntrypoints).map(([subpath, source]) => {
+        const entry = packageJson.exports[subpath];
+        const output = entry.require ?? entry.node?.require;
+        if (!source || !output?.startsWith('./dist/cjs/')) {
+          throw new Error(`Export ${subpath} must declare source and CommonJS output paths.`);
+        }
+        return [basename(output, '.cjs'), source];
+      })
+    : [['bundle', packageJson.src]],
+);
 
 const options = {
   entryPoints,

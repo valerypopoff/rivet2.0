@@ -12,7 +12,11 @@ import {
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
 import { executorSessionRevisionState, loadedRecordingState, getLoadedRecordingForTab } from '../state/execution.js';
 import { previousDataPerNodeToKeepState } from '../state/settings.js';
-import { remoteObservationsState, remoteObservationNoticesState } from '../state/remoteObservation.js';
+import {
+  getProjectRemoteObservations,
+  remoteObservationsState,
+  remoteObservationNoticesState,
+} from '../state/remoteObservation.js';
 import { createRemoteExecutionObservationRouter } from './remoteExecutionObservation.js';
 import { updateOpenProjectExecutionSnapshot } from './projectExecutionSnapshotRouting.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
@@ -35,9 +39,8 @@ export function useRemoteExecutionObservations(registry: ExecutorSessionRegistry
       if (message && !registry.getRemoteDebuggerRuntime(id)) return;
       const previous = store.get(remoteObservationNoticesState);
       if (previous[id] === message) return;
-      const next = { ...previous };
+      const next: typeof previous = { ...previous, [id]: message };
       if (message === undefined) delete next[id];
-      else next[id] = message;
       store.set(remoteObservationNoticesState, next);
     };
     return createRemoteExecutionObservationRouter({
@@ -62,13 +65,17 @@ export function useRemoteExecutionObservations(registry: ExecutorSessionRegistry
       publish(id, observation) {
         store.set(remoteObservationsState, (previous) => ({
           ...previous,
-          [id]: [...(previous[id] ?? []).filter((item) => item.id !== observation.id), observation],
+          [id]: [
+            ...getProjectRemoteObservations(previous, id).filter((item) => item.id !== observation.id),
+            observation,
+          ],
         }));
       },
       remove(id, observationId) {
         const previous = store.get(remoteObservationsState);
-        if (!previous[id]?.some((item) => item.id === observationId)) return;
-        const remaining = previous[id]!.filter((item) => item.id !== observationId);
+        const observations = getProjectRemoteObservations(previous, id);
+        if (!observations.some((item) => item.id === observationId)) return;
+        const remaining = observations.filter((item) => item.id !== observationId);
         const next = { ...previous };
         if (remaining.length) next[id] = remaining;
         else delete next[id];

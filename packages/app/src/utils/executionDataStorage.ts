@@ -135,17 +135,11 @@ export function storeInputsOrOutputsForHistory(
     return undefined;
   }
 
-  const storedData: Partial<Record<PortId, StoredDataValue>> = {};
-
-  for (const [portId, value] of Object.entries(data) as Array<[PortId, DataValue | undefined]>) {
-    if (value == null) {
-      continue;
-    }
-
-    storedData[portId] = storeDataValueForHistory(value, refStore, scope, portId);
-  }
-
-  return storedData as InputsOrOutputsWithRefs;
+  return Object.fromEntries(
+    (Object.entries(data) as Array<[PortId, DataValue | undefined]>).flatMap(([portId, value]) =>
+      value == null ? [] : [[portId, storeDataValueForHistory(value, refStore, scope, portId)]],
+    ),
+  ) as InputsOrOutputsWithRefs;
 }
 
 export function storeDataValueForHistory(
@@ -256,17 +250,11 @@ export function restoreStoredInputsOrOutputs(
     return undefined;
   }
 
-  const restoredData: Partial<Record<PortId, DataValue>> = {};
-
-  for (const [portId, storedValue] of Object.entries(data) as Array<[PortId, DataValueWithRefs | undefined]>) {
-    if (storedValue == null) {
-      continue;
-    }
-
-    restoredData[portId] = restoreStoredDataValue(storedValue, refStore);
-  }
-
-  return restoredData as Inputs | Outputs;
+  return Object.fromEntries(
+    (Object.entries(data) as Array<[PortId, DataValueWithRefs | undefined]>).flatMap(([portId, storedValue]) =>
+      storedValue == null ? [] : [[portId, restoreStoredDataValue(storedValue, refStore)]],
+    ),
+  ) as Inputs | Outputs;
 }
 
 export function tryRestoreStoredInputsOrOutputs(
@@ -352,18 +340,18 @@ export function splitRunDataByPreservedNodes(
   nodeIdsToPreserve: Iterable<NodeId>,
 ): { preservedRunData: RunDataByNodeId; removedRunData: RunDataByNodeId } {
   const preserveSet = new Set(nodeIdsToPreserve);
-  const preservedRunData: RunDataByNodeId = {};
-  const removedRunData: RunDataByNodeId = {};
+  const preserved: Array<[string, RunDataByNodeId[NodeId]]> = [];
+  const removed: Array<[string, RunDataByNodeId[NodeId]]> = [];
 
   for (const [nodeId, runData] of Object.entries(previousRunData)) {
     if (preserveSet.has(nodeId as NodeId)) {
-      preservedRunData[nodeId as NodeId] = runData;
+      preserved.push([nodeId, runData]);
     } else {
-      removedRunData[nodeId as NodeId] = runData;
+      removed.push([nodeId, runData]);
     }
   }
 
-  return { preservedRunData, removedRunData };
+  return { preservedRunData: Object.fromEntries(preserved), removedRunData: Object.fromEntries(removed) };
 }
 
 export function deleteStoredRefIds(refStore: DataRefDeleter, refIds: Iterable<string>): void {

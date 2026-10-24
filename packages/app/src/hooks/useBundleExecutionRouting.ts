@@ -5,7 +5,11 @@ import { useDataRefs } from '../providers/ProvidersContext.js';
 import { projectsState } from '../state/savedGraphs.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
 import { getLoadedRecordingForTab, loadedRecordingState } from '../state/execution.js';
-import { isProjectObservingRemote, remoteObservationsState } from '../state/remoteObservation.js';
+import {
+  getProjectRemoteObservations,
+  isProjectObservingRemote,
+  remoteObservationsState,
+} from '../state/remoteObservation.js';
 import { projectBindingRegistryState, retireWorkspaceExecutionState } from '../state/projectBindings.js';
 import { localExecutionObservationState } from '../state/executionObservation.js';
 import { updateOpenProjectExecutionSnapshot } from './projectExecutionSnapshotRouting.js';
@@ -30,7 +34,7 @@ export function useBundleExecutionRouting() {
         const info = store.get(projectsState).openedProjects[id];
         return Boolean(
           getLoadedRecordingForTab(store.get(loadedRecordingState), id, info?.fsPath) ||
-            isProjectObservingRemote(store.get(remoteObservationsState)[id] ?? [], id) ||
+            isProjectObservingRemote(getProjectRemoteObservations(store.get(remoteObservationsState), id), id) ||
             store.get(projectExecutionSnapshotsState)[id]?.graphRunning,
         );
       },
