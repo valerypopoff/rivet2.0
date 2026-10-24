@@ -12,6 +12,47 @@ import { RIVET_WEB_APP_CLIENT_JS } from '../../node/src/generated/webAppClient.g
 
 const requireFromStudioServerWeb = createRequire(import.meta.url);
 
+test('DOMPurify neutralizes shadow templates and hook-detached handlers in a real browser', async ({ page }) => {
+  await page.route('http://example.test/sanitizer-security', (route) =>
+    route.fulfill({ contentType: 'text/html', body: '<!doctype html><body></body>' }),
+  );
+  await page.goto('http://example.test/sanitizer-security');
+  await page.addScriptTag({ content: readRivetWebAppBrowserAsset('dompurify/dist/purify.min.js') });
+  const result = await page.evaluate(() => {
+    const purify = (window as unknown as { DOMPurify: typeof import('dompurify').default }).DOMPurify;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.append('$', document.createElement('object'), '{fixture}');
+    purify.sanitize(host, { IN_PLACE: true, SAFE_FOR_TEMPLATES: true });
+    const handlers: (string | null)[] = [];
+    for (const mode of ['parent', 'sibling']) {
+      const root = document.createElement('div');
+      root.innerHTML = '<figure><img class="drop"><img id="evil" onerror="fixture()"></figure><p>kept</p>';
+      const evil = root.querySelector('#evil')!;
+      purify.addHook('afterSanitizeAttributes', (node) => {
+        if (node.getAttribute?.('class') !== 'drop') return;
+        if (mode === 'parent') node.parentElement!.remove();
+        else node.nextElementSibling!.remove();
+      });
+      try {
+        purify.sanitize(root, { IN_PLACE: true });
+        handlers.push(evil.getAttribute('onerror'));
+      } finally {
+        purify.removeAllHooks();
+      }
+    }
+    return {
+      shadow: shadow.textContent,
+      handlers,
+      ordinary: purify.sanitize('<strong>kept</strong><img onerror="fixture()">'),
+    };
+  });
+  expect(result.shadow).not.toContain('${');
+  expect(result.handlers).toEqual([null, null]);
+  expect(result.ordinary).toContain('<strong>kept</strong>');
+  expect(result.ordinary).not.toContain('onerror');
+});
+
 function readRivetWebAppBrowserAsset(packagePath: string): string {
   return fs.readFileSync(requireFromStudioServerWeb.resolve(packagePath), 'utf8');
 }

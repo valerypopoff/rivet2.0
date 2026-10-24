@@ -1121,23 +1121,26 @@ overrides preserve the consumers' APIs; serialization's newer major remains
 CommonJS-compatible on the repository's supported Node 22+ runtime. Check the
 documentation production build when refreshing its webpack/Babel dependencies.
 
-Only two temporary JavaScript exceptions remain, both backed by local Yarn
-security patches because no verified upstream fix is available. They are not
-approvals to execute the original vulnerable code:
+One temporary JavaScript exception remains, backed by a local Yarn security
+patch because no verified upstream fix is available. It is not approval to
+execute the original vulnerable code:
 
-- `braces` 3.0.3 limits nesting to 256 levels in its parser and compile, expand,
-  and stringify AST walkers. The limit cannot be overridden by caller options.
-  This deliberately rejects extreme nesting, while ordinary watcher patterns
-  and brace expansion retain their behavior.
 - `http-cache-semantics` 4.2.0 synchronously revalidates zero-lifetime responses
   before honoring `max-stale` or stale-while-revalidate. This prevents security-
   zeroed cookies/private/no-store/no-cache/proxy-revalidate responses from being
   revived. Ordinary fresh and positive-lifetime stale public caching is retained;
   zero-TTL public entries conservatively revalidate too.
 
-Yarn still reports the underlying versions for patched packages. The exceptions
-are restricted to their existing docs/build ancestry, record the actual
-mitigation, and expire on 2026-11-01 for upstream re-review. The unchanged audit
+The `braces` 3.0.3 hardening patch remains: it limits nesting to 256 levels in
+the parser and compile, expand and stringify AST walkers, without a caller
+override. Ordinary watcher patterns and expansion retain their behavior. Its
+exception was removed on 2026-10-24 because the current registry report no longer
+contains that finding; an unused exception fails the gate. Removing the unused
+waiver does not remove the independently regression-tested protection.
+
+Yarn still reports the underlying versions for patched packages. The remaining
+exception is restricted to its existing docs/build ancestry, records the actual
+mitigation, and expires on 2026-11-01 for upstream re-review. The unchanged audit
 gate still rejects new runtime consumers, expired or unused exceptions, and
 every critical finding. Remove a patch and its exception together only when a
 replacement passes the same consumer-level regression tests.
@@ -1164,6 +1167,29 @@ resolution with `node .yarn/releases/yarn-4.17.1.cjs up -R <package>` instead of
 adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and
 replacement `.yarn/cache` archive together so zero-install CI resolves the same
 patched dependency as local development.
+
+The 2026-10-24 refresh uses body-parser 1.20.9/2.4.0
+([compressed-body advisory](https://github.com/advisories/GHSA-27r3-jxmh-p828)),
+Undici 6.29.1/7.30.1
+([response-decoding advisory](https://github.com/advisories/GHSA-xjj6-f33q-929c)),
+DOMPurify 3.4.17 across app, web and Node asset consumers
+([shadow-template](https://github.com/advisories/GHSA-cg2g-xh64-v4q7) and
+[detached-hook](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) advisories),
+and Zod 4.6.7 in the application and MCP SDK
+([bounded-validation advisory](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)).
+These fixes add no audit exceptions. Direct minimum ranges, transitive pins,
+lockfile, PnP map and zero-install archives must stay aligned.
+
+The version-specific `@google/genai@npm:0.12.0/zod` resolution also uses 4.6.7.
+The pinned Google SDK 0.12.0 declares Zod 3 but its shipped JavaScript and declarations do
+not import it. This narrowly scoped refresh avoids changing the Google SDK API;
+it does not apply to future SDK versions or force all Zod 3 consumers onto Zod 4.
+A child-process regression exercises an actual SDK tool-schema request and response through a
+synthetic fetch transport, without credentials or external requests. Other
+consumer-level regressions exercise both Express parser generations, both Undici
+majors, and upper collection bounds before element validation. Sanitizer tests
+cover split shadow-root expressions and hook-detached handlers in JSDOM and
+headless Chromium, retaining ordinary Markdown and web-app rendering checks.
 
 When a Studio Server workspace bundles a Rivet dependency that is also pinned by
 Rivet Core, use Core's exact tested version rather than a wider caret range. A

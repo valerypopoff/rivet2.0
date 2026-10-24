@@ -170,3 +170,18 @@ for (const vector of ['braces', 'http-cache', 'image-size']) {
     );
   });
 }
+
+for (const [vector, title] of [
+  ['body-parser', 'Express consumers survive trailing compressed-body bytes and preserve valid parsing'],
+  ['undici', 'Undici consumers reject excessive encodings without losing ordinary requests'],
+  ['zod', 'Zod consumers enforce upper collection bounds before walking elements'],
+  ['google-sdk', 'the pinned Google SDK preserves tool-schema requests with its scoped dependency refresh'],
+]) {
+  test(title, () => {
+    execFileSync(
+      process.execPath,
+      [fileURLToPath(new URL('./fixtures/runtime-dependency-security.mjs', import.meta.url)), vector],
+      { timeout: 15_000, stdio: 'pipe' },
+    );
+  });
+}

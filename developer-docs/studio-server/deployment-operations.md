@@ -543,7 +543,12 @@ late-heartbeat, failed-resume and routing propagation coverage.
 
 `deployment-command.test.mjs` additionally launches the **real deployment CLI**
 in an isolated temporary clean Git repository containing the current sources
-and chart. Git admission, immutable manifest validation, argument parsing,
+and chart. The fixture creates its ignored `artifacts` parent before allocating
+a unique workspace; a fresh checkout must not depend on earlier local diagnostics or a
+previous CI step. The missing-parent/concurrent-allocation regression starts
+with an empty temporary checkout. Cleanup removes only the exact fixture child,
+never the shared artifacts parent or another operation's diagnostics.
+Git admission, immutable manifest validation, argument parsing,
 private backup/acceptance adapter subprocesses and real Helm lint/render run
 normally. A test-only Node preload maps exactly the selected Helm/kubectl
 executables to strict local stand-in child processes; an empty kubeconfig

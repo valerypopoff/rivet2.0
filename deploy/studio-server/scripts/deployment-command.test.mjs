@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { parse, parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 
@@ -49,8 +50,26 @@ if(r.stage==='backup'){
  await fs.writeFile(path.join(directory,name),'synthetic application journey');out.checks[name]={passed:true,observed:true,evidence:name};}}
 await fs.writeFile(receipt,JSON.stringify(out));`;
 
+async function createFixtureDirectory(workspaceRoot) {
+  const artifacts = path.join(workspaceRoot, 'artifacts');
+  await fs.mkdir(artifacts, { recursive: true });
+  return fs.mkdtemp(path.join(artifacts, 'deployment-command-'));
+}
+
+test('deployment fixtures initialize an absent artifacts directory and remain isolated', async (t) => {
+  const checkout = await fs.mkdtemp(path.join(tmpdir(), 'rivet-command-checkout-'));
+  t.after(() => fs.rm(checkout, { recursive: true, force: true }));
+  await assert.rejects(fs.stat(path.join(checkout, 'artifacts')), { code: 'ENOENT' });
+  const directories = await Promise.all([createFixtureDirectory(checkout), createFixtureDirectory(checkout)]);
+  assert.notEqual(directories[0], directories[1]);
+  for (const directory of directories) {
+    assert.equal(path.dirname(directory), path.join(checkout, 'artifacts'));
+    assert.equal((await fs.stat(directory)).isDirectory(), true);
+  }
+});
+
 async function fixture(t, mode, fault) {
-  const directory = await fs.mkdtemp(path.join(root, 'artifacts', 'deployment-command-'));
+  const directory = await createFixtureDirectory(root);
   t.after(async () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
