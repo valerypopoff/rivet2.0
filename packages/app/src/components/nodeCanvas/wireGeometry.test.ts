@@ -4,12 +4,38 @@ import {
   getNormalOffsetWirePoints,
   getRepeatedWireArrowMarkerSegments,
   getWirePath,
+  getWirePathBounds,
   getWireSegments,
 } from './wireGeometry.js';
 
 const start = { x: 10, y: 20 };
 const end = { x: 110, y: 120 };
 const bendPoint = { x: 60, y: 70 };
+
+void test('culling bounds contain the same forward, backwards and fixed-endpoint paths used by rendering and arrow sampling', () => {
+  for (const startDirection of ['horizontal', 'down'] as const)
+    for (const endDirection of ['horizontal', 'down'] as const)
+      for (const [sx, sy, ex, ey] of [
+        [-3000, 400, 4000, 400],
+        [-100, 100, -200, 900],
+        [100, 900, -200, -50],
+        [50, 50, 50, 50],
+      ]) {
+        const coordinates = { sx: sx!, sy: sy!, ex: ex!, ey: ey!, startDirection, endDirection };
+        const bounds = getWirePathBounds(coordinates);
+        const samples = getNormalOffsetWirePoints({ ...coordinates, offset: 0 });
+        for (const p of samples) {
+          assert.ok(p.x >= bounds.left - 1e-9 && p.x <= bounds.right + 1e-9);
+          assert.ok(p.y >= bounds.top - 1e-9 && p.y <= bounds.bottom + 1e-9);
+        }
+      }
+  assert.deepEqual(getWirePathBounds({ sx: -100, sy: 100, ex: -200, ey: 900 }), {
+    left: -680,
+    top: 100,
+    right: 380,
+    bottom: 900,
+  });
+});
 
 test('getWireSegments renders one segment for ordinary wires', () => {
   assert.deepEqual(getWireSegments({ start, end }), [{ start, end }]);
@@ -34,14 +60,8 @@ test('getWirePath routes backwards wires through a horizontal midpoint bridge', 
 });
 
 test('getWirePath can leave or enter a viewport-fixed endpoint vertically downward', () => {
-  assert.equal(
-    getWirePath({ sx: 0, sy: 10, ex: 100, ey: 110, startDirection: 'down' }),
-    'M0,10 C0,45 50,110 100,110',
-  );
-  assert.equal(
-    getWirePath({ sx: 0, sy: 10, ex: 100, ey: 110, endDirection: 'down' }),
-    'M0,10 C50,10 100,145 100,110',
-  );
+  assert.equal(getWirePath({ sx: 0, sy: 10, ex: 100, ey: 110, startDirection: 'down' }), 'M0,10 C0,45 50,110 100,110');
+  assert.equal(getWirePath({ sx: 0, sy: 10, ex: 100, ey: 110, endDirection: 'down' }), 'M0,10 C50,10 100,145 100,110');
 });
 
 test('normal offsets keep the two lanes evenly separated around a forward Bézier curve', () => {
@@ -112,17 +132,20 @@ test('repeated arrow markers follow a wire forward at a stable spacing', () => {
     startInset: 30,
   });
 
-  assert.deepEqual(markers.map(({ start: markerStart, end: markerEnd }) => ({
-    start: { x: Math.round(markerStart.x), y: Math.round(markerStart.y) },
-    end: { x: Math.round(markerEnd.x), y: Math.round(markerEnd.y) },
-  })), [
-    { start: { x: 20, y: 0 }, end: { x: 30, y: 0 } },
-    { start: { x: 70, y: 0 }, end: { x: 80, y: 0 } },
-    { start: { x: 120, y: 0 }, end: { x: 130, y: 0 } },
-    { start: { x: 170, y: 0 }, end: { x: 180, y: 0 } },
-    { start: { x: 220, y: 0 }, end: { x: 230, y: 0 } },
-    { start: { x: 270, y: 0 }, end: { x: 280, y: 0 } },
-  ]);
+  assert.deepEqual(
+    markers.map(({ start: markerStart, end: markerEnd }) => ({
+      start: { x: Math.round(markerStart.x), y: Math.round(markerStart.y) },
+      end: { x: Math.round(markerEnd.x), y: Math.round(markerEnd.y) },
+    })),
+    [
+      { start: { x: 20, y: 0 }, end: { x: 30, y: 0 } },
+      { start: { x: 70, y: 0 }, end: { x: 80, y: 0 } },
+      { start: { x: 120, y: 0 }, end: { x: 130, y: 0 } },
+      { start: { x: 170, y: 0 }, end: { x: 180, y: 0 } },
+      { start: { x: 220, y: 0 }, end: { x: 230, y: 0 } },
+      { start: { x: 270, y: 0 }, end: { x: 280, y: 0 } },
+    ],
+  );
 });
 
 test('repeated arrow markers continue forward across a bent wire', () => {

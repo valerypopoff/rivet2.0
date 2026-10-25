@@ -171,9 +171,10 @@ test('desktop docs planning compares the complete push and published baseline wi
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 28);
+  assert.equal(editorCiSpecs.length, 29);
   assert.ok(editorCiSpecs.includes('evaluation-trial-orchestration.spec.ts'));
   assert.ok(editorCiSpecs.includes('partial-run-preload.spec.ts'));
+  assert.ok(editorCiSpecs.includes('wire-viewport-culling.spec.ts'));
   assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
   assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);
   const selected = ['1/3', '2/3', '3/3'].flatMap(selectEditorCiSpecs);

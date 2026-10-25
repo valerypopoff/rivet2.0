@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { journalForReleaseOperation } from './release-operation-journal.mjs';
+import { assertFenceIntent } from './execution-autoscaler-fence.mjs';
 
 export function autoscalerPolicy(input) {
   const policy = {
@@ -256,6 +257,11 @@ async function reconcileExecutionAutoscalingTick({
   };
   if (record.phase === 'complete' && (record.manifestDigest !== manifestDigest || record.policyDigest !== policyDigest))
     record = { ...record, lowSince: null, lastSampleAt: null };
+  // Fence steps belong to a retirement, not to later capacity growth. Earlier
+  // records can retain completed history in an interrupted ordinary scale-up.
+  if (record.phase === 'scaling' && !record.target && record.scale?.nextPhase === 'complete')
+    record = { ...record, fence: null };
+  if (record.phase !== 'complete' && record.fence) assertFenceIntent(record.fence, record.target);
   const previousRoutingAbsence = record.phase === 'withdrawing' ? record.target.routingAbsence : null;
   record = await io.writeJournal(
     {
@@ -300,7 +306,20 @@ async function reconcileExecutionAutoscalingTick({
     // A lost acknowledgement leaves the durable intent for observation only.
     await save({ phase: nextPhase, scale: null, lastScaleAt: now(), lowSince: null });
   };
-  let completedObservation = false;
+  const convergeFence = () =>
+    io.convergeFence(record.target, record.fence, {
+      authorize: fenced,
+      confirm: async (resource) => {
+        await save({
+          fence: {
+            ...record.fence,
+            steps: { ...record.fence.steps, [resource]: { ...record.fence.steps[resource], confirmed: true } },
+          },
+        });
+      },
+    });
+  let completedObservation = false,
+    failure;
   try {
     // Completion of an already-issued removal is not a load decision. In
     // particular, a Metrics API outage must not strand an otherwise settled
@@ -321,7 +340,7 @@ async function reconcileExecutionAutoscalingTick({
     if (record.phase === 'unfencing') {
       if (await io.isFenced(record.target))
         throw new Error('Startup-unfence intent is unconfirmed; inspect without replaying.');
-      await save({ phase: 'complete', target: null, removal: null, lastScaleAt: now(), lowSince: null });
+      await save({ phase: 'complete', target: null, fence: null, removal: null, lastScaleAt: now(), lowSince: null });
       return { state: 'settled' };
     }
     if (record.phase === 'removing') {
@@ -370,24 +389,30 @@ async function reconcileExecutionAutoscalingTick({
         (p) => p.uid !== tail?.uid && p.ready && p.state === 'serving' && !p.operationId,
       );
       if (!tail || peers.length < 2) throw new Error('Two serving peers are required before withdrawing an owner.');
+      const retirementTarget = {
+        name: tail.name,
+        uid: tail.uid,
+        incarnation: tail.incarnation,
+        workloadUid: snapshot.uid,
+        operationId: uuid(),
+        withdrawnAt: now(),
+      };
+      const fence = await io.prepareFence(retirementTarget);
       await save({
         phase: 'fencing',
-        target: {
-          name: tail.name,
-          uid: tail.uid,
-          incarnation: tail.incarnation,
-          workloadUid: snapshot.uid,
-          operationId: uuid(),
-          withdrawnAt: now(),
-        },
+        target: retirementTarget,
+        fence,
+        fenceRepair: null,
         lowSince: null,
       });
       await io.confirmPeers(record.target, snapshot.pods);
       await fenced();
-      await io.fence(record.target);
+      await convergeFence();
       return { state: 'fencing' };
     }
     if (record.phase === 'fencing') {
+      // Legacy unfinished journals lack step provenance and remain observation-only.
+      if (record.fence) await convergeFence();
       if (!(await io.isFenced(record.target)))
         throw new Error('Startup-fence intent is unconfirmed; inspect without replaying.');
       if (!(await io.fenceObserved(record.target))) return { state: 'waiting-for-startup-fence' };
@@ -456,19 +481,32 @@ async function reconcileExecutionAutoscalingTick({
       await io.scale(snapshot.uid, snapshot.replicas, snapshot.replicas - 1);
     }
     return { state: replace ? 'replacing-drained-owner' : 'scaled-down' };
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
     // Do not overwrite another runner after an uncertain journal write. Failed
     // observations reset the low-load window, so missing samples never shrink.
-    const owner = await io.readJournal();
-    if (owner?.resourceVersion === record.resourceVersion && owner.runner === runner && owner.token === record.token) {
-      await io.writeJournal(
-        {
-          ...record,
-          leaseExpiresAt: now(),
-          ...(!completedObservation && record.phase === 'complete' ? { lowSince: null, lastSampleAt: null } : {}),
-        },
-        record.resourceVersion,
-      );
+    try {
+      const owner = await io.readJournal();
+      if (
+        owner?.resourceVersion === record.resourceVersion &&
+        owner.runner === runner &&
+        owner.token === record.token
+      ) {
+        await io.writeJournal(
+          {
+            ...record,
+            leaseExpiresAt: now(),
+            ...(!completedObservation && record.phase === 'complete' ? { lowSince: null, lastSampleAt: null } : {}),
+          },
+          record.resourceVersion,
+        );
+      }
+    } catch (error) {
+      if (failure)
+        throw new AggregateError([failure, error], 'Reconciliation failed and lease release is unconfirmed.');
+      throw error;
     }
   }
 }

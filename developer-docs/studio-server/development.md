@@ -1356,6 +1356,14 @@ authentication and no-mutating-request-replay assertions intact when refreshing 
 policy mismatch must fail; a security update must not require restoring an old
 vulnerable tag merely to satisfy a stale DNS test.
 
+The hosted Subgraph error-body deadline regression uses a real loopback HTTP
+response for the stalled case, not an artificial stream that can let Node 22's
+event loop exit before an unref'ed timeout. It asserts upstream socket closure
+and preserves the application's timeout policy. Deployment-command fixtures
+serialize simulated API reads/writes through a bounded, test-only file lock;
+Windows `EPERM` is contention only while the expected regular lock exists.
+Permission errors, symlinks and timeout remain failures; tests never steal locks.
+
 `verify-proxy-dns.mjs` checks real upstream Host preservation through all three
 templates for hostname/port, IPv6/port and default-port authorities. Run headless
 `studio-server:ui:observe local-storage-upgrade-origin.spec.ts` on an enabled,
@@ -1525,6 +1533,21 @@ type changes and executes a criteria-free Box definition. Box currently requires
 Jev 1.14 (including its verified aliases) and an image visible to that question;
 unsupported Profile candidates fail before HTTP. See
 [Bounding Box contracts](../CLASSIFIER-NODES.md#bounding-box-questions).
+
+The shared editor's `wire-viewport-culling.spec.ts` runs isolated crossing,
+backwards-curve and authored-bend fixtures through real pan, wheel zoom in/out and
+resize gestures, checking visible SVG geometry as well as off-screen culling and
+re-entry. It needs no API or
+model credentials. See [canvas connection visibility](../CANVAS-INTERACTIONS.md#connection-visibility-during-panzoom)
+for the cached route-bound contract shared with desktop.
+The wire geometry, candidate and hook-lifecycle tests are discovered by the
+official `yarn test:app` runner. The browser spec is enrolled in the balanced
+editor CI shards via `scripts/ci/editor-test-shards.mjs`; keep that inventory and
+its coverage assertion in sync when renaming or adding browser scenarios.
+Canvas-only checks need no Kubernetes rehearsal. Autoscaler journal/recovery
+changes have their own local HTTP/Helm/ownership checks and
+[production recovery approval boundary](deployment-operations.md#recovering-an-inherited-execution-startup-fence);
+committing or pushing the source never applies that recovery to a live cluster.
 
 ## Versioning
 

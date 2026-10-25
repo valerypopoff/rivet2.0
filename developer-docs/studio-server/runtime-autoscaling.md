@@ -153,6 +153,158 @@ logs, UIDs/incarnations, generation and EndpointSlices for recovery.
 
 ## Deployment and security
 
+### Startup-fence convergence and inherited annotations
+
+A StatefulSet template annotation is copied to every new ordinal. A fence naming
+`execution-2` only blocks startup of ordinal 2; a newly added ordinal 4 can inherit
+that value without being fenced itself. The controller classifies absent, self,
+valid same-workload inherited, and malformed/foreign values explicitly. Only a
+valid inherited value may be replaced while retiring its exact UID/incarnation
+under the current journal lease. Self-targeting pod fences are never cleared;
+they disappear with that pod, including during interior-owner replacement.
+
+New retirements retain the root autoscaling journal protocol and add a versioned
+`fence` intent with template/pod previous values and confirmation bits, bound to
+the workload UID, pod UID, incarnation and retirement operation ID. Each metadata
+patch rechecks the process and the journal lease, and uses UID/resourceVersion
+preconditions. Lease authorization occurs after the final potentially slow
+resource/process inspection, immediately before PATCH; inspection cannot renew
+an already expired lease. Lost replies are observed from actual metadata. Only an unchanged,
+recorded before-value can converge through another conditional metadata patch;
+confirmed metadata that disappears or any divergent identity/value blocks.
+The controller waits for both annotations and StatefulSet observed generation
+before issuing withdrawal. This is not retry permission for exec, drain, delete,
+scale, uploads or workflow execution. Kubernetes JSON requests explicitly frame
+their bodies, including DELETE's UID precondition; transport tests inspect the
+actual received body rather than only the caller's arguments.
+
+Fence-step intent ends with its retirement: settling removes it from the
+journal. Earlier interrupted ordinary growth records with no retirement target
+and `scale.nextPhase: complete` discard obsolete fence-step history before
+acquisition. They still verify the exact pending scale UID and
+replica result; this is observation-only recovery, not permission to reissue
+the scale command. Active retirement intents remain identity-validated.
+Regression coverage completes a retirement, loses a later scale-up reply, then
+recovers under another runner without another mutation; it also reads earlier
+journals containing retained fence history.
+An unexpected runtime fence still blocks a completed record and retains its
+diagnostic history; this compatibility rule never clears Kubernetes annotations.
+
+If reconciliation and lease cleanup both fail, an `AggregateError` preserves
+the original failure first and cleanup failure second. An uncertain release
+does not reset the journal or steal its lease. The HTTP matrix combines a lost
+fence-patch response with an unavailable cleanup read and checks lease expiry
+before replacement-controller recovery, without replaying the successful patch.
+
+Legacy unfinished `fencing` records without step provenance remain observation-only.
+They require the explicit [fence recovery procedure](deployment-operations.md#recovering-an-inherited-execution-startup-fence).
+An old image/policy cannot be replaced to bypass an unfinished journal. Confirmed
+repair evidence retained by an older controller is scoped to its exact retirement
+target, not authority for a later ordinal's retirement.
+
+The HTTP/WebSocket regression matrix includes inherited annotations after growth,
+loss before/after either metadata write, fresh-runner recovery, identity/lease
+changes, and eventual interior replacement followed by a later retirement.
+The restart case retains an unexpired crash lease: the distinct replacement
+runner must perform only reads until expiry, then own the resumed journal.
+A second call using the original runner alone is not restart coverage. The
+operator command has separate binding, refusal and metadata-only tests. These
+include lease expiry during final reads/peer inspection, explicit expired-plan
+renewal after lost acknowledgement, and preservation of confirmed metadata and
+the original failure when lease cleanup also fails. These
+local stand-ins are authored from Rivet's consumed Kubernetes contract; they do
+not establish GKE routing/capacity qualification. The optional Postman CLI was
+unavailable during this repair, so mandatory checks use the existing real Node
+HTTP/WebSocket fixtures rather than client-method stubs or a paid environment.
+The HTTP fixture retains each object's resourceVersion independently: renewing
+the ConfigMap lease must not spuriously change the StatefulSet's version.
+
+For a separate real-API/scheduler check, create a fresh disposable local minikube
+profile with a `rivet-fence-` name, preserve the current context, and import a
+local `rivet-local/autoscaler-fence:` API image. Then run:
+
+```powershell
+$env:RIVET_FENCE_LOCAL_PROFILE='rivet-fence-<owned-local-operation>'
+$env:RIVET_FENCE_LOCAL_IMAGE='rivet-local/autoscaler-fence:<local-candidate>'
+yarn node deploy/studio-server/scripts/verify-execution-fence-local.mjs
+```
+
+This runner accepts only an explicit local minikube Docker container, not a
+host kubeconfig or production context. It records container/namespace UIDs and
+evidence under `artifacts/rivet-fence-*`. It exercises a failed pod patch,
+resume, growth during withdrawal, a held active-work counter, interior owner
+replacement and later retirement of inherited annotations back to two owners.
+The probe uses the chart's `Parallel` pod-management policy. Synthetic CPU
+samples isolate metadata/scheduler behavior; the probe is not a graph runner,
+database/recording acceptance test, representative load test or GKE certificate.
+Keep real supervisor/storage and browser regressions as separate mandatory
+checks. Inspect the result, then remove only the freshly created profile after
+rechecking its recorded immutable Docker ID. Failed-run namespaces are retained
+inside that disposable profile for diagnosis until profile cleanup; never target
+a pre-existing local cluster to make cleanup convenient.
+
+Repair delivery snapshot (2026-10-25): local HTTP/WebSocket failure/recovery,
+operator refusal, Node 22/24 stalled-response, real Linux lock, full Kubernetes
+contract/render and five hosted/bundle-debugger browser regressions passed. The
+real local protocol probe completed growth, held-work drain, interior replacement
+and subsequent inherited-ordinal retirement back to two Ready owners; its
+disposable minikube profile and local candidate tags were removed afterward.
+Evidence remains under `artifacts/autoscaler-fix-*` and the successful
+`artifacts/rivet-fence-4e3538c3/` receipt. Earlier failed **fixture** attempts are
+retained separately, not relabeled as successful runs. This does not qualify
+application storage/representative capacity or the GKE edge. Production recovery,
+publication, release qualification and deployment were not performed; the live
+legacy operation still requires its separately approved recovery procedure.
+
+A prior source snapshot's verification on 2026-10-25 is recorded separately in
+`artifacts/autoscaler-completion-evidence.json`: the rebuilt image's controller
+module hashes matched the workspace, its non-root startup/dependency/shutdown
+smoke passed without network access, and the real local cycle finished at two
+Ready owners (`artifacts/rivet-fence-df3a6fe8/result.json`). The full local suite,
+five browser scenarios, full Studio Server build, and Node 22/24 executor tests
+passed. Two optional checks (Postman and opt-in Docker lifecycle) stayed disabled;
+mandatory Linux ownership checks ran without skips. The temporary profile,
+image tag and preview server were removed. Earlier receipts were not relabeled.
+
+The subsequent adjacent review is recorded in
+`artifacts/autoscaler-adjacent-evidence.json`. Failure-first tests reproduced
+obsolete-intent growth recovery and a masked reconciliation error; targeted
+HTTP/state-machine/HA/Helm regressions and the final packaged Node 24 startup and
+state-machine checks passed after fixing them. This journal/error-only pass did
+not create another cluster or relabel the earlier browser/provider evidence.
+
+#### Repair completion boundary
+
+The implementation checklist is the inherited-fence classifier, durable
+template/pod step intent, conditional metadata convergence, fail-closed legacy
+journals, dry-run/approved recovery command, real stalled-response executor
+fixture, bounded Windows fixture locking, and the separate overlap DB-budget
+regression. No schema, topology, capacity-limit or saved-format change is part
+of this repair.
+
+Revalidate the final source, not an earlier image: compare packaged module hashes,
+exercise controller startup/shutdown as the image's non-root user, run the real
+local Kubernetes protocol cycle and the mandatory HTTP/ownership/Helm/browser
+regressions. Keep receipts for each layer separate. The local Kubernetes probe
+uses synthetic CPU/active-work inputs; the hosted browser fixtures use real
+Rivet processes but are not a browser on that probe's namespace. These checks
+must not be described as a single end-to-end GKE/application-storage acceptance
+run. Deployment requires the ordinary release qualification or an explicitly
+approved exception, not a relabeled local receipt.
+
+Local implementation completion is **not incident closure**. The following
+remain separate, explicitly authorized operations:
+
+1. Apply the exact guarded repair to the still-matching production operation;
+   observe its own withdrawal/drain and journal completion. Never force the
+   minimum replica count while accepted work or demand prevents it.
+2. Commit/publish through CI and verify the immutable release images.
+3. Deploy the corrected release through the normal backup, identity and
+   qualification gates, then perform application acceptance.
+
+Do not mark those stages complete from local test results, silently enable
+backend overlap, or raise the database allowance as part of this fix.
+
 The normal HA tool retains the controller during an autoscaled upgrade. The
 journal's exact `cooperativeScaling` binding permits bounded, monotonic growth
 without taking over the rollout. Execution scale-down remains paused, and the

@@ -77,3 +77,20 @@ test('unowned surge, namespace, shared cache and insufficient connection budget 
     assert.notEqual(result.status, 0, `${override} unexpectedly rendered`);
   }
 });
+
+test('overlap cannot reuse the singleton seven-owner database allowance without a capacity decision', () => {
+  const blocked = render([
+    'postgres.maxConnections=200',
+    'autoscaling.execution.enabled=true',
+    'autoscaling.execution.maxReplicas=7',
+  ]);
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /requires 201 connections/);
+  // This only verifies an alternative's arithmetic, not approval to change production limits.
+  const lowerCeiling = render([
+    'postgres.maxConnections=200',
+    'autoscaling.execution.enabled=true',
+    'autoscaling.execution.maxReplicas=6',
+  ]);
+  assert.equal(lowerCeiling.status, 0, lowerCeiling.stderr);
+});

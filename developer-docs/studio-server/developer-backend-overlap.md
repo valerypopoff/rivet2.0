@@ -32,6 +32,13 @@ or explicit sizing acknowledgements. The PostgreSQL budget includes one maintena
 API process and one surge process, their shared query/LISTEN/restore pools, and the
 existing scheduler pools. Only the active worker starts maintenance pools.
 
+With the current generic pool/reserve/restore arithmetic, singleton control with
+seven maximum execution owners budgets 186 connections. Overlap with the same
+seven-owner maximum needs 201, so a 200-connection Rivet allowance correctly
+rejects it. A six-owner overlap ceiling budgets 184, but reducing capacity is an
+operator decision, not an automatic migration. Do not raise the recorded
+allowance or lower production capacity just to enable this optional mode.
+
 The worker starts only after kernel `flock` on a persistent, non-symlink lock
 file. The inode is never replaced/deleted. Descriptor 3 is inherited by worker
 children; an orphaned archive/npm/restore child blocks takeover even after its

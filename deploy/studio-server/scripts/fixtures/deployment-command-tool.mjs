@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { parseAllDocuments } from 'yaml';
+import { acquireFixtureFileLock } from './fixture-file-lock.mjs';
 
 const kind = process.argv[2];
 const original = process.argv.slice(3);
@@ -12,15 +13,7 @@ const stateFile = path.join(directory, 'state.json'),
   lockFile = path.join(directory, 'state.lock');
 // Heartbeat and foreground command children share the simulated API server.
 // Serialize reads/writes just as its resourceVersion preconditions require.
-let lock;
-while (lock === undefined) {
-  try {
-    lock = fs.openSync(lockFile, 'wx');
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  }
-}
+const lock = acquireFixtureFileLock(lockFile);
 let state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
 const logs = path.join(directory, 'calls.ndjson');
 const args = [];

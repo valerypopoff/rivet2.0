@@ -178,7 +178,7 @@ export interface NodeCanvasProps {
   pasteCommandsEnabled?: boolean;
 }
 
-export type PortPositions = Record<string, { x: number; y: number }>;
+export type { PortPositions } from './nodeCanvas/wireEndpoints.js';
 
 export const NodeCanvas: FC<NodeCanvasProps> = ({
   nodes,
@@ -829,7 +829,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
       }),
     [hoveringNode, hoveringPort, selectedViewportNodeIds],
   );
-  const { heavyContentNodeIdSet, nearViewportNodeIdSet, visibleNodeIdSet } = useVisibleCanvasNodes({
+  const { heavyContentNodeIdSet, visibleNodeIdSet } = useVisibleCanvasNodes({
     draggingNodeIds: draggingViewportNodeIds,
     editingNodeId,
     expandedOutputNodeIds,
@@ -1171,9 +1171,7 @@ export const NodeCanvas: FC<NodeCanvasProps> = ({
             highlightedNodes={highlightedNodes}
             highlightedPort={hoveringPort}
             hoveredDataBusChannelKeys={hoveredDataBusChannelKeys}
-            nearViewportNodeIdSet={nearViewportNodeIdSet}
             portPositions={nodePortPositions}
-            visibleNodeIdSet={visibleNodeIdSet}
             viewportClientRect={viewportBounds.clientRect}
             draggingNode={isDraggingNode}
             draggingBend={isDraggingBend}

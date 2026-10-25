@@ -38,9 +38,31 @@ function fixture(replicas = 3, policyOverrides = {}) {
     state: 'serving',
     operationId: null,
   });
-  const snapshot = { uid: 'sts', resourceVersion: '1', replicas, pods: Array.from({ length: replicas }, (_, i) => pod(i)) };
+  const snapshot = {
+    uid: 'sts',
+    resourceVersion: '1',
+    replicas,
+    pods: Array.from({ length: replicas }, (_, i) => pod(i)),
+  };
   const calls = [];
   const io = {
+    prepareFence: async (target) => ({
+      protocol: 1,
+      name: target.name,
+      uid: target.uid,
+      workloadUid: target.workloadUid,
+      incarnation: target.incarnation,
+      operationId: target.operationId,
+      steps: { template: { before: null, confirmed: false }, pod: { before: null, confirmed: false } },
+    }),
+    convergeFence: async (target, intent, { authorize, confirm }) => {
+      if (!intent.steps.template.confirmed) {
+        await authorize();
+        await io.fence(target);
+        await confirm('template');
+      }
+      if (!intent.steps.pod.confirmed) await confirm('pod');
+    },
     fence: async (target) => {
       startupFence = target.name;
     },
@@ -282,6 +304,82 @@ test('withdrawal delay starts at first observed endpoint absence, even when remo
   f.advance();
   assert.equal((await f.tick()).state, 'draining');
   assert.equal(f.calls.filter(([action]) => action === 'begin').length, 1);
+});
+
+test('a completed retirement cannot strand later lost-acknowledgement scale-up recovery with its obsolete fence', async (t) => {
+  for (const retainedHistory of [false, true])
+    await t.test(retainedHistory ? 'previous journal retains fence history' : 'new journal', async () => {
+      const f = fixture();
+      await f.withdraw();
+      f.advance();
+      assert.equal((await f.tick()).state, 'draining');
+      const retirementFence = structuredClone(f.journal().fence);
+      f.snapshot.pods[2].state = 'drained';
+      assert.equal((await f.tick()).state, 'scaled-down');
+      assert.equal((await f.tick()).state, 'unfencing');
+      assert.equal((await f.tick()).state, 'settled');
+      if (retainedHistory) {
+        f.setJournal({ ...f.journal(), fence: retirementFence });
+        f.snapshot.startupFence = 'unowned-fence';
+        await assert.rejects(f.tick(), /unowned execution startup fence/);
+        assert.deepEqual(f.journal().fence, retirementFence, 'uncertain runtime metadata preserves diagnostic history');
+        delete f.snapshot.startupFence;
+      }
+      for (const pod of f.snapshot.pods) pod.active = 9;
+      const scale = f.io.scale;
+      f.io.scale = async (...args) => {
+        await scale(...args);
+        throw Error('scale acknowledgement lost');
+      };
+      await assert.rejects(f.tick(), /scale acknowledgement lost/);
+      assert.equal(f.journal().phase, 'scaling');
+      assert.equal(f.journal().target, null);
+      if (retainedHistory) f.setJournal({ ...f.journal(), fence: retirementFence });
+      const commands = f.calls.length;
+      f.io.scale = scale;
+      assert.equal((await f.tick({ runner: 'replacement-controller' })).state, 'scale-observed');
+      assert.equal(f.journal().phase, 'complete');
+      assert.equal(f.journal().fence, null);
+      assert.equal(f.calls.length, commands, 'recovery observes scaling without issuing another command');
+    });
+});
+
+test('reconciliation retains the primary failure when lease cleanup also fails and does not steal ownership', async (t) => {
+  for (const step of ['read', 'write'])
+    await t.test(step, async () => {
+      const f = fixture();
+      const primary = new Error('snapshot failed');
+      const cleanup = new Error('cleanup journal unavailable');
+      const read = f.io.readJournal,
+        write = f.io.writeJournal,
+        snapshot = f.io.snapshot;
+      let reads = 0,
+        writes = 0;
+      f.io.snapshot = async () => {
+        throw primary;
+      };
+      f.io.readJournal = async () => {
+        if (++reads === 2 && step === 'read') throw cleanup;
+        return read();
+      };
+      f.io.writeJournal = async (...args) => {
+        if (++writes === 2 && step === 'write') throw cleanup;
+        return write(...args);
+      };
+      await assert.rejects(f.tick(), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(error.errors, [primary, cleanup]);
+        return true;
+      });
+      f.io.readJournal = read;
+      f.io.writeJournal = write;
+      f.io.snapshot = snapshot;
+      assert.equal(f.journal().leaseExpiresAt > f.now(), true);
+      assert.equal((await f.tick({ runner: 'replacement' })).state, 'leased');
+      assert.deepEqual(f.calls, []);
+      f.advance(121);
+      assert.equal((await f.tick({ runner: 'replacement' })).state, 'observing');
+    });
 });
 
 test('a returning endpoint resets the full withdrawal propagation window', async () => {

@@ -203,6 +203,8 @@ async function main() {
       'deploy/studio-server/scripts/backend-overlap-helm.test.mjs',
       'deploy/studio-server/scripts/deployment-safety.test.mjs',
       'deploy/studio-server/scripts/deployment-command.test.mjs',
+      'deploy/studio-server/scripts/fixture-file-lock.test.mjs',
+      'deploy/studio-server/scripts/execution-fence-recovery.test.mjs',
       'deploy/studio-server/scripts/installed-upgrade-plan.test.mjs',
       'deploy/studio-server/scripts/kubernetes-release-settlement.test.mjs',
       'deploy/studio-server/scripts/ha-release-evidence.test.mjs',

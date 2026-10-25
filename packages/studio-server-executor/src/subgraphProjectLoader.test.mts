@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import {
   serializeProject,
   serializeDatasets,
@@ -186,12 +188,12 @@ test('published snapshots retain their datasets and revision identity', async ()
 test(
   'oversized and stalled denial streams are cancelled without exposing their contents',
   { timeout: 6000 },
-  async () => {
-    for (const oversized of [true, false]) {
+  async (t) => {
+    {
       let cancelled = false;
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(Buffer.from(oversized ? 'private'.repeat(2000) : '{"private":'));
+          controller.enqueue(Buffer.from('private'.repeat(2000)));
         },
         cancel() {
           cancelled = true;
@@ -208,5 +210,33 @@ test(
       );
       assert.equal(cancelled, true, 'the bounded error read must release the response body');
     }
+    // A real socket, not an artificial stream, keeps the response lifetime alive
+    // on Node 22 and 24 without changing the production timeout's unref policy.
+    let upstreamClosed: Promise<unknown> | undefined;
+    const server = createServer((_req, res) => {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.write('{"private":');
+      upstreamClosed = once(res, 'close');
+    });
+    t.after(async () => {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    const loader = createHostedSubgraphProjectLoader({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      headers: () => ({}),
+    });
+    const started = Date.now();
+    await assert.rejects(
+      loader.validateTarget(target),
+      (error: Error) => /authentication/.test(error.message) && !/private/.test(error.message),
+    );
+    assert.ok(Date.now() - started >= 2500, 'the real response must stall until the error-body deadline');
+    assert.ok(upstreamClosed);
+    await upstreamClosed;
   },
 );

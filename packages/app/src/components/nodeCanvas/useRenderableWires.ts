@@ -1,116 +1,43 @@
 import { useMemo, useRef } from 'react';
-import {
-  getProjectConnectionComparisonKey,
-  type ChartNode,
-  type NodeConnection,
-  type NodeId,
-  type PortId,
-} from '@valerypopoff/rivet2-core';
-import { getConnectionCacheKeys, getNodePortPosition } from '../Wire.js';
-import type { PortPositions } from '../NodeCanvas.js';
-import { lineCrossesViewport, type LineClipRect } from '../../utils/lineClipping.js';
+import { type ChartNode, type NodeConnection, type NodeId } from '@valerypopoff/rivet2-core';
+import type { PortPositions } from './wireEndpoints.js';
+import type { WirePathBounds } from './wireGeometry.js';
 import { markCanvasPerfEnd, markCanvasPerfStart, setCanvasPerf } from './canvasPerfDebug.js';
-import { getRenderableWireCandidates } from './getRenderableWireCandidates.js';
+import {
+  getRenderableWireCandidates,
+  getWireViewportBounds,
+  prepareWireVisibility,
+} from './getRenderableWireCandidates.js';
 
 type CanvasPositionConverter = (x: number, y: number) => { x: number; y: number };
 
 export function useRenderableWires({
-  canvasToClientPosition,
+  clientToCanvasPosition,
   connections,
-  draggingNode,
-  draggingWire,
   forceRenderableConnectionKeySet,
-  highlightedNodes,
-  highlightedPort,
-  nearViewportNodeIdSet,
   nodesById,
   portPositions,
-  runningNodeIdSet,
-  visibleNodeIdSet,
   viewportClientRect,
 }: {
-  canvasToClientPosition: CanvasPositionConverter;
+  clientToCanvasPosition: CanvasPositionConverter;
   connections: NodeConnection[];
-  draggingNode: boolean;
-  draggingWire: boolean;
   forceRenderableConnectionKeySet?: ReadonlySet<string>;
-  highlightedNodes?: NodeId[];
-  highlightedPort?:
-    | {
-        isInput: boolean;
-        nodeId: NodeId;
-        portId: PortId;
-      }
-    | undefined;
-  nearViewportNodeIdSet: ReadonlySet<NodeId>;
   nodesById: Record<NodeId, ChartNode>;
   portPositions: PortPositions;
-  runningNodeIdSet: ReadonlySet<NodeId>;
-  visibleNodeIdSet: ReadonlySet<NodeId>;
-  viewportClientRect: LineClipRect;
+  viewportClientRect: WirePathBounds;
 }): NodeConnection[] {
   const stableRenderableWiresRef = useRef<NodeConnection[] | undefined>(undefined);
-  const candidateConnections = useMemo(
-    () =>
-      getRenderableWireCandidates({
-        connections,
-        draggingNode,
-        draggingWire,
-        forceRenderableConnectionKeySet,
-        highlightedNodes,
-        highlightedPort,
-        nearViewportNodeIdSet,
-        runningNodeIdSet,
-        visibleNodeIdSet,
-      }),
-    [
-      connections,
-      draggingNode,
-      draggingWire,
-      forceRenderableConnectionKeySet,
-      highlightedNodes,
-      highlightedPort,
-      nearViewportNodeIdSet,
-      runningNodeIdSet,
-      visibleNodeIdSet,
-    ],
+  const entries = useMemo(
+    () => prepareWireVisibility(connections, nodesById, portPositions),
+    [connections, nodesById, portPositions],
   );
   return useMemo(() => {
     markCanvasPerfStart('WireLayer:recalculateRenderableWires');
 
-    const nextRenderableWires = candidateConnections.filter((connection) => {
-      const inputNode = nodesById[connection.inputNodeId];
-      const outputNode = nodesById[connection.outputNodeId];
-
-      if (!inputNode || !outputNode) {
-        return false;
-      }
-
-      // Data Bus hover revelation is an explicit user request. The bus itself
-      // is intentionally absent from the spatial viewport set, and a relay
-      // can connect to nodes far outside it, so normal virtualization and
-      // line clipping must not suppress this short-lived overlay.
-      if (forceRenderableConnectionKeySet?.has(getProjectConnectionComparisonKey(connection))) {
-        return true;
-      }
-
-      const [outputCacheKey, inputCacheKey] = getConnectionCacheKeys(connection);
-      const start = getNodePortPosition(outputNode, connection.outputId, outputCacheKey, portPositions);
-      const end = getNodePortPosition(inputNode, connection.inputId, inputCacheKey, portPositions);
-      const wireSegments = connection.bendPoint
-        ? [
-            { start, end: connection.bendPoint },
-            { start: connection.bendPoint, end },
-          ]
-        : [{ start, end }];
-
-      return wireSegments.some((segment) =>
-        lineCrossesViewport(
-          canvasToClientPosition(segment.start.x, segment.start.y),
-          canvasToClientPosition(segment.end.x, segment.end.y),
-          viewportClientRect,
-        ),
-      );
+    const nextRenderableWires = getRenderableWireCandidates({
+      entries,
+      viewportBounds: getWireViewportBounds(viewportClientRect, clientToCanvasPosition),
+      forceRenderableConnectionKeySet,
     });
 
     setCanvasPerf('WireLayer:renderableWireCount', nextRenderableWires.length);
@@ -123,14 +50,7 @@ export function useRenderableWires({
 
     stableRenderableWiresRef.current = stableRenderableWires;
     return stableRenderableWires;
-  }, [
-    canvasToClientPosition,
-    candidateConnections,
-    forceRenderableConnectionKeySet,
-    nodesById,
-    portPositions,
-    viewportClientRect,
-  ]);
+  }, [clientToCanvasPosition, entries, forceRenderableConnectionKeySet, viewportClientRect]);
 }
 
 function areConnectionListsEqual(previous: NodeConnection[], next: NodeConnection[]): boolean {

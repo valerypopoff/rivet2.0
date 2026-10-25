@@ -16,6 +16,86 @@ This is a timeout for individual Helm/wait/adapter phases, not a wall-clock cap
 for the complete upgrade. Long accepted work may extend the operation; reaching
 a deadline preserves that work and reports the exact recovery operation.
 
+## Recovering an inherited execution startup fence
+
+`repair-execution-startup-fence.mjs` is a deliberately narrow **operator** tool,
+not a release command, automatic deployment step or authorization to mutate a
+live installation. Use separate approval for production apply. Never replace
+the running controller image or erase its unfinished journal to bypass release
+and policy binding.
+
+The eligible legacy shape is phase `fencing`, an exact live target UID and serving
+incarnation with no retirement already active, a template naming that target,
+and a pod annotation naming a different ordinal of the same StatefulSet. An
+expired controller lease is required for apply; a valid lease is never stolen.
+Namespace UID, autoscaler Deployment UID/image/config, manifest, policy, workload,
+pod and operation identities are rechecked. Unknown/divergent state fails closed.
+The operator also rechecks matching execution-peer UIDs and status-only process
+responses: at least two Ready serving peers are required, and a conflicting
+retirement or changing peer blocks the repair.
+Peer verification runs under the acquired lease immediately before a metadata
+write; the lease is checked after all potentially slow inspection and renewed
+by CAS before PATCH. Confirmation-only journal writes do not repeat the full
+peer scan. A slow inspection that outlives the lease fails closed.
+Plan expiry is also rechecked after initial installation inspection, before
+acquiring a journal lease; inspection cannot turn expired approval into a write.
+
+First create a private, read-only plan (15-minute validity):
+
+```powershell
+node deploy/studio-server/scripts/repair-execution-startup-fence.mjs --context <exact-context> --namespace <namespace> --namespace-uid <verified-uid> --release <release> --controller <exact-autoscaler-deployment> --output <private-plan.json>
+```
+
+An optional `--kubeconfig <path>` uses an existing configuration; the tool never
+switches the current context. Verify the printed plan digest and private plan
+against the installation and obtain approval before running:
+
+```powershell
+node deploy/studio-server/scripts/repair-execution-startup-fence.mjs --context <same-context> --apply <private-plan.json> --confirm <sha256:printed-plan-digest> --output <new-private-receipt.json>
+```
+
+Both files use exclusive creation and mode 0600; use an OS-private directory on
+Windows as well. Do not upload, commit or print plans: they include operation
+identity. Apply acquires the existing journal by CAS, writes an additive
+`fenceRepair` intent, and changes only the exact pod annotation using UID and
+resourceVersion checks. Other annotations, token, phase, original image and
+policy remain intact. The transport refuses template patching, scaling,
+deletion and any exec except the read-only retirement-status command. A lost
+reply is observed under the same plan/intent; it does not authorize another
+retirement or removal. Foreign/uncertain journal writes retain fencing rather
+than being overwritten during cleanup. A fresh output path is required on each
+invocation. If an attempt loses its receipt, preserve all files, inspect the
+existing intent and lease, and reuse the exact unexpired plan only after its
+identity checks pass. Never clear the journal to retry.
+
+If that plan expired while an intent remains, rerun the same **read-only** plan
+command into a fresh private file. This is an explicit renewal, not an automatic
+extension: the new 15-minute plan names the previous intent digest in `supersedes`
+and requires fresh approval of its own digest. Target, operation token, policy
+and original annotation must still match. Apply CAS-replaces only that exact
+intent digest, retains any confirmed metadata and records `previousPlanDigest`;
+keep older private plans as the historical chain. A changed or missing intent
+cannot be adopted by a renewal. Already observed metadata is never rewritten.
+Apply rejects installation overrides; its identity comes exclusively from the
+approved plan (plus the explicitly matching context).
+
+If recovery and lease release both fail, the error retains both causes; release
+failure does not hide the original failure or permit overwriting uncertain state.
+
+`metadata-confirmed` means the annotations/generation were observed, **not**
+that retirement or scale-down finished. The original controller resumes its
+normal routing withdrawal and accepted-work/recording drain after lease release.
+Observe its journal and logs until completion, check readiness and the retained
+claim/storage identities, and let demand determine replica count. Long or paused
+runs may legitimately prevent return to the minimum. Do not force that return.
+If the old operation advanced, another identity appeared, or the plan expired,
+inspect before preparing a new action; the helper has no broad fallback.
+
+After the original operation settles, use the normal corrected-image release
+path with backup, exact release evidence and application acceptance. The code
+repair and a passing local test suite are not a GKE certificate or a new staging
+waiver. This procedure does not enable backend overlap or change DB capacity.
+
 ## Rolling versus maintenance
 
 Ordinary rolling upgrades retain exact installed-predecessor qualification.

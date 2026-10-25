@@ -30,6 +30,8 @@ const weightedSpecs = [
   ['evaluation-trial-orchestration.spec.ts', 20],
   // Initial estimate for the isolated history/preload regression.
   ['partial-run-preload.spec.ts', 13],
+  // Crossing/curved/bent wire routes through pan, zoom, resize and culling.
+  ['wire-viewport-culling.spec.ts', 25],
   ['tunnel-cache-retention.spec.ts', 1],
 ];
 

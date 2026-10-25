@@ -11,6 +11,11 @@ type WirePathCoordinates = {
   endDirection?: WireEndpointDirection;
 };
 
+export type WirePathBounds = { left: number; top: number; right: number; bottom: number };
+type WirePathPrimitive =
+  | { type: 'line'; start: WirePoint; end: WirePoint }
+  | { type: 'cubic'; start: WirePoint; control1: WirePoint; control2: WirePoint; end: WirePoint };
+
 const CUBIC_OFFSET_SAMPLE_COUNT = 48;
 const BACKWARDS_BRIDGE_SAMPLE_COUNT = 12;
 
@@ -31,14 +36,16 @@ export function getWireSegments({
     : [{ start, end }];
 }
 
-export function getWirePath({
+function getWirePathPrimitives({
   sx,
   sy,
   ex,
   ey,
   startDirection = 'horizontal',
   endDirection = 'horizontal',
-}: WirePathCoordinates): string {
+}: WirePathCoordinates): WirePathPrimitive[] {
+  const start = { x: sx, y: sy };
+  const end = { x: ex, y: ey };
   const handleDistance = sx <= ex ? Math.abs(ex - sx) * 0.5 : Math.abs(ey - sy) * 0.6;
   const directionalControls = getDirectionalWireControlPoints({
     sx,
@@ -51,10 +58,7 @@ export function getWirePath({
   });
 
   if (directionalControls) {
-    return (
-      `M${sx},${sy} C${directionalControls.control1.x},${directionalControls.control1.y} ` +
-      `${directionalControls.control2.x},${directionalControls.control2.y} ${ex},${ey}`
-    );
+    return [{ type: 'cubic', start, end, ...directionalControls }];
   }
 
   const curveX1 = sx + handleDistance;
@@ -62,9 +66,55 @@ export function getWirePath({
   const middleY = (sy + ey) / 2;
 
   return sx <= ex
-    ? `M${sx},${sy} C${curveX1},${sy} ${curveX2},${ey} ${ex},${ey}`
-    : `M${sx},${sy} C${curveX1},${sy} ${curveX1},${middleY} ${sx},${middleY} ` +
-        `L${ex},${middleY} C${curveX2},${middleY} ${curveX2},${ey} ${ex},${ey}`;
+    ? [{ type: 'cubic', start, control1: { x: curveX1, y: sy }, control2: { x: curveX2, y: ey }, end }]
+    : [
+        {
+          type: 'cubic',
+          start,
+          control1: { x: curveX1, y: sy },
+          control2: { x: curveX1, y: middleY },
+          end: { x: sx, y: middleY },
+        },
+        { type: 'line', start: { x: sx, y: middleY }, end: { x: ex, y: middleY } },
+        {
+          type: 'cubic',
+          start: { x: ex, y: middleY },
+          control1: { x: curveX2, y: middleY },
+          control2: { x: curveX2, y: ey },
+          end,
+        },
+      ];
+}
+
+export function getWirePath(coordinates: WirePathCoordinates): string {
+  return [
+    `M${coordinates.sx},${coordinates.sy}`,
+    ...getWirePathPrimitives(coordinates).map((segment) =>
+      segment.type === 'line'
+        ? `L${segment.end.x},${segment.end.y}`
+        : `C${segment.control1.x},${segment.control1.y} ${segment.control2.x},${segment.control2.y} ${segment.end.x},${segment.end.y}`,
+    ),
+  ].join(' ');
+}
+
+/** A Bezier stays inside its control hull. Conservative bounds never miss a visible curve. */
+export function getWirePathBounds(coordinates: WirePathCoordinates): WirePathBounds {
+  const bounds = { left: coordinates.sx, top: coordinates.sy, right: coordinates.sx, bottom: coordinates.sy };
+  const include = (point: WirePoint) => {
+    bounds.left = Math.min(bounds.left, point.x);
+    bounds.top = Math.min(bounds.top, point.y);
+    bounds.right = Math.max(bounds.right, point.x);
+    bounds.bottom = Math.max(bounds.bottom, point.y);
+  };
+  for (const segment of getWirePathPrimitives(coordinates)) {
+    include(segment.start);
+    include(segment.end);
+    if (segment.type === 'cubic') {
+      include(segment.control1);
+      include(segment.control2);
+    }
+  }
+  return bounds;
 }
 
 /**
@@ -84,15 +134,11 @@ export function getNormalOffsetWirePoints({
     // Preserve the declared endpoint tangent instead of estimating it from the
     // first short sample, which can pull steep, closely spaced lanes off-port.
     if (index === 0) {
-      return startDirection === 'down'
-        ? { x: point.x - offset, y: point.y }
-        : { x: point.x, y: point.y + offset };
+      return startDirection === 'down' ? { x: point.x - offset, y: point.y } : { x: point.x, y: point.y + offset };
     }
 
     if (index === points.length - 1) {
-      return endDirection === 'down'
-        ? { x: point.x + offset, y: point.y }
-        : { x: point.x, y: point.y + offset };
+      return endDirection === 'down' ? { x: point.x + offset, y: point.y } : { x: point.x, y: point.y + offset };
     }
 
     const previous = points[Math.max(0, index - 1)]!;
@@ -179,68 +225,14 @@ export function getRepeatedWireArrowMarkerSegments({
   return markerSegments;
 }
 
-function getWirePathSamplePoints({
-  sx,
-  sy,
-  ex,
-  ey,
-  startDirection = 'horizontal',
-  endDirection = 'horizontal',
-}: WirePathCoordinates): WirePoint[] {
-  const handleDistance = sx <= ex ? Math.abs(ex - sx) * 0.5 : Math.abs(ey - sy) * 0.6;
-  const directionalControls = getDirectionalWireControlPoints({
-    sx,
-    sy,
-    ex,
-    ey,
-    startDirection,
-    endDirection,
-    horizontalHandleDistance: handleDistance,
-  });
-
-  if (directionalControls) {
-    return sampleCubicPoints(
-      { x: sx, y: sy },
-      directionalControls.control1,
-      directionalControls.control2,
-      { x: ex, y: ey },
-      CUBIC_OFFSET_SAMPLE_COUNT,
-    );
-  }
-
-  const curveX1 = sx + handleDistance;
-  const curveX2 = ex - handleDistance;
-  const middleY = (sy + ey) / 2;
-
-  if (sx <= ex) {
-    return sampleCubicPoints(
-      { x: sx, y: sy },
-      { x: curveX1, y: sy },
-      { x: curveX2, y: ey },
-      { x: ex, y: ey },
-      CUBIC_OFFSET_SAMPLE_COUNT,
-    );
-  }
-
-  return appendSamplePoints(
-    appendSamplePoints(
-      sampleCubicPoints(
-        { x: sx, y: sy },
-        { x: curveX1, y: sy },
-        { x: curveX1, y: middleY },
-        { x: sx, y: middleY },
-        CUBIC_OFFSET_SAMPLE_COUNT,
-      ),
-      sampleLinePoints({ x: sx, y: middleY }, { x: ex, y: middleY }, BACKWARDS_BRIDGE_SAMPLE_COUNT),
-    ),
-    sampleCubicPoints(
-      { x: ex, y: middleY },
-      { x: curveX2, y: middleY },
-      { x: curveX2, y: ey },
-      { x: ex, y: ey },
-      CUBIC_OFFSET_SAMPLE_COUNT,
-    ),
-  );
+function getWirePathSamplePoints(coordinates: WirePathCoordinates): WirePoint[] {
+  return getWirePathPrimitives(coordinates).reduce<WirePoint[]>((points, segment) => {
+    const samples =
+      segment.type === 'line'
+        ? sampleLinePoints(segment.start, segment.end, BACKWARDS_BRIDGE_SAMPLE_COUNT)
+        : sampleCubicPoints(segment.start, segment.control1, segment.control2, segment.end, CUBIC_OFFSET_SAMPLE_COUNT);
+    return points.length ? appendSamplePoints(points, samples) : samples;
+  }, []);
 }
 
 function getCumulativeWireLengths(points: readonly WirePoint[]): number[] {
@@ -300,14 +292,10 @@ function getDirectionalWireControlPoints({
   }
 
   const horizontalDistance = Math.max(24, horizontalHandleDistance);
-  const verticalDistance = Math.max(
-    24,
-    Math.min(120, Math.max(Math.abs(ey - sy) * 0.35, Math.abs(ex - sx) * 0.15)),
-  );
+  const verticalDistance = Math.max(24, Math.min(120, Math.max(Math.abs(ey - sy) * 0.35, Math.abs(ex - sx) * 0.15)));
 
   return {
-    control1:
-      startDirection === 'down' ? { x: sx, y: sy + verticalDistance } : { x: sx + horizontalDistance, y: sy },
+    control1: startDirection === 'down' ? { x: sx, y: sy + verticalDistance } : { x: sx + horizontalDistance, y: sy },
     control2: endDirection === 'down' ? { x: ex, y: ey + verticalDistance } : { x: ex - horizontalDistance, y: ey },
   };
 }
