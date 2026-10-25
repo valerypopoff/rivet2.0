@@ -794,6 +794,20 @@ remains bounded to two minutes and still requires the durable interrupted event.
 
 - persistence after backend and execution-pod replacement.
 
+Replacement verification separates two contracts. An authenticated loopback
+workflow request runs inside the exact replacement execution pod via namespace-
+scoped `kubectl exec`; its returned hostname must match that pod and its App
+Settings value must survive. A separate bounded workflow request through the
+public proxy proves routing recovery and the persisted value. Public requests
+may legitimately keep reaching a healthy sibling (including through pooled
+upstream connections); load balancing is not a promise to visit every replica
+within 90 seconds. Neither successful sibling traffic nor readiness alone may
+substitute for executing on the replacement. These probes execute only the
+disposable, side-effect-free gate fixture; they are not automatic replay of
+user writes. HTTP failure of an individual direct request is not silently retried
+by its transport, and credentials come from the pod environment, not command
+arguments or diagnostic artifacts.
+
 `develop` pushes and `develop`/`staging` PRs use `.github/workflows/studio-server-verify.yml` directly. On a `staging` push, Build Images calls the same verifier once as a reusable workflow; there is no duplicate standalone verification run. The reusable verifier builds Studio Server once, then runs four isolated API shards, web tests, host compatibility, repository contracts, and Kubernetes render/contracts in parallel while preserving the final `verify` status. Its changed-path classifier skips heavy Studio Server jobs for unrelated commits; direct `yarn studio-server:test` remains the complete sequential local gate.
 
 The image workflow is path-gated to Studio Server and its Rivet runtime/deployment dependency closure. Repository verification and immutable candidate-image construction start concurrently. Every candidate set must pass the authenticated Compose smoke (`yarn studio-server:verify:candidate-images`), which verifies API/web routing, the key gate, executor WebSocket connectivity, and a published workflow execution through the production proxy.

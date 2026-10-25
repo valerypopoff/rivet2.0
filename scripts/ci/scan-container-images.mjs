@@ -122,10 +122,24 @@ export function assessContainerReport(report, { platform, image, database, now =
   };
 }
 
-export function scannerArguments({ output, cache, platform, image, archive, owner }) {
+export function scannerArguments({
+  output,
+  cache,
+  platform,
+  image,
+  archive,
+  owner,
+  uid = process.getuid?.() ?? 10001,
+  gid = process.getgid?.() ?? 10001,
+}) {
   assert.ok(['linux/amd64', 'linux/arm64'].includes(platform), 'Unsupported image platform');
   assert.ok(Boolean(image) !== Boolean(archive), 'Choose exactly one immutable image or local image archive');
   if (image) assert.match(image, immutableImage, 'Mutable image references are not accepted');
+  // Linux bind mounts keep the runner's ownership. Root with all capabilities
+  // dropped cannot write those directories either. Match the non-root host user
+  // instead of relying on the scanner image's (currently root) default user.
+  assert.ok(Number.isInteger(uid) && uid > 0, 'Run the scanner from a non-root host user');
+  assert.ok(Number.isInteger(gid) && gid >= 0, 'Invalid scanner group');
   return [
     'run',
     '--rm',
@@ -135,6 +149,8 @@ export function scannerArguments({ output, cache, platform, image, archive, owne
     `io.rivet.security-owner=${owner}`,
     '--cidfile',
     path.join(output, 'scanner.cid'),
+    '--user',
+    `${uid}:${gid}`,
     '--read-only',
     '--cap-drop=ALL',
     '--security-opt=no-new-privileges',

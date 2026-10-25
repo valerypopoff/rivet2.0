@@ -188,11 +188,23 @@ test('scanner is immutable, isolated, bounded and scans all vulnerability status
     image,
     platform: 'linux/arm64',
     owner: 'fixture',
+    uid: 1001,
+    gid: 1002,
   };
   const args = scannerArguments(settings);
   assert.ok(args.includes(scannerImage));
   assert.match(scannerImage, /@sha256:[a-f0-9]{64}$/);
   assert.ok(args.includes('--read-only') && args.includes('--cap-drop=ALL'));
+  assert.equal(args[args.indexOf('--user') + 1], '1001:1002');
+  if (process.getuid?.() === 0) {
+    assert.throws(() => scannerArguments({ ...settings, uid: undefined, gid: undefined }), /non-root host user/);
+  } else {
+    const defaults = scannerArguments({ ...settings, uid: undefined, gid: undefined });
+    assert.equal(
+      defaults[defaults.indexOf('--user') + 1],
+      `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`,
+    );
+  }
   assert.ok(!args.some((arg) => arg.includes('docker.sock')));
   assert.ok(args.includes('--ignore-unfixed=false'));
   assert.ok(args.includes('UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'));
@@ -206,6 +218,9 @@ test('scanner is immutable, isolated, bounded and scans all vulnerability status
   assert.throws(() => scannerArguments({ ...settings, image: 'example.test/proxy:latest' }));
   assert.throws(() => scannerArguments({ ...settings, platform: 'linux/unknown' }));
   assert.throws(() => scannerArguments({ ...settings, archive: '/fixture/image.tar' }));
+  for (const uid of [0, -1, 1.5, '1001'])
+    assert.throws(() => scannerArguments({ ...settings, uid }), /non-root host user/);
+  assert.throws(() => scannerArguments({ ...settings, gid: -1 }), /Invalid scanner group/);
 });
 
 test('the actual CLI records scanner startup failure, exits nonzero and refuses stale output reuse', async () => {
