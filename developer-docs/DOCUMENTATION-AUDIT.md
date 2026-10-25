@@ -212,6 +212,13 @@ paired performance measurement or provider qualification. Receipts use
 `artifacts/benchmarks/commit-prep-*` and
 `artifacts/benchmarks/editor-performance/commit-prep-20261025/`.
 
+The first develop CI run found a type-only React import in the lazy-component
+regression fixture that the focused pre-commit lint selection had missed. It was
+changed to `import type`; runtime loading and retry behavior are unchanged. The
+complete Editor/tooling lint lane passed locally after the fix (zero errors;
+one existing `useDraggingWire` dependency warning), alongside the lazy-component
+regression and documentation-link check. No lint rule was weakened.
+
 ## Remaining evidence to collect for the refactor
 
 Validation of this documentation change includes recursive local-link checking,

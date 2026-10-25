@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import React from 'react';
+import type React from 'react';
 import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
