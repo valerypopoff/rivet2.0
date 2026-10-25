@@ -8,6 +8,16 @@
 > cleanup coverage; GAP-05 now has runtime binding tokens and a canonical store.
 > GAP-04's definition/caller checks remain intentional adapter-specific policy.
 
+> **2026-10-25 explicit path-move amendment:** verified host moves of the same
+> immutable project within unchanged bundle membership retain the current binding
+> when old/new open paths are unique. This restores REM-04 source continuity and
+> narrows LOC-04's recorded path-based fence to actual reassignment/replacement,
+> not an acknowledged same-document rename. Ordinary rebinds, close/reopen,
+> membership changes and reloads still fence old events. The frozen descriptions
+> below remain unchanged; current ownership and regression evidence are in
+> [Execution coordination](./EXECUTION-COORDINATION.md) and
+> [the documentation audit](./DOCUMENTATION-AUDIT.md#refactor-drift-follow-up-2026-10-25).
+
 Recorded: 2026-10-24. Status: current working-tree behavior, before the proposed
 [execution-routing refactor](./studio-server/execution-routing-refactoring-plan.md).
 

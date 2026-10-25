@@ -6,15 +6,15 @@ Compare behavior with the frozen [baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELIN
 
 ## Ownership and writer inventory
 
-| Ingress / writer | Authority | Display/state boundary |
-| --- | --- | --- |
-| Browser processor and recording player, `useLocalExecutor` | Captured `EditorRunSession`, processor and recorder; never the selected tab | Captured binding guard; local observation adapter; ordinary active dispatcher or inactive snapshot reducer |
-| Desktop/hosted Node, `ExecutorSessionContext` and `useRemoteExecutor` | Existing executor runtime, request admission and pending result registry | Local observation adapter for dependencies; source handlers retain request/recording accounting |
-| External Remote Debugger, `executorSession` | Existing socket generation, logical session, cursor/replay deduplication and root admission | Remote observation adapter and shared display admission; reconnect never issues a run command |
+| Ingress / writer                                                                                             | Authority                                                                                                  | Display/state boundary                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser processor and recording player, `useLocalExecutor`                                                   | Captured `EditorRunSession`, processor and recorder; never the selected tab                                | Captured binding guard; local observation adapter; ordinary active dispatcher or inactive snapshot reducer                                   |
+| Desktop/hosted Node, `ExecutorSessionContext` and `useRemoteExecutor`                                        | Existing executor runtime, request admission and pending result registry                                   | Local observation adapter for dependencies; source handlers retain request/recording accounting                                              |
+| External Remote Debugger, `executorSession`                                                                  | Existing socket generation, logical session, cursor/replay deduplication and root admission                | Remote observation adapter and shared display admission; reconnect never issues a run command                                                |
 | `useGraphExecutionEvents`, `useNodeExecutionEvents`, `useExecutionDataFlow`, `useRunActivityExecutionEvents` | Existing active-source presentation policy (partial/preloaded/evaluation state, prompts and notifications) | `useExecutionSnapshotWriter` and the same snapshot transition functions as inactive/passive events; field lenses are compatibility/read APIs |
-| `projectExecutionSnapshotEvents` | Inactive/passive data transitions and once-only reference effects | `updateOpenProjectExecutionSnapshot`; no React updater owns payload allocation |
-| `recordingPlaybackDisplay`, menu reset/freeze operations | Explicit playback/reset owner | Same canonical snapshot; recording identity permits an explicit path move, not replacement by a different recorder/history |
-| Workspace load/close | Authored document and tab lifecycle | Load selects the view; close clears refs and removes only the closed project's snapshot |
+| `projectExecutionSnapshotEvents`                                                                             | Inactive/passive data transitions and once-only reference effects                                          | `updateOpenProjectExecutionSnapshot`; no React updater owns payload allocation                                                               |
+| `recordingPlaybackDisplay`, menu reset/freeze operations                                                     | Explicit playback/reset owner                                                                              | Same canonical snapshot; recording identity permits an explicit path move, not replacement by a different recorder/history                   |
+| Workspace load/close                                                                                         | Authored document and tab lifecycle                                                                        | Load selects the view; close clears refs and removes only the closed project's snapshot                                                      |
 
 Execution, controls, recording and observation are separate owners. The display
 coordinator cannot run, cancel, pause, resume, upload or resend a command. Existing
@@ -86,6 +86,20 @@ Actual clean file/snapshot replacement renews the token at the synchronous
 `useWorkspaceHostReplaceProjectSnapshot`). Failed asynchronous preparation does not publish
 a new binding. Ordinary save/title changes, graph navigation and tab selection do
 not renew a token. Rebinding a path or explicit bundle identity does.
+Verified host rename/move commits are the narrow exception: `moveProjectPaths`,
+or `updateProjectMetadata` with both `persistedExternally: true` and
+`changeSource: 'external-wrapper-rename'`, commits through
+`verifiedProjectPathChangesState`. The same project ID and bundle key must remain;
+old and new paths must have unique open owners. Registry reconciliation updates
+the path descriptor while retaining only the current token, in the same metadata
+transaction before subscribers run. It cannot revive a closed/replaced token,
+authorize a different project, or preserve admission across membership changes.
+The host remains responsible for verifying the server/file move; this metadata
+exception is not an authorization boundary or a general rebind bypass.
+Local and remote source/receiver admission therefore survives verified renames.
+Remote observation updates its current path descriptor within that same token,
+so a later membership removal still explains the blocked state; old event
+admission never transfers to the membership's replacement token.
 The recovery screen can read tab state after checkpoint validation fails. Binding
 derivation therefore ignores null, primitive and array-valued entries without
 mutating the saved record. These entries cannot retain an execution lifetime;
@@ -301,16 +315,16 @@ The source baseline is `1ebeef366`; receipts are ignored diagnostic artifacts, n
 release or provider certificates. Counts below overlap and must not be summed as
 unique scenarios.
 
-| Baseline IDs / boundary | Result and receipt |
-| --- | --- |
-| MEM-01–03, LOC-01–08, REM-01–10, SES-01–03, REC-01–04, STA-01–05 | 269 focused unit/adapter/workspace tests pass in `artifacts/execution-refactor-final-unit.log`; original policies retained except the dated GAP corrections in the baseline |
-| Snapshot data/ref/selection, save and Run Activity seams | 202 adjacent regressions pass in `artifacts/execution-refactor-adjacent-unit.log` |
-| Desktop bundle, both hosted topologies, complete remote observation matrix, repeated playback, local recordings, evaluation history | 41 headless UI checks pass in `artifacts/execution-refactor-final-acceptance-ui.log` |
-| Final lifetime hardening | 12 headless checks pass in `artifacts/execution-refactor-final-lifetime-ui.log`, including a gated live Browser run: same-path replacement fences display without cancelling accepted work; a following node still executes exactly once |
-| Admission before acceptance versus live execution | The strengthened desktop/bundle UI sequence passes twice in `artifacts/execution-refactor-preparation-green-ui.log`: replacement during environment preparation prevents obsolete code from starting, while replacement after start lets accepted work finish without stale display writes. The pre-fix failure is retained separately as `artifacts/execution-refactor-preparation-red-ui.log` |
-| Complete Run recordings modal | All 74 checks pass in `artifacts/execution-refactor-final-recordings-ui.log`, including actual activity rows and Decision AI request/response diagnostics |
-| Real local Node WebSocket/bundle execution | `executor.projectBundle.test.mts` passes in `artifacts/execution-refactor-native.log`; not a packaged sidecar qualification |
-| Domain boundary and static checks | Two boundary-policy regressions, app typecheck/lint, test-style guard, automatic shard discovery and documentation links pass |
+| Baseline IDs / boundary                                                                                                             | Result and receipt                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MEM-01–03, LOC-01–08, REM-01–10, SES-01–03, REC-01–04, STA-01–05                                                                    | 269 focused unit/adapter/workspace tests pass in `artifacts/execution-refactor-final-unit.log`; original policies retained except the dated GAP corrections in the baseline                                                                                                                                                                                                                     |
+| Snapshot data/ref/selection, save and Run Activity seams                                                                            | 202 adjacent regressions pass in `artifacts/execution-refactor-adjacent-unit.log`                                                                                                                                                                                                                                                                                                               |
+| Desktop bundle, both hosted topologies, complete remote observation matrix, repeated playback, local recordings, evaluation history | 41 headless UI checks pass in `artifacts/execution-refactor-final-acceptance-ui.log`                                                                                                                                                                                                                                                                                                            |
+| Final lifetime hardening                                                                                                            | 12 headless checks pass in `artifacts/execution-refactor-final-lifetime-ui.log`, including a gated live Browser run: same-path replacement fences display without cancelling accepted work; a following node still executes exactly once                                                                                                                                                        |
+| Admission before acceptance versus live execution                                                                                   | The strengthened desktop/bundle UI sequence passes twice in `artifacts/execution-refactor-preparation-green-ui.log`: replacement during environment preparation prevents obsolete code from starting, while replacement after start lets accepted work finish without stale display writes. The pre-fix failure is retained separately as `artifacts/execution-refactor-preparation-red-ui.log` |
+| Complete Run recordings modal                                                                                                       | All 74 checks pass in `artifacts/execution-refactor-final-recordings-ui.log`, including actual activity rows and Decision AI request/response diagnostics                                                                                                                                                                                                                                       |
+| Real local Node WebSocket/bundle execution                                                                                          | `executor.projectBundle.test.mts` passes in `artifacts/execution-refactor-native.log`; not a packaged sidecar qualification                                                                                                                                                                                                                                                                     |
+| Domain boundary and static checks                                                                                                   | Two boundary-policy regressions, app typecheck/lint, test-style guard, automatic shard discovery and documentation links pass                                                                                                                                                                                                                                                                   |
 
 The protected execution benchmark preserves outputs and ordered events
 (`artifacts/execution-refactor-benchmark.log`). Its timings are mixed, and its
@@ -453,3 +467,30 @@ the three boundary regressions, test-style, doc links and diff hygiene. Only doc
 and the boundary check's diagnostic wording changed during preparation; the final
 18-check browser receipt and post-integration 12-check Remote Debugger receipt
 above still cover the unchanged runtime source.
+
+### Bounded presentation performance follow-up (2026-10-25)
+
+The authoritative snapshot writer, journal and event-admission contracts above
+remain unchanged. A closed Run Activity drawer no longer mounts its detailed
+projection. The open presentation owns weak definition/invocation caches and
+reuses unchanged rows; closing it releases those caches and inspector/timer
+subscriptions without stopping event collection.
+Small drawer preferences (filters/search, follow-live and expanded keys) outlive
+the projection, but never retain execution payloads or derived rows.
+Deferred Run Activity fullscreen navigation belongs to the lightweight renderer,
+not its open-only projection: narrow-screen navigation intentionally closes the
+drawer before opening output. The pending frame is latest-intent-only and checks
+the existing workspace/binding lifetime, active project/graph/caller view, selected
+graph invocation and exact retained process page before opening. Cleared outputs,
+removed nodes, replaced bindings and stale tool-result ports cannot open another
+tab's same-ID output. Disposing the renderer cancels its pending action. This is a
+presentation fence, not a new execution owner, event store or retry mechanism.
+Identical scalar caller metadata
+does not replace the journal's existing executor descriptor merely because Core
+or a wire adapter allocated a new object. Actual metadata changes still propagate.
+
+Code editors and folding-code output load at their feature boundaries, retaining
+their existing model/search/worker owners. Explicit import recovery retries only
+the same pinned asset namespace and never replays an application command. See
+[the performance implementation and evidence](studio-server/editor-performance-results.md)
+for cache invalidation rules, local verification and measured limits.

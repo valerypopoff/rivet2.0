@@ -58,6 +58,8 @@ export type RivetProjectMetadataUpdateOptions = {
   hostedBundleKey?: string | null;
   path?: string | null;
   persistedExternally?: boolean;
+  /** With persistedExternally, a verified same-document path move may retain its
+   * execution binding; replacement or membership changes never do. */
   changeSource?: 'external-wrapper-rename';
 };
 
@@ -88,6 +90,8 @@ export type RivetWorkspaceHost = {
   closeProject(projectId?: ProjectId): Promise<boolean>;
   /** Remove editor-local context only, after the host has confirmed project deletion. Tab close retains it. */
   deleteProjectContext(projectId: ProjectId): Promise<void>;
+  /** After host verification, remap paths of existing documents without replacing
+   * their execution lifetimes. Does not perform the underlying file/server move. */
   moveProjectPaths(moves: MoveProjectPathsInput): void;
   setProjectTabUiState(projectId: ProjectId, state?: RivetProjectTabUiState): Promise<boolean>;
   startOpeningProjectTab(

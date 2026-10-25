@@ -930,3 +930,19 @@ checks must be evaluated for the pushed commit itself, not an older green run.
 A CI failure requires diagnosis and a verified follow-up change (or an explicit
 infrastructure limitation), not weakened assertions or replayed application
 writes. This handoff does not authorize merging to `main` or deploying production.
+
+### Measured performance follow-up (2026-10-25)
+
+The bounded follow-up now has a repository-owned benchmark and local
+[implementation/verification record](editor-performance-results.md), including
+presentation-cache ownership, feature-local loading and the intentionally retained
+live authorization checks. It does not reopen the architecture refactor or imply
+production qualification.
+
+The [local editor performance baseline](editor-performance-baseline.md) records
+production-build startup, a ten-project/999-node bundle, tab switching, Browser
+execution, real WebSocket debugger updates and repeated recording playback.
+It separates measured loading/presentation costs from unproven architectural or
+production claims. Prioritize deferred startup dependencies and the sampled Run
+Activity/state-update hot paths; do not restart a broad refactor from bundle-size
+warnings alone. Application code remains unchanged by this assessment.

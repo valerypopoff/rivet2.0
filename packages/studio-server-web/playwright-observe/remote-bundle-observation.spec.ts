@@ -38,6 +38,8 @@ for (const outcome of [
   'shared stop',
   'mixed versions',
   'source reopen',
+  'source rename',
+  'member rename',
   'outside caller',
   'external dependency',
   'member deleted',
@@ -159,13 +161,14 @@ for (const outcome of [
     });
     let run: ReturnType<typeof runner.run> | undefined;
     let memberDeleted = false;
+    let treeRevision = 0;
     try {
       if (fixture) {
         const history = fixture.warmHistory();
         await expect.poll(fixture.ready).toBe(true);
         await expect.poll(fixture.peerSequence).toBeGreaterThanOrEqual(history);
       }
-      if (outcome === 'member deleted') {
+      if (outcome === 'member deleted' || outcome === 'source rename' || outcome === 'member rename') {
         await page.addInitScript(() => {
           class TreeEventSource extends EventTarget {
             private changed = () =>
@@ -176,10 +179,10 @@ for (const outcome of [
               );
             constructor(_url: string) {
               super();
-              window.addEventListener('fixture-delete-member', this.changed);
+              window.addEventListener('fixture-tree-change', this.changed);
             }
             close() {
-              window.removeEventListener('fixture-delete-member', this.changed);
+              window.removeEventListener('fixture-tree-change', this.changed);
             }
           }
           Object.defineProperty(window, 'EventSource', { configurable: true, value: TreeEventSource });
@@ -201,7 +204,7 @@ for (const outcome of [
           json: {
             root: '/workflows',
             folders: [],
-            sync: { epoch: 'bundle-fixture', revision: memberDeleted ? 1 : 0 },
+            sync: { epoch: 'bundle-fixture', revision: treeRevision },
             projects: [...paths]
               .filter(([, project]) => !memberDeleted || project.metadata.id !== 'b')
               .map(([absolutePath, project]) => ({
@@ -388,7 +391,8 @@ for (const outcome of [
       }
       if (outcome === 'member deleted') {
         memberDeleted = true;
-        await page.evaluate(() => window.dispatchEvent(new Event('fixture-delete-member')));
+        treeRevision++;
+        await page.evaluate(() => window.dispatchEvent(new Event('fixture-tree-change')));
         await expect(page.locator('.project-row').filter({ hasText: 'Project B' })).toHaveCount(0);
         await tab('b').click();
         await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toHaveCount(0);
@@ -404,6 +408,30 @@ for (const outcome of [
         await tab('c').click();
         await expect(output).toContainText('C done');
         await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
+        await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
+        await expect.poll(clientCount).toBe(0);
+        expect(commands).toEqual([]);
+        return;
+      }
+      if (outcome === 'source rename' || outcome === 'member rename') {
+        const id = outcome === 'source rename' ? 'a' : 'b';
+        const oldPath = `/workflows/Project ${id.toUpperCase()}.rivet-project`;
+        const moved = paths.get(oldPath)!;
+        paths.delete(oldPath);
+        paths.set(`/workflows/Renamed Project ${id.toUpperCase()}.rivet-project`, moved);
+        treeRevision++;
+        await page.evaluate(() => window.dispatchEvent(new Event('fixture-tree-change')));
+        await expect(tab(id)).toContainText(`Renamed Project ${id.toUpperCase()}`);
+        await tab(id).click();
+        await expect(output).toContainText(`${id.toUpperCase()} streaming`);
+        await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
+        for (const item of gates.values()) item.release();
+        await run;
+        for (const member of ['a', 'b', 'c']) {
+          await tab(member).click();
+          await expect(output).toContainText(`${member.toUpperCase()} done`);
+        }
+        expect(clientCount()).toBe(1);
         await editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
         await expect.poll(clientCount).toBe(0);
         expect(commands).toEqual([]);

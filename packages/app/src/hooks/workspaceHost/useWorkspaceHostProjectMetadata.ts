@@ -7,6 +7,7 @@ import {
   projectState,
   projectUnsavedChangesState,
   projectsState,
+  verifiedProjectPathChangesState,
   savedProjectContentDigestsState,
 } from '../../state/savedGraphs.js';
 import {
@@ -27,6 +28,7 @@ import type { MoveProjectPathsInput, RivetProjectMetadataPatch, RivetProjectMeta
 export function useWorkspaceHostProjectMetadata() {
   const store = useStore();
   const setProjects = useSetAtom(projectsState);
+  const setVerifiedPaths = useSetAtom(verifiedProjectPathChangesState);
   const setLoadedProject = useSetAtom(loadedProjectState);
   const setOpenedProjectSnapshots = useSetAtom(openedProjectSnapshotsState);
   const setCurrentProject = useSetAtom(projectState);
@@ -36,7 +38,7 @@ export function useWorkspaceHostProjectMetadata() {
   const moveProjectPaths = useStableCallback((moves: MoveProjectPathsInput) => {
     const loadedProject = store.get(loadedProjectState);
     const normalizedMoves = normalizeProjectPathMoves(moves);
-    setProjects((previousProjects) => moveOpenedProjectPaths(previousProjects, normalizedMoves));
+    setVerifiedPaths((previousProjects) => moveOpenedProjectPaths(previousProjects, normalizedMoves));
 
     const nextLoadedProjectPath = loadedProject.path
       ? normalizedMoves.find((move) => move.from === loadedProject.path)?.to
@@ -78,7 +80,11 @@ export function useWorkspaceHostProjectMetadata() {
         ? applyProjectMetadataPatch(projectBeforePatch, metadataPatch)
         : undefined;
 
-      setProjects((previousProjects) =>
+      const commitMetadata =
+        options.persistedExternally && options.changeSource === 'external-wrapper-rename'
+          ? setVerifiedPaths
+          : setProjects;
+      commitMetadata((previousProjects) =>
         updateOpenedProjectMetadata(previousProjects, projectId, metadataPatch, {
           ...(hasPathUpdate ? { fsPath: nextPath } : {}),
           ...(options.hostedBundleKey !== undefined ? { hostedBundleKey: options.hostedBundleKey } : {}),

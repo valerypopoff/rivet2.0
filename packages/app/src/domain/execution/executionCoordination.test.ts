@@ -25,6 +25,47 @@ test('closing prototype-named IDs removes their binding and reopening cannot inh
   }
 });
 
+test('verified path moves preserve only unique same-membership bindings and never revive retired tokens', () => {
+  for (const id of ['a', 'constructor', '__proto__']) {
+    for (const scenario of [
+      'rename',
+      'membership',
+      'stale origin',
+      'ambiguous origin',
+      'ambiguous destination',
+    ] as const) {
+      const registry = createProjectBindingRegistry();
+      const before = {
+        [id]: { path: '/old', bundleKey: 'bundle' },
+        ...(scenario === 'ambiguous origin' ? { other: { path: '/old', bundleKey: 'bundle' } } : {}),
+      };
+      registry.reconcile(before);
+      const token = registry.get(id)!.token;
+      const next = {
+        [id]: { path: '/new', bundleKey: scenario === 'membership' ? 'another' : 'bundle' },
+        ...(scenario === 'ambiguous destination' ? { other: { path: '/new', bundleKey: 'bundle' } } : {}),
+      };
+      registry.reconcile(
+        next,
+        new Map([[id, { from: scenario === 'stale origin' ? '/obsolete' : '/old', to: '/new' }]]),
+      );
+      assert.equal(registry.isCurrent(id, token), scenario === 'rename', `${id}: ${scenario}`);
+      assert.equal(registry.get(id)!.path, '/new');
+      const retired = registry.get(id)!.token;
+      registry.reconcile({});
+      registry.reconcile(before);
+      const reopened = registry.get(id)!.token;
+      registry.reconcile(
+        { [id]: { path: '/third', bundleKey: 'bundle' } },
+        new Map([[id, { from: '/old', to: '/third' }]]),
+      );
+      assert.notEqual(registry.get(id)!.token, retired);
+      assert.equal(registry.isCurrent(id, token), false);
+      assert.equal(registry.isCurrent(id, reopened), scenario !== 'ambiguous origin');
+    }
+  }
+});
+
 test('binding lifetimes change only at close, rebind, membership or explicit replacement boundaries', () => {
   const registry = createProjectBindingRegistry();
   const original = { a: { path: '/a', bundleKey: 'bundle' } };

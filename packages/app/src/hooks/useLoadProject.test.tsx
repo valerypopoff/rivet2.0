@@ -22,7 +22,9 @@ import {
 import type { PathBasedIOProvider } from '../io/IOProvider.js';
 import { ProvidersProvider, type ProjectActivationPolicy } from '../providers/ProvidersContext.js';
 import { MemoryStaticDataStore } from '../providers/StaticDataStore.js';
-import { ExecutorSessionProvider } from '../providers/ExecutorSessionContext.js';
+import { ExecutorSessionProvider, createExecutorSessionRegistry } from '../providers/ExecutorSessionContext.js';
+import { FakeWebSocket } from './executorSessionTestUtils.js';
+import { captureDisplayAdmission, checkDisplayAdmission } from '../domain/execution/executionDisplayPolicy.js';
 import { HostCallbacksProvider } from '../providers/HostCallbacksContext.js';
 import { graphState } from '../state/graph.js';
 import { selectedOpeningProjectTabIdState } from '../state/openingProjectTabs.js';
@@ -1381,6 +1383,136 @@ test('cancelled or unselected opening placeholders cannot steal the active proje
     assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
     assert.equal(fixture.info(c.metadata.id), undefined);
   } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('verified source and receiver moves retain live session admission; an ordinary rebind still fences it', async () => {
+  const fixture = await mount(async () => ({ project: fixture.b, evaluation }));
+  const { store, a, b } = fixture;
+  const originalSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const bindings = store.get(projectBindingRegistryState);
+  const sessions = createExecutorSessionRegistry({
+    onStateChange() {},
+    getProjectBindingLifetime: (id) => bindings.get(id)?.token.toString(),
+  });
+  try {
+    await act(async () =>
+      store.set(projectsState, (previous) => ({
+        ...previous,
+        openedProjects: Object.fromEntries(
+          Object.entries(previous.openedProjects).map(([id, info]) => [
+            id,
+            { ...info, hostedBundleKey: 'server:bundle' },
+          ]),
+        ),
+      })),
+    );
+    const sourceToken = bindings.get(a.metadata.id)!.token;
+    const receiverToken = bindings.get(b.metadata.id)!.token;
+    const local = captureDisplayAdmission(a.metadata.id, bindings.capture(), () => false);
+    await sessions.connectBundleDebugger(
+      a.metadata.id,
+      [a.metadata.id, b.metadata.id],
+      'ws://synthetic',
+      'server:bundle',
+    );
+    const socket = FakeWebSocket.instances.at(-1)!;
+    socket.open();
+    const allowed: boolean[] = [];
+    sessions.subscribeMessagesForAllProjects((_id, _runtime, _message, _data, _request, admission) =>
+      allowed.push(admission?.sourceDisplayAllowed !== false),
+    );
+    const graph = a.graphs[a.metadata.mainGraphId!]!;
+    const execution = {
+      projectId: a.metadata.id,
+      rootRunId: 'moving-root' as RootRunId,
+      graphRunId: 'moving-graph' as GraphRunId,
+      graphId: graph.metadata!.id!,
+    };
+    socket.emitMessage({ message: 'start', data: { execution, project: a, startGraph: graph } });
+    assert.deepEqual(allowed, [true]);
+    const childGraph = b.graphs[b.metadata.mainGraphId!]!;
+    const childNode = TextNodeImpl.create();
+    childGraph.nodes.push(childNode);
+    const childExecution: GraphExecutionMetadata = {
+      projectId: b.metadata.id,
+      graphId: childGraph.metadata!.id!,
+      rootRunId: 'moving-local' as RootRunId,
+      graphRunId: 'moving-local-child' as GraphRunId,
+      parentGraphRunId: 'moving-local:entry' as GraphRunId,
+    };
+    await act(async () => {
+      fixture.startBundleRun('moving-local');
+      fixture.routeBundle(a.metadata.id, 'graphStart', { graph: childGraph, inputs: {}, execution: childExecution });
+    });
+    await act(async () => {
+      fixture.metadata.moveProjectPaths([
+        { from: 'a.rivet-project', to: 'folder/renamed-a.rivet-project' },
+        { from: 'b.rivet-project', to: 'folder/b.rivet-project' },
+      ]);
+      fixture.metadata.moveProjectPaths([
+        { from: 'folder/renamed-a.rivet-project', to: 'folder/a-final.rivet-project' },
+      ]);
+      await fixture.metadata.updateProjectMetadata(
+        b.metadata.id,
+        {},
+        { path: 'folder/b-final.rivet-project', persistedExternally: true, changeSource: 'external-wrapper-rename' },
+      );
+    });
+    assert.equal(bindings.get(a.metadata.id)!.token, sourceToken);
+    assert.equal(bindings.get(b.metadata.id)!.token, receiverToken);
+    assert.equal(store.get(loadedProjectState).path, 'folder/a-final.rivet-project');
+    assert.equal(
+      checkDisplayAdmission(
+        local,
+        b.metadata.id,
+        (id) => bindings.get(id),
+        () => false,
+      ),
+      undefined,
+    );
+    socket.emitMessage({ message: 'graphOutputsReady', data: { execution, graph, outputs: {} } });
+    assert.deepEqual(allowed, [true, true]);
+    const childFinish = (value: string) =>
+      fixture.routeBundle(a.metadata.id, 'nodeFinish', {
+        node: childNode,
+        processId: 'moving-local-process' as ProcessId,
+        execution: childExecution,
+        outputs: { ['output' as PortId]: { type: 'string', value } },
+      });
+    await act(async () => childFinish('after verified move'));
+    const childValue = () =>
+      store.get(projectExecutionSnapshotsState)[b.metadata.id]!.lastRunDataByNode[childNode.id]![0]!.data.outputData?.[
+        'output' as PortId
+      ];
+    assert.deepEqual(childValue(), { type: 'string', storage: 'inline', value: 'after verified move' });
+    await act(async () => {
+      await fixture.metadata.updateProjectMetadata(
+        a.metadata.id,
+        {},
+        { path: 'different-document.rivet-project', persistedExternally: true },
+      );
+    });
+    assert.notEqual(bindings.get(a.metadata.id)!.token, sourceToken);
+    assert.equal(
+      checkDisplayAdmission(
+        local,
+        b.metadata.id,
+        (id) => bindings.get(id),
+        () => false,
+      ),
+      'source-rebound',
+    );
+    socket.emitMessage({ message: 'done', data: { execution, results: {} } });
+    assert.deepEqual(allowed, [true, true, false]);
+    await act(async () => childFinish('stale rebind output'));
+    assert.deepEqual(childValue(), { type: 'string', storage: 'inline', value: 'after verified move' });
+    assert.deepEqual(socket.sent, [], 'path metadata cannot rerun or abort accepted work');
+  } finally {
+    sessions.disconnectAll();
+    globalThis.WebSocket = originalSocket;
     await fixture.cleanup();
   }
 });

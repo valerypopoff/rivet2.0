@@ -6,16 +6,36 @@ import {
 } from '@valerypopoff/rivet2-core';
 import type { ProcessDataForNode } from '../../state/dataFlow.js';
 
+type InspectableProcessData = ProcessDataForNode &
+  Required<Pick<ProcessDataForNode, 'graphId' | 'graphRunId' | 'rootRunId'>> & {
+    data: ProcessDataForNode['data'] & {
+      agentTraceEvents: NonNullable<ProcessDataForNode['data']['agentTraceEvents']>;
+    };
+  };
+
+/** The row only needs availability; build the full trace on actual inspection. */
+export function canInspectModelInvocation(
+  node: ChartNode,
+  processData: ProcessDataForNode | undefined,
+): processData is InspectableProcessData {
+  return (
+    hasModelResponseInspector(node) &&
+    processData != null &&
+    processData.graphId != null &&
+    processData.graphRunId != null &&
+    processData.rootRunId != null &&
+    processData.data.agentTraceEvents != null
+  );
+}
+
 /** Builds the inspector model for one exact editor node invocation. */
 export function buildModelInvocationTrace(
   node: ChartNode,
   processData: ProcessDataForNode | undefined,
 ): AgentResponseTrace | undefined {
-  if (!hasModelResponseInspector(node) || processData == null) return undefined;
+  if (!canInspectModelInvocation(node, processData)) return undefined;
 
   const { data, graphId, graphRunId, processId, rootRunId } = processData;
-  if (graphId == null || graphRunId == null || rootRunId == null || data.agentTraceEvents == null) return undefined;
-
   const timing = data.recordedTiming;
   const execution: GraphExecutionMetadata = { graphId, graphRunId, rootRunId };
   return buildAgentResponseTrace({

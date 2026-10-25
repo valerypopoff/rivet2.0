@@ -28,6 +28,7 @@ const HOSTED_FILE_MENU_VISIBLE_ITEMS = [
 
 const HOSTED_RIVET_UI = {
   checkForUpdates: false,
+  preloadCodeEditor: false,
   debuggerConnection: {
     getDefaultUrl: () => RIVET_REMOTE_DEBUGGER_DEFAULT_WS,
     normalizeUrl: normalizeRuntimeWebSocketUrl,

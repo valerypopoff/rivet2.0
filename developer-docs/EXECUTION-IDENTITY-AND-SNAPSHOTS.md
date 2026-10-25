@@ -64,10 +64,13 @@ events establish routing; identified root terminals finish display, and late chi
 events cannot resurrect it. Browser fences remain until actual processor settlement;
 Node completed display metadata is bounded separately. Active roots are not evicted.
 
-See baseline LOC-01–08 for exact rules and GAP-01–05 for the current journal,
-conflict-timing, cleanup and definition-check differences from Remote Debugger.
-Do not assume the remote ancestry/lifetime behavior below is already identical
-to the local adapter.
+The frozen baseline's LOC-01–08 describe the preserved behavior. Its GAP-01–05
+record pre-refactor differences, not the current implementation backlog.
+[Execution coordination](./EXECUTION-COORDINATION.md) describes the implemented
+shared binding/admission and snapshot owners, original activity ancestry,
+transient-conflict fences and cleanup. Intentional adapter differences remain:
+Remote Debugger validates runtime definitions/caller ancestry and uses view-only
+observation controls; ordinary local projection does not acquire those controls.
 
 ### Remote dependency observations across open tabs
 
@@ -111,6 +114,11 @@ same captured lifetime through the registry, not the initiating tab or a raw
 socket callback. Even when no current source remains, the registry still notifies
 the passive observation owner so it can settle its existing receivers. A normal
 file rename/move does not end the source tab's lifetime or strand its active run.
+This continuity applies to verified host moves with unchanged immutable project
+identity and bundle membership and unique old/new open paths. Ordinary path
+reassignment, ambiguous paths, membership changes and snapshot replacement still
+retire the old binding. Receiver renames use the same rule, so existing admitted
+data continues without issuing another run.
 Membership discovery is reused per explicit group during workspace refresh.
 Reconciliation removes departed members as well as adding new ones, without
 merging independent sessions. Only display eligibility changes; external calls

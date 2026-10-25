@@ -19,6 +19,7 @@ import { createHybridStorage } from './storage.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import { getExecutionBundleKey } from '../domain/execution/bundleMembership.js';
 import { projectBindingRegistryState } from './projectBindings.js';
+import type { VerifiedProjectPathMove } from '../domain/execution/projectBindingRegistry.js';
 
 /** Project context values stored in the IDE and not in the project file. Available in Context nodes. */
 export type ProjectContext = Record<
@@ -222,6 +223,33 @@ export const projectsState = atom(
     const next = typeof update === 'function' ? update(get(storedProjectsState)) : update;
     // Reconcile at the actual write boundary, including close/reopen in one batch.
     get(projectBindingRegistryState).reconcile(getProjectBindingSpecs(next.openedProjects));
+    set(storedProjectsState, next);
+  },
+);
+
+/** Trusted host rename/move commit, not a generic path-reassignment escape.
+ * Publish metadata and reconcile lifetime in one write before subscribers run. */
+export const verifiedProjectPathChangesState = atom(
+  null,
+  (get, set, update: (previous: OpenedProjectsInfo) => OpenedProjectsInfo) => {
+    const previous = get(projectsState);
+    const next = update(previous);
+    const before = getProjectBindingSpecs(previous.openedProjects);
+    const after = getProjectBindingSpecs(next.openedProjects);
+    const moves = new Map<string, VerifiedProjectPathMove>();
+    for (const [id, spec] of Object.entries(after)) {
+      const from = before[id]?.path;
+      if (
+        from &&
+        spec.path &&
+        from !== spec.path &&
+        Object.hasOwn(previous.openedProjects, id) &&
+        previous.openedProjects[id as ProjectId]?.projectId === id &&
+        next.openedProjects[id as ProjectId]?.projectId === id
+      )
+        moves.set(id, { from, to: spec.path });
+    }
+    get(projectBindingRegistryState).reconcile(after, moves);
     set(storedProjectsState, next);
   },
 );

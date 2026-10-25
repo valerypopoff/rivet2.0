@@ -2103,6 +2103,9 @@ export class GraphProcessor {
             };
             const key = getSubgraphProjectKey(target);
             let resolved = this.#shared.subgraphTargetCache.get(key);
+            // Snapshot reuse is not permission reuse. A descendant can move
+            // bundles after the parent's discovery but before this child starts;
+            // keep this preflight ahead of any child-node side effects.
             if (resolved) await this.#run.context.subgraphProjectLoader?.validateTarget?.(target);
             if (!resolved) {
               if (!this.#run.context.subgraphProjectLoader) {

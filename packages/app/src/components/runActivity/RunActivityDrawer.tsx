@@ -14,9 +14,11 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  memo,
 } from 'react';
 import { SegmentedEditor } from '../editors/SegmentedEditor.js';
 import { CollapsiblePanel } from '../CollapsiblePanel.js';
@@ -859,21 +861,25 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   onHeightChange,
   columnWidths,
   onColumnWidthsChange,
+  initialViewState,
+  onViewStateChange,
   renderExpandedContent,
   className,
 }) => {
-  const [filter, setFilter] = useState<RunActivityFilter>('all');
-  const [graphFilter, setGraphFilter] = useState('');
-  const [query, setQuery] = useState('');
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filter, setFilter] = useState<RunActivityFilter>(initialViewState?.filter ?? 'all');
+  const [graphFilter, setGraphFilter] = useState(initialViewState?.graphFilter ?? '');
+  const [query, setQuery] = useState(initialViewState?.query ?? '');
+  const [filtersOpen, setFiltersOpen] = useState(initialViewState?.filtersOpen ?? false);
   const [graphMenuPortalTarget, setGraphMenuPortalTarget] = useState<HTMLDivElement | null>(null);
   const [uncontrolledColumnWidths, setUncontrolledColumnWidths] = useState<RunActivityColumnWidths>(
     DEFAULT_RUN_ACTIVITY_COLUMN_WIDTHS,
   );
-  const [followLive, setFollowLive] = useState(true);
+  const [followLive, setFollowLive] = useState(initialViewState?.followLive ?? true);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [newActivityCount, setNewActivityCount] = useState(0);
-  const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(new Set());
+  const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(() =>
+    initialViewState?.rootRunId === viewModel.rootRunId ? initialViewState?.expandedKeys ?? new Set() : new Set(),
+  );
   const [displayHeight, setDisplayHeight] = useState(() => clampRunActivityDrawerHeight(height));
   const [isDrawerResizing, setIsDrawerResizing] = useState(false);
   const [pointerFocusedHeaderControl, setPointerFocusedHeaderControl] = useState<PointerFocusedHeaderControl>();
@@ -891,6 +897,18 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
   const isColumnWidthsControlledRef = useRef(columnWidths !== undefined);
   const onCloseRef = useRef(onClose);
   const isNarrowViewport = useNarrowViewport();
+
+  useLayoutEffect(() => {
+    onViewStateChange?.({
+      filter,
+      graphFilter,
+      query,
+      filtersOpen,
+      followLive,
+      expandedKeys,
+      rootRunId: viewModel.rootRunId,
+    });
+  }, [filter, graphFilter, query, filtersOpen, followLive, expandedKeys, viewModel.rootRunId, onViewStateChange]);
 
   const effectiveColumnWidths = useMemo(
     () => normalizeRunActivityColumnWidths(columnWidths ?? uncontrolledColumnWidths),
@@ -1163,14 +1181,14 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
     scrollActivityListToBottom(listRef.current);
   };
 
-  const toggleExpanded = (activityKey: string) => {
+  const toggleExpanded = useCallback((activityKey: string) => {
     setExpandedKeys((current) => {
       const next = new Set(current);
       if (next.has(activityKey)) next.delete(activityKey);
       else next.add(activityKey);
       return next;
     });
-  };
+  }, []);
 
   if (!open) return null;
 
@@ -1359,11 +1377,11 @@ export const RunActivityDrawer: FC<RunActivityDrawerProps> = ({
                 onKeyDown={handleColumnResizeKeyDown}
               />
               {filteredItems.map((item) => (
-                <RunActivityRow
+                <MemoRunActivityRow
                   key={item.activityKey}
                   item={item}
                   expanded={expandedKeys.has(item.activityKey)}
-                  onToggle={() => toggleExpanded(item.activityKey)}
+                  onToggle={toggleExpanded}
                   onLocate={onLocate}
                   onOpenFullOutput={onOpenFullOutput}
                   onOpenToolResult={onOpenToolResult}
@@ -1452,7 +1470,7 @@ const RunActivityColumnHeaderCell: FC<{
 const RunActivityRow: FC<{
   item: RunActivityItemViewModel;
   expanded: boolean;
-  onToggle(): void;
+  onToggle(activityKey: string): void;
   onLocate?: RunActivityDrawerProps['onLocate'];
   onOpenFullOutput?: RunActivityDrawerProps['onOpenFullOutput'];
   onOpenToolResult?: RunActivityDrawerProps['onOpenToolResult'];
@@ -1476,7 +1494,7 @@ const RunActivityRow: FC<{
       rootProps={{ 'data-activity-key': item.activityKey }}
       ariaControls={detailId}
       open={expanded}
-      onToggle={onToggle}
+      onToggle={() => onToggle(item.activityKey)}
       toggleClassName="run-activity-row-toggle"
       label={
         <>
@@ -1569,13 +1587,18 @@ const RunActivityRow: FC<{
   );
 };
 
+const MemoRunActivityRow = memo(RunActivityRow);
+
 const ActivityDetails: FC<{ item: RunActivityItemViewModel }> = ({ item }) => {
   const rows = [
     item.provider && { label: 'Provider', value: item.provider },
     item.model && { label: 'Model', value: item.model },
     item.toolName && { label: 'Tool', value: item.toolName },
     item.modelCallCount != null && { label: 'Model calls', value: String(item.modelCallCount) },
-    item.classifierRequestCount != null && { label: 'Decision AI requests', value: String(item.classifierRequestCount) },
+    item.classifierRequestCount != null && {
+      label: 'Decision AI requests',
+      value: String(item.classifierRequestCount),
+    },
     item.toolCallCount != null && { label: 'Tool calls', value: String(item.toolCallCount) },
     item.splitCount != null && { label: 'Split results', value: String(item.splitCount) },
     ...(item.detailRows ?? []),

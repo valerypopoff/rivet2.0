@@ -931,12 +931,18 @@ them; the returned state is always derived from the runtime.
 
 ## State Storage
 
+`state/projectExecutionStore.ts` exposes the active view of the one canonical
+`executionSnapshotsState` map. The compatibility atoms in `dataFlow.ts` are
+writable field lenses into that project's snapshot, not independent copies that
+must be transferred on tab activation. Execution ingress commits through the
+binding-checked snapshot writer; see [Execution coordination](./EXECUTION-COORDINATION.md).
+
 ### Graph run history
 
 ```typescript
 // packages/app/src/state/dataFlow.ts
 
-graphRunHistoryByViewState = atom<Record<GraphViewKey, GraphRunRecord[]>>({});
+export const graphRunHistoryByViewState = executionSnapshotField('graphRunHistoryByView');
 ```
 
 Each `GraphRunRecord` contains:
@@ -961,19 +967,26 @@ On new execution start (`onStart`), all history is cleared (unless running Evalu
 ### Graph run selection
 
 ```typescript
-selectedGraphRunByViewState = atom<Record<GraphViewKey, GraphRunSelection>>({});
-// where GraphRunSelection = GraphRunId | 'latest'
+export const selectedGraphRunByViewState = executionSnapshotField('selectedGraphRunByView');
+type GraphRunSelection = GraphRunId | 'latest' | {
+  type: 'caller';
+  parentNodeId: NodeId;
+  parentGraphRunId?: GraphRunId;
+  parentProcessId?: ProcessId;
+};
 ```
 
 - Defaults to `'latest'` (follow the most recent run).
 - Set to a specific `GraphRunId` when the user clicks a historical run in the run switcher.
+- Caller-scoped navigation can select a particular Subgraph caller even before
+  it starts a child run; it must not fall back to an unrelated invocation's output.
 - When a new run starts for a view, the selection is preserved if it was an explicit
   historical selection. If it was `'latest'` or unset, it stays `'latest'`.
 
 ### Per-node execution data
 
 ```typescript
-lastRunDataByNodeState = atom<Record<NodeId, ProcessDataForNode[]>>({});
+export const lastRunDataByNodeState = executionSnapshotField('lastRunDataByNode');
 ```
 
 Each `ProcessDataForNode` contains:

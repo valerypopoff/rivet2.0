@@ -142,6 +142,76 @@ acceptance evidence without reconciliation.
 | [Managed Kubernetes Audit](./studio-server/audits/kubernetes-managed-mode.md) | Dated source/static/single-host evidence; no fresh provider certification implied                                                                        |
 | [Backlog](./studio-server/backlog.md)                                         | Product ideas preserved as proposals rather than refactor acceptance requirements                                                                        |
 
+## Refactor drift follow-up (2026-10-25)
+
+The current source review compared the frozen execution-routing behavior with
+the implemented coordination/host/resource boundaries and the local performance
+follow-up. The frozen baseline remains historical, not rewritten to match source.
+
+One functional drift was reproduced with store/session probes and then a failing
+host-hook regression: verified same-bundle project renames rotated execution
+bindings and rejected an admitted live root's display. The host's existing move
+and explicitly persisted rename APIs now commit a narrow path-descriptor update
+without renewing the current lifetime. Unique open path ownership and unchanged
+project/bundle identity are required. Ordinary rebinding, membership changes,
+close/reopen and content replacement retain their fences. Rename followed by
+membership removal still keeps its blocked explanation without transferring event
+admission. See [Execution coordination](EXECUTION-COORDINATION.md) and
+[Hosted contracts](HOSTED-WEB-APP-CONTRACTS.md) for the current contract.
+
+Documentation drift was reconciled in the owning current guides:
+
+- Execution Data Flow's independent-atom examples and App Architecture's
+  tab-switch capture/restore description now point to the canonical snapshot
+  store and its compatibility lenses. Caller-scoped graph selection is included.
+- Execution Identity no longer presents historical GAP-01–05 as the current
+  backlog; it links implemented ownership while retaining intentional local and
+  remote differences.
+
+The preceding read-only audit passed 594 relevant tests (88 App, 201 Core, 51 API
+and 254 hosted-web/asset tests). Those checks did not cover the verified rename
+integration, which is why passing that selection did not rule out this drift.
+Fresh fix-specific verification passed:
+
+- Full App suite: **2,817 passed**, zero failures/skips.
+- Focused move/session/observation tests: **135 passed**; the final host,
+  playback-path and snapshot-routing subset passed **79** (both overlap App).
+- Hosted-web source and asset tests: **254 passed**, zero failures/skips.
+- Rebuilt local production assets: **14 headless Remote Debugger scenarios
+  passed**, including actual A/B/C streaming/final outputs through both source
+  and receiver renames, source close/reopen, member removal, failures, shared Stop
+  and replay recovery. No execution commands were sent by observation.
+- The isolated 999-node Browser/Node/playback benchmark smoke passed against the
+  rebuilt assets. This is functional verification, not a new paired speed claim.
+- App typecheck, changed-file lint/formatting, five architecture regressions,
+  execution/editor boundaries, test-style, documentation links and diff hygiene
+  passed.
+
+Logs use `artifacts/benchmarks/docs-drift-fix-*`; rebuilt asset evidence lives in
+`artifacts/benchmarks/editor-performance/rename-20261025/`, build diff digest
+`eba07324b33ed4ba8a7acdb8377bc184692a9668ca493d602c02bd5ace3b9628`.
+The failing-before-fix receipt is `docs-drift-fix-red.log`. Temporary local servers
+were stopped after checks. No production, GCP, publication, commit or push was
+performed. This does not certify packaged native UI or every documented feature.
+
+### Develop commit preparation — 2026-10-25
+
+The complete pending performance and verified-rename change set was reviewed
+together before publication. No additional runtime defect was confirmed in this
+pass. Source formatting was cleaned without reformatting the historical baseline
+or unrelated configuration. Generated builds, profiles and local diagnostic logs
+remain excluded from version control.
+
+Fresh commit-preparation checks passed: 118 focused editor regressions, App
+typecheck, the complete structural/style lane and the isolated headless
+Browser/Node/recording smoke, including lazy-import recovery and populated Run
+Activity. The style lane's eight POSIX-only release-script tests were skipped on
+Windows; Linux CI remains responsible for those checks. The smoke reused the
+exact immutable application build identified above; it is not a fresh build,
+paired performance measurement or provider qualification. Receipts use
+`artifacts/benchmarks/commit-prep-*` and
+`artifacts/benchmarks/editor-performance/commit-prep-20261025/`.
+
 ## Remaining evidence to collect for the refactor
 
 Validation of this documentation change includes recursive local-link checking,

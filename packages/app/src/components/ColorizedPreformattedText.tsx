@@ -1,5 +1,4 @@
 import { type FC, useCallback, useLayoutEffect, useRef } from 'react';
-import { ensureMonacoLanguage, monaco } from '../utils/monaco';
 import { useAtomValue } from 'jotai';
 import { themeState } from '../state/settings';
 import { resolveMonacoDisplayTheme, resolveMonacoForeground } from './codeEditorTheme.js';
@@ -29,6 +28,10 @@ function inlineMonacoTokenStyles(element: HTMLElement) {
 }
 
 async function colorizeStableHtml(text: string, language: string, theme: string): Promise<string> {
+  // Plain content is already painted by the caller. Syntax coloring is the
+  // capability boundary, not importing an output or node-body renderer.
+  const { ensureMonacoLanguage, monaco } = await import('../utils/monaco.js');
+  await ensureMonacoLanguage(language);
   const scratchRoot = document.createElement('div');
   const colorizedBody = document.createElement('pre');
 
@@ -107,8 +110,7 @@ export const ColorizedPreformattedText: FC<{
     body.textContent = text;
     body.dataset.lang = language;
 
-    void ensureMonacoLanguage(language)
-      .then(() => colorizeStableHtml(text, language, resolvedTheme))
+    void colorizeStableHtml(text, language, resolvedTheme)
       .then((html) => {
         if (cancelled || colorizeRequestRef.current !== colorizeRequest || bodyRef.current !== body) {
           return;

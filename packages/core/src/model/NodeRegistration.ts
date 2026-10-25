@@ -1,6 +1,6 @@
 import { type ChartNode } from './NodeBase.js';
 import { type NodeImplConstructor, type NodeImpl, type PluginNodeImpl, PluginNodeImplClass } from './NodeImpl.js';
-import { mapValues, values } from '../utils/typeSafety.js';
+import { values } from '../utils/typeSafety.js';
 import type { NodeDefinition, PluginNodeDefinition } from './NodeDefinition.js';
 import { type RivetPlugin } from './RivetPlugin.js';
 import { type RivetUIContext } from './RivetUIContext.js';
@@ -122,11 +122,6 @@ export class NodeRegistration<NodeTypes extends string = never, Nodes extends Ch
     return this.#implsMap;
   }
 
-  get #dynamicDisplayNames(): Record<string, string> {
-    const displayNameMap = mapValues(this.#infos, (info) => info.displayName);
-    return displayNameMap as Record<string, string>;
-  }
-
   registerPlugin(plugin: RivetPlugin) {
     if (plugin.register) {
       plugin.register((definition) => this.registerPluginNode(definition, plugin));
@@ -147,7 +142,9 @@ export class NodeRegistration<NodeTypes extends string = never, Nodes extends Ch
     return implClass.impl.create(implClass.pluginImpl);
   }
 
-  createImpl<TType extends NodeTypes>(node: Extract<Nodes, { type: TType }>): NodeImpl<Extract<Nodes, { type: TType }>> {
+  createImpl<TType extends NodeTypes>(
+    node: Extract<Nodes, { type: TType }>,
+  ): NodeImpl<Extract<Nodes, { type: TType }>> {
     const info = this.#getInfo(node.type);
     return new info.impl(node, info.pluginImpl);
   }
@@ -173,7 +170,7 @@ export class NodeRegistration<NodeTypes extends string = never, Nodes extends Ch
   }
 
   getDynamicDisplayName(type: string) {
-    const displayName = this.#dynamicDisplayNames[type];
+    const displayName = Object.hasOwn(this.#infos, type) ? this.#infos[type as NodeTypes].displayName : undefined;
     if (!displayName) {
       throw new Error(`Unknown node type: ${type}`);
     }

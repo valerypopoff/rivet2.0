@@ -15,7 +15,11 @@ import type {
   RootRunId,
 } from '@valerypopoff/rivet2-core';
 import type { ProcessDataForNode } from '../../state/dataFlow.js';
-import { buildModelInvocationTrace, hasModelResponseInspector } from './agentTraceViewModel.js';
+import {
+  buildModelInvocationTrace,
+  canInspectModelInvocation,
+  hasModelResponseInspector,
+} from './agentTraceViewModel.js';
 import { AgentResponseInspector } from './AgentResponseInspector.js';
 
 const node = { id: 'llm-node' as NodeId, type: 'llmChatV2' } as ChartNode;
@@ -256,6 +260,15 @@ void describe('agentTraceViewModel', () => {
     } as unknown as ProcessDataForNode;
 
     assert.equal(buildModelInvocationTrace(node, processData), undefined);
+    assert.equal(canInspectModelInvocation(node, processData), false);
+    const retained: ProcessDataForNode = { ...processData, data: { ...processData.data, agentTraceEvents: [] } };
+    for (const candidate of [
+      retained,
+      { ...retained, graphId: undefined },
+      { ...retained, rootRunId: undefined },
+      undefined,
+    ])
+      assert.equal(canInspectModelInvocation(node, candidate), buildModelInvocationTrace(node, candidate) != null);
   });
 
   void it('offers the same inspector for classifiers and isolates failed and split invocations', () => {

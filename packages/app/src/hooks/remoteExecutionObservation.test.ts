@@ -434,15 +434,18 @@ test('transient conflicts before a first child remain excluded, but a fresh root
   assert.equal(f.projected.length, 1);
 });
 
-test('explicit membership removal keeps a blocked explanation without transferring old event admission', () => {
-  for (const replacementPath of ['/b', '/different-file']) {
+test('membership removal after a verified rename keeps its explanation without transferring old event admission', () => {
+  for (const replacementPath of ['/renamed-b', '/different-file']) {
     const eligible = new Set(['a', 'b', 'c']);
     const f = fixture((id) => eligible.has(id));
     f.opened.set(id('b'), { token: 1, path: '/b', bundleKey: 'bundle' });
     f.begin();
     f.emit('graphStart', 'b');
+    f.opened.set(id('b'), { token: 1, path: '/renamed-b', bundleKey: 'bundle' });
+    f.router.reconcileOwnership();
+    assert.equal([...f.records.values()].find((entry) => entry.project === 'b')!.observation.status, 'observing');
     eligible.delete('b');
-    f.opened.set(id('b'), { token: 2, path: '/b' });
+    f.opened.set(id('b'), { token: 2, path: '/renamed-b' });
     f.router.reconcileOwnership();
     const record = [...f.records.values()].find((entry) => entry.project === 'b')!;
     assert.equal(record.observation.status, 'blocked');

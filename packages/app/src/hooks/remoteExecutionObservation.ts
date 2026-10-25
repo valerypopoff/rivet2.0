@@ -362,7 +362,15 @@ export function createRemoteExecutionObservationRouter(options: {
       const current = options.receivers();
       for (const [key, source] of sources)
         for (const run of source.runs.values()) {
-          for (const [id, member] of run.members)
+          for (const [id, member] of run.members) {
+            // A verified rename keeps this lifetime. Remember its current
+            // descriptor for a later membership-detach explanation, but never
+            // transfer the original admission across a changed token.
+            const latest = current.get(id);
+            if (latest?.token === member.token) {
+              if (run.receivers.get(id)?.token === member.token) run.receivers.set(id, latest);
+              continue;
+            }
             if (current.get(id)?.token !== member.token) {
               const previous = run.receivers.get(id);
               const next = current.get(id);
@@ -397,6 +405,7 @@ export function createRemoteExecutionObservationRouter(options: {
               run.members.delete(id);
               options.remove(id, member.observation.id);
             }
+          }
         }
     },
     reconcileOwnership() {

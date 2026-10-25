@@ -75,6 +75,23 @@ This is a choice between saved versions, not a merge or live-collaboration featu
 throw or rejected promise from wrapper callback code is logged without changing a
 successfully persisted save into `false` or repeating the persistence operation.
 
+### Verified path moves and execution continuity
+
+After verifying a same-document server rename/move, hosts use
+`RivetWorkspaceHost.moveProjectPaths(...)`. Identity-keyed reconciliation may use
+`updateProjectMetadata(id, patch, { path, persistedExternally: true,
+changeSource: 'external-wrapper-rename' })`. These existing APIs preserve a live
+execution binding only when project ID and bundle membership are unchanged and
+both paths have unique open owners. Active and inactive source/receiver display
+continues; no execution, upload or save is replayed. Consecutive moves read current
+store metadata, not a render's old path. These calls do not validate or perform
+the server/file operation themselves.
+
+An unmarked path reassignment, ambiguous mapping, membership change, close/reopen
+or content replacement keeps the ordinary lifetime fence. Do not use rename
+metadata to open another file under an old lifetime. Context, dirty baselines and
+accepted recording persistence keep their established ownership.
+
 ### Settings and project-context ownership
 
 `ui.debuggerConnection` optionally supplies `getDefaultUrl()` and `normalizeUrl()`;

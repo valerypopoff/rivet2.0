@@ -1,4 +1,10 @@
-import { resolveNodePrefabInstance, type NodeGraph, type Project, type RootRunId } from '@valerypopoff/rivet2-core';
+import {
+  resolveNodePrefabInstance,
+  type NodeGraph,
+  type PortId,
+  type Project,
+  type RootRunId,
+} from '@valerypopoff/rivet2-core';
 import type { ProcessDataForNode, RunDataByNodeId } from '../../state/dataFlow.js';
 import { buildModelInvocationTrace } from '../agentTrace/agentTraceViewModel.js';
 import type { RunActivityInvocationIdentity } from './types.js';
@@ -30,6 +36,26 @@ export function findExactProcessData(
       process.graphRunId === identity.graphRunId &&
       process.processId === identity.processId &&
       (process.graphId == null || process.graphId === identity.graphId),
+  );
+}
+
+export function findExactProcessPage(runDataByNode: RunDataByNodeId, identity: RunActivityInvocationIdentity) {
+  const graphProcesses =
+    runDataByNode[identity.nodeId]?.filter(
+      (process) =>
+        process.rootRunId === identity.rootRunId &&
+        process.graphRunId === identity.graphRunId &&
+        (process.graphId == null || process.graphId === identity.graphId),
+    ) ?? [];
+  const page = graphProcesses.findIndex((process) => process.processId === identity.processId);
+  return page < 0 ? undefined : page;
+}
+
+/** Result-owner pointers identify a concrete retained port, not merely a node. */
+export function processHasStoredOutputPort(processData: ProcessDataForNode, outputPortId: PortId): boolean {
+  return (
+    processData.data.outputData?.[outputPortId] != null ||
+    Object.values(processData.data.splitOutputData ?? {}).some((outputs) => outputs?.[outputPortId] != null)
   );
 }
 

@@ -8,6 +8,15 @@ import { loadConfigFromFile, type Plugin, type PluginOption, type UserConfig } f
 import { createBrowserSubpathAliases, createModuleOverrideAliases } from '../vite-aliases';
 
 const overrideDir = resolve('/repo/packages/studio-server-web/overrides');
+
+test('the shared preload helper cannot be assigned to a lazy editor chunk', () => {
+  const output = viteConfig.build?.rollupOptions?.output;
+  assert.ok(output && !Array.isArray(output));
+  assert.equal(typeof output.manualChunks, 'function');
+  const select = output.manualChunks as (id: string) => string | undefined;
+  assert.equal(select('\0vite/preload-helper.js'), 'vite-preload-helper');
+  assert.equal(select('/repo/node_modules/monaco-editor/esm/vs/editor/editor.api.js'), 'monaco-editor');
+});
 const updateCheckScript = readFileSync(
   new URL('../../../deploy/studio-server/scripts/update-check.sh', import.meta.url),
   'utf8',
