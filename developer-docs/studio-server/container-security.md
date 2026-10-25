@@ -33,6 +33,12 @@ consistency is guarded by the workflow-policy check in `test:style`.
 - Trivy 0.76.1 is itself digest-pinned. It runs in a temporary non-privileged,
   read-only-root container, without the Docker socket. Registry credentials are
   passed as environment variables, not command-line values or reports.
+  The container explicitly uses the invoking Linux user's UID/GID (10001:10001
+  on Windows). Linux callers must be non-root. Bind-mounted scratch, reports and
+  cache directories retain host ownership: the scanner image's default root user
+  cannot write runner-owned directories after all capabilities are dropped.
+  Do not fix that failure by restoring capabilities, running privileged or making
+  the root filesystem writable.
 - Both OS and language packages are analyzed. All severity levels are retained;
   **every High or Critical finding blocks promotion**, even without an available
   fix. There is no broad ignore file, `--ignore-unfixed`, or allow-failure path.

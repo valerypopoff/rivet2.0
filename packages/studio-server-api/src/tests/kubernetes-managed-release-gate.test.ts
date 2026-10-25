@@ -35,15 +35,21 @@ function replacementGate() {
   const gate = new ManagedReleaseGate({}, 'unused-kubectl', 'unused-helm');
   const replacements: string[] = [];
   let workflowCalls = 0;
+  const replacementCalls: string[] = [];
   gate.replaceWorkload = async (_baseUrl: string, component: string) => {
     replacements.push(component);
     return `${component}-replacement`;
   };
   gate.requestWorkflow = async () => {
     workflowCalls++;
+    // Public traffic may remain on a healthy sibling; that is not a failure.
+    return { hostname: 'execution-survivor', environmentValue: 'managed-persistence' };
+  };
+  gate.requestReplacementWorkflow = async (pod: string) => {
+    replacementCalls.push(pod);
     return { hostname: 'execution-replacement', environmentValue: 'managed-persistence' };
   };
-  return { gate, replacements, workflowCalls: () => workflowCalls };
+  return { gate, replacements, replacementCalls, workflowCalls: () => workflowCalls };
 }
 
 test('managed release gate CLI still runs and rejects missing context before touching a cluster', () => {
@@ -62,7 +68,7 @@ test('managed release gate CLI still runs and rejects missing context before tou
 });
 
 test('replacement web-app probe recovers from Service connection failures without replaying an action', async (t) => {
-  const { gate, replacements, workflowCalls } = replacementGate();
+  const { gate, replacements, replacementCalls, workflowCalls } = replacementGate();
   let appCalls = 0;
   t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
     assert.equal(options.method, undefined, 'only read-only requests may be retried by the recovery probe');
@@ -78,9 +84,125 @@ test('replacement web-app probe recovers from Service connection failures withou
     publishedRevision: 'published-fixture',
   });
   assert.deepEqual(replacements, ['backend', 'execution']);
+  assert.deepEqual(replacementCalls, ['execution-replacement']);
   assert.equal(workflowCalls(), 1);
   assert.equal(appCalls, 4);
 });
+
+test('replacement workflow probe executes the authenticated HTTP request inside the exact pod', async () => {
+  let status = 200;
+  let requests = 0;
+  const server = http.createServer((req, res) => {
+    assert.equal(req.url, '/workflows/managed-release-workflow');
+    assert.equal(req.method, 'POST');
+    assert.equal(req.headers.authorization, 'Bearer fixture-key');
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      assert.deepEqual(JSON.parse(body), { input: 'recovered' });
+      requests++;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          value: { type: 'any', value: { hostname: 'replacement', environmentValue: 'managed-persistence' } },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const gate = new ManagedReleaseGate({ namespace: 'fixture-owned' }, 'unused', 'unused');
+  gate.kubectl = async (args: string[], options: { capture: boolean }) => {
+    assert.deepEqual(args.slice(0, 10), [
+      'exec',
+      '-n',
+      'fixture-owned',
+      'pod/replacement',
+      '-c',
+      'api',
+      '--request-timeout=10s',
+      '--pod-running-timeout=10s',
+      '--',
+      'node',
+    ]);
+    assert.equal(args.join(' ').includes('fixture-key'), false, 'do not put credentials in command arguments');
+    assert.equal(options.capture, true);
+    return promisify(execFile)(process.execPath, args.slice(10), {
+      env: { ...process.env, PORT: String(address.port), RIVET_KEY: 'fixture-key' },
+      timeout: 10_000,
+      windowsHide: true,
+    });
+  };
+  try {
+    assert.deepEqual(await gate.requestReplacementWorkflow('replacement'), {
+      value: { type: 'any', value: { hostname: 'replacement', environmentValue: 'managed-persistence' } },
+    });
+    status = 503;
+    await assert.rejects(gate.requestReplacementWorkflow('replacement'), /Replacement workflow returned HTTP 503/);
+    assert.equal(requests, 2, 'one request per attempt, never replay a failed submission inside the transport');
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+for (const value of [
+  { hostname: 'execution-survivor', environmentValue: 'managed-persistence' },
+  { hostname: 'execution-replacement', environmentValue: 'missing' },
+]) {
+  test(`replacement proof rejects wrong identity or missing persisted settings: ${JSON.stringify(value)}`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const { gate, workflowCalls } = replacementGate();
+    gate.requestReplacementWorkflow = async () => value;
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ value: 'managed-persistence' }));
+    const outcome = assert.rejects(
+      gate.verifyAfterReplacement('http://fixture', { environmentVariableId: 'saved' }),
+      /Timed out waiting for execution through the replacement pod/,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(90_000);
+    await outcome;
+    assert.equal(workflowCalls(), 0, 'a healthy sibling cannot conceal a broken replacement');
+  });
+}
+
+for (const [label, response] of [
+  [
+    'unavailable proxy',
+    () => {
+      throw new Error('HTTP 503');
+    },
+  ],
+  ['lost settings', () => ({ hostname: 'execution-survivor', environmentValue: 'missing' })],
+  ['missing execution identity', () => ({ environmentValue: 'managed-persistence' })],
+] as const) {
+  test(`public workflow recovery cannot be hidden by a healthy direct pod: ${label}`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    const { gate, replacementCalls } = replacementGate();
+    let publicCalls = 0;
+    gate.requestWorkflow = async (_baseUrl: string, route: string, options: { timeoutMs: number }) => {
+      assert.equal(route, '/workflows/managed-release-workflow');
+      assert.equal(options.timeoutMs, 5000);
+      publicCalls++;
+      return response();
+    };
+    t.mock.method(globalThis, 'fetch', async (url: string) => {
+      assert.match(url, /\/api\/app-settings\//, 'do not probe the web app before workflow recovery');
+      return Response.json({ value: 'managed-persistence' });
+    });
+    const outcome = assert.rejects(
+      gate.verifyAfterReplacement('http://fixture', { environmentVariableId: 'saved' }),
+      /Timed out waiting for public workflow recovery after execution replacement/,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(90_000);
+    await outcome;
+    assert.deepEqual(replacementCalls, ['execution-replacement']);
+    assert.equal(publicCalls, 1, 'no requests after the bounded recovery window');
+  });
+}
 
 for (const [label, response, failure] of [
   ['persistent gateway failure', () => new Response('bad gateway', { status: 502 }), /replacement: 502/],

@@ -1723,6 +1723,39 @@ export class ManagedReleaseGate {
     return replacementName;
   }
 
+  async requestReplacementWorkflow(podName) {
+    // A ClusterIP may keep choosing a healthy sibling, especially with pooled
+    // upstream connections. Prove the replacement itself independently of that
+    // routing policy; the public proxy path is checked separately below.
+    const result = await this.kubectl(
+      [
+        'exec',
+        '-n',
+        this.config.namespace,
+        `pod/${podName}`,
+        '-c',
+        'api',
+        '--request-timeout=10s',
+        '--pod-running-timeout=10s',
+        '--',
+        'node',
+        '--input-type=module',
+        '-e',
+        [
+          'const response = await fetch(`http://127.0.0.1:${process.env.PORT}/workflows/managed-release-workflow`, {',
+          'method: "POST", signal: AbortSignal.timeout(5000),',
+          'headers: { "content-type": "application/json", authorization: `Bearer ${process.env.RIVET_KEY}` },',
+          'body: JSON.stringify({ input: "recovered" })',
+          '});',
+          'if (!response.ok) throw new Error(`Replacement workflow returned HTTP ${response.status}`);',
+          'console.log(JSON.stringify(await response.json()));',
+        ].join('\n'),
+      ],
+      { capture: true },
+    );
+    return JSON.parse(result.stdout);
+  }
+
   async verifyAfterReplacement(baseUrl, state) {
     await this.replaceWorkload(baseUrl, 'backend');
     const savedValue = await requestJson(
@@ -1734,10 +1767,7 @@ export class ManagedReleaseGate {
     await waitFor(
       'execution through the replacement pod',
       async () => {
-        const runtimeResult = await this.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
-          method: 'POST',
-          body: JSON.stringify({ input: 'recovered' }),
-        });
+        const runtimeResult = await this.requestReplacementWorkflow(replacementExecutionPod);
         const value = getReleaseGateWorkflowValue(runtimeResult);
         if (value.hostname !== replacementExecutionPod) {
           throw new Error(`Workflow request did not reach replacement execution pod ${replacementExecutionPod}`);
@@ -1748,6 +1778,20 @@ export class ManagedReleaseGate {
           );
         }
         return runtimeResult;
+      },
+      90_000,
+    );
+    await waitFor(
+      'public workflow recovery after execution replacement',
+      async () => {
+        const result = await this.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
+          method: 'POST',
+          body: JSON.stringify({ input: 'recovered' }),
+          timeoutMs: 5_000,
+        });
+        const value = getReleaseGateWorkflowValue(result);
+        if (!value.hostname || typeof value.hostname !== 'string' || value.environmentValue !== 'managed-persistence')
+          throw new Error('Public workflow did not retain its execution identity and persisted environment');
       },
       90_000,
     );
