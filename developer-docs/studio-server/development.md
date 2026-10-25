@@ -1344,7 +1344,13 @@ API health JSON, failure status and no-store caching; these paths must never
 reach the SPA or a login page. The real-NGINX fixture below also checks health
 routing, 503 propagation, HEAD/method handling, unchanged operator authentication, exact path
 matching and health recovery after an API address change. Its image-template
-case uses the production Dockerfile's `nginx:1.27-alpine` base.
+case uses the production Dockerfile's security-reviewed, digest-pinned NGINX base.
+The DNS contract test checks production/development pins against the shared
+`nginxImage` policy in `scripts/ci/scan-container-images.mjs`, rather than freezing
+a second historical version. Keep resolver/shared-zone, authentication and
+no-mutating-request-replay assertions intact when refreshing that image. A pin
+policy mismatch must fail; a security update must not require restoring an old
+vulnerable tag merely to satisfy a stale DNS test.
 
 `verify-proxy-dns.mjs` checks real upstream Host preservation through all three
 templates for hostname/port, IPv6/port and default-port authorities. Run headless

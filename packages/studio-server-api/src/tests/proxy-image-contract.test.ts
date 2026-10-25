@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 import { cleanupProxyDnsFixture } from '../../../../deploy/studio-server/scripts/fixtures/proxy-dns-cleanup.mjs';
+import { nginxImage } from '../../../../scripts/ci/scan-container-images.mjs';
 import { extractBracedBlock, readRepoFile, readRepoJson, repoRoot } from './helpers/repo-contract-helpers.js';
 
 const proxyTemplatePaths = [
@@ -128,8 +129,12 @@ test('a network removal failure alone fails otherwise successful DNS verificatio
 });
 
 test('proxy DNS refresh keeps shared upstream peers independently of request-time resolution', () => {
-  assert.match(readRepoFile('deploy/studio-server/images/proxy/Dockerfile'), /FROM nginx:1\.27\.5-alpine/);
-  assert.match(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), /image: nginx:1\.27\.5-alpine/);
+  // The security policy owns the reviewed version/digest. Do not freeze a second,
+  // obsolete version in the DNS contract when that policy receives a security update.
+  assert.match(nginxImage, /^nginx:\d+\.\d+\.\d+-alpine@sha256:[a-f0-9]{64}$/);
+  assert.equal(readRepoFile('deploy/studio-server/images/proxy/Dockerfile').match(/^FROM (\S+)\s*$/m)?.[1], nginxImage);
+  const devProxy = composeServiceBlock(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), 'proxy');
+  assert.equal(devProxy.match(/^\s+image: (\S+)\s*$/m)?.[1], nginxImage);
   for (const template of readProxyTemplates()) {
     assert.match(template, /resolver [^;]+ valid=30s ipv6=off;/);
     assert.match(template, /resolver_timeout 5s;/);
