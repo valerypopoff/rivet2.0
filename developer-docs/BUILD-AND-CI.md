@@ -1034,7 +1034,8 @@ explicit manual dispatches, not ordinary staging VM trials. Main image releases
 still apply changed-path Kubernetes classification; tags, schedules and forced
 manual release options have their own gate requirements.
 
-Promotion is gated by verification and candidate rehearsals. Staging publishes
+Promotion is gated by verification, candidate rehearsals and container vulnerability
+scans of every published architecture at the exact candidate digest. Staging publishes
 the staging branch and short-SHA aliases, never `latest` or the durable production
 release pointer. Alias retags are not atomic and are not evidence that a run passed.
 Wait for the intended **Build Images** run to succeed, then use
@@ -1099,6 +1100,15 @@ longer requires `dependenciesMeta` or an unplugged package copy.
 
 ### Dependency security
 
+Container dependencies have a separate fail-closed gate; Yarn/Cargo audits do not
+cover NGINX or Alpine packages. `scan-images` consumes this attempt's immutable
+candidate manifest, scans all four runtime images/platforms with digest-pinned
+Trivy, retains sanitized inventory/finding reports and blocks image promotion on
+High/Critical findings (including unfixed ones), incomplete reports or scanner
+errors. There is no container exception or allow-failure path. See
+[Container security](./studio-server/container-security.md) for local commands,
+evidence, NGINX pins and the remaining lower-severity dependency findings.
+
 `yarn security:audit` parses Yarn's recursive NDJSON audit output, discarding only
 Yarn reporter lines in its `➤ YN####:` format, and fails closed on every other
 non-JSON line. A nonzero audit command exit must first contain JSON finding output,
@@ -1131,11 +1141,11 @@ overrides preserve the consumers' APIs; serialization's newer major remains
 CommonJS-compatible on the repository's supported Node 22+ runtime. Check the
 documentation production build when refreshing its webpack/Babel dependencies.
 
-One temporary JavaScript exception remains, backed by a local Yarn security
-patch because no verified upstream fix is available. It is not approval to
-execute the original vulnerable code:
+No JavaScript audit exceptions remain after container remediation. A local Yarn
+security patch remains necessary even though the newer upstream version lies
+outside the advisory's current version range:
 
-- `http-cache-semantics` 4.2.0 synchronously revalidates zero-lifetime responses
+- Patched `http-cache-semantics` 4.3.0 synchronously revalidates zero-lifetime responses
   before honoring `max-stale` or stale-while-revalidate. This prevents security-
   zeroed cookies/private/no-store/no-cache/proxy-revalidate responses from being
   revived. Ordinary fresh and positive-lifetime stale public caching is retained;

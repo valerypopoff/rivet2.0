@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseDocument } from 'yaml';
+import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 
 const rootDir = process.cwd();
 
@@ -566,6 +567,7 @@ assertIncludesAll(
     'verify-repository',
     'build-and-push',
     'release-manifest',
+    'scan-images',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
     'promote-images',
@@ -586,6 +588,7 @@ const promotionCondition = String(imageJobs['promote-images'].if);
 for (const requiredGate of [
   'verify-repository',
   'build-and-push',
+  'scan-images',
   'fast-container-smoke',
   'managed-kubernetes-release-gate',
   'managed-kubernetes-provider-gate',
@@ -607,6 +610,70 @@ assert.match(
   'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push']);
+const scanImages = imageJobs['scan-images'];
+assert.deepEqual(asArray(scanImages.needs), ['release-manifest']);
+assert.deepEqual(scanImages.strategy.matrix.service, ['proxy', 'web', 'api', 'executor']);
+for (const target of imageJobs['build-and-push'].strategy.matrix.include) {
+  assert.deepEqual(
+    target.platforms.split(','),
+    imagePlatforms[target.service],
+    'Every published architecture must be scanned',
+  );
+}
+assert.equal(scanImages.strategy['fail-fast'], false);
+assert.deepEqual(scanImages.permissions, { actions: 'read', contents: 'read', packages: 'read' });
+const scanStep = findStep(scanImages, 'Scan every published architecture', 'Container security');
+assert.match(scanStep.run, /scan-container-images\.mjs/);
+assert.match(scanStep.run, /--manifest artifacts\/studio-server-release-manifest\/candidate-release-manifest\.json/);
+assert.match(scanStep.run, /--service \$\{\{ matrix\.service \}\}/);
+assert.equal(scanStep['continue-on-error'], undefined, 'Container security must fail closed');
+const scanEvidence = findStep(scanImages, 'Retain container vulnerability evidence', 'Container security');
+assert.equal(scanEvidence.if, '${{ always() }}');
+assert.equal(scanEvidence.with['if-no-files-found'], 'error');
+for (const file of [
+  'deploy/studio-server/images/proxy/Dockerfile',
+  'deploy/studio-server/compose/docker-compose.dev.yml',
+  'deploy/studio-server/scripts/verify-proxy-dns.mjs',
+  'deploy/studio-server/scripts/verify-trusted-client-proxy.mjs',
+]) {
+  const refs = read(file).match(/nginx:[\w.-]+(?:@sha256:[a-f0-9]{64})?/g) ?? [];
+  assert.ok(refs.length && refs.every((reference) => reference === nginxImage), `${file}: NGINX reference drift`);
+}
+assert.match(read('deploy/studio-server/images/proxy/Dockerfile'), /brotli-libs>=1\.2\.1-r0/);
+assert.equal(
+  parseDocument(read('deploy/studio-server/compose/docker-compose.yml')).toJS().services.web.build.dockerfile,
+  'deploy/studio-server/images/web/Dockerfile',
+  'Compose source builds must not bypass the hardened production web image.',
+);
+for (const service of ['api', 'executor', 'web']) {
+  const dockerfile = read(`deploy/studio-server/images/${service}/Dockerfile`);
+  const references = [
+    ...dockerfile.matchAll(/^(?:FROM |ARG NODE_IMAGE=)(node:[\w.-]+(?:@sha256:[a-f0-9]{64})?)/gm),
+  ].map((match) => match[1]);
+  assert.ok(
+    references.length && references.every((reference) => reference === runtimeNodeImage),
+    `${service}: Node base drift`,
+  );
+  if (service !== 'web') {
+    assert.ok(dockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
+    assert.match(dockerfile, /ARG TARGETARCH/);
+    assert.match(dockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH"/);
+    assert.match(dockerfile, /COPY --from=esbuild-security \/out\/esbuild \/app\/node_modules\/esbuild\/bin\/esbuild/);
+    assert.match(dockerfile, /npm install -g npm@11\.21\.1/);
+    assert.match(dockerfile, /--prefix \/tmp\/rivet-npm-security[^\n]+undici@6\.29\.1/);
+    assert.match(dockerfile, /node \/opt\/rivet\/harden-package-manager-caches\.mjs npm/);
+    assert.match(dockerfile, /node \/tmp\/verify-runtime-dependencies\.mjs npm/);
+    assert.match(dockerfile, /COPY --from=esbuild-security \/out\/@esbuild/);
+    assert.match(dockerfile, /remove-dependency-test-fixtures\.mjs \/app\/node_modules/);
+  }
+}
+assert.match(read('deploy/studio-server/images/api/Dockerfile'), /pnpm@10\.34\.8/);
+const esbuildVersion = JSON.parse(read('package.json')).resolutions.esbuild;
+assert.ok(
+  read('deploy/studio-server/images/lib/rebuild-esbuild.sh')
+    .replaceAll('\r\n', '\n')
+    .includes(`version=${esbuildVersion}\n`),
+);
 assert.deepEqual(
   asArray(imageJobs['managed-kubernetes-release-gate'].needs),
   ['changes', 'build-and-push', 'release-manifest'],
@@ -620,6 +687,7 @@ assertIncludesAll(
     'verify-repository',
     'build-and-push',
     'release-manifest',
+    'scan-images',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
     'managed-kubernetes-provider-gate',

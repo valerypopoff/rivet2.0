@@ -21,6 +21,11 @@ certify hosted speed, queue delays or Apple notarization latency.
 
 ## Execution boundaries
 
+Container images have a separate mandatory [vulnerability gate](./container-security.md).
+It scans the exact candidate digests and all published architectures alongside
+functional qualification; High/Critical findings or incomplete scans block
+promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
+
 - Classification uses shallow sparse checkout of its standalone helper and
   fetches only missing full-SHA event endpoints, with source blobs filtered out.
   It still compares complete commit trees over the whole push/PR range,
@@ -52,9 +57,12 @@ certify hosted speed, queue delays or Apple notarization latency.
   sources does not invalidate installation or recopy the Yarn cache into a second
   layer. API/executor final stages copy only compiled runtime workspace exports
   and bootstrap modules, excluding desktop/docs/source/test trees. Dynamic
-  third-party dependencies remain intact, including non-hoisted workspace-local
-  modules and relative links; the root node_modules alone is insufficient.
+  third-party runtime dependencies remain intact, including non-hoisted
+  workspace-local modules and relative links; the root node_modules alone is insufficient.
   Existing package licenses/readmes are retained as well.
+  The only third-party fixture exclusion is the reviewed, unexported
+  `zod-to-json-schema` dist-test-v3/v4 dependency installations; see
+  [container security](container-security.md) for runtime/compiler pins and tests.
   Image smoke and migration release gates
   remain mandatory; cache reuse is an optimization, not their replacement.
 - Pure/isolated Core tests use narrow implementation imports where safe and load

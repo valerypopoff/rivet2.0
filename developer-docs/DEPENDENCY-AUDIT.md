@@ -1,5 +1,28 @@
 # Dependency audit policy and October 2026 triage
 
+## Current container follow-up — 2026-10-25
+
+The historical reviews below remain evidence, not current exceptions. The
+JavaScript exception file is now empty. `http-cache-semantics` moves to **4.3.0
+with the same zero-lifetime revalidation patch retained**; unpatched 4.3.0 still
+fails the prohibited cache-reuse cases. This minor also hardens Vary matching;
+its release number alone is not the fix for CVE-2026-93748.
+
+The package managers inside the containers have independent dependency trees.
+Their 4.3.0 cache-policy copies receive that same fix with exact original/patched
+SHA-256 checks, real shared/serialized/public cache assertions and an in-image
+receipt. Unknown source bytes block the build. npm's bundled Undici is separately
+updated to 6.29.1 without changing its major or replacing the remaining npm
+dependency tree. The real final-image non-root tests exercise npm/pnpm offline
+installation as well as esbuild's transform/plugin APIs and Zod conversion.
+
+`webpack-dev-middleware` resolves 7.4.6 within the existing major. Its actual
+compiler-backed regression rejects traversal through a non-slash-terminated
+publicPath while retaining ordinary asset resolution. See
+[container security](studio-server/container-security.md) for image/compiler
+pins, precise fixture exclusions and local scan evidence. No ignore file or
+container finding exception was introduced.
+
 Run `yarn security:audit` before committing dependency changes. High/critical
 findings are blocking unless their exact advisory, package and immediate dependent
 have a current documented exception in `security/dependency-audit-exceptions.json`.

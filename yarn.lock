@@ -16176,17 +16176,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"http-cache-semantics@npm:4.2.0":
-  version: 4.2.0
-  resolution: "http-cache-semantics@npm:4.2.0"
-  checksum: 10/4efd2dfcfeea9d5e88c84af450b9980be8a43c2c8179508b1c57c7b4421c855f3e8efe92fa53e0b3f4a43c85824ada930eabbc306d1b3beab750b6dcc5187693
+"http-cache-semantics@npm:4.3.0":
+  version: 4.3.0
+  resolution: "http-cache-semantics@npm:4.3.0"
+  checksum: 10/3f7b17565d3a046f069ecfc220d790ccfbef4a94a486502c5d1a23c50d71880393175416845579487a91bfefca393614d16a99bd566d474807a4ebb1139da9cd
   languageName: node
   linkType: hard
 
-"http-cache-semantics@patch:http-cache-semantics@npm%3A4.2.0#~/.yarn/patches/http-cache-semantics-npm-4.2.0-fadacfb3ad.patch":
-  version: 4.2.0
-  resolution: "http-cache-semantics@patch:http-cache-semantics@npm%3A4.2.0#~/.yarn/patches/http-cache-semantics-npm-4.2.0-fadacfb3ad.patch::version=4.2.0&hash=9210db"
-  checksum: 10/95cf7b4268c4f0ea53b49c49c7c6dcbd07f1b51c7ceef936c3401978a561ae6fb3ead536848b127a519a8b2a14d1e6a745efdb738c6c245975a140a22984fecb
+"http-cache-semantics@patch:http-cache-semantics@npm%3A4.3.0#~/.yarn/patches/http-cache-semantics-npm-4.3.0-security.patch":
+  version: 4.3.0
+  resolution: "http-cache-semantics@patch:http-cache-semantics@npm%3A4.3.0#~/.yarn/patches/http-cache-semantics-npm-4.3.0-security.patch::version=4.3.0&hash=f66166"
+  checksum: 10/a415080bda779cd9454a4fb77f9b00b4332b773b19281a9bd7eb9010853cace6b48e94ee07897eb9cf1119dc385274eaab62a78aaf9b1ee046f3608478be5d60
   languageName: node
   linkType: hard
 
@@ -25084,9 +25084,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"webpack-dev-middleware@npm:^7.4.2":
-  version: 7.4.5
-  resolution: "webpack-dev-middleware@npm:7.4.5"
+"webpack-dev-middleware@npm:7.4.6":
+  version: 7.4.6
+  resolution: "webpack-dev-middleware@npm:7.4.6"
   dependencies:
     colorette: "npm:^2.0.10"
     memfs: "npm:^4.43.1"
@@ -25099,7 +25099,7 @@ __metadata:
   peerDependenciesMeta:
     webpack:
       optional: true
-  checksum: 10/50e9b162d740b81f14c0926beb5fa01fc6d2ae16740bab709320dd5ea1a52ebcc48b66f3db5a7262fc4dc31a7e18590db766cef5da90e77a39e3a26d3b5b1001
+  checksum: 10/fd82b8338d93b99bdc3169b4d2d35201a0a9a50b8c403c142b56d643d822e3c5f7295785388de0158879f5769c13207d35ff2b2c3739848e4ac8c01ef81528df
   languageName: node
   linkType: hard
 

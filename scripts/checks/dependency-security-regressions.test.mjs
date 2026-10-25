@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { dirname, join } from 'node:path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -17,6 +19,25 @@ const shellQuote = concurrentlyRequire('shell-quote');
 const docsRequire = createRequire(new URL('../../packages/docs/package.json', import.meta.url));
 const docsCoreRequire = createRequire(docsRequire.resolve('@docusaurus/core/package.json'));
 const webpackRequire = createRequire(docsCoreRequire.resolve('webpack-dev-server/package.json'));
+
+test('documentation middleware cannot escape a non-slash-terminated asset prefix', { timeout: 20_000 }, async (t) => {
+  const root = await fs.mkdtemp(join(os.tmpdir(), 'rivet-webpack-security-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(join(root, 'entry.js'), 'module.exports = 42;');
+  const webpack = webpackRequire('webpack');
+  const middleware = webpackRequire('webpack-dev-middleware');
+  const compiler = webpack({
+    mode: 'none',
+    entry: join(root, 'entry.js'),
+    output: { path: join(root, 'dist'), filename: 'bundle.js' },
+  });
+  const handler = middleware(compiler, { publicPath: '/assets', stats: false });
+  t.after(() => new Promise((resolve, reject) => handler.close((error) => (error ? reject(error) : resolve()))));
+  await new Promise((resolve) => handler.waitUntilValid(resolve));
+  assert.equal(handler.getFilenameFromUrl('/assets/bundle.js'), join(root, 'dist', 'bundle.js'));
+  for (const url of ['/assets../secret', '/assets%2e%2e/secret', '/assets-other/secret'])
+    assert.equal(handler.getFilenameFromUrl(url), undefined, url);
+});
 
 test(
   'redirects strip array and literal-metacharacter credential headers only across hosts',

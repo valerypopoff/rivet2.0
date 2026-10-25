@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
-FROM nginx:1.27.5-alpine
+FROM nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
 
-RUN apk add --no-cache curl && \
+# The upstream October image predates the Brotli decoder security update.
+RUN apk add --no-cache curl 'brotli-libs>=1.2.1-r0' && \
     addgroup -g 10001 -S rivet && \
     adduser -u 10001 -S -D -h /home/rivet -G rivet rivet && \
     mkdir -p /opt/rivet/lib /opt/rivet/proxy /tmp/nginx/conf.d /tmp/nginx/client_temp /tmp/nginx/proxy_temp /tmp/nginx/fastcgi_temp /tmp/nginx/uwsgi_temp /tmp/nginx/scgi_temp && \

@@ -4,7 +4,7 @@ x-dev-stack-labels: &dev-stack-labels
 services:
   proxy:
     labels: *dev-stack-labels
-    image: nginx:1.27.5-alpine
+    image: nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
     ports:
       - '${RIVET_PORT:-8080}:80'
     environment:

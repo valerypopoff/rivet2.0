@@ -422,6 +422,52 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  scan-images:
+    name: Scan runtime image (${{ matrix.service }})
+    needs: [release-manifest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [proxy, web, api, executor]
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set Up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Download candidate release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/studio-server-release-manifest
+      - name: Scan every published architecture
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node scripts/ci/scan-container-images.mjs
+          --manifest artifacts/studio-server-release-manifest/candidate-release-manifest.json
+          --service ${{ matrix.service }}
+          --output artifacts/container-security/${{ matrix.service }}
+      - name: Retain container vulnerability evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: container-security-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/container-security/${{ matrix.service }}/**/trivy.json
+            artifacts/container-security/${{ matrix.service }}/**/assessment.json
+            artifacts/container-security/${{ matrix.service }}/result.json
+          if-no-files-found: error
+          retention-days: 30
+
   fast-container-smoke:
     name: Smoke candidate images
     needs:
@@ -969,6 +1015,7 @@ jobs:
       - verify-repository
       - build-and-push
       - release-manifest
+      - scan-images
       - fast-container-smoke
       - managed-kubernetes-release-gate
       - managed-kubernetes-provider-gate
@@ -976,7 +1023,7 @@ jobs:
       - managed-kubernetes-evaluation-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.require_kind == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.require_kind != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
+    if: ${{ always() && needs.changes.result == 'success' && needs.verify-repository.result == 'success' && needs.build-and-push.result == 'success' && needs.release-manifest.result == 'success' && needs.scan-images.result == 'success' && needs.fast-container-smoke.result == 'success' && ((needs.changes.outputs.require_kind == 'true' && needs.managed-kubernetes-release-gate.result == 'success') || (needs.changes.outputs.require_kind != 'true' && needs.managed-kubernetes-release-gate.result == 'skipped')) && (needs.managed-kubernetes-provider-gate.result == 'success' || needs.managed-kubernetes-provider-gate.result == 'skipped') && (needs.managed-kubernetes-capacity-gate.result == 'success' || needs.managed-kubernetes-capacity-gate.result == 'skipped') && (needs.managed-kubernetes-evaluation-gate.result == 'success' || needs.managed-kubernetes-evaluation-gate.result == 'skipped') && (github.event_name != 'workflow_dispatch' || inputs.run_managed_kubernetes_capacity_observe != true) }}
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CANDIDATE_RELEASE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
