@@ -37,6 +37,7 @@ import type {
   ClassifierQuestionType,
   ClassifierScoreCriterionData,
   ClassifierScoreQuestionDefinition,
+  ClassifierBoxQuestionDefinition,
 } from '../classifier/types.js';
 import { prepareClassifierQuestion } from '../classifier/questions.js';
 import { ClassifierValueBudget } from '../classifier/limits.js';
@@ -69,7 +70,7 @@ export type ClassifierQuestionNodeData = ClassifierQuestionBaseData & {
 export type ClassifierQuestionNode = ChartNode<'classifierQuestion', ClassifierQuestionNodeData>;
 
 export type ClassifierQuestionBodySection = Readonly<{
-  id: 'identity' | 'instructions' | 'criteria';
+  id: 'identity' | 'instructions' | 'criteria' | 'capability';
   fields: readonly Readonly<{ label: string; value: string }>[];
   summary?: string | undefined;
 }>;
@@ -126,7 +127,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
     const data = this.data;
     const inputs: NodeInputDefinition[] = [];
     if (data.useInstructionsInput) inputs.push(getInstructionsInputDefinition());
-    if (data.useCriteriaInput) {
+    if (data.questionType !== 'box' && data.useCriteriaInput) {
       inputs.push(getCriteriaInputDefinition(getCriteriaInputTypes(data.questionType)));
     } else if (data.questionType === 'noul') {
       const criteriaType = getCriteriaType(data);
@@ -144,7 +145,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
           data.instructionsLines,
           data.instructionsObjectTemplate,
         );
-    if (!data.useCriteriaInput) {
+    if (data.questionType !== 'box' && !data.useCriteriaInput) {
       if (data.questionType === 'choice') {
         if (getCriteriaType(data) === 'text') templates.push(...(data.options ?? []).map((option) => option.value));
         else {
@@ -189,6 +190,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
           { value: 'noul', label: 'Noul' },
           { value: 'choice', label: 'Choice' },
           { value: 'score', label: 'Score' },
+          { value: 'box', label: 'Bounding Box' },
         ],
         defaultValue: 'choice',
         allowOptionWrap: false,
@@ -248,7 +250,8 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
         type: 'group',
         label: 'Criteria',
         presentation: 'section',
-        hideIf: (data) => data.questionType === 'noul' && Boolean(data.useCriteriaInput),
+        hideIf: (data) =>
+          data.questionType === 'box' || (data.questionType === 'noul' && Boolean(data.useCriteriaInput)),
         editors: [
           {
             type: 'dropdown',
@@ -395,7 +398,10 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
     const data = this.data;
     preparation.capture(data.questionId);
     // Reject impossible cardinalities before resolving even Instructions.
-    const criteria = data.useCriteriaInput ? getQuestionInputValue(inputs, 'criteria', 'Criteria') : undefined;
+    const criteria =
+      data.questionType !== 'box' && data.useCriteriaInput
+        ? getQuestionInputValue(inputs, 'criteria', 'Criteria')
+        : undefined;
     if (data.questionType === 'score') {
       const count = data.useCriteriaInput
         ? Array.isArray(criteria)
@@ -461,6 +467,7 @@ function getNoulCriteriaInputDefinition(
 }
 
 function getQuestionTypeLabel(questionType: ClassifierQuestionType): string {
+  if (questionType === 'box') return 'Bounding Box';
   return questionType === 'noul' ? 'Noul' : questionType[0]!.toUpperCase() + questionType.slice(1);
 }
 
@@ -482,10 +489,15 @@ export function getClassifierQuestionBodySections(
       ],
     },
     instructions,
-    {
-      id: 'criteria',
-      fields: [{ label: 'Criteria', value: data.useCriteriaInput ? 'input' : getCriteriaSummary(data) }],
-    },
+    data.questionType === 'box'
+      ? {
+          id: 'capability',
+          fields: [{ label: 'Requires', value: 'Jev 1.14 and an image (experimental)' }],
+        }
+      : {
+          id: 'criteria',
+          fields: [{ label: 'Criteria', value: data.useCriteriaInput ? 'input' : getCriteriaSummary(data) }],
+        },
   ];
 }
 
@@ -520,7 +532,12 @@ function createQuestionDefinition(
   questionId: string,
   instructions: ClassifierEntry,
   preparation: ClassifierQuestionPreparation,
-): ClassifierChoiceQuestionDefinition | ClassifierScoreQuestionDefinition | ClassifierNoulQuestionDefinition {
+):
+  | ClassifierChoiceQuestionDefinition
+  | ClassifierScoreQuestionDefinition
+  | ClassifierNoulQuestionDefinition
+  | ClassifierBoxQuestionDefinition {
+  if (data.questionType === 'box') return { questionId, type: 'box', instructions };
   if (data.questionType === 'choice') {
     return createChoiceQuestion(data, inputs, context, questionId, instructions, preparation);
   }

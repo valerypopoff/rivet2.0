@@ -101,6 +101,16 @@ export function validateClassifierEvaluationResponse(
         providerLabel,
       );
       requireResponseMap(responseField(answer, 'legend'), keys, `${question.questionId}.legend`, providerLabel);
+    } else if (question.type === 'box') {
+      const box = requireResponseMap(
+        responseField(answer, 'box'),
+        ['top', 'bottom', 'left', 'right'],
+        `${question.questionId}.box`,
+        providerLabel,
+      );
+      for (const edge of ['top', 'bottom', 'left', 'right'])
+        requireResponseNumber(box[edge], `${question.questionId}.box.${edge}`, providerLabel);
+      requireResponseNumber(responseField(answer, 'confidence'), `${question.questionId}.confidence`, providerLabel);
     } else {
       requireResponseNumber(responseField(answer, 'noul'), `${question.questionId}.noul`, providerLabel);
     }

@@ -19,7 +19,7 @@ export function createQuestionMap(
   for (const question of questions) {
     const instructions = instructionsFor(question);
     const providerQuestion =
-      question.type === 'noul' && question.criteria === undefined
+      (question.type === 'noul' || question.type === 'box') && question.criteria === undefined
         ? { type: question.type, instructions }
         : { type: question.type, instructions, criteria: question.criteria };
     Object.defineProperty(result, question.questionId, { enumerable: true, value: providerQuestion });
@@ -51,7 +51,7 @@ export function prepareClassifierQuestion(value: unknown, budget: ClassifierValu
   const question = snapshotClassifierJson(value, 'Question', budget, true) as ClassifierQuestionDefinition;
   if (typeof question.questionId !== 'string' || question.questionId.trim() === '')
     throw new Error('Every Decision AI question must have a non-empty Question ID.');
-  if (!['choice', 'score', 'noul'].includes(question.type))
+  if (!['choice', 'score', 'noul', 'box'].includes(question.type))
     throw new Error(`Question '${question.questionId}' has an unsupported type.`);
   // The whole question has already passed recursive JSON/resource validation.
   // Check only entry kinds here; do not scan each structured entry again.
@@ -69,6 +69,8 @@ export function prepareClassifierQuestion(value: unknown, budget: ClassifierValu
     assertClassifierInstructionsKind(question.instructions, `Question '${question.questionId}' instructions`);
   }
   const criteria = question.criteria;
+  if (question.type === 'box' && criteria !== undefined)
+    throw new Error(`Bounding Box question '${question.questionId}' does not accept criteria.`);
   if (question.type === 'choice') {
     if (typeof criteria !== 'object' || criteria === null || Array.isArray(criteria))
       throw new Error(`Choice question '${question.questionId}' requires object criteria.`);
@@ -86,7 +88,7 @@ export function prepareClassifierQuestion(value: unknown, budget: ClassifierValu
     let index = 0;
     for (const entry of classifierArrayValues(criteria, 'Criteria'))
       assertClassifierEntryKind(entry, `Question '${question.questionId}' criteria[${index++}]`);
-  } else if (criteria !== undefined) {
+  } else if (question.type === 'noul' && criteria !== undefined) {
     if (
       typeof criteria !== 'object' ||
       criteria === null ||

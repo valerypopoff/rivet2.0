@@ -1,5 +1,5 @@
 // Local-only contract subset from https://docs.typesafe.ai/images (2026-10-24).
-// No upstream proxying, credentials or project files. Only Noul is exercised here.
+// No upstream proxying, credentials or project files. Noul and Box contract subsets.
 const { createServer } = require('node:http');
 createServer(async (req, res) => {
   const send = (status, body) => {
@@ -29,12 +29,28 @@ createServer(async (req, res) => {
           return send(400, { error: 'Invalid image asset' });
       }
     }
-    if (Object.values(body.questions).some((question) => question.type !== 'noul'))
-      return send(501, { error: 'This local contract fixture exercises only Noul' });
+    const hasBox = Object.values(body.questions).some((question) => question.type === 'box');
+    if (Object.values(body.questions).some((question) => !['noul', 'box'].includes(question.type)))
+      return send(501, { error: 'This local contract fixture exercises only Noul and Box' });
+    if (
+      hasBox &&
+      (!['jev-1.14.0', 'jev-latest', 'jev-preview'].includes(body.model) ||
+        req.headers['typesafe-danger-zone-images'] !== 'true' ||
+        !Object.keys(body.assets || {}).length ||
+        Object.values(body.questions).some((question) => question.type === 'box' && 'criteria' in question))
+    )
+      return send(400, { error: 'Invalid Box request' });
     return send(200, {
       model: 'jev-1.14.0',
-      answers: Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'noul', noul: 0.8 }])),
-      usage: { input_tokens: 1000, output_tokens: 0 },
+      answers: Object.fromEntries(
+        Object.entries(body.questions).map(([id, question]) => [
+          id,
+          question.type === 'box'
+            ? { type: 'box', box: { top: 0.25, bottom: 0.82, left: 0.44, right: 0.84 }, confidence: 0.92 }
+            : { type: 'noul', noul: 0.8 },
+        ]),
+      ),
+      usage: { input_tokens: 1000, output_tokens: hasBox ? 21 : 0 },
     });
   } catch {
     return send(400, { error: 'Invalid JSON' });

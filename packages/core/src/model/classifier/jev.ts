@@ -5,6 +5,8 @@ import { createQuestionMap } from './questions.js';
 
 /** Experimental image contract, verified 2026-10-24: https://docs.typesafe.ai/images */
 export const JEV_IMAGE_MODELS = ['jev-latest', 'jev-preview', 'jev-1.13.0', 'jev-1.14.0'];
+/** https://docs.typesafe.ai/primitives/box — Box requires Jev 1.14, not 1.13. */
+export const JEV_BOX_MODELS = ['jev-latest', 'jev-preview', 'jev-1.14.0'];
 
 export function assertJevImageLimits(images: readonly PreparedClassifierImage[], check: () => void): void {
   for (const { dataUrl, mediaType, width, height } of images) {

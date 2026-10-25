@@ -321,7 +321,7 @@ do not prove live account access or model availability.
 
 ## Ownership and provider contract
 
-- `ClassifierQuestionNode` is a pure definition builder. It has Choice, Score, and Noul modes but never reads credentials or calls a provider.
+- `ClassifierQuestionNode` is a pure definition builder. It has Choice, Score, Noul and Bounding Box modes but never reads credentials or calls a provider.
 - `ClassifierEvaluateNode` owns active-port reads, bounded variadic flattening, API-key source selection, executor policy, and output projection. Providers own the shared preparation boundary for graph and direct calls. Its always-on output contract is **Answers**, **Usage**, and **Cost**; do not restore a Model port. The provider's resolved model remains available only in the opt-in raw response-body diagnostic.
 - `classifier/providers.ts` owns the ordered provider registry. A provider has a stable ID, label, default model, default credential names, browser policy, optional static token pricing, and an `evaluate` adapter. Its successful result carries the aggregate response plus the exact JSON request and response bodies at the provider boundary. Use `createApiCompatibleClassifierProvider` for future System One-compatible providers; fixed endpoints remain Core-owned. New Evaluate nodes keep Model empty and resolve the selected provider's default at runtime; explicit existing models stay authored contracts.
 - Jev is the first provider. Its specification owns the fixed TypeSafe System One endpoint and protocol mapping. All providers use one shared runner for preparation, retry/backoff, abort cleanup and high-level error summaries with preserved diagnostic causes. Its Core-owned USD pricing is fixed at **$0.042 / MTok input** and **$0 / MTok output**. Do not make this graph-authored or infer an unpriced future provider is free.
@@ -474,7 +474,8 @@ full image content (including animated PNG rejection), processed/expanded image
 size and token/context limits; Rivet's header inspection is not a decoder. No
 automatic resizing, format conversion or experimental long-context header is added.
 Usage already includes image input tokens: charge the ordinary Jev input rate once.
-Box questions remain unsupported. Question-local Instructions use the contract below.
+Bounding Box requires the verified Jev 1.14 models described below. Question-local
+Instructions use the same image contract.
 
 `JevImages.test.ts` covers inline/Profile use, aliases, ordered/repeated images,
 PNG/JPEG assets, retry stability, Cost, unchanged text requests and local limits.
@@ -496,12 +497,12 @@ yarn workspace @valerypopoff/rivet2-core exec tsx scripts/check-jev-image-simula
 
 Run the second command in another terminal. It uses only the loopback mock, fixture
 credentials and actual fetch/parser paths; it never calls Jev. The repo-owned mock
-models the verified Noul/image subset and rejects missing opt-in headers; unmatched
+models the verified Noul/Box/image subset and rejects missing opt-in headers; unmatched
 paths/types return 501. The owner-mock lookup required unavailable Postman login,
 and Orbit discovery was unavailable, so this uses the primary documentation rather
 than claiming upstream-mock or live-account qualification. Check simulation request
-events for twelve 200s (Jev shared State plus Jev/OpenAI question Instructions,
-native and real Assemble Message inputs in both modes) and two deliberate
+events for sixteen 200s (Jev shared State, Jev/OpenAI question Instructions and
+Jev Bounding Box with shared/local images in both modes) and two deliberate
 missing-header 400s. Stop the simulation afterward. The simulation also has an
 OpenAI member; its narrow handler supports the predicate/image contract exercised
 here and returns 501 for unmodeled operations. See its sibling context document.
@@ -543,7 +544,8 @@ the experimental header. OpenAI uses native content parts directly in each quest
 instructions (no role wrapper); Noul criteria append a text part, never stringify/drop images.
 Multiple messages flatten in order with a blank-line boundary. Other providers can consume
 text-only message Instructions but cannot receive question images. Criteria remain text/JSON;
-native Jev image-valued criteria and Box questions are not implemented here.
+native Jev image-valued criteria are not implemented here. Bounding Box uses the
+same Instructions contract and has no criteria.
 
 `ClassifierQuestionImages.test.ts` exercises real nodes and complete GraphProcessor paths,
 all question types, inline/Profile parity, scope isolation, exact bytes/order, aggregate
@@ -569,6 +571,40 @@ For PowerShell, set the two Playwright environment variables with `$env:` before
 running the command. Point `PLAYWRIGHT_BASE_URL` at a local editor server; the
 browser fixture intercepts API requests and checks actual recorded graph outputs.
 No live provider key is needed. Keep browser/HTTP artifacts out of source control.
+
+### Bounding Box questions
+
+The Question editor labels native `type: 'box'` as **Bounding Box**. The
+[Jev Box contract](https://docs.typesafe.ai/primitives/box) requires 1.14;
+`JEV_BOX_MODELS` allows only `jev-1.14.0`, `jev-latest` and `jev-preview`.
+`supportsBoxQuestions` is separate from image capability (Jev 1.13 has images
+but no Box). Unverified models and other providers fail as `capability` before
+HTTP; ordered Profile fallback preserves the complete mixed question batch.
+
+Box takes Instructions and no Criteria. The editor hides criteria controls,
+ports and inactive interpolation references without deleting saved settings;
+the node never reads hidden Criteria inputs. Direct definitions with non-undefined
+criteria fail validation. Each Box needs an image in shared State or its own
+Instructions; another question's private image does not satisfy it. Requests
+retain native Box shape and enable the experimental image header.
+
+Answers contain `{ type: 'box', box: { top, bottom, left, right }, confidence }`.
+The four documented edges are fractions of image dimensions from the top-left.
+Response validation requires exactly four own finite-number edges and an own
+finite confidence; it preserves provider values without range/order checks,
+clamping, rounding or conversion to pixels, consistent with the existing numeric
+trust contract. Missing/wrong-type fields remain malformed responses. Box always
+returns one box, with no not-found sentinel: use a separate Noul visibility check.
+There is no automatic image cropping or overlay. Jev output usage is retained;
+the documented output-token price remains free.
+
+`ClassifierBoundingBox.test.ts` covers node construction and inactive settings,
+all verified models, inline/Profile modes, shared/local image placement, mixed
+Box/Noul batches, fallback, zero-HTTP capability/input failures, malformed shape
+and trusted numeric values. The browser fixture switches Choice→Box→Choice→Box
+and executes the resulting Question graph. The existing local simulation also
+runs actual Box HTTP requests with generated PNGs; neither proves live model
+accuracy, availability or production readiness. This provider feature remains experimental.
 
 `OpenAIDecisions.test.ts` runs real Question/Evaluate nodes and mocked HTTP boundaries for mixed/legacy/structured definitions, special keys, native diagnostics, shared image bytes, snapshots, unsupported question image fields, capability rejection, refusals, retry payloads and response shape. `ClassifierState.test.ts` exercises real Assemble Message/Array/Evaluate chains, ordered native provider payloads, structured-state compatibility, bare base64 detection, rejected content and provider limits. The headless observer covers OpenAI selection, model/credential defaults, the State port and absence of separate Images/Question image controls. Live calls require an operator-supplied key; mock contract tests do not prove account/model access.
 

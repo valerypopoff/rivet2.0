@@ -20,7 +20,7 @@ import { validateClassifierEvaluationResponse } from './response.js';
 import { createOpenAIDecisionRequest, validateOpenAIDecisionResponse } from './openai.js';
 import { assertPerplexityDecisionLimits, perplexityDecisionState, PERPLEXITY_DECISION_MODELS } from './perplexity.js';
 import { prepareClassifierQuestion, createQuestionMap } from './questions.js';
-import { assertJevImageLimits, JEV_IMAGE_MODELS, createJevDecisionRequest } from './jev.js';
+import { assertJevImageLimits, JEV_IMAGE_MODELS, JEV_BOX_MODELS, createJevDecisionRequest } from './jev.js';
 import { assertSubQDecisionLimits, SUBQ_DECISION_MODELS, subqDecisionState } from './subq.js';
 import { classifierArrayValues } from './json.js';
 import {
@@ -77,6 +77,7 @@ export type ClassifierProvider = {
   browserExecutionSupported: boolean;
   supportsImages?: (model: string) => boolean;
   supportsQuestionImages?: (model: string) => boolean;
+  supportsBoxQuestions?: (model: string) => boolean;
   /** A stricter provider request limit also bounds preparation before encoding. */
   maxRequestBytes?: number;
   /** Legacy shorthand: pricing for defaultModel only, never arbitrary models. */
@@ -207,6 +208,7 @@ export const jevClassifierProvider = createClassifierProvider({
   modelPricing: [{ models: ['jev-latest', 'jev-preview', 'jev-1.13.0', 'jev-1.14.0'], pricing: JEV_TOKEN_PRICING }],
   supportsImages: (model) => JEV_IMAGE_MODELS.includes(model),
   supportsQuestionImages: (model) => JEV_IMAGE_MODELS.includes(model),
+  supportsBoxQuestions: (model) => JEV_BOX_MODELS.includes(model),
   checkState: (state, check) => {
     if (state.kind === 'messages') assertJevImageLimits(state.images, check);
   },
@@ -218,8 +220,10 @@ export const jevClassifierProvider = createClassifierProvider({
   buildRequest: createJevDecisionRequest,
   requestHeaders: ({ state, questions }): Record<string, string> =>
     (state.kind === 'messages' && state.images.length) ||
-    questions.some((question) =>
-      question.instructionsMessages?.some(({ parts }) => parts.some((part) => part.type === 'image')),
+    questions.some(
+      (question) =>
+        question.type === 'box' ||
+        question.instructionsMessages?.some(({ parts }) => parts.some((part) => part.type === 'image')),
     )
       ? { 'TypeSafe-Danger-Zone-Images': 'true' }
       : {},
@@ -436,9 +440,22 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
     }
     let imageCount = state.kind === 'messages' ? state.images.length : 0;
     for (const question of questions) {
-      if (!question.instructionsMessages) continue;
-      const images = inspectStateMessages(question.instructionsMessages, operation.check);
+      const images = question.instructionsMessages
+        ? inspectStateMessages(question.instructionsMessages, operation.check)
+        : [];
       imageCount += images.length;
+      if (question.type === 'box') {
+        if (!provider.supportsBoxQuestions?.(args.model))
+          throw new ClassifierProviderError(
+            `${provider.label} model '${args.model}' does not support Bounding Box questions.`,
+            'capability',
+          );
+        if (!(state.kind === 'messages' && state.images.length) && !images.length)
+          throw new ClassifierProviderError(
+            `Bounding Box question '${question.questionId}' requires an image in shared State or its own Instructions.`,
+            'capability',
+          );
+      }
       if (images.length && !provider.supportsQuestionImages?.(args.model))
         throw new ClassifierProviderError(
           `${provider.label} model '${args.model}' does not support images in question instructions. Use a compatible Jev or OpenAI profile.`,

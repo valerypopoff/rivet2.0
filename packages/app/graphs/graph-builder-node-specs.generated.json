@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:ada9c50a25d8ffdf",
+  "catalogFingerprint": "fnv1a64:1e834995775a1725",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -260,7 +260,7 @@
       "authoringChoiceId": "registered:classifierQuestion",
       "nodeType": "classifierQuestion",
       "displayName": "Decision AI Question",
-      "description": "Builds one serializable typed question for a Decision AI provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Decision AI run's aggregate Answers object. The same question format works with Jev , Liquid AI d1 , OpenAI Decisions , Microsoft Decision 1 through OpenRouter , and Perplexity Decisions . Choose the provider in Decision AI run; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See provider setup and limits.",
+      "description": "Builds one serializable typed question for a Decision AI provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Decision AI run's aggregate Answers object. The same Choice, Score and Noul text/JSON question format works with Jev , Liquid AI d1 , OpenAI Decisions , Microsoft Decision 1 through OpenRouter , Perplexity Decisions , and SubQ Snap . Choose the provider in Decision AI run; no manual question conversion is needed. Bounding Box requires a compatible Jev model. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Image Instructions require a compatible provider as described below. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See provider setup and limits.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

@@ -5,7 +5,7 @@ import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
 
-for (const mode of ['message', 'prompt', 'text-array'] as const)
+for (const mode of ['message', 'prompt', 'text-array', 'box'] as const)
   test(`Question Instructions execute in the editor through ${mode}`, async ({ page }) => {
     const withPrompt = mode === 'prompt';
     const withArray = mode === 'text-array';
@@ -55,10 +55,11 @@ for (const mode of ['message', 'prompt', 'text-array'] as const)
             'classifierQuestion',
             'Decision AI Question',
             {
-              questionType: 'noul',
+              questionType: mode === 'box' ? 'choice' : 'noul',
               questionId: 'q',
               instructions: '',
               useInstructionsInput: true,
+              useCriteriaInput: mode === 'box',
             },
             combined ? 840 : 560,
           ),
@@ -100,6 +101,20 @@ for (const mode of ['message', 'prompt', 'text-array'] as const)
     await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
     const question = page.locator('.node[data-nodeid="question"]');
     await expect(question).toBeVisible();
+    if (mode === 'box') {
+      await question.locator('button.edit-button').dispatchEvent('click');
+      const types = page.getByRole('group', { name: 'Question type', exact: true });
+      await expect(question.locator('.port-label', { hasText: /^Criteria$/ })).toHaveCount(1);
+      await types.getByRole('button', { name: 'Bounding Box', exact: true }).click();
+      await expect(question).toContainText('Type: Bounding Box');
+      await expect(question).toContainText('Jev 1.14 and an image');
+      await expect(question.locator('.port-label', { hasText: /^Criteria$/ })).toHaveCount(0);
+      await expect(page.getByRole('heading', { name: 'Criteria', exact: true })).toHaveCount(0);
+      await types.getByRole('button', { name: 'Choice', exact: true }).click();
+      await expect(question.locator('.port-label', { hasText: /^Criteria$/ })).toHaveCount(1);
+      await types.getByRole('button', { name: 'Bounding Box', exact: true }).click();
+      await page.keyboard.press('Escape');
+    }
     await page.locator('.run-button button').first().click();
     await expect.poll(() => recordings.length).toBe(1);
     await expect(question).toHaveClass(/success/);
@@ -111,7 +126,7 @@ for (const mode of ['message', 'prompt', 'text-array'] as const)
       type: 'object',
       value: {
         questionId: 'q',
-        type: 'noul',
+        type: mode === 'box' ? 'box' : 'noul',
         instructions: '',
         instructionsMessages: [
           {

@@ -153,9 +153,58 @@ try {
         }
         assert.equal((result.answers!.value as any).q.noul, 0.8);
       }
-  assert.equal(requests, 12);
+  for (const configurationMode of ['inline', 'profile'] as const)
+    for (const local of [false, true]) {
+      const context = {
+        executor: 'nodejs',
+        signal: AbortSignal.timeout(10_000),
+        settings: { classifierProviders: { jev: { apiKey: 'fixture' } } },
+      } as InternalProcessContext;
+      const question = ClassifierQuestionNodeImpl.create();
+      Object.assign(question.data, {
+        questionId: 'q',
+        questionType: 'box',
+        instructions: 'Find the object',
+        useInstructionsInput: local,
+      });
+      const built = await new ClassifierQuestionNodeImpl(question).process(
+        local ? { instructions: assembled.message } : {},
+        context,
+      );
+      const run = ClassifierEvaluateNodeImpl.create();
+      Object.assign(run.data, { model: 'jev-1.14.0', configurationMode, outputRequestBody: true });
+      const result = await new ClassifierEvaluateNodeImpl(run).process(
+        {
+          question1: built.question,
+          ...(!local ? { state: states[0]!.value } : {}),
+          ...(configurationMode === 'profile'
+            ? {
+                classifierProfile: {
+                  type: 'classifier-config' as const,
+                  value: {
+                    version: 1 as const,
+                    configuration: { provider: 'jev', model: 'jev-1.14.0' },
+                    credential: { value: 'fixture' },
+                  },
+                },
+              }
+            : {}),
+        },
+        context,
+      );
+      assert.deepEqual((result.answers!.value as any).q, {
+        type: 'box',
+        box: { top: 0.25, bottom: 0.82, left: 0.44, right: 0.84 },
+        confidence: 0.92,
+      });
+      const body = result.requestBody!.value as any;
+      assert.equal(body.questions.q.type, 'box');
+      assert.equal('criteria' in body.questions.q, false);
+      assert.equal(result.cost!.value, 0.000042);
+    }
+  assert.equal(requests, 16);
   console.log(
-    'Image simulation passed: Jev shared State and Jev/OpenAI question instructions, inline/profile, native/assembled PNG inputs, missing-header rejection.',
+    'Image simulation passed: shared State, question Instructions and Jev Bounding Box, inline/profile, missing-header rejection.',
   );
 } finally {
   globalThis.fetch = realFetch;

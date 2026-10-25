@@ -16,7 +16,7 @@ With automatic suspension enabled and supported by the host, each profile has a 
 
 **Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
 
-- **Provider**: choose **Jev**, **Liquid AI**, **OpenAI**, **OpenRouter**, **Perplexity**, or **SubQ**. All use the same Choice, Score, and Noul question definitions. OpenRouter defaults to Microsoft Decision-1.
+- **Provider**: choose **Jev**, **Liquid AI**, **OpenAI**, **OpenRouter**, **Perplexity**, or **SubQ**. All use the same Choice, Score, and Noul question definitions. Bounding Box additionally requires a verified Jev 1.14 model. OpenRouter defaults to Microsoft Decision-1.
 - **Model**: defaults to `jev-latest` for Jev, `d1` for Liquid AI, `gpt-6-luna` for OpenAI, `microsoft/microsoft-decision-1` for OpenRouter, `pplx-decider-v1.1-27b` for Perplexity, and `subq-snap-1.1` for SubQ. Leave it blank to use the selected provider's default. An explicit saved model or Model input is preserved when you switch providers; clear an old model to use the new provider's default. Pin a version when downstream thresholds were calibrated against it, and recheck those thresholds when changing models.
 - **API key source**: **Automatic** checks the named programmatic key, then environment credentials, then the saved Decision AI key when using default names. Existing graphs retain this mode. **Decision AI settings** uses only Settings → Decision AI's key for the selected provider and fails if missing; it never falls back to a general OpenAI key or environment credentials. **Input port** uses only the API Key input. Jev defaults to `typesafeApiKey` / `TYPESAFE_API_KEY`; Liquid AI to `liquidApiKey` / `LIQUID_API_KEY`; OpenAI to `openAiApiKey` / `OPENAI_API_KEY` (with legacy `openAiKey` checked before environment credentials in Automatic). OpenRouter uses `openRouterApiKey` / `OPENROUTER_API_KEY`; Perplexity uses `perplexityApiKey` / `PERPLEXITY_API_KEY`; SubQ uses `subqApiKey` / `SUBQ_API_KEY`. Custom key names are provider-scoped and available in Automatic. Credentials are resolved on the executor, which may be remote.
 - **Timeouts**: configured only in [Decision AI Profile](./classifier-profile.mdx), not on this node. There is no overall node or fallback-chain time limit. Old saved overall-timeout values are ignored. Inline calls and profiles without active automatic suspension wait until completion, provider failure or cancellation.
@@ -204,8 +204,9 @@ text-only calls are unchanged. GIF/WebP are not accepted by Jev: convert them
 upstream. Jev also rejects animated/damaged files and requests exceeding its
 processed-image or context limits. Input usage already includes image tokens,
 so no separate image charge is added. See [TypeSafe's image documentation](https://docs.typesafe.ai/images)
-for its experimental status and current limits. This does not add Box questions
-or images inside Question definitions.
+for its experimental status and current limits. Images may also go in Question
+Instructions for Jev/OpenAI. Jev 1.14 and its current aliases support the
+experimental [Bounding Box question](./classifier-question.mdx#bounding-box-answers).
 
 Use `data:image/png;base64,...` (or JPEG/GIF/WebP) when passing encoded images. Bare base64 is recognized only when decoded image headers identify a supported format; ordinary strings such as `test` remain text. Malformed explicitly marked images fail. Rivet never downloads image URLs or reads paths from State. System/developer/assistant/tool messages, document/audio parts, and explicit URL parts are not supported; use User messages containing text and inline images.
 

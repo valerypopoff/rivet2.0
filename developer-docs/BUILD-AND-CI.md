@@ -1863,6 +1863,25 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-10-25)
+
+All tracks last changed versions in `1ebeef366`. Changes since that baseline
+through `390d5657a`, together with the Bounding Box feature, prepare:
+
+| Track                               | Version change      | Reason                                                                                                                                                                                                |
+| ----------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop app                         | `2.29.0` → `2.30.0` | Bundled question-image/Bounding Box capabilities, host and execution-coordination consolidation, observation lifecycle fixes, lazy viewers and Run Activity improvements.                             |
+| Public Core/Node/Evaluations/CLI    | `2.23.0` → `2.24.0` | Additive question-local image Instructions and model-gated Jev Bounding Box definitions/responses, child ownership and registration hardening; Node/Evaluations/CLI are required lockstep companions. |
+| App executor                        | `2.15.0` → `2.16.0` | Source-bundled Core/runtime capability companion; no separate sidecar protocol change.                                                                                                                |
+| Documentation site                  | `2.23.0` → `2.24.0` | Question-image and Bounding Box authoring, provider limits and answer guidance.                                                                                                                       |
+| Five private Studio Server packages | `1.31.0` → `1.32.0` | Hosted Decision AI additions, shared editor host policies, repository/resource ownership hardening and image security changes; unchanged private workspaces remain lockstep companions.               |
+
+These are compatible minor releases, not a claim that every companion has
+package-local source changes. Desktop Tauri/Cargo metadata follows App; the CLI
+Docker fallback follows the public family. Workspace dependency ranges, Helm
+metadata and database schemas stay unchanged. Preparing versions and pushing to
+develop do not publish production releases, deploy GCP or qualify live model access.
+
 ### Prepared release versions (2026-10-24)
 
 Before this update, all tracks except Docs last changed versions in `18437156c`;

@@ -2,6 +2,25 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-25 — execution consolidation and image questions
+
+All tracks last changed versions in `1ebeef366`. This update covers subsequent
+changes through `390d5657a` plus model-gated Bounding Box questions.
+
+| Packages                        | Version             | Changes since that track's last bump                                                                                                                                                                                                                                                |
+| ------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.29.0` → `2.30.0` | Shared hosted/desktop policies and execution coordination, observation lifetime safeguards, lazy viewers and Run Activity improvements; bundles the new image-question and Bounding Box capabilities.                                                                               |
+| Core, Node, CLI, Evaluations    | `2.23.0` → `2.24.0` | Core adds question-local image Instructions and verified Jev Bounding Box support, and consolidates child ownership/runtime registration. Node, CLI and Evaluations have no package-local source changes and remain required public-family companions.                              |
+| App Executor                    | `2.15.0` → `2.16.0` | Source-bundled Core/runtime companion, with no new sidecar protocol or package-local source changes.                                                                                                                                                                                |
+| All five Studio Server packages | `1.31.0` → `1.32.0` | API repository/resource ownership and shutdown hardening; Web shared-host policies, execution and loading improvements, image-question/Box authoring; hardened container dependencies. Bootstrap, Shared and Executor are lockstep companions without package-local source changes. |
+| Docs                            | `2.23.0` → `2.24.0` | Question-image authoring, Bounding Box answers and provider/model limitations.                                                                                                                                                                                                      |
+
+Minor versions reflect compatible capabilities, not a new feature in every
+companion. Tauri/Cargo follows App and the CLI Docker fallback follows the public
+family. Workspace ranges, lockfile resolutions, Helm metadata and database schema
+versions are unchanged. This is release preparation, not publication, deployment
+or live provider qualification. See the [prepared release matrix](BUILD-AND-CI.md#prepared-release-versions-2026-10-25).
+
 ## Version update: 2026-10-24 — backend overlap, recording UX and Jev images
 
 Before this update, App, the public runtime family, App Executor and Studio Server

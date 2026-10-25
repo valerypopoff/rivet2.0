@@ -1510,24 +1510,28 @@ the shared-evidence input. Criteria remain text/JSON. See
 `decision-question-images.spec.ts` checks both image wiring forms and text-only
 messages passed through Array, using actual browser graph execution and recorded
 outputs without paid provider calls. Empty typed image/message arrays fail early.
+The same fixture also selects Bounding Box, restores hidden Choice settings on
+type changes and executes a criteria-free Box definition. Box currently requires
+Jev 1.14 (including its verified aliases) and an image visible to that question;
+unsupported Profile candidates fail before HTTP. See
+[Bounding Box contracts](../CLASSIFIER-NODES.md#bounding-box-questions).
 
 ## Versioning
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.31.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.32.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since `18437156c`: opt-in singleton backend
-overlap, exclusive embedded-housekeeping ownership/forwarding, separate readiness
-and recorded upgrade handovers. It also includes bundle execution/routing,
-recording metadata/playback improvements and hosted Decision AI presentation,
-including SubQ Snap provider controls and consistent runtime/inspector diagnostics.
-Compact HA/autoscaling was already covered by `1.30.0`. This version update does
-not enable overlap in an installation or establish GKE qualification.
+This minor release covers changes since `1ebeef366`: shared editor host policies,
+execution/observation lifecycle hardening, narrower repository/resource ownership,
+editor loading and Run Activity improvements, question-image/Bounding Box support
+and container security hardening. Unchanged workspaces are release companions.
+Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
+This version update does not enable overlap or establish GKE qualification.
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-24) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-25) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or

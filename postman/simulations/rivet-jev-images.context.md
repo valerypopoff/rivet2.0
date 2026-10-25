@@ -22,9 +22,14 @@ Use the printed listener address; stop the owned simulation with Ctrl+C after ch
 ## Observations
 
 <!-- begin:observations -->
+
+2026-10-25: Added documented Jev Box requests with shared/question-local images in
+inline/Profile modes; both members served traffic and expected missing-header
+requests still failed. Box coordinates/confidence survived the real HTTP/parser path.
 2026-10-25: Both members served real node requests: Jev shared State plus Jev/OpenAI
 question Instructions in inline/Profile modes, native/assembled PNGs; expected
 missing-header requests were rejected. No silent members.
+
 <!-- end:observations -->
 
 ## What didn't work

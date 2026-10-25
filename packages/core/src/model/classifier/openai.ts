@@ -25,6 +25,7 @@ export function createOpenAIDecisionRequest(args: PreparedClassifierEvaluation):
           ? state.value
           : JSON.stringify(state.value),
     questions: args.questions.map((question) => {
+      if (question.type === 'box') throw new Error('OpenAI Decisions does not support Bounding Box questions.');
       const instructions = question.instructionsMessages
         ? question.instructionsMessages.flatMap(({ parts }, index) => [
             ...(index ? [{ type: 'input_text', text: '\n\n' }] : []),

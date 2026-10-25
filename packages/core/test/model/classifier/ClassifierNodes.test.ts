@@ -263,6 +263,7 @@ test('one question node produces choice, score, and noul definitions while retai
     { value: 'noul', label: 'Noul' },
     { value: 'choice', label: 'Choice' },
     { value: 'score', label: 'Score' },
+    { value: 'box', label: 'Bounding Box' },
   ]);
   assert.equal(questionTypeEditor.allowOptionWrap, false);
   const instructionsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Instructions') as any;
