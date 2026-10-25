@@ -1345,10 +1345,14 @@ reach the SPA or a login page. The real-NGINX fixture below also checks health
 routing, 503 propagation, HEAD/method handling, unchanged operator authentication, exact path
 matching and health recovery after an API address change. Its image-template
 case uses the production Dockerfile's security-reviewed, digest-pinned NGINX base.
-The DNS contract test checks production/development pins against the shared
-`nginxImage` policy in `scripts/ci/scan-container-images.mjs`, rather than freezing
-a second historical version. Keep resolver/shared-zone, authentication and
-no-mutating-request-replay assertions intact when refreshing that image. A pin
+The repository CI contract (`scripts/checks/check-ci-workflows.mjs`) checks
+production/development and DNS-fixture pins against the shared `nginxImage`
+policy in `scripts/ci/scan-container-images.mjs`. Keep that Node-only build/scanner
+dependency outside the TypeScript API tests; the DNS contract tests behavior,
+not a second historical image version. Validate changes with both the API build
+and the focused contract tests: running a TypeScript test alone does not prove
+that the strict server compilation accepts it. Keep resolver/shared-zone,
+authentication and no-mutating-request-replay assertions intact when refreshing that image. A pin
 policy mismatch must fail; a security update must not require restoring an old
 vulnerable tag merely to satisfy a stale DNS test.
 
