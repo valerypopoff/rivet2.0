@@ -50,7 +50,7 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
   }
   getEditors(): EditorDefinition<ClassifierProfileNode>[] {
     return [
-      getClassifierModelEditor(this.data) as EditorDefinition<ClassifierProfileNode>,
+      getClassifierModelEditor() as EditorDefinition<ClassifierProfileNode>,
       {
         type: 'group',
         label: 'Decision AI profile suspension',

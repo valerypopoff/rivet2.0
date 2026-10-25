@@ -18,6 +18,11 @@ the question batch or dropping images.
 
 The Model section mirrors Decision AI run's inline provider/model/API-key settings. Credentials are resolved on the executor. Optional **Model** and **API Key** inputs are enabled by their settings. A missing key is represented as an unavailable candidate so Decision AI run can try the next profile; malformed configuration still fails.
 
+The **Model** dropdown includes known models, **Default**, and **Custom model…**
+for entering another name. Existing unlisted names open in Custom mode without
+being changed. Selecting Default follows the provider's default; selecting a
+listed model pins its exact ID. Model-from-input retains its existing behavior.
+
 With automatic suspension enabled on a supported host, **Response timeout** defaults to **0.5 seconds** per candidate. Existing saved values are kept. Fractional seconds are supported with millisecond precision: enter **0.25** for 250 ms or **0.5** for half a second. The minimum is **0.001** seconds. Decision AI run has no separate total chain deadline.
 
 The limit includes preparation, response validation, repeat requests to the same
@@ -41,6 +46,11 @@ profile suspension does not apply a response timeout; cancel the run if needed.
 Studio Server supplies a durable health store and a **Decision AI profile suspension** tab in Project Settings. Standalone integrations must supply the optional profile-health store to activate suspension and its response deadlines; profiles and fallback still work without it.
 
 **Profile** has type `classifier-config`. Its runtime value contains the resolved credential: treat it as sensitive, like LLM Profile output. Node settings do not persist API keys. Only sanitized attempts are safe for reliability diagnostics.
+
+For **Baseten**, select **Elephant-1** or **Mammoth-1** in Model; Default uses
+Elephant-1. Both use the same
+credential and shared-State image support as inline mode. See
+[Baseten setup and limits](./classifier-evaluate.mdx#using-elephant-1-and-mammoth-1-on-baseten).
 
 ## Fallback
 

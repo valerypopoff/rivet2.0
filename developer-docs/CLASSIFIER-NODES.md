@@ -321,13 +321,85 @@ do not prove live account access or model availability.
 
 ## Ownership and provider contract
 
+### Model selection UI
+
+The provider registry owns curated `modelOptions` (ID/label pairs), separate from
+pricing groups and image capabilities. Every built-in provider supplies at least
+its default; multi-model providers expose all currently supported catalog entries.
+These are suggestions, not a runtime allowlist. Custom model names continue to
+use the existing string field and ordinary provider validation.
+
+`getClassifierModelEditor()` supplies one `ClassifierModel` custom editor to both
+Evaluate and Profile nodes. The app implementation is shared by desktop and
+Studio Server; it does not fetch catalogs or credentials. It reuses the normal
+dropdown, text field and input-port toggle. **Default (ID)** saves an empty Model
+and follows the provider default; choosing a listed model pins its exact ID.
+**Custom model…** reveals a text field while preserving the current model until
+the user edits it. Unlisted saved models automatically show as Custom, including
+an old provider's model retained after switching providers. Opening settings
+does not normalize, clear or migrate authored values. The Custom sentinel and
+display mode are UI-only and never enter serialized projects or HTTP payloads.
+Editing an implicitly selected saved Custom value latches Custom mode too:
+clearing the text or typing through an exact known-model prefix must not unmount
+the input or lose focus. Only an explicit listed-model/Default selection leaves
+that editing mode; reopening derives the mode from the saved value again.
+
+The custom field patches the latest owning node through the editor session,
+preserving neighboring field edits and rejecting writes from retired/read-only
+sessions. Model-from-input remains authoritative at runtime without deleting the
+static model; the input connection survives menu changes. Disabled/read-only
+controls remain non-editable. Escape dismisses an open model menu first; with
+the menu closed it closes node settings, preserving the former text field's
+keyboard behavior. Provider changes retain the existing default,
+explicit-model and provider-scoped credential behavior.
+
+The hosted observer exercises every built-in catalog, Custom preservation after
+closing/reopening settings, clearing saved custom text, sequential typing through
+known aliases, Default, Model-input toggling and Profile extraction.
+Core tests check catalog uniqueness/default membership and unchanged execution,
+pricing and image boundaries. Adding a catalog entry does not imply a new price
+or capability: update those separately only when verified.
+
+### Provider ownership
+
 - `ClassifierQuestionNode` is a pure definition builder. It has Choice, Score, Noul and Bounding Box modes but never reads credentials or calls a provider.
 - `ClassifierEvaluateNode` owns active-port reads, bounded variadic flattening, API-key source selection, executor policy, and output projection. Providers own the shared preparation boundary for graph and direct calls. Its always-on output contract is **Answers**, **Usage**, and **Cost**; do not restore a Model port. The provider's resolved model remains available only in the opt-in raw response-body diagnostic.
 - `classifier/providers.ts` owns the ordered provider registry. A provider has a stable ID, label, default model, default credential names, browser policy, optional static token pricing, and an `evaluate` adapter. Its successful result carries the aggregate response plus the exact JSON request and response bodies at the provider boundary. Use `createApiCompatibleClassifierProvider` for future System One-compatible providers; fixed endpoints remain Core-owned. New Evaluate nodes keep Model empty and resolve the selected provider's default at runtime; explicit existing models stay authored contracts.
 - Jev is the first provider. Its specification owns the fixed TypeSafe System One endpoint and protocol mapping. All providers use one shared runner for preparation, retry/backoff, abort cleanup and high-level error summaries with preserved diagnostic causes. Its Core-owned USD pricing is fixed at **$0.042 / MTok input** and **$0 / MTok output**. Do not make this graph-authored or infer an unpriced future provider is free.
 - Liquid AI uses stable provider ID `liquid`, default model `d1`, and the fixed `https://api.liquid.ai/decisions/v1/systemone` endpoint through the same System One adapter. Existing Choice, Score and Noul questions (including structured entries, legacy criteria and exact IDs) require no migration or rewriting. Its default credentials are `liquidApiKey` / `LIQUID_API_KEY`; saved credentials use `settings.classifierProviders.liquid.apiKey`. Liquid never reads Jev's legacy plugin credential. Both desktop and hosted Settings → Classifier enumerate the registry, as do both hosts' environment loaders. Node execution is required for both providers.
 
-Liquid d1's Core-owned accounting rate is **$0.04 / MTok input** and **$0 / MTok output**, published in [Liquid's d1 announcement](https://www.liquid.ai/blog/d1-decision-model). The [decision-model API documentation](https://docs.liquid.ai/lfm/models/decision-models) defines the compatible question/response protocol. The Model placeholder and canvas default follow the selected provider. Switching providers does not overwrite an explicit authored or input-supplied model: clear Model to use the new provider's default. Calibrated thresholds may need reevaluation when changing models, even though the question format is compatible.
+Liquid d1's Core-owned accounting rate is **$0.02 / MTok input** and **$0 / MTok output**, rechecked against [Liquid's pricing page](https://www.liquid.ai/pricing) on 2026-10-26 rather than the older launch price. The [decision-model API documentation](https://docs.liquid.ai/lfm/models/d1) defines the compatible question/response protocol. The Model placeholder and canvas default follow the selected provider. Switching providers does not overwrite an explicit authored or input-supplied model: clear Model to use the new provider's default. Calibrated thresholds may need reevaluation when changing models, even though the question format is compatible.
+
+#### Liquid d1.1
+
+The existing `liquid` provider also accepts `d1.1` in inline, Profile and Model-input
+paths. Rivet retains `d1` as its default so updating Rivet does not silently change
+an authored model or calibrated decisions. The shared model dropdown makes `d1.1`
+discoverable without adding another provider, credential or node format.
+Both recognized models support shared-State images through the same ordered
+top-level `images` array and numbered State references, with the same eight-image,
+4.5 MB request, 10,000-patch and 100:1 aspect-ratio limits. Neither supports images
+inside Question Instructions or Bounding Box in this integration. Unknown future
+model IDs and `d1:free` remain image-disabled; text requests stay forward-compatible.
+
+The public pricing page names `d1`, not `d1.1`. Until a rate is explicitly verified
+for the latter, d1.1 Cost is unknown/excluded, and d1/d1.1 requested/returned pairs
+are not presumed pricing aliases. Output generation remains zero; free output
+alone is not a verified total cost. Tests preserve raw Usage and Answers.
+`OpenAIDecisions.test.ts` covers both Liquid models with real Profile-node outputs,
+and `ClassifierState.test.ts` checks d1.1's image admission bound. The existing
+hosted Liquid observer checks d1.1 selection and Profile extraction without
+rewriting legacy/default d1 configuration.
+
+Local real-HTTP verification (no provider credentials or paid inference):
+
+```sh
+postman simulation run postman/simulations/rivet-liquid-decisions.sim.yaml --port 4933 --no-history --output ndjson
+yarn workspace @valerypopoff/rivet2-core exec tsx scripts/check-liquid-simulation.mts
+```
+
+See its [simulation context](../postman/simulations/rivet-liquid-decisions.context.md)
+for source assumptions and run evidence. Stop the local listener afterwards.
 
 ### Microsoft Decision-1 through OpenRouter
 
@@ -450,6 +522,54 @@ resource. Check its nine request receipts: two successful node calls, two 402s,
 two 403s, 429 then success, and a slow response after the caller's timeout. This exercises
 real HTTP/client parsing, not live model quality/access. Stop the simulation after
 verification. No mock or service publication is required.
+
+### Baseten Elephant-1 and Mammoth-1
+
+The registry provider `baseten` uses `POST https://inference.baseten.co/v1/systemone`
+with Bearer authentication, following the [API reference](https://docs.baseten.co/reference/inference-api/system-one)
+and [model guide](https://docs.baseten.co/inference/model-apis/decision-models), verified 2026-10-26.
+The model IDs are `decision-models/baseten-elephant-9b-latest` (default) and
+`decision-models/baseten-mammoth-27b-latest`. Both inline and Profile modes use
+the same adapter. Credentials use saved Baseten settings, `BASETEN_API_KEY`,
+programmatic `basetenApiKey`, or the existing credential inputs/overrides.
+Browser execution remains disabled; credentials resolve on the Node executor.
+
+Choice, Score and Noul use the native question/answer maps. Score is ordinal,
+not restricted to 0–1; fractional values are preserved. Structured State stays
+structured. Multimodal State becomes ordered user-message text/image_url parts,
+not top-level images or base64 text. Both known models accept at most four
+PNG/JPEG/WebP images in shared State. Question images and Bounding Box are
+rejected before HTTP. Explicit JSON conversations receive the same role,
+format, image-count and capability checks; they cannot bypass the inline-only
+image policy. Native roles must be literal `user`/`assistant` strings; arrays
+that stringify to a role are rejected before HTTP, not coerced. Although
+Baseten documents selected cloud URLs, Rivet does not
+fetch or forward remote image URLs. Assistant images and non-auto detail fail.
+
+Preflight checks 512 total options (each Noul counts as two) and 50,000 Unicode
+characters of rendered State text. Baseten enforces its 16,384-token context
+budget, including provider formatting overhead; the character check is not a
+tokenizer. Shared payload, response, cancellation and retry limits still apply.
+No permanent price has been verified: Cost stays unknown/excluded rather than
+turning a temporary free promotion into a permanent zero-price assumption.
+The response model ID may differ from the requested public slug.
+
+`BasetenDecisions.test.ts` covers model/Profile parity, credentials, ordered
+images, structured questions/answers and preflight rejection without HTTP.
+Each refusal asserts its specific reason and zero requests; valid native JSON
+user/assistant conversations remain unchanged. The real-HTTP client checks all
+three answer types and prototype-like question IDs, not just a successful status.
+`jev-nodes.spec.ts` checks both model IDs, extraction and saved credentials.
+For real local HTTP verification without a provider key or paid inference:
+
+```sh
+postman simulation run postman/simulations/rivet-baseten-decisions.sim.yaml --port 4932 --no-history --output ndjson
+yarn workspace @valerypopoff/rivet2-core exec tsx scripts/check-baseten-simulation.mts
+```
+
+The [simulation context](../postman/simulations/rivet-baseten-decisions.context.md)
+records discovery limits, failure scenarios and what these local checks prove.
+Stop the simulation afterwards. No live model quality/access claim is implied.
 
 ### Experimental Jev images
 
@@ -831,7 +951,7 @@ authored metric-name overrides, and incomplete-pricing semantics.
 
 Rates were rechecked against the primary provider documentation on 2026-10-07. Charge the successful response's aggregate `usage.input_tokens` once: do not estimate tokens from text length/base64 bytes, multiply by question count, or add image tokens separately. [Liquid's usage contract](https://docs.liquid.ai/lfm/models/decision-models) already includes image tokens for every question (for example, two questions about a 1024×1024 image include 3,072 image tokens plus text). Jev reports request-level usage. OpenAI Decisions' cache-read, cache-write and output charges are zero; do not import Chat/Responses caching discounts or output rates even if those detail fields are present. Its long-context threshold uses `input_tokens`, not `total_tokens` or output tokens. `ClassifierCredentialsAndPricing.test.ts` exercises these rules through the calculator and real Evaluate nodes, with multi-question text/image evidence, diagnostics, Usage details on/off, tiny fractional USD costs, and both sides of the context threshold.
 
-Core's provider registry owns exact model-pricing groups. Both requested and returned model IDs must belong to the same verified group; do not infer rates from prefixes or treat aliases as proof about a future returned version. [TypeSafe's models](https://docs.typesafe.ai/models), rechecked on 2026-10-24, document `jev-1.13.0` and `jev-1.14.0` at $0.042/MTok input with free output. Both `jev-latest` and `jev-preview` currently resolve to 1.14.0. All four IDs belong to the verified Jev pricing group; an unlisted future version remains unpriced. Regression tests cover explicit 1.14.0 and alias requests through both inline and profile modes, with Usage details on/off. Liquid's documented paid `d1` rate is $0.04/MTok input; `d1:free` and unrecognized IDs have unknown pricing here, not assumed paid or zero. [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions) prices `gpt-6-luna` input at $0.10/MTok with no output/cache charges; its [model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna) doubles the input rate for the entire request above 272,000 input tokens. Regional/account-specific premiums are not inferred from token usage.
+Core's provider registry owns exact model-pricing groups. Both requested and returned model IDs must belong to the same verified group; do not infer rates from prefixes or treat aliases as proof about a future returned version. [TypeSafe's models](https://docs.typesafe.ai/models), rechecked on 2026-10-24, document `jev-1.13.0` and `jev-1.14.0` at $0.042/MTok input with free output. Both `jev-latest` and `jev-preview` currently resolve to 1.14.0. All four IDs belong to the verified Jev pricing group; an unlisted future version remains unpriced. Regression tests cover explicit 1.14.0 and alias requests through both inline and profile modes, with Usage details on/off. Liquid's documented paid `d1` rate is $0.02/MTok input, rechecked on 2026-10-26; `d1.1`, `d1:free` and unrecognized IDs have unknown pricing here, not assumed paid or zero. [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions) prices `gpt-6-luna` input at $0.10/MTok with no output/cache charges; its [model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna) doubles the input rate for the entire request above 272,000 input tokens. Regional/account-specific premiums are not inferred from token usage.
 
 `calculateClassifierUsageCost` receives requested/returned identities and safe successful-response usage. `modelPricing` supports explicit alias groups and long-context rates; the legacy descriptor `pricing` shorthand now applies only when both IDs exactly match `defaultModel`. No identities or unknown pricing returns `undefined`, excluding Cost and omitting Usage.totalCost while preserving Answers/Usage. The same result feeds both outputs and existing GraphProcessor accumulation. Tests cover strict credential selection with conflicting sources, new-node/legacy Automatic behavior, unpriced models, mismatched identities, aliases, threshold boundaries and real graph accounting.
 

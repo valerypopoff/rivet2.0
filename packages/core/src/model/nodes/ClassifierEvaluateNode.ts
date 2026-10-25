@@ -175,7 +175,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   getEditors(): EditorDefinition<ClassifierEvaluateNode>[] {
     return [
       { type: 'custom', label: 'Configuration', customEditorId: 'ClassifierConfiguration' },
-      { ...getClassifierModelEditor(this.data), hideIf: (data) => data.configurationMode === 'profile' },
+      { ...getClassifierModelEditor(), hideIf: (data) => data.configurationMode === 'profile' },
       {
         type: 'group',
         label: 'Outputs',
@@ -566,9 +566,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
 }
 
 /** Shared settings definition; constructing an unrelated node is unnecessary. */
-export function getClassifierModelEditor(
-  data: ClassifierProfileConfiguration,
-): EditorDefinitionGroup<ClassifierEvaluateNode> {
+export function getClassifierModelEditor(): EditorDefinitionGroup<ClassifierEvaluateNode> {
   return {
     type: 'group',
     label: 'Model',
@@ -582,15 +580,11 @@ export function getClassifierModelEditor(
         options: classifierProviders.map((provider) => ({ value: provider.id, label: provider.label })),
       },
       {
-        type: 'string',
+        type: 'custom',
         label: 'Model',
         dataKey: 'model',
         useInputToggleDataKey: 'useModelInput',
-        placeholder: getProviderForDisplay(data.provider).defaultModel,
-        helperMessage: (data) =>
-          getProviderForDisplay(data.provider).id === 'jev'
-            ? 'Jev images are experimental: use still PNG/JPEG, 280–1568 pixels per side. Image requests enable TypeSafe’s experimental image API.'
-            : undefined,
+        customEditorId: 'ClassifierModel',
       },
       {
         type: 'segmented',

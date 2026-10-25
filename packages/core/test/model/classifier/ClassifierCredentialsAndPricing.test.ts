@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 void test('Classifier settings is strict and provider-scoped while Automatic preserves credential precedence', () => {
-  for (const providerId of ['jev', 'liquid', 'openai', 'openrouter', 'perplexity', 'subq']) {
+  for (const providerId of ['jev', 'liquid', 'openai', 'openrouter', 'perplexity', 'subq', 'baseten']) {
     const provider = getClassifierProvider(providerId);
     const context = {
       settings: {
@@ -62,12 +62,15 @@ void test('Pricing recognizes exact aliases, rejects unverified model pairs and 
     assert.equal(cost('jev', requested, 'jev-1.15.0'), undefined);
   }
   assert.equal(cost('jev', 'jev-1.15.0', 'jev-1.14.0'), undefined);
-  assert.equal(cost('liquid', 'd1', 'd1'), 0.04);
+  assert.equal(cost('liquid', 'd1', 'd1'), 0.02);
   for (const [requested, returned] of [
     ['d1:free', 'd1:free'],
     ['unpriced-model', 'd1'],
     ['d1', 'unpriced-model'],
     ['d1', 'd1:free'],
+    ['d1.1', 'd1.1'],
+    ['d1', 'd1.1'],
+    ['d1.1', 'd1'],
   ])
     assert.equal(cost('liquid', requested!, returned!), undefined);
   assert.equal(cost('openai', 'gpt-6-luna', 'gpt-6-luna', 272_000), 0.0272);
@@ -158,7 +161,7 @@ void test('All providers price aggregate multi-question usage once and preserve 
   }));
   for (const [providerId, inputRate] of [
     ['jev', 0.042],
-    ['liquid', 0.04],
+    ['liquid', 0.02],
     ['openai', 0.1],
     ['openrouter', 0.042],
     ['perplexity', 0.02],
@@ -322,7 +325,7 @@ void test('Invalid model-pricing metadata never produces a cost, even below an i
 });
 
 void test('Unknown pricing preserves successful Answers and raw Usage but excludes Cost and Usage.totalCost', async () => {
-  for (const model of ['d1:free', 'future-model']) {
+  for (const model of ['d1.1', 'd1:free', 'future-model']) {
     for (const outputUsage of [false, true]) {
       const node = ClassifierEvaluateNodeImpl.create();
       node.data = { ...node.data, provider: 'liquid', model, outputUsage, apiKeySource: 'classifier-settings' };

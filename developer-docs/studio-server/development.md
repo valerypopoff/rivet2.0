@@ -144,6 +144,10 @@ Kubernetes rehearsal or a new browser run.
 ## Extending serving services
 
 Classifier providers are Core-owned and shared by desktop and hosted execution.
+Their curated `modelOptions` also drive the shared Decision AI Model dropdown in
+run/Profile inspectors: Default, known model IDs and Custom model text entry.
+There is no hosted override or network catalog fetch. Keep saved custom names and
+Model-input connections intact; see the [model-selection contract](../CLASSIFIER-NODES.md#model-selection-ui).
 Microsoft Decision-1 uses the `openrouter` provider and the native OpenRouter
 Decisions API, default model `microsoft/microsoft-decision-1`. Follow the
 [OpenRouter classifier contract](../CLASSIFIER-NODES.md#microsoft-decision-1-through-openrouter)
@@ -153,6 +157,11 @@ settings), not as a browser-exposed environment variable. No Azure resource URL
 or deployment is needed. Existing runtime settings injection applies to
 endpoints, web apps, Evaluations and editor Node runs without another adapter.
 
+Liquid's existing `liquid` provider supports `d1` (retained Rivet default) and
+explicit `d1.1` through the same Node runtime, saved key and environment injection.
+Both accept shared-State images; no hosted adapter or data migration is needed.
+See the [d1.1 contract and local HTTP check](../CLASSIFIER-NODES.md#liquid-d11).
+
 Perplexity uses the same registry/runtime injection with provider `perplexity`,
 default model `pplx-decider-v1.1-27b` and host credential `PERPLEXITY_API_KEY`
 (or saved Classifier settings / programmatic `perplexityApiKey`). Its native
@@ -160,6 +169,13 @@ Decisions endpoint is not Sonar or chat completions. Follow the
 [Perplexity classifier contract](../CLASSIFIER-NODES.md#perplexity-decisions)
 for inline image parts, smaller question limits and conservative cost accounting.
 Do not expose its environment key to the browser; Browser execution is rejected.
+
+Baseten uses the same registry with provider `baseten`, executor credential
+`BASETEN_API_KEY` / programmatic `basetenApiKey`, and saved **Baseten API Key**.
+Elephant-1 is the default; select Mammoth-1 in the shared Model dropdown. The
+stored value remains its full Model API slug, not the friendly display label.
+See the [Baseten contract and local HTTP checks](../CLASSIFIER-NODES.md#baseten-elephant-1-and-mammoth-1).
+There is no separate hosted adapter, browser-exposed key or GCP resource.
 
 Provider hardening belongs in Core's shared classifier preparation/HTTP runner,
 not duplicated host adapters. Graph and direct API State roots use the same

@@ -44,6 +44,11 @@ export const SUBQ_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
   environmentVariableName: 'SUBQ_API_KEY',
 };
 
+export const BASETEN_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'basetenApiKey',
+  environmentVariableName: 'BASETEN_API_KEY',
+};
+
 const programmaticNamePattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const environmentVariableNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

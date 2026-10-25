@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import {
   ClassifierEvaluateNodeImpl,
+  ClassifierProfileNodeImpl,
   ClassifierQuestionNodeImpl,
   getClassifierProvider,
   type InternalProcessContext,
@@ -233,35 +234,44 @@ test('Shared image evaluation snapshots every question and image before retries 
   assert.deepEqual(Object.keys(output['answers' as PortId]!.value as object), ['a', 'b', 'c']);
 });
 
-test('Liquid d1 sends shared images via its native System One images field', async () => {
+test('Liquid d1 and d1.1 preserve shared images in inline and Profile modes', async () => {
   let sent: any;
   let calls = 0;
   globalThis.fetch = async (_url, init) => {
     calls++;
     sent = JSON.parse(String(init?.body));
     return Response.json({
-      model: 'd1',
+      model: sent.model,
       answers: { q: { type: 'noul', noul: 0.75 }, r: { type: 'noul', noul: 0.6 } },
       usage: { input_tokens: 12, output_tokens: 0 },
     });
   };
-  await evaluator({ provider: 'liquid' }).process(
-    {
-      ['state' as PortId]: { type: 'string[]', value: [image] },
-      ['question1' as PortId]: {
-        type: 'object[]',
-        value: [
-          { questionId: 'q', type: 'noul', instructions: 'Red?' },
-          { questionId: 'r', type: 'noul', instructions: 'Damaged?' },
-        ],
-      },
-    },
-    ctx(),
-  );
-  assert.deepEqual(sent.images, [image]);
-  assert.deepEqual(sent.questions.q, { type: 'noul', instructions: 'Red?' });
-  assert.deepEqual(sent.questions.r, { type: 'noul', instructions: 'Damaged?' });
-  assert.equal(calls, 1);
+  for (const model of ['d1', 'd1.1'])
+    for (const configurationMode of ['inline', 'profile'] as const) {
+      const profile = ClassifierProfileNodeImpl.create();
+      Object.assign(profile.data, { provider: 'liquid', model, apiKeySource: 'classifier-settings' });
+      const profileOutput = await new ClassifierProfileNodeImpl(profile).process({}, { ...ctx(), node: profile });
+      const result = await evaluator({ provider: 'liquid', model, configurationMode }).process(
+        {
+          ['state' as PortId]: { type: 'string[]', value: [image] },
+          ['question1' as PortId]: {
+            type: 'object[]',
+            value: [
+              { questionId: 'q', type: 'noul', instructions: 'Red?' },
+              { questionId: 'r', type: 'noul', instructions: 'Damaged?' },
+            ],
+          },
+          ...(configurationMode === 'profile' ? { classifierProfile: profileOutput.profile! } : {}),
+        },
+        ctx(),
+      );
+      assert.deepEqual(sent.images, [image]);
+      assert.equal(sent.model, model);
+      assert.deepEqual(sent.questions.q, { type: 'noul', instructions: 'Red?' });
+      assert.deepEqual(sent.questions.r, { type: 'noul', instructions: 'Damaged?' });
+      assert.equal(result.cost!.type, model === 'd1' ? 'number' : 'control-flow-excluded');
+    }
+  assert.equal(calls, 4);
 });
 
 test('Unsupported models, remote URLs, malformed images and excessive image batches fail before network', async () => {

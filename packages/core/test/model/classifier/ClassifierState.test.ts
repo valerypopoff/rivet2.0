@@ -646,10 +646,11 @@ test('Provider-specific image count, complete UTF-8 request bytes, dimensions an
   const content = (count: number) => [
     { parts: Array.from({ length: count }, () => ({ type: 'image' as const, dataUrl: url })) },
   ];
-  await assert.rejects(
-    getClassifierProvider('liquid').evaluate({ ...args, model: 'd1', stateMessages: content(9) }),
-    /at most 8/,
-  );
+  for (const model of ['d1', 'd1.1'])
+    await assert.rejects(
+      getClassifierProvider('liquid').evaluate({ ...args, model, stateMessages: content(9) }),
+      /at most 8/,
+    );
   await assert.rejects(
     getClassifierProvider('openai').evaluate({ ...args, model: 'gpt-6-luna', stateMessages: content(129) }),
     /at most 128/,

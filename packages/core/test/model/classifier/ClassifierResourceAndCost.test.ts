@@ -525,7 +525,7 @@ test('Real graphs account each provider cost with Usage details on or off, retry
                 : { type: 'string', value: getClassifierProvider(provider).defaultModel },
           },
         );
-        const expected = (provider === 'jev' ? 0.042 : provider === 'liquid' ? 0.04 : 0.2) * (mode === 'split' ? 2 : 1);
+        const expected = (provider === 'jev' ? 0.042 : provider === 'liquid' ? 0.02 : 0.2) * (mode === 'split' ? 2 : 1);
         assert.equal(result.cost?.value, expected, `${provider}/${details}/${mode}`);
         assert.deepEqual(result.costBreakdown, { type: 'object', value: { llm: 0, classifier: expected, other: 0 } });
         assert.equal(calls, mode === 'split' ? 3 : 2);

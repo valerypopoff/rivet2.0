@@ -6,6 +6,7 @@ import {
   OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
   PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
   SUBQ_DEFAULT_CREDENTIAL_NAMES,
+  BASETEN_DEFAULT_CREDENTIAL_NAMES,
 } from './credentials.js';
 import type { DataValue } from '../DataValue.js';
 import { assertLiquidImageLimits } from './images.js';
@@ -23,6 +24,7 @@ import { prepareClassifierQuestion, createQuestionMap } from './questions.js';
 import { assertJevImageLimits, JEV_IMAGE_MODELS, JEV_BOX_MODELS, createJevDecisionRequest } from './jev.js';
 import { assertSubQDecisionLimits, SUBQ_DECISION_MODELS, subqDecisionState } from './subq.js';
 import { classifierArrayValues } from './json.js';
+import { assertBasetenDecisionLimits, BASETEN_DECISION_MODELS, basetenDecisionState } from './baseten.js';
 import {
   assertClassifierResourceLimits,
   ClassifierValueBudget,
@@ -47,6 +49,7 @@ export const OPENAI_DECISIONS_ENDPOINT = 'https://api.openai.com/v1/decisions';
 export const OPENROUTER_DECISIONS_ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const PERPLEXITY_DECISIONS_ENDPOINT = 'https://api.perplexity.ai/v1/decisions';
 export const SUBQ_DECISIONS_ENDPOINT = 'https://api.subq.ai/v1/systemone';
+export const BASETEN_DECISIONS_ENDPOINT = 'https://inference.baseten.co/v1/systemone';
 
 /** Jev 1.13/1.14 USD rates, verified 2026-10-24: https://docs.typesafe.ai/models */
 export const JEV_TOKEN_PRICING = {
@@ -54,9 +57,9 @@ export const JEV_TOKEN_PRICING = {
   outputPerMillionTokens: 0,
 } as const;
 
-/** Liquid d1's published USD rates: https://www.liquid.ai/blog/d1-decision-model */
+/** Liquid d1 USD rates, verified 2026-10-26: https://www.liquid.ai/pricing */
 export const LIQUID_TOKEN_PRICING = {
-  inputPerMillionTokens: 0.04,
+  inputPerMillionTokens: 0.02,
   outputPerMillionTokens: 0,
 } as const;
 
@@ -73,6 +76,10 @@ export type ClassifierProvider = {
   id: string;
   label: string;
   defaultModel: string;
+  /** Curated UI choices, not a runtime allowlist or a pricing/capability promise. */
+  modelOptions?: readonly { value: string; label: string }[];
+  /** Provider-owned model guidance shared by inline and Profile editors. */
+  modelHelp?: string;
   credentialNames: ClassifierCredentialNames;
   browserExecutionSupported: boolean;
   supportsImages?: (model: string) => boolean;
@@ -165,6 +172,8 @@ export type ApiCompatibleClassifierProviderConfig = {
   id: string;
   label: string;
   defaultModel: string;
+  modelOptions?: ClassifierProvider['modelOptions'];
+  modelHelp?: string;
   credentialNames: ClassifierCredentialNames;
   /** Static, provider-owned endpoint. It must never come from graph data. */
   endpoint: string;
@@ -202,6 +211,9 @@ export const jevClassifierProvider = createClassifierProvider({
   id: 'jev',
   label: 'Jev',
   defaultModel: 'jev-latest',
+  modelOptions: ['jev-latest', 'jev-preview', 'jev-1.14.0', 'jev-1.13.0'].map((value) => ({ value, label: value })),
+  modelHelp:
+    'Jev images are experimental: use still PNG/JPEG, 280–1568 pixels per side. Image requests enable TypeSafe’s experimental image API.',
   credentialNames: JEV_DEFAULT_CREDENTIAL_NAMES,
   endpoint: JEV_SYSTEM_ONE_ENDPOINT,
   browserExecutionSupported: false,
@@ -234,10 +246,12 @@ export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
   id: 'liquid',
   label: 'Liquid AI',
   defaultModel: 'd1',
+  modelOptions: ['d1', 'd1.1'].map((value) => ({ value, label: value })),
+  modelHelp: 'Images belong in shared State, not Question Instructions.',
   credentialNames: LIQUID_DEFAULT_CREDENTIAL_NAMES,
   endpoint: LIQUID_SYSTEM_ONE_ENDPOINT,
   modelPricing: [{ models: ['d1'], pricing: LIQUID_TOKEN_PRICING }],
-  supportsImages: (model) => model === 'd1',
+  supportsImages: (model) => model === 'd1' || model === 'd1.1',
   maxRequestBytes: 4_500_000,
   checkState: (state, check) => {
     if (state.kind === 'messages') assertLiquidImageLimits(state.images, check);
@@ -251,6 +265,7 @@ export const openrouterClassifierProvider = createApiCompatibleClassifierProvide
   id: 'openrouter',
   label: 'OpenRouter',
   defaultModel: 'microsoft/microsoft-decision-1',
+  modelOptions: [{ value: 'microsoft/microsoft-decision-1', label: 'Microsoft Decision-1' }],
   credentialNames: OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
   endpoint: OPENROUTER_DECISIONS_ENDPOINT,
   modelPricing: [
@@ -268,6 +283,7 @@ export const openaiClassifierProvider: ClassifierProvider = createClassifierProv
   id: 'openai',
   label: 'OpenAI',
   defaultModel: 'gpt-6-luna',
+  modelOptions: [{ value: 'gpt-6-luna', label: 'gpt-6-luna' }],
   credentialNames: OPENAI_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: OPENAI_DECISIONS_ENDPOINT,
@@ -292,6 +308,7 @@ export const perplexityClassifierProvider: ClassifierProvider = createClassifier
   id: 'perplexity',
   label: 'Perplexity',
   defaultModel: 'pplx-decider-v1.1-27b',
+  modelOptions: PERPLEXITY_DECISION_MODELS.map((value) => ({ value, label: value })),
   credentialNames: PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: PERPLEXITY_DECISIONS_ENDPOINT,
@@ -318,6 +335,7 @@ export const subqClassifierProvider: ClassifierProvider = createClassifierProvid
   id: 'subq',
   label: 'SubQ',
   defaultModel: 'subq-snap-1.1',
+  modelOptions: SUBQ_DECISION_MODELS.map((value) => ({ value, label: value })),
   credentialNames: SUBQ_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: SUBQ_DECISIONS_ENDPOINT,
@@ -333,6 +351,30 @@ export const subqClassifierProvider: ClassifierProvider = createClassifierProvid
   validateResponse: validateClassifierEvaluationResponse,
 });
 
+/** Native Baseten API reference uses Bearer authentication (not dedicated-deployment Api-Key). */
+export const basetenClassifierProvider: ClassifierProvider = createClassifierProvider({
+  id: 'baseten',
+  label: 'Baseten',
+  defaultModel: BASETEN_DECISION_MODELS[0],
+  modelOptions: [
+    { value: BASETEN_DECISION_MODELS[0], label: 'Elephant-1' },
+    { value: BASETEN_DECISION_MODELS[1], label: 'Mammoth-1' },
+  ],
+  modelHelp: 'Images belong in shared State, not Question Instructions.',
+  credentialNames: BASETEN_DEFAULT_CREDENTIAL_NAMES,
+  browserExecutionSupported: false,
+  endpoint: BASETEN_DECISIONS_ENDPOINT,
+  supportsImages: (model) => BASETEN_DECISION_MODELS.some((id) => id === model),
+  checkRequest: assertBasetenDecisionLimits,
+  buildRequest: ({ model, state, questions }) => ({
+    model,
+    state: basetenDecisionState(state),
+    questions: createQuestionMap(questions),
+  }),
+  validateResponse: validateClassifierEvaluationResponse,
+  // A temporary free promotion is not permanent pricing. Unknown cost stays unknown.
+});
+
 /** Ordered so adding compatible providers does not alter authored IDs. */
 export const classifierProviders: readonly ClassifierProvider[] = [
   jevClassifierProvider,
@@ -341,6 +383,7 @@ export const classifierProviders: readonly ClassifierProvider[] = [
   openrouterClassifierProvider,
   perplexityClassifierProvider,
   subqClassifierProvider,
+  basetenClassifierProvider,
 ];
 
 type ClassifierOperation = {

@@ -150,6 +150,7 @@ void test('Unsupported Box models, absent visible images and explicit criteria a
     ['jev', 'jev-future'],
     ['openai', 'gpt-6-luna'],
     ['liquid', 'd1'],
+    ['liquid', 'd1.1'],
     ['subq', 'subq-snap-1.1'],
     ['perplexity', 'pplx-decider-v1.1-27b'],
     ['openrouter', 'microsoft/microsoft-decision-1'],

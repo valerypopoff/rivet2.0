@@ -381,6 +381,7 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     { value: 'openrouter', label: 'OpenRouter' },
     { value: 'perplexity', label: 'Perplexity' },
     { value: 'subq', label: 'SubQ' },
+    { value: 'baseten', label: 'Baseten' },
   ]);
   assert.deepEqual(
     instance.getOutputDefinitions().map((output) => output.id),
@@ -481,8 +482,9 @@ test('Classifier Evaluate groups provider, model and credentials in an initially
     editors.map((editor) => editor.label),
     ['Configuration', 'Model', 'Outputs', 'Error behavior'],
   );
-  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
-  assert.ok(modelEditor?.type === 'string');
+  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'custom' && editor.dataKey === 'model');
+  assert.ok(modelEditor?.type === 'custom');
+  assert.equal(modelEditor.customEditorId, 'ClassifierModel');
   assert.equal(modelEditor.useInputToggleDataKey, 'useModelInput');
   const credentials = modelGroup.editors.find((editor) => editor.label === 'Configured API key names');
   assert.equal(credentials?.hideIf?.({ apiKeySource: 'input' }), true);
@@ -790,15 +792,15 @@ test('Liquid AI evaluates existing text, list and object questions without rewri
     ),
   );
   assert.deepEqual(outputs.answers!.value, providerResponse.answers);
-  assert.deepEqual(outputs.usage!.value, { ...providerResponse.usage, totalCost: 0.04 });
+  assert.deepEqual(outputs.usage!.value, { ...providerResponse.usage, totalCost: 0.02 });
   assert.deepEqual(outputs.requestBody!.value, calls[0]!.body);
   assert.deepEqual(outputs.responseBody!.value, providerResponse);
   assert.equal(JSON.stringify(outputs).includes('liquid-test-key'), false);
   const modelGroup = instance.getEditors().find((editor) => editor.type === 'group' && editor.label === 'Model');
   assert.ok(modelGroup?.type === 'group');
-  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
-  assert.ok(modelEditor?.type === 'string');
-  assert.equal(modelEditor.placeholder, 'd1');
+  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'custom' && editor.dataKey === 'model');
+  assert.ok(modelEditor?.type === 'custom');
+  assert.equal(modelEditor.customEditorId, 'ClassifierModel');
   assert.match(instance.getBody().text, /Liquid AI/);
   assert.match(instance.getBody().text, />d1</);
   assert.deepEqual(getClassifierProviderEnvironmentVariableNames(), [
@@ -808,7 +810,31 @@ test('Liquid AI evaluates existing text, list and object questions without rewri
     'OPENROUTER_API_KEY',
     'PERPLEXITY_API_KEY',
     'SUBQ_API_KEY',
+    'BASETEN_API_KEY',
   ]);
+});
+
+test('Decision AI model catalogs contain unique real IDs and defaults without restricting custom runtime models', () => {
+  for (const provider of classifierProviders) {
+    assert.ok(provider.modelOptions?.length, provider.id);
+    assert.ok(
+      provider.modelOptions.some(({ value }) => value === provider.defaultModel),
+      provider.id,
+    );
+    assert.equal(new Set(provider.modelOptions.map(({ value }) => value)).size, provider.modelOptions.length);
+    for (const { value, label } of provider.modelOptions) {
+      assert.notEqual(value.trim(), '');
+      assert.notEqual(label.trim(), '');
+    }
+  }
+  assert.deepEqual(
+    classifierProviders.find(({ id }) => id === 'liquid')!.modelOptions!.map(({ value }) => value),
+    ['d1', 'd1.1'],
+  );
+  assert.deepEqual(
+    classifierProviders.find(({ id }) => id === 'baseten')!.modelOptions!.map(({ label }) => label),
+    ['Elephant-1', 'Mammoth-1'],
+  );
 });
 
 test('Liquid AI configured keys are provider-scoped and authored models are preserved', async () => {

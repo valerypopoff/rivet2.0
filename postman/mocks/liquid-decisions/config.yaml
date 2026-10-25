@@ -1,0 +1,10 @@
+version: 1
+name: Liquid Decisions contract
+slug: liquid-decisions
+protocol: http
+port: 4933
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

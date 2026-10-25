@@ -179,14 +179,14 @@ export function assertLiquidImageLimits(
   images: readonly PreparedClassifierImage[],
   check?: ClassifierPreparationCheck,
 ): void {
-  if (images.length > 8) throw new Error('Liquid d1 State must contain at most 8 images.');
+  if (images.length > 8) throw new Error('Liquid Decision AI State must contain at most 8 images.');
   let patches = 0;
   for (const { width, height } of images) {
     check?.();
     if (Math.max(width, height) / Math.min(width, height) > 100)
-      throw new Error('Liquid d1 images must have an aspect ratio at most 100:1.');
+      throw new Error('Liquid Decision AI images must have an aspect ratio at most 100:1.');
     patches += Math.ceil(width / 32) * Math.ceil(height / 32);
   }
   if (patches > 10_000)
-    throw new Error('Liquid d1 images must contain at most 10,000 patches of 32 by 32 pixels in total.');
+    throw new Error('Liquid Decision AI images must contain at most 10,000 patches of 32 by 32 pixels in total.');
 }
