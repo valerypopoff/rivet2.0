@@ -368,7 +368,7 @@ and saved-key UI. These mocked checks do not prove live OpenRouter access.
 
 ### OpenAI Decisions and image evidence
 
-For multiple multimodal messages, connect each Assemble Message's ordered text/image Part inputs, set Type to **User** (or supply `user` through Type's input toggle), then connect their Message outputs to Assemble Prompt and its Prompt output directly to Evaluate's State. Array's Output is also supported. Assemble Prompt produces one ordered `chat-message[]` list, not a flattened message; each Message input accepts either a scalar message or an existing message array. Its numeric port order is preserved. Its optional empty-message filter retains image-only evidence; Anthropic cache-breakpoint metadata is ignored by Classifier State and never forwarded to decision providers. Keep arrays of messages distinct from arrays of content parts: OpenAI emits one native `input` message per assembled message, retaining boundaries and order. The [OpenAI Decisions input schema](https://developers.openai.com/api/reference/resources/decisions) currently permits only `role: "user"`; this is not the Chat/Responses role contract. System/developer/assistant/function messages are rejected before HTTP rather than silently relabeled. Liquid/System One has no chat-role field and flattens accepted user-message content with blank-line boundaries and numbered image references. The real GraphProcessor regression uses two Assemble Message nodes, a dynamic Type input and both Array and Assemble Prompt combiners, and verifies both native payloads plus all unsupported assembled roles for every provider. Additional real-node coverage checks mixed scalar/array message inputs, numeric port ordering, filtered empty prompts, image-only messages and cache metadata. Do not add extra supported roles until the provider's decision endpoint explicitly supports them.
+For multiple multimodal messages, connect each Assemble Message's ordered text/image Part inputs, set Type to **User** (or supply `user` through Type's input toggle), then connect their Message outputs to Assemble Prompt and its Prompt output directly to Evaluate's State, or to Question Instructions for question-local content on compatible providers. Array's Output is also supported. Assemble Prompt produces one ordered `chat-message[]` list, not a flattened message; each Message input accepts either a scalar message or an existing message array. Its numeric port order is preserved. Its optional empty-message filter retains image-only evidence; Anthropic cache-breakpoint metadata is ignored and never forwarded to decision providers. Keep arrays of messages distinct from arrays of content parts: OpenAI emits one native `input` message per shared-State message, retaining boundaries and order. Rivet deliberately accepts only User messages as portable decision evidence; the current [OpenAI Decisions input schema](https://developers.openai.com/api/reference/resources/decisions) supports additional conversation roles that Rivet does not expose here. System/developer/assistant/function messages are rejected before HTTP rather than silently relabeled. Liquid/System One has no chat-role field and flattens accepted user-message content with blank-line boundaries and numbered shared-image references. The real GraphProcessor regression uses two Assemble Message nodes, a dynamic Type input and both Array and Assemble Prompt combiners, and verifies native payloads plus rejected assembled roles. Additional real-node coverage checks mixed scalar/array message inputs, numeric port ordering, filtered empty prompts, image-only messages and cache metadata. New role support needs a separate intentional Rivet contract change, not merely a provider schema change.
 
 OpenAI has stable provider ID `openai`, default model `gpt-6-luna`, fixed endpoint `https://api.openai.com/v1/decisions`, and credentials `openAiApiKey` / `OPENAI_API_KEY`. Default configured lookup also accepts legacy `openAiKey`; custom credential names do not activate that alias. Saved classifier keys and input-key mode remain provider-scoped. All providers require Node execution. No SDK upgrade or Chat/Responses fallback is involved.
 
@@ -376,7 +376,7 @@ OpenAI has stable provider ID `openai`, default model `gpt-6-luna`, fixed endpoi
 
 Classifier Evaluate has one optional multimodal **State** input, not a separate Images input. `classifier/state.ts` normalizes `string`, `string[]`, `image`, `image[]`, `chat-message`, `chat-message[]`, and mixed `any[]` containing native images or user messages. Assemble Message and Array nodes retain content order and message boundaries. Ordinary `object`/`object[]` inputs always remain structured JSON; pure JSON `any`/`any[]` arrays keep their legacy meaning. Use typed `string[]` or Assemble Message for an explicit sequence of text parts. Image data URLs and recognizable bare image base64 strings become image parts; ordinary base64-compatible text stays text. No recursive search of JSON fields or new conversation semantics is introduced. Non-user messages, documents, audio, tool calls and explicit URL parts fail rather than being silently flattened or dropped. URL/path strings are ordinary text, never fetched or read. The intermediate unreleased Images port is removed; a supplied old port fails with guidance to reconnect to State.
 
-`classifier/images.ts` validates base64 syntax, supported image headers and matching media type; native bytes are encoded synchronously. OpenAI maps ordered messages/parts to `input` user messages containing `input_text` and `input_image`; plain text and JSON retain the string request format. Liquid maps ordered parts to text with numbered `[Image N]` placeholders and a top-level ordered `images` array. Text-only message sequences are joined with newlines for System One. Images remain shared evidence for every question. Jev uses its native assets protocol described below. Liquid `d1:free` rejects images before IO. OpenAI `gpt-6-luna` allows 128 images; Liquid `d1` allows 8, a complete UTF-8 JSON body below 4.5 MB, at most 10,000 32-by-32 pixel patches, and aspect ratios at most 100:1. These are provider-boundary checks; never silently resize, discard, or split evidence. Header inspection is not a full image decoder; providers still validate encoded image content. Classifier Question has no image setting or field; ordinary `{{images}}` interpolation is unchanged.
+`classifier/images.ts` validates base64 syntax, supported image headers and matching media type; native bytes are encoded synchronously. OpenAI maps shared messages/parts to `input` user messages containing `input_text` and `input_image`; plain text and JSON retain the string request format. Liquid maps ordered parts to text with numbered `[Image N]` placeholders and a top-level ordered `images` array. Text-only message sequences are joined with newlines for System One. State images remain shared evidence for every question. Jev uses its native assets protocol described below. Liquid `d1:free` rejects images before IO. Rivet allows at most 128 images across State and question Instructions together; Liquid `d1` allows 8 shared images, a complete UTF-8 JSON body below 4.5 MB, at most 10,000 32-by-32 pixel patches, and aspect ratios at most 100:1. These are provider-boundary checks; never silently resize, discard, or split evidence. Header inspection is not a full image decoder; providers still validate encoded image content. Classifier Question accepts images through Instructions as described below, not through a separate Images port; ordinary `{{images}}` interpolation is unchanged.
 
 ### SubQ Snap Decisions
 
@@ -459,7 +459,7 @@ experimental, not a provider production-readiness guarantee. The shared Model
 inspector in run/Profile nodes displays this warning. Unknown models remain
 image-incapable until their contract is verified.
 
-`classifier/jev.ts` adapts the existing shared State only: native images, inline
+`classifier/jev.ts` adapts shared State and question Instructions: native images, inline
 base64 and assembled user text/image messages. It creates per-request UUID asset
 references in the original part/message order, with one `assets` entry per distinct
 image. Each entry contains `type: image`, `format: png|jpg` and raw `data_base64`
@@ -474,7 +474,7 @@ full image content (including animated PNG rejection), processed/expanded image
 size and token/context limits; Rivet's header inspection is not a decoder. No
 automatic resizing, format conversion or experimental long-context header is added.
 Usage already includes image input tokens: charge the ordinary Jev input rate once.
-Question-local image definitions and Box questions are outside this change.
+Box questions remain unsupported. Question-local Instructions use the contract below.
 
 `JevImages.test.ts` covers inline/Profile use, aliases, ordered/repeated images,
 PNG/JPEG assets, retry stability, Cost, unchanged text requests and local limits.
@@ -500,10 +500,75 @@ models the verified Noul/image subset and rejects missing opt-in headers; unmatc
 paths/types return 501. The owner-mock lookup required unavailable Postman login,
 and Orbit discovery was unavailable, so this uses the primary documentation rather
 than claiming upstream-mock or live-account qualification. Check simulation request
-events for four 200s (native and real Assemble Message inputs in both modes) and
-two deliberate 400s. Stop the simulation afterward.
+events for twelve 200s (Jev shared State plus Jev/OpenAI question Instructions,
+native and real Assemble Message inputs in both modes) and two deliberate
+missing-header 400s. Stop the simulation afterward. The simulation also has an
+OpenAI member; its narrow handler supports the predicate/image contract exercised
+here and returns 501 for unmodeled operations. See its sibling context document.
 
-The provider boundary snapshots all State/questions/shared images before IO and submits the complete question batch in one request per candidate, subject to the existing retry policy. There is no image-based grouping, repeated State for different question scopes, usage aggregation, or multi-request diagnostic envelope. Inline mode has one candidate; profile mode advances only after the previous candidate fails or is suspended. Request/response diagnostics retain the winning native single-call JSON shape and can contain full image data, so they must be treated as sensitive. A question definition containing an `images` field is rejected before network IO with guidance to connect images to Evaluate instead; never silently discard that evidence or promote it to shared State.
+The provider boundary snapshots all State/questions/images before IO and submits the complete question batch in one request per candidate, subject to the existing retry policy. There is no image-based grouping, repeated State for different question scopes, usage aggregation, or multi-request diagnostic envelope. Inline mode has one candidate; profile mode advances only after the previous candidate fails or is suspended. Request/response diagnostics retain the winning native single-call JSON shape and can contain full image data, so they must be treated as sensitive. The obsolete question `images` field is still rejected, with guidance to use Question Instructions for local evidence or run State for shared evidence; never silently discard images or promote question evidence to shared State.
+
+### Images in question Instructions
+
+Verified 2026-10-25 against [Jev image placement](https://docs.typesafe.ai/images)
+and [OpenAI question instructions](https://developers.openai.com/api/docs/guides/decisions#include-images-in-question-instructions).
+The Question Instructions port preserves arrays and accepts native Image/Image Array,
+inline image data, mixed parts, Assemble Message (User), and Assemble Prompt's User-message list.
+Recommended wiring is **Image + Text → Assemble Message (User) → Question Instructions**.
+Assemble Prompt combines already assembled messages; raw Image/Text cannot feed its Message ports.
+One image can connect straight to Instructions. Existing authored text/list/JSON, ordinary Object
+inputs (including image-looking fields), criteria and saved node primitives keep their meanings.
+User messages retain their meaning through Any wrappers and Array, even without images;
+do not fall back to serializing message envelopes just because a picture was removed.
+Typed Image Array and User-message array inputs must not be empty (including an
+Assemble Prompt that filtered out every message). Ordinary String Array/JSON lists
+keep their legacy structured-entry interpretation. Reuse the normalizer's detached
+JSON result instead of reading and validating the raw structured input again.
+
+Multimodal Instructions serialize as `instructions: ''` plus optional `instructionsMessages`,
+using the same ordered `{ parts: [{ type: 'text', text } | { type: 'image', dataUrl }] }`
+message contract as State. It is an explicit envelope, not recursive image detection in JSON.
+The two fields are mutually exclusive; message shapes, nonempty content, getters, serialization
+hooks, depth/byte/part budgets and image headers are validated before transport.
+Typed image bytes are normalized before the Question's JSON snapshot. Non-User roles,
+documents, tool calls, remote-image parts and URLs-as-attachments are not supported.
+No files/URLs are read or fetched by this adapter.
+
+`supportsQuestionImages` is a provider-owned, exact-model capability separate from shared
+State support. Only verified Jev image models and OpenAI `gpt-6-luna` enable it.
+Unsupported profile candidates fail with `capability` and may advance without removing
+evidence. Jev uses one request-scoped UUID asset registry across State and all questions,
+preserving placement while deduplicating uploaded bytes. A question-only image also enables
+the experimental header. OpenAI uses native content parts directly in each question's
+instructions (no role wrapper); Noul criteria append a text part, never stringify/drop images.
+Multiple messages flatten in order with a blank-line boundary. Other providers can consume
+text-only message Instructions but cannot receive question images. Criteria remain text/JSON;
+native Jev image-valued criteria and Box questions are not implemented here.
+
+`ClassifierQuestionImages.test.ts` exercises real nodes and complete GraphProcessor paths,
+all question types, inline/Profile parity, scope isolation, exact bytes/order, aggregate
+image limits, incompatible-profile fallback, snapshots, retry UUID stability and invalid
+content with zero HTTP. Adjacent-envelope regressions also check distinct images in
+two questions and subsequent independent requests, hidden/accessor-backed message
+fields, sparse parts, serialization hooks, message/part limits and pre-dispatch
+cancellation. Rejecting invalid evidence must invoke neither getters/hooks nor HTTP.
+`decision-question-images.spec.ts` runs Message, Message→Prompt
+and text-only Message→Array graphs in the actual editor, checking successful nodes
+and the recorded Question output.
+The local simulation above additionally runs real HTTP/parser paths for both providers;
+it does not establish model accuracy, live account access or production qualification.
+
+Focused local verification (run from the repository root):
+
+```sh
+yarn workspace @valerypopoff/rivet2-core exec tsx --test test/model/classifier/*.test.ts test/model/nodes/AssembleMessageNode.test.ts test/model/nodes/AssemblePromptNode.test.ts
+PLAYWRIGHT_HEADLESS=1 PLAYWRIGHT_SLOW_MO=0 yarn studio-server:ui:observe decision-question-images.spec.ts
+```
+
+For PowerShell, set the two Playwright environment variables with `$env:` before
+running the command. Point `PLAYWRIGHT_BASE_URL` at a local editor server; the
+browser fixture intercepts API requests and checks actual recorded graph outputs.
+No live provider key is needed. Keep browser/HTTP artifacts out of source control.
 
 `OpenAIDecisions.test.ts` runs real Question/Evaluate nodes and mocked HTTP boundaries for mixed/legacy/structured definitions, special keys, native diagnostics, shared image bytes, snapshots, unsupported question image fields, capability rejection, refusals, retry payloads and response shape. `ClassifierState.test.ts` exercises real Assemble Message/Array/Evaluate chains, ordered native provider payloads, structured-state compatibility, bare base64 detection, rejected content and provider limits. The headless observer covers OpenAI selection, model/credential defaults, the State port and absence of separate Images/Question image controls. Live calls require an operator-supplied key; mock contract tests do not prove account/model access.
 

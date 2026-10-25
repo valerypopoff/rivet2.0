@@ -1,3 +1,5 @@
+import type { ClassifierStateMessage } from './state.js';
+
 export type ClassifierQuestionType = 'choice' | 'score' | 'noul';
 /** Secret-free classification used by fallback diagnostics and recording traces. */
 export const classifierFailureKinds = [
@@ -60,6 +62,8 @@ export type ClassifierQuestionDefinition = {
   questionId: string;
   type: ClassifierQuestionType;
   instructions: ClassifierEntry;
+  /** Explicit ordered question content; instructions must be empty when supplied. Not shared State. */
+  instructionsMessages?: ClassifierStateMessage[];
   criteria?: unknown;
 };
 

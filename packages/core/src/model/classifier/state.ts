@@ -188,7 +188,7 @@ function prepareRivetState(input: DataValue, budget: ClassifierValueBudget): Pre
   return messages.length ? { kind: 'messages', messages, images } : { kind: 'json', value: '' };
 }
 
-function inspectStateMessages(messages: unknown, check: ClassifierPreparationCheck): PreparedClassifierImage[] {
+export function inspectStateMessages(messages: unknown, check: ClassifierPreparationCheck): PreparedClassifierImage[] {
   if (!Array.isArray(messages)) throw new Error('State messages must be an array.');
   if (messages.length > CLASSIFIER_LIMITS.messages) throw new Error('State has too many messages.');
   const images: PreparedClassifierImage[] = [];

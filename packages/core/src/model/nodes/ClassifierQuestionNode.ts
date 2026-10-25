@@ -12,7 +12,6 @@ import {
 } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { ClassifierQuestionPreparation } from '../classifier/preparation.js';
-import { assertClassifierJson } from '../classifier/json.js';
 import {
   abbreviate,
   assertClassifierEntry,
@@ -21,6 +20,7 @@ import {
   getInstructionsInputDefinition,
   getInterpolationInputDefinitions,
   getQuestionInputValue,
+  getQuestionInstructionsInput,
   getStringInput,
   getStructuredInput,
   interpolateQuestionText,
@@ -38,6 +38,8 @@ import type {
   ClassifierScoreCriterionData,
   ClassifierScoreQuestionDefinition,
 } from '../classifier/types.js';
+import { prepareClassifierQuestion } from '../classifier/questions.js';
+import { ClassifierValueBudget } from '../classifier/limits.js';
 
 export type ClassifierQuestionNodeData = ClassifierQuestionBaseData & {
   questionType: ClassifierQuestionType;
@@ -412,26 +414,30 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
           ).length;
       if (count < 2 || count > 255) throw new Error('Choice questions require 2 to 255 options.');
     }
-    if (data.useInstructionsInput) preparation.capture(getQuestionInputValue(inputs, 'instructions', 'Instructions'));
     const questionId = requireQuestionId(data.questionId);
-    const instructions = data.useInstructionsInput
-      ? getStructuredInput(inputs, 'instructions', 'Instructions')
-      : resolveAuthoredClassifierEntry({
-          type: data.instructionsType,
-          text: data.instructions,
-          lines: data.instructionsLines,
-          objectTemplate: data.instructionsObjectTemplate,
-          inputs,
-          context,
-          label: 'Instructions',
-          preparation,
-        });
-    assertClassifierInstructions(instructions);
+    const instructionInput = data.useInstructionsInput
+      ? getQuestionInstructionsInput(inputs, preparation)
+      : {
+          instructions: resolveAuthoredClassifierEntry({
+            type: data.instructionsType,
+            text: data.instructions,
+            lines: data.instructionsLines,
+            objectTemplate: data.instructionsObjectTemplate,
+            inputs,
+            context,
+            label: 'Instructions',
+            preparation,
+          }),
+        };
+    const { instructions } = instructionInput;
+    if (data.useInstructionsInput) preparation.capture(instructionInput);
+    if (!instructionInput.instructionsMessages) assertClassifierInstructions(instructions);
 
     const question = createQuestionDefinition(data, inputs, context, questionId, instructions, preparation);
-    assertClassifierJson(question, 'Question', false, preparation.check);
+    if (instructionInput.instructionsMessages) question.instructionsMessages = instructionInput.instructionsMessages;
+    const prepared = prepareClassifierQuestion(question, new ClassifierValueBudget(preparation.check));
     preparation.check();
-    return { ['question' as PortId]: { type: 'object', value: question } };
+    return { ['question' as PortId]: { type: 'object', value: prepared } };
   }
 }
 

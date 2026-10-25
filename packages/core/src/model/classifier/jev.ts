@@ -1,5 +1,7 @@
 import type { PreparedClassifierImage } from './images.js';
-import { systemOneState, type PreparedClassifierState } from './state.js';
+import type { ClassifierStateMessage } from './state.js';
+import type { PreparedClassifierEvaluation } from './providers.js';
+import { createQuestionMap } from './questions.js';
 
 /** Experimental image contract, verified 2026-10-24: https://docs.typesafe.ai/images */
 export const JEV_IMAGE_MODELS = ['jev-latest', 'jev-preview', 'jev-1.13.0', 'jev-1.14.0'];
@@ -18,30 +20,37 @@ export function assertJevImageLimits(images: readonly PreparedClassifierImage[],
 }
 
 /** Jev substitutes opaque asset references, not Liquid's numbered image placeholders. */
-export function jevState(state: PreparedClassifierState): Record<string, unknown> {
-  if (state.kind === 'json') return { state: state.value };
-  if (!state.images.length) return systemOneState({ state: '', stateMessages: state.messages });
+export function createJevDecisionRequest({
+  model,
+  state,
+  questions,
+}: PreparedClassifierEvaluation): Record<string, unknown> {
   const references = new Map<string, string>();
   const assets: Record<string, { type: 'image'; format: 'png' | 'jpg'; data_base64: string }> = {};
-  const text = state.messages
-    .map(({ parts }) =>
-      parts
-        .map((part) => {
-          if (part.type === 'text') return part.text;
-          let reference = references.get(part.dataUrl);
-          if (!reference) {
-            reference = globalThis.crypto.randomUUID();
-            references.set(part.dataUrl, reference);
-            assets[reference] = {
-              type: 'image',
-              format: part.dataUrl.startsWith('data:image/png;') ? 'png' : 'jpg',
-              data_base64: part.dataUrl.slice(part.dataUrl.indexOf(',') + 1),
-            };
-          }
-          return reference;
-        })
-        .join('\n'),
-    )
-    .join('\n\n');
-  return { state: text, assets };
+  const messagesText = (messages: readonly ClassifierStateMessage[]) =>
+    messages
+      .map(({ parts }) =>
+        parts
+          .map((part) => {
+            if (part.type === 'text') return part.text;
+            let reference = references.get(part.dataUrl);
+            if (!reference) {
+              reference = globalThis.crypto.randomUUID();
+              references.set(part.dataUrl, reference);
+              assets[reference] = {
+                type: 'image',
+                format: part.dataUrl.startsWith('data:image/png;') ? 'png' : 'jpg',
+                data_base64: part.dataUrl.slice(part.dataUrl.indexOf(',') + 1),
+              };
+            }
+            return reference;
+          })
+          .join('\n'),
+      )
+      .join('\n\n');
+  const value = state.kind === 'json' ? state.value : messagesText(state.messages);
+  const questionMap = createQuestionMap(questions, (question) =>
+    question.instructionsMessages ? messagesText(question.instructionsMessages) : question.instructions,
+  );
+  return { model, state: value, questions: questionMap, ...(references.size ? { assets } : {}) };
 }

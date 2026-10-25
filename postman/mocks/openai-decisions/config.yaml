@@ -1,0 +1,10 @@
+version: 1
+name: OpenAI question image contract
+slug: openai-decisions
+protocol: http
+port: 4923
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.cjs
+    default: true

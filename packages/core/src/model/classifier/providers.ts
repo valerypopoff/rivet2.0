@@ -11,6 +11,7 @@ import type { DataValue } from '../DataValue.js';
 import { assertLiquidImageLimits } from './images.js';
 import {
   prepareClassifierState,
+  inspectStateMessages,
   systemOneState,
   type ClassifierStateMessage,
   type PreparedClassifierState,
@@ -18,8 +19,8 @@ import {
 import { validateClassifierEvaluationResponse } from './response.js';
 import { createOpenAIDecisionRequest, validateOpenAIDecisionResponse } from './openai.js';
 import { assertPerplexityDecisionLimits, perplexityDecisionState, PERPLEXITY_DECISION_MODELS } from './perplexity.js';
-import { prepareClassifierQuestion } from './questions.js';
-import { assertJevImageLimits, JEV_IMAGE_MODELS, jevState } from './jev.js';
+import { prepareClassifierQuestion, createQuestionMap } from './questions.js';
+import { assertJevImageLimits, JEV_IMAGE_MODELS, createJevDecisionRequest } from './jev.js';
 import { assertSubQDecisionLimits, SUBQ_DECISION_MODELS, subqDecisionState } from './subq.js';
 import { classifierArrayValues } from './json.js';
 import {
@@ -75,6 +76,7 @@ export type ClassifierProvider = {
   credentialNames: ClassifierCredentialNames;
   browserExecutionSupported: boolean;
   supportsImages?: (model: string) => boolean;
+  supportsQuestionImages?: (model: string) => boolean;
   /** A stricter provider request limit also bounds preparation before encoding. */
   maxRequestBytes?: number;
   /** Legacy shorthand: pricing for defaultModel only, never arbitrary models. */
@@ -204,16 +206,23 @@ export const jevClassifierProvider = createClassifierProvider({
   browserExecutionSupported: false,
   modelPricing: [{ models: ['jev-latest', 'jev-preview', 'jev-1.13.0', 'jev-1.14.0'], pricing: JEV_TOKEN_PRICING }],
   supportsImages: (model) => JEV_IMAGE_MODELS.includes(model),
+  supportsQuestionImages: (model) => JEV_IMAGE_MODELS.includes(model),
   checkState: (state, check) => {
     if (state.kind === 'messages') assertJevImageLimits(state.images, check);
   },
-  buildRequest: ({ model, state, questions }) => ({
-    ...jevState(state),
-    model,
-    questions: createQuestionMap(questions),
-  }),
-  requestHeaders: ({ state }): Record<string, string> =>
-    state.kind === 'messages' && state.images.length ? { 'TypeSafe-Danger-Zone-Images': 'true' } : {},
+  checkRequest: ({ questions }, check) => {
+    for (const question of questions)
+      if (question.instructionsMessages)
+        assertJevImageLimits(inspectStateMessages(question.instructionsMessages, check), check);
+  },
+  buildRequest: createJevDecisionRequest,
+  requestHeaders: ({ state, questions }): Record<string, string> =>
+    (state.kind === 'messages' && state.images.length) ||
+    questions.some((question) =>
+      question.instructionsMessages?.some(({ parts }) => parts.some((part) => part.type === 'image')),
+    )
+      ? { 'TypeSafe-Danger-Zone-Images': 'true' }
+      : {},
   validateResponse: validateClassifierEvaluationResponse,
 });
 
@@ -259,6 +268,7 @@ export const openaiClassifierProvider: ClassifierProvider = createClassifierProv
   browserExecutionSupported: false,
   endpoint: OPENAI_DECISIONS_ENDPOINT,
   supportsImages: (model) => model === 'gpt-6-luna',
+  supportsQuestionImages: (model) => model === 'gpt-6-luna',
   modelPricing: [
     {
       models: ['gpt-6-luna'],
@@ -424,6 +434,18 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
       ids.add(question.questionId);
       questions.push(question);
     }
+    let imageCount = state.kind === 'messages' ? state.images.length : 0;
+    for (const question of questions) {
+      if (!question.instructionsMessages) continue;
+      const images = inspectStateMessages(question.instructionsMessages, operation.check);
+      imageCount += images.length;
+      if (images.length && !provider.supportsQuestionImages?.(args.model))
+        throw new ClassifierProviderError(
+          `${provider.label} model '${args.model}' does not support images in question instructions. Use a compatible Jev or OpenAI profile.`,
+          'capability',
+        );
+    }
+    if (imageCount > 128) throw new Error('State and questions together must contain at most 128 images.');
     if (state.kind === 'messages' && state.images.length && !provider.supportsImages?.(args.model))
       throw new ClassifierProviderError(
         `${provider.label} model '${args.model}' does not support Decision AI images.`,
@@ -515,20 +537,6 @@ export function calculateClassifierUsageCost(
     (usage.input_tokens * pricing.inputPerMillionTokens + usage.output_tokens * pricing.outputPerMillionTokens) /
     TOKENS_PER_MILLION;
   return Number.isFinite(totalCost) && totalCost >= 0 ? totalCost : undefined;
-}
-
-function createQuestionMap(
-  questions: readonly PreparedClassifierQuestion[],
-): Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>> {
-  const result = Object.create(null) as Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>>;
-  for (const question of questions) {
-    const providerQuestion =
-      question.type === 'noul' && question.criteria === undefined
-        ? { type: question.type, instructions: question.instructions }
-        : { type: question.type, instructions: question.instructions, criteria: question.criteria };
-    Object.defineProperty(result, question.questionId, { enumerable: true, value: providerQuestion });
-  }
-  return result;
 }
 
 async function callClassifierHttp(

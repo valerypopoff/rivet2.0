@@ -1499,6 +1499,18 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
   - retries transient download failures with a bounded timeout; failures report the asset URL and underlying cause
   - use this when you want Kubernetes verification or the local Kubernetes launcher to work without a system Helm install
 
+## Decision AI question Instructions
+
+Decision AI question image Instructions are shared Core behavior, not a hosted
+override. Use Image/Text → Assemble Message (User) → Question Instructions;
+Assemble Prompt optionally combines already assembled messages. Only verified
+Jev models and OpenAI `gpt-6-luna` support question-local images; State remains
+the shared-evidence input. Criteria remain text/JSON. See
+[the implementation contract](../CLASSIFIER-NODES.md#images-in-question-instructions).
+`decision-question-images.spec.ts` checks both image wiring forms and text-only
+messages passed through Array, using actual browser graph execution and recorded
+outputs without paid provider calls. Empty typed image/message arrays fail early.
+
 ## Versioning
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one

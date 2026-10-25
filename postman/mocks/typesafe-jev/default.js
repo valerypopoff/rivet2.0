@@ -21,7 +21,7 @@ createServer(async (req, res) => {
       for (const [reference, asset] of Object.entries(body.assets)) {
         if (
           !reference ||
-          !JSON.stringify(body.state).includes(reference) ||
+          !JSON.stringify([body.state, ...Object.values(body.questions)]).includes(reference) ||
           asset.type !== 'image' ||
           !['png', 'jpg', 'jpeg'].includes(asset.format) ||
           !/^[A-Za-z0-9+/]+={0,2}$/.test(asset.data_base64)

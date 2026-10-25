@@ -25,7 +25,17 @@ export function createOpenAIDecisionRequest(args: PreparedClassifierEvaluation):
           ? state.value
           : JSON.stringify(state.value),
     questions: args.questions.map((question) => {
-      const common = { name: question.questionId, instructions: text(question.instructions) };
+      const instructions = question.instructionsMessages
+        ? question.instructionsMessages.flatMap(({ parts }, index) => [
+            ...(index ? [{ type: 'input_text', text: '\n\n' }] : []),
+            ...parts.map((part) =>
+              part.type === 'text'
+                ? { type: 'input_text', text: part.text }
+                : { type: 'input_image', image_url: part.dataUrl },
+            ),
+          ])
+        : text(question.instructions);
+      const common = { name: question.questionId, instructions };
       if (question.type === 'choice')
         return {
           ...common,
@@ -46,7 +56,15 @@ export function createOpenAIDecisionRequest(args: PreparedClassifierEvaluation):
         ...common,
         type: 'predicate',
         instructions: criteria
-          ? `${common.instructions}\n\nTrue criterion: ${text(criteria.true)}\nFalse criterion: ${text(criteria.false)}`
+          ? typeof instructions === 'string'
+            ? `${instructions}\n\nTrue criterion: ${text(criteria.true)}\nFalse criterion: ${text(criteria.false)}`
+            : [
+                ...instructions,
+                {
+                  type: 'input_text',
+                  text: `\n\nTrue criterion: ${text(criteria.true)}\nFalse criterion: ${text(criteria.false)}`,
+                },
+              ]
           : common.instructions,
       };
     }),
