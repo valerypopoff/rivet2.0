@@ -1,84 +1,118 @@
-import { useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useStore } from 'jotai';
-import type { GraphExecutionMetadata, ProcessEventMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
-import { useStableCallback } from './useStableCallback.js';
+import type { ProcessEventMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
 import { useDataRefs } from '../providers/ProvidersContext.js';
-import { projectsState, projectState } from '../state/savedGraphs.js';
+import { projectsState } from '../state/savedGraphs.js';
 import { projectExecutionSnapshotsState } from '../state/dataFlow.js';
-import { useProjectExecutionSnapshots } from './useProjectExecutionSnapshots.js';
+import { getLoadedRecordingForTab, loadedRecordingState } from '../state/execution.js';
+import {
+  getProjectRemoteObservations,
+  isProjectObservingRemote,
+  remoteObservationsState,
+} from '../state/remoteObservation.js';
+import { projectBindingRegistryState, retireWorkspaceExecutionState } from '../state/projectBindings.js';
+import { localExecutionObservationState } from '../state/executionObservation.js';
+import { updateOpenProjectExecutionSnapshot } from './projectExecutionSnapshotRouting.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
 import { handleError } from '../utils/errorHandling.js';
 import { previousDataPerNodeToKeepState } from '../state/settings.js';
+import type { ExecutionSourceKind } from '../domain/execution/executionEventNormalization.js';
+import { settleProjectExecutionObservation } from './projectExecutionObservationSettlement.js';
 
-/** Display projection only. Run ownership, cancellation and recording stay with the entry tab. */
+/** One workspace display coordinator, shared by browser and Node ingress hooks. */
 export function useBundleExecutionRouting() {
   const store = useStore();
   const refStore = useDataRefs();
-  const { captureCurrentProjectExecutionSnapshot, restoreProjectExecutionSnapshot } = useProjectExecutionSnapshots();
-  const runs = useRef(new Map<string, Map<string, ProjectId>>());
-  return useStableCallback(
-    <K extends keyof ProcessEventMessageMap>(entryId: ProjectId, message: K, data: ProcessEventMessageMap[K]) => {
-      const event = data as { execution?: GraphExecutionMetadata; replayRecordedAt?: number };
-      if (Number.isFinite(event.replayRecordedAt)) return;
-      const execution = event.execution;
-      if (!execution?.projectId) return;
-      const opened = store.get(projectsState).openedProjects;
-      const bundle = opened[entryId]?.bundleManifestPath;
-      if (
-        !bundle ||
-        opened[execution.projectId]?.bundleManifestPath !== bundle ||
-        opened[entryId]?.bundleMember === false ||
-        opened[execution.projectId]?.bundleMember === false
-      )
-        return;
-      let owners = runs.current.get(execution.rootRunId);
-      if (!owners) {
-        if (runs.current.size >= 32) runs.current.delete(runs.current.keys().next().value!);
-        owners = new Map();
-        runs.current.set(execution.rootRunId, owners);
+  const state = store.get(localExecutionObservationState);
+  const options = useMemo(
+    () => ({
+      bindings() {
+        store.get(projectsState);
+        return store.get(projectBindingRegistryState).capture();
+      },
+      conflict(id: ProjectId) {
+        const info = store.get(projectsState).openedProjects[id];
+        return Boolean(
+          getLoadedRecordingForTab(store.get(loadedRecordingState), id, info?.fsPath) ||
+            isProjectObservingRemote(getProjectRemoteObservations(store.get(remoteObservationsState), id), id) ||
+            store.get(projectExecutionSnapshotsState)[id]?.graphRunning,
+        );
+      },
+      settle(id: ProjectId, root: string, status: 'completed' | 'error' | 'aborted', token: number) {
+        try {
+          updateOpenProjectExecutionSnapshot(
+            store,
+            id,
+            (snapshot) => settleProjectExecutionObservation(snapshot, root, status),
+            token,
+          );
+        } catch (error) {
+          handleError(error, 'Failed to finish bundle execution display', { toastError: false });
+        }
+      },
+      project<K extends keyof ProcessEventMessageMap>(
+        id: ProjectId,
+        message: K,
+        data: ProcessEventMessageMap[K],
+        activityData: ProcessEventMessageMap[K] | false,
+        token: number,
+      ) {
+        try {
+          updateOpenProjectExecutionSnapshot(
+            store,
+            id,
+            (snapshot) => {
+              const result = applyProcessEventToProjectExecutionSnapshot({
+                message,
+                data,
+                activityData,
+                projectId: id,
+                refStore,
+                snapshot,
+                previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
+              });
+              return result.changed ? result.snapshot : snapshot;
+            },
+            token,
+          );
+        } catch (error) {
+          handleError(error, 'Failed to display bundle execution data', { toastError: false });
+        }
+      },
+    }),
+    [store, refStore],
+  );
+  useEffect(() => {
+    state.users++;
+    const reconcile = () => state.router.reconcile(options);
+    const unsubscribe = [
+      projectExecutionSnapshotsState,
+      loadedRecordingState,
+      remoteObservationsState,
+      projectsState,
+    ].map((atom) => store.sub(atom, reconcile));
+    return () => {
+      unsubscribe.forEach((stop) => stop());
+      if (--state.users === 0) {
+        state.router.dispose(options);
+        store.set(retireWorkspaceExecutionState);
       }
-      const parentOwner = execution.parentGraphRunId ? owners.get(execution.parentGraphRunId) : undefined;
-      owners.set(execution.graphRunId, execution.projectId);
-      if (message === 'done' || message === 'error') runs.current.delete(execution.rootRunId);
-      // The entry's own ordinary events already have their normal dispatcher.
-      if (execution.projectId === entryId && !execution.projectScope) return;
-      if (
-        message === 'userInput' ||
-        message === 'start' ||
-        message === 'done' ||
-        message === 'error' ||
-        message === 'abort'
-      )
-        return;
-      const projected = {
-        ...(data as object),
-        execution: {
-          ...execution,
-          projectScope: undefined,
-          ...(parentOwner !== execution.projectId ? { parentGraphRunId: undefined, executor: undefined } : {}),
+    };
+  }, [store, state, options]);
+  return useMemo(
+    () =>
+      Object.assign(
+        <K extends keyof ProcessEventMessageMap>(
+          entryId: ProjectId,
+          message: K,
+          data: ProcessEventMessageMap[K],
+          source?: object,
+          kind?: ExecutionSourceKind,
+        ) => {
+          state.router.receive(entryId, message, data, options, source, kind);
         },
-      } as ProcessEventMessageMap[K];
-      const id = execution.projectId;
-      const active = store.get(projectState).metadata.id === id;
-      const snapshot = active
-        ? captureCurrentProjectExecutionSnapshot()
-        : store.get(projectExecutionSnapshotsState)[id];
-      try {
-        const result = applyProcessEventToProjectExecutionSnapshot({
-          message,
-          data: projected,
-          projectId: id,
-          refStore,
-          snapshot,
-          previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
-        });
-        if (!result.changed) return;
-        store.set(projectExecutionSnapshotsState, (previous) => ({ ...previous, [id]: result.snapshot }));
-        if (active) restoreProjectExecutionSnapshot(result.snapshot);
-      } catch (error) {
-        // A display observer must not fail the root processor or its recording.
-        handleError(error, 'Failed to display bundle execution data', { toastError: false });
-      }
-    },
+        { settle: (source: object) => state.router.settle(source, options) },
+      ),
+    [state, options],
   );
 }

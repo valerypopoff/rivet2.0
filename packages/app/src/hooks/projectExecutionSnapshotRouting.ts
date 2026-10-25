@@ -3,88 +3,129 @@ import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
 import { type createStore } from 'jotai';
 import { projectState, projectsState } from '../state/savedGraphs.js';
-import {
-  projectExecutionSnapshotsState,
-  createEmptyProjectExecutionSnapshot,
-  type ProjectExecutionSnapshot,
-} from '../state/dataFlow.js';
-import {
-  captureProjectExecutionSnapshot,
-  restoreProjectExecutionSnapshot,
-} from './projectExecutionSnapshotBindings.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
+import { emptyExecutionSnapshotState } from '../state/projectExecutionStore.js';
+import { projectExecutionSnapshotsState, type ProjectExecutionSnapshot } from '../state/dataFlow.js';
 
 /** One synchronous display boundary: reference effects run once, and closed tabs cannot be recreated. */
 export function updateOpenProjectExecutionSnapshot(
   store: ReturnType<typeof createStore>,
   projectId: ProjectId,
   update: (snapshot: ProjectExecutionSnapshot) => ProjectExecutionSnapshot,
+  bindingToken?: number,
+  allowStandaloneActive = false,
 ): void {
-  if (!store.get(projectsState).openedProjects[projectId]) return;
-  const active = store.get(projectState).metadata.id === projectId;
-  const before = active
-    ? captureProjectExecutionSnapshot(store)
-    : store.get(projectExecutionSnapshotsState)[projectId] ?? createEmptyProjectExecutionSnapshot();
+  if (
+    !Object.hasOwn(store.get(projectsState).openedProjects, projectId) &&
+    !(allowStandaloneActive && store.get(projectState).metadata.id === projectId)
+  )
+    return;
+  if (bindingToken !== undefined && !store.get(projectBindingRegistryState).isCurrent(projectId, bindingToken)) return;
+  const snapshots = store.get(projectExecutionSnapshotsState);
+  const before =
+    (Object.hasOwn(snapshots, projectId) ? snapshots[projectId] : undefined) ?? store.get(emptyExecutionSnapshotState);
   const after = update(before);
   if (before === after) return;
   store.set(projectExecutionSnapshotsState, { ...store.get(projectExecutionSnapshotsState), [projectId]: after });
-  if (active) restoreProjectExecutionSnapshot(store, after, before);
 }
 
-export type ProjectExecutionSnapshots = Record<ProjectId, ProjectExecutionSnapshot | undefined>;
-
-export function shouldRouteProjectEventToSnapshot(options: {
-  activeProjectId: ProjectId | undefined;
-  isProjectOpen: boolean;
-  projectId: ProjectId;
-}): boolean {
-  return options.activeProjectId !== options.projectId && options.isProjectOpen;
-}
-
-export function applyProcessEventToProjectExecutionSnapshots<K extends keyof ProcessEventMessageMap>(options: {
-  data: ProcessEventMessageMap[K];
-  mapSnapshot?: (snapshot: ProjectExecutionSnapshot) => ProjectExecutionSnapshot;
-  message: K;
-  projectId: ProjectId;
-  refStore: DataRefStore;
-  snapshots: ProjectExecutionSnapshots;
-  previousDataPerNodeToKeep?: number;
-}): ProjectExecutionSnapshots {
-  const result = applyProcessEventToProjectExecutionSnapshot({
-    data: options.data,
-    message: options.message,
-    projectId: options.projectId,
-    refStore: options.refStore,
-    snapshot: options.snapshots[options.projectId],
-    previousDataPerNodeToKeep: options.previousDataPerNodeToKeep,
-  });
-  const nextSnapshot = options.mapSnapshot?.(result.snapshot) ?? result.snapshot;
-
-  if (!result.changed && nextSnapshot === result.snapshot) {
-    return options.snapshots;
-  }
-
+/** Evaluation trials journal to their captured owner, never whichever tab is selected later. */
+export function captureProjectExecutionActivity(
+  store: ReturnType<typeof createStore>,
+  projectId: ProjectId,
+  refStore: DataRefStore,
+) {
+  store.get(projectsState);
+  const registry = store.get(projectBindingRegistryState);
+  const bindingToken = registry.get(projectId)?.token;
+  const workspaceToken = registry.getWorkspaceToken();
+  const isCurrent = () => {
+    store.get(projectsState);
+    return (
+      registry.getWorkspaceToken() === workspaceToken &&
+      (bindingToken === undefined
+        ? registry.get(projectId) === undefined && store.get(projectState).metadata.id === projectId
+        : registry.isCurrent(projectId, bindingToken))
+    );
+  };
   return {
-    ...options.snapshots,
-    [options.projectId]: nextSnapshot,
+    isCurrent,
+    event<K extends keyof ProcessEventMessageMap>(message: K, data: ProcessEventMessageMap[K]): void {
+      if (!isCurrent()) return;
+      updateOpenProjectExecutionSnapshot(
+        store,
+        projectId,
+        (snapshot) =>
+          applyProcessEventToProjectExecutionSnapshot({
+            snapshot,
+            projectId,
+            refStore,
+            message,
+            data,
+            activityOnly: true,
+          }).snapshot,
+        bindingToken,
+        true,
+      );
+    },
   };
 }
 
-export function applyExecutorDisconnectToProjectExecutionSnapshots(options: {
-  errorMessage: string;
+/** Interactive adapters select a view; data and refs still commit at the same boundary. */
+export function updateCurrentProjectExecutionSnapshot(
+  store: ReturnType<typeof createStore>,
+  update: (snapshot: ProjectExecutionSnapshot) => ProjectExecutionSnapshot,
+): void {
+  const id = store.get(projectState).metadata.id;
+  store.get(projectsState);
+  updateOpenProjectExecutionSnapshot(store, id, update, store.get(projectBindingRegistryState).get(id)?.token, true);
+}
+
+/** Selection policy belongs here, not in Browser/Node transport callbacks. */
+export function routeProjectExecutionDisplay<K extends keyof ProcessEventMessageMap>(options: {
+  store: ReturnType<typeof createStore>;
+  projectId: ProjectId;
+  message: K;
+  data: ProcessEventMessageMap[K];
+  refStore: DataRefStore;
+  previousDataPerNodeToKeep?: number;
+  interactive?: () => void;
+  mapSnapshot?: (snapshot: ProjectExecutionSnapshot) => ProjectExecutionSnapshot;
+  onInactive?: () => void;
+  shouldApply?: (snapshot: ProjectExecutionSnapshot) => boolean;
+}): void {
+  if (options.store.get(projectState).metadata.id === options.projectId) {
+    options.interactive?.();
+    return;
+  }
+  options.store.get(projectsState);
+  const binding = options.store.get(projectBindingRegistryState).get(options.projectId);
+  if (!binding) return;
+  // Request progress/accounting may synchronously close or replace its tab.
+  // Complete that work first, then fence display/ref effects against its old lifetime.
+  options.onInactive?.();
+  updateOpenProjectExecutionSnapshot(
+    options.store,
+    options.projectId,
+    (snapshot) => {
+      if (options.shouldApply && !options.shouldApply(snapshot)) return snapshot;
+      const result = applyProcessEventToProjectExecutionSnapshot({ ...options, snapshot });
+      return options.mapSnapshot?.(result.snapshot) ?? result.snapshot;
+    },
+    binding.token,
+  );
+}
+
+export function routeExecutorDisconnectDisplay(options: {
+  store: ReturnType<typeof createStore>;
   projectId: ProjectId;
   refStore: DataRefStore;
-  snapshots: ProjectExecutionSnapshots;
-}): ProjectExecutionSnapshots {
-  const snapshot = options.snapshots[options.projectId];
-  if (!snapshot?.graphRunning) {
-    return options.snapshots;
-  }
-
-  return applyProcessEventToProjectExecutionSnapshots({
-    data: { error: new Error(options.errorMessage) } as ProcessEventMessageMap['error'],
+  errorMessage: string;
+}): void {
+  routeProjectExecutionDisplay({
+    ...options,
     message: 'error',
-    projectId: options.projectId,
-    refStore: options.refStore,
-    snapshots: options.snapshots,
+    data: { error: new Error(options.errorMessage) },
+    shouldApply: (snapshot) => snapshot.graphRunning,
   });
 }

@@ -1,6 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { IsomorphicCodeRunner } from '../../src/index.js';
+import { IsomorphicCodeRunner, GraphProcessor } from '../../src/index.js';
+import * as PublicExports from '../../src/exports.js';
+import { getCodeRunnerNamespace } from '../../src/integrations/CodeRunnerNamespace.js';
+
+test('the public composition root supplies the complete authored-code API lazily', async () => {
+  assert.equal(getCodeRunnerNamespace(), PublicExports);
+  const runner = new IsomorphicCodeRunner();
+  const output = await runner.runCode(
+    'return { result: {type: "any", value: [Rivet.GraphProcessor, Rivet.coerceType({type:"number",value:42}, "string")]}}',
+    {},
+    {
+      includeRivet: true,
+      includeConsole: false,
+      includeFetch: false,
+      includeProcess: false,
+      includeRequire: false,
+    },
+  );
+  assert.deepEqual(output.result?.value, [GraphProcessor, '42']);
+});
 
 test('IsomorphicCodeRunner injects the narrow interpolation resolver when requested', async () => {
   const runner = new IsomorphicCodeRunner();

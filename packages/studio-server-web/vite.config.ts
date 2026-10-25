@@ -530,6 +530,11 @@ export default defineConfig({
       rollupOptions: {
         output: {
           manualChunks: (id) => {
+            // Otherwise Rollup can put this shared helper in the first lazy
+            // Monaco chunk, making every dynamic import eagerly fetch Monaco.
+            if (id === '\0vite/preload-helper.js') {
+              return 'vite-preload-helper';
+            }
             if (id.includes('gpt-tokenizer')) {
               return 'gpt-tokenizer';
             }

@@ -1,6 +1,7 @@
 import { build } from 'vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { describeBuildFailure } from './build-failure.mjs';
 
 const webRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const root = process.env.RIVET_DEV_BUNDLE_ROOT;
@@ -59,13 +60,7 @@ try {
   }
 } catch (error) {
   console.error('[tunnel-build]', error);
-  process.send?.({
-    phase: 'failed',
-    retryAfterMs: error.code === 'RIVET_DEV_CACHE_BUSY' ? 5 * 60_000 : undefined,
-    error: error.message.startsWith('Tunnel bundle cache')
-      ? error.message
-      : 'Frontend build failed. Check the web container logs; the previous bundle remains available.',
-  });
+  process.send?.(describeBuildFailure(error, path.resolve(webRoot, '../..')));
   process.exitCode = 1;
 } finally {
   finished = true;

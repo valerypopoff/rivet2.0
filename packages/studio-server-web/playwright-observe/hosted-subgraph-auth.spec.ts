@@ -15,7 +15,7 @@ for (const topology of ['single-host', 'replicated'] as const) {
       const { caller, target } = runtime.fixture;
       const executorEvents: Array<{
         message: string;
-        data?: { node?: { id: string }; execution?: { projectId?: string } };
+        data?: { node?: { id: string }; execution?: { projectId?: string; graphId?: string } };
       }> = [];
       page.on('websocket', (socket) => {
         if (socket.url() !== runtime.executorWsUrl) return;
@@ -65,6 +65,9 @@ for (const topology of ['single-host', 'replicated'] as const) {
       await page.route('**/api/**', async (route) => {
         const request = route.request();
         const original = new URL(request.url());
+        // Vite source modules can contain /api/ in their filesystem path.
+        // Only actual root API routes belong to the isolated backend.
+        if (!original.pathname.startsWith('/api/')) return route.fallback();
         // This scenario does not need catalog notifications. route.fetch buffers
         // an SSE body forever; the executor's finite /access calls remain real.
         if (request.headers().accept === 'text/event-stream') return route.fulfill({ status: 204 });
@@ -91,8 +94,12 @@ for (const topology of ['single-host', 'replicated'] as const) {
       await page.goto('/', { waitUntil: 'domcontentloaded' });
       await waitForDashboardReady(page);
       await page.getByRole('button', { name: 'Expand Hosted Subgraph fixture bundle', exact: true }).click();
-      await page.locator('.project-row', { hasText: 'Hosted caller' }).dblclick();
+      // Open the dependency before running the caller, just as a designer does.
+      await page.locator('.project-row', { hasText: 'Hosted target' }).dblclick();
       const frame = page.frameLocator('iframe.dashboard-editor-frame');
+      const childOutput = frame.locator(`.node[data-nodeid="${runtime.fixture.childOutputId}"]`);
+      await expect(childOutput).toBeVisible();
+      await page.locator('.project-row', { hasText: 'Hosted caller' }).dblclick();
       const first = frame.locator('.node[data-nodeid="bundle-call-one"]');
       const second = frame.locator('.node[data-nodeid="bundle-call-two"]');
       const result = frame.locator('.node[data-nodeid="bundle-result"]');
@@ -125,6 +132,22 @@ for (const topology of ['single-host', 'replicated'] as const) {
         const checks = serviceAccess().length;
         const since = executorEvents.length;
         await run.click();
+        await expect
+          .poll(() =>
+            executorEvents
+              .slice(since)
+              .some(
+                (event) =>
+                  event.message === 'graphFinish' && event.data?.execution?.projectId === target.projectMetadataId,
+              ),
+          )
+          .toBe(true);
+        await page.locator('.project-row', { hasText: 'Hosted target' }).dblclick();
+        await expect(childOutput).toHaveClass(/success/);
+        await expect(childOutput).toContainText('child-result');
+        expect(freshEvents(since).some((event) => event.message === 'done')).toBe(false);
+        await expect(frame.locator('.run-button button').first()).not.toContainText('Abort');
+        await page.locator('.project-row', { hasText: 'Hosted caller' }).dblclick();
         await expect.poll(() => freshEvents(since).some((event) => event.message === 'done')).toBe(true);
         for (const id of ['bundle-call-one', 'bundle-call-two'])
           expect(
@@ -137,7 +160,48 @@ for (const topology of ['single-host', 'replicated'] as const) {
         expect(serviceAccess().at(-1)?.status).toBe(204);
         await expect(result).toContainText('child-result');
         await expect(second).toContainText('second-child-result');
+        await page.locator('.project-row', { hasText: 'Hosted target' }).dblclick();
+        await expect(childOutput).toHaveClass(/success/);
+        await expect(childOutput).toContainText('child-result');
+        await expect(frame.locator('.run-button button').first()).not.toContainText('Abort');
+        await page.locator('.project-row', { hasText: 'Hosted caller' }).dblclick();
+        await expect(result).toContainText('child-result');
       }
+      // A reopened receiver is a new display lifetime, not a continuation of
+      // the old tab, even though project ID/path/bundle are all unchanged.
+      const lifetimeSince = executorEvents.length;
+      await run.click();
+      await expect
+        .poll(() =>
+          executorEvents
+            .slice(lifetimeSince)
+            .some(
+              (event) =>
+                event.message === 'nodeStart' &&
+                event.data?.node?.id === 'bundle-child-delay' &&
+                event.data.execution?.projectId === target.projectMetadataId &&
+                event.data.execution.graphId === 'child-main',
+            ),
+        )
+        .toBe(true);
+      const childTab = frame.locator('.projects-container .project:not(.opening)').filter({ hasText: 'Hosted target' });
+      await childTab.hover();
+      await childTab.getByRole('button', { name: /^Close / }).click();
+      await expect(childTab).toHaveCount(0);
+      await page.locator('.project-row', { hasText: 'Hosted target' }).dblclick();
+      await expect(childOutput).toBeVisible();
+      await expect.poll(() => freshEvents(lifetimeSince).some((event) => event.message === 'done')).toBe(true);
+      await expect(childOutput).not.toHaveClass(/success/);
+      await page.locator('.project-row', { hasText: 'Hosted caller' }).dblclick();
+      await expect(result).toContainText('child-result');
+      const nextSince = executorEvents.length;
+      await run.click();
+      await expect.poll(() => freshEvents(nextSince).some((event) => event.message === 'done')).toBe(true);
+      await page.locator('.project-row', { hasText: 'Hosted target' }).dblclick();
+      await expect(childOutput).toHaveClass(/success/);
+      await expect(childOutput).toContainText('child-result');
+      await page.locator('.project-row', { hasText: 'Hosted caller' }).dblclick();
+
       // Run to here is the single-Subgraph execution path used in the incident.
       const checks = serviceAccess().length;
       const since = executorEvents.length;

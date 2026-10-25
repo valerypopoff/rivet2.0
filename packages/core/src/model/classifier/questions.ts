@@ -6,30 +6,71 @@ import {
 } from './json.js';
 import type { ClassifierQuestionDefinition, ClassifierEntry, PreparedClassifierQuestion } from './types.js';
 import type { ClassifierValueBudget } from './limits.js';
+import { inspectStateMessages, systemOneState } from './state.js';
+
+export function createQuestionMap(
+  questions: readonly PreparedClassifierQuestion[],
+  instructionsFor: (question: PreparedClassifierQuestion) => ClassifierEntry = (question) =>
+    question.instructionsMessages
+      ? (systemOneState({ state: '', stateMessages: question.instructionsMessages }).state as ClassifierEntry)
+      : question.instructions,
+): Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>> {
+  const result = Object.create(null) as Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>>;
+  for (const question of questions) {
+    const instructions = instructionsFor(question);
+    const providerQuestion =
+      (question.type === 'noul' || question.type === 'box') && question.criteria === undefined
+        ? { type: question.type, instructions }
+        : { type: question.type, instructions, criteria: question.criteria };
+    Object.defineProperty(result, question.questionId, { enumerable: true, value: providerQuestion });
+  }
+  return result;
+}
 
 /** Shared by node execution and direct provider calls, before taking the request snapshot. */
 export function prepareClassifierQuestion(value: unknown, budget: ClassifierValueBudget): PreparedClassifierQuestion {
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Question inputs must contain question definition objects.');
   if ('images' in value)
-    throw new Error("Question-level images are not supported. Connect images to Classifier Evaluate's State input.");
+    throw new Error(
+      "Question-level images fields are not supported. Connect images to Question Instructions (Jev/OpenAI), or to Decision AI run's State input for shared evidence.",
+    );
+  if ('instructionsMessages' in value) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, 'instructionsMessages');
+    if (!descriptor?.enumerable || !('value' in descriptor))
+      throw new Error('Question instructionsMessages must be an own, enumerable data field.');
+  }
   for (const key of ['questionId', 'type', 'instructions']) {
     if (!Object.prototype.propertyIsEnumerable.call(value, key))
-      throw new Error(`Every classifier question must have an own, enumerable '${key}' field.`);
+      throw new Error(`Every Decision AI question must have an own, enumerable '${key}' field.`);
   }
   const criteriaProperty = Object.getOwnPropertyDescriptor(value, 'criteria');
   if (criteriaProperty && (!criteriaProperty.enumerable || !('value' in criteriaProperty)))
-    throw new Error('Classifier question criteria must be an own, enumerable field.');
+    throw new Error('Decision AI question criteria must be an own, enumerable field.');
   // Optional envelope properties may be undefined; structured entries themselves must be exact JSON.
   const question = snapshotClassifierJson(value, 'Question', budget, true) as ClassifierQuestionDefinition;
   if (typeof question.questionId !== 'string' || question.questionId.trim() === '')
-    throw new Error('Every classifier question must have a non-empty Question ID.');
-  if (!['choice', 'score', 'noul'].includes(question.type))
+    throw new Error('Every Decision AI question must have a non-empty Question ID.');
+  if (!['choice', 'score', 'noul', 'box'].includes(question.type))
     throw new Error(`Question '${question.questionId}' has an unsupported type.`);
   // The whole question has already passed recursive JSON/resource validation.
   // Check only entry kinds here; do not scan each structured entry again.
-  assertClassifierInstructionsKind(question.instructions, `Question '${question.questionId}' instructions`);
+  if (question.instructionsMessages !== undefined) {
+    if (question.instructions !== '')
+      throw new Error('Question instructions and instructionsMessages cannot be supplied together.');
+    inspectStateMessages(question.instructionsMessages, budget.check);
+    if (
+      !question.instructionsMessages.some(({ parts }) =>
+        parts.some((part) => part.type === 'image' || part.text.trim() !== ''),
+      )
+    )
+      throw new Error(`Question '${question.questionId}' instructions must not be empty.`);
+  } else {
+    assertClassifierInstructionsKind(question.instructions, `Question '${question.questionId}' instructions`);
+  }
   const criteria = question.criteria;
+  if (question.type === 'box' && criteria !== undefined)
+    throw new Error(`Bounding Box question '${question.questionId}' does not accept criteria.`);
   if (question.type === 'choice') {
     if (typeof criteria !== 'object' || criteria === null || Array.isArray(criteria))
       throw new Error(`Choice question '${question.questionId}' requires object criteria.`);
@@ -47,7 +88,7 @@ export function prepareClassifierQuestion(value: unknown, budget: ClassifierValu
     let index = 0;
     for (const entry of classifierArrayValues(criteria, 'Criteria'))
       assertClassifierEntryKind(entry, `Question '${question.questionId}' criteria[${index++}]`);
-  } else if (criteria !== undefined) {
+  } else if (question.type === 'noul' && criteria !== undefined) {
     if (
       typeof criteria !== 'object' ||
       criteria === null ||

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createStore } from 'jotai';
 import {
+  TextNodeImpl,
   type NodeId,
   type ProcessId,
   type GraphId,
@@ -9,6 +10,7 @@ import {
   type RootRunId,
   type PortId,
   type ProjectId,
+  type DataValue,
 } from '@valerypopoff/rivet2-core';
 import {
   createEmptyProjectExecutionSnapshot,
@@ -22,8 +24,41 @@ import {
   captureProjectExecutionSnapshot,
   restoreProjectExecutionSnapshot,
 } from './projectExecutionSnapshotBindings.js';
+import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import { currentRemoteObservationsState, remoteObservationsState } from '../state/remoteObservation.js';
 
-test('every snapshot field round-trips across tab changes and large data retains identity', () => {
+test('opaque prototype-named IDs use empty own execution/observation state and reject closed-tab writes', () => {
+  for (const key of ['constructor', '__proto__', 'toString']) {
+    const id = key as ProjectId;
+    const store = createStore();
+    const project = store.get(projectState);
+    try {
+      store.set(projectState, { ...project, metadata: { ...project.metadata, id } });
+      assert.deepEqual(captureProjectExecutionSnapshot(store), createEmptyProjectExecutionSnapshot());
+      assert.deepEqual(store.get(currentRemoteObservationsState), []);
+      store.set(remoteObservationsState, { [id]: [{ sourceProjectId: 'other' as ProjectId } as never] });
+      assert.equal(store.get(currentRemoteObservationsState).length, 1);
+      store.set(projectsState, {
+        openedProjects: { [id]: { projectId: id, title: key, fsPath: null } },
+        openedProjectsSortedIds: [id],
+      });
+      updateOpenProjectExecutionSnapshot(store, id, (before) => {
+        assert.deepEqual(before, createEmptyProjectExecutionSnapshot());
+        return { ...before, graphPaused: true };
+      });
+      assert.equal(store.get(projectExecutionSnapshotsState)[id]!.graphPaused, true);
+      store.set(projectsState, { openedProjects: {}, openedProjectsSortedIds: [] });
+      store.set(projectExecutionSnapshotsState, {});
+      updateOpenProjectExecutionSnapshot(store, id, () =>
+        assert.fail('A closed tab cannot acquire new execution state'),
+      );
+    } finally {
+      store.set(projectState, project);
+    }
+  }
+});
+
+test('every snapshot field round-trips across tab changes without replacing node-history identity', () => {
   const store = createStore();
   const snapshot = createEmptyProjectExecutionSnapshot();
   snapshot.graphPaused = true;
@@ -91,6 +126,46 @@ test('passive snapshot boundary runs reference effects once and writes only chan
   assert.equal(store.get(lastRunDataByNodeState), originalData);
   assert.equal(captureProjectExecutionSnapshot(store).graphPaused, true);
   assert.equal(store.get(projectExecutionSnapshotsState)[id]!.graphPaused, true);
+  const values = new Map<string, DataValue>();
+  let allocations = 0;
+  const refStore = {
+    get: (key: string) => values.get(key),
+    set: (key: string, value: DataValue) => {
+      allocations++;
+      values.set(key, value);
+    },
+    delete: (key: string) => {
+      values.delete(key);
+    },
+  };
+  const node = TextNodeImpl.create();
+  const project = store.get(projectState);
+  updateOpenProjectExecutionSnapshot(
+    store,
+    id,
+    (snapshot) =>
+      applyProcessEventToProjectExecutionSnapshot({
+        snapshot,
+        refStore,
+        projectId: id,
+        message: 'nodeStart',
+        data: {
+          node,
+          processId: 'process' as ProcessId,
+          execution: {
+            projectId: id,
+            rootRunId: 'root' as RootRunId,
+            graphRunId: 'graph-run' as GraphRunId,
+            graphId: project.metadata.mainGraphId!,
+          },
+          inputs: { ['input' as PortId]: { type: 'string', value: 'large'.repeat(20_000) } },
+        },
+      }).snapshot,
+  );
+  assert.equal(allocations, 1, 'one real reducer event allocates its payload reference exactly once');
+  assert.equal(values.size, 1);
+  assert.equal(writes, 1, 'only the event that changes node history writes that atom');
+  assert.equal(captureProjectExecutionSnapshot(store).graphPaused, true, 'unrelated fields survive the payload update');
   unsubscribe();
 });
 

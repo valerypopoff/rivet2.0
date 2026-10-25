@@ -2,6 +2,7 @@ import {
   getCustomProviderApiContract,
   summarizeAgentResponseCalls,
   buildAgentProfileAttemptInspectorRows,
+  getProfileDisplayName,
   type PortId,
 } from '@valerypopoff/rivet2-core';
 import type {
@@ -30,6 +31,7 @@ import type {
   RunActivityViewModel,
 } from './types.js';
 import { previewStoredDataValue } from '../../features/runActivity/storedValuePreview.js';
+import { getNodeDisplayTitle } from '../../utils/nodeDisplayTitle.js';
 
 export {
   RUN_ACTIVITY_PREVIEW_MAX_CHARS,
@@ -66,6 +68,31 @@ export type BuildRunActivityViewModelOptions = {
   now?: number;
 };
 
+type CachedInvocationRow = {
+  resolved: RunActivityInvocationResolution | undefined;
+  graphRuns: RunActivityRoot['graphRunsById'];
+  row: RunActivityItemViewModel;
+};
+
+/** Derived rows only. The journal remains authoritative, and a root change
+ * releases this presentation's old cache rather than retaining execution data. */
+export function createRunActivityViewModelProjector() {
+  let rootId: RunActivityRoot['rootRunId'] | undefined;
+  let rows = new WeakMap<RunActivityNodeInvocation, CachedInvocationRow>();
+  return (
+    journal: RunActivityJournal,
+    resolveInvocation: ResolveRunActivityInvocation,
+    options: BuildRunActivityViewModelOptions = {},
+  ) => {
+    const nextId = selectRunActivityRoot(journal)?.rootRunId;
+    if (rootId !== nextId) {
+      rows = new WeakMap();
+      rootId = nextId;
+    }
+    return projectRunActivityViewModel(journal, resolveInvocation, options, rows);
+  };
+}
+
 /**
  * Projects the metadata-only execution journal into the presentation contract.
  * The resolver may expose already-stored inline/ref values, but this adapter
@@ -75,6 +102,15 @@ export function buildRunActivityViewModel(
   journal: RunActivityJournal,
   resolveInvocation: ResolveRunActivityInvocation,
   options: BuildRunActivityViewModelOptions = {},
+): RunActivityViewModel {
+  return projectRunActivityViewModel(journal, resolveInvocation, options);
+}
+
+function projectRunActivityViewModel(
+  journal: RunActivityJournal,
+  resolveInvocation: ResolveRunActivityInvocation,
+  options: BuildRunActivityViewModelOptions,
+  rows?: WeakMap<RunActivityNodeInvocation, CachedInvocationRow>,
 ): RunActivityViewModel {
   const root = selectRunActivityRoot(journal);
   if (root == null) {
@@ -91,7 +127,14 @@ export function buildRunActivityViewModel(
   const items = root.nodeInvocationOrder
     .map((key) => root.nodeInvocationsByKey[key])
     .filter((invocation): invocation is RunActivityNodeInvocation => invocation != null)
-    .map((invocation) => buildInvocationViewModel(root, invocation, resolveInvocation))
+    .map((invocation) => {
+      const resolved = resolveInvocation({ root, graphRun: root.graphRunsById[invocation.graphRunId], invocation });
+      const previous = rows?.get(invocation);
+      if (previous && previous.resolved === resolved && previous.graphRuns === root.graphRunsById) return previous.row;
+      const row = buildInvocationViewModel(root, invocation, resolved);
+      rows?.set(invocation, { resolved, graphRuns: root.graphRunsById, row });
+      return row;
+    })
     .sort((left, right) => left.sequence - right.sequence);
   const partialReason = getPartialReason(journal, root);
   const accounting = buildAccountingSummary(root);
@@ -159,16 +202,16 @@ export function selectRunActivityRoot(journal: RunActivityJournal): RunActivityR
 function buildInvocationViewModel(
   root: RunActivityRoot,
   invocation: RunActivityNodeInvocation,
-  resolveInvocation: ResolveRunActivityInvocation,
+  resolution: RunActivityInvocationResolution | undefined,
 ): RunActivityItemViewModel {
   const graphRun = root.graphRunsById[invocation.graphRunId];
-  const resolved = resolveInvocation({ root, graphRun, invocation }) ?? {};
+  const resolved = resolution ?? {};
   const graphName = resolved.graphName ?? invocation.graphName ?? graphRun?.graphName ?? 'Unknown graph';
-  const nodeTitle =
-    normalizeNonEmptyLabel(resolved.nodeTitle) ??
-    normalizeNonEmptyLabel(invocation.nodeTitle) ??
-    'Deleted or unavailable node';
   const nodeType = resolved.nodeType ?? invocation.nodeType ?? 'Unknown node type';
+  const authoredTitle = normalizeNonEmptyLabel(resolved.nodeTitle) == null ? invocation.nodeTitle : resolved.nodeTitle;
+  const nodeTitle =
+    normalizeNonEmptyLabel(getNodeDisplayTitle({ type: nodeType, title: authoredTitle ?? '' })) ??
+    'Deleted or unavailable node';
   const category = resolveCategory(invocation, resolved.category);
   const status = mapNodeStatus(invocation.status);
   const preview = getInvocationPreview(invocation, resolved);
@@ -246,6 +289,7 @@ function buildInvocationSearchTerms(
       attempt.model,
       attempt.family,
       attempt.profileName,
+      getProfileDisplayName(attempt.profileName, attempt.family),
       attempt.stage,
       attempt.failureKind,
       attempt.skipReason,
@@ -348,7 +392,7 @@ function profileAttemptToChild(attempt: RunActivityProfileAttempt): RunActivityC
 
   return {
     id: `profile-attempt:${attempt.eventId}`,
-    label: `${formatProfileTitle(attempt)}${formatModelCallProvider(attempt)} / ${attempt.model} - ${attempt.failureKind?.replaceAll('-', ' ') ?? describeProfileAttemptStage(attempt.stage)}`,
+    label: `${row.providerAndModel} - ${attempt.failureKind?.replaceAll('-', ' ') ?? describeProfileAttemptStage(attempt.stage)}`,
     secondaryText: `${row.context}${attempt.error ? `: ${attempt.error}` : ''}`,
     status: getProfileAttemptStatus(attempt),
     ...(attempt.durationMs == null ? {} : { durationMs: attempt.durationMs }),

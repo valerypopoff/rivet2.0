@@ -24,4 +24,16 @@ test('getProjectContextValues unwraps stored project context values', () => {
 
   assert.notEqual(unwrappedObjectValue, sourceObjectValue);
   assert.notEqual(unwrappedObjectValue.value.nested, sourceObjectValue.value.nested);
+
+  for (const id of ['__proto__', 'constructor', 'toString']) {
+    const values = getProjectContextValues(Object.fromEntries([[id, { value: storedObjectValue }]]));
+    assert.equal(Object.hasOwn(values, id), true, `Context ${id} must remain an own entry`);
+    assert.equal(Object.getPrototypeOf(values), Object.prototype);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(values))[id],
+      storedObjectValue,
+      'Node transport and recordings must retain the value',
+    );
+    assert.notEqual(values[id], storedObjectValue);
+  }
 });

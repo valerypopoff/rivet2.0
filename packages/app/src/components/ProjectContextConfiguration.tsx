@@ -4,9 +4,8 @@ import { Field } from '@atlaskit/form';
 import Modal, { ModalTransition, ModalBody, ModalFooter } from '@atlaskit/modal-dialog';
 import TextField from '@atlaskit/textfield';
 import { type DataValue } from '@valerypopoff/rivet2-core';
-import { produce } from 'immer';
 import { useAtom, useAtomValue } from 'jotai';
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useState } from 'react';
 import { useToggle } from 'ahooks';
 import { projectContextState, projectState } from '../state/savedGraphs.js';
 import { flushHybridStorageGroup } from '../state/storage.js';
@@ -97,8 +96,16 @@ function persistProjectContextValues(): void {
 export const ProjectContextConfiguration: FC = () => {
   const project = useAtomValue(projectState);
   const [projectContext, setProjectContext] = useAtom(projectContextState(project.metadata.id));
-  const [projectEditContextModalOpen, toggleProjectEditContextModalOpen] = useToggle(false);
+  const [projectEditContextModalOpen, { setLeft: closeContextEditor, setRight: openContextEditor }] = useToggle(false);
   const [editContextData, setEditContextData] = useState<ContextValue>();
+  const editTargetAvailable = editContextData === undefined || Object.hasOwn(projectContext, editContextData.key);
+
+  useEffect(() => {
+    if (!editTargetAvailable) {
+      closeContextEditor();
+      setEditContextData(undefined);
+    }
+  }, [editTargetAvailable, closeContextEditor]);
 
   const sortedContext = useMemo(() => {
     return entries(projectContext).sort(([a], [b]) => a.localeCompare(b));
@@ -107,41 +114,35 @@ export const ProjectContextConfiguration: FC = () => {
   const contextKeys = useMemo(() => sortedContext.map(([key]) => key), [sortedContext]);
 
   const setProjectContextValue = ({ key, previousKey, value }: ContextValue) => {
-    setProjectContext((context) =>
-      produce(context, (draft) => {
-        if (previousKey !== undefined && previousKey !== key) {
-          delete draft[previousKey];
-        }
-
-        draft[key] = {
-          value,
-        };
-      }),
-    );
+    setProjectContext((context) => {
+      const next = { ...context, [key]: { value } };
+      if (previousKey !== undefined && previousKey !== key) delete next[previousKey];
+      return next;
+    });
     persistProjectContextValues();
-    toggleProjectEditContextModalOpen.setLeft();
+    closeContextEditor();
     setEditContextData(undefined);
   };
 
   const deleteProjectContextValue = (key: string) => {
-    setProjectContext((context) =>
-      produce(context, (draft) => {
-        delete draft[key];
-      }),
-    );
+    setProjectContext((context) => {
+      const next = { ...context };
+      delete next[key];
+      return next;
+    });
     persistProjectContextValues();
-    toggleProjectEditContextModalOpen.setLeft();
+    closeContextEditor();
     setEditContextData(undefined);
   };
 
   const editContextValue = (value: ContextValue) => {
     setEditContextData(value);
-    toggleProjectEditContextModalOpen.setRight();
+    openContextEditor();
   };
 
   const addContextValue = () => {
     setEditContextData(undefined);
-    toggleProjectEditContextModalOpen.setRight();
+    openContextEditor();
   };
 
   return (
@@ -174,8 +175,8 @@ export const ProjectContextConfiguration: FC = () => {
         Add Context Value
       </Button>
       <ValueEditorModalRenderer
-        isOpen={projectEditContextModalOpen}
-        onClose={toggleProjectEditContextModalOpen.setLeft}
+        isOpen={projectEditContextModalOpen && editTargetAvailable}
+        onClose={closeContextEditor}
         initialKey={editContextData?.key}
         initialValue={editContextData?.value}
         existingKeys={contextKeys}
@@ -224,7 +225,8 @@ const ValueEditorModal: FC<{
   const hasExistingKey = initialKey !== undefined;
   const hasEditableLegacyBlankKey = hasExistingKey && initialKey.trim().length === 0;
   const contextKey = key.trim();
-  const contextKeyAlreadyExists = contextKey.length > 0 && contextKey !== initialKey && existingKeys.includes(contextKey);
+  const contextKeyAlreadyExists =
+    contextKey.length > 0 && contextKey !== initialKey && existingKeys.includes(contextKey);
   const canSave = contextKey.length > 0 && !contextKeyAlreadyExists;
 
   const handleDelete = () => {
@@ -253,6 +255,12 @@ const ValueEditorModal: FC<{
       <AppModalHeader title={hasExistingKey ? 'Edit Context Value' : 'Add Context Value'} />
       <ModalBody>
         <form
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              handleSave();
+            }
+          }}
           onSubmit={(e) => {
             e.preventDefault();
             handleSave();
@@ -270,11 +278,6 @@ const ValueEditorModal: FC<{
                 isRequired
                 onChange={(e) => setKey((e.target as HTMLInputElement).value)}
                 isDisabled={hasExistingKey && !hasEditableLegacyBlankKey}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleSave();
-                  }
-                }}
               />
             )}
           </Field>
@@ -289,11 +292,6 @@ const ValueEditorModal: FC<{
                 placeholder="Value"
                 value={value}
                 onChange={(e) => setValue((e.target as HTMLInputElement).value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleSave();
-                  }
-                }}
               />
             )}
           </Field>

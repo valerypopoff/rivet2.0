@@ -5,12 +5,14 @@ import TextField from '@atlaskit/textfield';
 import { type ChartNode } from '@valerypopoff/rivet2-core';
 import { NodeColorPicker } from '../NodeColorPicker.js';
 import type { NodeColor } from '../../utils/nodeColor.js';
+import { getNodeDisplayTitle } from '../../utils/nodeDisplayTitle.js';
 
 const NodeTitleInlineEditor: FC<{
   nodeId: string;
   title: string | undefined;
+  displayTitle: string;
   onTitleChange: (title: string) => void;
-}> = ({ nodeId, title, onTitleChange }) => {
+}> = ({ nodeId, title, displayTitle, onTitleChange }) => {
   const [isEditing, setIsEditing] = useState(false);
   const titleBeforeEditRef = useRef(title ?? '');
 
@@ -59,7 +61,7 @@ const NodeTitleInlineEditor: FC<{
 
   return (
     <button type="button" className="node-title-read-button" aria-label="Edit node title" onClick={startEditing}>
-      <div className={title ? 'title-read-content' : 'title-read-content is-empty'}>{title || 'Some title'}</div>
+      <div className={title ? 'title-read-content' : 'title-read-content is-empty'}>{displayTitle || 'Some title'}</div>
     </button>
   );
 };
@@ -85,7 +87,13 @@ export const NodeMetadataEditor: FC<{
       </div>
       <div className="node-metadata-fields">
         <div className="node-title-field">
-          <NodeTitleInlineEditor key={node.id} nodeId={node.id} title={node.title} onTitleChange={onTitleChange} />
+          <NodeTitleInlineEditor
+            key={node.id}
+            nodeId={node.id}
+            title={node.title}
+            displayTitle={getNodeDisplayTitle(node)}
+            onTitleChange={onTitleChange}
+          />
         </div>
         <div className="node-description-field">
           <InlineEdit

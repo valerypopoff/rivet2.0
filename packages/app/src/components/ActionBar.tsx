@@ -5,7 +5,11 @@ import { useAtomValue } from 'jotai';
 import { useLoadRecording } from '../hooks/useLoadRecording';
 import { useSaveRecording } from '../hooks/useSaveRecording';
 import { graphRunningState, graphPausedState } from '../state/dataFlow';
-import { currentProjectLoadedRecordingState, recordingPlaybackStartingState } from '../state/execution';
+import {
+  canUnloadCurrentProjectRecordingState,
+  currentProjectLoadedRecordingState,
+  recordingPlaybackStartingState,
+} from '../state/execution';
 import { selectedExecutorState } from '../state/settings';
 import MultiplyIcon from 'majesticons/line/multiply-line.svg?react';
 import PauseIcon from 'majesticons/line/pause-circle-line.svg?react';
@@ -30,6 +34,7 @@ import { getActionBarRunButtonPresentation } from './actionBarRunButtons.js';
 import { isRivetAppHostCapabilityEnabled, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 import { RemoteDebuggerInfo } from './RemoteDebuggerInfo.js';
 import { remoteObservationReadOnlyState } from '../state/remoteObservation.js';
+import { LoadedRecordingInfo } from './LoadedRecordingInfo.js';
 
 const styles = css`
   --action-bar-height: calc(32px * var(--ui-font-scale));
@@ -47,6 +52,69 @@ const styles = css`
   box-shadow: none;
   justify-content: flex-end;
   gap: 8px;
+
+  .action-bar-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  &.recording-panel {
+    width: max-content;
+    max-width: min(60ch, calc(100vw - 40px));
+    height: auto;
+    padding: 8px;
+    box-sizing: border-box;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    border: 1px solid var(--grey-darkish);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--grey-darker) 96%, transparent);
+    box-shadow: 0 3px 12px color-mix(in srgb, black 24%, transparent);
+
+    .action-bar-controls {
+      justify-content: flex-start;
+    }
+
+    .more-menu {
+      margin-left: auto;
+    }
+  }
+
+  .loaded-recording-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: calc(64px * var(--ui-font-scale));
+    line-height: 1.45;
+    max-height: min(300px, 40vh);
+    overflow: auto;
+    overflow-wrap: anywhere;
+    user-select: text;
+    .loaded-recording-heading {
+      display: flex;
+      gap: 6px 8px;
+      flex-wrap: wrap;
+      align-items: baseline;
+    }
+    .loaded-recording-tag {
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: color-mix(in srgb, currentColor 12%, transparent);
+      line-height: 1.2;
+    }
+    .loaded-recording-label {
+      color: var(--grey-light);
+    }
+    .loaded-recording-detail {
+      padding: 6px 8px;
+      border-left: 3px solid;
+      white-space: pre-wrap;
+    }
+  }
 
   .run-button button,
   .pause-button button,
@@ -96,6 +164,7 @@ const styles = css`
 
   .run-gentrace-button button,
   .pause-button button,
+  .unload-recording-button button,
   .save-recording-button button {
     background-color: rgba(255, 255, 255, 0.1);
 
@@ -105,8 +174,7 @@ const styles = css`
   }
 
   .unload-recording-button button {
-    background-color: var(--warning);
-    color: var(--grey-dark);
+    color: var(--foreground);
   }
 
   .run-button.running button {
@@ -186,6 +254,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const graphPaused = useAtomValue(graphPausedState);
 
   const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
+  const canUnloadRecording = useAtomValue(canUnloadCurrentProjectRecordingState);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const { unloadRecording } = useLoadRecording();
   const [menuIsOpen, toggleMenuIsOpen] = useToggle();
@@ -264,123 +333,133 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   };
 
   return (
-    <div css={styles} ref={actionBarRef} data-node-editor-action-bar>
-      <RemoteDebuggerInfo
-        key={`${projectMetadata.id}:${!!actionBarExecutionState.remoteDebuggerBanner}`}
-        connected={!!actionBarExecutionState.remoteDebuggerBanner}
-      />
-      {actionBarExecutionState.remoteDebuggerBanner && (
-        <div
-          className={clsx('remote-debugger-button active', {
-            reconnecting: actionBarExecutionState.remoteDebuggerBanner.isPending,
-          })}
-        >
-          <button onClick={() => disconnect()}>{actionBarExecutionState.remoteDebuggerBanner.label}</button>
-        </div>
-      )}
-
-      {activeRecording && !graphRunning && (
-        <div className={clsx('unload-recording-button')}>
-          <button onClick={() => unloadRecording()}>Unload Recording</button>
-        </div>
-      )}
-      {graphRunning && !observingRemote && (
-        <div className={clsx('pause-button', { paused: graphPaused })}>
-          <button onClick={graphPaused ? onResumeGraph : onPauseGraph}>
-            {graphPaused ? (
-              <>
-                Resume <PlayIcon />
-              </>
-            ) : (
-              <>
-                Pause <PauseIcon />
-              </>
-            )}
-          </button>
-        </div>
-      )}
-
-      {isGentracePluginEnabled && <GentraceInteractors />}
-
-      {recordingsEnabled && hasRecordingToSave && !activeRecording && (
-        <div className={clsx('save-recording-button')}>
-          <button onClick={saveRecording}>Save Recording</button>
-        </div>
-      )}
-      {showPrimaryGraphControlButton && (
-        <div
-          className={clsx('run-button', {
-            running: graphRunning,
-            recording: !!activeRecording,
-            secondary: runButtonPresentation.currentGraphRunSecondary,
-          })}
-        >
-          <button
-            disabled={runButtonsBlocked}
-            aria-disabled={runButtonsBlocked || undefined}
-            aria-busy={actionBarExecutionState.runButtonLoading || undefined}
-            onClick={() => runGraph(graphMetadata?.id)}
+    <div
+      css={styles}
+      ref={actionBarRef}
+      data-node-editor-action-bar
+      className={activeRecording ? 'recording-panel' : undefined}
+      role={activeRecording ? 'region' : undefined}
+      aria-label={activeRecording ? 'Loaded recording' : undefined}
+    >
+      <div className="action-bar-controls">
+        <RemoteDebuggerInfo
+          key={`${projectMetadata.id}:${!!actionBarExecutionState.remoteDebuggerBanner}`}
+          connected={!!actionBarExecutionState.remoteDebuggerBanner}
+        />
+        {actionBarExecutionState.remoteDebuggerBanner && (
+          <div
+            className={clsx('remote-debugger-button active', {
+              reconnecting: actionBarExecutionState.remoteDebuggerBanner.isPending,
+            })}
           >
-            {graphRunning ? (
-              <>
-                Abort <MultiplyIcon />
-              </>
-            ) : activeRecording ? (
-              renderRunButtonContents('Play Recording')
-            ) : (
-              renderRunButtonContents(runButtonPresentation.currentGraphRunLabel)
-            )}
-          </button>
-        </div>
-      )}
-      {runButtonPresentation.showProjectGraphRunButton && !observingRemote && (
-        <div className={clsx('run-button', { running: graphRunning })}>
-          <button
-            disabled={runButtonsBlocked}
-            aria-disabled={runButtonsBlocked || undefined}
-            aria-busy={actionBarExecutionState.runButtonLoading || undefined}
-            onClick={() => runGraph(projectMetadata.mainGraphId)}
-          >
-            {graphRunning ? (
-              <>
-                Abort <MultiplyIcon />
-              </>
-            ) : (
-              renderRunButtonContents(runButtonPresentation.projectGraphRunLabel)
-            )}
-          </button>
-        </div>
-      )}
-      <Popup
-        isOpen={menuIsOpen}
-        onClose={toggleMenuIsOpen.setLeft}
-        popupComponent={PopupMenuContainer}
-        content={() => (
-          <ActionBarMoreMenu
-            getDebuggerPanelAnchor={getDebuggerPanelAnchor}
-            onClose={toggleMenuIsOpen.setLeft}
-            onExportRecording={activeRecording && hasRecordingToSave ? saveRecording : undefined}
-            onAddRunInputsToEvaluation={
-              evaluationInputCopyEnabled ? toggleAddRunInputsToEvaluationModalOpen.setRight : undefined
-            }
-          />
+            <button onClick={() => disconnect()}>{actionBarExecutionState.remoteDebuggerBanner.label}</button>
+          </div>
         )}
-        placement="bottom-end"
-        trigger={(triggerProps) => (
-          <button
-            className="more-menu"
-            {...triggerProps}
-            onMouseDown={(e) => {
-              if (e.button === 0) {
-                toggleMenuIsOpen.toggle();
-                e.preventDefault();
+
+        {activeRecording && canUnloadRecording && !graphRunning && (
+          <div className={clsx('unload-recording-button')}>
+            <button onClick={() => unloadRecording()}>Unload Recording</button>
+          </div>
+        )}
+        {graphRunning && !observingRemote && (
+          <div className={clsx('pause-button', { paused: graphPaused })}>
+            <button onClick={graphPaused ? onResumeGraph : onPauseGraph}>
+              {graphPaused ? (
+                <>
+                  Resume <PlayIcon />
+                </>
+              ) : (
+                <>
+                  Pause <PauseIcon />
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {isGentracePluginEnabled && <GentraceInteractors />}
+
+        {recordingsEnabled && hasRecordingToSave && !activeRecording && (
+          <div className={clsx('save-recording-button')}>
+            <button onClick={saveRecording}>Save Recording</button>
+          </div>
+        )}
+        {showPrimaryGraphControlButton && (
+          <div
+            className={clsx('run-button', {
+              running: graphRunning,
+              recording: !!activeRecording,
+              secondary: runButtonPresentation.currentGraphRunSecondary,
+            })}
+          >
+            <button
+              disabled={runButtonsBlocked}
+              aria-disabled={runButtonsBlocked || undefined}
+              aria-busy={actionBarExecutionState.runButtonLoading || undefined}
+              onClick={() => runGraph(graphMetadata?.id)}
+            >
+              {graphRunning ? (
+                <>
+                  Abort <MultiplyIcon />
+                </>
+              ) : activeRecording ? (
+                renderRunButtonContents('Play Recording')
+              ) : (
+                renderRunButtonContents(runButtonPresentation.currentGraphRunLabel)
+              )}
+            </button>
+          </div>
+        )}
+        {runButtonPresentation.showProjectGraphRunButton && !observingRemote && (
+          <div className={clsx('run-button', { running: graphRunning })}>
+            <button
+              disabled={runButtonsBlocked}
+              aria-disabled={runButtonsBlocked || undefined}
+              aria-busy={actionBarExecutionState.runButtonLoading || undefined}
+              onClick={() => runGraph(projectMetadata.mainGraphId)}
+            >
+              {graphRunning ? (
+                <>
+                  Abort <MultiplyIcon />
+                </>
+              ) : (
+                renderRunButtonContents(runButtonPresentation.projectGraphRunLabel)
+              )}
+            </button>
+          </div>
+        )}
+        <Popup
+          isOpen={menuIsOpen}
+          onClose={toggleMenuIsOpen.setLeft}
+          popupComponent={PopupMenuContainer}
+          content={() => (
+            <ActionBarMoreMenu
+              getDebuggerPanelAnchor={getDebuggerPanelAnchor}
+              onClose={toggleMenuIsOpen.setLeft}
+              onExportRecording={activeRecording && hasRecordingToSave ? saveRecording : undefined}
+              onAddRunInputsToEvaluation={
+                evaluationInputCopyEnabled ? toggleAddRunInputsToEvaluationModalOpen.setRight : undefined
               }
-            }}
-          >
-            <MoreMenuVerticalIcon />
-          </button>
-        )}
-      />
+            />
+          )}
+          placement="bottom-end"
+          trigger={(triggerProps) => (
+            <button
+              className="more-menu"
+              {...triggerProps}
+              onMouseDown={(e) => {
+                if (e.button === 0) {
+                  toggleMenuIsOpen.toggle();
+                  e.preventDefault();
+                }
+              }}
+            >
+              <MoreMenuVerticalIcon />
+            </button>
+          )}
+        />
+      </div>
+      {activeRecording && <LoadedRecordingInfo recording={activeRecording} />}
       {evaluationInputCopyEnabled ? (
         <AddRunInputsToEvaluationModal
           open={addRunInputsToEvaluationModalOpen}

@@ -4,20 +4,29 @@ import {
   deserializeProject,
   serializeProject,
   type DataId,
+  type ExecutionRecorder,
   type GraphId,
   type Project,
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
-import type { IOProvider } from '../../io/IOProvider.js';
 import React from 'react';
 import { JSDOM } from 'jsdom';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { getDefaultStore } from 'jotai';
+import { toast } from 'react-toastify';
+import type { IOProvider } from '../../io/IOProvider.js';
 import { ProvidersProvider } from '../../providers/ProvidersContext.js';
 import { MemoryStaticDataStore } from '../../providers/StaticDataStore.js';
 import { HostCallbacksProvider, type RivetAppHostProjectSavedEvent } from '../../providers/HostCallbacksContext.js';
 import { ExecutorSessionProvider } from '../../providers/ExecutorSessionContext.js';
+import {
+  activateLoadedRecordingState,
+  currentProjectLoadedRecordingState,
+  loadedRecordingState,
+  recordingTabIndicatorsState,
+  recordingPlaybackStartingState,
+} from '../../state/execution.js';
 import { graphState } from '../../state/graph.js';
 import { selectedOpeningProjectTabIdState } from '../../state/openingProjectTabs.js';
 import { projectEditorStateByProjectIdState } from '../../state/projectEditor.js';
@@ -35,6 +44,7 @@ import { configureHybridStorageBackend, MemoryAsyncStorage } from '../../state/s
 import { createBlankProjectWithDefaultGraph } from '../../utils/blankProject.js';
 import { addOpenedProject } from '../../utils/openedProjects.js';
 import type { RivetWorkspaceHost } from '../../host.js';
+import { useWorkspaceTransitions } from '../useWorkspaceTransitions.js';
 import { useWorkspaceHostSave } from './useWorkspaceHostSave.js';
 
 type SaveableIOProvider = IOProvider & {
@@ -44,6 +54,7 @@ type SaveableIOProvider = IOProvider & {
 
 type MountedSaveHost = {
   saveCurrentProject: RivetWorkspaceHost['saveCurrentProject'];
+  saveProjectAs(): Promise<boolean>;
   unmount(): Promise<void>;
 };
 
@@ -432,7 +443,8 @@ test('public workspace save remains successful when the host save observer throw
   }
 });
 
-test('public workspace save returns false when persistence fails', async () => {
+test('public workspace save returns false when persistence fails', async (t) => {
+  const errors = t.mock.method(toast, 'error', () => 'fixture-error');
   let savedEventCount = 0;
   const ioProvider = createSaveableIOProvider({
     async saveProjectDataNoPrompt() {
@@ -454,6 +466,101 @@ test('public workspace save returns false when persistence fails', async () => {
     assert.equal(savedEventCount, 0);
     assert.equal(store.get(projectUnsavedChangesState)[projectId], true);
     assert.equal(store.get(projectDataUnsavedChangesState)[projectId], true);
+    assert.equal(errors.mock.callCount(), 1);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test('saving a recording snapshot warns without attempting persistence or marking it clean', async (t) => {
+  const warnings = t.mock.method(toast, 'warn', () => 'fixture-warning');
+  const errors = t.mock.method(toast, 'error', () => 'fixture-error');
+  let writes = 0;
+  const fixture = await mountSaveHost(
+    createSaveableIOProvider({
+      async saveProjectDataNoPrompt() {
+        writes++;
+      },
+    }),
+    undefined,
+    { loaded: true, path: 'recording://run/replay.rivet-project' },
+  );
+  const store = getDefaultStore();
+  const id = store.get(projectState).metadata.id;
+  const baseline = store.get(savedProjectContentDigestsState)[id];
+  try {
+    await act(async () => {
+      assert.equal(await fixture.saveCurrentProject(), false);
+    });
+    assert.equal(writes, 0);
+    assert.equal(warnings.mock.callCount(), 1);
+    assert.equal(warnings.mock.calls[0]!.arguments[0], 'Recording replay projects are read-only.');
+    assert.equal(errors.mock.callCount(), 0);
+    assert.equal(store.get(projectUnsavedChangesState)[id], true);
+    assert.equal(store.get(savedProjectContentDigestsState)[id], baseline);
+  } finally {
+    await fixture.unmount();
+  }
+});
+
+test('Save As keeps a recording attached to the new editable file without attempting an in-place write', async () => {
+  for (const path of ['recording://run/replay.rivet-project', null]) {
+    let saveAsCalls = 0;
+    let inPlaceCalls = 0;
+    const fixture = await mountSaveHost(
+      createSaveableIOProvider({
+        async saveProjectData() {
+          saveAsCalls++;
+          return 'saved-copy.rivet-project';
+        },
+        async saveProjectDataNoPrompt() {
+          inPlaceCalls++;
+        },
+      }),
+      undefined,
+      { loaded: path != null, path },
+    );
+    const store = getDefaultStore();
+    const id = store.get(projectState).metadata.id;
+    store.set(activateLoadedRecordingState, {
+      projectId: id,
+      projectPath: path,
+      path: 'original.rivet-recording',
+      recorder: { events: [] } as unknown as ExecutionRecorder,
+      summary: { status: 'succeeded', createdAt: '', durationMs: 0 },
+    });
+    try {
+      await act(async () => {
+        assert.equal(await fixture.saveProjectAs(), true);
+      });
+      assert.equal(saveAsCalls, 1);
+      assert.equal(inPlaceCalls, 0);
+      assert.equal(store.get(loadedProjectState).path, 'saved-copy.rivet-project');
+      assert.equal(store.get(currentProjectLoadedRecordingState)?.projectPath, 'saved-copy.rivet-project');
+      assert.equal(store.get(recordingTabIndicatorsState)[id]?.projectPath, 'saved-copy.rivet-project');
+    } finally {
+      await fixture.unmount();
+    }
+  }
+});
+
+test('an in-place save does not replace a loaded recording or reset its playback reservation', async () => {
+  const fixture = await mountSaveHost(createSaveableIOProvider({}));
+  const store = getDefaultStore();
+  const selected = {
+    projectId: store.get(projectState).metadata.id,
+    projectPath: 'project.rivet-project',
+    path: 'run.rivet-recording',
+    recorder: { events: [] } as unknown as ExecutionRecorder,
+  };
+  store.set(activateLoadedRecordingState, selected);
+  store.set(recordingPlaybackStartingState, true);
+  try {
+    await act(async () => {
+      assert.equal(await fixture.saveCurrentProject(), true);
+    });
+    assert.equal(store.get(loadedRecordingState), selected);
+    assert.equal(store.get(recordingPlaybackStartingState), true);
   } finally {
     await fixture.unmount();
   }
@@ -550,6 +657,9 @@ async function mountSaveHost(
   const projectId = project.metadata.id as ProjectId;
   const mainGraph = project.graphs[project.metadata.mainGraphId as GraphId]!;
   const previousState = {
+    loadedRecording: store.get(loadedRecordingState),
+    recordingIndicators: store.get(recordingTabIndicatorsState),
+    recordingStarting: store.get(recordingPlaybackStartingState),
     graph: store.get(graphState),
     loadedProject: store.get(loadedProjectState),
     openedProjectSnapshots: store.get(openedProjectSnapshotsState),
@@ -586,8 +696,11 @@ async function mountSaveHost(
   store.set(savedProjectContentDigestsState, {});
 
   let saveCurrentProject: (() => Promise<boolean>) | undefined;
+  let saveProjectAs: (() => Promise<boolean>) | undefined;
   function Harness() {
     saveCurrentProject = useWorkspaceHostSave();
+    const transitions = useWorkspaceTransitions();
+    saveProjectAs = () => transitions.saveProject({ forceSaveAs: true });
     return null;
   }
 
@@ -604,9 +717,11 @@ async function mountSaveHost(
     );
   });
   assert.ok(saveCurrentProject);
+  assert.ok(saveProjectAs);
 
   return {
     saveCurrentProject,
+    saveProjectAs,
     async unmount() {
       await act(async () => root.unmount());
       store.set(graphState, previousState.graph);
@@ -620,6 +735,9 @@ async function mountSaveHost(
       store.set(projectsState, previousState.projects);
       store.set(savedProjectContentDigestsState, previousState.savedProjectContentDigests);
       store.set(selectedOpeningProjectTabIdState, previousState.selectedOpeningProjectTabId);
+      store.set(loadedRecordingState, previousState.loadedRecording);
+      store.set(recordingTabIndicatorsState, previousState.recordingIndicators);
+      store.set(recordingPlaybackStartingState, previousState.recordingStarting);
       configureHybridStorageBackend(restoreStorageBackend);
       restoreGlobals();
       dom.window.close();

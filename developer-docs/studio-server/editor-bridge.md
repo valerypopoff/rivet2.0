@@ -119,6 +119,14 @@ shared activation and dirty-state behavior is exercised in App-owned hook tests.
 
 ## Model-node error behavior
 
+The Classifier family is branded **Decision AI** in the editor: **Decision AI run**,
+**Decision AI Profile** and **Decision AI Question**, under the **Decision AI**
+palette group and Rivet Settings page. This changes labels only; saved node types,
+port IDs, credential keys, health families and API names remain `classifier*`.
+Exact legacy default titles are aliased for display without modifying project
+contents; authored titles remain untouched. See the
+[presentation compatibility contract](../CLASSIFIER-NODES.md).
+
 The shared Image file picker (`ImageBrowserEditor.tsx`) receives bytes and the
 selected filename from the IO provider. Infer its Media Type from that filename,
 not the editor's data-field key; `.jpg`/`.jpeg` files must be labeled `image/jpeg`.
@@ -130,10 +138,10 @@ Classifier validation must continue rejecting mismatched headers/media types.
 The headless classifier observer covers JPEG (including uppercase `.JPG`), PNG
 and GIF selections through the real Image editor and browser file-input path.
 
-Classifier Evaluate's built-in providers are Jev, Liquid AI (`d1`), and OpenAI
-Decisions (`gpt-6-luna`). The hosted
+Decision AI run's built-in providers are Jev, Liquid AI (`d1`), OpenAI
+Decisions (`gpt-6-luna`), OpenRouter Microsoft Decision-1 and Perplexity Decisions. The hosted
 editor uses Core's ordered registry for provider/model defaults and the shared
-Settings → Classifier credentials page; its environment shim enumerates the
+Settings → Decision AI credentials page; its environment shim enumerates the
 registry's default names, including `LIQUID_API_KEY` and `OPENAI_API_KEY`, before Node execution.
 Evaluate's single State port accepts text, native images, base64 image strings,
 and assembled user messages or ordered mixed arrays. There is no separate Images
@@ -141,6 +149,18 @@ port. Question definitions remain text/JSON only; question-level image fields
 fail with guidance to use Evaluate's State. Unsupported models reject images rather than
 dropping them. OpenAI request/answer adaptation retains the existing node output
 and error contracts without image-based batching or aggregate diagnostic envelopes.
+Jev 1.13/1.14 and their verified aliases support experimental shared-State images.
+The shared Model inspector warns about this status. Core encodes PNG/JPEG into
+Jev-native assets with per-request UUID references, preserving order and retry
+payloads. Only image requests enable `TypeSafe-Danger-Zone-Images: true`; text-only
+requests and other providers are unchanged. Preflight enforces 280–1568 pixels per
+side and 16 MiB decoded per file, within the shared 32 MiB request cap. Providers
+still validate complete content and processed/context limits. See
+[the adapter and local HTTP simulation](../CLASSIFIER-NODES.md#experimental-jev-images).
+Cross-provider regressions verify identical accepted State forms in inline and
+Profile modes, while retaining each provider's own wire format and limits. Real
+GraphProcessor checks cover Graph Input → Assemble Message → Array/Assemble Prompt
+→ Decision AI run → Graph Output for Jev, Liquid, OpenAI and Perplexity.
 For a message array, wire text and image Parts into each Assemble Message, then
 combine its Message outputs with Assemble Prompt and connect Prompt directly to
 State (Array's Output is also supported). Assemble Prompt accepts scalar messages
@@ -151,14 +171,34 @@ User Type and input-supplied `user` roles are supported. OpenAI Decisions accept
 only User messages (not the Chat/Responses role set); unsupported assembled roles
 fail before HTTP. OpenAI retains each message boundary; System One flattens
 accepted message content without pretending it supports chat roles.
-Each evaluation captures its request configuration once and uses one absolute
-deadline across request preparation, retries and response validation.
+Each evaluation captures its request configuration once. Decision AI run has no
+overall timeout; enabled, hosted Profile response timeouts cover each provider
+attempt's preparation, retries and response validation. Old node-wide timeout
+fields are ignored, not migrated or retained as hidden safety deadlines.
+Retry cooldowns and provider `Retry-After` waits remain cancellable even without
+a deadline; Core chunks long waits instead of overflowing or shortening them.
 Credentialed classifier requests never follow redirects.
 Classifier credential UI presents Automatic (legacy `configured`), strict
-Classifier settings, and Input port. Preserve existing source values; do not
+Decision AI settings, and Input port. Preserve existing source values; do not
 silently change old graphs' key precedence. Strict saved-key selection must not
 fall back through the hosted environment shim or general OpenAI credentials.
 The editor shows source policy, not secret values or guesses about remote state.
+Core-emitted Decision AI errors and profile summaries use the visible brand,
+including the displayed exception prefix. Internal Classifier class/node names,
+family keys and credential settings stay unchanged. Recording replay does not
+rewrite historical diagnostic text or authored profile names; current and legacy
+errors use the same node/full-output/inspector/activity paths.
+The shared family-aware profile display helper also keeps Run Activity search
+aligned with its labels. Only the exact legacy default in the classifier family
+is aliased; padded/custom names and raw recording metadata remain unchanged.
+SubQ Snap uses the same registry-driven provider/settings/environment controls,
+with `subqApiKey` / `SUBQ_API_KEY` on the executor and default model
+`subq-snap-1.1`. Core owns the separate typed-base64 image mapping and limits;
+hosted wrappers must not duplicate it. See [SubQ integration](../CLASSIFIER-NODES.md#subq-snap-decisions)
+for pricing, retention and local verification boundaries.
+Decision AI HTTP 403 diagnostics distinguish denied model/key access from HTTP
+401's invalid-credentials message. The host displays Core's explanation without
+rewriting recorded history; retry/fallback and failure categories are unchanged.
 Question preparation uses its own bounded, cancellation-aware interpolation
 path before JSON parsing. Hosted wrappers use the same Core behavior.
 Estimated Cost is available only for verified requested/returned model pairs,
@@ -221,7 +261,7 @@ run and does not emit a caught failure.
 
 Caller cancellation is checked before preparation and after asynchronous work;
 late successful LLM replies cannot publish successful activity or enter the cache.
-Classifier's overall deadline covers both headers and JSON receipt, including
+Decision AI Profile response deadlines cover both headers and JSON receipt, including
 injected transports that ignore abort signals. Waiting settles on cancellation;
 late replies are discarded and late rejections consumed. Response-read errors
 retain their underlying cause instead of reporting only an invalid-JSON summary.
@@ -294,11 +334,13 @@ promotion is not a reload. `reloadFromDisk` is the explicit replacement path.
 `preferredGraphId` selects the requested graph instead of restoring an unrelated
 resource. See [workspace activation](../EDITOR-WORKSPACE-STATE.md#project-activation-and-content-replacement).
 
-The hosted `useLoadProject` override is only an Evaluation-cache/executor-policy
-adapter around App's `useActivateOpenedProject`. Snapshot selection, saved
-baselines and cancellation stay in that shared activation owner. Hosted tab
-synchronization likewise calls App's `useSyncProjectDirtyState` rather than
-duplicating digest comparison or marking restored content clean.
+Hosted `providers.projectActivation` supplies only Evaluation-cache/executor-policy
+callbacks to App's `useActivateOpenedProject`; there is no `useLoadProject` module override. Snapshot selection, saved
+baselines and cancellation stay in that shared activation owner. Hosted
+`providers.openedProjectSync` now configures App's shared tab synchronizer rather
+than replacing it. The adapter supplies explicit-tab policy, title resolution
+and open-ID cache pruning only. App's `useSyncProjectDirtyState` still owns dirty
+comparison; neither recovery nor title synchronization marks restored edits clean.
 
 Hosted preparation uses abortable fetch/worker deserialization with one overall
 deadline (including deferred import). Dataset import and accepted revision binding
@@ -336,10 +378,11 @@ Recovery checkpoint failure after a completed open is separate from open failure
 
 ## Project-tab keyboard navigation
 
-App's `ProjectSelector` owns adjacent project-tab shortcuts: Windows/Linux use
-Ctrl+Tab / Ctrl+Shift+Tab and Ctrl+Page Down / Ctrl+Page Up; macOS uses
-Command+Option+Right / Left. Alt+Page Down / Alt+Page Up is also available on all
-platforms as a browser-friendly alternative. Navigation follows the visible project-tab order,
+App's `ProjectSelector` owns adjacent project-tab shortcuts on all platforms:
+**Shift+Page Up selects the tab to the right; Shift+Page Down selects the tab to
+the left.** These replace the previous Ctrl+Tab, Ctrl+Page, Command+Option+arrow
+and Alt+Page bindings. Plain Page Up / Down retain graph navigation, and ordinary
+Tab / Shift+Tab retain keyboard focus traversal. Navigation follows the visible project-tab order,
 including opening placeholders, wraps at either end, and leaves workspace
 navigation buttons (Settings, Plugins, etc.) outside the cycle. Selecting a
 project closes the current workspace overlay through the normal tab-click path.
@@ -363,15 +406,14 @@ must not independently load project bytes, replace snapshots or mark edits clean
 Keyboard handling does not alter hosted Save shortcut ownership or native menus.
 
 These shortcuts work when key events reach Rivet (including desktop webviews).
-Browsers may reserve them for their own tabs before a page/iframe can intercept
-them; no JavaScript listener or iframe forwarding can override that reservation.
-Do not request fullscreen or keyboard-lock permissions automatically to work
-around it. Use Alt+Page Up / Down when the browser reserves Chrome-style keys.
+They require Shift alone, without Ctrl, Command or Alt, and do not claim browser
+tab shortcuts. Focus must be within the editor document; no fullscreen or
+keyboard-lock permissions are needed.
 The headless `project-tab-shortcuts` observer exercises the real selector,
 wraparound, edited snapshots, opening tabs and modal blocking. Synthetic events
-cover OS/browser-reserved combinations without claiming to verify delivery by
-Chrome's browser chrome or native Windows/Linux/macOS webviews.
-The observer also sends real Alt+Page Up / Down key presses from a focused text
+cover platform variations and rapid activation sequences without claiming to
+verify native Windows/Linux/macOS webviews.
+The observer also sends real Shift+Page Up / Down key presses from a focused text
 input and verifies project selection and same-window listener suppression.
 
 ## Project loading performance
@@ -498,16 +540,20 @@ Rivet owns editor-local find/search UIs, but `Ctrl+F` / `Cmd+F` can fire while f
 
 Node copy/paste shortcuts do not cross the editor bridge. Dashboard-focused duplicate is the narrow exception because browsers reserve `Ctrl+D` / `Cmd+D` for bookmark UI before the iframe can see it.
 
-- `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` stay inside the iframe, but hosted builds replace the upstream hotkey hook with a tracked wrapper override so copy/cut/paste reads the latest Jotai state immediately instead of waiting for a React re-render.
-- The hosted override delegates paste and single-node duplicate mutations to the shared editor commands rather than rebuilding node/connection copies itself. Thus copied wire bends follow the same node offset in desktop and hosted editors, even if the bends were not selected; paste and Alt-drag select copied bends with their new nodes and participate in shared Undo/Redo. Cross-graph paste copies only links internal to the copied nodes.
-- Hosted node shortcuts reject Alt-modified/AltGr key combinations, matching the desktop shortcut policy. Both paste entry points ignore empty node clipboards rather than clearing selection and adding an empty history step. Copy commands clear stale node hover on Apply/Undo/Redo so overlapping originals cannot block the newly selected copies.
+- `Ctrl+C`, `Ctrl+X`, and `Ctrl+V` stay inside the iframe. The shared App `useCopyNodesHotkeys` owns shortcuts, admission and dispatch in both desktop and hosted editors; there is no hosted clipboard module replacement. Copy, paste and delete commands read the current provider store at event time, including consecutive events before a React render. Do not substitute the global default Jotai store or restore a wrapper command implementation.
+- `ui.nodeClipboard` opts hosted editors into hovered-node fallback for copy/single-node duplicate (never cut) and capture-phase browser `copy`/`cut`/`paste` events. Omission retains standalone selection-only keyboard behavior. One window listener handles each enabled event type and unmount/policy changes remove it. Inputs, textareas, selects, content-editable targets, textbox roles, focused/targeted dialog controls, open editor overlays, node-edit mode, IME composition and already-consumed events keep ownership; no graph mutation runs behind them.
+- Paste and single-node duplicate use the shared editor commands rather than rebuilding node/connection copies. Thus copied wire bends follow the same node offset in desktop and hosted editors, even if the bends were not selected; paste and Alt-drag select copied bends with their new nodes and participate in shared Undo/Redo. Cross-graph paste copies only links internal to the copied nodes. Paste uses current pan/zoom and the shared Data Bus client offset, not a hosted-only coordinate calculation.
+- Hosted node shortcuts reject Alt-modified/AltGr key combinations, matching the desktop shortcut policy. Both paste entry points ignore empty node clipboards rather than clearing selection and adding an empty history step. Paste commands clear stale node hover on Apply/Undo/Redo so overlapping originals cannot block the newly selected copies.
+- Clipboard eligibility validates selection and hover against the current graph, including an immediate shortcut after cut/delete before React processes pointer cleanup. A missing target must not duplicate, add history or clear the existing clipboard. The shared copy operation applies the same filtering for context-menu callers and copies only connections internal to the actual copied nodes. Native `dialog[open]` controls retain clipboard keys even when they have no explicit ARIA role, just like role-based dialogs.
+- `utils/editorInputLock` is the common global admission check for clipboard and project-tab shortcuts. An ARIA-modal dialog owns input even with `autoFocus=false` or a window-retargeted event; root/body/app `inert` locks also win before graph dispatch. Text-field and dialog-ancestor checks remain separate so a modeless native dialog does not globally disable clipboard commands outside its controls. These checks never move focus or synthesize a replacement write.
+- Graph-input deletion confirmation carries a transient target: project ID, graph ID, existing binding-registry token and workspace token. Acceptance rechecks that target in the deletion command before touching nodes/history; switching graphs/projects, rebinding the same project or replacing the workspace makes the old confirmation inert. A current confirmation deletes only its captured IDs, not a newer selection, and keeps normal Undo. This is internal modal state, not a project/recording format or persisted-schema change.
 - Isolated clipboard browser fixtures use `mockHostedEditorBootstrap` for configuration and the shared evaluation library, alongside their project API fixtures. They exercise real canvas interactions without relying on an ambient backend to initialize editor persistence.
 - `Ctrl+D` / `Cmd+D` is editor-local when the iframe has focus. When an active project is open but focus is still on dashboard chrome, the dashboard prevents the browser bookmark default, focuses the iframe, and sends `trigger-editor-duplicate-shortcut`; the iframe then replays a normal `KeyD` shortcut so the existing Rivet node-duplicate handler owns selection, edit-state checks, and mutation.
 - The dashboard does not relay copy/cut/paste shortcuts to the iframe. That approach was intentionally avoided because iframe-focused clipboard events are not reliable at the parent-page level.
 - In hosted mode, shortcut reliability depends on editor focus, not dashboard focus. The hosted wrapper therefore explicitly focuses the iframe after `project-opened` and reclaims iframe focus on capture-phase pointer interactions inside `.node-canvas`.
 - On those canvas interactions, the hosted editor bridge also focuses the canvas element itself unless the click is on a real form control, and blurs stale editor-local text inputs before keyboard node actions run.
-- The hosted wrapper also replaces the upstream context-menu hook so closing a context menu clears any focused search input instead of leaving a hidden text field intercepting shortcuts. That override must continue to mirror upstream's virtual pointer anchor and `setFloatingMenu` contract; do not restore DOM-positioning wrappers such as `graph-item-context-menu-pos` or `graph-list-context-menu-pos`.
-- Open context menus treat the dashboard and its same-origin `.dashboard-editor-frame` as outside-click surfaces for each other. `useHostedSurfaceDismiss` subscribes to capture-phase `pointerdown` (mouse/touch/pen), `click` (including keyboard/assistive activation) and `contextmenu` on the opposite document only; editor graph/node menus use the hosted hook override, and dashboard project/folder/bundle menus use the same helper. Focus/Tab alone does not dismiss anything. It rebinds after iframe loads and removes listeners when menus close/unmount. It never synthesizes input, relays Escape, cancels the original event or moves focus. Ordinary click-away/menu-item behavior, inline text focus, canvas gestures, modal focus locks and desktop menus keep their existing owners. Unavailable/cross-origin or unrelated frames are ignored.
+- The shared context-menu hook consumes `ui.contextMenu.releaseFocus` so closing a hosted context menu clears any focused search input instead of leaving a hidden text field intercepting shortcuts. Its virtual pointer anchor and `setFloatingMenu` contract stay editor-owned; do not restore module replacements or DOM-positioning wrappers such as `graph-item-context-menu-pos` or `graph-list-context-menu-pos`.
+- Open context menus treat the dashboard and its same-origin `.dashboard-editor-frame` as outside-click surfaces for each other. `useHostedSurfaceDismiss` subscribes to capture-phase `pointerdown` (mouse/touch/pen), `click` (including keyboard/assistive activation) and `contextmenu` on the opposite document only; editor graph/node menus subscribe through `ui.contextMenu.subscribeToExternalDismiss`, and dashboard project/folder/bundle menus use the same helper. Focus/Tab alone does not dismiss anything. It rebinds after iframe loads and removes listeners when menus close/unmount. It never synthesizes input, relays Escape, cancels the original event or moves focus. Ordinary click-away/menu-item behavior, inline text focus, canvas gestures, modal focus locks and desktop menus keep their existing owners. Unavailable/cross-origin or unrelated frames are ignored.
 - Editor `pagehide` releases parent-document listeners even when iframe navigation does not run React effect cleanup; `pageshow` resumes a still-open menu restored from back/forward cache. Unmount removes both lifecycle listeners, preventing stale reattachment. Browser regressions verify keyboard activation in both directions and count listener removal through an actual editor reload.
 - The production-build focus regression also alternates real project/folder and canvas right clicks: the old menu closes without dismissing the newly opened one. Hover alone must not dismiss a menu, and the first click on a node's edit control must both dismiss the dashboard menu and open the editor. Escape still closes that editor. Dismissal never requires an extra click or sends a server write.
 - The hosted wrapper keeps the iframe and canvas focusable for keyboard reliability but suppresses their visible browser focus outline, so the editor does not show a white perimeter when focused.
@@ -522,7 +568,7 @@ The editor bridge is not the same thing as the executor/debugger websocket trans
 - hosted wrapper code still owns project-open/delete/path-move messages, parent-page save relay, hosted IO adapters, and the hosted File menu visibility policy; upstream Rivet owns workspace transitions, tab close fallback, path moves, command behavior, and the actual save transition
 - hosted UI policy uses the upstream `RivetAppHost.ui` seam. The wrapper exposes only `import_graph`, `export_graph`, `settings`, and `get_help` in the iframe File menu, preserving Rivet's command layer while hiding wrapper-owned project create/open/save commands. It sets `projectSettings.showProjectReferences: false` to remove the Project References editor from hosted Project settings; desktop hosts retain it by default. This is a UI restriction only: already saved references remain in project data and can still load or run, so it does not make published cross-project dependencies immutable. It also sets `webApps.desktopPreview: false` so the hosted web-app editor does not show the desktop-only `Run web app` preview action; hosted web apps are launched through published `/apps` and `/apps-latest` routes instead.
 - hosted provider wiring is explicit in `hostedRivetProviders`: the wrapper passes `HostedIOProvider`, an injected import/export-capable `HostedDatasetProvider`, hosted environment lookup, and hosted path-policy reads into `RivetAppHost.providers`; stale `ioProvider` and `TauriIOProvider` module aliases should stay removed
-- hosted builds keep a `clearProjectContextState` compatibility export in the `savedGraphs` override, backed by upstream `releaseProjectContextState`, so closing or replacing an editor tab forgets the atom instance without deleting stored project context values; project ids must remain stable because context persistence is keyed by `project.metadata.id`. `deleteHostedProjectContextState` is reserved for the dashboard delete-workflow command, which receives the deleted project id from the API and removes `projectContext__"<projectId>"` through Rivet's shared `project` storage group so it can also clean closed-tab state.
+- Context is editor-owned and remains keyed by `project.metadata.id` under `projectContext__"<projectId>"` in the existing `project` storage group. Closing/replacing tabs calls `releaseProjectContextState` and retains saved context. After confirmed server deletion, the dashboard invokes `workspace.deleteProjectContext(projectId)`, including for already-closed tabs. App resets live atoms, releases their family entry, removes only that project's key and awaits the recovery flush. The workspace method rejects a failed flush; the bridge reports local cleanup failures and continues independent dataset/session cleanup. Neither operation rewrites project files or deletes server data. No `savedGraphs` module replacement or wrapper-owned storage-key deletion remains.
 - `HostedDatasetProvider` extends Rivet's browser dataset provider and prunes the previous IndexedDB dataset rows for the project before importing the authoritative dataset payload from the project load response, so deleted datasets do not reappear from stale app storage
 - stale wrapper transport override files were removed after the Rivet 2 seam migration; do not restore `useExecutorSession`, `useRemoteDebugger`, `useGraphExecutor`, or `useRemoteExecutor` aliases unless the upstream seam is removed
 
@@ -578,13 +624,13 @@ New writes use the EvaluationRun version-2 envelope, separating execution state,
 - `packages/studio-server-web/dashboard/hostedRivetProviders.ts` - explicit provider overrides passed into `RivetAppHost`
 - `packages/studio-server-shared/llmProfileHealthHttpStore.ts` - authenticated runtime and Project Settings clients for durable LLM Profile health
 - `packages/studio-server-executor/src/executor.mts` - wrapper executor entrypoint that injects the server-backed health store into Node-mode runs
-- `packages/studio-server-web/overrides/state/savedGraphs.ts` - hosted preservation of editor-owned `projectContext__"<projectId>"` storage across tab close/reopen
+- `packages/app/src/hooks/workspaceHost/useWorkspaceHostProjectCleanup.ts` - editor-owned close cleanup and explicit durable context deletion through the public workspace API
 - `packages/studio-server-web/dashboard/useOpenWorkflowProject.ts` - hosted path loading, duplicate-id checks, and open/replace-current or opening-tab completion calls through the captured `RivetWorkspaceHost`
 - `packages/app/src/hooks/workspaceHost/useWorkspaceHostReplaceProjectSnapshot.ts` - explicit active/inactive tab snapshot replacement for reloads
 - `packages/studio-server-web/io/HostedDatasetProvider.ts` - abortable, guarded replacement of project datasets in one transaction, with separate explicit deletion cleanup
 - `packages/studio-server-web/io/HostedIOProvider.ts` - API-backed project loading/saving plus replay and published-version preview loading
-- `packages/studio-server-web/overrides/hooks/useCopyNodesHotkeys.ts` - hosted clipboard hotkey override that reads the latest node state synchronously
-- `packages/studio-server-web/overrides/hooks/useContextMenu.ts` - hosted context-menu override that clears stale focused menu inputs
+- `packages/app/src/hooks/useCopyNodesHotkeys.ts` - shared clipboard admission and event dispatch; hosted options come through the public UI config
+- `packages/app/src/hooks/useContextMenu.ts` - shared menu lifecycle/positioning, with hosted focus release and external dismissal supplied through `HostedEditorApp`'s `ui.contextMenu` contract
 - `packages/studio-server-web/dashboard/useHostedSurfaceDismiss.ts` - same-origin, cross-document context-menu dismissal without input forwarding; lifecycle regressions in `tests/editor-bridge-focus.test.ts`, browser focus/typing/menu checks in `playwright-observe/hosted-modal-focus.spec.ts`
 - `packages/studio-server-web/hosted-editor.css` - hosted global CSS that suppresses visible canvas focus outlines
 - `packages/studio-server-web/dashboard/HostedEditorApp.tsx` configures the shared host UI contract to show project titles without backing filenames in both loaded and opening editor tabs. Keep this behavior in `RivetAppHostUiConfig.projectTabs`; do not restore source-text transforms against App components.

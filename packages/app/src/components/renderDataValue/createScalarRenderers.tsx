@@ -331,7 +331,7 @@ export function createScalarRenderers(options: { renderValue: (props: DataValueR
     },
     'classifier-config': ({ value }) => (
       <div>
-        Classifier profile: <em>{value.value.configuration.provider}</em> / <em>{value.value.configuration.model}</em>
+        Decision AI profile: <em>{value.value.configuration.provider}</em> / <em>{value.value.configuration.model}</em>
       </div>
     ),
     document: ({ value }) => {

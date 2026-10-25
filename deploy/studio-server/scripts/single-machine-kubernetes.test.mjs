@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseArgs } from './deploy-kubernetes-release.mjs';
+import { parseArgs, parseDeploymentTimeout } from './deploy-kubernetes-release.mjs';
 import { preserveKubernetesContext } from './lib/kubernetes-context.mjs';
 import {
   singleMachineConfig,
@@ -38,6 +38,19 @@ test('release CLI accepts the documented Yarn separator but rejects unknown and 
   assert.throws(() => parseArgs(['--context', 'test', '--context', 'other']));
   assert.throws(() => parseArgs(['--unknown']));
   assert.throws(() => parseArgs(['--context']));
+});
+
+test('deployment timeout conversion rejects zero and timer overflow before release inputs are read', () => {
+  for (const [timeout, timeoutMs] of [['1s', 1000], ['15m', 900000], ['1h', 3600000], ['2147483s', 2147483000]])
+    assert.deepEqual(parseDeploymentTimeout(timeout), { timeout, timeoutMs });
+  for (const timeout of ['0s', '00m', '2147484s', '1000h', '999999999999999999999999999999999999h', '-1s', '1.5m', '5ms', 'Infinityh'])
+    assert.throws(() => parseDeploymentTimeout(timeout), /--timeout/);
+  const cli = fileURLToPath(new URL('./deploy-kubernetes-release.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, '--release', 'rivet', '--namespace', 'fixture', '--context', 'fixture',
+    '--values', 'artifacts/this-timeout-fixture-does-not-exist.yaml', '--timeout', '0s', '--dry-run'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /--timeout/);
+  assert.doesNotMatch(result.stderr, /ENOENT|manifest|Docker|kubectl/);
 });
 
 test('Minikube context changes are restored on success and failure, without overriding another choice', async () => {

@@ -24,7 +24,7 @@ import {
 import { migrationTargetIdentity } from '../vm-migration-target-gate.js';
 import type { SettingsRow } from '../scripts/migrate-app-settings.js';
 import { syncFileDescriptor, syncDirectory } from '../routes/workflows/filesystem-transaction-primitives.js';
-import { conflict } from '../utils/httpError.js';
+import { conflict, createHttpError } from '../utils/httpError.js';
 import { getServerUiAuthMode } from '../server-ui-auth.js';
 
 export function buildRestoreSettings(
@@ -80,6 +80,7 @@ export const legacyRestoreRequestBarrier: RequestHandler = (req, res, next) => {
     req.path.startsWith('/api/legacy-restore') ||
     req.path.startsWith('/ui-auth') ||
     req.path.startsWith('/api/config') ||
+    req.path === '/internal/ha/runtime-contract' ||
     req.path === '/internal/app-settings/proxy-config' ||
     (warmup && req.path === '/internal/executor-runtime-config');
   if (controlRequest) return next();
@@ -128,6 +129,12 @@ export class LegacyRestoreService {
   private uploadJob?: { abort: AbortController; done: Promise<RestoreOperation> };
   private completion?: Promise<void>;
   private restartRequested = false;
+  private handoverOperationId?: string;
+  beginHousekeepingHandover(operationId: string): void {
+    if (!/^[a-f0-9-]{36}$/.test(operationId) || (this.handoverOperationId && this.handoverOperationId !== operationId))
+      throw conflict('Another housekeeping handover owns this restore service.');
+    this.handoverOperationId = operationId;
+  }
   constructor(
     readonly control: LegacyRestoreControl,
     private readonly target: ManagedWorkflowStorageConfig,
@@ -157,12 +164,35 @@ export class LegacyRestoreService {
     if (operation && !['completed', 'cancelled'].includes(operation.phase))
       throw new Error('Restore scratch ownership blocks planned retirement.');
   }
+  /** Only the restore's acknowledged generation restart may bypass its restart fence. */
+  async assertMayRestart(): Promise<void> {
+    const assertSettled = () => {
+      if (!this.restartRequested || this.task || this.uploadJob || this.completion || this.child || this.closing)
+        throw new Error('Restore generation restart is not settled.');
+    };
+    assertSettled();
+    const operation = await this.control.read();
+    assertSettled();
+    if (
+      !operation ||
+      !(
+        operation.phase === 'restarting' ||
+        ['completed', 'cancelled'].includes(operation.phase) ||
+        (operation.phase === 'failed' && !operation.destructive)
+      )
+    )
+      throw new Error('Restore journal does not permit a generation restart.');
+  }
   private async ownedRoot() {
     const stat = await fs.lstat(this.root);
     if (!stat.isDirectory() || stat.isSymbolicLink() || (await fs.realpath(this.root)) !== path.resolve(this.root))
       throw new Error('Restore storage must be a real dedicated directory.');
   }
   async upload(input: Readable): Promise<RestoreOperation> {
+    if (this.handoverOperationId)
+      throw createHttpError(503, 'Maintenance handover in progress. Try again after it completes.', {
+        code: 'housekeeping_handover',
+      });
     if (this.closing || this.cancelling || this.restartRequested) throw conflict('Restore service is stopping.');
     if (this.task || this.uploadJob) throw conflict('Restore work is already active.');
     const abort = new AbortController();

@@ -779,7 +779,101 @@ edits in another open dependency tab must be saved before running the caller.
 Each run gets isolated dependency projects and datasets; mutations do not leak
 into another run or another version of the same project.
 Root runs project live dependency node/graph events into matching bundle tabs,
-including inactive tabs, in Browser and desktop Node mode. Core event metadata
+including inactive tabs, in Browser, desktop Node and hosted Node editor mode.
+The [execution-routing refactoring plan](./execution-routing-refactoring-plan.md)
+consolidates identity, admission, lifetime and display-state ownership around this
+behavior. Its shared binding/admission/canonical-store implementation is described
+in [Execution coordination](../EXECUTION-COORDINATION.md); existing command and
+recording ownership remains unchanged.
+The dated [functional baseline](../EXECUTION-ROUTING-BEHAVIOR-BASELINE.md) is the
+pre-refactor comparison guide: stable behavior IDs, control ownership, lifecycle,
+playback/snapshot rules, mode-specific differences and test/evidence mapping.
+The display router uses the same explicit membership key as bundle Remote Debugger:
+server-qualified `hostedBundleKey` for Server tabs, or the portable manifest binding
+for desktop tabs. Explicit hosted detachment never falls back to a desktop hint.
+Both internal executor targets participate; this does not connect Remote Debugger
+or execute another root run. A dependency tab's own active run or loaded recording
+keeps its display instead of being overwritten by passive child events.
+A conflicting receiver (own run, recording or Remote Debugger observation) stays
+excluded for that entire root run, even if its own execution ends, its recording
+is unloaded or its observer disconnects midway. The next independent run can
+be observed normally; late node completions never join a partial child history.
+Active and inactive projections use `updateOpenProjectExecutionSnapshot`, the same
+closed-tab/delta-restore boundary used by remote observation. Reference effects
+run once and unchanged display atoms are not redundantly restored.
+Synchronous subscriptions to display-ownership atoms also retain brief conflicts
+that start and finish between two child events, such as during a long provider wait.
+This includes conflicts before the first dependency event: initial receiver
+admission checks every eligible tab, and subscriptions protect those tabs even
+before the caller reaches them. A newly finished independent run or recording
+must not be replaced by a caller that was already in flight.
+These subscriptions only update transient admission metadata; they do not execute
+work, rewrite project state or acquire run controls.
+Each run captures its eligible opened tabs, file paths and explicit bundle key.
+Closing/reopening, rebinding or leaving/rejoining a bundle permanently excludes
+that tab from the old run, even when the change happens between events. A source
+binding change closes its old passive projection too; execution itself is unchanged.
+Newly opened members wait for the next run instead of acquiring partial history.
+Only the entry project's root start/graph-start can establish an observation,
+never a child start or a late node completion. Root graph-finish/error metadata
+releases the routing record: Browser `done`/`error` events omit execution identity
+and cannot do that cleanup themselves.
+An identified root terminal closes this passive projection; subsequent child
+events cannot resurrect it, including child starts arriving during error unwinding.
+Live routing records are not subject to an arbitrary 32-root eviction limit:
+concurrent or completed roots must not erase another root's existing display fences.
+The hosted Subgraph browser matrix opens the sibling before running the caller,
+switches to its outputs while the caller remains active, then returns to the caller.
+It repeats this through real single-host and HA-style hosted Node sessions. The
+desktop bundle matrix covers the same tab projection through Browser execution.
+Nested A → B → C routing, intra-project ancestry, active/inactive tabs, replay,
+independent run/playback ownership and explicit detachment are hook regressions.
+Local verification: `artifacts/bundle-local-tabs-unit.log` contains 117 passing
+focused regressions, and `bundle-local-tabs-final-ui.log` contains the three
+passing desktop Browser/single-host Node/replicated Node browser checks. App
+type-checking and API fixture compilation pass separately. The hosted browser
+fixture forwards only root `/api/` paths, never Vite filesystem module URLs that
+contain an `api` directory. This is local editor/protocol evidence, not a desktop
+binary release or a production deployment.
+Follow-up review: `bundle-routing-review-unit.log` records 129 passing focused
+regressions, including 12 initial/mid-run display-ownership conflicts across active
+and inactive tabs. `bundle-routing-review-ui.log` records 15 passing headless
+desktop, hosted and bundle Remote Debugger checks, including source reopen,
+membership changes, mixed versions and HA replay completion/failure/shared stop.
+Type-check and focused lint pass in `bundle-routing-review-types.log` and
+`bundle-routing-review-lint.log`. The failed pre-fix conflict regressions remain
+separate `bundle-routing-review-*-red.log` evidence.
+The lifetime follow-up adds seven reproduced regressions for receiver/source
+reopening, file rebinding, membership round-trips, newly opened receivers and
+completed Browser-root cleanup (`bundle-routing-lifetime-red.log`). The focused
+suite passes 136 checks in `bundle-routing-lifetime-unit.log`; type/lint and the
+API fixture compilation are recorded under the same artifact prefix. The hosted
+UI fixture holds a real child call open, closes/reopens its receiving tab, confirms
+old output is excluded and then confirms the next independent run displays normally.
+All five selected desktop/hosted/Remote Debugger UI checks pass in
+`bundle-routing-lifetime-ui.log`, including both single-host and replicated hosted
+close/reopen cases. No production services or paid provider rehearsal were used.
+The admission follow-up reproduces 17 failures before the fix, including initial
+conflicts that finish before the first child event, conflicts appearing and
+disappearing during that wait, concurrent-root eviction and late child starts
+after each identified root terminal (`bundle-routing-admission-red.log`). The
+focused suite now passes 149 checks in `bundle-routing-admission-unit.log`,
+including both blocked and eligible receivers under concurrent-root pressure.
+The hook fixtures explicitly send the real entry-root start before child events;
+child-only synthetic histories must not grant new display admission.
+The later test-only audit moves local policy cases into
+`packages/app/src/hooks/useBundleExecutionRouting.test.tsx`, retaining two real
+workspace tab-activation integrations in `useLoadProject.test.tsx`. Independent
+guard/positive-control cases replace assertions masked by an earlier conflict;
+paired blocked/eligible siblings strengthen pressure checks. See the functional
+baseline's test-consolidation section for coverage mapping and mutation receipts.
+All five selected desktop/hosted/Remote Debugger headless checks pass in
+`bundle-routing-admission-ui-final.log`. Type-checking and focused lint pass in
+`bundle-routing-admission-types.log` and `bundle-routing-admission-lint.log`.
+The initial UI attempts failed at local sandbox/browser or source-module access,
+not at a product assertion; the final run uses the same loopback fixtures outside
+the Windows sandbox. Disposable hosted fixture containers were verified absent.
+Core event metadata
 identifies the actual owning project. This is a display projection: run controls,
 cancellation, user-input prompts, recording and terminal errors remain entry-owned.
 Cross-project graph entries are rebased for the dependency's graph view; nested

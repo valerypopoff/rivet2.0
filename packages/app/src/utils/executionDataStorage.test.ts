@@ -17,6 +17,7 @@ import {
   storeNodeDataForHistory,
 } from './executionDataStorage.js';
 import { REF_STORAGE_THRESHOLD_CHARS } from './outputStorageLimits.js';
+import { sanitizeInputsOrOutputs } from './executionDataSanitization.js';
 
 function createDataRefStore(): DataRefStore & {
   values: Map<string, DataValue>;
@@ -167,13 +168,37 @@ test('restoreStoredInputsOrOutputs ignores legacy nullish port payloads', () => 
         value: 'hello',
       },
       missing: undefined,
+      ['__proto__']: { type: 'string', storage: 'inline', value: 'opaque' },
     } as never,
     dataRefs,
   );
 
   assert.deepEqual(restored, {
     present: { type: 'string', value: 'hello' },
+    ['__proto__']: { type: 'string', value: 'opaque' },
   });
+});
+
+test('history round trips preserve opaque port IDs for inline and ref-backed values', () => {
+  for (const text of ['inline value', 'x'.repeat(REF_STORAGE_THRESHOLD_CHARS + 1)]) {
+    const dataRefs = createDataRefStore();
+    const outputs = Object.fromEntries(
+      ['__proto__', 'constructor', 'toString'].map((id) => [id, { type: 'string', value: text }]),
+    ) as Outputs;
+    const normalized = sanitizeInputsOrOutputs(outputs);
+    assert.deepEqual(Object.keys(normalized), Object.keys(outputs));
+    const stored = storeInputsOrOutputsForHistory(normalized, dataRefs, {
+      nodeId: 'node',
+      processId: 'process',
+      channel: 'output',
+    })!;
+    assert.deepEqual(Object.keys(stored), Object.keys(outputs));
+    assert.equal(Object.getPrototypeOf(stored), Object.prototype);
+    const restored = restoreStoredInputsOrOutputs(JSON.parse(JSON.stringify(stored)), dataRefs)!;
+    assert.deepEqual(restored, outputs);
+    assert.equal(Object.getPrototypeOf(restored), Object.prototype);
+    assert.deepEqual(JSON.parse(JSON.stringify(restored)), outputs);
+  }
 });
 
 test('restoreStoredDataValue tolerates malformed primitive legacy payloads', () => {
@@ -694,17 +719,21 @@ test('storeDataValueForHistory namespaces ref ids by project when provided', () 
   assert.equal(dataRefs.values.get('execution:project-a:node-1:process-1:output:output')?.type, 'string');
   assert.equal(dataRefs.values.get('execution:project-b:node-1:process-1:output:output')?.type, 'string');
   assert.equal(
-    (dataRefs.values.get('execution:project-a:node-1:process-1:output:output') as Extract<
-      DataValue,
-      { type: 'string' }
-    >)?.value[0],
+    (
+      dataRefs.values.get('execution:project-a:node-1:process-1:output:output') as Extract<
+        DataValue,
+        { type: 'string' }
+      >
+    )?.value[0],
     'a',
   );
   assert.equal(
-    (dataRefs.values.get('execution:project-b:node-1:process-1:output:output') as Extract<
-      DataValue,
-      { type: 'string' }
-    >)?.value[0],
+    (
+      dataRefs.values.get('execution:project-b:node-1:process-1:output:output') as Extract<
+        DataValue,
+        { type: 'string' }
+      >
+    )?.value[0],
     'b',
   );
 });
@@ -753,6 +782,13 @@ test('splitRunDataByPreservedNodes separates previous run data for partial rerun
 
   assert.deepEqual(Object.keys(preservedRunData), ['a', 'b']);
   assert.deepEqual(Object.keys(removedRunData), ['c']);
+  const opaque = Object.fromEntries(['__proto__', 'constructor', 'toString'].map((id) => [id, previousRunData.a]));
+  for (const preserve of [true, false]) {
+    const split = splitRunDataByPreservedNodes(opaque, preserve ? (Object.keys(opaque) as NodeId[]) : []);
+    const selected = preserve ? split.preservedRunData : split.removedRunData;
+    assert.deepEqual(Object.keys(selected), Object.keys(opaque));
+    for (const id of Object.keys(opaque)) assert.equal(selected[id as NodeId], previousRunData.a);
+  }
 });
 
 test('clearRemovedExecutionDataRefs leaves refs that are still used by preserved run data', () => {

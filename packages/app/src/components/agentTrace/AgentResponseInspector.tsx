@@ -297,7 +297,7 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
             <Metric label="Model calls" value={String(trace.summary.modelCallCount)} />
           )}
           {getClassifierRequestCount(trace) != null && (
-            <Metric label="Classifier requests" value={formatClassifierRequestCount(trace)!} />
+            <Metric label="Decision AI requests" value={formatClassifierRequestCount(trace)!} />
           )}
           {trace.scope !== 'classifier-invocation' && (
             <Metric label="Tool calls" value={String(trace.summary.toolCallCount)} />
@@ -305,7 +305,7 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
         </MetricGroup>
         <MetricGroup
           title="Recovery behavior"
-          description="Provider request retries repeat a failed request. Profile fallbacks move to the next configured LLM or classifier profile."
+          description="Provider request retries repeat a failed request. Profile fallbacks move to the next configured LLM or Decision AI profile."
         >
           <Metric label="Provider request retries" value={String(trace.summary.retryCount)} />
           <Metric label="Profile fallbacks" value={String(trace.summary.fallbackCount)} />
@@ -374,7 +374,7 @@ const ResponseInspectorContent: FC<{ trace?: AgentResponseTrace; includeSubtitle
           </TraceSection>
         )}
         {getClassifierRequestCount(trace) != null && (
-          <TraceSection title="Classifier requests" omitted={0} empty="No classifier requests recorded.">
+          <TraceSection title="Decision AI requests" omitted={0} empty="No Decision AI requests recorded.">
             {renderProfileAttemptRows((trace.profileAttempts ?? []).filter(isClassifierRequest))}
           </TraceSection>
         )}

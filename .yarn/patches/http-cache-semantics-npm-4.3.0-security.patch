@@ -1,0 +1,16 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -395,6 +395,12 @@ module.exports = class CachePolicy {
+     evaluateRequest(req) {
+         this._assertRequestHasHeaders(req);
+ 
++        // A security-zeroed entry must not be revived by max-stale or SWR.
++        // Conservatively revalidate every zero-lifetime entry.
++        if (this.maxAge() === 0) {
++            return this._evaluateRequestMissResult(req);
++        }
++
+         // In all circumstances, a cache MUST NOT ignore the must-revalidate directive
+         if (this._rescc['must-revalidate']) {
+             return this._evaluateRequestMissResult(req);

@@ -85,7 +85,7 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
             ...(classifierOnly ? [] : [metric('Model calls', String(trace.summary.modelCallCount))]),
             ...(classifierRequestCount == null
               ? []
-              : [metric('Classifier requests', formatClassifierRequestCount(trace)!)]),
+              : [metric('Decision AI requests', formatClassifierRequestCount(trace)!)]),
             ...(classifierOnly ? [] : [metric('Tool calls', String(trace.summary.toolCallCount))]),
           ]),
           metricGroup(
@@ -94,7 +94,7 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
               metric('Provider request retries', String(trace.summary.retryCount)),
               metric('Profile fallbacks', String(trace.summary.fallbackCount)),
             ],
-            'Provider request retries repeat a failed request. Profile fallbacks move to the next configured LLM or classifier profile.',
+            'Provider request retries repeat a failed request. Profile fallbacks move to the next configured LLM or Decision AI profile.',
           ),
           metricGroup('Usage and cost', [
             metric('Input tokens', formatTraceTokens(trace.summary.promptTokens)),
@@ -174,10 +174,10 @@ function createResponseInspectorElement(trace: AgentResponseTrace | null, onClos
             ? []
             : [
                 createTraceDetails(
-                  'Classifier requests',
+                  'Decision AI requests',
                   createProfileAttemptRows((trace.profileAttempts ?? []).filter(isClassifierRequest)),
                   0,
-                  'No classifier requests recorded.',
+                  'No Decision AI requests recorded.',
                 ),
               ]),
           createTraceDetails(

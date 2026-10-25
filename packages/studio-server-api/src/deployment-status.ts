@@ -7,6 +7,7 @@ import { getApiRuntimeProfile } from './runtime-profile.js';
 import { getRuntimeLibrariesBackend } from './runtime-libraries/backend.js';
 import { badRequest } from './utils/httpError.js';
 import { getHaControlPlaneMode } from './ha-control-plane.js';
+import { getHousekeepingReadiness } from './housekeeping-owner.js';
 
 const DEPLOYMENT_TOPOLOGY_ENV_NAME = 'RIVET_DEPLOYMENT_TOPOLOGY';
 
@@ -35,7 +36,7 @@ export function buildDeploymentStatus(options: {
   topology: DeploymentTopology;
   apiProfile: DeploymentStatus['apiProfile'];
   replicaReadiness?: RuntimeLibraryReplicaReadinessState | null;
-  controlPlaneMode?: 'replicated' | 'singleton';
+  controlPlaneMode?: 'replicated' | 'singleton' | 'singleton-overlap';
 }): DeploymentStatus {
   return {
     topology: options.topology,
@@ -44,7 +45,7 @@ export function buildDeploymentStatus(options: {
       ? {
           controlPlaneAvailability: {
             mode: options.controlPlaneMode,
-            maintenance: options.controlPlaneMode === 'singleton' ? ('embedded' as const) : ('dedicated' as const),
+            maintenance: options.controlPlaneMode !== 'replicated' ? ('embedded' as const) : ('dedicated' as const),
             developerInterruptionAllowed: options.controlPlaneMode === 'singleton',
           },
         }
@@ -63,12 +64,15 @@ export async function getDeploymentStatus(
   const replicaReadiness =
     topology === 'replicated' ? (await getRuntimeLibrariesBackend().getState()).replicaReadiness : null;
 
-  return buildDeploymentStatus({
+  const status = buildDeploymentStatus({
     topology,
     apiProfile,
     replicaReadiness,
     ...(process.env.RIVET_HA_CONTROL_PLANE_MODE ? { controlPlaneMode: getHaControlPlaneMode() } : {}),
   });
+  if (process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton-overlap')
+    status.housekeepingReadiness = await getHousekeepingReadiness();
+  return status;
 }
 
 export async function clearStaleDeploymentReplicaStatuses(): Promise<RuntimeLibraryReplicaCleanupResult> {

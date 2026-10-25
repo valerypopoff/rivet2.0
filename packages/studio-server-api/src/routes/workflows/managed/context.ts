@@ -33,7 +33,7 @@ import {
   createManagedWebAppActionRetentionTask,
   getManagedWebAppActionRetentionConfig,
 } from '../../../web-app-action-managed-retention.js';
-import { createManagedWorkflowMaintenance } from './maintenance.js';
+import { createManagedWorkflowMaintenance, getManagedWorkflowMaintenanceConfig } from './maintenance.js';
 import { createManagedReconciliationTask, getManagedReconciliationStatus } from './reconciliation.js';
 import {
   createManagedStaleUploadRetentionTask,
@@ -81,43 +81,74 @@ export function createManagedWorkflowContext(
   blobStore?: ManagedWorkflowBlobStore,
   options?: { migrationMode?: 'copy' | 'verify' | 'restore' },
 ): ManagedWorkflowContext {
-  const poolLease = acquireManagedPostgresPool(getManagedDbPoolConfig(config));
-  const { pool } = poolLease;
-  const resolvedBlobStore = blobStore ?? new S3ManagedWorkflowBlobStore(config);
-  const executionCache = new ManagedWorkflowExecutionCache();
-  const queries = createManagedWorkflowQueries(pool);
+  // Reject expected configuration failures before acquiring a shared lease.
+  // A synchronous context-construction failure has no owner to dispose it.
+  const poolConfig = getManagedDbPoolConfig(config);
+  const databaseConnectionConfig = getManagedDbConnectionConfig(config);
   const staleUploadRetentionConfig = getManagedStaleUploadRetentionConfig(process.env);
+  const maintenanceConfig = getManagedWorkflowMaintenanceConfig();
   const runBackgroundTasks = options?.migrationMode === undefined && !isLegacyRestorePaused();
-  const maintenance = createManagedWorkflowMaintenance({
-    pool,
-    blobStore: resolvedBlobStore,
-    staleUploadDeletionEnabled: staleUploadRetentionConfig.mode === 'enforce',
-  });
+  const evaluationRetentionConfig =
+    runBackgroundTasks && maintenanceConfig.enabled
+      ? getManagedEvaluationRetentionConfig(process.env, maintenanceConfig.batchSize)
+      : undefined;
+  const webAppActionRetentionConfig =
+    runBackgroundTasks && maintenanceConfig.enabled
+      ? getManagedWebAppActionRetentionConfig(process.env, maintenanceConfig.batchSize)
+      : undefined;
+  const resolvedBlobStore = blobStore ?? new S3ManagedWorkflowBlobStore(config);
   // Reuse the same S3 contract with the fixed runtime prefix only on the
   // maintenance owner. Execution replicas must not allocate audit work or an
   // extra object-store client for the high-volume published endpoint path.
-  const runtimeLibrariesBlobStore =
-    runBackgroundTasks && maintenance.config.enabled && !blobStore
-      ? new S3ManagedWorkflowBlobStore(
-          {
-            ...config,
-            objectStoragePrefix: MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX,
-          },
-          'runtime_libraries',
-        )
-      : undefined;
+  let runtimeLibrariesBlobStore: S3ManagedWorkflowBlobStore | undefined;
+  let poolLease: ReturnType<typeof acquireManagedPostgresPool>;
+  try {
+    runtimeLibrariesBlobStore =
+      runBackgroundTasks && maintenanceConfig.enabled && !blobStore
+        ? new S3ManagedWorkflowBlobStore(
+            {
+              ...config,
+              objectStoragePrefix: MANAGED_RUNTIME_LIBRARIES_OBJECT_STORAGE_PREFIX,
+            },
+            'runtime_libraries',
+          )
+        : undefined;
+    poolLease = acquireManagedPostgresPool(poolConfig);
+  } catch (error) {
+    const failures = [error];
+    // No context has escaped yet. Release only clients constructed here, never
+    // a caller's injected store, and preserve failures from every cleanup.
+    for (const store of [blobStore ? undefined : resolvedBlobStore, runtimeLibrariesBlobStore]) {
+      try {
+        store?.dispose?.();
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+    }
+    if (failures.length > 1) throw new AggregateError(failures, 'Managed context construction and cleanup failed.');
+    throw error;
+  }
+  const { pool } = poolLease;
+  const executionCache = new ManagedWorkflowExecutionCache();
+  const queries = createManagedWorkflowQueries(pool);
+  const maintenance = createManagedWorkflowMaintenance({
+    pool,
+    blobStore: resolvedBlobStore,
+    config: maintenanceConfig,
+    staleUploadDeletionEnabled: staleUploadRetentionConfig.mode === 'enforce',
+  });
   if (runBackgroundTasks && maintenance.config.enabled) {
     maintenance.registerTask(
       'managed-evaluation-retention',
       createManagedEvaluationRetentionTask({
-        config: getManagedEvaluationRetentionConfig(process.env, maintenance.config.batchSize),
+        config: evaluationRetentionConfig!,
         pool,
       }),
     );
     maintenance.registerTask(
       'managed-web-app-action-retention',
       createManagedWebAppActionRetentionTask({
-        config: getManagedWebAppActionRetentionConfig(process.env, maintenance.config.batchSize),
+        config: webAppActionRetentionConfig!,
         pool,
       }),
     );
@@ -152,7 +183,7 @@ export function createManagedWorkflowContext(
   let disposePromise: Promise<void> | null = null;
 
   const executionInvalidationController = new ManagedWorkflowExecutionInvalidationController({
-    databaseConnectionConfig: getManagedDbConnectionConfig(config),
+    databaseConnectionConfig,
     withManagedDbRetry,
     invalidateWorkflowEndpointPointers: (workflowId) => {
       executionCache.invalidateWorkflowEndpointPointers(workflowId);
@@ -165,7 +196,8 @@ export function createManagedWorkflowContext(
     },
     onAllChanged: notifyAllWebAppSocketPolicyInvalidations,
     onExternalInvalidation: process.env.RIVET_HA_DEPLOYMENT === '1' ? notifyExternalWorkflowTreeChanged : undefined,
-    onEvaluationLibraryChanged: process.env.RIVET_HA_DEPLOYMENT === '1' ? notifyExternalEvaluationLibraryChanged : undefined,
+    onEvaluationLibraryChanged:
+      process.env.RIVET_HA_DEPLOYMENT === '1' ? notifyExternalEvaluationLibraryChanged : undefined,
   });
 
   const initialize = async (): Promise<void> => {
@@ -224,12 +256,21 @@ export function createManagedWorkflowContext(
       // Clear revision materializations before pool shutdown so test teardown does
       // not retain stale cached blobs across recreated contexts.
       executionCache.clearRevisionMaterializations();
+      const failures: unknown[] = [];
       try {
         await poolLease.release();
-      } finally {
-        resolvedBlobStore.dispose?.();
-        runtimeLibrariesBlobStore?.dispose?.();
+      } catch (error) {
+        failures.push(error);
       }
+      for (const store of [resolvedBlobStore, runtimeLibrariesBlobStore]) {
+        try {
+          store?.dispose?.();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, 'Managed context disposal failed.');
     })();
     await disposePromise;
   };

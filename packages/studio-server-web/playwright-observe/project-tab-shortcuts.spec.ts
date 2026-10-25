@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 
 for (const platform of ['windows', 'linux', 'macos'] as const) {
-  test(`project tabs follow Chrome shortcuts on ${platform} and preserve edited snapshots`, async ({ page }) => {
+  test(`project tabs follow Shift+Page shortcuts on ${platform} and preserve edited snapshots`, async ({ page }) => {
     const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../app/src').replaceAll('\\', '/');
     const project = projectBundleFixture().child.project;
     const projects = ['Alpha', 'Beta', 'Gamma'].map((title, index) => ({
@@ -27,6 +27,17 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
         });
         (window as any).shortcutProjects = projects;
         localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'browser', recordExecutions: false }));
+        localStorage.setItem(
+          'project',
+          JSON.stringify({
+            'projectContext__"shortcut-project-0"': {
+              'Context Alpha': { value: { type: 'string', value: 'fixture-alpha' } },
+            },
+            'projectContext__"shortcut-project-1"': {
+              'Context Beta': { value: { type: 'string', value: 'fixture-beta' } },
+            },
+          }),
+        );
       },
       { platform, projects },
     );
@@ -72,30 +83,17 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
     await expect(tabs).toHaveCount(3);
     await expect(active).toContainText('Gamma');
 
-    // Synthetic key delivery intentionally tests the editor handler even when
-    // a real browser reserves the OS shortcut for its own browser tabs.
-    const switchTab = async (direction: 'left' | 'right', pageKey = false, count = 1) => {
-      const code =
-        platform === 'macos'
-          ? direction === 'left'
-            ? 'ArrowLeft'
-            : 'ArrowRight'
-          : pageKey
-            ? direction === 'left'
-              ? 'PageUp'
-              : 'PageDown'
-            : 'Tab';
+    // Synthetic delivery also exercises multiple presses in one activation turn.
+    const switchTab = async (direction: 'left' | 'right', count = 1) => {
+      const code = direction === 'right' ? 'PageUp' : 'PageDown';
       return page.evaluate(
-        ({ code, platform, direction, count }) => {
+        ({ code, count }) => {
           let consumed = true;
           for (let index = 0; index < count; index++) {
             const event = new KeyboardEvent('keydown', {
               key: code,
               code,
-              ctrlKey: platform !== 'macos',
-              metaKey: platform === 'macos',
-              altKey: platform === 'macos',
-              shiftKey: platform !== 'macos' && code === 'Tab' && direction === 'left',
+              shiftKey: true,
               bubbles: true,
               cancelable: true,
             });
@@ -104,7 +102,7 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
           }
           return consumed;
         },
-        { code, platform, direction, count },
+        { code, count },
       );
     };
 
@@ -137,9 +135,9 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
     expect(await switchTab('right')).toBe(true);
     await expect(active).toContainText('Alpha edited');
     await expect(active).toHaveClass(/has-unsaved-changes/);
-    expect(await switchTab('right', true)).toBe(true);
+    expect(await switchTab('right')).toBe(true);
     await expect(active).toContainText('Beta');
-    expect(await switchTab('left', true)).toBe(true);
+    expect(await switchTab('left')).toBe(true);
     await expect(active).toContainText('Alpha edited');
     expect(await switchTab('left')).toBe(true);
     await expect(active).toContainText('Gamma');
@@ -163,7 +161,7 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
       window.addEventListener(
         'keydown',
         (event) => {
-          if (event.altKey && event.code.startsWith('Page')) (window as any).shortcutLeaks++;
+          if (event.shiftKey && event.code.startsWith('Page')) (window as any).shortcutLeaks++;
         },
         { capture: true },
       );
@@ -172,9 +170,9 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
       document.body.append(input);
       input.focus();
     });
-    await page.keyboard.press('Alt+PageDown');
+    await page.keyboard.press('Shift+PageUp');
     await expect(active).toContainText('Beta');
-    await page.keyboard.press('Alt+PageUp');
+    await page.keyboard.press('Shift+PageDown');
     await expect(active).toContainText('Alpha edited');
     expect(await page.evaluate(() => (window as any).shortcutLeaks)).toBe(0);
     expect(page.context().pages()).toHaveLength(browserTabs);
@@ -205,7 +203,7 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
     expect(await switchTab('right')).toBe(true);
     await expect(active).toContainText('Gamma');
     await page.evaluate(() => (window as any).shortcutHost.activateProject('shortcut-project-0'));
-    expect(await switchTab('right', false, 2)).toBe(true);
+    expect(await switchTab('right', 2)).toBe(true);
     await expect(active).toContainText('Beta');
 
     await page.evaluate(async () => {
@@ -230,5 +228,49 @@ for (const platform of ['windows', 'linux', 'macos'] as const) {
     expect(await switchTab('right')).toBe(true);
     await expect(active).toContainText('Alpha edited');
     await expect(page.locator('.Toastify__toast--error')).toHaveCount(0);
+    if (platform === 'windows') {
+      await page.locator('button.more-menu').click();
+      await page.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
+      await expect(page.getByPlaceholder('(Default)')).toHaveValue('ws://localhost:21888');
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      const showContext = async () => {
+        await page.getByRole('button', { name: 'Project settings', exact: true }).click();
+        const modal = page.getByTestId('project-settings-modal');
+        await modal.getByRole('button', { name: 'Context values', exact: true }).click();
+        return modal;
+      };
+      await page.evaluate(() =>
+        (window as any).shortcutHost.openProjectSnapshot({ project: (window as any).shortcutProjects[1] }),
+      );
+      let modal = await showContext();
+      await expect(modal.locator('.context-list .key')).toHaveText('Context Beta');
+      await modal.locator('.context-list').getByRole('button', { name: 'Edit', exact: true }).click();
+      await page.getByPlaceholder('Value', { exact: true }).fill('must not restore deleted context');
+      // Public deletion resets the already-mounted context view as well as durable storage.
+      await page.evaluate(() => (window as any).shortcutHost.deleteProjectContext('shortcut-project-1'));
+      await expect(modal.locator('.context-list .key')).toHaveCount(0);
+      await expect(page.getByPlaceholder('Value', { exact: true })).toHaveCount(0);
+      await modal.getByRole('button', { name: 'Close modal', exact: true }).click();
+      await page.evaluate(async () => {
+        await (window as any).shortcutHost.closeProject('shortcut-project-1');
+        await (window as any).shortcutHost.openProjectSnapshot({ project: (window as any).shortcutProjects[1] });
+      });
+      modal = await showContext();
+      await expect(modal.locator('.context-list .key')).toHaveCount(0);
+      await modal.getByRole('button', { name: 'Close modal', exact: true }).click();
+      await page.evaluate(() => (window as any).shortcutHost.activateProject('shortcut-project-0'));
+      modal = await showContext();
+      await expect(modal.locator('.context-list .key')).toHaveText('Context Alpha');
+      await modal.locator('.context-list').getByRole('button', { name: 'Edit', exact: true }).click();
+      await page.getByPlaceholder('Value', { exact: true }).fill('must not reach another project');
+      // Wrapper-driven activation can happen while a modal is open (e.g. deleting its project).
+      await page.evaluate(() => (window as any).shortcutHost.activateProject('shortcut-project-1'));
+      await expect(page.getByPlaceholder('Value', { exact: true })).toHaveCount(0);
+      await expect(modal).toHaveCount(0);
+      await page.evaluate(() => (window as any).shortcutHost.activateProject('shortcut-project-0'));
+      modal = await showContext();
+      await expect(modal.locator('.context-list .value')).toHaveText('fixture-alpha');
+      await modal.getByRole('button', { name: 'Close modal', exact: true }).click();
+    }
   });
 }

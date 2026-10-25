@@ -62,6 +62,18 @@ it is not a second Evaluation engine or storage adapter.
 | Durable run names, retention, deletion and baseline promotion | `evaluationRunCommands.ts` |
 | History loading, pagination, selected details and request generations | `useEvaluationHistory.ts` |
 | Dataset snapshotting, runner/checkpoint persistence and recording finalization | `utils/evaluationExecutionLifecycle.ts`, with runtime-specific execution supplied by the executor hooks |
+| Per-invocation output conversion, timing, abort/error identity and captured evidence | `utils/evaluationGraphExecution.ts`; adapters own processing and terminal-capture settlement |
+| Temporary artifact identity, write-once persistence and non-fatal artifact failures | `utils/evaluationRecordingPersistence.ts`; Browser and Node use the same policy |
+
+Browser and Node evaluation adapters must call `executeEvaluationGraph`, not
+duplicate trial-result/error construction. Node settles its request-scoped socket
+recording before persistence; Browser records its processor directly. Request
+admission, incomplete-capture disposal and abort commands remain transport-owned.
+`createEvaluationRecordingPersistence` memoizes the first persistence attempt,
+including an uncertain or failed write: no automatic retry, duplicate failure
+count or model-verdict replacement. Empty captures are not stored. Only compact
+run/final-retention lifecycle policy decides subsequent recording retention.
+The helper is called after capture settles, never to take intermediate snapshots.
 
 Views receive actions from the workspace. Keep confirmations in React and
 storage coordination in commands; moving JSX does not make multiple writes

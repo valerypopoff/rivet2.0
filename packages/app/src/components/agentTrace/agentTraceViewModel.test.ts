@@ -15,7 +15,11 @@ import type {
   RootRunId,
 } from '@valerypopoff/rivet2-core';
 import type { ProcessDataForNode } from '../../state/dataFlow.js';
-import { buildModelInvocationTrace, hasModelResponseInspector } from './agentTraceViewModel.js';
+import {
+  buildModelInvocationTrace,
+  canInspectModelInvocation,
+  hasModelResponseInspector,
+} from './agentTraceViewModel.js';
 import { AgentResponseInspector } from './AgentResponseInspector.js';
 
 const node = { id: 'llm-node' as NodeId, type: 'llmChatV2' } as ChartNode;
@@ -67,7 +71,7 @@ void describe('agentTraceViewModel', () => {
     trace.summary.classifierRequestCount = 10;
     const exact = new JSDOM(renderToStaticMarkup(React.createElement(AgentResponseInspector, { trace, onClose() {} })));
     const count = [...exact.window.document.querySelectorAll('dt')].find(
-      (label) => label.textContent === 'Classifier requests',
+      (label) => label.textContent === 'Decision AI requests',
     )!;
     assert.equal(count.nextElementSibling?.textContent, '10');
     exact.window.close();
@@ -105,7 +109,7 @@ void describe('agentTraceViewModel', () => {
     );
     const legacyDom = new JSDOM(legacyHtml);
     const legacyText = legacyDom.window.document.body.textContent!;
-    assert.match(legacyText, /Classifier requests/);
+    assert.match(legacyText, /Decision AI requests/);
     assert.match(legacyText, /Profile: Legacy classifier/);
     assert.match(legacyText, /HTTP 401/);
     assert.match(legacyText, /0.25 sec/);
@@ -117,7 +121,7 @@ void describe('agentTraceViewModel', () => {
       renderToStaticMarkup(React.createElement(AgentResponseInspector, { trace: empty, onClose() {} })),
     );
     const emptyText = emptyDom.window.document.body.textContent!;
-    assert.match(emptyText, /No classifier requests recorded/);
+    assert.match(emptyText, /No Decision AI requests recorded/);
     assert.match(emptyText, /No profile fallback or suspension decisions recorded/);
     assert.doesNotMatch(emptyText, /Tool calls|Cached input tokens|Reasoning tokens|Model calls/);
     emptyDom.window.close();
@@ -256,6 +260,15 @@ void describe('agentTraceViewModel', () => {
     } as unknown as ProcessDataForNode;
 
     assert.equal(buildModelInvocationTrace(node, processData), undefined);
+    assert.equal(canInspectModelInvocation(node, processData), false);
+    const retained: ProcessDataForNode = { ...processData, data: { ...processData.data, agentTraceEvents: [] } };
+    for (const candidate of [
+      retained,
+      { ...retained, graphId: undefined },
+      { ...retained, rootRunId: undefined },
+      undefined,
+    ])
+      assert.equal(canInspectModelInvocation(node, candidate), buildModelInvocationTrace(node, candidate) != null);
   });
 
   void it('offers the same inspector for classifiers and isolates failed and split invocations', () => {

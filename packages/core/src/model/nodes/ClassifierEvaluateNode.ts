@@ -25,7 +25,7 @@ import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 import { resolveClassifierApiKey } from '../classifier/credentials.js';
 import { classifierArrayValues, classifierInputDataValue } from '../classifier/json.js';
 import { normalizeClassifierState } from '../classifier/state.js';
-import { CLASSIFIER_LIMITS, classifierPreparationCheck, ClassifierValueBudget } from '../classifier/limits.js';
+import { CLASSIFIER_LIMITS, ClassifierValueBudget } from '../classifier/limits.js';
 import {
   calculateClassifierUsageCost,
   type ClassifierProviderEvaluateArgs,
@@ -51,7 +51,6 @@ export type ClassifierEvaluateNodeData = ClassifierProfileConfiguration & {
   configurationMode?: 'inline' | 'profile';
   outputClassifierAttempts?: boolean;
   outputClassifierProfileSummary?: boolean;
-  profileChainTimeoutMs?: number;
   /** Adds the exact JSON body sent to the provider, excluding its auth header. */
   outputRequestBody?: boolean;
   /** Adds the complete parsed JSON body returned by the provider. */
@@ -63,7 +62,6 @@ export type ClassifierEvaluateNodeData = ClassifierProfileConfiguration & {
   catchRequestFailed?: boolean;
   retryOnNon200RepeatTimes?: number;
   retryOnNon200CooldownMs?: number;
-  timeoutMs?: number;
 };
 
 export type ClassifierEvaluateNode = ChartNode<'classifierEvaluate', ClassifierEvaluateNodeData>;
@@ -83,13 +81,13 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   static create(): ClassifierEvaluateNode {
     return {
       type: 'classifierEvaluate',
-      title: 'Classifier Evaluate',
+      title: 'Decision AI run',
       id: nanoid() as NodeId,
       visualData: { x: 0, y: 0, width: 260 },
       // Keep the default model in the provider descriptor rather than
       // serializing Jev's model into every new node. A future provider then
       // receives its own default when an author changes the Provider field.
-      data: { provider: 'jev', timeoutMs: 30_000, errorOnNon200: true, catchRequestFailed: false },
+      data: { provider: 'jev', errorOnNon200: true, catchRequestFailed: false },
     };
   }
 
@@ -119,12 +117,12 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     if (this.data.configurationMode === 'profile') {
       inputs.unshift({
         id: 'classifierProfile' as PortId,
-        title: 'Classifier Profiles',
+        title: 'Decision AI Profiles',
         dataType: ['classifier-config', 'classifier-config[]'],
         required: true,
         coerced: true,
         splitRunBehavior: 'preserve-array',
-        description: 'One Classifier Profile or an ordered fallback chain.',
+        description: 'One Decision AI Profile or an ordered fallback chain.',
       });
     }
     if (this.data.configurationMode !== 'profile' && this.data.useModelInput) {
@@ -164,11 +162,11 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       outputs.push({ id: 'responseBody' as PortId, title: 'Response body', dataType: 'object' });
     }
     if (this.data.outputClassifierAttempts)
-      outputs.push({ id: 'classifierAttempts' as PortId, title: 'Classifier Attempts', dataType: 'object[]' });
+      outputs.push({ id: 'classifierAttempts' as PortId, title: 'Decision AI Attempts', dataType: 'object[]' });
     if (this.data.configurationMode === 'profile' && this.data.outputClassifierProfileSummary)
       outputs.push({
         id: 'classifierProfileSummary' as PortId,
-        title: 'Classifier Profile Summary',
+        title: 'Decision AI Profile Summary',
         dataType: 'string',
       });
     return [...outputs, ...getRunFailureOutputDefinitions({ catchRequestFailed: this.data.catchRequestFailed })];
@@ -177,7 +175,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   getEditors(): EditorDefinition<ClassifierEvaluateNode>[] {
     return [
       { type: 'custom', label: 'Configuration', customEditorId: 'ClassifierConfiguration' },
-      { ...getClassifierModelEditor(this.data), hideIf: (data) => data.configurationMode === 'profile' },
+      { ...getClassifierModelEditor(), hideIf: (data) => data.configurationMode === 'profile' },
       {
         type: 'group',
         label: 'Outputs',
@@ -194,7 +192,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             label: 'Request body',
             dataKey: 'outputRequestBody',
             helperMessage:
-              'Adds the exact classifier request JSON body sent to the provider. It excludes authorization headers and Rivet-managed API keys.',
+              'Adds the exact Decision AI request JSON body sent to the provider. It excludes authorization headers and Rivet-managed API keys.',
           },
           {
             type: 'toggle',
@@ -203,28 +201,12 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             helperMessage:
               'Shows the provider response, including rejected or invalid responses. Non-JSON responses appear as raw text. Captured content may contain sensitive input.',
           },
-          { type: 'toggle', label: 'Classifier attempts', dataKey: 'outputClassifierAttempts' },
+          { type: 'toggle', label: 'Decision AI attempts', dataKey: 'outputClassifierAttempts' },
           {
             type: 'toggle',
-            label: 'Classifier profile summary',
+            label: 'Decision AI profile summary',
             dataKey: 'outputClassifierProfileSummary',
             hideIf: (data) => data.configurationMode !== 'profile',
-          },
-        ],
-      },
-      {
-        type: 'group',
-        label: 'Advanced',
-        editors: [
-          {
-            type: 'number',
-            label: 'Overall timeout (seconds)',
-            dataKey: this.data.configurationMode === 'profile' ? 'profileChainTimeoutMs' : 'timeoutMs',
-            defaultValue: this.data.configurationMode === 'profile' ? 180_000 : 30_000,
-            storageMultiplier: 1000,
-            min: 1_000,
-            max: 600_000,
-            step: 1_000,
           },
         ],
       },
@@ -297,11 +279,11 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
 
   static getUIData(): NodeUIData {
     return {
-      contextMenuTitle: 'Classifier Evaluate',
-      infoBoxTitle: 'Classifier Evaluate',
+      contextMenuTitle: 'Decision AI run',
+      infoBoxTitle: 'Decision AI run',
       infoBoxBody:
-        'Evaluates shared state and optional images against typed classifier questions. Images are shared evidence for every question.',
-      group: ['Classifier'],
+        'Evaluates shared state and optional images against typed Decision AI questions. Images are shared evidence for every question.',
+      group: ['Decision AI'],
     };
   }
 
@@ -377,16 +359,11 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       this.data.configurationMode !== 'inline' &&
       this.data.configurationMode !== 'profile'
     )
-      throw new Error('Unknown classifier configuration mode.');
-    const timeoutMs =
-      this.data.configurationMode === 'profile'
-        ? normalizeTimeout(this.data.profileChainTimeoutMs ?? 180_000)
-        : normalizeTimeout(this.data.timeoutMs);
-    const deadline = Date.now() + timeoutMs;
-    const checkPreparation = classifierPreparationCheck(context.signal, deadline, timeoutMs);
+      throw new Error('Unknown Decision AI configuration mode.');
+    const checkPreparation = () => context.signal.throwIfAborted();
     checkPreparation();
     if (this.data.configurationMode === 'profile')
-      return this.processProfiles(inputs, context, deadline, checkPreparation, attempts, diagnostics);
+      return this.processProfiles(inputs, context, checkPreparation, attempts, diagnostics);
     const provider = getClassifierProvider(this.data.provider);
     if (!provider.browserExecutionSupported && context.executor === 'browser') {
       throw new Error(
@@ -440,7 +417,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         flattenQuestions(input.value, questions, checkPreparation, new Set(), 0, flattenWork);
       }
     }
-    if (questions.length === 0) throw new Error('Classifier Evaluate requires at least one question.');
+    if (questions.length === 0) throw new Error('Decision AI run requires at least one question.');
 
     const result = await (provider.evaluateInput ?? provider.evaluate).call(provider, {
       apiKey,
@@ -451,8 +428,6 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       retryOnNon200RepeatTimes: this.data.retryOnNon200RepeatTimes,
       signal: context.signal,
       ...state,
-      timeoutMs,
-      deadline,
       ...diagnostics,
       onAttempt: ({ kind, ...attempt }) => {
         const event: LLMAttempt = {
@@ -474,8 +449,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
         });
       },
     });
-    // Custom providers still own their asynchronous transport, but no late
-    // result may become a successful node output after the original deadline.
+    // Custom providers own their transport; caller cancellation still wins.
     checkPreparation();
     return { ...this.projectResult(provider, modelValue, result, checkPreparation), ...this.profileEvidence(attempts) };
   }
@@ -530,7 +504,6 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
   private async processProfiles(
     inputs: Inputs,
     context: InternalProcessContext,
-    deadline: number,
     check: () => void,
     attempts: LLMAttempt[],
     diagnostics: Pick<ClassifierProviderEvaluateArgs, 'onRequestBody' | 'onResponseBody'>,
@@ -555,7 +528,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       const input = classifierInputDataValue(inputs, port);
       if (input) flattenQuestions(input.value, values, check, new Set(), 0, work);
     }
-    if (!values.length) throw new Error('Classifier Evaluate requires at least one question.');
+    if (!values.length) throw new Error('Decision AI run requires at least one question.');
     const ids = new Set<string>();
     const questions = values.map((value) => {
       const question = prepareClassifierQuestion(value, budget);
@@ -570,7 +543,6 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       questions,
       context,
       nodeId: this.chartNode.id,
-      deadline,
       retryOnNon200: this.data.retryOnNon200,
       retryOnNon200RepeatTimes: this.data.retryOnNon200RepeatTimes,
       retryOnNon200CooldownMs: this.data.retryOnNon200CooldownMs,
@@ -594,9 +566,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
 }
 
 /** Shared settings definition; constructing an unrelated node is unnecessary. */
-export function getClassifierModelEditor(
-  data: ClassifierProfileConfiguration,
-): EditorDefinitionGroup<ClassifierEvaluateNode> {
+export function getClassifierModelEditor(): EditorDefinitionGroup<ClassifierEvaluateNode> {
   return {
     type: 'group',
     label: 'Model',
@@ -610,11 +580,11 @@ export function getClassifierModelEditor(
         options: classifierProviders.map((provider) => ({ value: provider.id, label: provider.label })),
       },
       {
-        type: 'string',
+        type: 'custom',
         label: 'Model',
         dataKey: 'model',
         useInputToggleDataKey: 'useModelInput',
-        placeholder: getProviderForDisplay(data.provider).defaultModel,
+        customEditorId: 'ClassifierModel',
       },
       {
         type: 'segmented',
@@ -624,7 +594,7 @@ export function getClassifierModelEditor(
         defaultValue: 'configured',
         options: [
           { value: 'configured', label: 'Automatic' },
-          { value: 'classifier-settings', label: 'Classifier settings' },
+          { value: 'classifier-settings', label: 'Decision AI settings' },
           { value: 'input', label: 'Input port' },
         ],
         helperMessage: getApiKeySourceHelperMessage,
@@ -651,7 +621,7 @@ function getStaticModel(model: string | undefined, defaultModel: string): string
   return typeof model === 'string' && model.trim() !== '' ? model.trim() : defaultModel;
 }
 
-/** Shared presentation model for the app's Classifier Evaluate card. */
+/** Shared presentation model for the app's Decision AI run card. */
 export function getClassifierEvaluateBodySections(
   data: ClassifierEvaluateNodeData,
 ): readonly ClassifierEvaluateBodySection[] {
@@ -702,8 +672,8 @@ function getApiKeySourceHelperMessage(data: ClassifierEvaluateNodeData): string 
   if (data.apiKeySource === 'input') return 'Uses the API Key input port instead of a configured provider key.';
   const provider = getProviderForDisplay(data.provider);
   if (data.apiKeySource === 'classifier-settings')
-    return `Uses only Settings > Classifier > ${provider.label} API Key on the executor. Does not fall back to named or environment credentials.`;
-  return 'Automatic checks the named programmatic setting, then the named environment variable, then the saved Classifier key (default names only). OpenAI also accepts its legacy general key; Jev accepts its legacy plugin key last. Resolution happens on the executor, not in this editor.';
+    return `Uses only Settings > Decision AI > ${provider.label} API Key on the executor. Does not fall back to named or environment credentials.`;
+  return 'Automatic checks the named programmatic setting, then the named environment variable, then the saved Decision AI key (default names only). OpenAI also accepts its legacy general key; Jev accepts its legacy plugin key last. Resolution happens on the executor, not in this editor.';
 }
 
 function flattenQuestions(
@@ -720,8 +690,7 @@ function flattenQuestions(
   if (Array.isArray(value)) {
     if (seen.has(value)) throw new Error('Question inputs must not contain circular arrays.');
     seen.add(value);
-    if (value.length > CLASSIFIER_LIMITS.questions)
-      throw new Error('Classifier Evaluate supports at most 1000 questions.');
+    if (value.length > CLASSIFIER_LIMITS.questions) throw new Error('Decision AI run supports at most 1000 questions.');
     for (const item of classifierArrayValues(value, 'Questions'))
       flattenQuestions(item, target, check, seen, depth + 1, work);
     seen.delete(value);
@@ -730,15 +699,8 @@ function flattenQuestions(
   if (typeof value !== 'object' || value === null) {
     throw new Error('Question inputs must contain question definition objects or nested arrays of definitions.');
   }
-  if (target.length >= CLASSIFIER_LIMITS.questions)
-    throw new Error('Classifier Evaluate supports at most 1000 questions.');
+  if (target.length >= CLASSIFIER_LIMITS.questions) throw new Error('Decision AI run supports at most 1000 questions.');
   target.push(value as ClassifierQuestionDefinition);
 }
 
-function normalizeTimeout(timeoutMs: number | undefined): number {
-  return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.min(timeoutMs, 600_000)
-    : 30_000;
-}
-
-export const classifierEvaluateNode = nodeDefinition(ClassifierEvaluateNodeImpl, 'Classifier Evaluate');
+export const classifierEvaluateNode = nodeDefinition(ClassifierEvaluateNodeImpl, 'Decision AI run');

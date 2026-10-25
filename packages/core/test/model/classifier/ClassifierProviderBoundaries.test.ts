@@ -108,7 +108,7 @@ for (const observer of ['request', 'success'] as const) {
   });
 }
 
-test('Inline status suppression cannot swallow an overall deadline during diagnostic capture', async (t) => {
+test('Inline status suppression cannot swallow cancellation during diagnostic capture', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
   let started!: () => void;
   const reading = new Promise<void>((resolve) => {
@@ -124,6 +124,7 @@ test('Inline status suppression cannot swallow an overall deadline during diagno
       { status: 400 },
     );
   const node = ClassifierEvaluateNodeImpl.create();
+  const controller = new AbortController();
   Object.assign(node.data, { provider: 'perplexity', timeoutMs: 50, errorOnNon200: false, outputResponseBody: true });
   const run = new ClassifierEvaluateNodeImpl(node).process(
     {
@@ -132,16 +133,86 @@ test('Inline status suppression cannot swallow an overall deadline during diagno
     },
     {
       executor: 'nodejs',
-      signal: new AbortController().signal,
+      signal: controller.signal,
       settings: { classifierProviders: { perplexity: { apiKey: 'private-key' } } },
     } as InternalProcessContext,
   );
-  const rejected = assert.rejects(run, /request timed out/);
+  const rejected = assert.rejects(run, /Stopped by user/);
   await reading;
   await new Promise<void>((resolve) => setImmediate(resolve));
-  t.mock.timers.tick(50);
+  controller.abort(new Error('Stopped by user'));
   await rejected;
 });
+
+test('Requests without a deadline keep long Retry-After waits cancellable without timer overflow', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response('', { status: 429, headers: { 'Retry-After': '1e100' } });
+  };
+  const run = getClassifierProvider('perplexity').evaluate({
+    apiKey: 'test',
+    model: 'pplx-decider-v1.1-27b',
+    questions: [question],
+    state: 'Evidence',
+    signal: controller.signal,
+  });
+  const rejected = assert.rejects(run, /cancel|Stopped by user/i);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(5000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  t.mock.timers.tick(2_147_483_647 - 5000);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1, 'Crossing a timer boundary must not dispatch a retry');
+  controller.abort(new Error('Stopped by user'));
+  await rejected;
+  assert.equal(calls, 1);
+});
+
+for (const source of ['Retry-After', 'configured cooldown'] as const) {
+  void test(`Unbounded ${source} waits preserve delays longer than one timer`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+    const timerLimit = 2_147_483_647;
+    const delayMs = timerLimit + 2000;
+    let calls = 0;
+    const run = getClassifierProvider('perplexity').evaluate({
+      apiKey: 'test',
+      model: 'pplx-decider-v1.1-27b',
+      questions: [question],
+      state: 'Evidence',
+      signal: new AbortController().signal,
+      retryOnNon200: true,
+      retryOnNon200CooldownMs: delayMs,
+      fetchImplementation: async () => {
+        if (++calls === 1)
+          return source === 'Retry-After'
+            ? new Response('', { status: 429, headers: { 'Retry-After': `${delayMs / 1000}` } })
+            : new Response('', { status: 503 });
+        return Response.json({
+          model: 'pplx-decider-v1.1-27b',
+          answers: { q: { type: 'noul', noul: 0.8 } },
+          usage: { input_tokens: 1, output_tokens: 0 },
+        });
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(calls, 1, 'A long cooldown must not overflow into an immediate retry');
+    t.mock.timers.tick(timerLimit - 5000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(calls, 1, 'A long cooldown must not be truncated to the timer limit');
+    t.mock.timers.tick(1999);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(calls, 1);
+    t.mock.timers.tick(1);
+    assert.equal((await run).response.answers.q?.type, 'noul');
+    assert.equal(calls, 2);
+  });
+}
 
 test('Opt-in rejected response diagnostics are bounded and preserve the original HTTP failure', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -196,7 +267,7 @@ test('Every provider rejects invalid root State before HTTP or attempt observati
   }
 });
 
-for (const id of ['openrouter', 'perplexity']) {
+for (const id of ['openrouter', 'perplexity', 'subq']) {
   const provider = getClassifierProvider(id);
   test(`${provider.label} does not retry permanent request rejections or expose rejected bodies`, async () => {
     for (const status of [400, 401, 402, 403, 413, 422]) {
@@ -232,8 +303,8 @@ for (const id of ['openrouter', 'perplexity']) {
     }
   });
 
-  test(`${provider.label} credit/payload rejection allows fallback without suspending the profile`, async () => {
-    for (const status of [402, 413]) {
+  test(`${provider.label} permanent access/credit/payload rejection allows fallback without suspending the profile`, async () => {
+    for (const status of [401, 402, 403, 413]) {
       const store = new InMemoryRivetLLMProfileHealthStore();
       const calls: string[] = [];
       globalThis.fetch = async (url, init) => {

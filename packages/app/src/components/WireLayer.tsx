@@ -29,7 +29,7 @@ import { draggingWireClosestPortState } from '../state/graphBuilder.js';
 import { effectiveNodesByIdState, graphState, isReadOnlyGraphState, nodesByIdState } from '../state/graph.js';
 import { projectState, referencedProjectsState } from '../state/savedGraphs.js';
 import { projectNodeRegistryState } from '../state/plugins.js';
-import { type PortPositions } from './NodeCanvas';
+import type { PortPositions } from './nodeCanvas/wireEndpoints.js';
 import {
   lastRunDataByNodeState,
   frozenNodeOutputsState,
@@ -48,7 +48,7 @@ import {
 import { canvasIoDefinitionsForNodeState } from '../state/selectors/canvasGraphSelectors.js';
 import { resolveClosestWireDropTargetFromPoint } from '../utils/wireDropTarget.js';
 import { useRenderableWires } from './nodeCanvas/useRenderableWires.js';
-import type { LineClipRect } from '../utils/lineClipping.js';
+import type { WirePathBounds } from './nodeCanvas/wireGeometry.js';
 import { useSetConnectionBendPointCommand } from '../commands/setConnectionBendPointCommand.js';
 import {
   getGhostConnectionBendPoint,
@@ -321,10 +321,8 @@ type WireLayerProps = {
     portId: PortId;
   };
   hoveredDataBusChannelKeys?: readonly string[];
-  nearViewportNodeIdSet: ReadonlySet<NodeId>;
   portPositions: PortPositions;
-  visibleNodeIdSet: ReadonlySet<NodeId>;
-  viewportClientRect: LineClipRect;
+  viewportClientRect: WirePathBounds;
 };
 
 export const WireLayer: FC<WireLayerProps> = ({
@@ -340,9 +338,7 @@ export const WireLayer: FC<WireLayerProps> = ({
   highlightedNodes,
   highlightedPort,
   hoveredDataBusChannelKeys = [],
-  nearViewportNodeIdSet,
   portPositions,
-  visibleNodeIdSet,
   viewportClientRect,
 }) => {
   const wireArrowMarkerPrefix = `wire-arrow-${useId().replaceAll(':', '')}`;
@@ -449,7 +445,7 @@ export const WireLayer: FC<WireLayerProps> = ({
     };
   }, [handleMouseDown, handleMouseMove]);
 
-  const { canvasClientOffset, canvasPosition, clientToCanvasPosition, canvasToClientPosition } = useCanvasPositioning();
+  const { canvasClientOffset, canvasPosition, clientToCanvasPosition } = useCanvasPositioning();
   const mousePositionCanvas = clientToCanvasPosition(mousePosition.x, mousePosition.y);
   const nodesById = useAtomValue(nodesByIdState);
   const effectiveNodesById = useAtomValue(effectiveNodesByIdState);
@@ -554,18 +550,11 @@ export const WireLayer: FC<WireLayerProps> = ({
   }, [draggingBend, draggingBendConnectionKeys, hoverRevealedDataBusConnectionKeySet]);
 
   const renderableWires = useRenderableWires({
-    canvasToClientPosition,
+    clientToCanvasPosition,
     connections: visibleConnections,
-    draggingNode,
-    draggingWire: !!draggingWire,
     forceRenderableConnectionKeySet: forcedRenderableConnectionKeySet,
-    highlightedNodes,
-    highlightedPort,
-    nearViewportNodeIdSet,
     nodesById: renderNodesById,
     portPositions,
-    runningNodeIdSet,
-    visibleNodeIdSet,
     viewportClientRect,
   });
   const renderableConnectionKeySet = useMemo(

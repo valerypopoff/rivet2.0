@@ -1,5 +1,5 @@
 import { atom } from 'jotai';
-import { atomWithStorage, atomFamily } from 'jotai/utils';
+import { atomWithStorage, atomFamily, RESET } from 'jotai/utils';
 import { nanoid } from 'nanoid/non-secure';
 import { produce } from 'immer';
 import {
@@ -17,6 +17,9 @@ import { blankProject } from '../utils/blankProject.js';
 import { entries, values } from '../utils/typeSafety';
 import { createHybridStorage } from './storage.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
+import { getExecutionBundleKey } from '../domain/execution/bundleMembership.js';
+import { projectBindingRegistryState } from './projectBindings.js';
+import type { VerifiedProjectPathMove } from '../domain/execution/projectBindingRegistry.js';
 
 /** Project context values stored in the IDE and not in the project file. Available in Context nodes. */
 export type ProjectContext = Record<
@@ -185,13 +188,70 @@ export type OpenedProjectsInfo = {
   openedProjectsSortedIds: ProjectId[];
 };
 
-export const projectsState = atomWithStorage<OpenedProjectsInfo>(
+const storedProjectsState = atomWithStorage<OpenedProjectsInfo>(
   'projectsState',
   {
     openedProjects: {},
     openedProjectsSortedIds: [],
   },
   storage,
+);
+
+function getProjectBindingSpecs(opened: OpenedProjectsInfo['openedProjects']) {
+  return Object.fromEntries(
+    Object.entries(opened)
+      // Recovery controls can read tab state after checkpoint validation fails.
+      // Derive no execution binding for damaged metadata; preserve the record.
+      .filter(([, info]) => info !== null && typeof info === 'object' && !Array.isArray(info))
+      .map(([id, info]) => [
+        id,
+        {
+          path: info.fsPath,
+          bundleKey: getExecutionBundleKey(info),
+        },
+      ]),
+  );
+}
+
+export const projectsState = atom(
+  (get) => {
+    const opened = get(storedProjectsState);
+    get(projectBindingRegistryState).reconcile(getProjectBindingSpecs(opened.openedProjects));
+    return opened;
+  },
+  (get, set, update: OpenedProjectsInfo | ((previous: OpenedProjectsInfo) => OpenedProjectsInfo)) => {
+    const next = typeof update === 'function' ? update(get(storedProjectsState)) : update;
+    // Reconcile at the actual write boundary, including close/reopen in one batch.
+    get(projectBindingRegistryState).reconcile(getProjectBindingSpecs(next.openedProjects));
+    set(storedProjectsState, next);
+  },
+);
+
+/** Trusted host rename/move commit, not a generic path-reassignment escape.
+ * Publish metadata and reconcile lifetime in one write before subscribers run. */
+export const verifiedProjectPathChangesState = atom(
+  null,
+  (get, set, update: (previous: OpenedProjectsInfo) => OpenedProjectsInfo) => {
+    const previous = get(projectsState);
+    const next = update(previous);
+    const before = getProjectBindingSpecs(previous.openedProjects);
+    const after = getProjectBindingSpecs(next.openedProjects);
+    const moves = new Map<string, VerifiedProjectPathMove>();
+    for (const [id, spec] of Object.entries(after)) {
+      const from = before[id]?.path;
+      if (
+        from &&
+        spec.path &&
+        from !== spec.path &&
+        Object.hasOwn(previous.openedProjects, id) &&
+        previous.openedProjects[id as ProjectId]?.projectId === id &&
+        next.openedProjects[id as ProjectId]?.projectId === id
+      )
+        moves.set(id, { from, to: spec.path });
+    }
+    get(projectBindingRegistryState).reconcile(after, moves);
+    set(storedProjectsState, next);
+  },
 );
 
 export const openedProjectSnapshotsState = atomWithStorage<Record<ProjectId, OpenedProjectSnapshot>>(
@@ -255,3 +315,9 @@ export const projectContextState = atomFamily((projectId: ProjectId) =>
 export function releaseProjectContextState(projectId: ProjectId): void {
   projectContextState.remove(projectId);
 }
+
+/** Reset any live view before releasing its family entry and removing its persisted key. */
+export const deleteProjectContextState = atom(null, (_get, set, projectId: ProjectId) => {
+  set(projectContextState(projectId), RESET);
+  releaseProjectContextState(projectId);
+});

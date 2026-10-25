@@ -1,5 +1,6 @@
 import { useFloating, autoUpdate, shift, useMergeRefs } from '@floating-ui/react';
 import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 
 export type ContextMenuData = {
   x: number;
@@ -29,9 +30,23 @@ export const createContextMenuVirtualElement = (x: number, y: number) => ({
 });
 
 export const useContextMenu = () => {
+  const { contextMenu: host } = useRivetAppHostUiConfig();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [contextMenuData, setContextMenuData] = useState<ContextMenuData>({ x: -3000, y: 0, data: null });
+  const releaseFocus = useCallback(() => host?.releaseFocus?.(contextMenuRef.current), [host]);
+  const dismiss = useCallback(() => {
+    releaseFocus();
+    setShowContextMenu(false);
+  }, [releaseFocus]);
+
+  useEffect(() => {
+    if (!showContextMenu) {
+      releaseFocus();
+      return;
+    }
+    return host?.subscribeToExternalDismiss?.(contextMenuRef.current?.ownerDocument ?? document, dismiss);
+  }, [showContextMenu, host, dismiss, releaseFocus]);
 
   const { refs, floatingStyles, update } = useFloating({
     placement: 'bottom-start',
@@ -58,14 +73,14 @@ export const useContextMenu = () => {
     const handleWindowMouseDown = (event: MouseEvent) => {
       // Close context menu as soon as the next outside click starts.
       if (contextMenuRef.current && !contextMenuRef.current.contains(event.target as Node)) {
-        setShowContextMenu(false);
+        dismiss();
       }
     };
 
     const handleEscapePress = (event: KeyboardEvent) => {
       // Close context menu if escape key is pressed
       if (event.key === 'Escape') {
-        setShowContextMenu(false);
+        dismiss();
       }
     };
 
@@ -75,7 +90,7 @@ export const useContextMenu = () => {
       window.removeEventListener('mousedown', handleWindowMouseDown, true);
       window.removeEventListener('keydown', handleEscapePress);
     };
-  }, [contextMenuRef]);
+  }, [dismiss]);
 
   const setReference = useMergeRefs([refs.setReference, contextMenuRef]);
   const setFloatingMenu = useMergeRefs([refs.setFloating, contextMenuRef]);

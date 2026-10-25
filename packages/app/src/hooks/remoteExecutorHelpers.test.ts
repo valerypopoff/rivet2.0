@@ -898,6 +898,33 @@ test('getDependentDataForNodeForPreload returns prior outputs for requested depe
       output: { type: 'string', value: 'hello' },
     },
   });
+  for (const id of ['__proto__', 'constructor', 'toString'] as NodeId[]) {
+    const previous = Object.fromEntries([
+      [
+        id,
+        [
+          {
+            processId: 'process',
+            data: { outputData: { output: { type: 'string', storage: 'inline', value: 'hello' } } },
+          },
+        ],
+      ],
+    ]);
+    const restored = getDependentDataForNodeForPreload([id], previous as never);
+    const frozen = getDependentDataForNodeForPreload(
+      [id],
+      {},
+      { graphId, frozenNodeOutputs: { [graphId]: { [id]: [preloadData['node-1']!] } } },
+    );
+    for (const result of [restored, frozen]) {
+      assert.equal(Object.hasOwn(result, id), true);
+      assert.deepEqual(JSON.parse(JSON.stringify(result))[id], preloadData['node-1']);
+    }
+  }
+  assert.throws(
+    () => getDependentDataForNodeForPreload(['constructor' as NodeId], {}),
+    /not found in the previous run data/,
+  );
 });
 
 test('getDependentDataForNodeForPreload prefers frozen boundary outputs over previous run outputs', () => {

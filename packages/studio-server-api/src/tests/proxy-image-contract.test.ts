@@ -128,8 +128,8 @@ test('a network removal failure alone fails otherwise successful DNS verificatio
 });
 
 test('proxy DNS refresh keeps shared upstream peers independently of request-time resolution', () => {
-  assert.match(readRepoFile('deploy/studio-server/images/proxy/Dockerfile'), /FROM nginx:1\.27\.5-alpine/);
-  assert.match(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), /image: nginx:1\.27\.5-alpine/);
+  // check-ci-workflows.mjs owns exact image-pin validation against the scanner's
+  // security policy. This contract owns DNS behavior, not a second version check.
   for (const template of readProxyTemplates()) {
     assert.match(template, /resolver [^;]+ valid=30s ipv6=off;/);
     assert.match(template, /resolver_timeout 5s;/);

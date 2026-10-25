@@ -999,11 +999,29 @@ function ensureGraphRun(
     if (execution.projectId != null) graphRun.projectId = execution.projectId;
     graphRun.graphName = graph?.metadata?.name ?? graphRun.graphName;
     graphRun.parentGraphRunId = execution.parentGraphRunId ?? graphRun.parentGraphRunId;
-    graphRun.executor = execution.executor ?? graphRun.executor;
+    // Core and wire adapters legitimately emit fresh metadata objects. Equal
+    // scalar fields are not an ancestry change: retaining this reference lets
+    // immutable consumers reuse completed rows across unrelated node events.
+    if (execution.executor != null && !haveSameExecutorFields(graphRun.executor, execution.executor)) {
+      graphRun.executor = execution.executor;
+    }
     graphRun.startedAt = minDefined(graphRun.startedAt, at);
   }
 
   return graphRun;
+}
+
+function haveSameExecutorFields(
+  previous: GraphExecutionMetadata['executor'],
+  next: NonNullable<GraphExecutionMetadata['executor']>,
+): boolean {
+  if (previous === next) return true;
+  if (previous == null) return false;
+  const keys = Object.keys(next) as (keyof typeof next)[];
+  return (
+    Object.keys(previous).length === keys.length &&
+    keys.every((key) => Object.hasOwn(previous, key) && previous[key] === next[key])
+  );
 }
 
 function ensureNodeInvocation(

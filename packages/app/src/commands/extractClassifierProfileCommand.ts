@@ -31,7 +31,7 @@ export function useExtractClassifierProfileCommand() {
     apply({ nodeId }, applied, state) {
       if (!applied) {
         const node = state.nodes.find((candidate) => candidate.id === nodeId);
-        if (!node || node.type !== 'classifierEvaluate') throw new Error('Classifier Evaluate was not found.');
+        if (!node || node.type !== 'classifierEvaluate') throw new Error('Decision AI run was not found.');
         const evaluateNode = node as ClassifierEvaluateNode;
         const profileNode = createAddedNode({
           nodeType: 'classifierProfile',

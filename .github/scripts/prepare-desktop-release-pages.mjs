@@ -141,15 +141,6 @@ async function writeUnderPagesRoot(relativePath, bytes) {
   await writeFile(targetPath, bytes);
 }
 
-function releaseAssetUrls(metadata) {
-  return [
-    ...(Array.isArray(metadata.stableDownloads) ? metadata.stableDownloads : []),
-    ...(Array.isArray(metadata.artifacts) ? metadata.artifacts : []),
-  ]
-    .map((item) => item?.url)
-    .filter((url) => typeof url === 'string' && url.length > 0);
-}
-
 function assertPublishedReleaseMetadata(metadata, metadataFile) {
   if (metadata == null || typeof metadata !== 'object') {
     throw new Error(`Existing ${metadataFile} is not a release metadata object.`);
@@ -168,7 +159,7 @@ function assertPublishedReleaseMetadata(metadata, metadataFile) {
   }
 }
 
-async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
+async function preservePublishedRelease(metadataFile, publishedSiteUrl, { required = false, expectedCommit } = {}) {
   const metadataUrl = new URL(metadataFile, publishedSiteUrl);
   let response;
 
@@ -183,6 +174,10 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
   }
 
   if (response.status === 404) {
+    if (required)
+      throw new Error(
+        `Existing ${metadataFile} is required for documentation-only publication. Run a full desktop release.`,
+      );
     console.log(`No existing ${metadataFile} found on Pages; nothing to preserve.`);
     return;
   }
@@ -208,13 +203,17 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
 
   try {
     assertPublishedReleaseMetadata(metadata, metadataFile);
+    if (expectedCommit && (metadata.commit !== expectedCommit || metadata.channel !== releaseChannel))
+      throw new Error(
+        `Existing ${metadataFile} changed after release planning; rerun against the current published baseline.`,
+      );
   } catch (error) {
     throw new Error(
       `${error instanceof Error ? error.message : String(error)} Refusing to publish a Pages site that could drop the other release channel.`,
     );
   }
 
-  for (const assetUrl of releaseAssetUrls(metadata)) {
+  for (const { url: assetUrl, size } of [...metadata.stableDownloads, ...metadata.artifacts]) {
     const assetPath = normalizePublishedPath(assetUrl, publishedSiteUrl);
 
     if (!assetPath) {
@@ -230,6 +229,9 @@ async function preservePublishedRelease(metadataFile, publishedSiteUrl) {
       }
 
       const assetBytes = Buffer.from(await assetResponse.arrayBuffer());
+      if (assetBytes.length !== size) {
+        throw new Error(`Expected ${size} bytes, received ${assetBytes.length}.`);
+      }
       await writeUnderPagesRoot(assetPath, assetBytes);
     } catch (error) {
       throw new Error(
@@ -521,6 +523,24 @@ async function main() {
     .map((file) => file.trim())
     .filter((file) => file.length > 0 && file !== releaseConfig.metadataFile);
   const publishedSiteUrl = process.env.PAGES_SITE_URL ?? defaultPublishedSiteUrl();
+  if (process.env.REUSE_PUBLISHED_DESKTOP_RELEASE !== undefined) {
+    const commit = process.env.PRESERVED_DESKTOP_COMMIT;
+    if (
+      process.env.REUSE_PUBLISHED_DESKTOP_RELEASE !== '1' ||
+      releaseAssetsManifestPath ||
+      !/^[a-f0-9]{40}$/i.test(commit ?? '')
+    )
+      throw new Error(
+        'Documentation-only publication requires an exact preserved desktop commit and no new asset manifest.',
+      );
+    await preservePublishedRelease(releaseConfig.metadataFile, publishedSiteUrl, {
+      required: true,
+      expectedCommit: commit,
+    });
+    for (const metadataFile of preserveMetadataFiles) await preservePublishedRelease(metadataFile, publishedSiteUrl);
+    console.log(`Prepared documentation with unchanged ${releaseChannel} installers and release metadata.`);
+    return;
+  }
   const version = await readAppVersion();
 
   for (const metadataFile of preserveMetadataFiles) {
@@ -536,9 +556,7 @@ async function main() {
     ({ artifacts, releaseUrl, stableDownloads } = releaseAssetsManifest);
   } else {
     await mkdir(originalDownloadsDir, { recursive: true });
-    artifacts = (await Promise.all(
-      releasePlatforms.map((platformConfig) => collectPlatformArtifacts(platformConfig)),
-    ))
+    artifacts = (await Promise.all(releasePlatforms.map((platformConfig) => collectPlatformArtifacts(platformConfig))))
       .flat()
       .sort((a, b) => `${a.platform}:${a.name}`.localeCompare(`${b.platform}:${b.name}`));
     stableDownloads = await createStableDownloads(artifacts);

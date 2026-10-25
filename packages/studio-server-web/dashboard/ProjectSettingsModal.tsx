@@ -261,7 +261,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
         disabled={!canCloseModal}
         onClick={() => setActiveTab('classifier-health')}
       >
-        Classifier profile suspension
+        Decision AI profile suspension
       </SegmentedControlButton>
       <SegmentedControlButton
         selected={activeTab === 'history'}

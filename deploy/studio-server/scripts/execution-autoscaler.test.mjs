@@ -9,9 +9,10 @@ import {
   reconcileExecutionAutoscaling,
 } from './lib/execution-autoscaler.mjs';
 import { journalForReleaseOperation } from './lib/release-operation-journal.mjs';
-import { assertRuntimeAutoscalingEvidence, HA_AUTOSCALING_CHECKS } from './lib/ha-release-evidence.mjs';
+import { assertRuntimeAutoscalingEvidence, assertCooperativeAutoscalingEvidence, HA_AUTOSCALING_CHECKS,
+  HA_COOPERATIVE_AUTOSCALING_CHECKS } from './lib/ha-release-evidence.mjs';
 
-function fixture(replicas = 3) {
+function fixture(replicas = 3, policyOverrides = {}) {
   let clock = 1000000,
     journal = null,
     version = 0,
@@ -22,6 +23,7 @@ function fixture(replicas = 3) {
     cooldownSeconds: 10,
     pollSeconds: 10,
     withdrawalSeconds: 1,
+    ...policyOverrides,
   });
   const pod = (ordinal) => ({
     name: `exec-${ordinal}`,
@@ -36,9 +38,31 @@ function fixture(replicas = 3) {
     state: 'serving',
     operationId: null,
   });
-  const snapshot = { uid: 'sts', replicas, pods: Array.from({ length: replicas }, (_, i) => pod(i)) };
+  const snapshot = {
+    uid: 'sts',
+    resourceVersion: '1',
+    replicas,
+    pods: Array.from({ length: replicas }, (_, i) => pod(i)),
+  };
   const calls = [];
   const io = {
+    prepareFence: async (target) => ({
+      protocol: 1,
+      name: target.name,
+      uid: target.uid,
+      workloadUid: target.workloadUid,
+      incarnation: target.incarnation,
+      operationId: target.operationId,
+      steps: { template: { before: null, confirmed: false }, pod: { before: null, confirmed: false } },
+    }),
+    convergeFence: async (target, intent, { authorize, confirm }) => {
+      if (!intent.steps.template.confirmed) {
+        await authorize();
+        await io.fence(target);
+        await confirm('template');
+      }
+      if (!intent.steps.pod.confirmed) await confirm('pod');
+    },
     fence: async (target) => {
       startupFence = target.name;
     },
@@ -58,13 +82,15 @@ function fixture(replicas = 3) {
       return structuredClone(journal);
     },
     snapshot: async () => structuredClone(snapshot),
-    scale: async (uid, from, to) => {
+    scale: async (uid, from, to, expectedResourceVersion) => {
       assert.equal(uid, snapshot.uid);
       assert.equal(from, snapshot.replicas);
+      if (expectedResourceVersion !== undefined) assert.equal(expectedResourceVersion, snapshot.resourceVersion);
       calls.push(['scale', from, to]);
       if (to > from) for (let i = from; i < to; i++) snapshot.pods.push(pod(i));
       else snapshot.pods = snapshot.pods.filter((p) => p.ordinal < to);
       snapshot.replicas = to;
+      snapshot.resourceVersion = String(Number(snapshot.resourceVersion) + 1);
     },
     retire: async (target, action) => {
       calls.push([action, target.uid]);
@@ -101,6 +127,7 @@ function fixture(replicas = 3) {
       advance();
       await tick();
     }
+    await tick(); // First observed absence starts the propagation window.
   };
   return {
     io,
@@ -133,6 +160,89 @@ test('policy rejects unsafe, fractional and incompatible bounds', () => {
   assert.equal(autoscalerPolicyDigest({}), autoscalerPolicyDigest(autoscalerPolicy({})));
 });
 
+test('an active or paused HA upgrade permits only bounded scale-up without replacing its journal', async () => {
+  for (const leaseExpiresAt of [0, 2_000_000]) {
+    const f = fixture(3);
+    const record = { protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
+      token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt,
+      workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
+      cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate',
+        maxReplicas: f.policy.maxReplicas, policyDigest: autoscalerPolicyDigest(f.policy) } };
+    f.setJournal(structuredClone(record));
+    for (const pod of f.snapshot.pods) pod.active = 9;
+    const options = { workload: 'exec', image: 'candidate' };
+    assert.equal((await f.tick(options)).state, 'rollout-scaled-up');
+    assert.equal(f.snapshot.replicas, 5);
+    assert.deepEqual(f.journal(), record);
+    for (const pod of f.snapshot.pods) pod.active = 0;
+    f.advance(1000);
+    assert.equal((await f.tick(options)).state, 'rollout-observing');
+    assert.equal(f.snapshot.replicas, 5);
+    assert.deepEqual(f.calls, [['scale', 3, 5]]);
+  }
+});
+
+test('HA scale-up fences policy/owner changes and reserves capacity for the retiring execution owner', async () => {
+  const f = fixture(3, { maxReplicas: 7 });
+  f.setJournal({ protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
+    token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt: 0,
+    workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
+    owner: { name: 'exec-0', operationId: 'retirement' },
+    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate', maxReplicas: 7,
+      policyDigest: autoscalerPolicyDigest(f.policy) } });
+  for (const pod of f.snapshot.pods) pod.active = 6;
+  assert.equal((await f.tick({ workload: 'exec', image: 'candidate' })).replicas, 4);
+  await assert.rejects(f.tick({ workload: 'other', image: 'candidate' }), /exact rollout/);
+  f.snapshot.uid = 'foreign';
+  await assert.rejects(f.tick({ workload: 'exec', image: 'candidate' }), /unconfirmed/);
+});
+
+test('a lost HA scale-up reply is observed without replaying the increase or rewriting the deployment journal', async () => {
+  const f = fixture(3);
+  const record = { protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
+    token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt: 0,
+    workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
+    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate', maxReplicas: f.policy.maxReplicas,
+      policyDigest: autoscalerPolicyDigest(f.policy) } };
+  f.setJournal(record);
+  for (const p of f.snapshot.pods) p.active = 9;
+  const scale = f.io.scale;
+  f.io.scale = async (...args) => { await scale(...args); throw Error('lost scale reply'); };
+  await assert.rejects(f.tick({ workload: 'exec', image: 'candidate' }), /lost scale reply/);
+  assert.equal((await f.tick({ workload: 'exec', image: 'candidate' })).state, 'rollout-observing');
+  assert.deepEqual(f.calls, [['scale', 3, 5]]);
+  assert.deepEqual(f.journal(), record);
+});
+
+test('a cutover taking ownership during an HA demand read prevents the following scale request', async () => {
+  const f = fixture(3);
+  f.setJournal({ protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
+    token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt: 0,
+    workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
+    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate', maxReplicas: f.policy.maxReplicas,
+      policyDigest: autoscalerPolicyDigest(f.policy) } });
+  for (const p of f.snapshot.pods) p.active = 9;
+  const snapshot = f.io.snapshot;
+  f.io.snapshot = async () => { const result = await snapshot(); f.setJournal({ ...f.journal(), protocol: undefined,
+    formatVersion: 1, resourceVersion: '8', phase: 'quiescing', token: 'cutover' }); return result; };
+  await assert.rejects(f.tick({ workload: 'exec', image: 'candidate' }), /ownership changed/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('the installed controller can close only an expired untouched preflight before resuming normal scaling', async () => {
+  const f = fixture(3);
+  f.setJournal({ protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'next-digest', previousManifestDigest: 'digest',
+    runner: 'stopped-deployer', token: 'upgrade', resourceVersion: '7', phase: 'preflight', leaseExpiresAt: 0, completed: [], owner: null,
+    workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
+    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'next-image', previousImage: 'installed-image',
+      maxReplicas: f.policy.maxReplicas, policyDigest: autoscalerPolicyDigest(f.policy) } });
+  assert.equal((await f.tick({ workload: 'exec', image: 'installed-image' })).state, 'rollout-preflight-released');
+  assert.equal(f.journal().abortedBeforeTemplates, true);
+  assert.equal(f.journal().phase, 'complete');
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.tick()).state, 'observing');
+});
+
 test('waiting LLM slots scale up even with zero CPU; CPU scales independently; caps apply', async () => {
   const f = fixture(2);
   f.snapshot.pods.forEach((p) => {
@@ -157,6 +267,8 @@ test('continuous low load withdraws only the highest ordinal; waits for routing,
   f.io.routed = async () => true;
   assert.equal((await f.tick()).state, 'waiting-for-routing');
   f.io.routed = async () => false;
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  f.advance();
   assert.equal((await f.tick()).state, 'draining');
   for (let i = 0; i < 20; i++) {
     f.advance(1000);
@@ -173,6 +285,175 @@ test('continuous low load withdraws only the highest ordinal; waits for routing,
   assert.equal(f.snapshot.replicas, 2);
   assert.equal(f.journal().phase, 'complete');
   assert.ok(f.snapshot.pods.every((p) => p.ready));
+});
+
+test('withdrawal delay starts at first observed endpoint absence, even when removal takes longer than the delay', async () => {
+  const f = fixture(3, { withdrawalSeconds: 60 });
+  f.io.routed = async () => true;
+  await f.withdraw();
+  f.advance(55);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  f.advance(6);
+  f.io.routed = async () => false;
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  for (let i = 0; i < 5; i++) {
+    f.advance();
+    assert.equal((await f.tick()).state, 'waiting-for-routing');
+  }
+  assert.equal(f.calls.filter(([action]) => action === 'begin').length, 0);
+  f.advance();
+  assert.equal((await f.tick()).state, 'draining');
+  assert.equal(f.calls.filter(([action]) => action === 'begin').length, 1);
+});
+
+test('a completed retirement cannot strand later lost-acknowledgement scale-up recovery with its obsolete fence', async (t) => {
+  for (const retainedHistory of [false, true])
+    await t.test(retainedHistory ? 'previous journal retains fence history' : 'new journal', async () => {
+      const f = fixture();
+      await f.withdraw();
+      f.advance();
+      assert.equal((await f.tick()).state, 'draining');
+      const retirementFence = structuredClone(f.journal().fence);
+      f.snapshot.pods[2].state = 'drained';
+      assert.equal((await f.tick()).state, 'scaled-down');
+      assert.equal((await f.tick()).state, 'unfencing');
+      assert.equal((await f.tick()).state, 'settled');
+      if (retainedHistory) {
+        f.setJournal({ ...f.journal(), fence: retirementFence });
+        f.snapshot.startupFence = 'unowned-fence';
+        await assert.rejects(f.tick(), /unowned execution startup fence/);
+        assert.deepEqual(f.journal().fence, retirementFence, 'uncertain runtime metadata preserves diagnostic history');
+        delete f.snapshot.startupFence;
+      }
+      for (const pod of f.snapshot.pods) pod.active = 9;
+      const scale = f.io.scale;
+      f.io.scale = async (...args) => {
+        await scale(...args);
+        throw Error('scale acknowledgement lost');
+      };
+      await assert.rejects(f.tick(), /scale acknowledgement lost/);
+      assert.equal(f.journal().phase, 'scaling');
+      assert.equal(f.journal().target, null);
+      if (retainedHistory) f.setJournal({ ...f.journal(), fence: retirementFence });
+      const commands = f.calls.length;
+      f.io.scale = scale;
+      assert.equal((await f.tick({ runner: 'replacement-controller' })).state, 'scale-observed');
+      assert.equal(f.journal().phase, 'complete');
+      assert.equal(f.journal().fence, null);
+      assert.equal(f.calls.length, commands, 'recovery observes scaling without issuing another command');
+    });
+});
+
+test('reconciliation retains the primary failure when lease cleanup also fails and does not steal ownership', async (t) => {
+  for (const step of ['read', 'write'])
+    await t.test(step, async () => {
+      const f = fixture();
+      const primary = new Error('snapshot failed');
+      const cleanup = new Error('cleanup journal unavailable');
+      const read = f.io.readJournal,
+        write = f.io.writeJournal,
+        snapshot = f.io.snapshot;
+      let reads = 0,
+        writes = 0;
+      f.io.snapshot = async () => {
+        throw primary;
+      };
+      f.io.readJournal = async () => {
+        if (++reads === 2 && step === 'read') throw cleanup;
+        return read();
+      };
+      f.io.writeJournal = async (...args) => {
+        if (++writes === 2 && step === 'write') throw cleanup;
+        return write(...args);
+      };
+      await assert.rejects(f.tick(), (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(error.errors, [primary, cleanup]);
+        return true;
+      });
+      f.io.readJournal = read;
+      f.io.writeJournal = write;
+      f.io.snapshot = snapshot;
+      assert.equal(f.journal().leaseExpiresAt > f.now(), true);
+      assert.equal((await f.tick({ runner: 'replacement' })).state, 'leased');
+      assert.deepEqual(f.calls, []);
+      f.advance(121);
+      assert.equal((await f.tick({ runner: 'replacement' })).state, 'observing');
+    });
+});
+
+test('a returning endpoint resets the full withdrawal propagation window', async () => {
+  const f = fixture(3, { withdrawalSeconds: 60 });
+  await f.withdraw();
+  for (let i = 0; i < 3; i++) {
+    f.advance();
+    await f.tick();
+  }
+  f.io.routed = async () => true;
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  assert.equal(f.journal().target.routingAbsence, null);
+  f.io.routed = async () => false;
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  for (let i = 0; i < 5; i++) {
+    f.advance();
+    assert.equal((await f.tick()).state, 'waiting-for-routing');
+  }
+  f.advance();
+  assert.equal((await f.tick()).state, 'draining');
+});
+
+test('failed, missing, restarted and legacy routing observations cannot reuse an earlier absence window', async () => {
+  for (const fault of ['snapshot-error', 'route-error', 'journal-read-error', 'journal-write-error', 'observation-gap', 'clock-regression', 'restart', 'legacy']) {
+    const f = fixture(3, { withdrawalSeconds: 60 });
+    await f.withdraw();
+    for (let i = 0; i < 3; i++) {
+      f.advance();
+      await f.tick();
+    }
+    let runner = 'controller';
+    if (fault.endsWith('-error')) {
+      const method = { 'snapshot-error': 'snapshot', 'route-error': 'routed', 'journal-read-error': 'readJournal', 'journal-write-error': 'writeJournal' }[fault];
+      const previous = f.io[method];
+      f.io[method] = async () => { throw new Error('observation unavailable'); };
+      await assert.rejects(f.tick(), /observation unavailable/);
+      if (!fault.startsWith('journal-')) assert.equal(f.journal().target.routingAbsence, null);
+      f.io[method] = previous;
+    } else if (fault === 'observation-gap') f.advance(26);
+    else if (fault === 'clock-regression') f.advance(-1);
+    else if (fault === 'restart') runner = 'new-controller-process';
+    else {
+      const previous = f.journal();
+      f.setJournal({ ...previous, target: { ...previous.target, routingAbsence: undefined } });
+    }
+    assert.equal((await f.tick({ runner })).state, 'waiting-for-routing', fault);
+    for (let i = 0; i < 5; i++) {
+      f.advance();
+      assert.equal((await f.tick({ runner })).state, 'waiting-for-routing', fault);
+    }
+    assert.equal(f.calls.filter(([action]) => action === 'begin').length, 0, fault);
+    f.advance();
+    assert.equal((await f.tick({ runner })).state, 'draining', fault);
+    assert.equal(f.calls.filter(([action]) => action === 'withdraw').length, 1, fault);
+    assert.equal(f.calls.filter(([action]) => action === 'begin').length, 1, fault);
+  }
+});
+
+test('rising demand still adds capacity during endpoint withdrawal and restarts its observation window', async () => {
+  const f = fixture(3, { withdrawalSeconds: 60 });
+  await f.withdraw();
+  f.snapshot.pods.forEach((p) => { p.active = 10; });
+  assert.equal((await f.tick()).state, 'scaled-up');
+  assert.equal(f.snapshot.replicas, 6);
+  assert.equal(f.journal().target.routingAbsence, null);
+  f.snapshot.pods.forEach((p) => { p.active = 0; });
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  for (let i = 0; i < 5; i++) {
+    f.advance();
+    assert.equal((await f.tick()).state, 'waiting-for-routing');
+  }
+  f.advance();
+  assert.equal((await f.tick()).state, 'draining');
+  assert.equal(f.snapshot.replicas, 6);
 });
 
 test('traffic returning during a long drain adds capacity and replaces only the old interior UID', async () => {
@@ -290,7 +571,8 @@ test('restart observes the same owned retirement without issuing withdraw or beg
   const f = fixture();
   await f.withdraw();
   f.advance();
-  await f.tick({ runner: 'replacement' });
+  assert.equal((await f.tick({ runner: 'replacement' })).state, 'waiting-for-routing');
+  f.advance();
   await f.tick({ runner: 'replacement' });
   assert.equal(f.calls.filter((c) => c[0] === 'withdraw').length, 1);
   assert.equal(f.calls.filter((c) => c[0] === 'begin').length, 1);
@@ -315,7 +597,11 @@ test('lost retirement acknowledgement is observed; an unsent/uncertain intent is
     await assert.rejects(f.tick(), /connection reset/);
     f.io.retire = real;
     f.advance();
-    if (sent) assert.equal((await f.tick()).state, 'draining');
+    if (sent) {
+      assert.equal((await f.tick()).state, 'waiting-for-routing');
+      f.advance();
+      assert.equal((await f.tick()).state, 'draining');
+    }
     else await assert.rejects(f.tick(), /intent is unconfirmed/);
     assert.equal(f.calls.filter((c) => c[0] === 'withdraw').length, sent ? 1 : 0);
   }
@@ -396,6 +682,10 @@ test('runtime autoscaling evidence is bound to exact source, images, chart and p
     checks: [...HA_AUTOSCALING_CHECKS],
   };
   assert.doesNotThrow(() => assertRuntimeAutoscalingEvidence(evidence, release, evidence.policyDigest));
+  assert.throws(() => assertCooperativeAutoscalingEvidence(evidence, release, evidence.policyDigest), /v2/);
+  const cooperative = { ...evidence, protocol: 2, checks: [...HA_COOPERATIVE_AUTOSCALING_CHECKS] };
+  assert.equal(assertCooperativeAutoscalingEvidence(cooperative, release, evidence.policyDigest).protocol, 2);
+  assert.throws(() => assertCooperativeAutoscalingEvidence({ ...cooperative, checks: [...HA_AUTOSCALING_CHECKS] }, release), /qualification/);
   for (const patch of [
     { candidateSourceSha: 'old' },
     { candidateImages: {} },

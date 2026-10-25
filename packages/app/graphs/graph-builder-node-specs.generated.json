@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:1cb5aa0f41c09dfa",
+  "catalogFingerprint": "fnv1a64:1e834995775a1725",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -229,7 +229,7 @@
     {
       "authoringChoiceId": "registered:classifierEvaluate",
       "nodeType": "classifierEvaluate",
-      "displayName": "Classifier Evaluate",
+      "displayName": "Decision AI run",
       "description": "Evaluates one shared state and optional images against a batch of independent typed questions in one provider request, apart from retries. Every question sees the same state and images. It is not an LLM Chat node and does not stream tokens.",
       "aliases": [],
       "capabilities": {
@@ -244,8 +244,8 @@
     {
       "authoringChoiceId": "registered:classifierProfile",
       "nodeType": "classifierProfile",
-      "displayName": "Classifier Profile",
-      "description": "Defines reusable provider, model, credential resolution and suspension settings for Classifier Evaluate. Supports Jev, Liquid AI, OpenAI Decisions, Microsoft Decision 1 through OpenRouter, and Perplexity Decisions. Connect Profile directly to Evaluate's Classifier Profiles input, or combine multiple profiles with an Array node to create an ordered fallback chain. Set Evaluate's Configuration to From profile . For OpenRouter, clear Model to use microsoft/microsoft decision 1 ; see OpenRouter setup. For Perplexity, clear Model to use pplx decider v1.1 27b ; see Perplexity setup.",
+      "displayName": "Decision AI Profile",
+      "description": "Defines reusable provider, model, credential resolution and suspension settings for Decision AI run. Supports Jev, Liquid AI, OpenAI Decisions, Microsoft Decision 1 through OpenRouter, Perplexity Decisions, and SubQ Snap. Connect Profile directly to Decision AI run's Decision AI Profiles input, or combine multiple profiles with an Array node to create an ordered fallback chain. Set Decision AI run's Configuration to From profile . For OpenRouter, clear Model to use microsoft/microsoft decision 1 ; see OpenRouter setup. For Perplexity, clear Model to use pplx decider v1.1 27b ; see Perplexity setup.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,
@@ -259,8 +259,8 @@
     {
       "authoringChoiceId": "registered:classifierQuestion",
       "nodeType": "classifierQuestion",
-      "displayName": "Classifier Question",
-      "description": "Builds one serializable typed question for a classifier provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Classifier Evaluate's aggregate Answers object. The same question format works with Jev , Liquid AI d1 , OpenAI Decisions , Microsoft Decision 1 through OpenRouter , and Perplexity Decisions . Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See provider setup and limits.",
+      "displayName": "Decision AI Question",
+      "description": "Builds one serializable typed question for a Decision AI provider. It does not make a network request. Question ID is preserved exactly and becomes the key in Decision AI run's aggregate Answers object. The same Choice, Score and Noul text/JSON question format works with Jev , Liquid AI d1 , OpenAI Decisions , Microsoft Decision 1 through OpenRouter , Perplexity Decisions , and SubQ Snap . Choose the provider in Decision AI run; no manual question conversion is needed. Bounding Box requires a compatible Jev model. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Image Instructions require a compatible provider as described below. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See provider setup and limits.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

@@ -138,6 +138,7 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
   #listenerConnected = false;
   #initialized = false;
   #disposed = false;
+  #disposePromise: Promise<void> | undefined;
 
   constructor(options: ManagedSettingsStoreOptions) {
     this.#poolConfig = options.poolConfig;
@@ -353,10 +354,8 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     return () => this.#listeners.delete(listener);
   }
 
-  async dispose(): Promise<void> {
-    if (this.#disposed) {
-      return;
-    }
+  dispose(): Promise<void> {
+    if (this.#disposePromise) return this.#disposePromise;
     this.#disposed = true;
     this.#initialized = false;
     this.#listenerConnected = false;
@@ -371,11 +370,19 @@ export class PostgresAppSettingsBackend implements AppSettingsBackend {
     }
     const listener = this.#listenerClient;
     this.#listenerClient = null;
-    await this.#pollInFlight?.catch(() => undefined);
-    this.#pollInFlight = undefined;
-    await Promise.allSettled([listener?.end(), this.#poolLease.release()]);
-    this.#listeners.clear();
-    this.#knownRevisions.clear();
+    this.#disposePromise = (async () => {
+      await this.#pollInFlight?.catch(() => undefined);
+      this.#pollInFlight = undefined;
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => listener?.end()),
+        Promise.resolve().then(() => this.#poolLease.release()),
+      ]);
+      this.#listeners.clear();
+      this.#knownRevisions.clear();
+      const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []));
+      if (failures.length) throw new AggregateError(failures, 'Managed settings resources did not close cleanly.');
+    })();
+    return this.#disposePromise;
   }
 
   #toRecord(row: AppSettingsRow, value: Record<string, unknown>): ManagedSettingsRecord {

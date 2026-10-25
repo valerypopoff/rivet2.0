@@ -588,8 +588,18 @@ node .yarn/releases/yarn-4.17.1.cjs workspace @valerypopoff/rivet-app exec tsx -
 ```
 
 `yarn check:file-tree` rejects unignored generated paths and package source deep
-imports. The remaining production long-relative-import queue has a shrinking numeric
-baseline; increasing it fails so settled boundaries cannot silently regress.
+imports. Existing deep-relative dependency debt is recorded per source/specifier
+in `scripts/checks/import-boundary-debt.json`, not as a count ceiling. New edges,
+obsolete allowances and duplicates fail; line movement is harmless. The parser
+handles multiline, re-export, dynamic and type imports without reading comments
+or authored code strings as imports. The CodeRunner runtime graph must not reach
+Core's public barrels. The gate and its focused regressions run in `test:style`.
+
+Core source entrypoints are declared once in `package.json.rivetSourceEntrypoints`
+and consumed by Vite aliases and the CommonJS builder. Core's normal build also
+checks built ESM/CommonJS export parity and executes authored code against both
+public namespaces. Adding a public subpath requires matching source, ESM, types
+and CommonJS declarations; published runtime resolution remains unchanged.
 
 ### Yarn PnP install state
 
@@ -1024,7 +1034,8 @@ explicit manual dispatches, not ordinary staging VM trials. Main image releases
 still apply changed-path Kubernetes classification; tags, schedules and forced
 manual release options have their own gate requirements.
 
-Promotion is gated by verification and candidate rehearsals. Staging publishes
+Promotion is gated by verification, candidate rehearsals and container vulnerability
+scans of every published architecture at the exact candidate digest. Staging publishes
 the staging branch and short-SHA aliases, never `latest` or the durable production
 release pointer. Alias retags are not atomic and are not evidence that a run passed.
 Wait for the intended **Build Images** run to succeed, then use
@@ -1089,6 +1100,15 @@ longer requires `dependenciesMeta` or an unplugged package copy.
 
 ### Dependency security
 
+Container dependencies have a separate fail-closed gate; Yarn/Cargo audits do not
+cover NGINX or Alpine packages. `scan-images` consumes this attempt's immutable
+candidate manifest, scans all four runtime images/platforms with digest-pinned
+Trivy, retains sanitized inventory/finding reports and blocks image promotion on
+High/Critical findings (including unfixed ones), incomplete reports or scanner
+errors. There is no container exception or allow-failure path. See
+[Container security](./studio-server/container-security.md) for local commands,
+evidence, NGINX pins and the remaining lower-severity dependency findings.
+
 `yarn security:audit` parses Yarn's recursive NDJSON audit output, discarding only
 Yarn reporter lines in its `➤ YN####:` format, and fails closed on every other
 non-JSON line. A nonzero audit command exit must first contain JSON finding output,
@@ -1121,23 +1141,26 @@ overrides preserve the consumers' APIs; serialization's newer major remains
 CommonJS-compatible on the repository's supported Node 22+ runtime. Check the
 documentation production build when refreshing its webpack/Babel dependencies.
 
-Only two temporary JavaScript exceptions remain, both backed by local Yarn
-security patches because no verified upstream fix is available. They are not
-approvals to execute the original vulnerable code:
+No JavaScript audit exceptions remain after container remediation. A local Yarn
+security patch remains necessary even though the newer upstream version lies
+outside the advisory's current version range:
 
-- `braces` 3.0.3 limits nesting to 256 levels in its parser and compile, expand,
-  and stringify AST walkers. The limit cannot be overridden by caller options.
-  This deliberately rejects extreme nesting, while ordinary watcher patterns
-  and brace expansion retain their behavior.
-- `http-cache-semantics` 4.2.0 synchronously revalidates zero-lifetime responses
+- Patched `http-cache-semantics` 4.3.0 synchronously revalidates zero-lifetime responses
   before honoring `max-stale` or stale-while-revalidate. This prevents security-
   zeroed cookies/private/no-store/no-cache/proxy-revalidate responses from being
   revived. Ordinary fresh and positive-lifetime stale public caching is retained;
   zero-TTL public entries conservatively revalidate too.
 
-Yarn still reports the underlying versions for patched packages. The exceptions
-are restricted to their existing docs/build ancestry, record the actual
-mitigation, and expire on 2026-11-01 for upstream re-review. The unchanged audit
+The `braces` 3.0.3 hardening patch remains: it limits nesting to 256 levels in
+the parser and compile, expand and stringify AST walkers, without a caller
+override. Ordinary watcher patterns and expansion retain their behavior. Its
+exception was removed on 2026-10-24 because the current registry report no longer
+contains that finding; an unused exception fails the gate. Removing the unused
+waiver does not remove the independently regression-tested protection.
+
+Yarn still reports the underlying versions for patched packages. The remaining
+exception is restricted to its existing docs/build ancestry, records the actual
+mitigation, and expires on 2026-11-01 for upstream re-review. The unchanged audit
 gate still rejects new runtime consumers, expired or unused exceptions, and
 every critical finding. Remove a patch and its exception together only when a
 replacement passes the same consumer-level regression tests.
@@ -1164,6 +1187,29 @@ resolution with `node .yarn/releases/yarn-4.17.1.cjs up -R <package>` instead of
 adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and
 replacement `.yarn/cache` archive together so zero-install CI resolves the same
 patched dependency as local development.
+
+The 2026-10-24 refresh uses body-parser 1.20.9/2.4.0
+([compressed-body advisory](https://github.com/advisories/GHSA-27r3-jxmh-p828)),
+Undici 6.29.1/7.30.1
+([response-decoding advisory](https://github.com/advisories/GHSA-xjj6-f33q-929c)),
+DOMPurify 3.4.17 across app, web and Node asset consumers
+([shadow-template](https://github.com/advisories/GHSA-cg2g-xh64-v4q7) and
+[detached-hook](https://github.com/advisories/GHSA-mrv2-3pqr-j5jr) advisories),
+and Zod 4.6.7 in the application and MCP SDK
+([bounded-validation advisory](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)).
+These fixes add no audit exceptions. Direct minimum ranges, transitive pins,
+lockfile, PnP map and zero-install archives must stay aligned.
+
+The version-specific `@google/genai@npm:0.12.0/zod` resolution also uses 4.6.7.
+The pinned Google SDK 0.12.0 declares Zod 3 but its shipped JavaScript and declarations do
+not import it. This narrowly scoped refresh avoids changing the Google SDK API;
+it does not apply to future SDK versions or force all Zod 3 consumers onto Zod 4.
+A child-process regression exercises an actual SDK tool-schema request and response through a
+synthetic fetch transport, without credentials or external requests. Other
+consumer-level regressions exercise both Express parser generations, both Undici
+majors, and upper collection bounds before element validation. Sanitizer tests
+cover split shadow-root expressions and hook-detached handlers in JSDOM and
+headless Chromium, retaining ordinary Markdown and web-app rendering checks.
 
 When a Studio Server workspace bundles a Rivet dependency that is also pinned by
 Rivet Core, use Core's exact tested version rather than a wider caret range. A
@@ -1486,11 +1532,26 @@ manifests. Studio Server-only and developer-documentation-only commits no longer
 consume signed desktop runners. Manual dispatch remains available and always
 runs the selected branch's release.
 
-Graph Builder validation, the shared desktop frontend build, and documentation
-building start concurrently. A Linux job typechecks and bundles the desktop
-frontend once, seals every output file with a SHA-256 inventory and the source
-commit, and uploads the same-commit artifact. Windows and both native macOS
-packaging jobs depend on that producer. Their explicit Tauri configuration
+The read-only publication planner runs first. Developer push callers opt into
+docs-only reuse: both the full push range and the range from the commit in the
+published `developer-release.json` must contain only `packages/docs/` changes.
+This second comparison is essential when a docs push cancels an earlier code
+push before its installers publish. Incomplete history, missing/unavailable or
+invalid metadata, or any other changed input retains the full native build.
+Manual dispatch and official releases always use the full build. This does not
+change native publication frequency for application changes or bypass the
+separate Build workflow's checks.
+
+In a full build, Graph Builder validation, frontend acquisition and documentation
+building start concurrently. Build's existing Node 22 `frontend-build` job is
+the single desktop compiler: it seals every output file with a SHA-256 inventory
+and the source commit and uploads `rivet-desktop-web-<full SHA>`. Desktop Release
+uses read-only Actions access to locate the exact same-repository, same-branch
+**push** Build run and download its exact artifact ID. It verifies the inventory
+without installing dependencies or recompiling, then hands that verified output
+to Windows and both native macOS consumers. No PR/fork artifact, branch-tip
+substitute, other SHA or unverified fallback build is accepted. Studio Server's
+Node 24 build remains separate. Their explicit Tauri configuration
 override verifies the complete restored inventory before preparing the native
 sidecars; it does not repeat the frontend build. Missing, changed, extra or
 non-regular files fail closed. Local Tauri builds keep their ordinary frontend
@@ -1505,6 +1566,78 @@ Code-to-Graph-Output execution through its worker, and runs the packaged pnpm
 `--version` command. The smoke graph uses an `any` Graph Output because the
 current Code node's whole-value output is intentionally an `any` DataValue; the
 assertion verifies both that type and the returned value.
+
+For docs-only reuse, native and Graph Builder jobs must be **skipped**, not
+failed; the publisher explicitly requires the planner and docs build to succeed.
+It downloads no new installers and publishes no release assets. Pages preparation
+requires the primary channel's existing metadata to still match the exact
+planned installer commit, preserves its bytes/URLs and same-site binaries, and
+preserves the other channel as before (a never-published other channel may be
+absent). Same-site downloads must match their recorded byte count before being
+written; a shortened HTTP 200 response fails preparation without publishing new
+metadata. This is a truncation check, not a substitute for signatures or a
+cryptographic digest. A changed primary baseline fails preparation. Original version, label,
+commit and timestamps remain attached to the old installers, never the docs SHA.
+Existing branch freshness checks and serialized Pages publication remain active;
+the explicit skipped-job gate must not admit canceled workflows.
+
+Immediately before release assets or Pages preparation can be written, the
+publisher runs `scripts/ci/desktop-build-evidence.mjs validated`. Native releases
+pin both Build run ID and attempt from frontend acquisition. Docs-only releases
+resolve the exact current docs SHA's Build independently (not the old installer
+SHA). Only a completed, successful Build passes; failed/canceled runs, changed
+attempts, identity mismatch, API errors and timeouts stop publication. Signing
+and packaging can overlap the remaining Build checks; **publication cannot**.
+This is a point-in-time gate, not a lock against somebody subsequently rerunning
+Build. The final asset branch-head check must run **after** this potentially long
+wait and immediately before asset publication. In particular, manual workflows
+are not canceled by newer pushes and must not publish using a head check from
+before the wait. Pages retains its own subsequent branch-head check. If its first
+deployment attempt fails, the retry rechecks the branch after that attempt and
+the cancellation-settlement delay. A stale or failed freshness check prevents
+the second deployment; the old check is never reused to authorize another write.
+
+Evidence waits are bounded to 20 minutes, with individual HTTP calls bounded to
+10 seconds and no redirect-following or modifying API calls. Missing or expired
+frontend artifacts require rerunning Build before the desktop workflow. Artifacts
+are retained seven days. Do not bypass the gate or rebuild an unqualified
+frontend inside Desktop Release. Existing workflow triggers, manual entry points,
+native release frequency, signing, audits and required aggregate job IDs remain
+unchanged. Six short lint jobs are grouped into two lanes; four supporting-suite
+jobs are grouped into two. Every original command remains required exactly once.
+
+`scripts/ci/desktop-release-plan.mjs` and the real Pages-preparation CLI have
+regression tests using disposable Git histories and actual local HTTP responses.
+They cover unpublished application changes, malformed/missing metadata,
+unavailable assets and a changed baseline without contacting the live site.
+The repo-owned synthetic Pages contract lives in `postman/mocks/rivet-pages/`.
+For an optional local CLI simulation (Postman CLI 1.70+), run:
+
+```sh
+postman simulation run postman/simulations/rivet-docs-publication.sim.yaml --port 4919 --no-history --output ndjson
+```
+
+Use `http://127.0.0.1:4919/pages/ok/` as `PAGES_SITE_URL`; the synthetic preserved
+commit is forty `a` characters. `/pages/changed/`, `/pages/missing/` and
+`/pages/asset-failure/` exercise rejection. No real credentials or release assets
+are used. The ordinary Node HTTP regression tests reuse this contract and do not
+require Postman or upload request history.
+
+The read-only GitHub gate has a separate synthetic contract and simulation:
+
+```sh
+postman simulation run postman/simulations/rivet-build-evidence.sim.yaml --port 4920 --no-history --output ndjson
+```
+
+Use `GITHUB_API_URL=http://127.0.0.1:4920/github/ok/`, repository `fixture/repo`,
+SHA of forty `a` characters, ref `refs/heads/develop` and a synthetic token. Run
+`node scripts/ci/desktop-build-evidence.mjs artifact` or `validated`. `/failed/`,
+`/rerun/` and `/unavailable/` replace `/ok/` for rejection checks. The fixture
+models the documented GitHub REST GET shapes; an owner-workspace mock was not
+used. Normal CI runs the same contract over disposable local HTTP without a
+Postman installation or provider credentials. Local tests do not certify actual
+cross-run artifact transport, native signing or hosted timing; verify those in
+the first complete hosted push run.
 
 Notarization also requires exactly one DMG before signing or submitting anything;
 it must never pick an arbitrary first artifact that differs from verification's
@@ -1729,6 +1862,48 @@ that the CLI Dockerfile's local-build fallback matches the lockstep package
 version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
+
+### Prepared release versions (2026-10-25)
+
+All tracks last changed versions in `1ebeef366`. Changes since that baseline
+through `390d5657a`, together with the Bounding Box feature, prepare:
+
+| Track                               | Version change      | Reason                                                                                                                                                                                                |
+| ----------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop app                         | `2.29.0` → `2.30.0` | Bundled question-image/Bounding Box capabilities, host and execution-coordination consolidation, observation lifecycle fixes, lazy viewers and Run Activity improvements.                             |
+| Public Core/Node/Evaluations/CLI    | `2.23.0` → `2.24.0` | Additive question-local image Instructions and model-gated Jev Bounding Box definitions/responses, child ownership and registration hardening; Node/Evaluations/CLI are required lockstep companions. |
+| App executor                        | `2.15.0` → `2.16.0` | Source-bundled Core/runtime capability companion; no separate sidecar protocol change.                                                                                                                |
+| Documentation site                  | `2.23.0` → `2.24.0` | Question-image and Bounding Box authoring, provider limits and answer guidance.                                                                                                                       |
+| Five private Studio Server packages | `1.31.0` → `1.32.0` | Hosted Decision AI additions, shared editor host policies, repository/resource ownership hardening and image security changes; unchanged private workspaces remain lockstep companions.               |
+
+These are compatible minor releases, not a claim that every companion has
+package-local source changes. Desktop Tauri/Cargo metadata follows App; the CLI
+Docker fallback follows the public family. Workspace dependency ranges, Helm
+metadata and database schemas stay unchanged. Preparing versions and pushing to
+develop do not publish production releases, deploy GCP or qualify live model access.
+
+### Prepared release versions (2026-10-24)
+
+Before this update, all tracks except Docs last changed versions in `18437156c`;
+Docs used `216625246`. Subsequent changes through `181b51496` plus this change set's Decision AI
+timeout, pricing/image work, SubQ Snap integration and diagnostic hardening prepare:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.28.2` → `2.29.0` | Bundle-wide local execution visibility and recording UI/status/tab capabilities, plus presentation and safety fixes. |
+| Public Core/Node/Evaluations/CLI | `2.22.1` → `2.23.0` | Jev image assets and 1.14 pricing, SubQ Snap Decisions integration, removed node-wide classifier timeout, long-retry hardening and consistent Decision AI diagnostics; Node security update and required family companions. |
+| App executor | `2.14.2` → `2.15.0` | Bundled Core/runtime companion for Jev/SubQ and timeout changes, not a new sidecar API. |
+| Documentation site | `2.22.0` → `2.23.0` | New bundle-execution, recording and Decision AI/Jev/SubQ guidance. |
+| Five private Studio Server packages | `1.30.0` → `1.31.0` | Opt-in backend overlap/housekeeping handover and readiness capabilities, recording/bundle routing refinements and hosted editor updates. |
+
+The [package inventory](PACKAGES.md#version-update-2026-10-24--backend-overlap-recording-ux-and-jev-images)
+distinguishes implementation work from required release companions. The old
+run-node timeout fields are deliberately ignored rather than migrated; call this
+out in release notes. Profile response deadlines and cancellation remain.
+Synchronize Tauri/Cargo from App and the CLI Docker fallback from the public
+family. Workspace dependency ranges, Helm metadata and schema versions do not
+change merely for these versions. Publication, GCP deployment and upstream/provider
+qualification remain separate actions.
 
 ### Prepared release versions (2026-10-22)
 

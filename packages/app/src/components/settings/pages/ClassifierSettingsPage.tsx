@@ -13,12 +13,12 @@ export const ClassifierSettingsPage: FC = () => {
   return (
     <div css={fields}>
       <section className="settings-section">
-        <h2 className="settings-section-heading">Classifier credentials</h2>
+        <h2 className="settings-section-heading">Decision AI credentials</h2>
         <FieldHelperMessage>
-          These credentials are used by built-in Classifier nodes. They are not saved into project YAML and may instead
+          These credentials are used by built-in Decision AI nodes. They are not saved into project YAML and may instead
           be supplied through the node&apos;s API Key input or the provider&apos;s documented environment variable.
-          Choose Classifier settings in the node to use only the saved provider key. Automatic gives named programmatic
-          and environment credentials priority over these keys; missing keys in Classifier settings mode do not fall
+          Choose Decision AI settings in the node to use only the saved provider key. Automatic gives named programmatic
+          and environment credentials priority over these keys; missing keys in Decision AI settings mode do not fall
           back.
         </FieldHelperMessage>
         <div className="settings-section-fields">

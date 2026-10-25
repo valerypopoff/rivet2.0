@@ -11,13 +11,7 @@ import { match } from 'ts-pattern';
 import { entries } from './typeSafety.js';
 
 export function sanitizeInputsOrOutputs<T extends Inputs | Outputs>(data: T): T {
-  const sanitized: Partial<Record<keyof T, DataValue>> = {};
-
-  for (const [key, value] of entries(data)) {
-    sanitized[key as keyof T] = fixDataValueUint8Arrays(value) as DataValue;
-  }
-
-  return sanitized as T;
+  return Object.fromEntries(entries(data).map(([key, value]) => [key, fixDataValueUint8Arrays(value)])) as T;
 }
 
 /** Applies the same transport-safe value normalization to each split result. */

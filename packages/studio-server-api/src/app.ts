@@ -3,7 +3,15 @@ import type { AcceptedWork, ProcessRetirement } from '../../studio-server-shared
 import { createRequestWorkBarrier } from './request-work.js';
 import { createProcessRetirementRouter } from './process-retirement-http.js';
 import { isLatestDebuggerRelayReady } from './latestWorkflowRemoteDebugger.js';
-import { getHaControlPlaneMode, getHaRuntimeContract } from './ha-control-plane.js';
+import { getHaControlPlaneMode, getHaRuntimeContract, ownsMaintenance } from './ha-control-plane.js';
+import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
+import {
+  requireHousekeepingIncarnation,
+  closeHousekeepingAdmission,
+  getHousekeepingAdmissionState,
+} from './housekeeping-owner.js';
+import { getLegacyRestoreService } from './legacy-restore/service.js';
+import { asyncHandler } from './utils/asyncHandler.js';
 import { getLocalMetadataServingSelection } from './local-metadata/serving-selection.js';
 import { localUpgradeFailure } from './local-metadata/upgrade-diagnostics.js';
 
@@ -305,7 +313,7 @@ function dispatchDynamicBasePath(getBasePath: () => string, router: ExpressRoute
   };
 }
 
-function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void {
+function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile, health: RuntimeHealthReader): void {
   app.get('/internal/executor-runtime-config', (req, res) => {
     const address = req.socket.remoteAddress;
     if (
@@ -365,7 +373,22 @@ function mountControlPlaneRoutes(app: Express, profile: ApiRuntimeProfile): void
   app.use('/api/projects', projectsRouter);
   app.use('/api/workflows', workflowsRouter);
   app.use('/api/runtime-libraries', runtimeLibrariesRouter);
-  app.use('/api/deployment-status', createDeploymentStatusRouter(profile));
+  app.use(
+    '/api/deployment-status',
+    createDeploymentStatusRouter(profile, () => {
+      const snapshot = health.getReadiness();
+      const maintenance = isLegacyRestorePaused();
+      const peers = isLatestDebuggerRelayReady();
+      return {
+        ready: snapshot.ok && !maintenance && peers,
+        state: maintenance ? 'maintenance' : snapshot.state,
+        checkedAt: snapshot.checkedAt,
+        ...(maintenance || !peers || snapshot.code
+          ? { code: maintenance ? 'restore_maintenance' : !peers ? 'ha_debugger_peers_unavailable' : snapshot.code }
+          : {}),
+      };
+    }),
+  );
   app.use('/api/app-settings', appSettingsRouter);
   app.use('/api/legacy-restore', legacyRestoreRouter);
   app.use('/api', configRouter);
@@ -423,7 +446,10 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
       }
       return;
     }
-    if (!isLatestDebuggerRelayReady()) { res.status(503).json({ ok: false, code: 'ha_debugger_peers_unavailable' }); return; }
+    if (!isLatestDebuggerRelayReady()) {
+      res.status(503).json({ ok: false, code: 'ha_debugger_peers_unavailable' });
+      return;
+    }
     sendHealth(health.getReadiness(), res);
   });
 
@@ -434,6 +460,45 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
       createProcessRetirementRouter(options.retirement.owner, options.retirement.token),
     );
   if (options.requestWork) app.use(createRequestWorkBarrier(options.requestWork));
+  if (process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton-overlap' && process.env.RIVET_HA_MAINTENANCE === '1') {
+    app.use(
+      '/internal/housekeeping/handover',
+      requireAuth,
+      requireHousekeepingIncarnation,
+      asyncHandler(async (req, res) => {
+        if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) {
+          res.sendStatus(403);
+          return;
+        }
+        const id = req.get('x-rivet-housekeeping-operation') ?? '';
+        if (req.headers.origin || !/^[a-f0-9-]{36}$/.test(id)) {
+          res.sendStatus(403);
+          return;
+        }
+        const service = getLegacyRestoreService();
+        const restart = req.get('x-rivet-housekeeping-restore-restart') === '1';
+        if (restart && req.method !== 'GET') {
+          res.sendStatus(405);
+          return;
+        }
+        if (req.method === 'POST') {
+          service.beginHousekeepingHandover(id);
+          closeHousekeepingAdmission();
+        } else if (req.method !== 'GET') {
+          res.sendStatus(405);
+          return;
+        }
+        let idle = true;
+        try {
+          if (restart) await service.assertMayRestart();
+          else await service.assertMayRetire();
+        } catch {
+          idle = false;
+        }
+        res.set('Cache-Control', 'no-store').json({ protocol: 1, operationId: id, idle });
+      }),
+    );
+  }
   app.use(createMetricsRequestObserver(metrics));
 
   app.use(vmMigrationRequestBarrier);
@@ -443,9 +508,34 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   app.use(captureAppSettingsSnapshot);
 
   if (process.env.RIVET_HA_CONTROL_PLANE_MODE && profile !== 'evaluation') {
-    app.get('/internal/ha/runtime-contract', requireAuth, (_req, res) => {
-      res.set('Cache-Control', 'no-store').json(getHaRuntimeContract(profile));
-    });
+    app.get(
+      '/internal/ha/runtime-contract',
+      requireAuth,
+      asyncHandler(async (_req, res) => {
+        let maintenanceIdle = false;
+        let maintenanceReady = false;
+        if (ownsMaintenance() && ['control', 'combined'].includes(profile)) {
+          try {
+            const restore = getLegacyRestoreService();
+            maintenanceReady = true;
+            await restore.assertMayRetire();
+            await projectBundleJobs.assertMayTransfer();
+            maintenanceIdle = true;
+          } catch {
+            /* Busy or uncertain work must block serial bridge adoption. */
+          }
+        }
+        res.set('Cache-Control', 'no-store').json({
+          ...getHaRuntimeContract(profile),
+          maintenanceIdle,
+          maintenanceReady,
+          ...(process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton-overlap' &&
+          process.env.RIVET_HA_MAINTENANCE === '1'
+            ? { housekeepingAdmission: getHousekeepingAdmissionState() }
+            : {}),
+        });
+      }),
+    );
   }
 
   // Non-secret, revisioned routing projection. Execution must cold-start without
@@ -462,7 +552,7 @@ export function createApiApp(profile = getApiRuntimeProfile(), options: ApiAppOp
   }
 
   if (isControlPlaneApiProfile(profile)) {
-    mountControlPlaneRoutes(app, profile);
+    mountControlPlaneRoutes(app, profile, health);
   }
 
   if (isPublishedExecutionApiProfile(profile)) {

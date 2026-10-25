@@ -82,6 +82,61 @@ const rootDestinations = new Map([
  */
 const currentDestinationSuccessors = new Map([
   [
+    'packages/studio-server-web/overrides/state/settings.ts',
+    {
+      path: 'packages/app/src/state/settings.ts',
+      reason:
+        'The shared editor owns stored debugger preferences; explicit host UI policy supplies defaults and URL normalization.',
+    },
+  ],
+  [
+    'packages/studio-server-web/overrides/state/savedGraphs.ts',
+    {
+      path: 'packages/app/src/hooks/workspaceHost/useWorkspaceHostProjectCleanup.ts',
+      reason:
+        'Workspace cleanup owns tab release and explicit durable project-context deletion; the host no longer reaches into editor storage.',
+    },
+  ],
+  [
+    'packages/studio-server-web/overrides/hooks/useCheckForUpdate.tsx',
+    {
+      path: 'packages/app/src/hooks/useCheckForUpdate.tsx',
+      reason: 'The shared updater respects explicit host capability while keeping the standalone desktop update flow.',
+    },
+  ],
+  [
+    'packages/studio-server-web/overrides/hooks/useCopyNodesHotkeys.ts',
+    {
+      path: 'packages/app/src/hooks/useCopyNodesHotkeys.ts',
+      reason:
+        'The shared clipboard owner reads its provider store at event time; the host supplies hovered fallback and native clipboard event policy.',
+    },
+  ],
+  [
+    'packages/studio-server-web/overrides/hooks/useSyncCurrentStateIntoOpenedProjects.ts',
+    {
+      path: 'packages/app/src/hooks/useSyncCurrentStateIntoOpenedProjects.ts',
+      reason:
+        'The shared editor synchronizer owns metadata, legacy recovery and close suppression; the host supplies explicit tab and title/cache policy.',
+    },
+  ],
+  [
+    'packages/studio-server-web/overrides/hooks/useContextMenu.ts',
+    {
+      path: 'packages/app/src/hooks/useContextMenu.ts',
+      reason:
+        'The shared editor owns menu state and positioning; the host supplies only external dismissal and focus cleanup.',
+    },
+  ],
+  [
+    'packages/studio-server-web/overrides/hooks/useLoadProject.ts',
+    {
+      path: 'packages/app/src/hooks/useActivateOpenedProject.ts',
+      reason:
+        'The shared activation owner consumes host-provided Evaluation cache and executor policy without a module replacement.',
+    },
+  ],
+  [
     'packages/studio-server-api/src/runtime-libraries/managed/job-stream.ts',
     {
       path: 'packages/studio-server-api/src/routes/runtime-library-job-stream.ts',

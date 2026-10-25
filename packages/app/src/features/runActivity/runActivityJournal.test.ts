@@ -60,6 +60,36 @@ const project: Project = {
   graphs: { [graphId]: graph },
 };
 
+test('fresh but unchanged executor metadata preserves graph ancestry references across node events', () => {
+  const child: GraphExecutionMetadata = {
+    ...execution,
+    parentGraphRunId: 'parent-run' as GraphRunId,
+    executor: {
+      nodeId: 'caller' as NodeId,
+      parentGraphId: 'parent' as GraphId,
+      processId: 'caller-process' as ProcessId,
+    },
+  };
+  let journal = apply(createRunActivityJournal(), 'graphStart', { graph, inputs: {}, execution: child }, 10);
+  const initial = journal.rootsById[rootRunId]!.graphRunsById;
+  journal = apply(journal, 'nodeStart', { node, processId, inputs: {}, execution: structuredClone(child) }, 11);
+  assert.strictEqual(journal.rootsById[rootRunId]!.graphRunsById, initial);
+  journal = apply(journal, 'nodeFinish', { node, processId, outputs: {}, execution: structuredClone(child) }, 12);
+  assert.strictEqual(journal.rootsById[rootRunId]!.graphRunsById, initial);
+  for (const patch of [
+    { nodeId: 'other-caller' as NodeId },
+    { parentGraphId: 'other-parent' as GraphId },
+    { processId: 'other-process' as ProcessId },
+    { splitIndex: 2 },
+  ]) {
+    const changed = { ...child, executor: { ...child.executor!, ...patch } };
+    const enriched = apply(journal, 'graphStart', { graph, inputs: {}, execution: changed }, 13);
+    assert.notStrictEqual(enriched.rootsById[rootRunId]!.graphRunsById, initial);
+    assert.deepEqual(enriched.rootsById[rootRunId]!.graphRunsById[graphRunId]!.executor, changed.executor);
+    assert.deepEqual(initial[graphRunId]!.executor, child.executor, 'Earlier journal snapshots remain immutable');
+  }
+});
+
 test('projects a complete lifecycle without retaining DataValues or node data', () => {
   let journal = createRunActivityJournal();
   journal = apply(journal, 'start', { project, startGraph: graph, inputs: {}, contextValues: {}, execution }, 10);

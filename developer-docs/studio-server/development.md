@@ -51,6 +51,62 @@ The supported server development command is `yarn studio-server:dev:local-storag
 retained for historical migration and isolated compatibility fixtures, not new
 server deployments.
 
+### Development frontend source-read failures
+
+The Docker development web service compiles read-only host source mounts into
+immutable generations. A Docker Desktop/host filesystem read failure can therefore
+fail the frontend even when the source is valid. An observed example was
+`[vite:load-fallback] EIO ... open /app/packages/evaluations/src/assertions.ts`.
+The host and a subsequent read-only container probe returned identical SHA-256
+content, and the normal production web build succeeded. Startup also reproduced
+EIO across other source files while host compilation continued normally. This
+establishes an unhealthy mount with intermittent individual read failures, not a
+TypeScript or missing-source fix; it does not identify the exact underlying
+Docker/Windows filesystem component. Bounded retries cannot repair a persistently
+unhealthy mount or establish that the Docker launcher started successfully.
+
+`dev/compile.mjs` classifies only EIO source reads in the watched application
+source directories. Vite-wrapped `PLUGIN_ERROR`/`pluginCode: EIO` must identify a
+load/open, or the syscall must be a read or source-metadata stat (also reproduced
+through `vite:esbuild` while resolving a source-directory tsconfig).
+Vite's CSS transform instead overwrites
+`pluginCode` with CSS source; its confirmed wrapper must preserve Linux EIO
+`errno: -5`, `plugin: vite:css`, `hook: transform` and an `open` syscall.
+Output/cache writes, unclassified opens,
+dependencies, syntax errors, missing files and permission failures do not acquire
+this retry behavior. `dev/builder.mjs` retries the unchanged source twice, after
+1s and 3s, using a fresh compiler **only after the failed child exits**. It never
+publishes failed/partial output or retries an application's API/write request.
+The previous good generation remains available; a first build remains unready
+until a complete generation is published. A real source edit or successful build
+resets the retry budget. Exhaustion leaves an actionable Docker file-sharing
+diagnostic and waits for an edit/restart; it does not spin indefinitely.
+The existing cache-busy five-minute policy is separate and unchanged.
+When an edit supersedes an active compiler, the watcher logs the first changed
+path/event so repeated supersession is distinguishable from an IO retry.
+
+For a persistent EIO, check that the host file is readable, inspect the web
+container logs and Docker Desktop file sharing, then rerun the local launcher.
+Do not delete PostgreSQL/MinIO volumes, change credentials or modify the reported
+source file merely to work around a mount failure. Restarting Docker Desktop can
+interrupt unrelated local containers and requires explicit user approval; it is
+not performed automatically by the launcher.
+This policy is development-only; release build errors are not hidden or retried.
+If Desktop itself fails to start (for example, its Secrets Engine cannot access
+`engine.sock`), stop at that separate platform failure. Do not factory-reset
+Docker, remove its credential storage or claim the Rivet stack is running.
+Host-only build/browser results must be recorded separately from Docker startup.
+
+Regression owners: `dev/build-failure.test.mjs` checks classification and budgets;
+`dev/build-retry-process.test.mjs` runs actual watcher/compiler children with a
+test-only Vite fault injector, checking transient recovery, persistent exhaustion,
+syntax rejection, edit recovery, single publication and non-overlapping compiler
+lifetimes. The regular web test command discovers both. Supervisor/generation
+tests continue to cover source supersession and last-good-bundle ownership.
+Local receipts are under `artifacts/local-web-build-*`; actual Docker/host source
+read agreement is diagnostic evidence, not a deterministic reproduction of the
+underlying Docker Desktop fault.
+
 The six `dev|staging|prod` × `local-storage|external-storage` commands share
 `container-server.mjs` and one normalized Compose model. Development builds source;
 staging consumes immutable candidates; both production choices require promoted
@@ -88,6 +144,10 @@ Kubernetes rehearsal or a new browser run.
 ## Extending serving services
 
 Classifier providers are Core-owned and shared by desktop and hosted execution.
+Their curated `modelOptions` also drive the shared Decision AI Model dropdown in
+run/Profile inspectors: Default, known model IDs and Custom model text entry.
+There is no hosted override or network catalog fetch. Keep saved custom names and
+Model-input connections intact; see the [model-selection contract](../CLASSIFIER-NODES.md#model-selection-ui).
 Microsoft Decision-1 uses the `openrouter` provider and the native OpenRouter
 Decisions API, default model `microsoft/microsoft-decision-1`. Follow the
 [OpenRouter classifier contract](../CLASSIFIER-NODES.md#microsoft-decision-1-through-openrouter)
@@ -97,6 +157,11 @@ settings), not as a browser-exposed environment variable. No Azure resource URL
 or deployment is needed. Existing runtime settings injection applies to
 endpoints, web apps, Evaluations and editor Node runs without another adapter.
 
+Liquid's existing `liquid` provider supports `d1` (retained Rivet default) and
+explicit `d1.1` through the same Node runtime, saved key and environment injection.
+Both accept shared-State images; no hosted adapter or data migration is needed.
+See the [d1.1 contract and local HTTP check](../CLASSIFIER-NODES.md#liquid-d11).
+
 Perplexity uses the same registry/runtime injection with provider `perplexity`,
 default model `pplx-decider-v1.1-27b` and host credential `PERPLEXITY_API_KEY`
 (or saved Classifier settings / programmatic `perplexityApiKey`). Its native
@@ -104,6 +169,13 @@ Decisions endpoint is not Sonar or chat completions. Follow the
 [Perplexity classifier contract](../CLASSIFIER-NODES.md#perplexity-decisions)
 for inline image parts, smaller question limits and conservative cost accounting.
 Do not expose its environment key to the browser; Browser execution is rejected.
+
+Baseten uses the same registry with provider `baseten`, executor credential
+`BASETEN_API_KEY` / programmatic `basetenApiKey`, and saved **Baseten API Key**.
+Elephant-1 is the default; select Mammoth-1 in the shared Model dropdown. The
+stored value remains its full Model API slug, not the friendly display label.
+See the [Baseten contract and local HTTP checks](../CLASSIFIER-NODES.md#baseten-elephant-1-and-mammoth-1).
+There is no separate hosted adapter, browser-exposed key or GCP resource.
 
 Provider hardening belongs in Core's shared classifier preparation/HTTP runner,
 not duplicated host adapters. Graph and direct API State roots use the same
@@ -1288,7 +1360,25 @@ API health JSON, failure status and no-store caching; these paths must never
 reach the SPA or a login page. The real-NGINX fixture below also checks health
 routing, 503 propagation, HEAD/method handling, unchanged operator authentication, exact path
 matching and health recovery after an API address change. Its image-template
-case uses the production Dockerfile's `nginx:1.27-alpine` base.
+case uses the production Dockerfile's security-reviewed, digest-pinned NGINX base.
+The repository CI contract (`scripts/checks/check-ci-workflows.mjs`) checks
+production/development and DNS-fixture pins against the shared `nginxImage`
+policy in `scripts/ci/scan-container-images.mjs`. Keep that Node-only build/scanner
+dependency outside the TypeScript API tests; the DNS contract tests behavior,
+not a second historical image version. Validate changes with both the API build
+and the focused contract tests: running a TypeScript test alone does not prove
+that the strict server compilation accepts it. Keep resolver/shared-zone,
+authentication and no-mutating-request-replay assertions intact when refreshing that image. A pin
+policy mismatch must fail; a security update must not require restoring an old
+vulnerable tag merely to satisfy a stale DNS test.
+
+The hosted Subgraph error-body deadline regression uses a real loopback HTTP
+response for the stalled case, not an artificial stream that can let Node 22's
+event loop exit before an unref'ed timeout. It asserts upstream socket closure
+and preserves the application's timeout policy. Deployment-command fixtures
+serialize simulated API reads/writes through a bounded, test-only file lock;
+Windows `EPERM` is contention only while the expected regular lock exists.
+Permission errors, symlinks and timeout remain failures; tests never steal locks.
 
 `verify-proxy-dns.mjs` checks real upstream Host preservation through all three
 templates for hostname/port, IPv6/port and default-port authorities. Run headless
@@ -1443,22 +1533,54 @@ database migration or Kubernetes rehearsal is needed for these editor changes.
   - retries transient download failures with a bounded timeout; failures report the asset URL and underlying cause
   - use this when you want Kubernetes verification or the local Kubernetes launcher to work without a system Helm install
 
+## Decision AI question Instructions
+
+Decision AI question image Instructions are shared Core behavior, not a hosted
+override. Use Image/Text → Assemble Message (User) → Question Instructions;
+Assemble Prompt optionally combines already assembled messages. Only verified
+Jev models and OpenAI `gpt-6-luna` support question-local images; State remains
+the shared-evidence input. Criteria remain text/JSON. See
+[the implementation contract](../CLASSIFIER-NODES.md#images-in-question-instructions).
+`decision-question-images.spec.ts` checks both image wiring forms and text-only
+messages passed through Array, using actual browser graph execution and recorded
+outputs without paid provider calls. Empty typed image/message arrays fail early.
+The same fixture also selects Bounding Box, restores hidden Choice settings on
+type changes and executes a criteria-free Box definition. Box currently requires
+Jev 1.14 (including its verified aliases) and an image visible to that question;
+unsupported Profile candidates fail before HTTP. See
+[Bounding Box contracts](../CLASSIFIER-NODES.md#bounding-box-questions).
+
+The shared editor's `wire-viewport-culling.spec.ts` runs isolated crossing,
+backwards-curve and authored-bend fixtures through real pan, wheel zoom in/out and
+resize gestures, checking visible SVG geometry as well as off-screen culling and
+re-entry. It needs no API or
+model credentials. See [canvas connection visibility](../CANVAS-INTERACTIONS.md#connection-visibility-during-panzoom)
+for the cached route-bound contract shared with desktop.
+The wire geometry, candidate and hook-lifecycle tests are discovered by the
+official `yarn test:app` runner. The browser spec is enrolled in the balanced
+editor CI shards via `scripts/ci/editor-test-shards.mjs`; keep that inventory and
+its coverage assertion in sync when renaming or adding browser scenarios.
+Canvas-only checks need no Kubernetes rehearsal. Autoscaler journal/recovery
+changes have their own local HTTP/Helm/ownership checks and
+[production recovery approval boundary](deployment-operations.md#recovering-an-inherited-execution-startup-fence);
+committing or pushing the source never applies that recovery to a live cluster.
+
 ## Versioning
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.30.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.32.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since `216625246`: compact HA developer
-control with embedded maintenance, execution-owned published scheduling/runtime
-settings, additive availability reporting and drain-aware scaling/deployment
-support. It also includes routing-withdrawal convergence, hosted save-conflict
-and reconnect fixes, and publication-aware Delete navigation. Bundle lifecycle
-features were already covered by `1.29.0`.
+This minor release covers changes since `1ebeef366`: shared editor host policies,
+execution/observation lifecycle hardening, narrower repository/resource ownership,
+editor loading and Run Activity improvements, question-image/Bounding Box support
+and container security hardening. Unchanged workspaces are release companions.
+Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
+This version update does not enable overlap or establish GKE qualification.
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-22) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-25) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -2671,8 +2793,8 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - declare packages imported by the hosted Rivet import graph directly in `packages/studio-server-web/package.json`; the workspace declares `idb` because hosted dataset/storage modules import it. Do not rely on a coincidental transitive dependency.
 - hosted project context values are editor-owned app state, not `.rivet-project` file contents
   - Rivet stores them under `projectContext__"<projectId>"`, so hosted open/reopen persistence depends on stable `project.metadata.id` values
-  - keep `packages/studio-server-web/overrides/state/savedGraphs.ts` exporting the hosted `clearProjectContextState` compatibility helper by delegating normal tab cleanup to upstream `releaseProjectContextState`, so `RivetWorkspaceHost.closeProject()` and `replaceCurrent()` can close tabs without deleting those stored values
-  - actual dashboard workflow deletion should forward the project id returned by `DELETE /api/workflows/projects`, then call `deleteHostedProjectContextState` and `clearHostedDatasetsForProject` from the iframe delete handler so stale editor-owned browser state does not remain even when the tab was already closed; the delete helper removes `projectContext__"<projectId>"` through the shared `project` storage group
+  - normal tab cleanup delegates to shared `releaseProjectContextState`, so `RivetWorkspaceHost.closeProject()` and `replaceCurrent()` retain stored context without any hosted `savedGraphs` replacement
+  - actual dashboard workflow deletion forwards the confirmed project id to `workspace.deleteProjectContext(projectId)` and `clearHostedDatasetsForProject`; App resets live context and removes only `projectContext__"<projectId>"` through the shared `project` storage group, awaiting the recovery flush even for closed tabs. Do not manipulate editor context keys in wrapper code.
   - `HostedDatasetProvider` inherits project-scoped cleanup from `BrowserDatasetProvider`; its only specialization is atomic replacement on import. Do not reintroduce clear-then-import or require duplicated cleanup code in source-contract tests. `hosted-dataset-provider.test.ts` exercises the actual hosted adapter with IndexedDB, including shared dataset IDs across projects, inactive imports, stale selections, quota failure rollback, and cancellation after replacement deletes. The app's `BrowserDatasetProvider.test.ts` covers the shared implementation and schema migration.
 - editor executor transport should prefer Rivet's upstream host/session seam
   - mount the editor through `RivetAppHost`
@@ -2710,13 +2832,13 @@ When adding new code, keep the post-refactor ownership seams explicit instead of
   - `TauriIOProvider.test.ts` runs the real native API adapter through an in-memory IPC stub (no OS dialogs or production files), covering deferred/guarded dataset import, cancelled reads and rejected native writes. Combined with custom-provider activation tests, this protects interface compatibility; it is not an interactive packaged-desktop smoke test
   - if direct workflow activation fails, rely on the workspace host's boolean result and avoid posting `project-opened` to the dashboard
   - `useLoadProject` in both app and hosted mode uses the store-scoped `runLatestProjectActivation` coordinator: preparation is cancellable and deadline-bound, never a lock that blocks a newer selection. Serialize only derived cache operations per provider; do not acknowledge superseded selections or bypass the coordinator for an active editor-tab click. After IO, recheck tab/path and immutable project identity, reread its current snapshot, and preserve deliberately absent static data. `useLoadProject.test.tsx` covers delayed cancellation, close/move races, picker reopens, reused paths, latest snapshots and live-graph preservation; `projectActivationCoordinator.test.ts` covers nonblocking supersession, deadlines and failed-operation recovery. The tree activation browser test also exercises slow tab recovery after reload, identity rejection and successful retry
-  - when fixing tab close/switch behavior, update the wrapper overrides rather than storing full project objects back into `projectsState.openedProjects`
-  - if `useSyncCurrentStateIntoOpenedProjects` is overridden for hosted tab cleanup, call the shared `useSyncProjectDirtyState` observer; do not duplicate its saved-baseline logic in the wrapper. It must preserve dirty recovered tabs when their saved baseline is absent
+  - when fixing tab close/switch behavior, update shared workspace hooks and explicit host policy rather than restoring wrapper overrides or storing full project objects in `projectsState.openedProjects`
+  - use `providers.openedProjectSync` for hosted explicit-tab/title/cache policy; do not override `useSyncCurrentStateIntoOpenedProjects`. The shared hook owns legacy recovery and delegates dirty state to `useSyncProjectDirtyState`, preserving dirty recovered tabs when their saved baseline is absent
   - carry forward upstream's per-project executor metadata in hosted opened-project overrides: the active tab must write `OpenedProjectInfo.executorMode`, and `useLoadProject` must pass `projectInfo.executorMode` back into `workspaceTransitions.loadProject(...)` so Browser, Node, and Remote Debugger choices are restored when switching tabs
 - wrapper module overrides should stay scoped to upstream app importers
   - `packages/studio-server-web/vite.config.ts` resolves override files only when the importer is under `packages/app/src`
-  - keep the `savedGraphs` override narrow: it re-exports upstream state, maps the hosted `clearProjectContextState` compatibility helper to upstream `releaseProjectContextState` for normal tab close/reopen, and exposes an explicit storage-removing delete helper for actual workflow deletion
-  - keep the `state/settings` override narrow: delegate upstream settings exports and override only hosted executor/debugger defaults plus the wrapper update-check modal atom, so upstream UI settings such as canvas background preferences and custom theme color helpers are not copied into the wrapper
+  - do not restore `savedGraphs` or `state/settings` replacements: use `workspace.deleteProjectContext()` for confirmed local context deletion and `ui.debuggerConnection` for live debugger defaults/normalization. The shared editor owns preference storage and normal tab-close retention.
+  - hosted `ui.checkForUpdates: false` gates the shared updater even for forced checks; desktop omission preserves the native update flow. Do not restore the obsolete updater hook or update-modal atom.
   - do not put wrapper-owned transport overrides back into `packages/studio-server-web/vite-aliases.ts`
   - do not alias `useSaveProject`, `useMenuCommands`, or `useWindowsHotkeysFix`; upstream `RivetAppHost.ui.keyboardShortcuts.saveProject`, `RivetWorkspaceHost.saveCurrentProject()`, `RivetAppHost.onProjectSaved`, and `RivetAppHost.ui.fileMenu.visibleItems` own the save/menu seam. The wrapper sends `save-project` only when focus is outside the iframe and reconciles saved title/path metadata through `RivetWorkspaceHost.updateProjectMetadata()` after successful saves
   - keep dashboard-focused `Ctrl+S` / `Cmd+S` narrow: prevent browser Save Page behavior, consume repeat keydowns without sending another bridge command, and let `useEditorCommandBridge` call `RivetWorkspaceHost.saveCurrentProject()`. Keep shortcut-originated saves and explicit dashboard-button saves as separate zero-argument callbacks: only the shortcut callback adds `source: "shortcut"`, and the button's DOM handler must consume its event before invoking the source-free callback. Do not pass a semantic callback with optional payload arguments directly to a React event prop, because the runtime event can otherwise leak into `postMessage`. Preview promotion must be driven by `RivetAppHost.onProjectSaved`, not by save invocation, so cancelled or failed saves stay previews
@@ -2854,7 +2976,7 @@ Current repo-local baseline:
 - The old mixed `managed-backend-sql.test.ts` suite has been split. Put managed schema, folder-move SQL, and execution lookup query contracts in `managed-workflow-schema.test.ts`; put managed publication history, restore, star persistence, and save-target behavior in `managed-publication-history.test.ts`. Schema tests should import the exported SQL string, not read `schema.ts` as source text, so escaping regressions are tested against what the app actually sends to Postgres.
 - The old broad `phase4-static-contract.test.ts` suite has been split. Put proxy, Docker image, CI image, and production launcher contracts in `proxy-image-contract.test.ts`; hosted editor wrapper/upstream seam guardrails in `hosted-editor-seams.test.ts`; and Helm/chart topology assertions in `kubernetes-contract.test.ts`.
 - Keep `hosted-editor-seams.test.ts` focused on wrapper ownership. Recording activation, executor preservation, and tab-path cleanup are exercised by the web recording/command behavior tests. Save-shortcut classification and evaluation suppression are exercised by `editor-bridge-focus.test.ts` and `editor-bridge-contract.test.ts`; app hotkey tests cover editor repeat suppression, and `evaluation-save-shortcut.spec.ts` verifies dashboard and iframe ownership in the browser. The separate dashboard save listener retains a narrow source guard for repeat suppression and its required `shortcut` argument until hook-level coverage replaces it. That source is intentional: Evaluations uses it to suppress project saves.
-- The hosted seam guard follows wrapper-owned integration points rather than obsolete implementation locations: dependency-light `entry.tsx` awaits `bootstrapApp.tsx`, which loads hosted CSS and React; `useOpenWorkflowProject` activates existing tabs through `RivetWorkspaceHost` instead of reading snapshots itself; the hosted `useLoadProject` adapter delegates to App's `useActivateOpenedProject`; and hosted tab synchronization delegates dirty-state observation to App's `useSyncProjectDirtyState`. It must not read the shared App hooks' implementation files or expand the upstream-source allowlist. App's `useLoadProject.test.tsx` owns behavioral coverage for cancellation, snapshot activation, saved baselines and conservative dirty state. Run the focused hosted seam test plus `yarn workspace @valerypopoff/rivet-app run test:files -- src/hooks/useLoadProject.test.tsx` after ownership refactors, then API shard 3/4 (`--shard-index 2 --shard-count 4`) before handoff. Root `yarn test:style` also executes the actual Studio Server style-policy CLI through `scripts/ci/studio-server-test-style.test.mjs`; use `yarn studio-server:verify:test-style` for the focused check and the independent Studio Server CI gate. Architectural guards supplement, rather than replace, behavioral editor and browser regressions.
+- The hosted seam guard follows wrapper-owned integration points rather than obsolete implementation locations: dependency-light `entry.tsx` awaits `bootstrapApp.tsx`, which loads hosted CSS and React; `useOpenWorkflowProject` activates existing tabs through `RivetWorkspaceHost` instead of reading snapshots itself; `providers.projectActivation` supplies caching/executor policy to App's shared activation owner; and hosted tab synchronization delegates dirty-state observation to App's `useSyncProjectDirtyState`. It must not read the shared App hooks' implementation files or expand the upstream-source allowlist. App's `useLoadProject.test.tsx` owns behavioral coverage for cancellation, snapshot activation, saved baselines and conservative dirty state. Run the focused hosted seam test plus `yarn workspace @valerypopoff/rivet-app run test:files -- src/hooks/useLoadProject.test.tsx` after ownership refactors, then API shard 3/4 (`--shard-index 2 --shard-count 4`) before handoff. Root `yarn test:style` also executes the actual Studio Server style-policy CLI through `scripts/ci/studio-server-test-style.test.mjs`; use `yarn studio-server:verify:test-style` for the focused check and the independent Studio Server CI gate. Architectural guards supplement, rather than replace, behavioral editor and browser regressions.
 - `yarn workspace @valerypopoff/rivet-studio-server-api run test` intentionally does not run Helm. Use `yarn studio-server:verify:kubernetes` for Kubernetes launcher tests, Helm-rendered chart contracts, and production overlay lint/template checks. The API suite runs with `--test-concurrency=1` because many API tests intentionally set process-wide `RIVET_*` roots before importing route modules; keep that serialization unless the affected tests are refactored to avoid global env mutation.
 - Wrapper regressions built from upstream Rivet fixtures must derive fixture project and graph IDs from the parsed fixture instead of copying generated IDs into the test. For filesystem project-reference moves, cover a reused former hint path as well as the moved target: the wrapper must verify a hinted project's immutable ID before accepting it, then resolve the moved project by ID. When a fixture needs `Project.references`, set that field on the parsed project and serialize it with Rivet; do not rely on a version-specific YAML placeholder such as `references: []`.
 - Keep full-screen node-output paging compact and in the header's top-left pager group. LLM Chat round history keeps its full truthful label there (for example, `Round 2 · Requested tools`) instead of becoming a second full-width control row. An ordinary multi-round LLM invocation uses its selected historical round directly; only nodes configured with `Run per item` use the split-output renderer. The `latest` terminal output and the newest retained round that led into a failure both show its process-level error, while the retained round keeps its own snapshot content. Never repeat that error or its red output surface on earlier historical rounds; the node can retain its overall failed execution status while the selected earlier snapshot is presented neutrally.
@@ -3041,7 +3163,7 @@ For hosted editor production-image regressions:
 
 1. remember that `yarn studio-server:prod` and `yarn studio-server:prod:prebuilt` use pulled images, `yarn studio-server:prod:restart` keeps already-local images, and `yarn studio-server:prod:custom` builds the current monorepo workspace
 2. if dev works but prod does not, compare the exact published image revision with the current monorepo commit and keep any hosted-only adaptation in the tracked Studio Server host/override seam rather than modifying shared editor behavior solely for the hosted application
-3. for clipboard or graph-tree context-menu regressions specifically, check the tracked hosted overrides for `useCopyNodesHotkeys`, `useContextMenu`, and the canvas focus handoff in `EditorMessageBridge.tsx`; the context-menu override must keep upstream's virtual pointer anchor plus `setFloatingMenu` return and should not depend on removed graph-list positioning classes such as `graph-item-context-menu-pos` or `graph-list-context-menu-pos`
+3. for clipboard or graph-tree context-menu regressions specifically, check the shared App `useCopyNodesHotkeys` and `useContextMenu`, their `HostedEditorApp` UI policy, and the canvas focus handoff in `EditorMessageBridge.tsx`; clipboard commands read the current provider store and menu positioning uses the shared virtual pointer anchor plus `setFloatingMenu`, not copied hooks or removed graph-list positioning classes such as `graph-item-context-menu-pos` or `graph-list-context-menu-pos`
 
 For slow hosted node settings panels:
 

@@ -1,6 +1,9 @@
 import { atom } from 'jotai';
+import { executionSnapshotField } from './projectExecutionStore.js';
 import { type ExecutionRecorder, type ProjectId } from '@valerypopoff/rivet2-core';
 import { loadedProjectState, projectState } from './savedGraphs.js';
+import { getRecordingPresentation, type RecordingRunDetails } from '../utils/recordingPresentation.js';
+import { isRecordingSnapshotPath } from '../utils/recordingPlayback.js';
 
 /** Transient render tick for the runtime-owned executor/debugger session. */
 export const executorSessionRevisionState = atom(0);
@@ -8,12 +11,18 @@ export const executorSessionRevisionState = atom(0);
 export type LoadedRecording = {
   path: string;
   recorder: ExecutionRecorder;
+  summary?: RecordingRunDetails;
   /** The exact editor tab that selected this recording for playback. */
   projectId: ProjectId;
   projectPath: string | null;
 };
 
 export const loadedRecordingState = atom<LoadedRecording | null>(null);
+
+/** Small, transient tab decorations; never retain a second copy of recording events. */
+type RecordingTabIndicator = Pick<ReturnType<typeof getRecordingPresentation>, 'status' | 'color' | 'label'> &
+  Pick<LoadedRecording, 'projectPath'>;
+export const recordingTabIndicatorsState = atom<Record<string, RecordingTabIndicator>>({});
 
 /**
  * True when a loaded recording belongs to this exact editor tab. Project IDs
@@ -51,11 +60,23 @@ export function getLoadedRecordingForTab(
 
 /** The recording mode visible to the current editor tab, if any. */
 export const currentProjectLoadedRecordingState = atom((get) =>
-  getLoadedRecordingForTab(
-    get(loadedRecordingState),
-    get(projectState).metadata.id,
-    get(loadedProjectState).path,
-  ),
+  getLoadedRecordingForTab(get(loadedRecordingState), get(projectState).metadata.id, get(loadedProjectState).path),
+);
+
+/** Standalone replay tabs have no live project mode to return to; close the tab instead. */
+export const canUnloadCurrentProjectRecordingState = atom((get) => {
+  const recording = get(currentProjectLoadedRecordingState);
+  return recording != null && !isRecordingSnapshotPath(recording.projectPath);
+});
+
+/**
+ * A detached hosted replay is already a snapshot before its recording activates,
+ * and remains detached until its tab closes. Local files use snapshot presentation
+ * only while their own tab has a recording loaded. Never use this as authority
+ * to access a live project or infer bundle membership.
+ */
+export const isRecordingProjectState = atom(
+  (get) => !!get(currentProjectLoadedRecordingState) || isRecordingSnapshotPath(get(loadedProjectState).path),
 );
 
 /**
@@ -86,20 +107,36 @@ export function canChangeLoadedRecordingForTab(
 export const recordingPlaybackStartingState = atom(false);
 
 /** Selects a recording for playback and clears any prior tab's start-in-progress flag. */
-export const activateLoadedRecordingState = atom(
-  null,
-  (_get, set, loadedRecording: LoadedRecording) => {
-    set(loadedRecordingState, loadedRecording);
-    set(recordingPlaybackStartingState, false);
-  },
-);
+export const activateLoadedRecordingState = atom(null, (_get, set, loadedRecording: LoadedRecording) => {
+  const { status, color, label } = getRecordingPresentation(loadedRecording);
+  set(recordingTabIndicatorsState, (current) => ({
+    ...current,
+    [loadedRecording.projectId]: { projectPath: loadedRecording.projectPath, status, color, label },
+  }));
+  set(loadedRecordingState, loadedRecording);
+  set(recordingPlaybackStartingState, false);
+});
 
-/** Keeps a manually loaded recording attached when its owning tab is moved or renamed. */
+/** Keeps a loaded recording attached when its tab is moved, renamed or saved to a new file. */
 export const rebindLoadedRecordingPathState = atom(
   null,
-  (get, set, move: { fromPath: string; toPath: string }): boolean => {
+  (get, set, move: { fromPath: string | null; toPath: string; projectId?: ProjectId }): boolean => {
+    set(recordingTabIndicatorsState, (current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([id, indicator]) => [
+          id,
+          indicator.projectPath === move.fromPath && (move.projectId == null || id === move.projectId)
+            ? { ...indicator, projectPath: move.toPath }
+            : indicator,
+        ]),
+      ),
+    );
     const loadedRecording = get(loadedRecordingState);
-    if (loadedRecording?.projectPath !== move.fromPath) {
+    if (
+      !loadedRecording ||
+      loadedRecording.projectPath !== move.fromPath ||
+      (move.projectId != null && loadedRecording.projectId !== move.projectId)
+    ) {
       return false;
     }
 
@@ -116,6 +153,13 @@ export const rebindLoadedRecordingPathState = atom(
 export const clearLoadedRecordingForTabState = atom(
   null,
   (get, set, owner: { projectId: string | undefined; projectPath: string | null | undefined }): boolean => {
+    set(recordingTabIndicatorsState, (current) => {
+      if (!owner.projectId || !current[owner.projectId] || current[owner.projectId]?.projectPath !== owner.projectPath)
+        return current;
+      const next = { ...current };
+      delete next[owner.projectId];
+      return next;
+    });
     if (!isLoadedRecordingOwnedByTab(get(loadedRecordingState), owner.projectId, owner.projectPath)) {
       return false;
     }
@@ -134,6 +178,11 @@ export const clearLoadedRecordingForTabState = atom(
 export const clearLoadedRecordingForPathState = atom(
   null,
   (get, set, projectPath: string | null | undefined): boolean => {
+    if (projectPath != null) {
+      set(recordingTabIndicatorsState, (current) =>
+        Object.fromEntries(Object.entries(current).filter(([, indicator]) => indicator.projectPath !== projectPath)),
+      );
+    }
     if (projectPath == null || get(loadedRecordingState)?.projectPath !== projectPath) {
       return false;
     }
@@ -144,4 +193,4 @@ export const clearLoadedRecordingForPathState = atom(
   },
 );
 
-export const lastRecordingState = atom<string | undefined>(undefined);
+export const lastRecordingState = executionSnapshotField('lastRecording');

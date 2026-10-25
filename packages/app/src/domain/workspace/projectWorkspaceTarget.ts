@@ -26,7 +26,7 @@ export function getProjectWorkspaceTargetCapabilities(
   target: ProjectWorkspaceTarget | undefined,
 ): ProjectWorkspaceTargetCapabilities {
   return {
-    canRun: target == null || target.type === 'graph',
+    canRun: target?.type !== 'nodeLibrary' && target?.type !== 'uiGraph',
     hasCanvas: target?.type !== 'uiGraph',
   };
 }
@@ -34,16 +34,13 @@ export function getProjectWorkspaceTargetCapabilities(
 export function getProjectWorkspaceLeavePolicy(
   target: ProjectWorkspaceTarget | undefined,
 ): ProjectWorkspaceLeavePolicy {
-  const leavesGraph = target == null || target.type === 'graph';
+  const leavesGraph = target?.type !== 'nodeLibrary' && target?.type !== 'uiGraph';
   return { commitLiveGraph: leavesGraph, persistGraphViewport: leavesGraph };
 }
 
 /** A nested graph view is valid only while its exact Subgraph caller remains. */
-export function isProjectGraphViewContextValid(
-  graphView: GraphViewContext,
-  project: Pick<Project, 'graphs'>,
-): boolean {
-  if (!project.graphs[graphView.graphId]) {
+export function isProjectGraphViewContextValid(graphView: GraphViewContext, project: Pick<Project, 'graphs'>): boolean {
+  if (!graphView || !project.graphs[graphView.graphId]) {
     return false;
   }
 
@@ -74,7 +71,7 @@ export function isProjectWorkspaceTargetValid(
     return project.uiGraphs?.[target.uiGraphId] != null;
   }
 
-  return isProjectGraphViewContextValid(target.graphView, project);
+  return target.type === 'graph' && isProjectGraphViewContextValid(target.graphView, project);
 }
 
 export function resolveProjectWorkspaceTarget(options: {

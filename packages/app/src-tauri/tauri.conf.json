@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "Rivet 2",
-    "version": "2.28.2"
+    "version": "2.30.0"
   },
   "tauri": {
     "allowlist": {

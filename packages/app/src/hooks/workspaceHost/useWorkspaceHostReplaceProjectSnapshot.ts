@@ -6,6 +6,7 @@ import { flushHybridStorageGroup } from '../../state/storage.js';
 import { useStableCallback } from '../useStableCallback.js';
 import { normalizeProjectSnapshot } from './projectSnapshot.js';
 import { useWorkspaceHostCleanBaseline } from './useWorkspaceHostCleanBaseline.js';
+import { renewProjectBindingState } from '../../state/projectBindings.js';
 import type { RivetProjectSnapshotInput } from './types.js';
 
 /**
@@ -44,6 +45,7 @@ export function useWorkspaceHostReplaceProjectSnapshot(
         : existingOpenedProject.openedGraph && normalized.project.graphs[existingOpenedProject.openedGraph]
           ? existingOpenedProject.openedGraph
           : fallbackGraph;
+    store.set(renewProjectBindingState, projectId);
     setOpenedProjectSnapshots((previousSnapshots) => ({
       ...previousSnapshots,
       [projectId]: {

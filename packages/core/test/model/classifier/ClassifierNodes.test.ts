@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import {
   ClassifierEvaluateNodeImpl,
+  ClassifierProfileNodeImpl,
   ClassifierQuestionNodeImpl,
   calculateClassifierUsageCost,
   classifierProviders,
@@ -51,12 +52,36 @@ function evaluateNode(data: Partial<ClassifierEvaluateNodeImpl['data']> = {}) {
   return new ClassifierEvaluateNodeImpl({ ...node, data: { ...node.data, ...data } });
 }
 
-test('Classifier nodes are first-party built-ins in the Classifier group', () => {
+test('Decision AI presentation preserves registered classifier primitives and saved configuration', () => {
   const registry = createBuiltInRegistry();
-  assert.equal(registry.getPluginFor('classifierQuestion'), undefined);
-  assert.equal(registry.getPluginFor('classifierEvaluate'), undefined);
-  assert.deepEqual(ClassifierQuestionNodeImpl.getUIData().group, ['Classifier']);
-  assert.deepEqual(ClassifierEvaluateNodeImpl.getUIData().group, ['Classifier']);
+  for (const [Impl, type, title] of [
+    [ClassifierQuestionNodeImpl, 'classifierQuestion', 'Decision AI Question'],
+    [ClassifierProfileNodeImpl, 'classifierProfile', 'Decision AI Profile'],
+    [ClassifierEvaluateNodeImpl, 'classifierEvaluate', 'Decision AI run'],
+  ] as const) {
+    const created = Impl.create();
+    assert.equal(registry.getPluginFor(type), undefined);
+    assert.equal(created.type, type);
+    assert.equal(created.title, title);
+    assert.equal(registry.getDynamicDisplayName(type), title);
+    assert.equal(Impl.getUIData().contextMenuTitle, title);
+    assert.deepEqual(Impl.getUIData().group, ['Decision AI']);
+  }
+  const node = ClassifierEvaluateNodeImpl.create();
+  node.title = 'Classifier Evaluate';
+  node.data.apiKeySource = 'classifier-settings';
+  node.data.configurationMode = 'profile';
+  node.data.outputClassifierAttempts = true;
+  node.data.outputClassifierProfileSummary = true;
+  const before = structuredClone(node);
+  const impl = new ClassifierEvaluateNodeImpl(node);
+  const profile = impl.getInputDefinitions([]).find((port) => port.id === 'classifierProfile');
+  assert.equal(profile?.title, 'Decision AI Profiles');
+  assert.deepEqual(profile?.dataType, ['classifier-config', 'classifier-config[]']);
+  assert.ok(impl.getOutputDefinitions().some((port) => port.id === 'classifierAttempts'));
+  assert.ok(impl.getOutputDefinitions().some((port) => port.id === 'classifierProfileSummary'));
+  impl.getEditors();
+  assert.deepEqual(node, before);
 });
 
 test('Classifier Question presents dimmed Type and ID fields before separated question and criteria summaries', () => {
@@ -238,6 +263,7 @@ test('one question node produces choice, score, and noul definitions while retai
     { value: 'noul', label: 'Noul' },
     { value: 'choice', label: 'Choice' },
     { value: 'score', label: 'Score' },
+    { value: 'box', label: 'Bounding Box' },
   ]);
   assert.equal(questionTypeEditor.allowOptionWrap, false);
   const instructionsGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Instructions') as any;
@@ -354,6 +380,8 @@ test('Classifier Evaluate preserves arrays, exposes trailing question input, and
     { value: 'openai', label: 'OpenAI' },
     { value: 'openrouter', label: 'OpenRouter' },
     { value: 'perplexity', label: 'Perplexity' },
+    { value: 'subq', label: 'SubQ' },
+    { value: 'baseten', label: 'Baseten' },
   ]);
   assert.deepEqual(
     instance.getOutputDefinitions().map((output) => output.id),
@@ -452,10 +480,11 @@ test('Classifier Evaluate groups provider, model and credentials in an initially
   );
   assert.deepEqual(
     editors.map((editor) => editor.label),
-    ['Configuration', 'Model', 'Outputs', 'Advanced', 'Error behavior'],
+    ['Configuration', 'Model', 'Outputs', 'Error behavior'],
   );
-  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
-  assert.ok(modelEditor?.type === 'string');
+  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'custom' && editor.dataKey === 'model');
+  assert.ok(modelEditor?.type === 'custom');
+  assert.equal(modelEditor.customEditorId, 'ClassifierModel');
   assert.equal(modelEditor.useInputToggleDataKey, 'useModelInput');
   const credentials = modelGroup.editors.find((editor) => editor.label === 'Configured API key names');
   assert.equal(credentials?.hideIf?.({ apiKeySource: 'input' }), true);
@@ -533,7 +562,7 @@ test('Classifier Evaluate exposes provider HTTP body outputs only when enabled i
   assert.equal(outputsGroup.editors[0]?.label, 'Usage details');
   assert.deepEqual(
     outputsGroup.editors.map((editor: any) => editor.label),
-    ['Usage details', 'Request body', 'Response body', 'Classifier attempts', 'Classifier profile summary'],
+    ['Usage details', 'Request body', 'Response body', 'Decision AI attempts', 'Decision AI profile summary'],
   );
   assert.equal(
     outputsGroup.editors.find((editor: any) => editor.dataKey === 'outputRequestBody')?.label,
@@ -763,15 +792,15 @@ test('Liquid AI evaluates existing text, list and object questions without rewri
     ),
   );
   assert.deepEqual(outputs.answers!.value, providerResponse.answers);
-  assert.deepEqual(outputs.usage!.value, { ...providerResponse.usage, totalCost: 0.04 });
+  assert.deepEqual(outputs.usage!.value, { ...providerResponse.usage, totalCost: 0.02 });
   assert.deepEqual(outputs.requestBody!.value, calls[0]!.body);
   assert.deepEqual(outputs.responseBody!.value, providerResponse);
   assert.equal(JSON.stringify(outputs).includes('liquid-test-key'), false);
   const modelGroup = instance.getEditors().find((editor) => editor.type === 'group' && editor.label === 'Model');
   assert.ok(modelGroup?.type === 'group');
-  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'string' && editor.dataKey === 'model');
-  assert.ok(modelEditor?.type === 'string');
-  assert.equal(modelEditor.placeholder, 'd1');
+  const modelEditor = modelGroup.editors.find((editor) => editor.type === 'custom' && editor.dataKey === 'model');
+  assert.ok(modelEditor?.type === 'custom');
+  assert.equal(modelEditor.customEditorId, 'ClassifierModel');
   assert.match(instance.getBody().text, /Liquid AI/);
   assert.match(instance.getBody().text, />d1</);
   assert.deepEqual(getClassifierProviderEnvironmentVariableNames(), [
@@ -780,7 +809,32 @@ test('Liquid AI evaluates existing text, list and object questions without rewri
     'OPENAI_API_KEY',
     'OPENROUTER_API_KEY',
     'PERPLEXITY_API_KEY',
+    'SUBQ_API_KEY',
+    'BASETEN_API_KEY',
   ]);
+});
+
+test('Decision AI model catalogs contain unique real IDs and defaults without restricting custom runtime models', () => {
+  for (const provider of classifierProviders) {
+    assert.ok(provider.modelOptions?.length, provider.id);
+    assert.ok(
+      provider.modelOptions.some(({ value }) => value === provider.defaultModel),
+      provider.id,
+    );
+    assert.equal(new Set(provider.modelOptions.map(({ value }) => value)).size, provider.modelOptions.length);
+    for (const { value, label } of provider.modelOptions) {
+      assert.notEqual(value.trim(), '');
+      assert.notEqual(label.trim(), '');
+    }
+  }
+  assert.deepEqual(
+    classifierProviders.find(({ id }) => id === 'liquid')!.modelOptions!.map(({ value }) => value),
+    ['d1', 'd1.1'],
+  );
+  assert.deepEqual(
+    classifierProviders.find(({ id }) => id === 'baseten')!.modelOptions!.map(({ label }) => label),
+    ['Elephant-1', 'Mammoth-1'],
+  );
 });
 
 test('Liquid AI configured keys are provider-scoped and authored models are preserved', async () => {

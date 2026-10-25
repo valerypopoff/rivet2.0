@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseAllDocuments } from 'yaml';
 import { runHaKubernetesRollout } from './ha-kubernetes-rollout.mjs';
+import { createDeploymentSafety } from './deployment-safety.mjs';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { runManagedGateCommand as run } from '../kubernetes-managed-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs } from './ha-release-probes.mjs';
@@ -101,6 +102,9 @@ export async function verifyHaReleaseRecovery(gate, baseUrl, rootDir) {
       const accepted = new HaReleaseProbes(gate, baseUrl, rootDir);
       const { send, state } = createHaRecoveryFaultTransport(fault, kube, journal, journalName);
       const options = {
+        safety: createDeploymentSafety({ mode: 'rolling', scope: 'rehearsal', checkBaseline: () => gate.assertProofContext(),
+          localIdentity: { release: gate.config.release, namespace: gate.config.namespace, context: gate.config.context,
+            candidateManifestDigest: gate.config.images.api.digest } }),
         kube: send,
         release: gate.config.release,
         namespace: gate.config.namespace,

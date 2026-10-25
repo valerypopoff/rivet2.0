@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { chmod } from 'node:fs/promises';
+import { createHousekeepingSupervisor } from './housekeeping-supervisor.mjs';
 import {
   createBackendRetirement,
   createApiRetirementParticipant,
@@ -102,11 +103,27 @@ export async function startBackendSupervisor({
   shutdownTimeoutMs = Number(env.RIVET_BACKEND_SHUTDOWN_TIMEOUT_MS ?? 130_000),
 } = {}) {
   const config = childEnvironments(env);
+  const apiOnly = env.RIVET_HA_API_ONLY === '1';
+  const overlap = env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton-overlap' && !apiOnly;
   const uiControl = (env.RIVET_DEPLOYMENT_TOPOLOGY || 'single-host') === 'single-host';
   const controlToken = randomBytes(32).toString('hex');
   const retirementEnabled = env.RIVET_ROLLING_RETIREMENT_PROTOCOL === '1';
-  const apiOnly = env.RIVET_HA_API_ONLY === '1';
   const incarnation = randomUUID();
+  const housekeeping =
+    overlap && env.RIVET_RELEASE_MAINTENANCE !== 'true'
+      ? createHousekeepingSupervisor({
+          env: { ...config.api, RIVET_LEGACY_RESTORE_SUPERVISOR_TOKEN: controlToken },
+          incarnation,
+          command: apiCommand,
+          token: controlToken,
+          timeoutMs: apiStartupTimeoutMs,
+        })
+      : null;
+  if (overlap) {
+    config.api.RIVET_MANAGED_MAINTENANCE_ENABLED = 'false';
+    config.api.RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED = 'false';
+    config.api.RIVET_HA_MAINTENANCE = '0';
+  }
   if (retirementEnabled) {
     config.api.RIVET_ROLLING_RETIREMENT_PROTOCOL = '1';
     config.api.RIVET_ROLLING_RETIREMENT_TOKEN = controlToken;
@@ -180,8 +197,12 @@ export async function startBackendSupervisor({
   let retirementControl;
   let exitCode = 0;
   let requestedAction = null;
+  let restoreRestartRequested = false;
   let restoreMaintenance = false;
   let restoreWarmup = false;
+  let restoreConsumerExit;
+  let consumerCycling = false;
+  let consumerGeneration = 0;
   let shutdownTimer;
   let finish;
   const completed = new Promise((resolve) => {
@@ -195,14 +216,32 @@ export async function startBackendSupervisor({
           `http://127.0.0.1:${config.apiPort}/internal/process-retirement`,
           controlToken,
         ),
-        executor: apiOnly ? (() => {
-          let operationId = null;
-          return { status: async () => ({ protocol: 1, incarnation, operationId, state: operationId ? 'drained' : 'serving' }),
-            begin: async (id) => { operationId = id; } };
-        })() : createExecutorRetirementParticipant(() => executor, incarnation),
+        executor: apiOnly
+          ? (() => {
+              let operationId = null;
+              return {
+                status: async () => ({
+                  protocol: 1,
+                  incarnation,
+                  operationId,
+                  state: operationId ? 'drained' : 'serving',
+                }),
+                begin: async (id) => {
+                  operationId = id;
+                },
+              };
+            })()
+          : createExecutorRetirementParticipant(() => executor, incarnation),
         available: () => !stopping && !apiDone && (apiOnly || (!executorDone && executorReady)) && !restoreMaintenance,
         onRetiring: () => {
           retiring = true;
+        },
+        beforeDrained: async (operationId) => {
+          if (!housekeeping) return;
+          const state = housekeeping.snapshot().state;
+          if (state === 'owner') await housekeeping.command('release', operationId);
+          else if (!['standby', 'released', 'stopped'].includes(state))
+            throw Error('Housekeeping ownership is unsettled; backend retirement blocked.');
         },
       })
     : null;
@@ -257,6 +296,7 @@ export async function startBackendSupervisor({
         return;
       }
       requestedAction = request.url.endsWith('/prepare') ? 'prepare' : 'restart';
+      restoreRestartRequested = restoreRestart;
       response.writeHead(202, { 'Cache-Control': 'no-store' }).end();
       // Let the API forward its acknowledgement before graceful shutdown.
       setTimeout(() => void stop(), 250).unref();
@@ -267,7 +307,10 @@ export async function startBackendSupervisor({
       return;
     }
     await apiReady();
-    const live = !stopping && api != null && !apiDone && (restoreMaintenance || !executor || !executorDone);
+    const live =
+      !stopping &&
+      ((api != null && !apiDone && (restoreMaintenance || !executor || !executorDone)) ||
+        (overlap && consumerCycling && ['owner', 'acquiring'].includes(housekeeping?.snapshot().state)));
     const healthy =
       request.url === '/livez'
         ? live && (!executorReady || (await executorListening()))
@@ -293,7 +336,12 @@ export async function startBackendSupervisor({
           return;
         }
         if (request.method === 'GET') {
-          response.writeHead(200).end(JSON.stringify(retirement.snapshot()));
+          response.writeHead(200).end(
+            JSON.stringify({
+              ...retirement.snapshot(),
+              ...(housekeeping ? { housekeeping: housekeeping.snapshot() } : {}),
+            }),
+          );
           return;
         }
         if (request.method !== 'POST') {
@@ -309,10 +357,25 @@ export async function startBackendSupervisor({
           }
           const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
           if (body.protocol !== 1) throw new Error('Retirement protocol rejected.');
-          if (body.action !== undefined && !['withdraw', 'begin'].includes(body.action)) throw new Error('Retirement action rejected.');
-          const status = body.action === 'withdraw'
-            ? retirement.withdraw(body.operationId, body.incarnation)
-            : retirement.begin(body.operationId, body.incarnation);
+          if (housekeeping && ['housekeeping-acquire', 'housekeeping-release'].includes(body.action)) {
+            if (retiring) throw Error('Retiring backends cannot accept new housekeeping commands.');
+            if (body.incarnation !== incarnation || !/^[a-f0-9-]{36}$/.test(body.operationId ?? ''))
+              throw Error('Housekeeping command identity rejected.');
+            const action = body.action === 'housekeeping-acquire' ? 'acquire' : 'release';
+            void housekeeping
+              .command(action, body.operationId)
+              .catch((error) => console.error('[housekeeping]', error.message));
+            response
+              .writeHead(202)
+              .end(JSON.stringify({ ...retirement.snapshot(), housekeeping: housekeeping.snapshot() }));
+            return;
+          }
+          if (body.action !== undefined && !['withdraw', 'begin'].includes(body.action))
+            throw new Error('Retirement action rejected.');
+          const status =
+            body.action === 'withdraw'
+              ? retirement.withdraw(body.operationId, body.incarnation)
+              : retirement.begin(body.operationId, body.incarnation);
           response.writeHead(202).end(JSON.stringify(status));
         } catch {
           response.writeHead(409).end();
@@ -349,10 +412,18 @@ export async function startBackendSupervisor({
         server.closeAllConnections();
         server.close(resolve);
       });
-    void Promise.all([closed(health), closed(retirementControl)]).then(() => {
-      localMetadataLease?.release();
-      finish(exitCode);
-    });
+    void Promise.all([
+      closed(health),
+      closed(retirementControl),
+      housekeeping?.stop({ restoreRestart: restoreRestartRequested }),
+    ])
+      .then(() => {
+        localMetadataLease?.release();
+        finish(exitCode);
+      })
+      .catch((error) =>
+        console.error('[backend-supervisor] Ownership retained after unsettled shutdown:', error.message),
+      );
   }
 
   function stop(code = 0) {
@@ -363,9 +434,15 @@ export async function startBackendSupervisor({
     stopping = true;
     exitCode = code;
     executorReady = false;
-    if (!apiDone) api?.kill('SIGTERM');
-    if (!executorDone) executor?.kill('SIGTERM');
+    if (!apiDone) stopChild(api);
+    if (!executorDone) stopChild(executor);
     shutdownTimer = setTimeout(() => {
+      console.error(
+        '[backend-supervisor] Child shutdown deadline exceeded; API stopped:',
+        apiDone,
+        'executor stopped:',
+        executorDone,
+      );
       if (!apiDone) api?.kill('SIGKILL');
       if (!executorDone) executor?.kill('SIGKILL');
       exitCode = 1;
@@ -378,74 +455,153 @@ export async function startBackendSupervisor({
   function onSignal() {
     void stop();
   }
+
+  function stopChild(child) {
+    child?.kill('SIGTERM');
+    // Retirement IPC is a referenced handle once the executor installs its
+    // message listener. Close it only after shutdown has been requested; leaving
+    // it open turns a fully settled child into a forced-kill timeout.
+    if (child?.connected) child.disconnect();
+  }
   signalSource.on('SIGINT', onSignal);
   signalSource.on('SIGTERM', onSignal);
 
   function launch(command, childEnv, onExit, ipc = false) {
+    const editor = childEnv.RIVET_RUNTIME_PROCESS_ROLE === 'executor';
     const [executable, ...args] = Array.isArray(command) ? command : [command];
     const child = spawn(executable, args, {
       env: childEnv,
-      cwd: ipc ? executorCwd : undefined,
+      cwd: editor ? executorCwd : undefined,
       stdio: ipc ? ['inherit', 'inherit', 'inherit', 'ipc'] : 'inherit',
     });
     child.once('error', (error) => {
-      console.error(`[backend-supervisor] Failed to start ${ipc ? 'executor' : 'API'}:`, error);
+      console.error(`[backend-supervisor] Failed to start ${editor ? 'executor' : 'API'}:`, error);
     });
-    child.once('close', (code, signal) => {
+    let settled = false;
+    const childStopped = (code, signal) => {
+      if (settled) return;
+      settled = true;
       onExit();
       if (!stopping) {
-        console.error(`[backend-supervisor] ${ipc ? 'Executor' : 'API'} exited (${code ?? signal}).`);
+        if (overlap && !editor && restoreConsumerExit === child && !retiring) {
+          restoreConsumerExit = undefined;
+          consumerCycling = true;
+          void restartDeveloperConsumers().catch((error) => {
+            console.error('[backend-supervisor] Restore consumer restart failed:', error.message);
+            void stop(1);
+          });
+          return;
+        }
+        if (consumerCycling && editor) return;
+        console.error(`[backend-supervisor] ${editor ? 'Executor' : 'API'} exited (${code ?? signal}).`);
         void stop(1);
       }
       finishIfStopped();
-    });
+    };
+    // These children inherit stdout/stderr and own no housekeeping lease. Their
+    // process exit, not Node's IPC-close bookkeeping, settles this generation.
+    // The maintenance worker separately waits for close and inherited flock.
+    child.once('exit', childStopped);
+    child.once('close', childStopped); // Also covers failure to spawn (no exit).
     return child;
   }
 
-  api = launch(apiCommand, { ...config.api, ...apiEnvOverrides }, () => {
-    apiDone = true;
-  });
-  void (async () => {
-    const deadline = Date.now() + apiStartupTimeoutMs;
-    while (!stopping && !(await apiReady())) {
-      if (Date.now() >= deadline) {
-        console.error('[backend-supervisor] API did not become ready before the startup deadline.');
-        void stop(1);
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    if (stopping) return;
-    if (apiOnly) return;
-    while (!stopping && restoreMaintenance && !restoreWarmup) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await apiReady();
-    }
-    if (stopping) return;
-    executorDone = false;
-    executor = launch(
-      executorCommand,
-      { ...config.executor, ...executorEnvOverrides },
+  function launchApi() {
+    apiDone = false;
+    api = launch(
+      apiCommand,
+      { ...config.api, ...apiEnvOverrides },
       () => {
-        executorDone = true;
-        executorReady = false;
+        apiDone = true;
       },
-      true,
+      overlap,
     );
-    executor.on('message', (message) => {
-      if (message?.type === 'rivet-executor-ready') executorReady = true;
-      if (message?.type === 'rivet-executor-unready') executorReady = false;
+    const child = api;
+    if (overlap)
+      child.on('message', (message) => {
+        if (
+          !stopping &&
+          !retiring &&
+          api === child &&
+          message?.type === 'rivet-restore-consumer-restart' &&
+          message.incarnation === incarnation
+        )
+          restoreConsumerExit = child;
+      });
+  }
+  async function restartDeveloperConsumers() {
+    ++consumerGeneration;
+    const old = executor;
+    executorReady = false;
+    if (old && !executorDone) {
+      const closed = new Promise((resolve) => old.once('exit', resolve));
+      stopChild(old);
+      const force = setTimeout(() => {
+        if (old.exitCode === null && old.signalCode === null) old.kill('SIGKILL');
+      }, shutdownTimeoutMs);
+      try {
+        await closed;
+      } finally {
+        clearTimeout(force);
+      }
+    }
+    if (stopping) return;
+    executorDone = true;
+    launchApi();
+    consumerCycling = false;
+    startEditorWhenReady();
+  }
+  function startEditorWhenReady() {
+    const generation = ++consumerGeneration;
+    void (async () => {
+      const deadline = Date.now() + apiStartupTimeoutMs;
+      while (!stopping && generation === consumerGeneration && !(await apiReady())) {
+        if (Date.now() >= deadline && !(overlap && restoreMaintenance)) {
+          console.error('[backend-supervisor] API did not become ready before the startup deadline.');
+          void stop(1);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+      if (stopping || generation !== consumerGeneration) return;
+      if (apiOnly) return;
+      while (!stopping && generation === consumerGeneration && restoreMaintenance && !restoreWarmup) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await apiReady();
+      }
+      if (stopping || generation !== consumerGeneration) return;
+      executorDone = false;
+      executor = launch(
+        executorCommand,
+        { ...config.executor, ...executorEnvOverrides },
+        () => {
+          executorDone = true;
+          executorReady = false;
+        },
+        true,
+      );
+      executor.on('message', (message) => {
+        if (message?.type === 'rivet-executor-ready') executorReady = true;
+        if (message?.type === 'rivet-executor-unready') executorReady = false;
+      });
+    })().catch((error) => {
+      console.error('[backend-supervisor] Startup failed:', error);
+      void stop(1);
     });
-  })().catch((error) => {
-    console.error('[backend-supervisor] Startup failed:', error);
-    void stop(1);
-  });
+  }
+  launchApi();
+  // Recovery ownership cannot depend on the developer API becoming ready: that
+  // API may itself be fenced by an unfinished restore which this worker owns.
+  if (housekeeping && /-0$/.test(env.RIVET_POD_NAME || ''))
+    void housekeeping.command('acquire', incarnation).catch((error) => console.error('[housekeeping]', error.message));
+  startEditorWhenReady();
 
   return {
     completed,
     stop,
     healthPort: config.healthPort,
     retirement,
+    housekeeping,
     get requestedAction() {
       return requestedAction;
     },

@@ -79,6 +79,22 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
   let saveSequence = 0;
 
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    const state = { seen: false };
+    Object.assign(window, { __ownSaveConflictNotice: state });
+    const notices = '.workflow-remote-project-change-notice';
+    new MutationObserver((records) => {
+      if (
+        document.querySelector(notices) ||
+        records.some((record) =>
+          [...record.addedNodes].some(
+            (node) => node instanceof Element && (node.matches(notices) || node.querySelector(notices)),
+          ),
+        )
+      )
+        state.seen = true;
+    }).observe(document, { subtree: true, childList: true });
+  });
 
   await page.route('**/api/workflows/tree', async (route) => {
     const tree: WorkflowTreeResponse = {
@@ -128,6 +144,11 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
   await expect.poll(() => savedPaths).toEqual([projectPath]);
   await expect(saveButton).toHaveCount(0);
   expect(pageErrors).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => (window as Window & { __ownSaveConflictNotice: { seen: boolean } }).__ownSaveConflictNotice.seen,
+    ),
+  ).toBe(false);
 
   await dragNode(page, 30);
   await expect(saveButton).toBeVisible({ timeout: 30_000 });
@@ -142,4 +163,9 @@ test('dashboard Save sends a data-only command and remains explicit in Evaluatio
   await expect.poll(() => savedPaths).toEqual([projectPath, projectPath]);
   await expect(saveButton).toHaveCount(0);
   expect(pageErrors).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => (window as Window & { __ownSaveConflictNotice: { seen: boolean } }).__ownSaveConflictNotice.seen,
+    ),
+  ).toBe(false);
 });

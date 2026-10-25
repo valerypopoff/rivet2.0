@@ -31,6 +31,52 @@ Text-like node-card bodies use core's `buildNodeBodyPreview(...)` formatter. It 
 
 ## Connection Mode
 
+### Connection visibility during pan/zoom
+
+`getRenderableWireCandidates` tests cached, canvas-space route bounds, not the
+visibility of endpoint nodes. A wire may cross the viewport with both nodes far
+outside the node-virtualization padding. `prepareWireVisibility` invalidates on
+connection, node or measured-port changes; pan/zoom only converts the live client
+viewport and tests the existing bounds. Missing nodes still exclude a connection.
+`wireEndpoints` owns the measured/fallback endpoint lookup and weakly cached port
+keys shared by culling and drawing. The visibility layer must not import the React
+wire component or editor state just to obtain endpoint geometry.
+
+Drawing, marker sampling and culling share `wireGeometry`'s path primitives.
+Cubic control-hull bounds conservatively enclose forward/backwards curves and
+each authored bend segment. These are deliberately not exact intersections:
+some off-screen curves may remain mounted, but a visible curve must not disappear
+because its straight endpoint chord misses the viewport. The obsolete straight-line
+clipper and its chord-only tests are retired. A 16-client-pixel plus
+16-canvas-unit gutter preserves hit targets, paired lanes and arrow decorations.
+Do not replace this with endpoint-only filtering or sampled-curve rejection.
+
+Explicitly revealed Data Bus routes and dragged bend routes retain their forced
+visibility exception; pending drag wires bypass this static filter. Comparison
+and execution styling remain separate from visibility, and no saved graph data
+is changed. The existing all-wire suppression at zoom <= 0.15 remains intentional.
+Unit matrices cover route bounds, measured/fallback positions, stale geometry,
+missing nodes, forced routes, ordering and multiple coordinate transforms.
+`wire-viewport-culling.spec.ts` verifies actual paths while panning, zooming,
+resizing, leaving the route completely off-screen and returning to it.
+The browser assertions check actual on-screen SVG samples after both zoom
+directions and each gesture, not only mounted path counts. The real hook lifecycle
+test also proves camera-only renders reuse the endpoint snapshot and result-list
+identity, while measured ports, fallback node positions, bends and node removal
+invalidate the correct geometry.
+
+Root-cause verification (2026-10-25): the unchanged crossing, backwards-curve
+and bend browser fixtures were also run with the seven pre-fix rendering modules
+loaded read-only from `85615dc79` through a local Vite load override. All three
+reached the canvas and failed because zero paths were rendered (expected one,
+one and two respectively). With the current implementation all three pass their
+complete gestures. Initial cold-start/loading timeouts were excluded from this
+negative-control evidence. The override and artifacts are local diagnostics, not
+a product mode or CI dependency. Unit coverage also includes vertical crossing
+and a backwards curve returning into view from the right edge. This establishes
+regression coverage for both diagnosed filters, not a guarantee against every
+possible browser/GPU rendering defect.
+
 Established non-warning ports use a subtly stronger gray fill from
 `--node-port-connected-bg`, mixed from the neutral fill and border so it adapts to
 both themes. Borders and labels stay neutral; connection presence controls the

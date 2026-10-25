@@ -1,24 +1,28 @@
 import { clipboardState } from '../state/clipboard';
-import { type ChartNode, type NodeConnection } from '@valerypopoff/rivet2-core';
-import { useCanvasPositioning } from './useCanvasPositioning';
-import { useAtomValue } from 'jotai';
+import { clientToCanvasPosition, getCanvasClientOffset } from './useCanvasPositioning';
+import { useStore } from 'jotai';
 import { usePasteNodesCommand } from '../commands/pasteNodesCommand.js';
+import { canvasPositionState } from '../state/graphBuilder.js';
+import { dataBusFullRowCountState, uiFontSizeState } from '../state/ui.js';
 
 export function usePasteNodes() {
-  const clipboard = useAtomValue(clipboardState);
-  const { clientToCanvasPosition } = useCanvasPositioning();
+  const store = useStore();
   const pasteNodesCommand = usePasteNodesCommand();
 
   const pasteNodes = (mousePosition: { x: number; y: number }) => {
+    const clipboard = store.get(clipboardState);
     if (clipboard?.type !== 'nodes' || clipboard.nodes.length === 0) {
       return;
     }
 
-    const canvasPosition = clientToCanvasPosition(mousePosition.x, mousePosition.y);
+    const canvasPosition = clientToCanvasPosition(
+      store.get(canvasPositionState),
+      getCanvasClientOffset(store.get(dataBusFullRowCountState), store.get(uiFontSizeState)),
+    )(mousePosition.x, mousePosition.y);
 
     pasteNodesCommand({
-      nodes: clipboard.nodes as ChartNode[],
-      connections: clipboard.connections as NodeConnection[],
+      nodes: clipboard.nodes,
+      connections: clipboard.connections,
       position: canvasPosition,
     });
   };

@@ -217,7 +217,7 @@ const sidebars = {
     },
     {
       type: 'category',
-      label: 'Classifier',
+      label: 'Decision AI',
       collapsible: true,
       collapsed: false,
       items: [

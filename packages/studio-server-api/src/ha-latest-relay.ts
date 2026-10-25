@@ -405,7 +405,7 @@ export class LatestDebuggerRelay {
     // required dependencies. Replicated control keeps its peer-ready gate.
     return (
       !this.#closed &&
-      (process.env.RIVET_HA_CONTROL_PLANE_MODE === 'singleton' ||
+      (['singleton', 'singleton-overlap'].includes(process.env.RIVET_HA_CONTROL_PLANE_MODE ?? '') ||
         [...this.#outbound.values()].some((socket) => socket.readyState === WebSocket.OPEN))
     );
   }

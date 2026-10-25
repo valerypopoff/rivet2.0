@@ -1,0 +1,5 @@
+simulation: rivet-docs-publication
+routing: path
+mocks:
+  - routeKey: pages
+    path: ../mocks/rivet-pages/config.yaml

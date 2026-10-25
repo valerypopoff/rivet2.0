@@ -22,7 +22,7 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
   static create(): ClassifierProfileNode {
     return {
       type: 'classifierProfile',
-      title: 'Classifier Profile',
+      title: 'Decision AI Profile',
       id: nanoid() as NodeId,
       visualData: { x: 0, y: 0, width: 260 },
       data: { provider: 'jev', responseTimeoutMs: DEFAULT_CLASSIFIER_PROFILE_RESPONSE_TIMEOUT_MS },
@@ -44,16 +44,16 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
         id: 'profile' as PortId,
         title: 'Profile',
         dataType: 'classifier-config',
-        description: 'Sensitive resolved classifier configuration. Combine profiles with Array for ordered fallback.',
+        description: 'Sensitive resolved Decision AI configuration. Combine profiles with Array for ordered fallback.',
       },
     ];
   }
   getEditors(): EditorDefinition<ClassifierProfileNode>[] {
     return [
-      getClassifierModelEditor(this.data) as EditorDefinition<ClassifierProfileNode>,
+      getClassifierModelEditor() as EditorDefinition<ClassifierProfileNode>,
       {
         type: 'group',
-        label: 'Classifier profile suspension',
+        label: 'Decision AI profile suspension',
         editors: [
           {
             type: 'info',
@@ -131,11 +131,11 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
   }
   static getUIData(): NodeUIData {
     return {
-      contextMenuTitle: 'Classifier Profile',
-      infoBoxTitle: 'Classifier Profile',
+      contextMenuTitle: 'Decision AI Profile',
+      infoBoxTitle: 'Decision AI Profile',
       infoBoxBody:
-        'Reusable classifier provider/model/credential configuration. Combine profiles with Array for ordered fallback.',
-      group: ['Classifier'],
+        'Reusable Decision AI provider/model/credential configuration. Combine profiles with Array for ordered fallback.',
+      group: ['Decision AI'],
     };
   }
   async process(inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
@@ -145,4 +145,4 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
     };
   }
 }
-export const classifierProfileNode = nodeDefinition(ClassifierProfileNodeImpl, 'Classifier Profile');
+export const classifierProfileNode = nodeDefinition(ClassifierProfileNodeImpl, 'Decision AI Profile');

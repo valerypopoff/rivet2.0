@@ -45,7 +45,7 @@ export function resetRecordingPlaybackDisplay(
     updateOpenProjectExecutionSnapshot(store, projectId, reset);
   } else {
     const before = captureProjectExecutionSnapshot(store);
-    restoreProjectExecutionSnapshot(store, reset(before), before);
+    restoreProjectExecutionSnapshot(store, reset(before));
   }
   // Install the display before releasing its obsolete references. This is a
   // synchronous boundary, never a React updater which could be evaluated twice.

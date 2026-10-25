@@ -96,6 +96,22 @@ test('copies a graph and folder across hosted projects, saves them, and reopens 
   await page.keyboard.press('Control+C');
   await page.keyboard.press('Control+V');
   await expect(canvasNodes).toHaveCount(2);
+  // Browser-native clipboard events use the same commands, once per event,
+  // and retain Undo/Redo. These events must stay inside the editor document.
+  await canvasNodes.last().evaluate((node) =>
+    node.ownerDocument.dispatchEvent(new ClipboardEvent('cut', { bubbles: true, cancelable: true })),
+  );
+  await expect(canvasNodes).toHaveCount(1);
+  await page.keyboard.press('Control+Z');
+  await expect(canvasNodes).toHaveCount(2);
+  await canvasNodes.first().click();
+  await canvasNodes.first().evaluate((node) => {
+    node.ownerDocument.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true }));
+    node.ownerDocument.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true }));
+  });
+  await expect(canvasNodes).toHaveCount(3);
+  await page.keyboard.press('Control+Z');
+  await expect(canvasNodes).toHaveCount(2);
   await editor.locator('.graph-list-spacer').click({ button: 'right' });
   await expect(editor.locator('.graph-list-context-menu').getByRole('button', { name: 'Paste graphs' })).toHaveCount(0);
   const sourceGraph = editor.locator(`[data-graphid="${copiedGraphId}"]`);

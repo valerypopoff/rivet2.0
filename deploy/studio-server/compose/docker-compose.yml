@@ -49,7 +49,7 @@ services:
     read_only: true
     build:
       context: ../../..
-      dockerfile: deploy/studio-server/compose/docker/Dockerfile.web
+      dockerfile: deploy/studio-server/images/web/Dockerfile
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}

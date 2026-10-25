@@ -7,6 +7,7 @@ import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { useAtomValue } from 'jotai';
 import clsx from 'clsx';
 import CloseIcon from 'majesticons/line/multiply-line.svg?react';
+import RecordingIcon from 'majesticons/line/video-line.svg?react';
 
 import { type OpeningProjectTabId, openingProjectTabsState } from '../../state/openingProjectTabs.js';
 import {
@@ -22,8 +23,10 @@ import {
   projectTabDragActivationConstraint,
   resolveOpeningProjectTabPresentation,
   resolveProjectTabPresentation,
+  shouldShowProjectTabChanges,
 } from './projectSelectorModel.js';
 import { ProjectTabSurface } from './ProjectTabSurface.js';
+import { recordingTabIndicatorsState } from '../../state/execution.js';
 
 export const ProjectTabRow: FC<{
   projectTabsSelected: boolean;
@@ -167,8 +170,11 @@ const ProjectTab: FC<{
   const projectUnsavedChanges = useAtomValue(projectUnsavedChangesState);
   const projectDataUnsavedChanges = useAtomValue(projectDataUnsavedChangesState);
   const currentProject = useAtomValue(projectState);
+  const recordingIndicators = useAtomValue(recordingTabIndicatorsState);
 
   const project = openedProjects[projectId];
+  const indicator = recordingIndicators[projectId];
+  const recording = indicator?.projectPath === (project?.fsPath ?? null) ? indicator : undefined;
 
   const hasUnsavedChanges = hasProjectUnsavedChanges(projectUnsavedChanges, projectDataUnsavedChanges, projectId);
   const presentation = resolveProjectTabPresentation({
@@ -186,8 +192,26 @@ const ProjectTab: FC<{
       active={presentation.active}
       closeIcon={<CloseIcon />}
       displayName={presentation.displayName}
+      leadingIcon={
+        recording && (
+          <span
+            className="recording-tab-icon"
+            data-recording-status={recording.status}
+            style={{ color: recording.color }}
+            role="img"
+            aria-label={`Recording: ${recording.label}`}
+            title={`Recording: ${recording.label}`}
+          >
+            <RecordingIcon aria-hidden="true" />
+          </span>
+        )
+      }
       dragListeners={dragListeners}
-      hasUnsavedChanges={hasUnsavedChanges}
+      hasUnsavedChanges={shouldShowProjectTabChanges({
+        hasUnsavedChanges,
+        recording: !!recording,
+        fsPath: project?.fsPath,
+      })}
       preview={presentation.preview}
       unsaved={presentation.unsaved}
       onCloseProject={onCloseProject}

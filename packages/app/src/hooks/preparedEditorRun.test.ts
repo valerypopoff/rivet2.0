@@ -35,6 +35,8 @@ test('Evaluation input preparation uses the target input types and rejects unkno
 test('editor preparation captures authored graph/static data and inputs without cloning host callbacks', () => {
   const source = structuredClone(project);
   const inputs = { value: { type: 'string' as const, value: 'original' } };
+  const settings = { pluginSettings: { plugin: { key: 'original' } } };
+  const context = { token: { value: { type: 'string' as const, value: 'original-context' } } };
   const callback = () => {};
   const captured = captureEditorRun({
     project: source,
@@ -42,13 +44,19 @@ test('editor preparation captures authored graph/static data and inputs without 
     projectData: { [dataId]: 'static' },
     plugins: { appPluginStates: [], registry },
     options: { inputs, onProgress: callback },
+    settings,
+    context,
   });
   source.graphs[graphId]!.metadata!.name = 'edited';
   inputs.value.value = 'edited';
+  settings.pluginSettings.plugin.key = 'edited';
+  context.token.value.value = 'edited';
   assert.equal(captured.project.graphs[graphId]!.metadata!.name, 'Main');
   assert.equal(captured.options.inputs!.value!.value, 'original');
   assert.equal(captured.project.data![dataId], 'static');
   assert.equal(captured.options.onProgress, callback);
+  assert.equal(captured.settings.pluginSettings!.plugin!.key, 'original');
+  assert.equal(captured.contextValues.token!.value, 'original-context');
 });
 
 test('both Evaluation adapters resolve the explicit suite graph and reject missing resources', () => {

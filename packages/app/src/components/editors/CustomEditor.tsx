@@ -16,6 +16,7 @@ import { KnowledgeStoreSelectorEditor } from './custom/KnowledgeStoreSelectorEdi
 import { LLMChatV2ConfigurationEditor } from './custom/LLMChatV2ConfigurationEditor';
 import { LLMChatV2CredentialNamesEditor } from './custom/LLMChatV2CredentialNamesEditor';
 import { ClassifierCredentialNamesEditor } from './custom/ClassifierCredentialNamesEditor';
+import { ClassifierModelEditor } from './custom/ClassifierModelEditor';
 import { ClassifierScoreCriteriaEditor } from './custom/ClassifierScoreCriteriaEditor';
 import { ClassifierChoiceCriteriaEditor } from './custom/ClassifierChoiceCriteriaEditor';
 import { SubgraphTargetEditor } from './custom/SubgraphTargetEditor';
@@ -39,6 +40,7 @@ export const CustomEditor: FC<
     .with('ClassifierConfiguration', () => <LLMChatV2ConfigurationEditor {...props} editor={editor} />)
     .with('LLMChatV2CredentialNames', () => <LLMChatV2CredentialNamesEditor {...props} editor={editor} />)
     .with('ClassifierCredentialNames', () => <ClassifierCredentialNamesEditor {...props} editor={editor} />)
+    .with('ClassifierModel', () => <ClassifierModelEditor {...props} editor={editor} />)
     .with('ClassifierScoreCriteria', () => <ClassifierScoreCriteriaEditor {...props} editor={editor} />)
     .with('ClassifierChoiceCriteria', () => <ClassifierChoiceCriteriaEditor {...props} editor={editor} />)
     .with('SubgraphTarget', () => <SubgraphTargetEditor {...props} />)

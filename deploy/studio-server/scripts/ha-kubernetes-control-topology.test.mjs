@@ -5,12 +5,23 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
-import { runHaKubernetesControlTopology, matchesTopologyTemplate } from './lib/ha-kubernetes-control-topology.mjs';
+import {
+  runHaKubernetesControlTopology as runTopologyAdapter,
+  matchesTopologyTemplate,
+} from './lib/ha-kubernetes-control-topology.mjs';
+import { fixtureDeploymentSafety } from './fixtures/deployment-safety.mjs';
+const runHaKubernetesControlTopology = (options) =>
+  runTopologyAdapter({
+    ...options,
+    safety:
+      options.safety ?? fixtureDeploymentSafety('topology', options, { baseline: options.assertInstalledBaseline }),
+  });
 import { hasSameHaOwnerIdentity } from './lib/ha-kubernetes-rollout.mjs';
+import { deploymentRecoveryIdentity } from './lib/deployment-workflow.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const component = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
-function render(singleton, compact = false) {
+function render(singleton, compact = false, overlap = false) {
   return parseAllDocuments(
     execFileSync(
       resolveHelmBinOrThrow(root),
@@ -30,6 +41,9 @@ function render(singleton, compact = false) {
         'objectStorage.bucket=fixture',
         '--set',
         'postgres.maxConnections=250',
+        ...(overlap
+          ? ['--set', 'ha.controlPlane.mode=singleton-overlap,ha.namespaceUid=f70a25bb-0c5f-44e4-9da4-3b347f87331d']
+          : []),
       ],
       { cwd: root, encoding: 'utf8' },
     ),
@@ -40,8 +54,8 @@ function render(singleton, compact = false) {
     })
     .filter(Boolean);
 }
-function fixture(from = false, compact = false) {
-  const resources = render(!from, compact),
+function fixture(from = false, compact = false, overlap = false) {
+  const resources = render(overlap || !from, compact, overlap),
     live = render(from, compact),
     pods = new Map(),
     states = new Map(),
@@ -71,7 +85,18 @@ function fixture(from = false, compact = false) {
         status: { conditions: [{ type: 'Ready', status: 'True' }] },
       };
       pods.set(name, p);
-      states.set(name, { protocol: 1, withdrawalProtocol: 1, incarnation: randomUUID(), state: 'serving' });
+      const incarnation = randomUUID();
+      states.set(name, {
+        protocol: 1,
+        withdrawalProtocol: 1,
+        incarnation,
+        state: 'serving',
+        ...(r.spec.template.spec.containers.some((c) =>
+          c.env?.some((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton-overlap'),
+        )
+          ? { housekeeping: { protocol: 1, state: 'owner', podUid: p.metadata.uid, incarnation } }
+          : {}),
+      });
     }
     r.status = {
       readyReplicas: r.spec.replicas,
@@ -93,7 +118,12 @@ function fixture(from = false, compact = false) {
     manifestDigest: 'same-bridge',
     resources,
     timeoutMs: 5,
-    routingWithdrawalClock: { now: () => routingTime, wait: async () => { routingTime += 1000; } },
+    routingWithdrawalClock: {
+      now: () => routingTime,
+      wait: async () => {
+        routingTime += 1000;
+      },
+    },
     kube: async (args, extra = {}) => {
       commands.push(args.join(' '));
       const respond = (value) => ({ stdout: JSON.stringify(value) });
@@ -137,6 +167,8 @@ function fixture(from = false, compact = false) {
         if (args.includes('--input-type=module'))
           return respond({
             protocol: options.missingBridge ? 0 : 1,
+            housekeepingOverlapProtocol: options.missingOwnershipBridge ? 0 : 1,
+            maintenanceIdle: !options.busyMaintenance,
             executionOwnedProxySettings: component(p) === 'execution',
             scheduledRunScope:
               component(p) === 'execution' ? 'published' : component(p) === 'backend' ? 'latest' : null,
@@ -145,7 +177,11 @@ function fixture(from = false, compact = false) {
         if (args.includes('--withdraw-only') || args.includes('--begin-only')) {
           assert.equal(args.at(-2), state.incarnation);
           if (args.includes('--withdraw-only')) routingWithdrawals.set(p.metadata.uid, routingTime);
-          else assert.ok(routingTime - routingWithdrawals.get(p.metadata.uid) >= 60_000, 'ownership transfer cannot close admission before routing propagates');
+          else
+            assert.ok(
+              routingTime - routingWithdrawals.get(p.metadata.uid) >= 60_000,
+              'ownership transfer cannot close admission before routing propagates',
+            );
           Object.assign(state, {
             operationId: args.at(-3),
             state: args.includes('--begin-only') ? 'drained' : 'withdrawing',
@@ -241,6 +277,9 @@ function fixture(from = false, compact = false) {
     claim,
     volume,
     live,
+    get journal() {
+      return journal ? JSON.parse(journal.data.record) : null;
+    },
     expireLease() {
       const record = JSON.parse(journal.data.record);
       record.leaseExpiresAt = 0;
@@ -273,6 +312,63 @@ for (const reverse of [false, true])
       assert.equal(applications, 1);
       assert.ok(!f.commands.some((c) => /^(patch|scale|delete) |--withdraw-only|--begin-only/.test(c)));
     });
+
+for (const reverse of [false, true])
+  test(`${reverse ? 'reverse' : 'forward'} transfer retains the CLI workflow binding through exact-token recovery`, async () => {
+    const f = fixture(reverse);
+    const workflowIdentity = {
+      operationId: 'operation',
+      policyDigest: `sha256:${'a'.repeat(64)}`,
+      valuesDigest: `sha256:${'b'.repeat(64)}`,
+      installedManifestDigest: `sha256:${'c'.repeat(64)}`,
+      beforeVerified: true,
+    };
+    f.options.workflowIdentity = workflowIdentity;
+    const apply = f.options.applyTemplates;
+    let applications = 0,
+      baselines = 0;
+    f.options.assertInstalledBaseline = async () => {
+      baselines++;
+    };
+    f.options.applyTemplates = async (...args) => {
+      applications++;
+      await apply(...args);
+      throw Error('lost template acknowledgement');
+    };
+    await assert.rejects(runHaKubernetesControlTopology(f.options), /lost template acknowledgement/);
+    const resumeToken = f.expireLease();
+    // This is the actual unfinished adapter journal consumed by the CLI gate.
+    assert.deepEqual(
+      deploymentRecoveryIdentity(f.journal, {
+        resumeToken,
+        policyDigest: workflowIdentity.policyDigest,
+        valuesDigest: workflowIdentity.valuesDigest,
+      }),
+      workflowIdentity,
+    );
+    let journal;
+    f.options.artifact = async (name, value) => {
+      if (name === 'ha-control-topology.json') journal = JSON.parse(value);
+    };
+    const result = await runHaKubernetesControlTopology({ ...f.options, resumeToken });
+    assert.deepEqual(result.workflowIdentity, workflowIdentity);
+    assert.deepEqual(journal.workflowIdentity, workflowIdentity);
+    assert.equal(applications, 1);
+    assert.equal(baselines, 2);
+  });
+
+test('Kubernetes topology adapter forwards its owned-baseline guard before writes to workloads', async () => {
+  const f = fixture();
+  f.options.assertInstalledBaseline = async () => {
+    throw Error('stale installed release');
+  };
+  await assert.rejects(runHaKubernetesControlTopology(f.options), /stale installed release/);
+  assert.ok(!f.commands.some((c) => /^(patch|scale|delete) |--withdraw-only|--begin-only/.test(c)));
+  const token = f.expireLease();
+  f.options.assertInstalledBaseline = async () => {};
+  // The untouched attempt was aborted, not left as a recoverable partial transfer.
+  await assert.rejects(runHaKubernetesControlTopology({ ...f.options, resumeToken: token }), /No unfinished topology/);
+});
 
 for (const reverse of [false, true])
   test(`${reverse ? 'reverse' : 'forward'} recovery refuses a recreated backend controller after Helm`, async () => {
@@ -309,6 +405,48 @@ test('reverse owner-phase recovery still requires execution health after the edg
   f.commands.length = 0;
   await assert.rejects(runHaKubernetesControlTopology({ ...f.options, resumeToken }), /execution-owned proxy health/);
   assert.ok(!f.commands.some((c) => /^(create|replace|patch|scale|delete|exec) /.test(c)));
+});
+
+test('topology preserves an unchanged independent autoscaler but rejects controller changes', async () => {
+  for (const changed of [false, true]) {
+    const f = fixture(false);
+    const controller = {
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: {
+        name: 'rivet-autoscaler',
+        uid: randomUUID(),
+        generation: 1,
+        labels: { 'app.kubernetes.io/component': 'autoscaler', 'app.kubernetes.io/instance': 'rivet' },
+      },
+      spec: {
+        replicas: 1,
+        selector: { matchLabels: { 'app.kubernetes.io/component': 'autoscaler' } },
+        template: {
+          metadata: { labels: { 'app.kubernetes.io/component': 'autoscaler', 'app.kubernetes.io/instance': 'rivet' } },
+          spec: { containers: [{ name: 'autoscaler', image: 'fixture/controller@sha256:' + 'a'.repeat(64) }] },
+        },
+      },
+    };
+    f.live.push(structuredClone(controller));
+    f.options.resources.push(structuredClone(controller));
+    if (changed) f.options.resources.at(-1).spec.template.spec.containers[0].image += '-changed';
+    if (changed) await assert.rejects(runHaKubernetesControlTopology(f.options), /independent autoscaler/);
+    else assert.equal((await runHaKubernetesControlTopology(f.options)).phase, 'complete');
+  }
+});
+
+test('singleton overlap adoption requires the ownership-aware same-image bridge', async () => {
+  const missing = fixture(true, true, true);
+  missing.options.missingOwnershipBridge = true;
+  await assert.rejects(runHaKubernetesControlTopology(missing.options), /[Bb]ridge/);
+  assert.ok(!missing.commands.some((c) => /^(create|replace|patch|scale|delete) /.test(c)));
+  const busy = fixture(true, true, true);
+  busy.options.busyMaintenance = true;
+  await assert.rejects(runHaKubernetesControlTopology(busy.options), /maintenance is busy/);
+  assert.ok(!busy.commands.some((c) => /^(create|replace|patch|scale|delete) /.test(c)));
+  const valid = fixture(true, true, true);
+  assert.equal((await runHaKubernetesControlTopology(valid.options)).phase, 'complete');
 });
 
 for (const reverse of [false, true])

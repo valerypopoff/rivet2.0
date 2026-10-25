@@ -198,6 +198,21 @@ test('fullscreen output resizes independently from both edges and retains bounds
   await expect(modal).toBeVisible();
   await expect(leftHandle).not.toHaveClass(/resizing/);
   await expect.poll(async () => Math.abs((await bounds()).width - preferred.width)).toBeLessThan(2);
+  await page.keyboard.press('Escape');
+  await expect(modal).toBeHidden();
+
+  // Narrow-screen navigation closes the expensive drawer before the deferred
+  // exact-output action opens. That normal unmount must not cancel the action.
+  await page.setViewportSize({ width: 700, height: 1000 });
+  await editor.getByRole('button', { name: 'Open Run Activity', exact: true }).click();
+  const activity = editor.locator('[aria-label="Run Activity"]');
+  const activityRow = activity.locator('.run-activity-row').filter({ hasText: 'Resize Text' });
+  await expect(activityRow).toHaveCount(1);
+  await activityRow.locator('.run-activity-row-toggle').click();
+  await activityRow.getByRole('button', { name: 'Open full output', exact: true }).click();
+  await expect(activity).toBeHidden();
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText('Resize this output');
 });
 
 test('fullscreen search keeps the match highlighted after opening a paged JSON chunk', async ({ page }) => {

@@ -6,11 +6,25 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { Provider, createStore } from 'jotai';
 import { createEmptyEvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
-import type { DataId, GraphId } from '@valerypopoff/rivet2-core';
+import {
+  TextNodeImpl,
+  getSubgraphProjectKey,
+  type DataId,
+  type GraphId,
+  type GraphRunId,
+  type RootRunId,
+  type NodeId,
+  type PortId,
+  type ProcessId,
+  type ProcessEvents,
+  type GraphExecutionMetadata,
+} from '@valerypopoff/rivet2-core';
 import type { PathBasedIOProvider } from '../io/IOProvider.js';
-import { ProvidersProvider } from '../providers/ProvidersContext.js';
+import { ProvidersProvider, type ProjectActivationPolicy } from '../providers/ProvidersContext.js';
 import { MemoryStaticDataStore } from '../providers/StaticDataStore.js';
-import { ExecutorSessionProvider } from '../providers/ExecutorSessionContext.js';
+import { ExecutorSessionProvider, createExecutorSessionRegistry } from '../providers/ExecutorSessionContext.js';
+import { FakeWebSocket } from './executorSessionTestUtils.js';
+import { captureDisplayAdmission, checkDisplayAdmission } from '../domain/execution/executionDisplayPolicy.js';
 import { HostCallbacksProvider } from '../providers/HostCallbacksContext.js';
 import { graphState } from '../state/graph.js';
 import { selectedOpeningProjectTabIdState } from '../state/openingProjectTabs.js';
@@ -23,7 +37,9 @@ import {
   projectsState,
   projectUnsavedChangesState,
   savedProjectContentDigestsState,
+  projectContextState,
 } from '../state/savedGraphs.js';
+import { useWorkspaceHostDeleteProjectContext } from './workspaceHost/useWorkspaceHostProjectCleanup.js';
 import {
   configureHybridStorageBackend,
   flushHybridStorageGroup,
@@ -37,6 +53,8 @@ import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
 import { useLoadProjectWithFileBrowser } from './useLoadProjectWithFileBrowser.js';
 import { useWorkspaceHostCloseProject } from './workspaceHost/useWorkspaceHostCloseProject.js';
 import { useWorkspaceHostOpenProject } from './workspaceHost/useWorkspaceHostOpenProject.js';
+import { useWorkspaceHostReplaceProjectSnapshot } from './workspaceHost/useWorkspaceHostReplaceProjectSnapshot.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
 import { useWorkspaceHostOpeningTabs } from './workspaceHost/useWorkspaceHostOpeningTabs.js';
 import { useWorkspaceHostProjectMetadata } from './workspaceHost/useWorkspaceHostProjectMetadata.js';
 import { useSyncProjectDirtyState } from './useSyncProjectDirtyState.js';
@@ -126,7 +144,10 @@ test('a file-picker result after a newer tab selection cannot import or open its
   }
 });
 
-async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
+async function mount(
+  load: PathBasedIOProvider['loadProjectDataNoPrompt'],
+  projectActivation?: ProjectActivationPolicy,
+) {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://rivet.test/' });
   const keys = ['React', 'document', 'localStorage', 'navigator', 'window', 'IS_REACT_ACT_ENVIRONMENT'] as const;
   const previous = keys.map((key) => Object.getOwnPropertyDescriptor(globalThis, key));
@@ -193,7 +214,9 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
   let routeBundle!: ReturnType<typeof useBundleExecutionRouting>;
   let openFile!: ReturnType<typeof useLoadProjectWithFileBrowser>;
   let closeProject!: ReturnType<typeof useWorkspaceHostCloseProject>;
+  let deleteProjectContext!: ReturnType<typeof useWorkspaceHostDeleteProjectContext>;
   let open!: ReturnType<typeof useWorkspaceHostOpenProject>;
+  let replaceSnapshot!: ReturnType<typeof useWorkspaceHostReplaceProjectSnapshot>;
   let opening!: ReturnType<typeof useWorkspaceHostOpeningTabs>;
   let metadata!: ReturnType<typeof useWorkspaceHostProjectMetadata>;
   let baseline!: ReturnType<typeof useWorkspaceHostCleanBaseline>;
@@ -208,7 +231,9 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     routeBundle = useBundleExecutionRouting();
     openFile = useLoadProjectWithFileBrowser();
     closeProject = useWorkspaceHostCloseProject();
+    deleteProjectContext = useWorkspaceHostDeleteProjectContext();
     open = useWorkspaceHostOpenProject();
+    replaceSnapshot = useWorkspaceHostReplaceProjectSnapshot(open.replaceCurrent);
     opening = useWorkspaceHostOpeningTabs(open.openProjectSnapshot);
     metadata = useWorkspaceHostProjectMetadata();
     baseline = useWorkspaceHostCleanBaseline();
@@ -220,7 +245,7 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
   const render = (recoverStaticData = false) =>
     root.render(
       <Provider store={store}>
-        <ProvidersProvider providers={{ io, staticData }}>
+        <ProvidersProvider providers={{ io, staticData, projectActivation }}>
           <HostCallbacksProvider callbacks={{ onOpenError: (event) => errors.push(event.error) }}>
             <ExecutorSessionProvider>
               <Harness />
@@ -241,10 +266,25 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
     errors,
     activate,
     routeBundle,
+    startBundleRun: (rootRunId: string) =>
+      routeBundle(a.metadata.id, 'start', {
+        project: a,
+        startGraph: a.graphs[a.metadata.mainGraphId!]!,
+        inputs: {},
+        contextValues: {},
+        execution: {
+          projectId: a.metadata.id,
+          rootRunId: rootRunId as RootRunId,
+          graphRunId: `${rootRunId}:entry` as GraphRunId,
+          graphId: a.metadata.mainGraphId!,
+        },
+      }),
     openFile,
     io,
     closeProject,
+    deleteProjectContext,
     open,
+    replaceSnapshot,
     opening,
     metadata,
     baseline,
@@ -266,7 +306,226 @@ async function mount(load: PathBasedIOProvider['loadProjectDataNoPrompt']) {
   };
 }
 
+test('tab close retains context while explicit project deletion clears only its durable local context', async () => {
+  const fixture = await mount(async () => {
+    throw new Error('Snapshots should avoid disk reads');
+  });
+  const { store, a, b } = fixture;
+  const aValue = { token: { value: { type: 'string', value: 'fixture-a' } } } as const;
+  const bValue = { token: { value: { type: 'string', value: 'fixture-b' } } } as const;
+  try {
+    act(() => {
+      store.set(projectContextState(a.metadata.id), aValue);
+      store.set(projectContextState(b.metadata.id), bValue);
+    });
+    await act(async () => {
+      assert.equal(await fixture.closeProject(b.metadata.id), true);
+    });
+    const afterClose = JSON.parse((await fixture.storage.getItem(getWorkspaceRecoveryStorage().key))!);
+    assert.deepEqual(afterClose.groups.project[`projectContext__"${b.metadata.id}"`], bValue);
+    const reopenedContext = projectContextState(b.metadata.id);
+    const stopObserving = store.sub(reopenedContext, () => {});
+    assert.deepEqual(store.get(reopenedContext), bValue, 'A fresh mounted context reads the retained close value');
+    stopObserving();
+    const checkpointKey = getWorkspaceRecoveryStorage().key;
+    const durableBeforeFailure = await fixture.storage.getItem(checkpointKey);
+    const persist = fixture.storage.setItem.bind(fixture.storage);
+    try {
+      fixture.storage.setItem = async () => {
+        throw new Error('fixture context quota exceeded');
+      };
+      await act(async () =>
+        assert.rejects(fixture.deleteProjectContext(b.metadata.id), /fixture context quota exceeded/),
+      );
+      assert.equal(
+        await fixture.storage.getItem(checkpointKey),
+        durableBeforeFailure,
+        'A rejected flush must not pretend the old checkpoint changed',
+      );
+      assert.deepEqual(store.get(projectContextState(a.metadata.id)), aValue);
+      assert.deepEqual(store.get(reopenedContext), {}, 'Deletion still clears its live value when persistence fails');
+    } finally {
+      fixture.storage.setItem = persist;
+    }
+    // Explicit retry commits the deletion without erasing another project's context.
+    await act(async () => fixture.deleteProjectContext(b.metadata.id));
+    const afterDelete = JSON.parse((await fixture.storage.getItem(getWorkspaceRecoveryStorage().key))!);
+    assert.equal(Object.hasOwn(afterDelete.groups.project, `projectContext__"${b.metadata.id}"`), false);
+    assert.deepEqual(afterDelete.groups.project[`projectContext__"${a.metadata.id}"`], aValue);
+    assert.deepEqual(store.get(projectContextState(a.metadata.id)), aValue);
+    assert.deepEqual(store.get(projectContextState(b.metadata.id)), {});
+    const liveContext = projectContextState(a.metadata.id);
+    await act(async () => fixture.deleteProjectContext(a.metadata.id));
+    assert.deepEqual(store.get(liveContext), {}, 'Already-mounted context atoms must not retain deleted values');
+    assert.deepEqual(store.get(projectContextState(a.metadata.id)), {}, 'Live context views are reset too');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('same-path inactive snapshot replacement commits a new binding without selecting the tab', async () => {
+  const fixture = await mount(async () => {
+    throw new Error('Replacement must not read IO');
+  });
+  try {
+    const registry = fixture.store.get(projectBindingRegistryState);
+    const a = registry.get(fixture.a.metadata.id)!;
+    const b = registry.get(fixture.b.metadata.id)!;
+    const replacement = structuredClone(fixture.b);
+    replacement.metadata.description = 'Explicit remote reload';
+    await act(async () => {
+      assert.equal(
+        await fixture.replaceSnapshot(fixture.b.metadata.id, { project: replacement, path: 'b.rivet-project' }),
+        true,
+      );
+    });
+    assert.notEqual(registry.get(fixture.b.metadata.id)!.token, b.token);
+    assert.equal(registry.get(fixture.a.metadata.id), a);
+    assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
+    const current = registry.get(fixture.b.metadata.id)!;
+    await act(async () => {
+      assert.equal(
+        await fixture.replaceSnapshot(fixture.b.metadata.id, { project: fixture.a, path: 'b.rivet-project' }),
+        false,
+      );
+    });
+    assert.equal(registry.get(fixture.b.metadata.id), current, 'rejected replacement cannot renew a binding');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 const evaluation = { evaluationData: createEmptyEvaluationProjectData(), evaluationDatasets: [] };
+
+test('host activation policy supplies cached evaluations without replacing live snapshots or rereading saved data', async () => {
+  const normalized: unknown[] = [];
+  const fixture = await mount(
+    async () => {
+      throw new Error('Cached activation must not read IO');
+    },
+    {
+      getEvaluation: () => evaluation,
+      cacheEvaluation: () => assert.fail('A cache hit must not be imported again'),
+      normalizeExecutorMode: (mode) => {
+        normalized.push(mode);
+        return { type: 'local', executor: 'browser' };
+      },
+    },
+  );
+  try {
+    fixture.store.set(savedProjectContentDigestsState, (digests) => markProjectClean(digests, { project: fixture.b }));
+    const snapshot = structuredClone(fixture.b);
+    snapshot.metadata.description = 'Unsaved inactive content';
+    fixture.store.set(openedProjectSnapshotsState, { [fixture.b.metadata.id]: { project: snapshot, data: undefined } });
+    await act(async () => {
+      assert.equal(
+        await fixture.activate(fixture.store.get(projectsState).openedProjects[fixture.b.metadata.id]!),
+        true,
+      );
+    });
+    assert.equal(fixture.store.get(projectState).metadata.description, 'Unsaved inactive content');
+    assert.equal(normalized.length, 1);
+    assert.deepEqual(fixture.store.get(evaluationLibraryState).data, evaluation.evaluationData);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('a host evaluation-cache miss is filled from guarded IO without committing over an open snapshot', async () => {
+  const cached: unknown[] = [];
+  let commits = 0;
+  const fixture = await mount(
+    async () => ({
+      project: fixture.b,
+      evaluation,
+      commit: async () => {
+        commits++;
+        return true;
+      },
+    }),
+    {
+      getEvaluation: () => undefined,
+      cacheEvaluation: (info, value) => cached.push([info.projectId, info.fsPath, value]),
+    },
+  );
+  try {
+    await act(async () => {
+      assert.equal(
+        await fixture.activate(fixture.store.get(projectsState).openedProjects[fixture.b.metadata.id]!),
+        true,
+      );
+    });
+    assert.equal(commits, 0);
+    assert.deepEqual(cached, [[fixture.b.metadata.id, 'b.rivet-project', evaluation]]);
+    assert.equal(fixture.store.get(projectState).metadata.id, fixture.b.metadata.id);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+for (const change of ['snapshot replacement', 'bundle rebinding'] as const) {
+  for (const outcome of ['loaded', 'failed'] as const) {
+    test(`delayed host activation (${outcome}) is ignored after ${change}`, async () => {
+      const started = deferred();
+      const release = deferred();
+      const cached: unknown[] = [];
+      const fixture = await mount(
+        async () => {
+          started.resolve();
+          await release.promise;
+          if (outcome === 'failed') throw new Error('Obsolete read failed');
+          return { project: fixture.b, evaluation };
+        },
+        {
+          getEvaluation: () => undefined,
+          cacheEvaluation: (_info, value) => cached.push(value),
+        },
+      );
+      try {
+        let activation!: Promise<boolean>;
+        await act(async () => {
+          activation = fixture.activate(fixture.store.get(projectsState).openedProjects[fixture.b.metadata.id]!);
+          await started.promise;
+        });
+        await act(async () => {
+          if (change === 'snapshot replacement') {
+            const replacement = structuredClone(fixture.b);
+            replacement.metadata.description = 'New authoritative snapshot';
+            assert.equal(
+              await fixture.replaceSnapshot(fixture.b.metadata.id, { project: replacement, path: 'b.rivet-project' }),
+              true,
+            );
+          } else {
+            fixture.store.set(projectsState, (state) => ({
+              ...state,
+              openedProjects: {
+                ...state.openedProjects,
+                [fixture.b.metadata.id]: {
+                  ...state.openedProjects[fixture.b.metadata.id]!,
+                  hostedBundleKey: 'server:new-bundle',
+                },
+              },
+            }));
+          }
+        });
+        release.resolve();
+        await act(async () => assert.equal(await activation, false));
+        assert.deepEqual(cached, []);
+        assert.deepEqual(fixture.errors, []);
+        assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
+        if (change === 'snapshot replacement') {
+          assert.equal(
+            fixture.store.get(openedProjectSnapshotsState)[fixture.b.metadata.id]!.project.metadata.description,
+            'New authoritative snapshot',
+          );
+        }
+      } finally {
+        release.resolve();
+        await fixture.cleanup();
+      }
+    });
+  }
+}
 
 test('reopening an existing bundle member retains membership without importing over live data', async () => {
   for (const entry of ['active', 'inactive'] as const) {
@@ -374,104 +633,78 @@ test('rebinding a tab during baseline recovery discards the old bundle read', as
   }
 });
 
-test('bundle execution targets inactive and active dependency tabs without taking run ownership', async () => {
-  const fixture = await mount(async () => {
-    throw new Error('Unexpected read');
-  });
-  const childGraph = fixture.b.graphs[fixture.b.metadata.mainGraphId!]!;
-  const node = { id: 'shared-node', type: 'text', data: { text: 'result' } };
-  const execution = {
-    projectId: fixture.b.metadata.id,
-    graphId: childGraph.metadata!.id,
-    rootRunId: 'root-run',
-    graphRunId: 'child-run',
-    parentGraphRunId: 'entry-run',
-    projectScope: 'child:latest',
-  };
-  try {
-    await act(async () => fixture.baseline.markProjectClean(fixture.b.metadata.id, { project: fixture.b }));
-    fixture.store.set(projectsState, (previous) => ({
-      ...previous,
-      openedProjects: Object.fromEntries(
-        Object.entries(previous.openedProjects).map(([id, info]) => [
-          id,
-          { ...info, bundleManifestPath: 'rivet-bundle.json' },
-        ]),
-      ),
-    }));
-    await act(async () => {
-      fixture.routeBundle(fixture.a.metadata.id, 'graphStart', { graph: childGraph, execution } as never);
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
-        node,
-        processId: 'process',
-        outputs: { output: { type: 'string', value: 'first' } },
-        execution,
-      } as never);
+for (const membership of ['desktop', 'hosted'] as const)
+  test(`${membership} bundle results follow real tab activation without taking run ownership`, async () => {
+    const fixture = await mount(async () => {
+      throw new Error('Unexpected read');
     });
-    const inactive = fixture.store.get(projectExecutionSnapshotsState)[fixture.b.metadata.id]!;
-    assert.equal(inactive.lastRunDataByNode['shared-node' as never]![0]!.parentGraphRunId, undefined);
-    assert.equal(inactive.graphRunning, false, 'dependency display is not an independent root run');
-    assert.equal(
-      fixture.store.get(lastRunDataByNodeState)['shared-node' as never],
-      undefined,
-      'caller canvas remains isolated',
-    );
-    await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
-    await act(async () =>
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
+    try {
+      const node = TextNodeImpl.create();
+      node.id = 'shared-node' as NodeId;
+      fixture.b.graphs[fixture.b.metadata.mainGraphId!]!.nodes.push(node);
+      await act(async () => fixture.baseline.markProjectClean(fixture.b.metadata.id, { project: fixture.b }));
+      fixture.store.set(projectsState, (state) => ({
+        ...state,
+        openedProjects: Object.fromEntries(
+          Object.entries(state.openedProjects).map(([id, info]) => [
+            id,
+            {
+              ...info,
+              ...(membership === 'desktop'
+                ? { bundleManifestPath: 'rivet-bundle.json' }
+                : { hostedBundleKey: 'server:bundle' }),
+            },
+          ]),
+        ),
+      }));
+      const graph = fixture.b.graphs[fixture.b.metadata.mainGraphId!]!;
+      const execution: GraphExecutionMetadata = {
+        projectId: fixture.b.metadata.id,
+        graphId: graph.metadata!.id!,
+        rootRunId: 'root-run' as RootRunId,
+        graphRunId: 'child-run' as GraphRunId,
+        parentGraphRunId: 'root-run:entry' as GraphRunId,
+        projectScope: getSubgraphProjectKey({ projectId: fixture.b.metadata.id, version: 'latest' }),
+      };
+      const data: ProcessEvents['nodeFinish'] = {
         node,
-        processId: 'process',
-        outputs: { output: { type: 'string', value: 'second' } },
+        processId: 'process' as ProcessId,
         execution,
-      } as never),
-    );
-    assert.equal(fixture.store.get(lastRunDataByNodeState)['shared-node' as never]![0]!.data.status?.type, 'ok');
-    assert.deepEqual(
-      fixture.store.get(lastRunDataByNodeState)['shared-node' as never]![0]!.data.outputData?.['output' as never],
-      {
+        outputs: { ['output' as PortId]: { type: 'string', value: 'inactive' } },
+      };
+      await act(async () => {
+        fixture.startBundleRun(execution.rootRunId);
+        fixture.routeBundle(fixture.a.metadata.id, 'graphStart', { graph, inputs: {}, execution });
+        fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', data);
+      });
+      const inactive = fixture.store.get(projectExecutionSnapshotsState)[fixture.b.metadata.id]!;
+      assert.equal(inactive.graphRunning, false, 'display is not an independent root');
+      assert.equal(inactive.lastRunDataByNode[node.id]![0]!.parentGraphRunId, undefined);
+      assert.deepEqual(inactive.lastRunDataByNode[node.id]![0]!.data.outputData?.['output' as PortId], {
         type: 'string',
         storage: 'inline',
-        value: 'second',
-      },
-    );
-    const beforeReplay = fixture.store.get(lastRunDataByNodeState);
-    await act(async () =>
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
-        node,
-        processId: 'replay',
-        outputs: {},
-        execution,
-        replayRecordedAt: 1,
-      } as never),
-    );
-    assert.equal(
-      fixture.store.get(lastRunDataByNodeState),
-      beforeReplay,
-      'replay is not projected as a live bundle run',
-    );
-    fixture.store.set(projectsState, (previous) => ({
-      ...previous,
-      openedProjects: {
-        ...previous.openedProjects,
-        [fixture.b.metadata.id]: {
-          ...previous.openedProjects[fixture.b.metadata.id]!,
-          bundleManifestPath: 'other-bundle.json',
-        },
-      },
-    }));
-    await act(async () =>
-      fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
-        node,
-        processId: 'foreign',
-        outputs: {},
-        execution,
-      } as never),
-    );
-    assert.equal(fixture.store.get(lastRunDataByNodeState), beforeReplay, 'unrelated bundles are excluded');
-  } finally {
-    await fixture.cleanup();
-  }
-});
+        value: 'inactive',
+      });
+      assert.equal(fixture.store.get(lastRunDataByNodeState)[node.id], undefined, 'source remains isolated');
+      await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.b.metadata.id)), true));
+      await act(async () =>
+        fixture.routeBundle(fixture.a.metadata.id, 'nodeFinish', {
+          ...data,
+          outputs: { ['output' as PortId]: { type: 'string', value: 'active' } },
+        }),
+      );
+      assert.deepEqual(fixture.store.get(lastRunDataByNodeState)[node.id]![0]!.data.outputData?.['output' as PortId], {
+        type: 'string',
+        storage: 'inline',
+        value: 'active',
+      });
+      await act(async () => assert.equal(await fixture.activate(fixture.info(fixture.a.metadata.id)), true));
+      assert.equal(fixture.store.get(graphState).metadata?.description, 'Unsaved live edit');
+      assert.equal(fixture.store.get(lastRunDataByNodeState)[node.id], undefined);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 
 test('manifest opening adds every missing tab, selects root and preserves existing edits and baselines', async () => {
   const child = createBlankProjectWithDefaultGraph();
@@ -1150,6 +1383,136 @@ test('cancelled or unselected opening placeholders cannot steal the active proje
     assert.equal(fixture.store.get(projectState).metadata.id, fixture.a.metadata.id);
     assert.equal(fixture.info(c.metadata.id), undefined);
   } finally {
+    await fixture.cleanup();
+  }
+});
+
+test('verified source and receiver moves retain live session admission; an ordinary rebind still fences it', async () => {
+  const fixture = await mount(async () => ({ project: fixture.b, evaluation }));
+  const { store, a, b } = fixture;
+  const originalSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const bindings = store.get(projectBindingRegistryState);
+  const sessions = createExecutorSessionRegistry({
+    onStateChange() {},
+    getProjectBindingLifetime: (id) => bindings.get(id)?.token.toString(),
+  });
+  try {
+    await act(async () =>
+      store.set(projectsState, (previous) => ({
+        ...previous,
+        openedProjects: Object.fromEntries(
+          Object.entries(previous.openedProjects).map(([id, info]) => [
+            id,
+            { ...info, hostedBundleKey: 'server:bundle' },
+          ]),
+        ),
+      })),
+    );
+    const sourceToken = bindings.get(a.metadata.id)!.token;
+    const receiverToken = bindings.get(b.metadata.id)!.token;
+    const local = captureDisplayAdmission(a.metadata.id, bindings.capture(), () => false);
+    await sessions.connectBundleDebugger(
+      a.metadata.id,
+      [a.metadata.id, b.metadata.id],
+      'ws://synthetic',
+      'server:bundle',
+    );
+    const socket = FakeWebSocket.instances.at(-1)!;
+    socket.open();
+    const allowed: boolean[] = [];
+    sessions.subscribeMessagesForAllProjects((_id, _runtime, _message, _data, _request, admission) =>
+      allowed.push(admission?.sourceDisplayAllowed !== false),
+    );
+    const graph = a.graphs[a.metadata.mainGraphId!]!;
+    const execution = {
+      projectId: a.metadata.id,
+      rootRunId: 'moving-root' as RootRunId,
+      graphRunId: 'moving-graph' as GraphRunId,
+      graphId: graph.metadata!.id!,
+    };
+    socket.emitMessage({ message: 'start', data: { execution, project: a, startGraph: graph } });
+    assert.deepEqual(allowed, [true]);
+    const childGraph = b.graphs[b.metadata.mainGraphId!]!;
+    const childNode = TextNodeImpl.create();
+    childGraph.nodes.push(childNode);
+    const childExecution: GraphExecutionMetadata = {
+      projectId: b.metadata.id,
+      graphId: childGraph.metadata!.id!,
+      rootRunId: 'moving-local' as RootRunId,
+      graphRunId: 'moving-local-child' as GraphRunId,
+      parentGraphRunId: 'moving-local:entry' as GraphRunId,
+    };
+    await act(async () => {
+      fixture.startBundleRun('moving-local');
+      fixture.routeBundle(a.metadata.id, 'graphStart', { graph: childGraph, inputs: {}, execution: childExecution });
+    });
+    await act(async () => {
+      fixture.metadata.moveProjectPaths([
+        { from: 'a.rivet-project', to: 'folder/renamed-a.rivet-project' },
+        { from: 'b.rivet-project', to: 'folder/b.rivet-project' },
+      ]);
+      fixture.metadata.moveProjectPaths([
+        { from: 'folder/renamed-a.rivet-project', to: 'folder/a-final.rivet-project' },
+      ]);
+      await fixture.metadata.updateProjectMetadata(
+        b.metadata.id,
+        {},
+        { path: 'folder/b-final.rivet-project', persistedExternally: true, changeSource: 'external-wrapper-rename' },
+      );
+    });
+    assert.equal(bindings.get(a.metadata.id)!.token, sourceToken);
+    assert.equal(bindings.get(b.metadata.id)!.token, receiverToken);
+    assert.equal(store.get(loadedProjectState).path, 'folder/a-final.rivet-project');
+    assert.equal(
+      checkDisplayAdmission(
+        local,
+        b.metadata.id,
+        (id) => bindings.get(id),
+        () => false,
+      ),
+      undefined,
+    );
+    socket.emitMessage({ message: 'graphOutputsReady', data: { execution, graph, outputs: {} } });
+    assert.deepEqual(allowed, [true, true]);
+    const childFinish = (value: string) =>
+      fixture.routeBundle(a.metadata.id, 'nodeFinish', {
+        node: childNode,
+        processId: 'moving-local-process' as ProcessId,
+        execution: childExecution,
+        outputs: { ['output' as PortId]: { type: 'string', value } },
+      });
+    await act(async () => childFinish('after verified move'));
+    const childValue = () =>
+      store.get(projectExecutionSnapshotsState)[b.metadata.id]!.lastRunDataByNode[childNode.id]![0]!.data.outputData?.[
+        'output' as PortId
+      ];
+    assert.deepEqual(childValue(), { type: 'string', storage: 'inline', value: 'after verified move' });
+    await act(async () => {
+      await fixture.metadata.updateProjectMetadata(
+        a.metadata.id,
+        {},
+        { path: 'different-document.rivet-project', persistedExternally: true },
+      );
+    });
+    assert.notEqual(bindings.get(a.metadata.id)!.token, sourceToken);
+    assert.equal(
+      checkDisplayAdmission(
+        local,
+        b.metadata.id,
+        (id) => bindings.get(id),
+        () => false,
+      ),
+      'source-rebound',
+    );
+    socket.emitMessage({ message: 'done', data: { execution, results: {} } });
+    assert.deepEqual(allowed, [true, true, false]);
+    await act(async () => childFinish('stale rebind output'));
+    assert.deepEqual(childValue(), { type: 'string', storage: 'inline', value: 'after verified move' });
+    assert.deepEqual(socket.sent, [], 'path metadata cannot rerun or abort accepted work');
+  } finally {
+    sessions.disconnectAll();
+    globalThis.WebSocket = originalSocket;
     await fixture.cleanup();
   }
 });

@@ -174,20 +174,31 @@ jobs:
         run: node scripts/ci/job-timing.mjs finish "Studio Server web tests"
 
   editor-regression:
-    name: Studio Server editor regressions
+    name: Studio Server editor regressions (${{ matrix.shard }})
     if: needs.changes.outputs.relevant == 'true'
     needs:
       - changes
       - build-studio-server
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - shard: 1/3
+            label: 1
+          - shard: 2/3
+            label: 2
+          - shard: 3/3
+            label: 3
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-yarn
         with:
           node-version: 24
       - name: Start timing
-        run: node scripts/ci/job-timing.mjs start "Studio Server editor regressions"
+        run: node scripts/ci/job-timing.mjs start "Studio Server editor regressions (${{ matrix.shard }})"
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Download compiled Studio Server dependencies
@@ -200,6 +211,7 @@ jobs:
       # The executor subprocess consumes compiled Core/Node exports restored above.
       # Keep this runtime regression out of the source-only repository-contract job.
       - name: Verify accepted executor retirement
+        if: matrix.label == 1
         run: yarn studio-server:verify:executor-retirement
       - name: Install Playwright Chromium
         run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
@@ -207,18 +219,19 @@ jobs:
         env:
           PLAYWRIGHT_HEADLESS: 1
           PLAYWRIGHT_SLOW_MO: 0
+          RIVET_EDITOR_TEST_SHARD: ${{ matrix.shard }}
         run: yarn studio-server:ui:ci
       - name: Upload Playwright failure artifacts
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: studio-server-editor-regression-${{ github.sha }}
+          name: studio-server-editor-regression-${{ github.sha }}-${{ matrix.label }}
           path: artifacts/playwright
           if-no-files-found: ignore
           retention-days: 7
       - name: Report timing
         if: always()
-        run: node scripts/ci/job-timing.mjs finish "Studio Server editor regressions"
+        run: node scripts/ci/job-timing.mjs finish "Studio Server editor regressions (${{ matrix.shard }})"
 
   host-compatibility:
     name: Studio Server host compatibility
@@ -279,9 +292,9 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix:
-        lane: [managed, gateway]
+        lane: [managed, deployment, gateway]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: ./.github/actions/setup-yarn
@@ -300,7 +313,7 @@ jobs:
       - name: Verify restored compiled workspace dependencies
         run: yarn check:compiled-workspace-exports
       - name: Set Up Kubernetes Tools
-        if: matrix.lane == 'managed'
+        if: matrix.lane == 'deployment'
         run: yarn studio-server:setup:k8s-tools
       - name: Verify compiled migrations on PostgreSQL
         if: matrix.lane == 'managed'
@@ -318,7 +331,7 @@ jobs:
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed
       - name: Verify Kubernetes and deployment contracts
-        if: matrix.lane == 'managed'
+        if: matrix.lane == 'deployment'
         run: yarn studio-server:verify:kubernetes
       - name: Verify proxy DNS outages, browser continuity and address recovery
         if: matrix.lane == 'gateway'

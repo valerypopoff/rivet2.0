@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 void test('Classifier settings is strict and provider-scoped while Automatic preserves credential precedence', () => {
-  for (const providerId of ['jev', 'liquid', 'openai', 'openrouter', 'perplexity']) {
+  for (const providerId of ['jev', 'liquid', 'openai', 'openrouter', 'perplexity', 'subq', 'baseten']) {
     const provider = getClassifierProvider(providerId);
     const context = {
       settings: {
@@ -44,7 +44,7 @@ void test('Classifier settings is strict and provider-scoped while Automatic pre
     assert.equal(resolveClassifierApiKey(args), 'general');
     assert.throws(
       () => resolveClassifierApiKey({ ...args, apiKeySource: 'invalid' as any }),
-      /Unknown classifier API key source/,
+      /Unknown Decision AI API key source/,
     );
   }
 });
@@ -57,21 +57,72 @@ void test('Pricing recognizes exact aliases, rejects unverified model pairs and 
       { ...usage, input_tokens },
       { requestedModel, responseModel },
     );
-  assert.equal(cost('jev', 'jev-latest', 'jev-1.13.0'), 0.042);
-  assert.equal(cost('jev', 'jev-preview', 'jev-1.13.0'), 0.042);
-  assert.equal(cost('liquid', 'd1', 'd1'), 0.04);
+  for (const requested of ['jev-latest', 'jev-preview', 'jev-1.13.0', 'jev-1.14.0']) {
+    for (const returned of ['jev-1.13.0', 'jev-1.14.0']) assert.equal(cost('jev', requested, returned), 0.042);
+    assert.equal(cost('jev', requested, 'jev-1.15.0'), undefined);
+  }
+  assert.equal(cost('jev', 'jev-1.15.0', 'jev-1.14.0'), undefined);
+  assert.equal(cost('liquid', 'd1', 'd1'), 0.02);
   for (const [requested, returned] of [
     ['d1:free', 'd1:free'],
     ['unpriced-model', 'd1'],
     ['d1', 'unpriced-model'],
     ['d1', 'd1:free'],
+    ['d1.1', 'd1.1'],
+    ['d1', 'd1.1'],
+    ['d1.1', 'd1'],
   ])
     assert.equal(cost('liquid', requested!, returned!), undefined);
-  assert.equal(cost('jev', 'jev-latest', 'jev-1.14.0'), undefined);
   assert.equal(cost('openai', 'gpt-6-luna', 'gpt-6-luna', 272_000), 0.0272);
   assert.equal(cost('openai', 'gpt-6-luna', 'gpt-6-luna', 272_001), 0.0544002);
   assert.equal(cost('openai', 'gpt-6-luna', 'gpt-6-luna'), 0.2);
   assert.equal(calculateClassifierUsageCost(getClassifierProvider('liquid'), usage), undefined);
+});
+
+void test('Jev 1.14 produces numeric Cost in inline and profile modes, independent of Usage details', async () => {
+  const body = {
+    model: 'jev-1.14.0',
+    answers: { q: { type: 'noul', noul: 0.8 } },
+    usage: { input_tokens: 1_000_000, output_tokens: 999 },
+  };
+  for (const configurationMode of ['inline', 'profile'] as const)
+    for (const model of ['jev-1.14.0', 'jev-latest', 'jev-preview'])
+      for (const outputUsage of [false, true]) {
+        let calls = 0;
+        globalThis.fetch = async (_url, init) => {
+          calls++;
+          assert.equal(JSON.parse(String(init?.body)).model, model);
+          return Response.json(body);
+        };
+        const node = ClassifierEvaluateNodeImpl.create();
+        Object.assign(node.data, { configurationMode, model, outputUsage });
+        const outputs = await new ClassifierEvaluateNodeImpl(node).process(
+          {
+            question1: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Check' } },
+            ...(configurationMode === 'profile'
+              ? {
+                  classifierProfile: {
+                    type: 'classifier-config' as const,
+                    value: {
+                      version: 1 as const,
+                      configuration: { provider: 'jev', model },
+                      credential: { value: 'fixture' },
+                    },
+                  },
+                }
+              : {}),
+          },
+          {
+            executor: 'nodejs',
+            signal: new AbortController().signal,
+            settings: { classifierProviders: { jev: { apiKey: 'fixture' } } },
+          } as InternalProcessContext,
+        );
+        assert.equal(calls, 1);
+        assert.deepEqual(outputs.cost, { type: 'number', value: 0.042 });
+        assert.deepEqual(outputs.answers?.value, body.answers);
+        assert.deepEqual(outputs.usage?.value, outputUsage ? { ...body.usage, totalCost: 0.042 } : body.usage);
+      }
 });
 
 void test('Decisions pricing ignores cache/output metadata and uses input tokens for the context threshold', () => {
@@ -95,8 +146,14 @@ void test('Decisions pricing ignores cache/output metadata and uses input tokens
 });
 
 void test('All providers price aggregate multi-question usage once and preserve raw usage and diagnostics', async () => {
-  const image =
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
+  // Header-only fixture: include Jev's documented minimum dimensions.
+  const imageBytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  imageBytes.writeUInt32BE(280, 16);
+  imageBytes.writeUInt32BE(280, 20);
+  const image = `data:image/png;base64,${imageBytes.toString('base64')}`;
   const questions = ['first', 'second'].map((questionId) => ({
     questionId,
     type: 'noul',
@@ -104,10 +161,11 @@ void test('All providers price aggregate multi-question usage once and preserve 
   }));
   for (const [providerId, inputRate] of [
     ['jev', 0.042],
-    ['liquid', 0.04],
+    ['liquid', 0.02],
     ['openai', 0.1],
     ['openrouter', 0.042],
     ['perplexity', 0.02],
+    ['subq', 0.04],
   ] as const) {
     for (const outputUsage of [false, true]) {
       const provider = getClassifierProvider(providerId);
@@ -162,6 +220,8 @@ void test('All providers price aggregate multi-question usage once and preserve 
       if (providerId === 'openai') assert.equal(sent.input[0].content[1].type, 'input_image');
       if (providerId === 'perplexity')
         assert.deepEqual(sent.state, ['Caption', '\n', { type: 'image_url', image_url: { url: image } }]);
+      if (providerId === 'subq')
+        assert.deepEqual(sent.images, [{ mediaType: 'image/png', base64: image.split(',')[1] }]);
       assert.equal(outputs.cost!.type, 'number');
       assert.equal(outputs.cost!.value, expected);
       assert.deepEqual(outputs.usage!.value, outputUsage ? { ...usage, totalCost: expected } : usage);
@@ -265,7 +325,7 @@ void test('Invalid model-pricing metadata never produces a cost, even below an i
 });
 
 void test('Unknown pricing preserves successful Answers and raw Usage but excludes Cost and Usage.totalCost', async () => {
-  for (const model of ['d1:free', 'future-model']) {
+  for (const model of ['d1.1', 'd1:free', 'future-model']) {
     for (const outputUsage of [false, true]) {
       const node = ClassifierEvaluateNodeImpl.create();
       node.data = { ...node.data, provider: 'liquid', model, outputUsage, apiKeySource: 'classifier-settings' };

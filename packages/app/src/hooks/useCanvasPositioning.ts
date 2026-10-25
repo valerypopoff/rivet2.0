@@ -12,6 +12,13 @@ export type CanvasClientOffset = {
 
 const NO_CANVAS_CLIENT_OFFSET: CanvasClientOffset = { x: 0, y: 0 };
 
+export function getCanvasClientOffset(dataBusFullRowCount: number, uiFontSize: number): CanvasClientOffset {
+  return {
+    x: 0,
+    y: getDataBusFullRowsHeight({ rowCount: dataBusFullRowCount, uiFontScale: getUiFontScale(uiFontSize) }),
+  };
+}
+
 export const canvasToClientPosition =
   (
     canvasPosition: { x: number; y: number; zoom: number },
@@ -58,13 +65,7 @@ export function useCanvasPositioning() {
   const dataBusFullRowCount = useAtomValue(dataBusFullRowCountState);
   const uiFontSize = useAtomValue(uiFontSizeState);
   const canvasClientOffset = useMemo<CanvasClientOffset>(
-    () => ({
-      x: 0,
-      y: getDataBusFullRowsHeight({
-        rowCount: dataBusFullRowCount,
-        uiFontScale: getUiFontScale(uiFontSize),
-      }),
-    }),
+    () => getCanvasClientOffset(dataBusFullRowCount, uiFontSize),
     [dataBusFullRowCount, uiFontSize],
   );
 

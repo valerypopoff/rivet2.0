@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 
 export type SeedHostedEditorProjectOptions = {
+  damagedOpenedProjects?: Record<string, unknown>;
   extraOpenedProjects?: Array<{
     graphId: string;
     projectId: string;
@@ -83,6 +84,7 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
         },
         projectsState: {
           openedProjects: {
+            ...seed.damagedOpenedProjects,
             [seed.projectId]: {
               projectId: seed.projectId,
               title: seed.title,
@@ -96,7 +98,11 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
               openedGraph: opened.graphId,
             }])),
           },
-          openedProjectsSortedIds: [seed.projectId, ...(seed.extraOpenedProjects ?? []).map((opened) => opened.projectId)],
+          openedProjectsSortedIds: [
+            seed.projectId,
+            ...(seed.extraOpenedProjects ?? []).map((opened) => opened.projectId),
+            ...Object.keys(seed.damagedOpenedProjects ?? {}),
+          ],
         },
         openedProjectSnapshotsState: {},
       }),

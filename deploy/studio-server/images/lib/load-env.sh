@@ -26,6 +26,13 @@ load_optional_dotenv_preserving_deployment_storage() {
   retirement_protocol="${RIVET_ROLLING_RETIREMENT_PROTOCOL:-}"
   retirement_token="${RIVET_ROLLING_RETIREMENT_TOKEN:-}"
   retirement_incarnation="${RIVET_PROCESS_INCARNATION:-}"
+  housekeeping_lock_inherited="${RIVET_MAINTENANCE_LOCK_INHERITED:-}"
+  housekeeping_node_options="${NODE_OPTIONS:-}"
+  housekeeping_capability="${RIVET_HOUSEKEEPING_CAPABILITY:-}"
+  housekeeping_port="${RIVET_HOUSEKEEPING_PORT:-}"
+  housekeeping_pod_uid="${RIVET_POD_UID:-}"
+  housekeeping_pod_ip="${RIVET_POD_IP:-}"
+  housekeeping_namespace_uid="${RIVET_NAMESPACE_UID:-}"
   ha_protocol="${RIVET_HA_PROTOCOL:-}"
   ha_pod_name="${RIVET_POD_NAME:-}"
   ha_headless_service="${RIVET_HA_HEADLESS_SERVICE:-}"
@@ -56,6 +63,10 @@ load_optional_dotenv_preserving_deployment_storage() {
     export RIVET_ROLLING_RETIREMENT_PROTOCOL="$retirement_protocol"
     export RIVET_ROLLING_RETIREMENT_TOKEN="$retirement_token"
     export RIVET_PROCESS_INCARNATION="$retirement_incarnation"
+    export RIVET_HOUSEKEEPING_CAPABILITY="$housekeeping_capability" RIVET_HOUSEKEEPING_PORT="$housekeeping_port"
+    export RIVET_POD_UID="$housekeeping_pod_uid" RIVET_POD_IP="$housekeeping_pod_ip" RIVET_NAMESPACE_UID="$housekeeping_namespace_uid"
+    export RIVET_MAINTENANCE_LOCK_INHERITED="$housekeeping_lock_inherited"
+    if [ "$housekeeping_lock_inherited" = "1" ]; then export NODE_OPTIONS="$housekeeping_node_options"; fi
     export RIVET_HA_PROTOCOL="$ha_protocol"
     export RIVET_POD_NAME="$ha_pod_name"
     export RIVET_HA_HEADLESS_SERVICE="$ha_headless_service"
@@ -130,6 +141,11 @@ load_optional_dotenv_preserving_deployment_storage() {
   export RIVET_HA_DEPLOYMENT="$ha_deployment" RIVET_HA_MAINTENANCE="$ha_maintenance" RIVET_HA_API_ONLY="$ha_api_only"
   if [ -n "$ha_control_plane_mode" ]; then export RIVET_HA_CONTROL_PLANE_MODE="$ha_control_plane_mode"; else unset RIVET_HA_CONTROL_PLANE_MODE; fi
   export RIVET_HA_PEER_LIMIT="$ha_peer_limit" RIVET_HA_MAINTENANCE_URL="$ha_maintenance_url"
+
+  export RIVET_HOUSEKEEPING_CAPABILITY="$housekeeping_capability" RIVET_HOUSEKEEPING_PORT="$housekeeping_port"
+  export RIVET_POD_UID="$housekeeping_pod_uid" RIVET_POD_IP="$housekeeping_pod_ip" RIVET_NAMESPACE_UID="$housekeeping_namespace_uid"
+  export RIVET_MAINTENANCE_LOCK_INHERITED="$housekeeping_lock_inherited"
+  if [ "$housekeeping_lock_inherited" = "1" ]; then export NODE_OPTIONS="$housekeeping_node_options"; fi
 
   export RIVET_DEPLOYMENT_TOPOLOGY=replicated
   export RIVET_DEPLOYMENT_STORAGE_MODE="$deployment_storage_mode"

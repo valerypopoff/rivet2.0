@@ -1,7 +1,9 @@
-import type { GraphId, GraphInputNode, GraphOutputs, Project } from '@valerypopoff/rivet2-core';
+import type { GraphId, GraphInputNode, GraphOutputs, Project, Settings } from '@valerypopoff/rivet2-core';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import type { EvaluationDataset, EvaluationSuite, PortableJson } from '@valerypopoff/rivet2-evaluations';
 import { withDerivedProjectPluginSpecs } from '../utils/pluginUsage.js';
+import { getProjectContextValues } from '../utils/projectContextValues.js';
+import type { ProjectContext } from '../state/savedGraphs.js';
 import {
   getDependentDataForNodeForPreload,
   getEditorRunFromPlan,
@@ -59,6 +61,8 @@ export function captureEditorRun(input: {
   projectData: Project['data'];
   plugins: PluginContext;
   options: EditorGraphRunOptions;
+  settings: Settings;
+  context: ProjectContext;
 }) {
   const project: Project = structuredClone(
     withDerivedProjectPluginSpecs(
@@ -80,6 +84,8 @@ export function captureEditorRun(input: {
     projectId: project.metadata.id,
     graphId: options.graphId ?? input.currentGraph.metadata!.id!,
     options,
+    settings: structuredClone(input.settings),
+    contextValues: getProjectContextValues(input.context),
   };
 }
 

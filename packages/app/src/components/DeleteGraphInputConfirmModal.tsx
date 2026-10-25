@@ -38,9 +38,9 @@ export const DeleteGraphInputConfirmModalRenderer: FC = () => {
       return;
     }
 
-    const { nodeIds } = confirmState;
+    const { nodeIds, target } = confirmState;
     close();
-    deleteNodes({ nodeIds, skipGraphInputUsageConfirm: true });
+    deleteNodes({ nodeIds, skipGraphInputUsageConfirm: true, expectedTarget: target });
   };
 
   const visibleUsages = confirmState?.usages.slice(0, 8) ?? [];

@@ -39,6 +39,16 @@ export const PERPLEXITY_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
   environmentVariableName: 'PERPLEXITY_API_KEY',
 };
 
+export const SUBQ_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'subqApiKey',
+  environmentVariableName: 'SUBQ_API_KEY',
+};
+
+export const BASETEN_DEFAULT_CREDENTIAL_NAMES: ClassifierCredentialNames = {
+  programmaticName: 'basetenApiKey',
+  environmentVariableName: 'BASETEN_API_KEY',
+};
+
 const programmaticNamePattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const environmentVariableNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -55,27 +65,27 @@ export function normalizeClassifierCredentialNames(
   defaults: ClassifierCredentialNames = JEV_DEFAULT_CREDENTIAL_NAMES,
 ): ClassifierCredentialNames {
   if (value != null && (typeof value !== 'object' || Array.isArray(value))) {
-    throw new Error('Classifier API key names must be an object.');
+    throw new Error('Decision AI API key names must be an object.');
   }
 
   const raw = value as Partial<ClassifierCredentialNames> | undefined;
   if (raw?.programmaticName != null && typeof raw.programmaticName !== 'string') {
-    throw new Error('Classifier programmatic API key name must be a string.');
+    throw new Error('Decision AI programmatic API key name must be a string.');
   }
   if (raw?.environmentVariableName != null && typeof raw.environmentVariableName !== 'string') {
-    throw new Error('Classifier API key environment variable must be a string.');
+    throw new Error('Decision AI API key environment variable must be a string.');
   }
 
   const programmaticName = raw?.programmaticName?.trim() || defaults.programmaticName;
   const environmentVariableName = raw?.environmentVariableName?.trim() || defaults.environmentVariableName;
   if (!isValidClassifierProgrammaticCredentialName(programmaticName)) {
     throw new Error(
-      'Classifier programmatic API key name must be a JavaScript-style identifier without a leading digit.',
+      'Decision AI programmatic API key name must be a JavaScript-style identifier without a leading digit.',
     );
   }
   if (!isValidClassifierEnvironmentCredentialName(environmentVariableName)) {
     throw new Error(
-      'Classifier API key environment variable must contain letters, digits, and _ without a leading digit.',
+      'Decision AI API key environment variable must contain letters, digits, and _ without a leading digit.',
     );
   }
   return { programmaticName, environmentVariableName };
@@ -120,12 +130,12 @@ export function resolveClassifierApiKey({
   if (apiKeySource === 'classifier-settings') {
     const read = (value: unknown, key: string): unknown =>
       value !== null && typeof value === 'object'
-        ? classifierDataProperty(value, key, 'Classifier settings credentials')
+        ? classifierDataProperty(value, key, 'Decision AI settings credentials')
         : undefined;
     const saved = getNonEmptyString(read(read(read(context.settings, 'classifierProviders'), providerId), 'apiKey'));
     if (!saved)
       throw new ClassifierCredentialMissingError(
-        `Classifier settings API key for ${providerId} is not set. No automatic fallback is used.`,
+        `Decision AI settings API key for ${providerId} is not set. No automatic fallback is used.`,
       );
     return saved;
   }
@@ -136,7 +146,7 @@ export function resolveClassifierApiKey({
     return value;
   }
   if (apiKeySource !== undefined && apiKeySource !== 'configured')
-    throw new Error('Unknown classifier API key source.');
+    throw new Error('Unknown Decision AI API key source.');
 
   const names = normalizeClassifierCredentialNames(apiKeyNames, defaults);
   const namedValue = resolveNamedClassifierApiKey(
@@ -158,7 +168,7 @@ export function resolveClassifierApiKey({
   }
 
   throw new ClassifierCredentialMissingError(
-    `${providerId === 'jev' ? 'Jev' : 'Classifier'} API key is not set. Pass ${names.programmaticName}, configure ${names.environmentVariableName}, or set the configured key in Settings > Classifier.`,
+    `${providerId === 'jev' ? 'Jev' : 'Decision AI'} API key is not set. Pass ${names.programmaticName}, configure ${names.environmentVariableName}, or set the configured key in Settings > Decision AI.`,
   );
 }
 

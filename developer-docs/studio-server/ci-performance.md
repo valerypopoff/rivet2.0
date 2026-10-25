@@ -3,7 +3,7 @@
 Optimize measured critical paths without dropping coverage, weakening release
 gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
-Branch, publication and protected deployment policies remain unchanged.
+Branch targeting, signing and protected deployment safeguards remain unchanged.
 
 ## Hosted baseline: October 5, 2026
 
@@ -20,6 +20,11 @@ summaries with the next hosted runs after landing changes. Local timings cannot
 certify hosted speed, queue delays or Apple notarization latency.
 
 ## Execution boundaries
+
+Container images have a separate mandatory [vulnerability gate](./container-security.md).
+It scans the exact candidate digests and all published architectures alongside
+functional qualification; High/Critical findings or incomplete scans block
+promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
 
 - Classification uses shallow sparse checkout of its standalone helper and
   fetches only missing full-SHA event endpoints, with source blobs filtered out.
@@ -52,9 +57,12 @@ certify hosted speed, queue delays or Apple notarization latency.
   sources does not invalidate installation or recopy the Yarn cache into a second
   layer. API/executor final stages copy only compiled runtime workspace exports
   and bootstrap modules, excluding desktop/docs/source/test trees. Dynamic
-  third-party dependencies remain intact, including non-hoisted workspace-local
-  modules and relative links; the root node_modules alone is insufficient.
+  third-party runtime dependencies remain intact, including non-hoisted
+  workspace-local modules and relative links; the root node_modules alone is insufficient.
   Existing package licenses/readmes are retained as well.
+  The only third-party fixture exclusion is the reviewed, unexported
+  `zod-to-json-schema` dist-test-v3/v4 dependency installations; see
+  [container security](container-security.md) for runtime/compiler pins and tests.
   Image smoke and migration release gates
   remain mandatory; cache reuse is an optimization, not their replacement.
 - Pure/isolated Core tests use narrow implementation imports where safe and load
@@ -65,29 +73,117 @@ certify hosted speed, queue delays or Apple notarization latency.
   required by the Build aggregator. Set `RIVET_CORE_TEST_SHARD=1/2` or `2/2`, then
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
-- Browser CI runs two independent spec files at once, preserving serial tests
-  within each file and test-owned contexts/mocks/temporary paths. No assertion,
-  failure artifact or retry policy was removed.
+- Browser CI uses three required matrix shards, each running two independent
+  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns the same 26
+  specs exactly once using measured file weights (623/615/620 seconds estimated
+  work). These weights balance work, not predict hosted wall time. Serial tests
+  within each file, test-owned contexts/mocks/temporary paths, assertions and
+  retry policy are unchanged. Each shard has separate reports and failure
+  artifacts. Executor-retirement verification runs exactly once, on shard 1.
+  Set `RIVET_EDITOR_TEST_SHARD=1/3`, `2/3` or `3/3` before
+  `yarn studio-server:ui:ci` to reproduce a lane. Omit it to run the complete
+  selection; unknown shard values fail instead of silently dropping coverage.
+  Locally, finish build-mutating checks (including `yarn test:style`) before
+  starting browser lanes: their real-API fixtures consume Core's compiled exports.
+  Parallel shards need distinct `PLAYWRIGHT_CI_PORT` values. Hosted matrix jobs
+  have independent checkouts and verified artifacts rather than shared outputs.
   The shared isolated-editor bootstrap mocks optional provider-environment
   lookups as unset; it must not contact an ambient API or read local credentials.
   Individual provider tests can override that route with their own fixture.
-- Deployment contracts have two isolated matrix lanes: managed storage/schema
-  and gateway/proxy behavior. Both must pass. The measured 2m40s storage checks
-  no longer precede the roughly 3m40s gateway checks. Proxy templates still run
+- Deployment contracts have three required, isolated matrix lanes: managed
+  storage/schema/restore, deployment-command/Helm contracts, and gateway/proxy
+  behavior. Deployment checks no longer wait behind PostgreSQL/restore fixtures.
+  All three consume verified same-commit compiled artifacts. Proxy templates still run
   serially through real DNS expiry, address replacement and unhealthy/healthy
   transitions; no TTL or outage assertion is shortened to improve timings.
-  Fixture phases within each lane remain ordered. Only the managed lane installs
-  Helm/Kubernetes tools, and neither lane shares containers or source roots.
+  Fixture phases within each lane remain ordered. Only the deployment lane
+  installs Helm/Kubernetes tools; lanes do not share containers or source roots.
 - Node tests validate the same-commit artifact with
   `RIVET_NODE_TEST_DEPENDENCIES=prebuilt`, avoiding a redundant Core/Node build.
   Local tests still build both ESM and CJS prerequisites.
-- One Linux job compiles the desktop frontend. Windows and both native macOS
+- Build's Node 22 frontend job is the single desktop compiler across Build and
+  Desktop Release. The latter retrieves the exact Build run's artifact by ID
+  using read-only Actions access, verifies its SHA/length/hash inventory and
+  re-exports it for native consumers; it does not compile another copy. No PR,
+  fork, stale SHA or unqualified fallback is allowed. Windows and both native macOS
   consumers restore the source-SHA artifact and verify its complete length/hash
   inventory before Tauri prepares platform sidecars. Rust builds, architecture
   checks, signing, notarization, packaged executor/pnpm smoke and publication
   gates stay native and mandatory. Local Tauri keeps its ordinary build hook.
 - Desktop Vite omits compression-size reporting unless bundle analysis is
   requested. Only diagnostic work changes, not generated assets/minification.
+- Developer public-docs-only pushes can publish documentation without native
+  packaging, but only when both the push range and the last published desktop
+  commit differ exclusively under `packages/docs/`. This prevents a later docs
+  push from canceling an unpublished app change and reusing stale installers.
+  Missing metadata/history or any non-docs difference retains the full native
+  build. Manual and official releases always build native installers. Docs-only
+  preparation preserves both channels' existing metadata and installer links;
+  it neither publishes assets nor labels old installers with the new docs SHA.
+  The primary metadata commit is rechecked immediately before preparation.
+  See [Build and CI](../BUILD-AND-CI.md#desktop-release-and-pages-workflows).
+
+## October 24 follow-up and evidence limits
+
+The recent browser step alone took 15.9 minutes for 165 tests; adding more
+workers inside one runner would compete for its CPU. The bounded three-shard
+split targets that critical path while preserving the entire selected suite.
+The managed lane also combined independent DB/restore and deployment-command
+work; these now run separately. Hosted improvements must be measured on the
+next complete runs, including queue and checkout overhead. More runners can
+reduce elapsed time while increasing total runner-minutes.
+
+### Completed follow-up: narrower cross-workflow handoff
+
+Existing workflow graphs/triggers and required aggregate job IDs are retained.
+Desktop Release now consumes Build's exact-SHA frontend, then requires the
+matching Build run/attempt to succeed before any publication. Native packaging
+can overlap other checks. Asset freshness is checked after the Build wait, so a
+manual release that becomes stale while waiting skips publication. An ordering
+guard protects this boundary. Pages retries likewise recheck the branch after
+the failed attempt and retry delay rather than trusting earlier freshness.
+Docs-only publication also requires a successful Build
+for its current SHA. Failed/canceled runs, stale ownership, expired artifacts,
+changed attempts and uncertain responses fail closed. Read-only polling is
+bounded; unlike a single-DAG rewrite, the handoff has some polling/transfer
+overhead that must be included in hosted measurements. It avoids rewriting the
+signing/release graph or introducing a privileged `workflow_run` trigger.
+
+Six short lint jobs are grouped into two lanes and four supporting-test jobs into
+two, preserving every original command exactly once. The six long Core/App lanes
+remain parallel and fail-fast remains disabled. Native installers still publish
+automatically for relevant code pushes and remain manually available. Node 24
+Studio verification, security audits, migration/restore checks and provider/image
+release gates are unchanged. This pass does not claim that fewer jobs alone
+guarantees lower wall time or that packaging cannot start before Build finishes.
+
+Local follow-up verification passed all 165 browser tests across the three
+shards (69/53/43), with exact test-identity union checked against the unsharded
+selection. The observe-runner smoke, Studio build, style/structure/workflow guards
+and real Git/HTTP publication regressions also passed. Initial live-API fixture
+startup failures came from running a Core-rebuilding style check concurrently;
+the affected partitions passed after that check settled, with no retry-policy or
+assertion changes. The optional Postman simulation exercised actual Pages
+preparation and changed-baseline rejection using synthetic local assets only.
+None of these local results certify hosted timings, signing or publication.
+
+The completed handoff also passed real local HTTP evidence tests (including
+failed/canceled Builds, identity changes, reruns, expired/foreign artifacts and
+bounded timeouts), the actual CLI against a synthetic GitHub simulation, and
+the desktop/CLI build plus sealed-inventory verification. All four regrouped
+supporting suites passed (578 tests), all six lint commands passed, and the
+real-process executor retirement regression passed both scenarios. Lint exposed an existing floating
+`node:test` registration promise in executor retirement coverage; marking that
+registration `void` preserves its assertions without disabling the lint rule.
+Cross-workflow artifact transport and hosted speed still need the next push run.
+
+The HTTP evidence regressions assert each rejection's specific cause, rather
+than accepting arbitrary network errors. Positive requests have ordinary local
+startup headroom; only timeout scenarios use short deadlines, keeping the suite
+fast without conflating identity validation with timing failures.
+Preserved same-site downloads also validate their declared byte count, rejecting
+shortened HTTP 200 bodies before writing assets/metadata. The actual Pages CLI
+regression uses synthetic HTTP responses, not a stubbed fetch.
 
 ## Verification
 

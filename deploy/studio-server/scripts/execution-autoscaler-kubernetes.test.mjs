@@ -12,9 +12,18 @@ import {
   createExecutionAutoscalerIO,
   cpuQuantity,
 } from './lib/execution-autoscaler-kubernetes.mjs';
-import { autoscalerPolicy, reconcileExecutionAutoscaling } from './lib/execution-autoscaler.mjs';
+import {
+  autoscalerPolicy,
+  autoscalerPolicyDigest,
+  reconcileExecutionAutoscaling,
+} from './lib/execution-autoscaler.mjs';
+import {
+  prepareExecutionFenceRepair,
+  applyExecutionFenceRepair,
+  fenceRepairDigest,
+} from './lib/execution-fence-recovery.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
-import { haFrozenAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
+import { haFrozenAutoscalingValues, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
 import { childEnvironments } from '../images/api/backend-supervisor.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -148,6 +157,49 @@ test('HA operational pause retains execution retirement protection and fences pr
   );
 });
 
+test('cooperative rollout keeps execution and proxy growth active and pauses only proxy downscale', () => {
+  const overlay = haRolloutAutoscalingValues(render());
+  const overrides = Object.entries(overlay.autoscaling).flatMap(([role, fields]) =>
+    Object.entries(fields).map(([key, value]) => `autoscaling.${role}.${key}=${value}`),
+  );
+  const resources = render(...overrides);
+  assert.equal(
+    resources.find((r) => r.kind === 'Deployment' && r.metadata.labels['app.kubernetes.io/component'] === 'autoscaler')
+      .spec.replicas,
+    1,
+  );
+  const hpa = resources.find((r) => r.kind === 'HorizontalPodAutoscaler');
+  assert.equal(hpa.metadata.labels['app.kubernetes.io/component'], 'proxy');
+  assert.equal(hpa.spec.behavior.scaleDown.selectPolicy, 'Disabled');
+  assert.notEqual(hpa.spec.behavior.scaleUp?.selectPolicy, 'Disabled');
+  assert.equal(
+    render().find((r) => r.kind === 'HorizontalPodAutoscaler').spec.behavior.scaleDown.selectPolicy,
+    undefined,
+  );
+});
+
+test('cooperative scale-up cannot apply a demand sample after the workload configuration version changes', async () => {
+  const calls = [];
+  const io = createExecutionAutoscalerIO({
+    release: 'rivet',
+    namespace: 'fixture',
+    workload: 'execution',
+    service: 'execution',
+    image: 'candidate',
+    port: 8080,
+    policy: autoscalerPolicy({}),
+    transport: {
+      json: async (method, request) => {
+        calls.push([method, request]);
+        assert.equal(method, 'GET', 'No PATCH is allowed after a stale workload observation');
+        return { metadata: { uid: 'workload', resourceVersion: 'new-template' }, spec: { replicas: 3 } };
+      },
+    },
+  });
+  await assert.rejects(io.scale('workload', 3, 4, 'sampled-old-template'), /precondition changed/);
+  assert.equal(calls.length, 1);
+});
+
 test('chart rejects two replica writers, unsafe floors/targets/metrics and a DB budget below the maximum', () => {
   for (const bad of [
     'ha.enabled=false',
@@ -179,13 +231,72 @@ test('reviewed execution ceiling fits a shared 200-connection allowance without 
     assert.throws(() => render('postgres.maxConnections=200', `autoscaling.execution.maxReplicas=${max}`));
 });
 
-async function clusterFixture(t) {
+test('compact HA maintenance validation preserves workload and storage identities while fencing traffic and timers', () => {
+  const serving = render();
+  const maintenance = [
+    'workflowSchema.maintenanceValidation=true',
+    'replicaCount.proxy=0',
+    'replicaCount.web=0',
+    'replicaCount.evaluation=0',
+    'autoscaling.execution.enabled=false',
+    'autoscaling.executionController.enabled=false',
+    'autoscaling.proxy.enabled=false',
+    'autoscaling.web.enabled=false',
+    'autoscaling.backend.enabled=false',
+  ];
+  const validation = render(...maintenance);
+  assert.equal(
+    validation.some((resource) => resource.kind === 'HorizontalPodAutoscaler'),
+    false,
+  );
+  assert.equal(
+    validation.some((resource) => resource.metadata?.labels?.['app.kubernetes.io/component'] === 'autoscaler'),
+    false,
+  );
+  for (const component of ['backend', 'execution', 'proxy', 'web']) {
+    const workload = (resources) =>
+      resources.find(
+        (resource) =>
+          ['StatefulSet', 'Deployment'].includes(resource.kind) &&
+          resource.metadata.labels?.['app.kubernetes.io/component'] === component,
+      );
+    const before = workload(serving),
+      during = workload(validation);
+    assert.ok(before && during, component);
+    assert.equal(during.metadata.name, before.metadata.name, component);
+    assert.equal(during.kind, before.kind, component);
+    assert.deepEqual(during.spec.selector, before.spec.selector, component);
+    assert.equal(during.spec.serviceName, before.spec.serviceName, component);
+    assert.deepEqual(during.spec.template.spec.volumes, before.spec.template.spec.volumes, component);
+    assert.equal(during.spec.replicas, ['proxy', 'web'].includes(component) ? 0 : before.spec.replicas, component);
+    for (const container of during.spec.template.spec.containers) {
+      assert.equal(container.lifecycle.preStop.exec.command.at(-1), 'sleep 0');
+      if (['backend', 'execution'].includes(component)) {
+        assert.equal(container.env.find((entry) => entry.name === 'RIVET_RELEASE_MAINTENANCE')?.value, 'true');
+        assert.equal(
+          container.env.find((entry) => entry.name === 'RIVET_RUNTIME_LIBRARIES_JOB_WORKER_ENABLED')?.value,
+          'false',
+        );
+        assert.equal(container.env.find((entry) => entry.name === 'RIVET_MANAGED_MAINTENANCE_ENABLED')?.value, 'false');
+      }
+    }
+    for (const container of before.spec.template.spec.containers)
+      assert.equal(container.lifecycle.preStop.exec.command.at(-1), 'sleep 120');
+  }
+  assert.throws(() => render('replicaCount.web=0'), /minimum|singleton control requires/);
+  assert.throws(() => render(...maintenance, 'replicaCount.web=1'), /maintenance validation requires/);
+  assert.throws(() => render(...maintenance, 'replicaCount.execution=1'), /singleton control requires/);
+});
+
+async function clusterFixture(t, policyOverrides = {}) {
   let time = Date.now(),
     journal = null,
     version = 1,
+    workloadVersion = '1',
     replicas = 3,
     outputFailure = null,
     fault = null,
+    responseFailure = null,
     generation = 1;
   let annotations = {};
   let active = 0;
@@ -198,6 +309,7 @@ async function clusterFixture(t) {
     cooldownSeconds: 10,
     pollSeconds: 10,
     withdrawalSeconds: 1,
+    ...policyOverrides,
   });
   const pods = new Map(),
     logs = [];
@@ -231,6 +343,10 @@ async function clusterFixture(t) {
     logs.push([req.method, path]);
     if (fault && fault(req, res) !== false) return;
     const json = (code, value) => {
+      if (responseFailure?.(req.method, path, value)) {
+        res.destroy();
+        return;
+      }
       res.writeHead(code, { 'content-type': 'application/json' });
       res.end(JSON.stringify(value));
     };
@@ -250,16 +366,15 @@ async function clusterFixture(t) {
     }
     if (path.endsWith(`/statefulsets/${workload}`)) {
       if (req.method === 'PATCH') {
-        assert.equal(body[0].value, 'sts-uid');
-        assert.equal(body[1].value, String(version));
+        if (body[0].value !== 'sts-uid' || body[1].value !== workloadVersion) return json(409, {});
         annotations = body[2].value;
-        version++;
+        workloadVersion = String(version++);
         generation++;
       }
       return json(200, {
         metadata: {
           uid: 'sts-uid',
-          resourceVersion: String(version),
+          resourceVersion: workloadVersion,
           generation,
           labels: { 'app.kubernetes.io/instance': release },
         },
@@ -273,14 +388,14 @@ async function clusterFixture(t) {
     }
     if (path.endsWith('/scale')) {
       if (req.method === 'GET')
-        return json(200, { metadata: { uid: 'sts-uid', resourceVersion: String(version) }, spec: { replicas } });
+        return json(200, { metadata: { uid: 'sts-uid', resourceVersion: workloadVersion }, spec: { replicas } });
       assert.equal(req.headers['content-type'], 'application/json-patch+json');
       assert.equal(body[0].value, 'sts-uid');
-      assert.equal(body[1].value, String(version));
+      assert.equal(body[1].value, workloadVersion);
       assert.equal(body[2].value, replicas);
       const previous = replicas;
       replicas = body[3].value;
-      version++;
+      workloadVersion = String(version++);
       for (let i = previous; i < replicas; i++) newPod(i);
       for (let i = replicas; i < previous; i++) pods.delete(`${workload}-${i}`);
       return json(200, { spec: { replicas } });
@@ -316,6 +431,7 @@ async function clusterFixture(t) {
         return json(200, p);
       }
       if (req.method === 'DELETE') {
+        assert.ok(Number(req.headers['content-length']) > 0, 'UID preconditions must actually reach Kubernetes');
         assert.equal(body.preconditions.uid, p.metadata.uid);
         newPod(Number(name.split('-').at(-1)));
         return json(200, {});
@@ -384,13 +500,13 @@ async function clusterFixture(t) {
     image,
     now: () => time,
   });
-  const tick = () =>
+  const tick = ({ runner = 'fixture' } = {}) =>
     reconcileExecutionAutoscaling({
       io,
       release,
       namespace,
       manifestDigest: 'pinned',
-      runner: 'fixture',
+      runner,
       policy,
       now: () => time,
     });
@@ -401,6 +517,11 @@ async function clusterFixture(t) {
     pods,
     transport,
     origin,
+    policy,
+    now: () => time,
+    responseFailure: (value) => {
+      responseFailure = value;
+    },
     advance: (seconds = 10) => {
       time += seconds * 1000;
     },
@@ -429,6 +550,7 @@ test('actual HTTP/exec-WebSocket client observes admission demand, CAS scales, w
     await f.tick();
   }
   assert.equal(f.logs.filter((l) => l[0] === 'EXEC' && l[2] === '--withdraw-only').length, 1);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
   f.advance();
   assert.equal((await f.tick()).state, 'draining');
   assert.equal((await f.tick()).state, 'waiting-for-work');
@@ -451,6 +573,7 @@ test('issued retirement settles during a metrics outage without load sampling or
     f.advance();
     await f.tick();
   }
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
   f.advance();
   await f.tick();
   [...f.pods.values()].at(-1).retirement.state = 'drained';
@@ -473,6 +596,49 @@ test('issued retirement settles during a metrics outage without load sampling or
     false,
   );
   await assert.rejects(f.tick(), /Kubernetes/); // Missing metrics still fence a NEW load decision.
+});
+
+test('HTTP EndpointSlice delay and failed observation require a new full propagation window before exec begin', async (t) => {
+  const f = await clusterFixture(t, { withdrawalSeconds: 60 });
+  const targetUid = [...f.pods.values()].at(-1).metadata.uid;
+  f.fault((req, res) => {
+    if (!req.url.includes('/endpointslices')) return false;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({ items: [{ endpoints: [{ targetRef: { uid: targetUid }, conditions: { ready: true } }] }] }),
+    );
+    return true;
+  });
+  await f.tick();
+  for (let i = 0; i < 4; i++) {
+    f.advance();
+    await f.tick();
+  }
+  f.advance(61);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  f.fault(null);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  for (let i = 0; i < 3; i++) {
+    f.advance();
+    await f.tick();
+  }
+  f.fault((req, res) => {
+    if (!req.url.includes('/endpointslices')) return false;
+    res.writeHead(503);
+    res.end('{}');
+    return true;
+  });
+  await assert.rejects(f.tick(), /Kubernetes/);
+  f.fault(null);
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
+  for (let i = 0; i < 5; i++) {
+    f.advance();
+    assert.equal((await f.tick()).state, 'waiting-for-routing');
+  }
+  assert.equal(f.logs.filter((call) => call[0] === 'EXEC' && call[2] === '--begin-only').length, 0);
+  f.advance();
+  assert.equal((await f.tick()).state, 'draining');
+  assert.equal(f.logs.filter((call) => call[0] === 'EXEC' && call[2] === '--begin-only').length, 1);
 });
 
 test('lease expiry during real peer queries prevents subsequent Kubernetes fence writes', async (t) => {
@@ -502,6 +668,7 @@ test('an unrecorded replacement at a removed tail keeps the actual Kubernetes te
     f.advance();
     await f.tick();
   }
+  assert.equal((await f.tick()).state, 'waiting-for-routing');
   f.advance();
   await f.tick();
   const tail = [...f.pods.values()].at(-1);
@@ -552,6 +719,386 @@ test('an unconfirmed live-pod startup fence cannot authorize withdrawal', async 
   await assert.rejects(f.io.fenceObserved(target), /Pod startup fence intent/);
   assert.equal(
     f.logs.some((l) => l[0] === 'EXEC' && l[2] === '--withdraw-only'),
+    false,
+  );
+});
+
+test('inherited annotations survive growth and later retirements; partial fence writes converge over real HTTP', async (t) => {
+  for (const loss of ['template', 'pod', 'pod-before-write'])
+    await t.test(loss, async (t) => {
+      const f = await clusterFixture(t);
+      const tail = [...f.pods.values()].at(-1);
+      tail.metadata.annotations['rivet.dev/execution-retirement-fence'] = 'rivet-ha-execution-1';
+      let injected = false;
+      if (loss === 'pod-before-write')
+        f.fault((req, res) => {
+          if (!injected && req.method === 'PATCH' && req.url.includes('/pods/')) {
+            injected = true;
+            res.writeHead(409);
+            res.end('{}');
+            return true;
+          }
+          return false;
+        });
+      else
+        f.responseFailure((method, path) => {
+          if (!injected && method === 'PATCH' && path.includes(loss === 'template' ? '/statefulsets/' : '/pods/')) {
+            injected = true;
+            return true;
+          }
+          return false;
+        });
+      await f.tick();
+      for (let i = 0; i < 2; i++) {
+        f.advance();
+        await f.tick();
+      }
+      f.advance();
+      await assert.rejects(f.tick(), /409|socket|hang|reset|request/i);
+      assert.equal(injected, true);
+      assert.equal((await f.io.readJournal()).phase, 'fencing');
+      assert.equal(
+        f.logs.some((l) => l[0] === 'EXEC' && l[2] === '--withdraw-only'),
+        false,
+      );
+      // A crash can leave the last acknowledged lease intact, unlike a clean catch/finally.
+      const interrupted = await f.io.readJournal();
+      await f.io.writeJournal({ ...interrupted, leaseExpiresAt: f.now() + 120000 }, interrupted.resourceVersion);
+      const beforeRestart = f.logs.length;
+      assert.equal((await f.tick({ runner: 'replacement-controller' })).state, 'leased');
+      assert.ok(f.logs.slice(beforeRestart).every((entry) => entry[0] === 'GET'));
+      f.advance(121);
+      // A new runner resumes from the persisted step intents, without replacing a pod.
+      assert.equal((await f.tick({ runner: 'replacement-controller' })).state, 'withdrawing');
+      assert.equal((await f.io.readJournal()).runner, 'replacement-controller');
+      assert.equal(tail.metadata.annotations['rivet.dev/execution-retirement-fence'], tail.metadata.name);
+      const writes = f.logs.filter((l) => l[0] === 'PATCH');
+      assert.equal(writes.filter((l) => l[1].includes('/statefulsets/')).length, 1);
+      assert.equal(writes.filter((l) => l[1].includes('/pods/')).length, loss === 'pod-before-write' ? 2 : 1);
+      // Growth while this ordinal is fenced creates peers carrying its annotation.
+      f.active(30);
+      f.advance();
+      assert.equal((await f.tick()).state, 'scaled-up');
+      const grown = [...f.pods.values()].at(-1);
+      assert.notEqual(grown.metadata.name, tail.metadata.name);
+      assert.equal(grown.metadata.annotations['rivet.dev/execution-retirement-fence'], tail.metadata.name);
+      f.active(0);
+      f.advance();
+      await f.tick();
+      f.advance();
+      await f.tick();
+      tail.retirement.state = 'drained';
+      assert.equal((await f.tick()).state, 'replacing-drained-owner');
+      await f.tick();
+      await f.tick();
+      for (let i = 0; i < 8 && (await f.io.readJournal()).phase === 'complete'; i++) {
+        f.advance();
+        await f.tick();
+      }
+      assert.equal((await f.io.readJournal()).target.name, grown.metadata.name);
+      assert.equal(grown.metadata.annotations['rivet.dev/execution-retirement-fence'], grown.metadata.name);
+    });
+});
+
+test('fence intents reject foreign metadata, changed UIDs, process incarnations, leases and prior confirmations', async (t) => {
+  for (const change of ['foreign', 'malformed', 'uid', 'incarnation', 'lease', 'confirmed'])
+    await t.test(change, async (t) => {
+      const f = await clusterFixture(t);
+      const target = { ...(await f.io.snapshot()).pods.at(-1), workloadUid: 'sts-uid' };
+      const pod = f.pods.get(target.name);
+      if (change === 'foreign' || change === 'malformed') {
+        pod.metadata.annotations['rivet.dev/execution-retirement-fence'] =
+          change === 'foreign' ? 'other-2' : 'rivet-ha-execution-01';
+        await assert.rejects(f.io.prepareFence(target), /Malformed|foreign/);
+        return;
+      }
+      const intent = await f.io.prepareFence(target);
+      if (change === 'uid') pod.metadata.uid = 'replaced';
+      if (change === 'incarnation') pod.retirement.incarnation = 'restarted';
+      if (change === 'confirmed') intent.steps.template.confirmed = true;
+      const before = f.logs.length;
+      await assert.rejects(
+        f.io.convergeFence(target, intent, {
+          authorize: async () => {
+            if (change === 'lease') throw Error('lease expired');
+          },
+          confirm: async () => {},
+        }),
+        /changed|incarnation|diverged|lease/,
+      );
+      assert.equal(
+        f.logs.slice(before).some((l) => l[0] === 'PATCH'),
+        false,
+      );
+    });
+});
+
+test('legacy recovery is dry-run first, lease-bound, metadata-only and observes lost replies', async (t) => {
+  const f = await clusterFixture(t);
+  const target = {
+    ...(await f.io.snapshot()).pods.at(-1),
+    workloadUid: 'sts-uid',
+    operationId: 'retirement',
+    withdrawnAt: f.now(),
+  };
+  await f.io.fence(target);
+  f.pods.get(target.name).metadata.annotations['rivet.dev/execution-retirement-fence'] = 'rivet-ha-execution-1';
+  await f.io.writeJournal(
+    {
+      autoscalingProtocol: 1,
+      phase: 'fencing',
+      release: 'rivet',
+      namespace: 'proof',
+      manifestDigest: 'pinned',
+      policyDigest: autoscalerPolicyDigest(f.policy),
+      target,
+      token: 'original-operation',
+      runner: 'old-controller',
+      leaseExpiresAt: f.now(),
+    },
+    undefined,
+  );
+  const binding = {
+    release: 'rivet',
+    namespace: 'proof',
+    workload: 'rivet-ha-execution',
+    manifestDigest: 'pinned',
+    policyDigest: autoscalerPolicyDigest(f.policy),
+  };
+  const io = { ...f.io, verifyRepairBinding: async (b) => assert.deepEqual(b, binding) };
+  const legacyStart = f.logs.length;
+  await assert.rejects(f.tick(), /Pod startup fence intent/);
+  assert.equal(
+    f.logs.slice(legacyStart).some((l) => l[0] === 'PATCH'),
+    false,
+    'legacy journals are not silently adopted',
+  );
+  const before = f.logs.length;
+  const plan = await prepareExecutionFenceRepair({ io, binding, now: f.now });
+  assert.equal(
+    f.logs.slice(before).some((l) => l[0] !== 'GET' && l[0] !== 'EXEC'),
+    false,
+  );
+  await assert.rejects(applyExecutionFenceRepair({ io, plan, confirmation: 'wrong', now: f.now }), /confirmation/);
+  let r = await io.readJournal();
+  await io.writeJournal({ ...r, leaseExpiresAt: f.now() + 1000 }, r.resourceVersion);
+  await assert.rejects(
+    applyExecutionFenceRepair({ io, plan, confirmation: fenceRepairDigest(plan), now: f.now }),
+    /valid lease/,
+  );
+  f.advance();
+  let lost = false;
+  f.responseFailure((method, path) => {
+    if (!lost && method === 'PATCH' && path.includes('/pods/')) {
+      lost = true;
+      return true;
+    }
+    return false;
+  });
+  await assert.rejects(
+    applyExecutionFenceRepair({ io, plan, confirmation: fenceRepairDigest(plan), now: f.now }),
+    /socket|reset|hang/i,
+  );
+  const patches = f.logs.filter((l) => l[0] === 'PATCH').length;
+  const result = await applyExecutionFenceRepair({ io, plan, confirmation: fenceRepairDigest(plan), now: f.now });
+  assert.equal(result.outcome, 'metadata-confirmed');
+  assert.equal(
+    f.logs.filter((l) => l[0] === 'PATCH').length,
+    patches,
+    'observed successful metadata is never written again',
+  );
+  r = await io.readJournal();
+  assert.equal(r.token, 'original-operation');
+  assert.equal(r.phase, 'fencing');
+  assert.equal(r.manifestDigest, 'pinned');
+  assert.equal(r.fenceRepair.confirmed, true);
+  assert.equal(
+    f.logs
+      .slice(before)
+      .some(
+        (l) =>
+          l[0] === 'DELETE' || l[1].endsWith('/scale') || (l[0] === 'EXEC' && l[2] !== '/opt/rivet/retire-backend.mjs'),
+      ),
+    false,
+  );
+});
+
+test('lost recovery-journal acknowledgement retains the lease and expired plans need explicit renewal', async (t) => {
+  const f = await clusterFixture(t);
+  const target = {
+    ...(await f.io.snapshot()).pods.at(-1),
+    workloadUid: 'sts-uid',
+    operationId: 'retirement',
+    withdrawnAt: f.now(),
+  };
+  await f.io.fence(target);
+  f.pods.get(target.name).metadata.annotations['rivet.dev/execution-retirement-fence'] = 'rivet-ha-execution-1';
+  const binding = {
+    release: 'rivet',
+    namespace: 'proof',
+    workload: 'rivet-ha-execution',
+    manifestDigest: 'pinned',
+    policyDigest: autoscalerPolicyDigest(f.policy),
+  };
+  await f.io.writeJournal(
+    {
+      autoscalingProtocol: 1,
+      phase: 'fencing',
+      ...binding,
+      target,
+      token: 'original',
+      runner: 'old',
+      leaseExpiresAt: f.now(),
+    },
+    undefined,
+  );
+  const io = { ...f.io, verifyRepairBinding: async () => {} };
+  const plan = await prepareExecutionFenceRepair({ io, binding, now: f.now });
+  const start = f.logs.length;
+  let lost = false;
+  f.responseFailure((method, path) => {
+    if (!lost && method === 'PUT' && path.includes('/configmaps/')) {
+      lost = true;
+      return true;
+    }
+    return false;
+  });
+  await assert.rejects(
+    applyExecutionFenceRepair({ io, plan, confirmation: fenceRepairDigest(plan), now: f.now }),
+    /socket|reset|hang/i,
+  );
+  assert.equal(
+    f.logs.slice(start).some((l) => l[0] === 'PATCH'),
+    false,
+  );
+  assert.ok((await io.readJournal()).leaseExpiresAt > f.now());
+  await assert.rejects(
+    applyExecutionFenceRepair({ io, plan, confirmation: fenceRepairDigest(plan), now: f.now }),
+    /valid lease/,
+  );
+  f.advance(901);
+  const expiredAt = f.logs.length;
+  await assert.rejects(
+    applyExecutionFenceRepair({ io, plan, confirmation: fenceRepairDigest(plan), now: f.now }),
+    /current exact recovery plan/,
+  );
+  assert.equal(f.logs.length, expiredAt, 'expired approval must not access the cluster');
+  const renewed = await prepareExecutionFenceRepair({ io, binding, now: f.now });
+  assert.equal(renewed.supersedes, fenceRepairDigest(plan));
+  assert.ok(f.logs.slice(expiredAt).every((l) => l[0] === 'GET' || l[0] === 'EXEC'));
+  assert.equal(
+    (await applyExecutionFenceRepair({ io, plan: renewed, confirmation: fenceRepairDigest(renewed), now: f.now }))
+      .outcome,
+    'metadata-confirmed',
+  );
+  assert.equal(f.logs.slice(start).filter((l) => l[0] === 'PATCH').length, 1);
+});
+
+test('conditional fence writes authorize after the last template or pod read, not before slow inspection', async (t) => {
+  for (const resource of ['template', 'pod'])
+    await t.test(resource, async (t) => {
+      const f = await clusterFixture(t);
+      const target = { ...(await f.io.snapshot()).pods.at(-1), workloadUid: 'sts-uid', operationId: 'retirement' };
+      if (resource === 'pod') {
+        await f.io.fence(target);
+        f.pods.get(target.name).metadata.annotations['rivet.dev/execution-retirement-fence'] = 'rivet-ha-execution-1';
+      }
+      const intent = await f.io.prepareFence(target);
+      if (resource === 'pod') intent.steps.template.confirmed = true;
+      const deadline = f.now() + 120000;
+      let reads = 0;
+      f.fault((req) => {
+        const path = resource === 'template' ? `/statefulsets/rivet-ha-execution` : `/pods/${target.name}`;
+        if (req.method === 'GET' && req.url.endsWith(path) && ++reads === (resource === 'template' ? 2 : 6))
+          f.advance(121);
+        return false;
+      });
+      const start = f.logs.length;
+      await assert.rejects(
+        f.io.convergeFence(target, intent, {
+          authorize: async () => {
+            if (f.now() >= deadline) throw Error('lease expired');
+          },
+          confirm: async () => {},
+        }),
+        /lease expired/,
+      );
+      assert.equal(
+        f.logs.slice(start).some((l) => l[0] === 'PATCH'),
+        false,
+      );
+    });
+});
+
+test('real HTTP retirement completion cannot poison later growth recovery with old fence steps', async (t) => {
+  const f = await clusterFixture(t);
+  let retired = false;
+  for (let i = 0; i < 30; i++) {
+    f.advance();
+    for (const pod of f.pods.values()) if (pod.retirement.state === 'draining') pod.retirement.state = 'drained';
+    await f.tick();
+    if (f.replicas() === 2 && (await f.io.readJournal()).phase === 'complete') {
+      retired = true;
+      break;
+    }
+  }
+  assert.equal(retired, true);
+  assert.equal((await f.io.readJournal()).fence, null);
+  f.active(9);
+  let lost = false;
+  f.responseFailure((method, path) => {
+    if (!lost && method === 'PATCH' && path.endsWith('/scale')) {
+      lost = true;
+      return true;
+    }
+    return false;
+  });
+  await assert.rejects(f.tick(), /socket|reset|hang/i);
+  assert.equal((await f.io.readJournal()).phase, 'scaling');
+  const issued = f.logs.filter((entry) => entry[0] === 'PATCH' && entry[1].endsWith('/scale')).length;
+  assert.equal((await f.tick({ runner: 'growth-recovery' })).state, 'scale-observed');
+  assert.equal(f.logs.filter((entry) => entry[0] === 'PATCH' && entry[1].endsWith('/scale')).length, issued);
+});
+
+test('lost fence response plus journal cleanup outage preserves both failures and the live lease', async (t) => {
+  const f = await clusterFixture(t);
+  let lost = false,
+    cleanupFailed = false;
+  f.responseFailure((method, path) => {
+    if (!lost && method === 'PATCH' && path.includes('/statefulsets/')) {
+      lost = true;
+      return true;
+    }
+    return false;
+  });
+  f.fault((req, res) => {
+    if (lost && !cleanupFailed && req.method === 'GET' && req.url.includes('/configmaps/')) {
+      cleanupFailed = true;
+      res.writeHead(503);
+      res.end('{}');
+      return true;
+    }
+    return false;
+  });
+  for (let i = 0; i < 3; i++) {
+    await f.tick();
+    f.advance();
+  }
+  await assert.rejects(f.tick(), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.errors[0].message, /socket|reset|hang/i);
+    assert.match(error.errors[1].message, /503/);
+    return true;
+  });
+  const record = await f.io.readJournal();
+  assert.equal(record.phase, 'fencing');
+  assert.ok(record.leaseExpiresAt > f.now());
+  assert.equal((await f.tick({ runner: 'replacement-controller' })).state, 'leased');
+  f.advance(121);
+  assert.equal((await f.tick({ runner: 'replacement-controller' })).state, 'withdrawing');
+  assert.equal(f.logs.filter((entry) => entry[0] === 'PATCH' && entry[1].includes('/statefulsets/')).length, 1);
+  assert.equal(
+    f.logs.some((entry) => entry[0] === 'DELETE'),
     false,
   );
 });

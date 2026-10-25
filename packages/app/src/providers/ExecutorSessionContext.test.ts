@@ -1,12 +1,71 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { type ProjectId } from '@valerypopoff/rivet2-core';
+import { type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
 import { createExecutorSessionRegistry } from './ExecutorSessionContext.js';
 import { attachAndStartDesktopSidecarForRuntime } from '../hooks/executorSessionRuntimeResources.js';
 import { FakeWebSocket } from '../hooks/executorSessionTestUtils.js';
 import { bindExecutorSessionRun } from '../hooks/executorSessionRunReadiness.js';
 
 describe('ExecutorSessionRegistry', () => {
+  test(
+    'internal request display keeps its originating binding even if replacement precedes its first frame',
+    { timeout: 2000 },
+    async () => {
+      const original = globalThis.WebSocket;
+      globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+      FakeWebSocket.instances = [];
+      let lifetime = 'first';
+      const registry = createExecutorSessionRegistry({ onStateChange() {}, getProjectBindingLifetime: () => lifetime });
+      try {
+        const runtime = registry.getRuntime('a' as ProjectId);
+        await runtime.connectInternalHostedExecutor('ws://internal');
+        const socket = FakeWebSocket.instances.at(-1)!;
+        socket.open();
+        const pending = runtime.createPendingGraphExecution('request' as RemoteRunRequestId);
+        void pending.promise.catch(() => {});
+        runtime.setActiveGraphRunRequestId(pending.requestId);
+        lifetime = 'replacement';
+        runtime.setActiveGraphRunRequestId(pending.requestId); // Re-observing the request must not recapture a new owner.
+        const displays: boolean[] = [];
+        runtime.subscribeMessages((_message, _data, _request, admission) => {
+          displays.push(admission?.sourceDisplayAllowed !== false);
+        });
+        const execution = { projectId: 'a', rootRunId: 'root', graphRunId: 'graph', graphId: 'main' };
+        socket.emitMessage({
+          message: 'start',
+          requestId: pending.requestId,
+          data: {
+            execution,
+            project: { metadata: { id: 'a' } },
+            startGraph: { metadata: { id: 'main' }, nodes: [], connections: [] },
+          },
+        });
+        assert.deepEqual(displays, [false]);
+        socket.emitMessage({
+          message: 'done',
+          requestId: pending.requestId,
+          data: { execution, results: { value: { type: 'string', value: 'accepted result' } } },
+        });
+        assert.deepEqual(await pending.promise, { value: { type: 'string', value: 'accepted result' } });
+        assert.deepEqual(displays, [false, false]);
+        runtime.setActiveGraphRunRequestId('next' as RemoteRunRequestId);
+        socket.emitMessage({
+          message: 'start',
+          requestId: 'next',
+          data: {
+            execution: { ...execution, rootRunId: 'fresh' },
+            project: { metadata: { id: 'a' } },
+            startGraph: { metadata: { id: 'main' }, nodes: [], connections: [] },
+          },
+        });
+        assert.equal(displays.at(-1), true);
+        assert.deepEqual(socket.sent, [], 'display fencing neither retries nor aborts an accepted request');
+      } finally {
+        registry.disconnectAll();
+        globalThis.WebSocket = original;
+      }
+    },
+  );
   test('explicit bundle reconciliation removes moved members without merging debugger groups', async () => {
     const original = globalThis.WebSocket;
     globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;

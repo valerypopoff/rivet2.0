@@ -1,4 +1,5 @@
 import { GraphInvocationState, GraphSharedExecutionState } from './GraphExecutionState.js';
+import { resolveChildInvocationOwnership } from './ChildInvocationOwnership.js';
 import {
   planStreamingWatchTopology,
   planAsyncBranchTopology,
@@ -165,7 +166,6 @@ import type { SubGraphNode } from './nodes/SubGraphNode.js';
 import { MAX_CAUGHT_STREAMING_CHUNKS, type CatchStreamingChunksNode } from './nodes/CatchStreamingChunksNode.js';
 import { isEqual } from 'lodash-es';
 
-// eslint-disable-next-line import/no-cycle -- There has to be a cycle because CodeRunner needs to import the entirety of Rivet
 import { IsomorphicCodeRunner } from '../integrations/CodeRunner.js';
 
 /**
@@ -2103,6 +2103,9 @@ export class GraphProcessor {
             };
             const key = getSubgraphProjectKey(target);
             let resolved = this.#shared.subgraphTargetCache.get(key);
+            // Snapshot reuse is not permission reuse. A descendant can move
+            // bundles after the parent's discovery but before this child starts;
+            // keep this preflight ahead of any child-node side effects.
             if (resolved) await this.#run.context.subgraphProjectLoader?.validateTarget?.(target);
             if (!resolved) {
               if (!this.#run.context.subgraphProjectLoader) {
@@ -2726,7 +2729,6 @@ export class GraphProcessor {
   ): Promise<void> {
     const root = this.getRootProcessor();
     const sameGraphOwner = this.#sameGraphRunOwnerOverride ?? this;
-    const isRootGraphOrigin = !sameGraphOwner.#isSubProcessor;
     if (root.#run.abortController.signal.aborted) {
       throw createGraphAbortErrorFromSignal(root.#run.abortController.signal, 'Async branch aborted before it started');
     }
@@ -2747,31 +2749,8 @@ export class GraphProcessor {
       ),
       onCreated: onProcessorCreated,
     });
-    processor.#parent = sameGraphOwner;
-    processor.#abortOwnerOverride = root;
-    processor.#suppressGraphPartialOutputs = true;
-    processor.#suppressGraphLifecycleEvents = isRootGraphOrigin;
-    processor.#sharedRunStateOverride = {
-      attachedNodeData: this.#run.attachedNodeData,
-      graphInputNodeValues: this.#run.graphInputNodeValues,
-      // Async branches cannot contain Graph Output nodes. Keep their synthetic
-      // boundary outputs private so branch finalization cannot seed the root's
-      // derived cost output before the root has accumulated every path.
-      graphOutputs: {},
-    };
     const branchRunToNodeIds = this.runToNodeIds?.filter((nodeId) => plan.nodeIds.has(nodeId));
     processor.runToNodeIds = branchRunToNodeIds?.length ? branchRunToNodeIds : undefined;
-    processor.#executionIdentityOverride = isRootGraphOrigin
-      ? {
-          rootRunId: this.#run.rootRunId,
-          graphRunId: this.#run.graphRunId,
-          parentGraphRunId: this.#run.parentGraphRunId,
-        }
-      : {
-          rootRunId: root.#run.rootRunId,
-          graphRunId: nanoid() as GraphRunId,
-          parentGraphRunId: sameGraphOwner.#run.graphRunId,
-        };
     processor.preloadNodeData(triggerNode.id, triggerOutputs);
     processor.#suppressedPreloadedNodeIds.add(triggerNode.id);
 
@@ -3693,23 +3672,14 @@ export class GraphProcessor {
     }
 
     const branchGraphOutputs = createGraphOutputsOverlay(this.#run.graphOutputs);
-    const processor = this.#constructChildInvocation({ kind: 'continuation', graph: branchPlan.graph });
-    processor.#abortOwnerOverride = this.#abortOwnerOverride ?? this;
-    processor.#sameGraphRunOwnerOverride = this.#sameGraphRunOwnerOverride ?? this;
-    processor.#suppressGraphLifecycleEvents = true;
-    processor.#sharedRunStateOverride = {
-      attachedNodeData: this.#run.attachedNodeData,
-      graphInputNodeValues: this.#run.graphInputNodeValues,
+    const processor = this.#constructChildInvocation({
+      kind: 'continuation',
+      graph: branchPlan.graph,
       graphOutputs: branchGraphOutputs.view,
-    };
+    });
     const branchNodeIds = new Set(branchPlan.graph.nodes.map((node) => node.id));
     const branchRunToNodeIds = this.runToNodeIds?.filter((nodeId) => branchNodeIds.has(nodeId));
     processor.runToNodeIds = branchRunToNodeIds?.length ? branchRunToNodeIds : undefined;
-    processor.#executionIdentityOverride = {
-      rootRunId: this.#run.rootRunId,
-      graphRunId: this.#run.graphRunId,
-      parentGraphRunId: this.#run.parentGraphRunId,
-    };
 
     for (const [nodeId, outputs] of branchPlan.preloadedOutputs) {
       processor.preloadNodeData(nodeId, outputs);
@@ -4481,21 +4451,8 @@ export class GraphProcessor {
         kind: 'watch',
         graph: plan.graph,
         watchNodeId: plan.watchNode.id,
-      });
-      processor.#abortOwnerOverride = root;
-      processor.#suppressGraphPartialOutputs = true;
-      processor.#suppressGraphLifecycleEvents = true;
-      processor.#sharedRunStateOverride = {
-        // Repeated node IDs do not imply shared race/loop state between snapshots.
-        attachedNodeData: new Map(),
-        graphInputNodeValues: { ...this.#run.graphInputNodeValues },
-        graphOutputs: {},
-      };
-      processor.#executionIdentityOverride = {
-        rootRunId: root.#run.rootRunId,
         graphRunId: historyIteration.graphRunId,
-        parentGraphRunId: this.#run.graphRunId,
-      };
+      });
       processor.#streamingWatchInvocation = {
         plan,
         historyIteration,
@@ -4922,13 +4879,13 @@ export class GraphProcessor {
     });
   }
 
-  /** Common construction only. Aliases, execution identity and terminal commits
-   * remain explicit in each invocation path rather than a matrix of flags. */
+  /** One construction boundary applies the discriminated ownership contract;
+   * scheduling and terminal commits remain with their respective branch owner. */
   #constructChildInvocation(
     invocation:
       | { kind: 'subgraph'; project: Project; graphId: GraphId | undefined; initialExecutionPlan?: GraphExecutionPlan }
-      | { kind: 'continuation'; graph: NodeGraph }
-      | { kind: 'watch'; graph: NodeGraph; watchNodeId: NodeId }
+      | { kind: 'continuation'; graph: NodeGraph; graphOutputs: GraphOutputs }
+      | { kind: 'watch'; graph: NodeGraph; watchNodeId: NodeId; graphRunId: GraphRunId }
       | {
           kind: 'async';
           graph: NodeGraph;
@@ -4980,6 +4937,27 @@ export class GraphProcessor {
     processor.#graphCallPath = this.#graphCallPath;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
     processor.#executor = this.#executor;
+    if (!ordinary) {
+      const sameGraphOwner = this.#sameGraphRunOwnerOverride ?? this;
+      const ownership = resolveChildInvocationOwnership(invocation, {
+        parent: this,
+        root: this.getRootProcessor(),
+        abortOwner: this.#abortOwnerOverride ?? this,
+        sameGraphOwner,
+        rootGraphOrigin: !sameGraphOwner.#isSubProcessor,
+        run: this.#run,
+        rootIdentity: this.getRootProcessor().#run,
+        sameGraphIdentity: sameGraphOwner.#run,
+        newGraphRunId: () => nanoid() as GraphRunId,
+      });
+      processor.#parent = ownership.parent;
+      processor.#abortOwnerOverride = ownership.abortOwner;
+      processor.#sameGraphRunOwnerOverride = ownership.sameGraphOwner;
+      processor.#suppressGraphPartialOutputs = ownership.suppressPartialOutputs;
+      processor.#suppressGraphLifecycleEvents = ownership.suppressLifecycle;
+      processor.#sharedRunStateOverride = ownership.state;
+      processor.#executionIdentityOverride = ownership.identity;
+    }
     return processor;
   }
 

@@ -51,9 +51,15 @@ their disruption budgets during a Rivet upgrade.
 
 ## A consistent baseline precedes the first migration
 
-The release CLI's `--maintenance-cutover` moves directly from stopping old pods
-to installing/validating the candidate. It has **no backup-only checkpoint**.
-Do not interrupt a live command at an assumed phase or invent a prepare-only flag.
+Without an explicit maintenance plan, the release CLI's `--maintenance-cutover`
+moves directly from stopping old pods to installing/validating the candidate;
+operators must arrange the consistent recovery baseline first. The separately
+approved, same-schema `--maintenance-plan` path now runs a hash-pinned recovery
+adapter after quiescence and before installation. It is not a backup-only mode
+and does not apply to legacy adoption or schema changes. See
+[deployment operation contracts](deployment-operations.md) for its approval,
+data-isolation and exact-token recovery requirements. Do not interrupt a live
+command at an assumed phase or invent a prepare-only flag.
 
 HA adoption's temporary maintenance-validation overlay deliberately uses a
 singleton and zero proxy/web replicas. It must set `availability.gkeGateway=false`

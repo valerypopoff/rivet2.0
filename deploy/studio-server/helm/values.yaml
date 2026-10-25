@@ -37,6 +37,10 @@ images:
 replicaCount:
   proxy: 2
   web: 1
+  # Raising backend from 1 to 2 is not a safe shortcut to redundancy: the
+  # control-plane ownership mode and chart validation must also support it.
+  # In singleton-overlap mode, keep this at 1; only the recorded deployment
+  # operation may temporarily add a second backend for a coordinated upgrade.
   backend: 1
   execution: 2
   # Only rendered when hostedEvaluations.enabled=true. This is a bounded
@@ -138,6 +142,8 @@ autoscaling:
       limits: { cpu: 500m, memory: 256Mi }
   proxy:
     enabled: false
+    # Owned HA upgrades permit HPA growth while keeping every serving replica.
+    scaleDownPaused: false
     minReplicas: 2
     maxReplicas: 5
     targetCPUUtilizationPercentage: 75
@@ -411,6 +417,8 @@ ha:
   peerLimit: 9
   # Private release-helper CAS guards; do not set in operator values.
   rolloutResourceVersions: {}
+  # Required installation identity for opt-in singleton-overlap ownership.
+  namespaceUid: ''
 
 legacyRestore:
   enabled: true
@@ -484,6 +492,12 @@ resources:
     requests:
       cpu: 500m
       memory: 1Gi
+  # Combined developer API/executor plus an active maintenance-only API process.
+  # Temporary overlap reserves this envelope twice on the same node.
+  backendOverlap:
+    requests:
+      cpu: 750m
+      memory: 1536Mi
   execution:
     requests:
       cpu: 500m
@@ -498,6 +512,9 @@ resources:
 # acknowledgement that records why the limit is intentionally deferred pending
 # capacity evidence. Remove an acknowledgement when that resource limit is set.
 resourceLimitAcknowledgements:
+  backendOverlap:
+    memory: ''
+    ephemeralStorage: ''
   proxy:
     memory: ''
     ephemeralStorage: ''

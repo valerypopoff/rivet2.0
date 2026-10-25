@@ -43,7 +43,7 @@ export function tryRestoreStoredPortMap(
     return undefined;
   }
 
-  const restoredData: Partial<Record<PortId, DataValue>> = {};
+  const restoredEntries: Array<[PortId, DataValue]> = [];
 
   for (const [portId, storedValue] of Object.entries(data) as Array<[PortId, DataValueWithRefs | undefined]>) {
     if (storedValue == null) {
@@ -52,11 +52,11 @@ export function tryRestoreStoredPortMap(
 
     const restoredValue = tryRestoreStoredDataValue(storedValue, dataRefs);
     if (restoredValue) {
-      restoredData[portId] = restoredValue;
+      restoredEntries.push([portId, restoredValue]);
     }
   }
 
-  return Object.keys(restoredData).length > 0 ? (restoredData as Outputs) : undefined;
+  return restoredEntries.length > 0 ? (Object.fromEntries(restoredEntries) as Outputs) : undefined;
 }
 
 export function restoreStoredPortValue(

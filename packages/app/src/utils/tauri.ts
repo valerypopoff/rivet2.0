@@ -1,12 +1,5 @@
-import {
-  getClassifierProviderEnvironmentVariableNames,
-  resolveProcessSettings,
-  type RivetPlugin,
-  type RuntimeSettings,
-  type Settings,
-  type StringPluginConfigurationSpec,
-} from '@valerypopoff/rivet2-core';
-import { entries } from './typeSafety';
+import type { RivetPlugin, RuntimeSettings, Settings } from '@valerypopoff/rivet2-core';
+import { resolveEnvironmentSettings } from './resolveEnvironmentSettings';
 import { invokeNative, isInTauri as detectTauri } from './platform/core.js';
 import type { EnvironmentProvider, PathPolicyProvider } from '../providers/ProvidersContext.js';
 
@@ -67,108 +60,12 @@ export async function getEnvVar(name: string): Promise<string | undefined> {
   }
 }
 
-export async function fillMissingSettingsFromEnvironmentVariables(
+export function fillMissingSettingsFromEnvironmentVariables(
   settings: Partial<Settings>,
   plugins: RivetPlugin[],
-  optionsOrExtraEnvVarNames: string[] | { extraEnvVarNames?: string[]; environmentProvider?: EnvironmentProvider } = [],
+  options: string[] | { extraEnvVarNames?: string[]; environmentProvider?: EnvironmentProvider } = [],
 ): Promise<RuntimeSettings> {
-  const options = Array.isArray(optionsOrExtraEnvVarNames)
-    ? { extraEnvVarNames: optionsOrExtraEnvVarNames }
-    : optionsOrExtraEnvVarNames;
-  const environmentProvider = options.environmentProvider ?? getDefaultEnvironmentProvider();
-  // A key can be shared by chat, classifiers and plugins. Resolve it once per
-  // settings snapshot even when the injected provider has no cache of its own.
-  const lookups = new Map<string, Promise<string | undefined>>();
-  const getProviderEnvVar = (name: string) => {
-    let value = lookups.get(name);
-    if (!value) {
-      value = environmentProvider.getEnvVar(name);
-      lookups.set(name, value);
-    }
-    return value;
-  };
-  const resolveSetting = (value: string | undefined, envVarName: string) =>
-    value ? Promise.resolve(value) : getProviderEnvVar(envVarName);
-  const resolveSettingFromAnyEnv = async (value: string | undefined, envVarNames: string[]) => {
-    if (value) {
-      return value;
-    }
-
-    for (const envVarName of envVarNames) {
-      const envValue = await getProviderEnvVar(envVarName);
-      if (envValue) {
-        return envValue;
-      }
-    }
-
-    return undefined;
-  };
-  const pluginEnvVarNames = new Set<string>(getClassifierProviderEnvironmentVariableNames());
-
-  for (const plugin of plugins) {
-    const stringConfigs = entries(plugin.configSpec ?? {}).filter(([, c]) => c.type === 'string') as [
-      string,
-      StringPluginConfigurationSpec,
-    ][];
-    for (const [configName, config] of stringConfigs) {
-      if (config.pullEnvironmentVariable) {
-        const envVarName =
-          typeof config.pullEnvironmentVariable === 'string'
-            ? config.pullEnvironmentVariable
-            : config.pullEnvironmentVariable === true
-              ? configName
-              : undefined;
-        if (envVarName) {
-          pluginEnvVarNames.add(envVarName);
-        }
-      }
-    }
-  }
-
-  for (const envVarName of (options.extraEnvVarNames ?? []).map((name) => name.trim()).filter(Boolean)) {
-    pluginEnvVarNames.add(envVarName);
-  }
-
-  const [
-    openAiApiKey,
-    anthropicApiKey,
-    googleApiKey,
-    openRouterApiKey,
-    customAiApiKey,
-    openAiOrganization,
-    pluginEnvEntries,
-  ] = await Promise.all([
-    resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
-    resolveSetting(settings.anthropicApiKey, 'ANTHROPIC_API_KEY'),
-    resolveSetting(settings.googleApiKey, 'GOOGLE_GENERATIVE_AI_API_KEY'),
-    resolveSetting(settings.openRouterApiKey, 'OPENROUTER_API_KEY'),
-    resolveSettingFromAnyEnv(settings.customAiApiKey, ['CUSTOM_PROVIDER_API_KEY', 'CUSTOM_AI_API_KEY']),
-    resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
-    Promise.all(
-      [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
-    ),
-  ]);
-  const fullSettings: Settings = {
-    ...settings,
-    openAiApiKey: openAiApiKey ?? '',
-    openAiKey: openAiApiKey ?? '',
-    anthropicApiKey: anthropicApiKey ?? '',
-    googleApiKey: googleApiKey ?? '',
-    openRouterApiKey: openRouterApiKey ?? '',
-    customAiApiKey: customAiApiKey ?? '',
-    openAiOrganization: openAiOrganization ?? '',
-    openAiEndpoint: settings.openAiEndpoint ?? '',
-    pluginSettings: settings.pluginSettings,
-    pluginEnv: {},
-  };
-
-  for (const [envVarName, envVarValue] of pluginEnvEntries) {
-    if (envVarValue) {
-      fullSettings.pluginEnv![envVarName] = envVarValue;
-    }
-  }
-
-  return resolveProcessSettings(fullSettings);
+  return resolveEnvironmentSettings(settings, plugins, getDefaultEnvironmentProvider(), options);
 }
 
 export async function allowDataFileNeighbor(projectFilePath: string): Promise<void> {

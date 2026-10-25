@@ -5,7 +5,7 @@ import { constants as fsConstants } from 'node:fs';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { WorkflowDataBackend, WorkflowExecutionDefinition, WorkflowRecordingPageQuery } from './data-backend.js';
+import type { WorkflowRepositories, WorkflowExecutionDefinition, WorkflowRecordingPageQuery } from './data-backend.js';
 import {
   getWorkflowStorageServices,
   peekWorkflowStorageServices,
@@ -37,6 +37,7 @@ import type {
 import type {
   WorkflowRecordingExecutionIdentity,
   WorkflowRecordingRunsPageResponse,
+  WorkflowRecordingRunSummary,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
   WorkflowRunStatisticsQuery,
@@ -67,6 +68,7 @@ import {
   listWorkflowRecordingWorkflows,
   persistWorkflowExecutionRecording,
   readWorkflowRecordingArtifact,
+  getWorkflowRecordingSummary,
 } from './recordings.js';
 import { shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
 import {
@@ -215,7 +217,6 @@ export function getLocalWorkflowActiveWriteCount(): number {
 export function getLocalWorkflowPendingCatalogOperationCount(): number {
   return peekWorkflowStorageServices()?.getLocalPendingOperationCount() ?? 0;
 }
-const getDataBackend = () => getWorkflowStorageServices().getData();
 const getManagedBackend = () => getWorkflowStorageServices().getManaged();
 export async function getExplicitBundleService() {
   const services = getWorkflowStorageServices();
@@ -244,12 +245,13 @@ export async function listManagedReconciliationFindingDetailsWithBackend(
   return (await getManagedBackend()).listManagedReconciliationFindingDetails(query);
 }
 
-async function delegate<T>(
-  managedFn: (backend: WorkflowDataBackend) => Promise<T>,
+async function delegate<T, K extends keyof WorkflowRepositories>(
+  repository: K,
+  managedFn: (backend: WorkflowRepositories[K]) => Promise<T>,
   fsFn: () => Promise<T>,
 ): Promise<T> {
   if (usesDatabaseCatalog()) {
-    const backend = await getDataBackend();
+    const backend = await getWorkflowStorageServices().getRepository(repository);
     return managedFn(backend);
   }
 
@@ -263,11 +265,12 @@ const legacyCommands = createLegacyWorkflowCommands({
   getEvaluationStore,
 });
 
-async function delegateWithWorkflowsRoot<T>(
-  managedFn: (backend: WorkflowDataBackend) => Promise<T>,
+async function delegateWithWorkflowsRoot<T, K extends keyof WorkflowRepositories>(
+  repository: K,
+  managedFn: (backend: WorkflowRepositories[K]) => Promise<T>,
   fsFn: (root: string) => Promise<T>,
 ): Promise<T> {
-  return delegate(managedFn, async () => fsFn(await ensureWorkflowsRoot()));
+  return delegate(repository, managedFn, async () => fsFn(await ensureWorkflowsRoot()));
 }
 
 async function loadFilesystemWithMissingRootRetry<T>(load: (root: string) => Promise<T>): Promise<T> {
@@ -465,6 +468,7 @@ export async function initializeWorkflowStorage(): Promise<void> {
 
 export async function getWorkflowTree() {
   const tree = await delegate(
+    'projects',
     async (backend) => backend.getTree(),
     async () => {
       const root = isVmMigrationMaintenanceActive() ? getWorkflowsRoot() : await ensureWorkflowsRoot();
@@ -480,6 +484,7 @@ export async function getWorkflowTree() {
 
 export async function listHostedProjectPaths(): Promise<string[]> {
   return delegateWithWorkflowsRoot(
+    'projects',
     async (backend) => backend.listProjectPathsForHostedIo(),
     async (root) =>
       withFilesystemWorkflowStorageRead(async () => {
@@ -494,7 +499,8 @@ export async function listHostedProjectPaths(): Promise<string[]> {
 }
 
 export async function loadHostedProject(projectPath: string): Promise<LoadHostedProjectResult> {
-  return delegate<LoadHostedProjectResult>(
+  return delegate<LoadHostedProjectResult, 'projects'>(
+    'projects',
     async (backend) => backend.loadHostedProject(projectPath),
     async () => {
       try {
@@ -528,7 +534,8 @@ export async function saveHostedProject(options: {
   projectId?: ProjectId;
   saveIntent?: HostedProjectSaveIntent;
 }): Promise<SaveHostedProjectResult> {
-  return delegate<SaveHostedProjectResult>(
+  return delegate<SaveHostedProjectResult, 'projects'>(
+    'projects',
     async (backend) => backend.saveHostedProject(options),
     async () => {
       try {
@@ -643,7 +650,7 @@ export async function readManagedHostedText(filePath: string): Promise<string> {
     throw createHttpError(400, 'Managed workflow storage is disabled');
   }
 
-  return (await getDataBackend()).readHostedText(filePath);
+  return (await getWorkflowStorageServices().getRepository('projects')).readHostedText(filePath);
 }
 
 export async function managedHostedPathExists(filePath: string): Promise<boolean> {
@@ -651,7 +658,7 @@ export async function managedHostedPathExists(filePath: string): Promise<boolean
     return false;
   }
 
-  return (await getDataBackend()).hostedPathExists(filePath);
+  return (await getWorkflowStorageServices().getRepository('projects')).hostedPathExists(filePath);
 }
 
 export async function readManagedHostedRelativeProject(relativeFrom: string, projectFilePath: string): Promise<string> {
@@ -659,11 +666,15 @@ export async function readManagedHostedRelativeProject(relativeFrom: string, pro
     throw createHttpError(400, 'Managed workflow storage is disabled');
   }
 
-  return (await getDataBackend()).resolveManagedRelativeProjectText(relativeFrom, projectFilePath);
+  return (await getWorkflowStorageServices().getRepository('projects')).resolveManagedRelativeProjectText(
+    relativeFrom,
+    projectFilePath,
+  );
 }
 
 export async function listWorkflowRecordingWorkflowsWithBackend(): Promise<WorkflowRecordingWorkflowListResponse> {
   return delegateWithWorkflowsRoot(
+    'recordings',
     async (backend) => backend.listWorkflowRecordingWorkflows(),
     async (root) => listWorkflowRecordingWorkflows(root),
   );
@@ -685,6 +696,7 @@ export async function listWorkflowRecordingRunsPageWithBackend(
   const inputFilter = query.inputFilter ? structuredClone(query.inputFilter) : null;
   const runScope = query.runScope ?? (inputFilter ? 'roots' : 'all');
   return delegateWithWorkflowsRoot(
+    'recordings',
     async (backend) =>
       backend.listWorkflowRecordingRunsPage({
         workflowId,
@@ -733,6 +745,7 @@ export async function listWorkflowRunStatisticsCatalogWithBackend(
   surface: WorkflowRunStatisticsSurface,
 ): Promise<WorkflowRunStatisticsCatalogResponse> {
   return delegateWithWorkflowsRoot(
+    'recordings',
     async (backend) => backend.listWorkflowRunStatisticsCatalog(surface),
     async (root) => listWorkflowRunStatisticsCatalog(root, surface),
   );
@@ -742,6 +755,7 @@ export async function getWorkflowRunStatisticsWithBackend(
   query: WorkflowRunStatisticsQuery,
 ): Promise<WorkflowRunStatisticsResponse> {
   return delegateWithWorkflowsRoot(
+    'recordings',
     async (backend) => backend.getWorkflowRunStatistics(query),
     async (root) => getWorkflowRunStatistics(root, query),
   );
@@ -764,13 +778,25 @@ export async function readWorkflowRecordingArtifactWithBackend(
   artifact: 'recording' | 'replay-project' | 'replay-dataset',
 ): Promise<string> {
   return delegateWithWorkflowsRoot(
+    'recordings',
     async (backend) => backend.readWorkflowRecordingArtifact(recordingId, artifact),
     async (root) => readWorkflowRecordingArtifact(root, recordingId, artifact),
   );
 }
 
+export async function getWorkflowRecordingSummaryWithBackend(
+  recordingId: string,
+): Promise<WorkflowRecordingRunSummary> {
+  return delegateWithWorkflowsRoot(
+    'recordings',
+    async (backend) => backend.getWorkflowRecordingSummary(recordingId),
+    async (root) => getWorkflowRecordingSummary(root, recordingId),
+  );
+}
+
 export async function deleteWorkflowRecordingWithBackend(recordingId: string): Promise<void> {
   await delegateWithWorkflowsRoot(
+    'recordings',
     async (backend) => backend.deleteWorkflowRecording(recordingId),
     async (root) => deleteWorkflowRecording(root, recordingId),
   );
@@ -794,7 +820,8 @@ export async function moveWorkflowItemWithBackend(
   project?: WorkflowProjectItem;
   movedProjectPaths: WorkflowProjectPathMove[];
 }> {
-  return delegate<Awaited<ReturnType<typeof moveWorkflowItemWithBackend>>>(
+  return delegate<Awaited<ReturnType<typeof moveWorkflowItemWithBackend>>, 'projects'>(
+    'projects',
     async (backend) =>
       itemType === 'project'
         ? backend.moveWorkflowProject(sourceRelativePath, destinationFolderRelativePath)
@@ -808,6 +835,7 @@ export async function moveWorkflowItemWithBackend(
 
 export async function createWorkflowFolderItemWithBackend(name: string, parentRelativePath: string) {
   return delegate(
+    'projects',
     async (backend) => backend.createWorkflowFolderItem(name, parentRelativePath),
     () => legacyCommands.createWorkflowFolderItem(name, parentRelativePath),
   );
@@ -815,6 +843,7 @@ export async function createWorkflowFolderItemWithBackend(name: string, parentRe
 
 export async function renameWorkflowFolderItemWithBackend(relativePath: string, newName: string) {
   return delegate(
+    'projects',
     async (backend) => backend.renameWorkflowFolderItem(relativePath, newName),
     () => legacyCommands.renameWorkflowFolderItem(relativePath, newName),
   );
@@ -822,6 +851,7 @@ export async function renameWorkflowFolderItemWithBackend(relativePath: string, 
 
 export async function deleteWorkflowFolderItemWithBackend(relativePath: string) {
   return delegate(
+    'projects',
     async (backend) => backend.deleteWorkflowFolderItem(relativePath),
     () => legacyCommands.deleteWorkflowFolderItem(relativePath),
   );
@@ -829,6 +859,7 @@ export async function deleteWorkflowFolderItemWithBackend(relativePath: string) 
 
 export async function createWorkflowProjectItemWithBackend(folderRelativePath: string, name: string) {
   return delegate(
+    'projects',
     async (backend) => backend.createWorkflowProjectItem(folderRelativePath, name),
     () => legacyCommands.createWorkflowProjectItem(folderRelativePath, name),
   );
@@ -836,6 +867,7 @@ export async function createWorkflowProjectItemWithBackend(folderRelativePath: s
 
 export async function renameWorkflowProjectItemWithBackend(relativePath: string, newName: string) {
   return delegate(
+    'projects',
     async (backend) => backend.renameWorkflowProjectItem(relativePath, newName),
     () => legacyCommands.renameWorkflowProjectItem(relativePath, newName),
   );
@@ -846,6 +878,7 @@ export async function duplicateWorkflowProjectItemWithBackend(
   version: WorkflowProjectDownloadVersion,
 ) {
   return delegate(
+    'projects',
     async (backend) => backend.duplicateWorkflowProjectItem(relativePath, version),
     () => legacyCommands.duplicateWorkflowProjectItem(relativePath, version),
   );
@@ -857,6 +890,7 @@ export async function uploadWorkflowProjectItemWithBackend(
   contents: string,
 ) {
   return delegate(
+    'projects',
     async (backend) => backend.uploadWorkflowProjectItem(folderRelativePath, fileName, contents),
     () => legacyCommands.uploadWorkflowProjectItem(folderRelativePath, fileName, contents),
   );
@@ -867,6 +901,7 @@ export async function readWorkflowProjectDownloadWithBackend(
   version: WorkflowProjectDownloadVersion,
 ) {
   return delegate(
+    'projects',
     async (backend) => backend.readWorkflowProjectDownload(relativePath, version),
     () => legacyCommands.readWorkflowProjectDownload(relativePath, version),
   );
@@ -874,6 +909,7 @@ export async function readWorkflowProjectDownloadWithBackend(
 
 export async function readWorkflowProjectReferenceSnapshotsWithBackend(relativePath: string) {
   return delegate(
+    'projects',
     async (backend) => backend.readWorkflowProjectReferenceSnapshots(relativePath),
     () => legacyCommands.readWorkflowProjectReferenceSnapshots(relativePath),
   );
@@ -881,6 +917,7 @@ export async function readWorkflowProjectReferenceSnapshotsWithBackend(relativeP
 
 export async function listWorkflowProjectReferenceCatalogWithBackend() {
   return delegate(
+    'projects',
     async (backend) => backend.listWorkflowProjectReferenceCatalog(),
     () => legacyCommands.listWorkflowProjectReferenceCatalog(),
   );
@@ -890,6 +927,7 @@ export async function listWorkflowPublishedVersionsWithBackend(
   relativePath: string,
 ): Promise<WorkflowPublishedVersionsResponse> {
   return delegate(
+    'publications',
     async (backend) => backend.listWorkflowPublishedVersions(relativePath),
     () => legacyCommands.listWorkflowPublishedVersions(relativePath),
   );
@@ -897,6 +935,7 @@ export async function listWorkflowPublishedVersionsWithBackend(
 
 export async function readWorkflowPublishedVersionDownloadWithBackend(relativePath: string, versionId: string) {
   return delegate(
+    'publications',
     async (backend) => backend.readWorkflowPublishedVersionDownload(relativePath, versionId),
     () => legacyCommands.readWorkflowPublishedVersionDownload(relativePath, versionId),
   );
@@ -904,6 +943,7 @@ export async function readWorkflowPublishedVersionDownloadWithBackend(relativePa
 
 export async function readWorkflowPublishedVersionPreviewWithBackend(relativePath: string, versionId: string) {
   return delegate(
+    'publications',
     async (backend) => backend.readWorkflowPublishedVersionPreview(relativePath, versionId),
     () => legacyCommands.readWorkflowPublishedVersionPreview(relativePath, versionId),
   );
@@ -915,6 +955,7 @@ export async function setWorkflowPublishedVersionStarWithBackend(
   isStarred: boolean,
 ): Promise<WorkflowPublishedVersionSummary> {
   return delegate(
+    'publications',
     async (backend) => backend.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
     () => legacyCommands.setWorkflowPublishedVersionStar(relativePath, versionId, isStarred),
   );
@@ -926,6 +967,7 @@ export async function setWorkflowPublishedVersionCommentWithBackend(
   comment: string,
 ): Promise<WorkflowPublishedVersionSummary> {
   return delegate(
+    'publications',
     async (backend) => backend.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
     () => legacyCommands.setWorkflowPublishedVersionComment(relativePath, versionId, comment),
   );
@@ -937,6 +979,7 @@ async function restoreWorkflowPublishedVersionWithBackend(
   preconditions: WorkflowDraftPublicationPreconditions,
 ): Promise<WorkflowPublishedVersionRestoreResponse> {
   return delegate(
+    'publications',
     async (backend) => backend.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
     () => legacyCommands.restoreWorkflowPublishedVersion(relativePath, versionId, preconditions),
   );
@@ -948,6 +991,7 @@ async function publishWorkflowProjectItemWithBackend(
   preconditions: WorkflowDraftPublicationPreconditions,
 ) {
   return delegate(
+    'publications',
     async (backend) => backend.publishWorkflowProjectItem(relativePath, settings, preconditions),
     () => legacyCommands.publishWorkflowProjectItem(relativePath, settings, preconditions),
   );
@@ -959,6 +1003,7 @@ async function updateWorkflowEndpointAccessWithBackend(
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
+    'publications',
     async (backend) => backend.updateWorkflowEndpointAccess(relativePath, access, preconditions),
     () => legacyCommands.updateWorkflowEndpointAccess(relativePath, access, preconditions),
   );
@@ -968,6 +1013,7 @@ export async function listWorkflowProjectWebAppsWithBackend(
   relativePath: string,
 ): Promise<WorkflowProjectWebAppsResponse> {
   return delegate(
+    'publications',
     async (backend) => backend.listWorkflowProjectWebApps(relativePath),
     () => legacyCommands.listWorkflowProjectWebApps(relativePath),
   );
@@ -979,6 +1025,7 @@ async function publishWorkflowProjectWebAppsWithBackend(
   preconditions: WorkflowDraftPublicationPreconditions,
 ) {
   return delegate(
+    'publications',
     async (backend) => backend.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
     () => legacyCommands.publishWorkflowProjectWebApps(relativePath, publications, preconditions),
   );
@@ -990,6 +1037,7 @@ async function updateWorkflowProjectWebAppAccessWithBackend(
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
+    'publications',
     async (backend) => backend.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
     () => legacyCommands.updateWorkflowProjectWebAppAccess(relativePath, accessUpdates, preconditions),
   );
@@ -1001,6 +1049,7 @@ async function unpublishWorkflowProjectWebAppWithBackend(
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
+    'publications',
     async (backend) => backend.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
     () => legacyCommands.unpublishWorkflowProjectWebApp(relativePath, uiGraphId, preconditions),
   );
@@ -1011,6 +1060,7 @@ async function unpublishWorkflowProjectItemWithBackend(
   preconditions: WorkflowPublicationPreconditions,
 ) {
   return delegate(
+    'publications',
     async (backend) => backend.unpublishWorkflowProjectItem(relativePath, preconditions),
     () => legacyCommands.unpublishWorkflowProjectItem(relativePath, preconditions),
   );
@@ -1067,6 +1117,7 @@ export async function executeWorkflowPublicationCommandWithBackend(
 
 export async function deleteWorkflowProjectItemWithBackend(relativePath: string) {
   return delegate(
+    'projects',
     async (backend) => backend.deleteWorkflowProjectItem(relativePath),
     () => legacyCommands.deleteWorkflowProjectItem(relativePath),
   );
@@ -1077,7 +1128,10 @@ export async function resolvePublishedExecutionProject(
   requireFreshPointer = false,
 ): Promise<ExecutionProjectResult | null> {
   if (usesDatabaseCatalog()) {
-    return (await getDataBackend()).loadPublishedExecutionProject(endpointName, requireFreshPointer);
+    return (await getWorkflowStorageServices().getRepository('execution')).loadPublishedExecutionProject(
+      endpointName,
+      requireFreshPointer,
+    );
   }
 
   return withFilesystemWorkflowStorageRead(() =>
@@ -1089,7 +1143,7 @@ export async function resolvePublishedExecutionProject(
 
 export async function resolvePublishedWebAppExecutionProject(slug: string): Promise<ExecutionProjectResult | null> {
   if (usesDatabaseCatalog()) {
-    return (await getDataBackend()).loadPublishedWebAppExecutionProject(slug);
+    return (await getWorkflowStorageServices().getRepository('execution')).loadPublishedWebAppExecutionProject(slug);
   }
 
   return withFilesystemWorkflowStorageRead(() =>
@@ -1099,7 +1153,7 @@ export async function resolvePublishedWebAppExecutionProject(slug: string): Prom
 
 export async function resolveLatestWebAppExecutionProject(slug: string): Promise<ExecutionProjectResult | null> {
   if (usesDatabaseCatalog()) {
-    return (await getDataBackend()).loadLatestWebAppExecutionProject(slug);
+    return (await getWorkflowStorageServices().getRepository('execution')).loadLatestWebAppExecutionProject(slug);
   }
 
   return withFilesystemWorkflowStorageRead(() =>
@@ -1113,7 +1167,9 @@ export async function resolveWebAppAccessPolicy(
   expectedProjectVirtualPath?: string,
 ): Promise<WebAppAccessPolicy | null> {
   if (getWorkflowStorageServices().mode === 'sqlite') {
-    const policy = await (await getDataBackend()).resolveWebAppAccessPolicy(slug);
+    const policy = await (
+      await getWorkflowStorageServices().getRepository('execution')
+    ).resolveWebAppAccessPolicy(slug);
     return policy == null
       ? null
       : {
@@ -1147,7 +1203,10 @@ export async function resolveLatestExecutionProject(
   requireFreshPointer = false,
 ): Promise<ExecutionProjectResult | null> {
   if (usesDatabaseCatalog()) {
-    return (await getDataBackend()).loadLatestExecutionProject(endpointName, requireFreshPointer);
+    return (await getWorkflowStorageServices().getRepository('execution')).loadLatestExecutionProject(
+      endpointName,
+      requireFreshPointer,
+    );
   }
 
   return withFilesystemWorkflowStorageRead(() =>
@@ -1158,7 +1217,8 @@ export async function resolveLatestExecutionProject(
 }
 
 export async function createExecutionProjectReferenceLoader(projectPath: string) {
-  return delegate<ProjectReferenceLoader>(
+  return delegate<ProjectReferenceLoader, 'execution'>(
+    'execution',
     async (backend) => backend.createProjectReferenceLoader(),
     async () => {
       const loader = createPublishedWorkflowProjectReferenceLoader(getWorkflowsRoot(), projectPath);
@@ -1174,12 +1234,14 @@ export function createExecutionSubgraphProjectLoader() {
   return {
     async validateTarget(target: SubgraphProjectTarget): Promise<void> {
       await delegate(
+        'execution',
         async (backend) => backend.validateSubgraphTarget?.(target),
         async () => {},
       );
     },
     async loadTarget(target: SubgraphProjectTarget): Promise<ResolvedSubgraphProject> {
       return delegate(
+        'execution',
         async (backend) => backend.loadSubgraphTarget(target),
         async () =>
           withFilesystemWorkflowStorageRead(async () => {
@@ -1249,7 +1311,9 @@ export async function persistWorkflowExecutionRecordingWithBackend(options: {
   // must honor the same server-side dataset retention policy.
   const permittedOptions = shouldSnapshotWorkflowRecordingDatasets() ? options : { ...options, executedDatasets: [] };
   if (usesDatabaseCatalog()) {
-    return await (await getDataBackend()).persistWorkflowExecutionRecording(permittedOptions);
+    return await (
+      await getWorkflowStorageServices().getRepository('recordings')
+    ).persistWorkflowExecutionRecording(permittedOptions);
   }
 
   return await persistWorkflowExecutionRecording({ workflowsRoot: getWorkflowsRoot(), ...permittedOptions });

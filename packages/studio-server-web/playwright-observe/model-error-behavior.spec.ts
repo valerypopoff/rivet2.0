@@ -66,7 +66,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     const outputLabels =
       type === 'llmChatV2'
         ? ['Reasoning', 'Usage details', 'LLM attempts', 'Request body', 'Response body']
-        : ['Usage details', 'Request body', 'Response body', 'Classifier attempts'];
+        : ['Usage details', 'Request body', 'Response body', 'Decision AI attempts'];
     for (const label of outputLabels) {
       await expect(outputControls.getByText(label, { exact: true })).toBeVisible();
     }
@@ -76,7 +76,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
       const modelContent = modelSection
         .locator('xpath=ancestor::div[@class="Collapsible"][1]')
         .locator(':scope > .Collapsible__contentOuter');
-      const modelField = editor.getByRole('textbox', { name: 'Model', exact: true });
+      const modelField = editor.getByRole('textbox', { name: 'Custom model', exact: true });
       const keyName = editor.getByRole('textbox', { name: 'Programmatic API key name', exact: true });
       const modelInput = editor.getByRole('button', { name: 'Use an input port for Model', exact: true });
       await expect(modelSection).toHaveAttribute('aria-expanded', 'true');
@@ -88,6 +88,10 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
       await expect.poll(() => modelContent.evaluate((element) => (element as HTMLElement).style.height)).toBe('auto');
       await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/\bhas-unsaved-changes\b/);
       expect(saved).toHaveLength(0);
+      const modelSelector = editor.getByRole('combobox', { name: 'Model', exact: true });
+      await modelSelector.fill('Custom model…');
+      await editor.getByText('Custom model…', { exact: true }).last().click();
+      await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/\bhas-unsaved-changes\b/);
       await modelField.fill('jev-grouped-model');
       await keyName.fill('groupedApiKey');
       await expect(card).toContainText('Model: jev-grouped-model');
@@ -142,7 +146,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
     await expect(card).not.toContainText('Throw on non-2XX:');
     await editor.getByText('Catch all exceptions', { exact: true }).click();
     await expect(card).not.toContainText('Catch all exceptions:');
-    // Classifier failure ports are opt-in via Catch; LLM also exposes them when
+    // Decision AI failure ports are opt-in via Catch; LLM also exposes them when
     // HTTP failures are suppressed. Preserve their existing runtime contracts.
     if (type === 'classifierEvaluate') await expect(card.getByText('Run failed', { exact: true })).toHaveCount(0);
     else await expect(card.getByText('Run failed', { exact: true })).toBeVisible();
@@ -208,7 +212,7 @@ for (const type of ['llmChatV2', 'classifierEvaluate'] as const) {
       const modelSection = editor.getByRole('button', { name: 'Model', exact: true }).and(editor.locator('button'));
       await expect(modelSection).toHaveAttribute('aria-expanded', 'false');
       await modelSection.click();
-      await expect(editor.getByRole('textbox', { name: 'Model', exact: true })).toHaveValue('jev-grouped-model');
+      await expect(editor.getByRole('textbox', { name: 'Custom model', exact: true })).toHaveValue('jev-grouped-model');
       await expect(editor.getByRole('textbox', { name: 'Programmatic API key name', exact: true })).toHaveValue(
         'groupedApiKey',
       );

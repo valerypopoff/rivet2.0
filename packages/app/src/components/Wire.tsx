@@ -10,7 +10,7 @@ import { useAtomValue } from 'jotai';
 import clsx from 'clsx';
 import { ErrorBoundary } from 'react-error-boundary';
 import { nodeByIdState } from '../state/graph';
-import { type PortPositions } from './NodeCanvas';
+import { getConnectionCacheKeys, getNodePortPosition, type PortPositions } from './nodeCanvas/wireEndpoints.js';
 import {
   getNormalOffsetWirePoints,
   getNormalOffsetWirePath,
@@ -121,18 +121,8 @@ export const ConditionallyRenderWire: FC<WireProps> = ({
         if (isBidirectionalToolContinuation) {
           return (
             <Fragment key={`tool-continuation-wire-segment-${index}`}>
-              <Wire
-                {...wireProps}
-                normalOffset={-2}
-                normalOffsetPath
-                toolContinuationPaired
-              />
-              <Wire
-                {...wireProps}
-                normalOffset={2}
-                normalOffsetPath
-                toolContinuationPaired
-              />
+              <Wire {...wireProps} normalOffset={-2} normalOffsetPath toolContinuationPaired />
+              <Wire {...wireProps} normalOffset={2} normalOffsetPath toolContinuationPaired />
             </Fragment>
           );
         }
@@ -499,46 +489,3 @@ const WireInteractionTarget: FC<{
 );
 
 WireInteractionTarget.displayName = 'WireInteractionTarget';
-
-export function getNodePortPosition(
-  node: ChartNode,
-  portId: PortId,
-  cacheKey: string,
-  portPositions: PortPositions,
-): { x: number; y: number } {
-  if (!node) {
-    return { x: 0, y: 0 };
-  }
-
-  if (portId) {
-    const portPosition = portPositions[cacheKey];
-    if (portPosition) {
-      return { x: portPosition.x, y: portPosition.y };
-    } else {
-      return {
-        x: node.visualData.x + 100,
-        y: node.visualData.y + 100,
-      };
-    }
-  }
-
-  return { x: 0, y: 0 };
-}
-
-const cacheKeysByConnection = new WeakMap<NodeConnection, readonly [string, string]>();
-
-export function getConnectionCacheKeys(connection: NodeConnection): readonly [string, string] {
-  const cached = cacheKeysByConnection.get(connection);
-  if (cached) {
-    return cached;
-  }
-
-  const cacheKeys = [
-    `${connection.outputNodeId}-output-${connection.outputId}`,
-    `${connection.inputNodeId}-input-${connection.inputId}`,
-  ] as const;
-
-  cacheKeysByConnection.set(connection, cacheKeys);
-
-  return cacheKeys;
-}

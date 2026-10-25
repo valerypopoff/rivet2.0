@@ -19,6 +19,7 @@ import Button from '@atlaskit/button';
 import { isNotNull } from '../utils/genericUtilFunctions.js';
 import { ErrorBoundary } from 'react-error-boundary';
 import { currentProjectLoadedRecordingState } from '../state/execution.js';
+import { getRecordingPresentation } from '../utils/recordingPresentation.js';
 import { useGraphHistoryNavigation } from '../hooks/useGraphHistoryNavigation';
 import { entries } from '../utils/typeSafety';
 import { useGraphBuilderContextMenuHandler } from '../hooks/useGraphBuilderContextMenuHandler';
@@ -77,7 +78,7 @@ const Container = styled.div`
     bottom: 0;
     pointer-events: none;
     z-index: 500;
-    box-shadow: inset 0 0 2px 3px var(--warning-dark);
+    box-shadow: inset 0 0 2px 3px var(--recording-color, var(--warning));
   }
 
   .read-only-border {
@@ -136,6 +137,10 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
   const recordingsEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'recordings');
   const loadedRecordingForProject = useAtomValue(currentProjectLoadedRecordingState);
   const loadedRecording = recordingsEnabled ? loadedRecordingForProject : undefined;
+  const recordingPresentation = useMemo(
+    () => (loadedRecording ? getRecordingPresentation(loadedRecording) : undefined),
+    [loadedRecording],
+  );
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
   const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
@@ -238,7 +243,13 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
           onNodeStartEditing={nodeStartEditing}
           onContextMenuItemSelected={contextMenuHandler}
         />
-        {loadedRecording && overlay === undefined && <div className="recording-border" />}
+        {recordingPresentation && overlay === undefined && (
+          <div
+            className="recording-border"
+            data-recording-status={recordingPresentation.status}
+            style={{ '--recording-color': recordingPresentation.color } as React.CSSProperties}
+          />
+        )}
         {isReadOnly && <div className="read-only-border" />}
         {overlay === undefined && <NodeEditorRenderer />}
         {firstNodeQuestions && firstNodeQuestions.length > 0 && (

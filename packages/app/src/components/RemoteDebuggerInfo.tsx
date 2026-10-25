@@ -15,11 +15,12 @@ export function RemoteDebuggerInfo({ connected }: { connected: boolean }) {
   const observations = useAtomValue(currentRemoteObservationsState);
   const projectId = useAtomValue(projectState).metadata.id;
   const notices = useAtomValue(remoteObservationNoticesState);
+  const notice = Object.hasOwn(notices, projectId) ? notices[projectId] : undefined;
   const opened = useAtomValue(projectsState).openedProjects;
   useAtomValue(executorSessionRevisionState);
   const registry = useExecutorSessionRegistry();
   const activate = useLoadProject();
-  if (!connected && !observations.length && !notices[projectId]) return null;
+  if (!connected && !observations.length && !notice) return null;
   const sources = [...new Map(observations.map((item) => [item.sourceProjectId, item])).values()];
   const blocked = observations.every((item) => item.status === 'blocked');
   return (
@@ -81,7 +82,7 @@ export function RemoteDebuggerInfo({ connected }: { connected: boolean }) {
                 {[...new Set(observations.map((item) => item.message).filter(Boolean))].map((message) => (
                   <div key={message}>{message}</div>
                 ))}
-                {notices[projectId] && <div>{notices[projectId]}</div>}
+                {notice && <div>{notice}</div>}
                 {sources.map(
                   (item) =>
                     opened[item.sourceProjectId] && (

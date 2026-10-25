@@ -2,16 +2,18 @@ import type { Inputs } from '../GraphProcessor.js';
 import { createInterpolationInputDefinition } from '../interpolationInputDefinition.js';
 import type { NodeInputDefinition, PortId } from '../NodeBase.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
+import type { DataValue } from '../DataValue.js';
 import {
   extractInterpolationVariableReferences,
   getInterpolationGlobalValues,
   interpolate,
 } from '../../utils/interpolation.js';
 import { interpolateJsonTemplate } from '../nodes/ObjectNode.js';
-import type { ClassifierEntry, ClassifierEntryEditorType } from './types.js';
+import type { ClassifierEntry, ClassifierEntryEditorType, ClassifierQuestionDefinition } from './types.js';
 import { assertClassifierEntry, classifierDataProperty } from './json.js';
 import type { ClassifierQuestionPreparation } from './preparation.js';
 import { checkClassifierJsonWork } from './limits.js';
+import { normalizeClassifierState } from './state.js';
 export { assertClassifierEntry, assertClassifierInstructions } from './json.js';
 
 export type ClassifierQuestionBaseData = {
@@ -29,11 +31,33 @@ export function getInstructionsInputDefinition(): NodeInputDefinition {
   return {
     id: 'instructions' as PortId,
     title: 'Instructions',
-    dataType: STRUCTURED_ENTRY_TYPES,
+    dataType: [...STRUCTURED_ENTRY_TYPES, 'string[]', 'image', 'image[]', 'chat-message', 'chat-message[]'],
     required: true,
     splitRunBehavior: 'preserve-array',
-    description: 'String or JSON structure describing the independent question.',
+    description: 'Text/JSON, an image, or assembled User messages. Question images require Jev or OpenAI.',
   };
+}
+
+/** Reuse State's bounded native-image/message normalization, without promoting content to shared State. */
+export function getQuestionInstructionsInput(
+  inputs: Inputs,
+  preparation: ClassifierQuestionPreparation,
+): Pick<ClassifierQuestionDefinition, 'instructions' | 'instructionsMessages'> {
+  const input = classifierDataProperty(inputs, 'instructions', 'Instructions') as DataValue | undefined;
+  if (!input) throw new Error('Instructions input is required.');
+  const normalized = normalizeClassifierState(input, preparation.check);
+  if (
+    normalized.stateMessages &&
+    (input.type !== 'string[]' ||
+      normalized.stateMessages.some(({ parts }) => parts.some((part) => part.type === 'image')))
+  )
+    return { instructions: '', instructionsMessages: normalized.stateMessages };
+  if (input.type === 'image[]' || input.type === 'chat-message[]')
+    throw new Error('Instructions must not contain empty image or User-message arrays.');
+  if (!normalized.stateMessages) return { instructions: normalized.state as ClassifierEntry };
+  // Keep legacy JSON/list semantics; image-looking fields in an Object remain ordinary data.
+  // Only text-only String Array needs its original list representation, not message flattening.
+  return { instructions: getStructuredInput(inputs, 'instructions', 'Instructions') };
 }
 
 export function getCriteriaInputDefinition(dataTypes: NodeInputDefinition['dataType']): NodeInputDefinition {

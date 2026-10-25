@@ -31,7 +31,12 @@ const context = {
   executor: 'nodejs',
   signal: new AbortController().signal,
   settings: {
-    classifierProviders: { openai: { apiKey: 'test' }, liquid: { apiKey: 'test' }, jev: { apiKey: 'test' } },
+    classifierProviders: {
+      openai: { apiKey: 'test' },
+      liquid: { apiKey: 'test' },
+      jev: { apiKey: 'test' },
+      perplexity: { apiKey: 'test' },
+    },
   },
 } as InternalProcessContext;
 
@@ -371,7 +376,7 @@ test('Serialization hooks and disappearing question image fields cannot replace 
   assert.equal(calls, 0);
 });
 
-test('State preparation consumes the node timeout before any provider request', async () => {
+test('State preparation ignores removed node timeout values', async () => {
   const originalNow = Date.now;
   const originalFetch = globalThis.fetch;
   let now = 1000;
@@ -383,19 +388,23 @@ test('State preparation consumes the node timeout before any provider request', 
   };
   globalThis.fetch = async () => {
     calls++;
-    throw new Error('Unexpected network');
+    now += 600_000;
+    return Response.json({
+      model: 'gpt-6-luna',
+      answers: [{ name: 'q', type: 'predicate', probability: 0.8 }],
+      usage: { input_tokens: 1, output_tokens: 0 },
+    });
   };
   const state: DataValue = { type: 'image', value: native() };
   const node = ClassifierEvaluateNodeImpl.create();
   try {
-    await assert.rejects(
-      new ClassifierEvaluateNodeImpl({
-        ...node,
-        data: { ...node.data, provider: 'openai', timeoutMs: 100 },
-      }).process({ state, question1: { type: 'object[]', value: questions } }, context),
-      /timed out after 100 ms/,
+    Object.assign(node.data, { provider: 'openai', timeoutMs: 100 });
+    const result = await new ClassifierEvaluateNodeImpl(node).process(
+      { state, question1: { type: 'object[]', value: questions } },
+      context,
     );
-    assert.equal(calls, 0);
+    assert.equal(result.answers?.type, 'object');
+    assert.equal(calls, 1);
   } finally {
     Date.now = originalNow;
     globalThis.fetch = originalFetch;
@@ -450,6 +459,12 @@ test('Provider deadlines may shorten but never extend the timeout and reject non
 
 for (const combiner of ['Array', 'Assemble Prompt'] as const) {
   test(`A complete ${combiner} graph preserves mixed State without split runs and rejects removed Images wires`, async () => {
+    // Header-only fixture: one common image within all four providers' limits.
+    const graphImage = native();
+    const dimensions = new DataView(graphImage.data.buffer);
+    dimensions.setUint32(16, 280);
+    dimensions.setUint32(20, 280);
+    const graphImageUrl = `data:image/png;base64,${Buffer.from(graphImage.data).toString('base64')}`;
     const input = (id: string, dataType: string) => {
       const node = GraphInputNodeImpl.create();
       return { ...node, data: { ...node.data, id, dataType } };
@@ -531,7 +546,14 @@ for (const combiner of ['Array', 'Assemble Prompt'] as const) {
               answers: [{ name: 'q', type: 'predicate', probability: 0.8 }],
               usage: { input_tokens: 1, output_tokens: 0 },
             }
-          : { model: 'd1', answers: { q: { type: 'noul', noul: 0.8 } }, usage: { input_tokens: 1, output_tokens: 0 } },
+          : {
+              model:
+                evaluate.data.provider === 'jev'
+                  ? 'jev-1.14.0'
+                  : getClassifierProvider(evaluate.data.provider).defaultModel,
+              answers: { q: { type: 'noul', noul: 0.8 } },
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
       );
     };
     let nodeError = '';
@@ -546,7 +568,7 @@ for (const combiner of ['Array', 'Assemble Prompt'] as const) {
           text: { type: 'string', value: 'Caption' },
           candidate: { type: 'string', value: 'Candidate' },
           role: { type: 'string', value: messageRole },
-          image: { type: 'image', value: native() },
+          image: { type: 'image', value: graphImage },
           questions: { type: 'object[]', value: questions },
         },
       );
@@ -558,22 +580,39 @@ for (const combiner of ['Array', 'Assemble Prompt'] as const) {
           role: 'user',
           content: [
             { type: 'input_text', text: 'Caption' },
-            { type: 'input_image', image_url: url },
+            { type: 'input_image', image_url: graphImageUrl },
           ],
         },
         {
           role: 'user',
           content: [
             { type: 'input_text', text: 'Candidate' },
-            { type: 'input_image', image_url: url },
+            { type: 'input_image', image_url: graphImageUrl },
           ],
         },
       ]);
       evaluate.data.provider = 'liquid';
       const liquid = await run();
       assert.equal((liquid.request!.value as any).state, 'Caption\n[Image 1]\n\nCandidate\n[Image 2]');
-      assert.deepEqual((liquid.request!.value as any).images, [url, url]);
-      for (const provider of ['openai', 'liquid', 'jev']) {
+      assert.deepEqual((liquid.request!.value as any).images, [graphImageUrl, graphImageUrl]);
+      evaluate.data.provider = 'jev';
+      const jev = (await run()).request!.value as any;
+      const [reference] = Object.keys(jev.assets);
+      assert.equal(Object.keys(jev.assets).length, 1);
+      assert.equal(jev.state, `Caption\n${reference}\n\nCandidate\n${reference}`);
+      assert.equal(jev.assets[reference!].data_base64, graphImageUrl.split(',')[1]);
+      evaluate.data.provider = 'perplexity';
+      const perplexity = (await run()).request!.value as any;
+      assert.deepEqual(perplexity.state, [
+        'Caption',
+        '\n',
+        { type: 'image_url', image_url: { url: graphImageUrl } },
+        '\n\n',
+        'Candidate',
+        '\n',
+        { type: 'image_url', image_url: { url: graphImageUrl } },
+      ]);
+      for (const provider of ['openai', 'liquid', 'jev', 'perplexity']) {
         evaluate.data.provider = provider;
         for (const unsupportedRole of ['system', 'developer', 'assistant', 'function']) {
           await assert.rejects(run(unsupportedRole), /failed to process/);
@@ -583,7 +622,7 @@ for (const combiner of ['Array', 'Assemble Prompt'] as const) {
       graph.connections.push(wire(image.id, 'data', evaluate.id, 'images'));
       await assert.rejects(run(), /failed to process/);
       assert.match(nodeError, /Connect images.*State/);
-      assert.equal(calls, 2);
+      assert.equal(calls, 4);
     } finally {
       globalThis.fetch = original;
     }
@@ -607,16 +646,17 @@ test('Provider-specific image count, complete UTF-8 request bytes, dimensions an
   const content = (count: number) => [
     { parts: Array.from({ length: count }, () => ({ type: 'image' as const, dataUrl: url })) },
   ];
-  await assert.rejects(
-    getClassifierProvider('liquid').evaluate({ ...args, model: 'd1', stateMessages: content(9) }),
-    /at most 8/,
-  );
+  for (const model of ['d1', 'd1.1'])
+    await assert.rejects(
+      getClassifierProvider('liquid').evaluate({ ...args, model, stateMessages: content(9) }),
+      /at most 8/,
+    );
   await assert.rejects(
     getClassifierProvider('openai').evaluate({ ...args, model: 'gpt-6-luna', stateMessages: content(129) }),
     /at most 128/,
   );
   await assert.rejects(
-    getClassifierProvider('jev').evaluate({ ...args, model: 'jev-latest', stateMessages: content(1) }),
+    getClassifierProvider('jev').evaluate({ ...args, model: 'jev-1.15.0', stateMessages: content(1) }),
     /does not support/,
   );
   await assert.rejects(
@@ -756,7 +796,7 @@ test('Text-only user messages work for Jev and multimodal failures use ordinary 
       context,
     );
     assert.equal(output.runFailed?.value, true);
-    assert.match(String(output.runError?.value), /does not support classifier images/);
+    assert.match(String(output.runError?.value), /280 and 1568/);
     assert.equal(output.answers?.type, 'control-flow-excluded');
   } finally {
     globalThis.fetch = original;

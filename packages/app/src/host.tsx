@@ -98,6 +98,7 @@ export function RivetAppHost({
 
 export { RivetApp } from './components/RivetApp.js';
 export { RivetAppLoader } from './components/RivetAppLoader.js';
+export type { DebuggerConnectionPolicy } from './utils/debuggerConnectionSettings.js';
 export {
   ExecutorSessionProvider,
   useExecutorSessionHostConfig,
@@ -125,10 +126,12 @@ export {
   type EnvironmentProvider,
   type LLMProfileHealthAdminProvider,
   type PathPolicyProvider,
+  type ProjectActivationPolicy,
   type ProviderOverrides,
   type Providers,
 } from './providers/ProvidersContext.js';
 export type { EvaluationRunStore, EvaluationStore } from '@valerypopoff/rivet2-evaluations';
+export type { OpenedProjectSynchronizationPolicy } from './utils/openedProjectSynchronization.js';
 export {
   BrowserStaticDataStore,
   MemoryStaticDataStore,

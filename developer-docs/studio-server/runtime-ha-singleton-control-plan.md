@@ -1,9 +1,20 @@
 # Plan: HA runtime consolidation and drain-aware autoscaling
 
-Status: **10-pod bridge functionally verified locally; compact six-application-pod profile and independent autoscaler implemented with local regression coverage; seven-pod autoscaling baseline still awaiting exact-image/provider qualification; not deployed**.
+Follow-on implementation: [uninterrupted developer-backend planned upgrades](developer-backend-overlap.md)
+introduces opt-in `singleton-overlap`, one in-pod kernel-exclusive housekeeping
+worker and a temporary second backend on the same node. The serial `singleton`
+behavior and historical evidence in this document remain unchanged; the extension
+needs its own local/provider evidence and serial bridge adoption.
+
+Status: **Implemented with local regression coverage. One production installation uses the compact six-application-pod layout plus an independent autoscaler (seven baseline pods), admitted through an explicit maintenance qualification waiver. Exact-image/provider qualification remains incomplete; deployment under a waiver is not zero-downtime certification.**
 No GCP changes, paid rehearsal, image publication or production rollout are
 authorized by this document. Existing HA and local development behavior remain
 the defaults; this profile requires explicit selection and qualification.
+
+See [deployment operations](deployment-operations.md) for the supported, narrowly
+scoped maintenance exception and its frozen recovery checkpoint. Historical
+experiment results below remain unchanged; they do not become certificates
+because an operator accepted maintenance interruption.
 
 The [qualification publication sequence](runtime-ha-qualification.md) keeps
 post-build provider evidence bound to the original candidate without rebuilding

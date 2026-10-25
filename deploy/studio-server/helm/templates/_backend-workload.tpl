@@ -172,6 +172,20 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- if eq .Values.ha.controlPlane.mode "singleton-overlap" }}
+            - name: RIVET_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: RIVET_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: RIVET_NAMESPACE_UID
+              value: {{ .Values.ha.namespaceUid | quote }}
+            - name: RIVET_HOUSEKEEPING_PORT
+              value: "8093"
+            {{- end }}
             - name: RIVET_HA_BACKEND_NAME
               value: {{ include "rivet.backendName" . | quote }}
             - name: RIVET_HA_PEER_LIMIT
@@ -196,7 +210,7 @@ spec:
             - name: project-bundles
               mountPath: /data/project-bundles
           resources:
-{{ toYaml .Values.resources.backend | nindent 12 }}
+{{ toYaml (ternary .Values.resources.backendOverlap .Values.resources.backend (eq .Values.ha.controlPlane.mode "singleton-overlap")) | nindent 12 }}
         {{- end }}
         {{- if eq .Values.deploymentProfile "single-machine" }}
         {{- if gt (int .Values.replicaCount.web) 0 }}
@@ -210,7 +224,7 @@ spec:
         {{- end }}
         {{- end }}
       volumes:
-        {{- if and (or (not .Values.ha.enabled) (default false .haMaintenance) (eq .Values.ha.controlPlane.mode "singleton")) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
+        {{- if and (or (not .Values.ha.enabled) (default false .haMaintenance) (has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap"))) .Values.legacyRestore.enabled (eq .Values.workflowStorage.backend "managed") (not .Values.compatibility.legacyStartupSettingsFiles) }}
         - name: legacy-restore
           persistentVolumeClaim:
             claimName: {{ include "rivet.fullname" . }}-legacy-restore

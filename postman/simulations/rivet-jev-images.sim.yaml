@@ -1,0 +1,7 @@
+simulation: rivet-jev-images
+routing: path
+mocks:
+  - routeKey: jev
+    path: ../mocks/typesafe-jev/config.yaml
+  - routeKey: openai
+    path: ../mocks/openai-decisions/config.yaml

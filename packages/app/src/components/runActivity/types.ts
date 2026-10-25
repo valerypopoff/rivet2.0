@@ -119,6 +119,17 @@ export interface RunActivityViewModel {
   partialReason?: string;
 }
 
+/** Small UI preferences only; never execution payloads or derived rows. */
+export interface RunActivityDrawerViewState {
+  filter: RunActivityFilter;
+  graphFilter: string;
+  query: string;
+  filtersOpen: boolean;
+  followLive: boolean;
+  rootRunId?: RootRunId;
+  expandedKeys: ReadonlySet<string>;
+}
+
 export interface RunActivityDrawerProps {
   open: boolean;
   viewModel: RunActivityViewModel;
@@ -133,6 +144,9 @@ export interface RunActivityDrawerProps {
   /** User-local desktop column preferences, owned by the renderer rather than the drawer. */
   columnWidths?: RunActivityColumnWidths;
   onColumnWidthsChange?(widths: RunActivityColumnWidths): void;
+  /** Preserve committed UI state when the expensive presentation is unmounted. */
+  initialViewState?: RunActivityDrawerViewState;
+  onViewStateChange?(state: RunActivityDrawerViewState): void;
   /** Lets the host render rich, lazily resolved output without coupling this component to execution atoms. */
   renderExpandedContent?(item: RunActivityItemViewModel): ReactNode;
   className?: string;

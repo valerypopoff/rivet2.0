@@ -3,7 +3,8 @@ import type { GraphId } from '@valerypopoff/rivet2-core';
 import { graphState, isReadOnlyGraphState } from '../state/graph.js';
 import { projectWorkspaceTargetsState } from '../state/workspaceTarget.js';
 import { isPathBasedIOProvider } from '../io/IOProvider.js';
-import { useIOProvider } from '../providers/ProvidersContext.js';
+import { useProviders } from '../providers/ProvidersContext.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
 import {
   openedProjectSnapshotsState,
   type OpenedProjectInfo,
@@ -13,23 +14,16 @@ import {
 } from '../state/savedGraphs.js';
 import { handleError } from '../utils/errorHandling.js';
 import { useWorkspaceTransitions } from './useWorkspaceTransitions.js';
-import type { EvaluationProjectFileData } from '../io/IOProvider.js';
 import { useRivetAppHostCallbacks } from '../providers/HostCallbacksContext.js';
 import { normalizeProjectSnapshot } from './workspaceHost/projectSnapshot.js';
 import { isValidOpenedProjectSnapshot } from '../utils/openedProjectSnapshots.js';
 import { runLatestProjectActivation } from '../utils/projectActivationCoordinator.js';
 import { markProjectClean } from '../utils/projectUnsavedChanges.js';
 
-type ActivationPolicy = {
-  getEvaluation?: (info: OpenedProjectInfo) => EvaluationProjectFileData | undefined;
-  cacheEvaluation?: (info: OpenedProjectInfo, evaluation: EvaluationProjectFileData) => void;
-  normalizeExecutorMode?: (mode: OpenedProjectInfo['executorMode']) => OpenedProjectInfo['executorMode'];
-};
-
 /** Shared tab activation owner. Hosts can cache Evaluation data, not replace
  * snapshot selection, identity checks, saved baselines, or race semantics. */
-export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
-  const ioProvider = useIOProvider();
+export function useActivateOpenedProject() {
+  const { projectActivation: policy, io: ioProvider } = useProviders();
   const callbacks = useRivetAppHostCallbacks();
   const workspaceTransitions = useWorkspaceTransitions();
   const store = useStore();
@@ -40,6 +34,7 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
     intent?: { isCurrent(): boolean; signal: AbortSignal; bundleManifestPath?: string },
   ): Promise<boolean> => {
     const activate = async (isCurrent: () => boolean, signal: AbortSignal) => {
+      let isTabCurrent = isCurrent;
       try {
         if (!isCurrent() || signal.aborted) return false;
         const currentInfo = store.get(projectsState).openedProjects[projectInfo.projectId];
@@ -50,10 +45,14 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
         const requestedPath = projectInfo.fsPath;
         const requestedManifest = projectInfo.bundleManifestPath;
         const requestedMembership = projectInfo.bundleMember;
-        const isTabCurrent = () => {
+        const bindings = store.get(projectBindingRegistryState);
+        const requestedBinding = bindings.get(projectInfo.projectId);
+        isTabCurrent = () => {
           const latest = store.get(projectsState).openedProjects[projectInfo.projectId];
           return (
             isCurrent() &&
+            requestedBinding !== undefined &&
+            bindings.isCurrent(projectInfo.projectId, requestedBinding.token) &&
             latest !== undefined &&
             latest.fsPath === requestedPath &&
             latest.bundleManifestPath === requestedManifest &&
@@ -90,13 +89,13 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
         let project = storedSnapshot?.project;
         let data = storedSnapshot?.data;
         let markClean = false;
-        let evaluation = policy.getEvaluation?.(projectInfo);
+        let evaluation = policy?.getEvaluation?.(projectInfo);
 
         const needsSavedBaseline = store.get(savedProjectContentDigestsState)[projectInfo.projectId] == null;
         if (
           projectInfo.fsPath &&
           isPathBasedIOProvider(ioProvider) &&
-          (!project || (policy.getEvaluation !== undefined && !evaluation) || needsSavedBaseline)
+          (!project || (policy?.getEvaluation !== undefined && !evaluation) || needsSavedBaseline)
         ) {
           const loadedProject = await ioProvider.loadProjectDataNoPrompt(projectInfo.fsPath, {
             signal,
@@ -136,7 +135,7 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
           data = storedSnapshot ? storedSnapshot.data : loadedProject.project.data;
           markClean = !storedSnapshot;
           evaluation = loadedProject.evaluation;
-          policy.cacheEvaluation?.(projectInfo, evaluation);
+          policy?.cacheEvaluation?.(projectInfo, evaluation);
           if (store.get(savedProjectContentDigestsState)[projectInfo.projectId] == null) {
             const saved = normalizeProjectSnapshot({ project: loadedProject.project });
             store.set(savedProjectContentDigestsState, (digests) =>
@@ -167,7 +166,7 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
           // A stored tab restores its full workspace target/navigation. The last
           // graph id is a fallback only when recovering content from disk.
           openedGraph: storedSnapshot ? undefined : projectInfo.openedGraph,
-          executorMode: policy.normalizeExecutorMode
+          executorMode: policy?.normalizeExecutorMode
             ? policy.normalizeExecutorMode(projectInfo.executorMode)
             : projectInfo.executorMode,
           evaluationData: evaluation?.evaluationData,
@@ -183,7 +182,7 @@ export function useActivateOpenedProject(policy: ActivationPolicy = {}) {
           },
         });
       } catch (err) {
-        if (!isCurrent()) return false;
+        if (!isTabCurrent()) return false;
         callbacks.onOpenError?.({
           error: err,
           operation: 'loadProject',

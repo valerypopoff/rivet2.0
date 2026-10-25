@@ -1,29 +1,4 @@
 {
   "version": 1,
-  "exceptions": [
-    {
-      "advisoryIds": [1240991],
-      "packages": ["http-cache-semantics"],
-      "dependents": ["cacheable-request@npm:10.2.14"],
-      "workspaceOwners": ["docs@workspace:packages/docs"],
-      "scope": "Patched Docusaurus update-notifier public npm version lookup only; not a Rivet runtime or shared authenticated-response cache.",
-      "reason": "No confirmed upstream fix for GHSA-ch52-4w7c-c8xp. The checked-in Yarn patch makes evaluateRequest synchronously revalidate every zero-lifetime entry, preventing max-stale and stale-while-revalidate from reviving security-zeroed responses. Regression tests through the actual cacheable-request consumer cover shared Set-Cookie, private, no-store, no-cache and proxy-revalidate entries, serialized policies, and ordinary public caching. Yarn still audits the underlying 4.2.0 version. This entry acknowledges the verified local mitigation, not the original vulnerable code; remove it and the patch when an upstream fix passes the same tests.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-11-01"
-    },
-    {
-      "advisoryIds": [1240992],
-      "packages": ["braces"],
-      "dependents": ["chokidar@npm:3.5.3"],
-      "workspaceOwners": [
-        "@valerypopoff/rivet-app-executor@workspace:packages/app-executor",
-        "@valerypopoff/rivet-studio-server-executor@workspace:packages/studio-server-executor",
-        "docs@workspace:packages/docs"
-      ],
-      "scope": "Patched repository-controlled documentation and executor build watchers only; no request-time or user-project pattern processing.",
-      "reason": "braces 3.0.3 has no upstream fix for GHSA-vfj7-8cjw-p6xm. The checked-in Yarn patch bounds parser nesting and all recursive AST walkers to 256 levels, including caller-supplied ASTs. Regression tests resolve through the actual build watcher and test nested braces, parentheses, malformed patterns, direct AST inputs, and ordinary expansion. Yarn still audits the underlying 3.0.3 version. This entry acknowledges the verified local mitigation rather than waiving stack exhaustion; remove it and the patch when a compatible upstream fix passes the same tests.",
-      "owner": "Rivet maintainers",
-      "expires": "2026-11-01"
-    }
-  ]
+  "exceptions": []
 }

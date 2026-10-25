@@ -10,6 +10,7 @@ import {
   resolveOpeningProjectTabPresentation,
   resolveProjectSelectorPlatformPolicy,
   resolveProjectTabPresentation,
+  shouldShowProjectTabChanges,
 } from './projectSelector/projectSelectorModel.js';
 import { ProjectTabSurface } from './projectSelector/ProjectTabSurface.js';
 
@@ -27,6 +28,7 @@ test('project tabs select after click completion while preserving close and drag
           active: true,
           closeIcon: React.createElement('span', undefined, 'Close'),
           displayName: 'Project',
+          leadingIcon: React.createElement('span', { 'data-testid': 'recording-icon' }, 'recording'),
           dragListeners: { onPointerDown: () => undefined },
           onCloseProject: () => {
             closes += 1;
@@ -40,6 +42,7 @@ test('project tabs select after click completion while preserving close and drag
 
     const project = dom.window.document.querySelector<HTMLElement>('.project')!;
     const close = dom.window.document.querySelector<HTMLButtonElement>('.close-project')!;
+    assert.equal(project.querySelector('.project-name')!.firstElementChild!.textContent, 'recording');
 
     await act(async () => project.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true })));
     assert.equal(selections, 0);
@@ -91,6 +94,14 @@ test('inactive project tabs retain a close escape hatch', async () => {
   }
 });
 test('project tab presentation owns active labels, unsaved state, and preview styling', () => {
+  for (const fsPath of [undefined, '/projects/normal.rivet-project', 'recording://run/replay.rivet-project']) {
+    assert.equal(shouldShowProjectTabChanges({ hasUnsavedChanges: true, recording: true, fsPath }), false);
+    assert.equal(shouldShowProjectTabChanges({ hasUnsavedChanges: false, recording: false, fsPath }), false);
+    assert.equal(
+      shouldShowProjectTabChanges({ hasUnsavedChanges: true, recording: false, fsPath }),
+      !fsPath?.startsWith('recording://'),
+    );
+  }
   assert.deepEqual(
     resolveProjectTabPresentation({
       title: 'Current project',

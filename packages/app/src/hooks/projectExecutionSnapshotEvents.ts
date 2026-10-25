@@ -4,6 +4,8 @@ import {
   type ProcessEventMessageMap,
   type ProcessEvents,
   type ProjectId,
+  type NodeId,
+  type GraphExecutionMetadata,
 } from '@valerypopoff/rivet2-core';
 import {
   createEmptyProjectExecutionSnapshot,
@@ -18,6 +20,9 @@ import { getEventOccurredAt } from '../utils/recordedNodeTiming.js';
 import { nodeExecutionData } from './nodeExecutionData.js';
 import {
   clearExecutionDataRefs,
+  clearRemovedExecutionDataRefs,
+  collectStoredRefIds,
+  splitRunDataByPreservedNodes,
   deleteStoredRefIds,
   storeInputsOrOutputsForHistory,
   storeNodeDataForHistory,
@@ -28,6 +33,8 @@ import {
   interruptRunningProcesses,
   reconcileRunningProcessesAfterSuccessfulDone,
   updateSelectedGraphRunForGraphStart,
+  appendRootRunIdOnce,
+  type MissingDebuggerTerminalEvent,
 } from './graphExecutionEventHelpers.js';
 import {
   isTerminalNodeRunStatus,
@@ -52,7 +59,17 @@ export type ProjectExecutionSnapshotEventResult = {
   snapshot: ProjectExecutionSnapshot;
 };
 
-type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap> = {
+export type ProjectExecutionEventPolicy = {
+  /** Interactive presentation choices; passive projection leaves these unspecified. */
+  selectProcessPage?: boolean;
+  includeDebugData?: boolean;
+  start?: { preserveNodeIds?: NodeId[]; evaluationRunning: boolean };
+  keepRunningNodesOnError?: boolean;
+  /** Collect metadata only; external diagnostic listeners run after the snapshot commits. */
+  missingTerminalEvents?: MissingDebuggerTerminalEvent[];
+};
+
+export type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap> = {
   data: ProcessEventMessageMap[K];
   /** Original ancestry for passive copies; false when the source already journals the raw event. */
   activityData?: ProcessEventMessageMap[K] | false;
@@ -63,6 +80,7 @@ type ProjectExecutionSnapshotEventOptions<K extends keyof ProcessEventMessageMap
   refStore: DataRefStore;
   snapshot: ProjectExecutionSnapshot | undefined;
   previousDataPerNodeToKeep?: number;
+  policy?: ProjectExecutionEventPolicy;
 };
 
 export function applyProcessEventToProjectExecutionSnapshot<K extends keyof ProcessEventMessageMap>(
@@ -146,7 +164,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
     case 'start':
       return {
         changed: true,
-        snapshot: applyStart(snapshot, options.data as ProcessEvents['start'], options.refStore),
+        snapshot: applyStart(snapshot, options.data as ProcessEvents['start'], options.refStore, options.policy?.start),
       };
     case 'nodeStart':
       return {
@@ -154,7 +172,10 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot: setDataForNodeInSnapshot(
           snapshot,
           options.data as ProcessEvents['nodeStart'],
-          nodeExecutionData.start(options.data as ProcessEvents['nodeStart'], false),
+          nodeExecutionData.start(
+            options.data as ProcessEvents['nodeStart'],
+            options.policy?.includeDebugData ?? false,
+          ),
           options,
         ),
       };
@@ -184,7 +205,10 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
         snapshot: setDataForNodeInSnapshot(
           snapshot,
           options.data as ProcessEvents['nodeExcluded'],
-          nodeExecutionData.excluded(options.data as ProcessEvents['nodeExcluded'], false),
+          nodeExecutionData.excluded(
+            options.data as ProcessEvents['nodeExcluded'],
+            options.policy?.includeDebugData ?? false,
+          ),
           options,
         ),
       };
@@ -247,6 +271,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
           snapshot,
           options.data as ProcessEvents['nodeOutputsCleared'],
           options.refStore,
+          options.policy?.selectProcessPage,
         ),
       };
     case 'streamingOutputWatchSummary': {
@@ -259,7 +284,11 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
     case 'userInput':
       return {
         changed: true,
-        snapshot: applyUserInput(snapshot, options.data as ProcessEvents['userInput']),
+        snapshot: applyUserInput(
+          snapshot,
+          options.data as ProcessEvents['userInput'],
+          options.policy?.selectProcessPage,
+        ),
       };
     case 'graphStart':
       return {
@@ -284,7 +313,11 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
     case 'done':
       return {
         changed: true,
-        snapshot: applyDone(snapshot),
+        snapshot: applyDone(
+          snapshot,
+          options.data as ProcessEventMessageMap['done'],
+          options.policy?.missingTerminalEvents,
+        ),
       };
     case 'abort':
       return {
@@ -310,7 +343,7 @@ function applyProcessEventToProjectExecutionSnapshotData<K extends keyof Process
     case 'error':
       return {
         changed: true,
-        snapshot: applyAbort(snapshot),
+        snapshot: applyAbort(snapshot, options.policy?.keepRunningNodesOnError),
       };
     default:
       return {
@@ -388,7 +421,36 @@ function applyStart(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['start'],
   refStore: DataRefStore,
+  interactive?: ProjectExecutionEventPolicy['start'],
 ): ProjectExecutionSnapshot {
+  if (interactive) {
+    const base = {
+      ...snapshot,
+      lastRecording: undefined,
+      userInputQuestions: {},
+      graphPaused: snapshot.graphPaused,
+      graphRunning: true,
+      graphStartTime: Date.now(),
+      rootGraph: data.startGraph.metadata!.id!,
+      completedRootRunIds: [],
+    };
+    if (interactive.evaluationRunning) return base;
+    const { preservedRunData, removedRunData } = splitRunDataByPreservedNodes(
+      snapshot.lastRunDataByNode,
+      interactive.preserveNodeIds ?? [],
+    );
+    let selections = interactive.preserveNodeIds?.length ? snapshot.selectedLLMChatOutputPageByInvocation ?? {} : {};
+    for (const nodeId of Object.keys(removedRunData))
+      selections = removeLLMChatOutputHistorySelectionsForProcess({ nodeId, selections });
+    clearRemovedExecutionDataRefs(refStore, removedRunData, preservedRunData);
+    return {
+      ...base,
+      lastRunDataByNode: preservedRunData,
+      selectedLLMChatOutputPageByInvocation: selections,
+      graphRunHistoryByView: {},
+      selectedGraphRunByView: {},
+    };
+  }
   clearExecutionDataRefs(refStore, snapshot.lastRunDataByNode);
 
   return {
@@ -400,31 +462,50 @@ function applyStart(
   };
 }
 
-function applyDone(snapshot: ProjectExecutionSnapshot): ProjectExecutionSnapshot {
+function applyDone(
+  snapshot: ProjectExecutionSnapshot,
+  data: ProcessEventMessageMap['done'],
+  missingTerminalEvents?: MissingDebuggerTerminalEvent[],
+): ProjectExecutionSnapshot {
+  const rootRunId = data.execution?.rootRunId ?? snapshot.completedRootRunIds?.[0];
   return {
     ...snapshot,
     graphPaused: false,
     graphRunning: false,
-    lastRunDataByNode: reconcileRunningProcessesAfterSuccessfulDone(snapshot.lastRunDataByNode),
+    lastRunDataByNode: reconcileRunningProcessesAfterSuccessfulDone(snapshot.lastRunDataByNode, {
+      rootRunId,
+      onMissingTerminalEvent: missingTerminalEvents ? (event) => missingTerminalEvents.push(event) : undefined,
+    }),
+    completedRootRunIds: (snapshot.completedRootRunIds ?? []).filter((id) => id !== rootRunId),
     runningGraphs: [],
     userInputQuestions: {},
   };
 }
 
-function applyAbort(snapshot: ProjectExecutionSnapshot): ProjectExecutionSnapshot {
+export function stopProjectExecutionSnapshot(snapshot: ProjectExecutionSnapshot): ProjectExecutionSnapshot {
   return {
     ...snapshot,
     graphPaused: false,
     graphRunning: false,
-    lastRunDataByNode: interruptRunningProcesses(snapshot.lastRunDataByNode),
     runningGraphs: [],
     userInputQuestions: {},
+    completedRootRunIds: [],
+  };
+}
+
+function applyAbort(snapshot: ProjectExecutionSnapshot, keepRunningNodes = false): ProjectExecutionSnapshot {
+  return {
+    ...stopProjectExecutionSnapshot(snapshot),
+    lastRunDataByNode: keepRunningNodes
+      ? snapshot.lastRunDataByNode
+      : interruptRunningProcesses(snapshot.lastRunDataByNode),
   };
 }
 
 function applyUserInput(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['userInput'],
+  selectProcessPage?: boolean,
 ): ProjectExecutionSnapshot {
   // Playback retains this event for the snapshot's Run Activity journal, but
   // never restores an already-satisfied historical prompt into the User Input
@@ -441,7 +522,8 @@ function applyUserInput(
       processId: data.processId,
       questions: data.inputStrings,
     });
-    if (!isLiveCalledProjectExecutionEvent(data)) draft.selectedProcessPageNodes[data.node.id] = 'latest';
+    if (!isLiveCalledProjectExecutionEvent(data) && selectProcessPage !== false)
+      draft.selectedProcessPageNodes[data.node.id] = 'latest';
   });
 }
 
@@ -483,15 +565,25 @@ function applyGraphFinish(
   return {
     ...snapshot,
     ...finishGraphRunState(snapshot, graphViewKey, graphId, data.execution?.graphRunId, status),
+    ...(status === 'ok' && data.execution && data.execution.parentGraphRunId == null
+      ? { completedRootRunIds: appendRootRunIdOnce(snapshot.completedRootRunIds ?? [], data.execution.rootRunId) }
+      : {}),
   };
 }
 
-function setDataForNodeInSnapshot(
+export function setDataForNodeInSnapshot(
   snapshot: ProjectExecutionSnapshot,
-  event: Pick<ProcessEvents['nodeStart'], 'execution' | 'node' | 'processId'>,
+  event: Pick<ProcessEvents['nodeStart'], 'node' | 'processId'> & { execution?: GraphExecutionMetadata },
   data: Partial<NodeRunData>,
-  options: { projectId: ProjectId; refStore: DataRefStore; previousDataPerNodeToKeep?: number },
+  options: {
+    projectId: ProjectId;
+    refStore: DataRefStore;
+    previousDataPerNodeToKeep?: number;
+    ignoreIfTerminal?: boolean;
+    policy?: ProjectExecutionEventPolicy;
+  },
 ): ProjectExecutionSnapshot {
+  if (options.ignoreIfTerminal && isTerminalNodeProcess(snapshot, event.node.id, event.processId)) return snapshot;
   const storedData = storeNodeDataForHistory(prepareNodeRunDataForStorage(data), options.refStore, {
     nodeId: event.node.id,
     processId: event.processId,
@@ -503,7 +595,12 @@ function setDataForNodeInSnapshot(
     execution: event.execution,
     data: storedData,
     previousDataPerNodeToKeep: options.previousDataPerNodeToKeep,
+    ignoreIfTerminal: options.ignoreIfTerminal,
   });
+  if (!result.applied) {
+    deleteStoredRefIds(options.refStore, collectStoredRefIds(storedData));
+    return snapshot;
+  }
   const nextSnapshot = {
     ...snapshot,
     lastRunDataByNode: result.runData,
@@ -520,11 +617,12 @@ function setDataForNodeInSnapshot(
       data.status && data.status.type !== 'running'
         ? removeUserInputQuestionsForProcess(snapshot.userInputQuestions ?? {}, event.node.id, event.processId)
         : snapshot.userInputQuestions,
-    selectedProcessPageNodes: snapshot.lastRunDataByNode[event.node.id]?.some(
-      (process) => process.processId === event.processId,
-    )
-      ? snapshot.selectedProcessPageNodes
-      : { ...snapshot.selectedProcessPageNodes, [event.node.id]: 'latest' as const },
+    selectedProcessPageNodes:
+      options.policy?.selectProcessPage === false ||
+      (options.policy?.selectProcessPage !== true &&
+        snapshot.lastRunDataByNode[event.node.id]?.some((process) => process.processId === event.processId))
+        ? snapshot.selectedProcessPageNodes
+        : { ...snapshot.selectedProcessPageNodes, [event.node.id]: 'latest' as const },
   };
   deleteStoredRefIds(options.refStore, result.obsoleteRefIds);
   return nextSnapshot;
@@ -533,10 +631,15 @@ function setDataForNodeInSnapshot(
 function applyPartialOutput(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['partialOutput'],
-  options: { projectId: ProjectId; refStore: DataRefStore; previousDataPerNodeToKeep?: number },
+  options: {
+    projectId: ProjectId;
+    refStore: DataRefStore;
+    previousDataPerNodeToKeep?: number;
+    policy?: ProjectExecutionEventPolicy;
+  },
 ): ProjectExecutionSnapshot {
   const next = setDataForNodeInSnapshot(snapshot, data, nodeExecutionData.partial(data), options);
-  if (!data.node.isSplitRun) return next;
+  if (!data.node.isSplitRun || options.policy?.selectProcessPage === false) return next;
   return { ...next, selectedProcessPageNodes: { ...next.selectedProcessPageNodes, [data.node.id]: 'latest' } };
 }
 
@@ -553,13 +656,13 @@ function applyNodeOutputsCleared(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['nodeOutputsCleared'],
   refStore: DataRefStore,
+  selectProcessPage = true,
 ): ProjectExecutionSnapshot {
   const result = clearNodeRunData(snapshot.lastRunDataByNode, data.node.id, data.processId);
   const nextSnapshot = produce(snapshot, (draft) => {
-    if (!snapshot.lastRunDataByNode[data.node.id]) return;
     draft.lastRunDataByNode = result.runData;
 
-    draft.selectedProcessPageNodes[data.node.id] = 'latest';
+    if (selectProcessPage) draft.selectedProcessPageNodes[data.node.id] = 'latest';
     draft.selectedLLMChatOutputPageByInvocation = removeLLMChatOutputHistorySelectionsForProcess({
       nodeId: data.node.id,
       processId: data.processId,

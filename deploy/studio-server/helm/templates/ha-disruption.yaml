@@ -4,7 +4,7 @@ kind: PodDisruptionBudget
 metadata:
   name: {{ include "rivet.backendName" . }}
 spec:
-  {{- if eq .Values.ha.controlPlane.mode "singleton" }}
+  {{- if has .Values.ha.controlPlane.mode (list "singleton" "singleton-overlap") }}
   maxUnavailable: 1
   {{- else }}
   minAvailable: 2

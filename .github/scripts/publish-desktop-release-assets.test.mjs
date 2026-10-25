@@ -1,6 +1,91 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildUploadPlan, createReleaseAssetManifest } from './publish-desktop-release-assets.mjs';
+import { createRequire } from 'node:module';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+
+// test-style: fixture-read: inspect only the publication output generated in an owned temporary directory.
+const { createPagesHandler, metadata } = createRequire(import.meta.url)('../../postman/mocks/rivet-pages/contract.cjs');
+
+test('docs-only Pages preparation preserves release identity and downloads, and fails closed on uncertainty', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'rivet-docs-publication-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const requests = [];
+  const commit = 'a'.repeat(40);
+  const server = createServer(createPagesHandler({ commit, requests }));
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const run = (mode) =>
+    new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [fileURLToPath(new URL('./prepare-desktop-release-pages.mjs', import.meta.url))],
+        {
+          env: {
+            ...process.env,
+            PAGES_SITE_URL: `http://127.0.0.1:${server.address().port}/${mode}/`,
+            PAGES_OUT_DIR: path.join(root, mode),
+            RELEASE_CHANNEL: 'developer',
+            PRESERVED_DESKTOP_COMMIT: commit,
+            REUSE_PUBLISHED_DESKTOP_RELEASE: '1',
+            PRESERVE_RELEASE_METADATA_FILES: 'official-release.json',
+            RELEASE_ASSETS_MANIFEST_PATH: '',
+            GITHUB_SHA: 'c'.repeat(40),
+            RELEASE_LABEL: 'must-not-replace-installers',
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+          timeout: 10_000,
+        },
+      );
+      let output = '';
+      child.stdout.on('data', (data) => {
+        output += data;
+      });
+      child.stderr.on('data', (data) => {
+        output += data;
+      });
+      child.on('error', reject);
+      child.on('close', (code) => resolve({ code, output }));
+    });
+  const success = await run('ok');
+  assert.equal(success.code, 0, success.output);
+  for (const channel of ['developer', 'official']) {
+    assert.equal(
+      await readFile(path.join(root, 'ok', `${channel}-release.json`), 'utf8'),
+      JSON.stringify(metadata(channel, commit), null, 2),
+    );
+    assert.equal(await readFile(path.join(root, 'ok', `downloads/${channel}/installer.msi`), 'utf8'), 'MSI!');
+  }
+  assert.deepEqual(requests, [
+    'GET /ok/developer-release.json',
+    'GET /ok/downloads/developer/installer.msi',
+    'GET /ok/official-release.json',
+    'GET /ok/downloads/official/installer.msi',
+  ]);
+  for (const mode of ['missing', 'unavailable', 'malformed', 'changed', 'asset-failure', 'wrong-size']) {
+    const result = await run(mode);
+    assert.notEqual(result.code, 0, mode);
+    if (mode === 'wrong-size') assert.match(result.output, /Expected 4 bytes, received 3/);
+    await assert.rejects(stat(path.join(root, mode, 'developer-release.json')), { code: 'ENOENT' });
+  }
+  const optional = await run('optional-missing');
+  assert.equal(optional.code, 0, optional.output);
+  assert.equal(
+    JSON.parse(await readFile(path.join(root, 'optional-missing', 'developer-release.json'), 'utf8')).commit,
+    commit,
+  );
+});
 
 void test('publishes distinct, architecture-labelled macOS downloads', () => {
   const uploadPlan = buildUploadPlan({

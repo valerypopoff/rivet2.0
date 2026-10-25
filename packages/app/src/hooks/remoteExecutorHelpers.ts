@@ -39,50 +39,51 @@ export function getDependentDataForNodeForPreload(
   previousRunData: RunDataByNodeId,
   options: { frozenNodeOutputs?: FrozenNodeOutputsByGraph; graphId?: GraphId } = {},
 ): Record<NodeId, Outputs> {
-  const preloadData: Record<NodeId, Outputs> = {};
+  return Object.fromEntries(
+    dependencyNodes.map((dependencyNode): [NodeId, Outputs] => {
+      const frozenOutput = getFrozenNodePreloadOutput(options.frozenNodeOutputs, options.graphId, dependencyNode);
+      if (frozenOutput) {
+        return [dependencyNode, frozenOutput];
+      }
 
-  for (const dependencyNode of dependencyNodes) {
-    const frozenOutput = getFrozenNodePreloadOutput(options.frozenNodeOutputs, options.graphId, dependencyNode);
-    if (frozenOutput) {
-      preloadData[dependencyNode] = frozenOutput;
-      continue;
-    }
+      const dependencyNodeData = Object.hasOwn(previousRunData, dependencyNode)
+        ? previousRunData[dependencyNode]
+        : undefined;
 
-    const dependencyNodeData = previousRunData[dependencyNode];
+      if (!dependencyNodeData) {
+        throw new Error(
+          `Node ${dependencyNode} was not found in the previous run data, cannot continue preloading data`,
+        );
+      }
 
-    if (!dependencyNodeData) {
-      throw new Error(`Node ${dependencyNode} was not found in the previous run data, cannot continue preloading data`);
-    }
+      const latestExecutionWithOutput = findLatestExecutionWithOutput(dependencyNodeData);
 
-    const latestExecutionWithOutput = findLatestExecutionWithOutput(dependencyNodeData);
+      const outputData = latestExecutionWithOutput?.data.outputData;
+      if (!hasStoredPortMapValues(outputData)) {
+        throw new Error(
+          `Node ${dependencyNode} has no output data in the previous run data, cannot continue preloading data`,
+        );
+      }
 
-    const outputData = latestExecutionWithOutput?.data.outputData;
-    if (!hasStoredPortMapValues(outputData)) {
-      throw new Error(
-        `Node ${dependencyNode} has no output data in the previous run data, cannot continue preloading data`,
-      );
-    }
+      let outputDataWithoutRefs: Outputs | undefined;
 
-    let outputDataWithoutRefs: Outputs | undefined;
+      try {
+        outputDataWithoutRefs = restoreStoredPortMap(outputData, dataRefs);
+      } catch (error) {
+        throw new Error(
+          `Node ${dependencyNode} output data was cleared from execution memory and cannot be preloaded: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
 
-    try {
-      outputDataWithoutRefs = restoreStoredPortMap(outputData, dataRefs);
-    } catch (error) {
-      throw new Error(
-        `Node ${dependencyNode} output data was cleared from execution memory and cannot be preloaded: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+      if (!outputDataWithoutRefs || Object.keys(outputDataWithoutRefs).length === 0) {
+        throw new Error(
+          `Node ${dependencyNode} output data could not be restored from execution memory, cannot continue preloading data`,
+        );
+      }
 
-    if (!outputDataWithoutRefs || Object.keys(outputDataWithoutRefs).length === 0) {
-      throw new Error(
-        `Node ${dependencyNode} output data could not be restored from execution memory, cannot continue preloading data`,
-      );
-    }
-
-    preloadData[dependencyNode] = outputDataWithoutRefs;
-  }
-
-  return preloadData;
+      return [dependencyNode, outputDataWithoutRefs];
+    }),
+  );
 }
 
 export function getFrozenNodeOutputsForExecutorRunPayload(

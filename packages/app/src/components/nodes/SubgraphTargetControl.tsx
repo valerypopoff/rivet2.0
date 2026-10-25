@@ -25,6 +25,7 @@ import { OpenFolderIcon } from '../graphList/OpenFolderIcon';
 import { graphState } from '../../state/graph';
 import { useNodeEditorSessionContext } from '../nodeEditor/NodeEditorSessionContext';
 import { filterSubgraphProjectTree, subgraphSourceScope } from '../../utils/subgraphBundleScope.js';
+import { isRecordingProjectState } from '../../state/execution.js';
 
 const controlCss = css`
   min-width: 0;
@@ -163,13 +164,58 @@ function makeTargetOptions(
   ];
 }
 
-export const SubgraphTargetControl: FC<{
+type SubgraphTargetControlProps = {
   node: SubGraphNode;
   isReadonly?: boolean;
   projectTree?: Tree | null;
   onProjectTreeChange?(tree: Tree | null): void;
   onChange(next: SubGraphNode): void;
-}> = ({ node, isReadonly, projectTree, onProjectTreeChange, onChange }) => {
+};
+
+/** Display only: a detached replay cannot authorize live bundle preview reads. */
+export function SubgraphTargetLabel({ node, isRecording }: { node: SubGraphNode; isRecording?: boolean }) {
+  const ownProject = useAtomValue(projectState);
+  const openedProjects = useAtomValue(projectsState).openedProjects;
+  const referencedProjects = useAtomValue(referencedProjectsState);
+  const target = node.data.targetProjectId
+    ? referencedProjects[
+        getSubgraphProjectKey({
+          projectId: node.data.targetProjectId,
+          version: node.data.targetVersion ?? 'latest',
+        })
+      ]
+    : ownProject;
+  return (
+    <div
+      css={controlCss}
+      data-recorded-target={isRecording || undefined}
+      title={isRecording ? 'Recorded target. Playback uses saved events, not the live project.' : undefined}
+    >
+      <span className="target-label">
+        {node.data.targetProjectId && (
+          <>
+            {target?.metadata.title || openedProjects[node.data.targetProjectId]?.title || node.data.targetProjectId}
+            {' / '}
+          </>
+        )}
+        {target?.graphs[node.data.graphId]?.metadata?.name || node.data.graphId || 'No graph selected'}
+      </span>
+    </div>
+  );
+}
+
+export const SubgraphTargetControl: FC<SubgraphTargetControlProps> = (props) => {
+  const recording = useAtomValue(isRecordingProjectState);
+  return recording ? <SubgraphTargetLabel node={props.node} isRecording /> : <LiveSubgraphTargetControl {...props} />;
+};
+
+const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
+  node,
+  isReadonly,
+  projectTree,
+  onProjectTreeChange,
+  onChange,
+}) => {
   const catalog = useSubgraphProjectCatalog();
   const store = useStore();
   const session = useNodeEditorSessionContext();
@@ -293,21 +339,20 @@ export const SubgraphTargetControl: FC<{
     return () => {
       active = false;
     };
-  }, [catalog, node.data.targetProjectId, selectedKey, selectedPreview, setReferencedProjects, version, isCurrent]);
+  }, [
+    catalog,
+    node.data.targetProjectId,
+    selectedKey,
+    selectedPreview,
+    setReferencedProjects,
+    version,
+    isCurrent,
+    ownProject.metadata.id,
+  ]);
 
   if (!catalog || !otherProjects) {
     if (!catalog && node.data.targetProjectId) {
-      return (
-        <div css={controlCss}>
-          <span className="target-label">
-            {selectedPreview?.metadata.title ||
-              openedProjects[node.data.targetProjectId]?.title ||
-              node.data.targetProjectId}
-            {' / '}
-            {selectedPreview?.graphs[node.data.graphId]?.metadata?.name || node.data.graphId}
-          </span>
-        </div>
-      );
+      return <SubgraphTargetLabel node={node} />;
     }
     return (
       <GraphSelectorSelect

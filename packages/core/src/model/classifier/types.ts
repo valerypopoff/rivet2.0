@@ -1,4 +1,6 @@
-export type ClassifierQuestionType = 'choice' | 'score' | 'noul';
+import type { ClassifierStateMessage } from './state.js';
+
+export type ClassifierQuestionType = 'choice' | 'score' | 'noul' | 'box';
 /** Secret-free classification used by fallback diagnostics and recording traces. */
 export const classifierFailureKinds = [
   'configuration',
@@ -60,6 +62,8 @@ export type ClassifierQuestionDefinition = {
   questionId: string;
   type: ClassifierQuestionType;
   instructions: ClassifierEntry;
+  /** Explicit ordered question content; instructions must be empty when supplied. Not shared State. */
+  instructionsMessages?: ClassifierStateMessage[];
   criteria?: unknown;
 };
 
@@ -78,11 +82,17 @@ export type ClassifierNoulQuestionDefinition = ClassifierQuestionDefinition & {
   criteria?: { true: ClassifierEntry; false: ClassifierEntry };
 };
 
+export type ClassifierBoxQuestionDefinition = ClassifierQuestionDefinition & {
+  type: 'box';
+  criteria?: never;
+};
+
 /** Internal contract after the untrusted public definition has been validated. */
 export type PreparedClassifierQuestion =
   | ClassifierChoiceQuestionDefinition
   | ClassifierScoreQuestionDefinition
-  | ClassifierNoulQuestionDefinition;
+  | ClassifierNoulQuestionDefinition
+  | ClassifierBoxQuestionDefinition;
 
 export type ClassifierEvaluationResponse = {
   model: string;

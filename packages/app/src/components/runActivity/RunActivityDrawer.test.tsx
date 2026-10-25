@@ -479,6 +479,39 @@ test('Escape closes a modal opened from the drawer before it closes the drawer',
   }
 });
 
+test('unchanged expanded rows do not rerender for another invocation update', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restore = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  let renders = 0;
+  const renderExpandedContent = () => {
+    renders++;
+    return <span>Expanded evidence</span>;
+  };
+  const render = (items: RunActivityItemViewModel[]) =>
+    root.render(
+      <RunActivityDrawer
+        open
+        viewModel={{ status: 'completed', items }}
+        onClose={() => {}}
+        renderExpandedContent={renderExpandedContent}
+      />,
+    );
+  try {
+    await act(async () => render(ITEMS));
+    await act(async () => dom.window.document.querySelector<HTMLButtonElement>('.run-activity-row-toggle')!.click());
+    assert.equal(renders, 1);
+    await act(async () => render([ITEMS[0]!, { ...ITEMS[1]!, preview: 'Another invocation changed' }]));
+    assert.equal(renders, 1);
+    await act(async () => render([{ ...ITEMS[0]!, preview: 'Selected invocation changed' }, ITEMS[1]!]));
+    assert.equal(renders, 2);
+  } finally {
+    await act(async () => root.unmount());
+    restore();
+    dom.window.close();
+  }
+});
+
 function installDomGlobals(dom: JSDOM): () => void {
   const previous = {
     window: globalThis.window,

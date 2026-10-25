@@ -1,0 +1,5 @@
+simulation: rivet-subq-decisions
+routing: path
+mocks:
+  - routeKey: subq
+    path: ../mocks/subq-snap/config.yaml

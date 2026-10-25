@@ -1,8 +1,7 @@
-import { lazy, type FC } from 'react';
-import {
-  useMultilineEditorFontSize,
-  type MultilineEditorFontSizeScope,
-} from '../hooks/useMultilineEditorFontSize.js';
+import { type FC } from 'react';
+import { createLazyComponent } from './createLazyComponent.js';
+import { createRetryableModuleLoader } from './retryableModuleLoader.js';
+import { useMultilineEditorFontSize, type MultilineEditorFontSizeScope } from '../hooks/useMultilineEditorFontSize.js';
 import { useIsNodeEditorResizing } from './nodeEditor/NodeEditorResizeContext.js';
 import type { CodeEditorProps } from './CodeEditor.js';
 
@@ -11,21 +10,17 @@ type CodeEditorModule = {
   CodeEditor: FC<CodeEditorProps>;
 };
 
-let codeEditorPreloadPromise: Promise<CodeEditorModule> | undefined;
+const codeEditorLoader = createRetryableModuleLoader<CodeEditorModule>(() => import('./CodeEditor'));
 
 export function preloadCodeEditor(): Promise<CodeEditorModule> {
-  codeEditorPreloadPromise ??= import('./CodeEditor').catch((error) => {
-    codeEditorPreloadPromise = undefined;
-    throw error;
-  });
-  return codeEditorPreloadPromise;
+  return codeEditorLoader.load();
 }
 
 export function warmCodeEditor(): void {
   void preloadCodeEditor().catch(() => undefined);
 }
 
-const LazyCodeEditorImpl = lazy(preloadCodeEditor);
+const LazyCodeEditorImpl = createLazyComponent(preloadCodeEditor, 'code editor', codeEditorLoader.retry);
 
 type LazyCodeEditorProps = Omit<
   CodeEditorProps,

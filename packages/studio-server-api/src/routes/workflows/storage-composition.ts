@@ -9,6 +9,7 @@ import {
 import { FilesystemRivetEvaluationStore } from '../../evaluation-runs/filesystem-store.js';
 import { flushLLMProfileHealthRecordingOutcomes } from '../../llm-profile-health/recording-outcomes.js';
 import { ManagedWorkflowBackend } from './managed/backend.js';
+import { createManagedWorkflowOperations } from './managed/operations.js';
 import { getManagedWorkflowStorageConfig, isManagedWorkflowStorageEnabled } from './storage-config.js';
 import { ensureWorkflowsRoot, listProjectPathsRecursive, pathExists, PROJECT_EXTENSION } from './fs-helpers.js';
 import { readStoredWorkflowProjectSettings } from './publication.js';
@@ -44,7 +45,9 @@ export function createWorkflowStorageServices(): WorkflowStorageServices {
     },
     createManaged: () => {
       if (!managedConfig) throw new Error('No managed workflow storage selected.');
-      return new ManagedWorkflowBackend(managedConfig);
+      return new ManagedWorkflowBackend(managedConfig, undefined, {
+        createOperations: createManagedWorkflowOperations,
+      });
     },
     createProfileHealth: () => new FilesystemRivetLLMProfileHealthStore(),
     createEvaluations: () => new FilesystemRivetEvaluationStore(),

@@ -13,9 +13,17 @@ import {
   runningGraphsState,
   graphRunHistoryByViewState,
   selectedGraphRunByViewState,
+  lastRunDataByNodeState,
+  createEmptyProjectExecutionSnapshot,
+  projectExecutionSnapshotsState,
 } from '../state/dataFlow.js';
+import { projectState } from '../state/savedGraphs.js';
 import { userInputModalQuestionsState } from '../state/userInput.js';
-import { useGraphExecutionEvents, type GraphExecutionEventsApi } from './useGraphExecutionEvents.js';
+import {
+  useGraphExecutionEvents,
+  type GraphExecutionEventsApi,
+  type GraphExecutionEventsOptions,
+} from './useGraphExecutionEvents.js';
 
 test('graph lifecycle keeps exact running slots and errors toast before node output without duplicates', async () => {
   const dom = new JSDOM('<div id="root"></div>');
@@ -37,6 +45,8 @@ test('graph lifecycle keeps exact running slots and errors toast before node out
     questions: store.get(userInputModalQuestionsState),
     history: store.get(graphRunHistoryByViewState),
     selections: store.get(selectedGraphRunByViewState),
+    nodeData: store.get(lastRunDataByNodeState),
+    snapshots: store.get(projectExecutionSnapshotsState),
   };
   const originalToastError = toast.error;
   const originalConsoleError = console.error;
@@ -48,12 +58,16 @@ test('graph lifecycle keeps exact running slots and errors toast before node out
   console.error = () => {};
   let events: GraphExecutionEventsApi | undefined;
   let preservationCleared = 0;
+  let missingTerminal: GraphExecutionEventsOptions['onMissingDebuggerTerminalEvent'];
   const Harness = () => {
-    events = useGraphExecutionEvents({
-      clearNodeRunDataPreservationForNextStart: () => preservationCleared++,
-      consumeNodeRunDataPreservationForNextStart: () => undefined,
-      evaluationRunningLatest: { current: false },
-    });
+    events = useGraphExecutionEvents(
+      {
+        clearNodeRunDataPreservationForNextStart: () => preservationCleared++,
+        consumeNodeRunDataPreservationForNextStart: () => undefined,
+        evaluationRunningLatest: { current: false },
+      },
+      { onMissingDebuggerTerminalEvent: (event) => missingTerminal?.(event) },
+    );
     return null;
   };
   try {
@@ -117,6 +131,57 @@ test('graph lifecycle keeps exact running slots and errors toast before node out
       events!.onAbort({} as never);
     });
     assert.equal(toasted.length, 3);
+
+    // An identified terminal must not consume another root's FIFO confirmation.
+    // This happens when completion order differs from graph-finish arrival order.
+    await act(async () => {
+      events!.onStart({ startGraph: first.graph } as never);
+      for (const root of ['root-a', 'root-b'])
+        events!.onGraphFinish({ ...first, execution: { ...first.execution, rootRunId: root } } as never);
+      store.set(lastRunDataByNodeState, {
+        node: ['root-a', 'root-b'].map((root) => ({
+          processId: root,
+          rootRunId: root,
+          data: { status: { type: 'running' } },
+        })),
+      } as never);
+      events!.onDone({ results: {}, execution: { ...first.execution, rootRunId: 'root-b' } } as never);
+    });
+    const processes = Object.values(store.get(lastRunDataByNodeState))[0]!;
+    assert.equal(processes[0]!.data.status?.type, 'running');
+    assert.notEqual(processes[1]!.data.status?.type, 'running');
+
+    for (const action of ['replace', 'throw'] as const) {
+      const id = store.get(projectState).metadata.id;
+      const replacement = { ...createEmptyProjectExecutionSnapshot(), lastRecording: 'new-content' };
+      let notified = 0;
+      missingTerminal = () => {
+        notified++;
+        if (action === 'throw') throw new Error('diagnostic listener failed');
+        store.set(projectExecutionSnapshotsState, { [id]: replacement });
+      };
+      await act(async () => {
+        store.set(graphRunningState, true);
+        store.set(lastRunDataByNodeState, {
+          node: [{ processId: 'orphan', rootRunId: 'root-a', data: { status: { type: 'running' } } }],
+        } as never);
+        assert.doesNotThrow(() =>
+          events!.onDone({ results: {}, execution: { ...first.execution, rootRunId: 'root-a' } } as never),
+        );
+      });
+      assert.equal(notified, 1);
+      if (action === 'replace')
+        assert.equal(
+          store.get(projectExecutionSnapshotsState)[id],
+          replacement,
+          'diagnostics cannot overwrite replacement state',
+        );
+      else {
+        assert.equal(store.get(graphRunningState), false, 'diagnostics cannot prevent terminal cleanup');
+        assert.equal(Object.values(store.get(lastRunDataByNodeState))[0]![0]!.data.status?.type, 'ok');
+      }
+    }
+    assert.equal(toasted.length, 3, 'a diagnostic listener failure is not a graph execution failure');
   } finally {
     await act(async () => root.unmount());
     store.set(graphRunningState, previous.running);
@@ -125,6 +190,8 @@ test('graph lifecycle keeps exact running slots and errors toast before node out
     store.set(userInputModalQuestionsState, previous.questions);
     store.set(graphRunHistoryByViewState, previous.history);
     store.set(selectedGraphRunByViewState, previous.selections);
+    store.set(lastRunDataByNodeState, previous.nodeData);
+    store.set(projectExecutionSnapshotsState, previous.snapshots);
     toast.error = originalToastError;
     console.error = originalConsoleError;
     for (const [key, descriptor] of descriptors) {

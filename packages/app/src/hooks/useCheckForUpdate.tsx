@@ -7,6 +7,7 @@ import { isInTauri } from '../utils/platform/core.js';
 import { checkForAppUpdate } from '../utils/platform/updater.js';
 import { openExternalUrl } from '../utils/platform/shell.js';
 import { wrapAsync } from '../utils/errorHandling.js';
+import { shouldCheckForUpdates, useRivetAppHostUiConfig } from '../providers/HostUiConfigContext.js';
 
 const toastStyle = css`
   display: flex;
@@ -46,9 +47,10 @@ export function useCheckForUpdate({
   const checkForUpdates = useAtomValue(checkForUpdatesState);
   const [skippedMaxVersion, setSkippedMaxVersion] = useAtom(skippedMaxVersionState);
   const shouldNotifyErrors = notifyErrors ?? (notifyNoUpdates || force);
+  const hostUi = useRivetAppHostUiConfig();
 
   return async () => {
-    if ((!force && !checkForUpdates) || !isInTauri()) {
+    if (!shouldCheckForUpdates(hostUi) || (!force && !checkForUpdates) || !isInTauri()) {
       console.log('Skipping update check');
       return;
     }

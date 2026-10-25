@@ -688,6 +688,20 @@ export async function readWorkflowRecordingArtifact(
   return readArtifactText(filePath, row.encoding);
 }
 
+export async function getWorkflowRecordingSummary(
+  root: string,
+  recordingId: string,
+): Promise<WorkflowRecordingRunSummary> {
+  await ensureWorkflowRecordingStorage(root);
+
+  const row = await getWorkflowRecordingRunRow(recordingId);
+  if (!row) {
+    throw createHttpError(404, 'Recording not found');
+  }
+
+  return toWorkflowRecordingRunSummary(row);
+}
+
 export async function deleteWorkflowRecording(root: string, recordingId: string): Promise<void> {
   const recordingsRoot = await ensureWorkflowRecordingStorage(root);
 

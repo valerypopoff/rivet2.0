@@ -1,3 +1,5 @@
+import { isRecordingSnapshotPath } from '../../utils/recordingPlayback.js';
+
 export type ProjectTabPresentation = {
   active: boolean;
   displayName: string;
@@ -8,6 +10,15 @@ export type ProjectTabPresentation = {
 // Ordinary tab presses should resolve as clicks. dnd-kit waits for this small
 // movement threshold before it turns the same gesture into a sortable drag.
 export const projectTabDragActivationConstraint = { distance: 4 };
+
+/** Decoration only: never clear dirty flags or change close/save safeguards. */
+export function shouldShowProjectTabChanges(options: {
+  hasUnsavedChanges: boolean;
+  recording: boolean;
+  fsPath?: string | null;
+}): boolean {
+  return options.hasUnsavedChanges && !options.recording && !isRecordingSnapshotPath(options.fsPath);
+}
 
 export function resolveProjectTabPresentation(options: {
   title: string;

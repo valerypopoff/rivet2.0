@@ -1373,6 +1373,135 @@ The main recordings routes are:
 
 ## Recording browser
 
+### Loaded-recording presentation
+
+The editor action bar becomes a compact recording panel while the active tab owns
+a loaded recording. Its controls retain Play/Abort, Pause/Resume and the existing
+More menu. Standalone `recording://` tabs opened from Run recordings do not expose
+Unload: they have no ordinary project mode to return to. Close their project tab
+when finished. `canUnloadCurrentProjectRecordingState` is shared by the action bar
+and unload handler, so a stale or programmatic unload cannot detach their replay.
+Ordinary desktop/hosted projects with an overlaid recording still offer Unload,
+including pathless projects; it returns them to live mode. Unload uses a neutral
+background and hover state, not a warning color; Play retains its green action
+style. Primary controls align left; More stays
+at the right of the same row. The panel fits its contents, with a viewport-aware
+readable width cap for long text, and uses the evaluation panel's base typography,
+padding and outline. The details area has 64px of font-scaled right padding,
+roughly half the Play Recording button width. This padding applies only to the
+content; buttons keep their existing alignment and the panel retains its width
+cap. After a 12px gap below the controls, two simple rows show:
+the colored outcome tag followed by saved date/time; and Endpoint at execution.
+The headless playback regression checks both panel and details-area overflow at
+14px, default 15px and maximum 20px UI sizes in a narrower window, using the real
+font-token generator and including long unbroken failure text. Padding remains
+font-scaled without adding resize observers or
+measuring button widths in application code.
+Duration and LATEST / LOCAL EDITOR / PUBLISHED tags remain in the recording browser,
+not this compact editor summary. Only an actual recorded endpoint is shown;
+missing endpoints and synthetic Subgraph graph labels display an em dash instead
+of falling back to a graph name. Error/warning detail remains below these rows.
+Project/graph names, scheduled names, related-run keys and the inferred-metadata
+notice are intentionally omitted from this compact panel. The text
+is selectable; long details scroll inside the panel instead of covering the
+canvas. Other project tabs retain their ordinary live controls.
+
+An open recording tab shows the same `video-line.svg` recording icon as the server
+library UI, before its title. Its green/red/yellow color follows the original
+recorded outcome (including an unknown outcome's yellow warning), not playback
+completion or abort. Small, non-persistent tab indicators retain this decoration
+across tab switches and opening another recording; they retain no event payloads.
+Indicators are path-bound, follow path rebinding and clear on unload, replacement
+or close, including inactive-tab cleanup. Ordinary tabs have no recording icon.
+Recording tabs do not show the unsaved-changes dot. This includes detached
+`recording://` snapshots before activation. Marker suppression
+does not reset actual dirty flags, and ordinary editable projects
+without a loaded recording retain their marker. Closing a detached `recording://`
+snapshot skips the unsaved-changes dialog because its layout edits are disposable;
+this covers active and inactive tabs. Editable source-project
+files still require confirmation for unsaved changes, even with a recording loaded.
+The shared `isRecordingSnapshotPath` predicate owns this distinction; a recording
+icon or global playback selection is not sufficient reason to discard source edits.
+Saving a detached recording in place returns `false` with a read-only warning toast,
+before any persistence is attempted. It does not recommend Save As, which the
+hosted editor's menu policy does not expose. Repeated Save presses reuse one
+warning toast. Where available, explicit Save As retains its normal new-file flow, while
+genuine save failures still produce error toasts. The provider's read-only guard
+remains as defense in depth; the warning does not mark the snapshot clean or emit
+a successful-save acknowledgement.
+When a successful Save As changes the tab binding, the loaded recording and its
+tab indicator follow the new path so playback controls stay reachable. This is scoped
+to that exact project, including pathless desktop projects; another active
+recording must not move with it. Failed/canceled saves and newer path changes
+never rebind playback from stale save results.
+An ordinary in-place save does not reselect the recording or reset a pending
+playback reservation; only an actual, accepted path change moves ownership.
+
+Regression coverage uses the public workspace-save hook for read-only warning
+severity, persistence failures and Save As ownership (including pathless desktop
+tabs). The headless `recording-playback-history` observer moves replay nodes and
+closes active/inactive snapshots, checks warning toasts and verifies actual Run
+Activity rows through repeated playback. `project-tab-shortcuts` separately
+checks that ordinary editable tabs still require unsaved-close confirmation.
+Save As is tested through the save hook, not the hosted menu that hides it.
+The recording-browser regression also verifies that standalone tabs have no
+Unload action, closing them restores the neighboring ordinary project, and a
+recording loaded from a file onto that ordinary project can still be unloaded.
+
+The canvas border follows the **original recording**: succeeded is green, failed
+is red, suspicious/control-flow-excluded is yellow. Replaying or aborting playback
+does not overwrite that recorded outcome. Shared timestamp/status formatters keep
+the modal and editor consistent.
+
+`GET /api/workflows/recordings/:recordingId/summary` returns the same run summary
+using an ID lookup in filesystem, SQLite-live and managed PostgreSQL storage. It
+uses the existing control-plane authentication and no-store policy, does not read
+recording/project blob bodies and returns 404 for a missing recording. There is
+no new schema or recording-file format. The bridge retains this display-only
+snapshot with the recording, including tab switches and virtual replay reopening.
+The optional request is bounded to five seconds and validates the recording ID
+and outcome before display. If an older server cannot provide it, playback still
+works with event-derived timing and outcome, without an extra fallback notice.
+
+Desktop/imported and evaluation recordings without server summaries infer root
+outcome and timing from their existing events. Handled child
+errors do not make an otherwise successful root red; late root failures do. A
+recording without terminal evidence stays yellow and says its outcome is
+unavailable rather than claiming success. Missing endpoint metadata is
+not invented.
+
+Fallback outcome inference uses the recorded entry's exact root/graph-run identity
+when present, not graph ID alone: a recursive invocation can reuse the entry graph
+ID without becoming its completion or failure. Child-only artifacts use their first
+graph entry even when that entry retains a parent-run ID. Legacy artifacts without
+execution identity retain graph-ID fallback. The compact presentation no longer
+derives unused project/graph names or duration, nor subscribes to project edits;
+it does not copy/reverse the entire event history to find the final root outcome.
+
+Verification: presentation unit tests, existing playback ownership/history
+regressions, real recording-summary HTTP tests, SQLite and managed repository
+tests, plus headless `recording-playback-history.spec.ts` cover saved success,
+failure and warning colors, metadata retention through repeated playback and
+ordinary controls in neighboring tabs. Browser playback assertions require actual
+Run Activity node rows, not just the graph name in its drawer header.
+
+Subgraph target display in a recording is snapshot-only, in both the node body
+and the node settings. It does not load the live catalog, preview a target or
+probe Published availability. A detached replay has a fresh project ID, which
+must never be passed as a live bundle caller or treated as bundle membership.
+The `recording://` path selects this presentation before recorder activation and
+keeps it until the tab closes; a local/desktop project uses it only while that exact tab
+owns a loaded recording. Switching to an ordinary tab restores its normal picker.
+Available cached/open-tab names are display hints only; targets without available
+names retain their IDs. No historical name is invented, no boundary is refreshed,
+and playback still uses the saved events and authored boundary. Bundle isolation
+and all live preview/execution authorization remain unchanged. Regression coverage
+uses a detached root replay with cross-project nodes and a preview endpoint that
+would return 403, asserting no live target reads before/during repeated playback,
+in settings, or after unloading the detached replay.
+
+### Browsing and opening runs
+
 Plain Tab toggles the sidebar belonging to the focused document: the server sidebar in the dashboard, or the graph sidebar inside the editor iframe. Text/code entry and open dashboard dialogs retain normal Tab navigation; Shift+Tab and modified Tab are unchanged. The editor also retains Ctrl+Q/Cmd+Q. Hosted modal focus retains keyboard navigation, trapping, and restoration without decorative focus outlines on dialogs or their controls; close buttons highlight on pointer hover only. Published-catalog browser coverage verifies the rendered close glyph, corner placement, content insets, and fixed header during list scrolling.
 
 The dashboard exposes `Run recordings` in the left-panel footer. Runtime-library administration lives separately under `Settings` -> `Runtime libraries`. The text-only `Published` action opens a live catalog derived from the authoritative workflow tree. It lists every currently published workflow endpoint and web app in separate modal-level `Endpoints (n)` and `Web apps (n)` tabs, where each counter is derived from that same live catalog. The title, description, tabs, and corner close control occupy the fixed modal header; only the selected tab's inset item list scrolls. Each endpoint row uses the currently published endpoint name, not a renamed but unpublished draft; an internal-only endpoint shows and copies its deployment-specific private URL, while public endpoints and web apps show their configured public routes. The copy control writes an absolute URL to the clipboard, reveals a copy icon immediately before that route on hover or keyboard focus, and provides a separate `Project: ...` reference: the `Project:` label is muted and the project name is bright. Activating that project reference closes the catalog and opens the project persistently in the editor through the normal project-opening path. Rows do not repeat their publication type. Their names and project references share a consistent left edge, with the labeled freshness badge below both: green means the item is published from the current draft, while amber means it remains published but the project has unpublished changes. The workflow tree carries freshness for each web-app publication independently, so a stale endpoint or sibling app cannot mislabel another app. Older tree responses without per-app freshness are displayed conservatively as published. Endpoint drafts whose endpoint publication status is `unpublished` are excluded even when the same project owns published web apps; the tree's `publishedWebApps` entries remain independently visible. The dashboard does not cache a second publication index or infer endpoint publication from the aggregate project status.

@@ -15,13 +15,12 @@ export function extractClassifierConfigurationToProfile(input: {
   recoverableConnections: readonly NodeConnection[];
 }) {
   const { evaluateNode } = input;
-  if (evaluateNode.data.configurationMode === 'profile') throw new Error('Classifier Evaluate already uses a profile.');
+  if (evaluateNode.data.configurationMode === 'profile') throw new Error('Decision AI run already uses a profile.');
   const profileNode = {
     ...structuredClone(input.profileNode),
     data: {
       ...input.profileNode.data,
       ...structuredClone(pickClassifierProfileData(evaluateNode.data)),
-      responseTimeoutMs: evaluateNode.data.responseTimeoutMs ?? evaluateNode.data.timeoutMs ?? 30_000,
     },
   };
   const active = new Set<string>(

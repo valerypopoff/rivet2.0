@@ -243,6 +243,13 @@ test('input search matches only roots and unfolds cross-project Subgraphs withou
     );
     assert.ok(callerRuns.runs[0]?.executionIdentity?.correlationId);
     const callerUrl = `${apiBaseUrl}/recordings/workflows/${encodeURIComponent(callerProject.metadata.id)}/runs`;
+    const summaryResponse = await fetch(`${apiBaseUrl}/recordings/${callerRuns.runs[0]!.id}/summary`);
+    assert.equal(summaryResponse.status, 200);
+    assert.match(summaryResponse.headers.get('cache-control') ?? '', /no-store/);
+    const summary = await readJson<Record<string, unknown>>(summaryResponse);
+    for (const key of ['id', 'status', 'durationMs', 'endpointNameAtExecution', 'createdAt'])
+      assert.deepEqual(summary[key], (callerRuns.runs[0] as unknown as Record<string, unknown>)[key]);
+    assert.equal((await fetch(`${apiBaseUrl}/recordings/missing/summary`)).status, 404);
     const relatedResponse = await fetch(`${callerUrl}?includeSubgraphRuns=true&pageSize=1`);
     assert.equal(relatedResponse.status, 200);
     const related = await readJson<{

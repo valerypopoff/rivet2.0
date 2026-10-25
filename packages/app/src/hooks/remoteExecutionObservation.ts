@@ -1,5 +1,8 @@
 import type { GraphExecutionMetadata, ProcessEventMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
 import { getSubgraphProjectKey } from '@valerypopoff/rivet2-core';
+import { createExecutionObservationCoordinator } from '../domain/execution/executionObservationCoordinator.js';
+import type { DisplayAdmission } from '../domain/execution/executionDisplayPolicy.js';
+import { normalizeExecutionEvent } from '../domain/execution/executionEventNormalization.js';
 
 export type RemoteObservation = {
   id: string;
@@ -12,12 +15,12 @@ export type RemoteObservation = {
   needsInput?: boolean;
   paused?: boolean;
 };
-type Receiver = { token: number };
+type Receiver = { token: number; path?: string | null; bundleKey?: string };
 type Member = { token: number; observation: RemoteObservation };
 type Run = {
+  admission: DisplayAdmission;
   projectId: ProjectId;
   receivers: Map<ProjectId, Receiver>;
-  owners: Map<string, ProjectId>;
   members: Map<ProjectId, Member>;
   pendingInputs: Set<string>;
   settled: boolean;
@@ -28,6 +31,7 @@ type Source = { serial: number; projectId: ProjectId; runs: Map<string, Run> };
 
 /** Metadata-only admission/lifetime owner. Never opens a socket or sends controls. */
 export function createRemoteExecutionObservationRouter(options: {
+  coordinator?: ReturnType<typeof createExecutionObservationCoordinator>;
   eligible?(projectId: ProjectId, source: object): boolean;
   receivers(): Map<ProjectId, Receiver>;
   conflict(projectId: ProjectId, source: object): string | undefined;
@@ -39,16 +43,19 @@ export function createRemoteExecutionObservationRouter(options: {
     message: K,
     data: ProcessEventMessageMap[K],
     activityData: ProcessEventMessageMap[K] | false,
+    bindingToken: number,
   ): void;
   settle(projectId: ProjectId, rootRunId: string, status: 'completed' | 'error' | 'aborted'): void;
 }) {
   const sources = new Map<object, Source>();
+  const coordinator = options.coordinator ?? createExecutionObservationCoordinator();
   let serial = 0;
   function isCurrent(projectId: ProjectId, member: Member) {
     return options.receivers().get(projectId)?.token === member.token;
   }
-  function update(projectId: ProjectId, member: Member, patch: Partial<RemoteObservation>) {
+  function update(run: Run, projectId: ProjectId, member: Member, patch: Partial<RemoteObservation>) {
     if (
+      run.members.get(projectId) !== member ||
       !isCurrent(projectId, member) ||
       Object.keys(patch).every((key) =>
         Object.is(member.observation[key as keyof RemoteObservation], patch[key as keyof RemoteObservation]),
@@ -60,17 +67,32 @@ export function createRemoteExecutionObservationRouter(options: {
     options.publish(projectId, next);
   }
   function forget(run: Run) {
-    for (const [id, member] of run.members) options.remove(id, member.observation.id);
+    const members = [...run.members];
+    run.members.clear();
+    for (const [id, member] of members) options.remove(id, member.observation.id);
   }
   function blocked(key: object, run: Run, root: string, id: ProjectId, member: Member) {
-    if (!isCurrent(id, member) || member.observation.status === 'blocked') return true;
+    if (run.members.get(id) !== member || !isCurrent(id, member) || member.observation.status === 'blocked')
+      return true;
+    const rejection = coordinator.check(
+      run.admission,
+      root,
+      id,
+      (id) => options.receivers().get(id as ProjectId),
+      (id) => options.eligible?.(id as ProjectId, key) === false || Boolean(options.conflict(id as ProjectId, key)),
+    );
     const conflict =
       options.eligible?.(id, key) === false
         ? 'This project no longer belongs to this Remote Debugger session.'
-        : options.conflict(id, key);
+        : options.conflict(id, key) ??
+          (rejection ? 'This tab changed ownership during the run. Observe the next remote run.' : undefined);
     if (!conflict) return false;
-    if (!run.settled && id !== run.projectId) options.settle(id, root, 'aborted');
-    update(id, member, { status: 'blocked', message: conflict, needsInput: false, paused: false });
+    const shouldSettle = !run.settled && member.observation.status === 'observing' && id !== run.projectId;
+    const bindingToken = member.token;
+    // Store writes notify ownership subscribers synchronously. Commit the
+    // blocked state before settlement can reenter this router.
+    update(run, id, member, { status: 'blocked', message: conflict, needsInput: false, paused: false });
+    if (shouldSettle && options.receivers().get(id)?.token === bindingToken) options.settle(id, root, 'aborted');
     return true;
   }
   return {
@@ -87,7 +109,14 @@ export function createRemoteExecutionObservationRouter(options: {
         replayRecordedAt?: number;
         processId?: string;
       } | null;
-      if (!accepted || Number.isFinite(event?.replayRecordedAt)) return;
+      const envelope = normalizeExecutionEvent({
+        source: key,
+        kind: 'remote-debugger',
+        sourceProjectId,
+        message,
+        data,
+      });
+      if (!accepted || envelope.origin === 'replay') return;
       // Even a legacy or mid-run source owns its warning's lifetime. Keeping
       // this empty source record lets disconnect/dispose remove that notice.
       let source = sources.get(key);
@@ -123,11 +152,14 @@ export function createRemoteExecutionObservationRouter(options: {
               receivers.delete(previous.projectId);
             const member = previous.members.get(sourceProjectId);
             if (!member) continue;
-            if (!previous.settled && member.observation.status !== 'blocked' && isCurrent(sourceProjectId, member))
-              options.settle(sourceProjectId, root, 'aborted');
-            options.remove(sourceProjectId, member.observation.id);
             previous.members.delete(sourceProjectId);
             previous.receivers.delete(sourceProjectId);
+            if (!previous.settled && member.observation.status === 'observing' && isCurrent(sourceProjectId, member))
+              options.settle(sourceProjectId, root, 'aborted');
+            options.remove(sourceProjectId, member.observation.id);
+            // Finish removing the detached member even after disconnect, but
+            // never let that old start capture an unreachable admission.
+            if (sources.get(key) !== source) return;
           }
         if ([...source.runs.values()].filter((item) => !item.settled).length >= 32) {
           options.notice(
@@ -137,13 +169,24 @@ export function createRemoteExecutionObservationRouter(options: {
           return;
         }
         run = {
+          admission: coordinator.capture(
+            key,
+            execution.rootRunId,
+            sourceProjectId,
+            receivers,
+            (id) =>
+              options.eligible?.(id as ProjectId, key) === false || Boolean(options.conflict(id as ProjectId, key)),
+            false,
+            'remote-debugger',
+          ),
           projectId: sourceProjectId,
           receivers,
-          owners: new Map([[execution.graphRunId, sourceProjectId]]),
           members: new Map(),
           pendingInputs: new Set(),
           settled: false,
         };
+        run.receivers = run.admission.receivers as Map<ProjectId, Receiver>;
+        run.admission.graphOwners.set(execution.graphRunId, sourceProjectId);
         source.runs.set(execution.rootRunId, run);
         options.notice(sourceProjectId, undefined);
       }
@@ -160,7 +203,7 @@ export function createRemoteExecutionObservationRouter(options: {
       if (message === 'pause' || message === 'resume') {
         run.paused = message === 'pause';
         for (const [id, member] of run.members)
-          if (!blocked(key, run, execution.rootRunId, id, member)) update(id, member, { paused: run.paused });
+          if (!blocked(key, run, execution.rootRunId, id, member)) update(run, id, member, { paused: run.paused });
         return;
       }
       const isRootGraph = !execution.parentGraphRunId && execution.projectId === sourceProjectId;
@@ -174,23 +217,32 @@ export function createRemoteExecutionObservationRouter(options: {
         const successful = message === 'done' || message === 'graphFinish';
         for (const [id, member] of run.members) {
           if (blocked(key, run, execution.rootRunId, id, member)) continue;
-          if (id !== sourceProjectId)
+          // Claim this member's terminal state before store callbacks can
+          // disconnect the source or hand its tab to another owner.
+          update(run, id, member, {
+            status: successful ? 'complete' : 'interrupted',
+            needsInput: false,
+            paused: false,
+          });
+          if (id !== sourceProjectId && isCurrent(id, member))
             options.settle(
               id,
               execution.rootRunId,
               successful ? 'completed' : run.abortRequested ? 'aborted' : 'error',
             );
-          update(id, member, { status: successful ? 'complete' : 'interrupted', needsInput: false, paused: false });
         }
         run.settled = true;
         const completed = [...source.runs.entries()].filter(([, item]) => item.settled);
         for (const [root, old] of completed.slice(0, Math.max(0, completed.length - 32))) {
           forget(old);
           source.runs.delete(root);
+          coordinator.settle(key, root);
         }
         return;
       }
-      const parentOwner = execution.parentGraphRunId ? run.owners.get(execution.parentGraphRunId) : undefined;
+      const parentOwner = execution.parentGraphRunId
+        ? run.admission.graphOwners.get(execution.parentGraphRunId)
+        : undefined;
       if (message === 'graphStart') {
         if (execution.projectId !== sourceProjectId && !parentOwner) {
           options.notice(
@@ -199,16 +251,16 @@ export function createRemoteExecutionObservationRouter(options: {
           );
           return;
         }
-        if (run.owners.size >= 4096 && !run.owners.has(execution.graphRunId)) {
+        if (run.admission.graphOwners.size >= 4096 && !run.admission.graphOwners.has(execution.graphRunId)) {
           options.notice(
             sourceProjectId,
             'Dependency graph observation capacity reached. Some graph details are unavailable.',
           );
           return;
         }
-        run.owners.set(execution.graphRunId, execution.projectId);
+        run.admission.graphOwners.set(execution.graphRunId, execution.projectId);
       }
-      if (run.owners.get(execution.graphRunId) !== execution.projectId) return;
+      if (run.admission.graphOwners.get(execution.graphRunId) !== execution.projectId) return;
       // A wait belongs to the runtime root, not a visible receiving tab. Source
       // prompts and terminals from closed/stopped children must update it too.
       const pendingBefore = run.pendingInputs.size;
@@ -219,19 +271,28 @@ export function createRemoteExecutionObservationRouter(options: {
       if (pendingBefore !== run.pendingInputs.size)
         for (const [target, entry] of run.members)
           if (!blocked(key, run, execution.rootRunId, target, entry))
-            update(target, entry, { needsInput: run.pendingInputs.size > 0 });
+            update(run, target, entry, { needsInput: run.pendingInputs.size > 0 });
       if (execution.projectId === sourceProjectId && !execution.projectScope) return;
       const id = execution.projectId;
       const receiver = run.receivers.get(id);
       if (options.eligible?.(id, key) === false) return;
       if (!receiver || receiver.token !== options.receivers().get(id)?.token) return;
-      if (run.owners.get(execution.graphRunId) !== id) return;
+      if (run.admission.graphOwners.get(execution.graphRunId) !== id) return;
       const version = (['latest', 'published'] as const).find(
         (version) => execution.projectScope === getSubgraphProjectKey({ projectId: id, version }),
       );
       let member = run.members.get(id);
       if (!member) {
-        const conflict = options.conflict(id, key);
+        const rejection = coordinator.check(
+          run.admission,
+          execution.rootRunId,
+          id,
+          (id) => options.receivers().get(id as ProjectId),
+          (id) => options.eligible?.(id as ProjectId, key) === false || Boolean(options.conflict(id as ProjectId, key)),
+        );
+        const conflict =
+          options.conflict(id, key) ??
+          (rejection ? 'This tab changed ownership during the run. Observe the next remote run.' : undefined);
         member = {
           token: receiver.token,
           observation: {
@@ -253,9 +314,12 @@ export function createRemoteExecutionObservationRouter(options: {
       // starts after this root was admitted. Do not resume halfway through it.
       if (blocked(key, run, execution.rootRunId, id, member)) return;
       if (version)
-        update(id, member, {
+        update(run, id, member, {
           version: member.observation.version && member.observation.version !== version ? 'mixed' : version,
         });
+      // Publishing provenance can synchronously release or block this member.
+      // The old callback must not paint data after that ownership handoff.
+      if (run.members.get(id) !== member || member.observation.status === 'blocked') return;
       if (['start', 'abort', 'trace', 'codeConsole'].includes(message)) return;
       options.project(
         id,
@@ -269,17 +333,22 @@ export function createRemoteExecutionObservationRouter(options: {
           },
         } as ProcessEventMessageMap[K],
         id === sourceProjectId ? false : data,
+        receiver.token,
       );
     },
     disconnect(key: object) {
       const source = sources.get(key);
       if (!source) return;
+      // Relinquish ownership before any external store callback. Otherwise its
+      // synchronous reconciliation can recursively settle the disconnecting run.
+      sources.delete(key);
+      coordinator.disconnect(key);
       for (const [root, run] of source.runs) {
         for (const [id, member] of run.members) {
           if (
             !run.settled &&
             id !== run.projectId &&
-            member.observation.status !== 'blocked' &&
+            member.observation.status === 'observing' &&
             options.receivers().get(id)?.token === member.token
           )
             options.settle(id, root, 'aborted');
@@ -288,23 +357,76 @@ export function createRemoteExecutionObservationRouter(options: {
         options.notice(run.projectId, undefined);
       }
       options.notice(source.projectId, undefined);
-      sources.delete(key);
     },
     sweep() {
       const current = options.receivers();
-      for (const source of sources.values())
+      for (const [key, source] of sources)
         for (const run of source.runs.values()) {
-          for (const [id, member] of run.members)
-            if (current.get(id)?.token !== member.token) {
-              options.remove(id, member.observation.id);
-              run.members.delete(id);
+          for (const [id, member] of run.members) {
+            // A verified rename keeps this lifetime. Remember its current
+            // descriptor for a later membership-detach explanation, but never
+            // transfer the original admission across a changed token.
+            const latest = current.get(id);
+            if (latest?.token === member.token) {
+              if (run.receivers.get(id)?.token === member.token) run.receivers.set(id, latest);
+              continue;
             }
+            if (current.get(id)?.token !== member.token) {
+              const previous = run.receivers.get(id);
+              const next = current.get(id);
+              if (
+                next &&
+                previous &&
+                member.token === previous.token &&
+                next.path === previous.path &&
+                next.bundleKey !== previous.bundleKey
+              ) {
+                // An explicit membership transition on a still-open document
+                // retains a blocked explanation, not admission to old events.
+                // Only that first transition can carry provenance forward; a
+                // later renewal is a new lifetime even at the identical path.
+                const shouldSettle =
+                  !run.settled &&
+                  member.observation.status === 'observing' &&
+                  id !== run.projectId &&
+                  !options.conflict(id, key);
+                member.token = next.token;
+                const bindingToken = member.token;
+                update(run, id, member, {
+                  status: 'blocked',
+                  message: 'This project no longer belongs to this Remote Debugger session.',
+                  needsInput: false,
+                  paused: false,
+                });
+                if (shouldSettle && options.receivers().get(id)?.token === bindingToken)
+                  options.settle(id, member.observation.rootRunId, 'aborted');
+                continue;
+              }
+              run.members.delete(id);
+              options.remove(id, member.observation.id);
+            }
+          }
         }
     },
     reconcileOwnership() {
+      // Binding renewals can be reported through execution-state changes rather
+      // than the project list (notably a same-path reload).
+      this.sweep();
       for (const [key, source] of sources)
-        for (const [root, run] of source.runs)
+        for (const [root, run] of source.runs) {
+          // Capture even transient conflicts before a first child event. The
+          // canonical store removes the old tab-switch intermediate-state race.
+          for (const id of run.receivers.keys())
+            coordinator.check(
+              run.admission,
+              root,
+              id,
+              (id) => options.receivers().get(id as ProjectId),
+              (id) =>
+                options.eligible?.(id as ProjectId, key) === false || Boolean(options.conflict(id as ProjectId, key)),
+            );
           for (const [id, member] of run.members) blocked(key, run, root, id, member);
+        }
     },
     dispose() {
       for (const key of [...sources.keys()]) this.disconnect(key);

@@ -1,0 +1,5 @@
+simulation: rivet-liquid-decisions
+routing: path
+mocks:
+  - routeKey: liquid
+    path: ../mocks/liquid-decisions/config.yaml

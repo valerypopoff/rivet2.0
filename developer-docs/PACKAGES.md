@@ -2,6 +2,53 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-25 — execution consolidation and image questions
+
+All tracks last changed versions in `1ebeef366`. This update covers subsequent
+changes through `390d5657a` plus model-gated Bounding Box questions.
+
+| Packages                        | Version             | Changes since that track's last bump                                                                                                                                                                                                                                                |
+| ------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.29.0` → `2.30.0` | Shared hosted/desktop policies and execution coordination, observation lifetime safeguards, lazy viewers and Run Activity improvements; bundles the new image-question and Bounding Box capabilities.                                                                               |
+| Core, Node, CLI, Evaluations    | `2.23.0` → `2.24.0` | Core adds question-local image Instructions and verified Jev Bounding Box support, and consolidates child ownership/runtime registration. Node, CLI and Evaluations have no package-local source changes and remain required public-family companions.                              |
+| App Executor                    | `2.15.0` → `2.16.0` | Source-bundled Core/runtime companion, with no new sidecar protocol or package-local source changes.                                                                                                                                                                                |
+| All five Studio Server packages | `1.31.0` → `1.32.0` | API repository/resource ownership and shutdown hardening; Web shared-host policies, execution and loading improvements, image-question/Box authoring; hardened container dependencies. Bootstrap, Shared and Executor are lockstep companions without package-local source changes. |
+| Docs                            | `2.23.0` → `2.24.0` | Question-image authoring, Bounding Box answers and provider/model limitations.                                                                                                                                                                                                      |
+
+Minor versions reflect compatible capabilities, not a new feature in every
+companion. Tauri/Cargo follows App and the CLI Docker fallback follows the public
+family. Workspace ranges, lockfile resolutions, Helm metadata and database schema
+versions are unchanged. This is release preparation, not publication, deployment
+or live provider qualification. See the [prepared release matrix](BUILD-AND-CI.md#prepared-release-versions-2026-10-25).
+
+## Version update: 2026-10-24 — backend overlap, recording UX and Jev images
+
+Before this update, App, the public runtime family, App Executor and Studio Server
+last changed versions in `18437156c`; Docs last changed version in `216625246`.
+This update covers subsequent commits through `181b51496` plus the accompanying
+Decision AI timeout removal, Jev 1.14 pricing/images, SubQ Snap integration and
+diagnostic/regression hardening.
+
+| Packages | Version | Changes since that track's last bump |
+| --- | --- | --- |
+| App | `2.28.2` → `2.29.0` | Adds bundle-wide local execution visibility, loaded-recording status colors, metadata and tab icons. Refines recording-only tabs, save/close safeguards and tab shortcuts; renames Classifier presentation to Decision AI without renaming serialized primitives. Includes profile extraction/timeout ownership fixes and security dependency updates. |
+| Core, Node, CLI, Evaluations | `2.22.1` → `2.23.0` | Core adds experimental Jev image assets for verified 1.13/1.14 models and aliases, recognizes 1.14 pricing, adds SubQ Snap's native Decisions API, removes run-wide classifier timeouts, and hardens cancellable long retry waits. Decision AI diagnostics/profile labels and denied-access guidance are consistent across Core, Run Activity and Node's hosted inspector. Node also has a security dependency update; CLI and Evaluations are required public-family companions, not separate feature implementations. |
+| App Executor | `2.14.2` → `2.15.0` | Source-bundled companion for Core's new Jev/SubQ capabilities and changed timeout behavior. Package-local changes are retirement regression tests, not a new sidecar API. |
+| All five Studio Server packages | `1.30.0` → `1.31.0` | Adds opt-in singleton backend overlap, exclusive embedded-housekeeping ownership and forwarding, separate readiness reporting and recorded upgrade handovers. Includes bundle execution/routing and recording playback/metadata refinements, hosted Decision AI presentation and security/build fixes. API/Web/Shared change locally; Bootstrap has a dependency fix; Executor is a lockstep companion. |
+| Docs | `2.22.0` → `2.23.0` | Documents bundle execution visibility, updated recordings, Decision AI naming/profile timing, experimental Jev images and SubQ Snap setup, including usage/pricing, access/retention and provider-specific limits. |
+
+These feature increments follow the repository's separate release tracks; they do
+not imply publication, GCP deployment or provider qualification. Important behavior
+change: Decision AI run no longer exposes or honors saved `timeoutMs` or
+`profileChainTimeoutMs` values, and profile extraction does not migrate them.
+Profile-owned response deadlines, cancellation and resource limits remain.
+Jev's image API remains experimental. Existing node type IDs and project formats
+are unchanged.
+
+Tauri/Cargo metadata follows App; the CLI Docker fallback follows the public
+family. Existing `workspace:` ranges, dependency resolutions, Helm metadata and
+managed schema versions are not changed by this version-only preparation.
+
 ## Version update: 2026-10-22 — compact HA and project-settings correctness
 
 All package tracks were last bumped in `216625246`. This update covers commits

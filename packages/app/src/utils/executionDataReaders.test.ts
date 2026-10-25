@@ -282,6 +282,7 @@ test('tryRestoreStoredPortMap skips unavailable ref-backed values without losing
   const restored = tryRestoreStoredPortMap(
     {
       output: inlineStored('string', 'available'),
+      ['__proto__']: inlineStored('string', 'opaque available'),
       missing: refStored('object', 'missing-ref'),
     } as never,
     createDataRefStore(),
@@ -292,6 +293,7 @@ test('tryRestoreStoredPortMap skips unavailable ref-backed values without losing
       type: 'string',
       value: 'available',
     },
+    ['__proto__']: { type: 'string', value: 'opaque available' },
   });
 });
 

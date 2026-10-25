@@ -330,6 +330,19 @@ export async function fetchWorkflowRecordingArtifactText(
   return parseTextResponse(response);
 }
 
+export async function fetchWorkflowRecordingSummary(
+  recordingId: string,
+): Promise<import('./types').WorkflowRecordingRunSummary> {
+  const response = await fetch(`${API}/workflows/recordings/${encodeURIComponent(recordingId)}/summary`, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(5_000),
+  });
+  const summary = await workflowJsonResponse<import('./types').WorkflowRecordingRunSummary>(response);
+  if (summary.id !== recordingId || !['succeeded', 'failed', 'suspicious'].includes(summary.status))
+    throw new Error('Recording summary identity or outcome is invalid.');
+  return summary;
+}
+
 export async function fetchHostedProjectFile(path: string): Promise<{ contents: string }> {
   const response = await fetch(`${API}/projects/load`, {
     method: 'POST',

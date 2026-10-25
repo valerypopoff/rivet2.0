@@ -2,6 +2,18 @@
 
 Canonical guide for execution lineage, event snapshots, and app-side run history.
 
+For bundle editor/debugger/playback behavior before the coordination refactor,
+use the dated
+[functional baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md). It supplies stable
+comparison IDs, mode-specific differences, code/test owners and evidence limits.
+The shared binding registry/coordinator and canonical execution store are now
+implemented; see [Execution coordination](./EXECUTION-COORDINATION.md) for the
+writer inventory, extension rules and explicit baseline adjustments.
+Interactive graph/node/activity hooks and inactive projection now use the same
+snapshot transitions and commit boundary. Differences such as preload suppression,
+partial-run preservation and selection are explicit presentation policy. Legacy
+terminal confirmations are runtime snapshot metadata, not a hook-local queue.
+
 ## Core Identity
 
 Every graph event carries `GraphExecutionMetadata`: `rootRunId` identifies one root
@@ -33,6 +45,32 @@ its stored outputs.
 Browser, Node sidecar, and Remote Debugger sessions are project-scoped. Routing keys
 include project/run ownership so runs in different tabs cannot replace each other.
 Terminal events and abort controls must resolve against the same owning session.
+
+### Ordinary editor bundle runs across open tabs
+
+Normal Browser, internal desktop Node and internal hosted Node runs project live
+called-project evidence into then-open members of the same explicit bundle.
+Hosted membership uses its server-qualified identity; desktop membership uses its
+explicit manifest binding, with authoritative hosted detachment taking precedence.
+The source keeps cancellation, prompts, root errors and recording. Local passive
+display does not create a Remote Debugger session or view-only lock.
+
+Independent runs, loaded recordings and passive Remote Debugger observations have
+display priority. Local conflict exclusions last for the root, including conflicts
+that end before the first child event or occur entirely between child events.
+Source/receiver close/reopen, file rebinding or bundle membership round-trips fence
+old projection; newly opened tabs wait for the next root. Only source-root start
+events establish routing; identified root terminals finish display, and late child
+events cannot resurrect it. Browser fences remain until actual processor settlement;
+Node completed display metadata is bounded separately. Active roots are not evicted.
+
+The frozen baseline's LOC-01–08 describe the preserved behavior. Its GAP-01–05
+record pre-refactor differences, not the current implementation backlog.
+[Execution coordination](./EXECUTION-COORDINATION.md) describes the implemented
+shared binding/admission and snapshot owners, original activity ancestry,
+transient-conflict fences and cleanup. Intentional adapter differences remain:
+Remote Debugger validates runtime definitions/caller ancestry and uses view-only
+observation controls; ordinary local projection does not acquire those controls.
 
 ### Remote dependency observations across open tabs
 
@@ -76,6 +114,11 @@ same captured lifetime through the registry, not the initiating tab or a raw
 socket callback. Even when no current source remains, the registry still notifies
 the passive observation owner so it can settle its existing receivers. A normal
 file rename/move does not end the source tab's lifetime or strand its active run.
+This continuity applies to verified host moves with unchanged immutable project
+identity and bundle membership and unique old/new open paths. Ordinary path
+reassignment, ambiguous paths, membership changes and snapshot replacement still
+retire the old binding. Receiver renames use the same rule, so existing admitted
+data continues without issuing another run.
 Membership discovery is reused per explicit group during workspace refresh.
 Reconciliation removes departed members as well as adding new ones, without
 merging independent sessions. Only display eligibility changes; external calls
@@ -114,8 +157,9 @@ Ownership is split deliberately:
   A → B → A return calls keep their existing canvas projection.
 - `useRemoteExecutionObservations.ts` binds the router to project snapshots and
   provenance atoms. `updateOpenProjectExecutionSnapshot` applies storage/reference
-  effects once synchronously, ignores closed tabs, and restores only changed active
-  fields. Authored graphs, dirty state and executor preferences are not rewritten.
+  effects once synchronously, ignores closed/stale bindings, and writes one canonical
+  snapshot shared by active field lenses. Authored graphs, dirty state and executor
+  preferences are not rewritten.
 
 Canvas projection clears foreign `projectScope` and cross-project parent/executor
 links, but **Run Activity retains original ancestry** via `activityData`. Otherwise
@@ -142,9 +186,9 @@ controls and guard shortcut/Evaluation entry points. The actual root project kee
 its existing runtime controls and prompts, using the same shared transport. Every
 member can stop the shared debugger. Completed values remain visible.
 Ownership changes also block retained completed observations, so an old view-only
-lock cannot override a newly selected debugger or playback owner. The adapter
-coalesces ownership checks after synchronous tab restoration; it does not scan large
-execution snapshots on every streaming chunk. Every terminal and provenance fan-out
+lock cannot override a newly selected debugger or playback owner. Ownership checks
+are synchronous against canonical per-project state; there is no intermediate tab
+restoration state. Every terminal and provenance fan-out
 also checks ownership and the receiver lifetime before publishing.
 
 Input-wait accounting belongs to the admitted root, including prompts in the source

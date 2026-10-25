@@ -1,7 +1,15 @@
 import type { ProjectId } from '@valerypopoff/rivet2-core';
+import { loadHostedPackagePlugin } from '../io/loadHostedPackagePlugin';
 import { normalizeEvaluationLibrary, normalizeEvaluationRun } from '@valerypopoff/rivet2-evaluations';
 import type { ProviderOverrides } from '../../app/src/host';
 import { LocalEvaluationRunStore } from '../../app/src/providers/EvaluationRunStore';
+import {
+  getOpenedProjectSession,
+  primeOpenedProjectSession,
+  syncOpenedProjectSessionIds,
+} from '../io/openedProjectSessionCache';
+import { resolveHostedProjectTitle } from './openedProjectMetadata';
+import { normalizeHostedProjectExecutorMode } from '../overrides/utils/hostedExecutorMode';
 import { HostedDatasetProvider } from '../io/HostedDatasetProvider';
 import { HostedIOProvider } from '../io/HostedIOProvider';
 import { getDefaultEnvironmentProvider, getDefaultPathPolicyProvider } from '../overrides/utils/tauri';
@@ -44,6 +52,19 @@ export function clearHostedDatasetsForProject(projectId: ProjectId): Promise<voi
 }
 
 export const hostedRivetProviders = {
+  packagePluginLoader: loadHostedPackagePlugin,
+  openedProjectSync: {
+    mode: 'explicit-tabs',
+    resolveTitle: resolveHostedProjectTitle,
+    onOpenProjectIdsChanged: syncOpenedProjectSessionIds,
+  },
+  projectActivation: {
+    getEvaluation: (info) => (info.fsPath ? getOpenedProjectSession(info.projectId, info.fsPath) : undefined),
+    cacheEvaluation: (info, evaluation) => {
+      if (info.fsPath) primeOpenedProjectSession(info.projectId, { fsPath: info.fsPath, evaluation });
+    },
+    normalizeExecutorMode: normalizeHostedProjectExecutorMode,
+  },
   io: new HostedIOProvider(hostedDatasetProvider, hostedEvaluationStore),
   datasets: hostedDatasetProvider,
   environment: getDefaultEnvironmentProvider(),

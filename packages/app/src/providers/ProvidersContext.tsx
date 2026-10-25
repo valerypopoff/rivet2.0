@@ -1,5 +1,7 @@
 import { createContext, useContext, useMemo, type FC, type ReactNode } from 'react';
-import { type IOProvider } from '../io/IOProvider.js';
+import { type IOProvider, type EvaluationProjectFileData } from '../io/IOProvider.js';
+import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
+import type { OpenedProjectSynchronizationPolicy } from '../utils/openedProjectSynchronization.js';
 import {
   type DatasetProvider,
   type AudioProvider,
@@ -12,6 +14,8 @@ import {
   type SubgraphProjectRun,
   type Project,
   type ProjectGraphCallSite,
+  type PackagePluginLoadSpec,
+  type RivetPlugin,
 } from '@valerypopoff/rivet2-core';
 import {
   type EvaluationDataset,
@@ -197,7 +201,18 @@ export type LocalExecutionRecordingPersistenceProvider = {
   }): Promise<void>;
 };
 
+/** Hosts customize persistence/transport, never activation identity or commit rules. */
+type ProjectActivationLocation = { projectId: ProjectId; fsPath?: string | null };
+export type ProjectActivationPolicy = {
+  getEvaluation?: (info: ProjectActivationLocation) => EvaluationProjectFileData | undefined;
+  cacheEvaluation?: (info: ProjectActivationLocation, evaluation: EvaluationProjectFileData) => void;
+  normalizeExecutorMode?: (mode: ProjectExecutorMode | undefined) => ProjectExecutorMode | undefined;
+};
+
 export type Providers = {
+  packagePluginLoader?: (spec: PackagePluginLoadSpec, log: (message: string) => void) => Promise<RivetPlugin>;
+  openedProjectSync?: OpenedProjectSynchronizationPolicy;
+  projectActivation?: ProjectActivationPolicy;
   io: IOProvider;
   datasets: AppDatasetProvider;
   audio: AudioProvider;

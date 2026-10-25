@@ -429,7 +429,9 @@ export const customThemeSecondaryColorState = atomWithStorage<string | undefined
   storage,
 );
 
-export const debuggerDefaultUrlState = atomWithStorage('debuggerDefaultUrl', 'ws://localhost:21888', storage);
+// Missing preference is distinct from an explicitly saved URL. The shared
+// connection-settings hook supplies the current host default without persisting it.
+export const debuggerDefaultUrlState = atomWithStorage<string | undefined>('debuggerDefaultUrl', undefined, storage);
 
 function clampCssColorChannel(value: number): number {
   if (!Number.isFinite(value)) {

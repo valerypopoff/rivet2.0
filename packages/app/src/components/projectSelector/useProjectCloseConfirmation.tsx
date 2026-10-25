@@ -21,6 +21,7 @@ import {
 } from '../../utils/projectUnsavedChanges.js';
 import { graphState } from '../../state/graph.js';
 import { AppModalHeader } from '../AppModalHeader.js';
+import { isRecordingSnapshotPath } from '../../utils/recordingPlayback.js';
 
 const unsavedProjectCloseModalBody = css`
   display: flex;
@@ -42,6 +43,13 @@ export function useProjectCloseConfirmation(): {
   const [projectPendingClose, setProjectPendingClose] = useState<ProjectId | null>(null);
 
   const requestCloseProject = (projectId: ProjectId) => {
+    // Replay layout edits cannot be saved back to a source project. This must
+    // also work for inactive snapshots and after their recording is unloaded.
+    // Do not exempt an editable project merely because it has a recording loaded.
+    if (isRecordingSnapshotPath(store.get(openedProjectsState)[projectId]?.fsPath)) {
+      void closeProject(projectId);
+      return;
+    }
     const active = store.get(projectState);
     const content =
       active.metadata.id === projectId

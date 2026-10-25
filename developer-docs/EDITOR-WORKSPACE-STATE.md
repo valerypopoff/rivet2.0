@@ -60,6 +60,28 @@ cannot overwrite the retained viewport with the runtime canvas default.
 
 ### Project activation and content replacement
 
+`useSyncCurrentStateIntoOpenedProjects` is shared by standalone and hosted
+editors; no hosted source replacement is needed. Hosted `openedProjectSync`
+policy uses explicit-tab ownership, path-derived labels (except virtual replay
+paths) and a cache-pruning observer. The editor synchronizes live tab metadata,
+keeps Browser/Node/debugger choices per tab and repairs old persisted registries
+through `reconcileOpenedProjectRegistry`. Recovery preserves bundle membership,
+prefers a file-backed duplicate, keeps valid snapshots, repairs missing/damaged
+snapshots from valid legacy embedded projects and removes unrecoverable orphans.
+It never marks recovered edits clean. Closed active tabs cannot be recreated from
+the retained scratch project or old loaded path, but an explicit reopen is valid.
+Disabling synchronization for a loading placeholder disables all these writes
+and cache notifications. The default standalone scratch-tab policy is unchanged.
+Executor metadata is resolved from the active project's own live session at the
+synchronization write, never from a previous render's tab or passive bundle
+observer. Legacy recovery of a still-loaded file with missing tab metadata keeps
+its loaded path; clearing that path is reserved for a genuinely closed workspace.
+The close-suppression observer starts with the rendered tab IDs, so a closure
+before its first effect (or while a loading placeholder disables it) cannot be
+mistaken for legacy recovery. Registry recovery treats project IDs as opaque
+keys, including `constructor` and `__proto__`; it uses a Map while reconciling and
+creates ordinary own properties for serialized metadata/snapshots.
+
 [`useActivateOpenedProject.ts`](../packages/app/src/hooks/useActivateOpenedProject.ts)
 owns activation of an existing tab. Selecting an already-active project does not
 reload bytes or reset its saved digest. Selecting another open tab prefers its

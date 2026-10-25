@@ -25,35 +25,20 @@ const key = (code: string, modifiers: Partial<KeyboardShortcutEvent> = {}): Keyb
   ...modifiers,
 });
 
-test('Windows and Linux match Chrome tab navigation, not tab-reordering or extra modifiers', () => {
-  for (const platform of ['windows', 'linux'] as const) {
-    assert.equal(getProjectTabHotkeyDirection(key('Tab', { ctrlKey: true }), platform), 1);
-    assert.equal(getProjectTabHotkeyDirection(key('Tab', { ctrlKey: true, shiftKey: true }), platform), -1);
-    assert.equal(getProjectTabHotkeyDirection(key('PageDown', { ctrlKey: true }), platform), 1);
-    assert.equal(getProjectTabHotkeyDirection(key('PageUp', { ctrlKey: true }), platform), -1);
-    assert.equal(getProjectTabHotkeyDirection(key('PageDown', { ctrlKey: true, shiftKey: true }), platform), undefined);
-    assert.equal(getProjectTabHotkeyDirection(key('PageUp', { ctrlKey: true, shiftKey: true }), platform), undefined);
-    assert.equal(getProjectTabHotkeyDirection(key('Tab'), platform), undefined);
-    assert.equal(getProjectTabHotkeyDirection(key('Tab', { ctrlKey: true, altKey: true }), platform), undefined);
-    assert.equal(getProjectTabHotkeyDirection(key('Tab', { ctrlKey: true, metaKey: true }), platform), undefined);
-    assert.equal(getProjectTabHotkeyDirection(key('Tab', { metaKey: true }), platform), undefined);
+test('Shift+Page Up switches right and Shift+Page Down left with exact modifiers on every platform', () => {
+  for (const platform of ['windows', 'linux', 'macos'] as const) {
+    for (const [code, direction] of [
+      ['PageUp', 1],
+      ['PageDown', -1],
+    ] as const) {
+      assert.equal(getProjectTabHotkeyDirection(key(code, { shiftKey: true }), platform), direction);
+      assert.equal(getProjectTabHotkeyDirection(key('', { key: code, shiftKey: true }), platform), direction);
+      assert.equal(getProjectTabHotkeyDirection(key(code), platform), undefined);
+      for (const extra of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+        assert.equal(getProjectTabHotkeyDirection(key(code, { shiftKey: true, ...extra }), platform), undefined);
+      }
+    }
   }
-});
-
-test('macOS matches Command+Option+arrows without claiming text navigation shortcuts', () => {
-  assert.equal(getProjectTabHotkeyDirection(key('ArrowRight', { metaKey: true, altKey: true }), 'macos'), 1);
-  assert.equal(getProjectTabHotkeyDirection(key('ArrowLeft', { metaKey: true, altKey: true }), 'macos'), -1);
-  for (const modifiers of [
-    { altKey: true },
-    { metaKey: true },
-    { ctrlKey: true, altKey: true },
-    { metaKey: true, altKey: true, shiftKey: true },
-    { metaKey: true, altKey: true, ctrlKey: true },
-  ]) {
-    assert.equal(getProjectTabHotkeyDirection(key('ArrowLeft', modifiers), 'macos'), undefined);
-  }
-  // Semantic keys work even when no physical code is provided.
-  assert.equal(getProjectTabHotkeyDirection(key('', { key: 'ArrowRight', metaKey: true, altKey: true }), 'macos'), 1);
 });
 
 test('adjacent navigation follows visible order, wraps, and includes opening placeholders', () => {
@@ -67,13 +52,21 @@ test('adjacent navigation follows visible order, wraps, and includes opening pla
   assert.equal(getAdjacentProjectTab([a], a, 1), undefined);
 });
 
-test('browser-friendly Alt+Page shortcuts use exact modifiers on every platform', () => {
+test('previous project-tab shortcuts and ordinary Tab are no longer claimed', () => {
   for (const platform of ['windows', 'linux', 'macos'] as const) {
-    assert.equal(getProjectTabHotkeyDirection(key('PageUp', { altKey: true }), platform), -1);
-    assert.equal(getProjectTabHotkeyDirection(key('PageDown', { altKey: true }), platform), 1);
-    for (const extra of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }]) {
-      assert.equal(getProjectTabHotkeyDirection(key('PageDown', { altKey: true, ...extra }), platform), undefined);
-    }
+    for (const event of [
+      key('Tab'),
+      key('Tab', { shiftKey: true }),
+      key('Tab', { ctrlKey: true }),
+      key('Tab', { ctrlKey: true, shiftKey: true }),
+      key('PageUp', { ctrlKey: true }),
+      key('PageDown', { ctrlKey: true }),
+      key('PageUp', { altKey: true }),
+      key('PageDown', { altKey: true }),
+      key('ArrowLeft', { metaKey: true, altKey: true }),
+      key('ArrowRight', { metaKey: true, altKey: true }),
+    ])
+      assert.equal(getProjectTabHotkeyDirection(event, platform), undefined);
   }
 });
 
@@ -97,9 +90,9 @@ test('listener advances pending intent, yields to other selections/failures and 
   );
   const dispatch = (options: KeyboardEventInit = {}) => {
     const event = new dom.window.KeyboardEvent('keydown', {
-      code: 'Tab',
-      key: 'Tab',
-      ctrlKey: true,
+      code: 'PageUp',
+      key: 'PageUp',
+      shiftKey: true,
       bubbles: true,
       cancelable: true,
       ...options,
@@ -113,7 +106,7 @@ test('listener advances pending intent, yields to other selections/failures and 
     assert.deepEqual(selections, [b, c]);
     // A mouse/host intent supersedes the keyboard cursor even while pending.
     state = { ...state, selected: b, activation: { revision: 3, pending: true } };
-    dispatch({ shiftKey: true });
+    dispatch({ code: 'PageDown', key: 'PageDown' });
     assert.equal(selections.at(-1), a);
     // A failed activation returns navigation to the actual active tab.
     state = { ...state, selected: b, activation: { revision: 4, pending: false } };
@@ -152,9 +145,9 @@ test('owned shortcuts cannot reach same-window, target, or bubbling listeners', 
   input.addEventListener('keydown', () => leaked++);
   const dispatch = () => {
     const event = new dom.window.KeyboardEvent('keydown', {
-      key: 'PageDown',
-      code: 'PageDown',
-      altKey: true,
+      key: 'PageUp',
+      code: 'PageUp',
+      shiftKey: true,
       bubbles: true,
       cancelable: true,
     });
@@ -180,7 +173,12 @@ test('owned shortcuts cannot reach same-window, target, or bubbling listeners', 
 
 test('listener respects an already handled event', () => {
   const dom = new JSDOM();
-  const event = new dom.window.KeyboardEvent('keydown', { code: 'Tab', key: 'Tab', ctrlKey: true, cancelable: true });
+  const event = new dom.window.KeyboardEvent('keydown', {
+    code: 'PageUp',
+    key: 'PageUp',
+    shiftKey: true,
+    cancelable: true,
+  });
   event.preventDefault();
   const cleanup = installProjectTabHotkeyListener(
     dom.window as unknown as Window,
@@ -218,9 +216,9 @@ test('closing a pending keyboard target returns navigation to the live tab, not 
   const dispatch = () =>
     dom.window.dispatchEvent(
       new dom.window.KeyboardEvent('keydown', {
-        code: 'Tab',
-        key: 'Tab',
-        ctrlKey: true,
+        code: 'PageUp',
+        key: 'PageUp',
+        shiftKey: true,
         cancelable: true,
       }),
     );

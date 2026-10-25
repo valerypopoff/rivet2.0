@@ -14,6 +14,7 @@ import type {
   RootRunId,
 } from '@valerypopoff/rivet2-core';
 import {
+  accountRemoteRunSessionEvent,
   clearActiveRemoteRunRequest,
   clearActiveRemoteRunRequestIfMatches,
   createUnscopedRemoteExecutionRoutingState,
@@ -25,6 +26,51 @@ import {
   type ActiveRemoteRunRequestRef,
 } from './remoteExecutorRunRequest.js';
 import { createExecutorSessionPendingExecutions } from './executorSessionPendingExecutions.js';
+import { EditorRunSession } from './editorRunSession.js';
+
+test('request lifecycle retains an early-output execution tail even when its display binding is fenced', async () => {
+  const request = 'owned' as RemoteRunRequestId;
+  const other = 'other' as RemoteRunRequestId;
+  const session = new EditorRunSession();
+  const unrelated = new EditorRunSession();
+  const sessions = new Map([
+    [request, session],
+    [other, unrelated],
+  ]);
+  const earlyResults = new Set<RemoteRunRequestId>();
+  let disposed = 0;
+  let cancelled = 0;
+  session.onDispose(() => {
+    disposed++;
+  });
+  session.bindCancellation(() => {
+    cancelled++;
+  });
+
+  // The subscription boundary must account before an active/inactive or stale
+  // binding guard returns. A result is not physical execution settlement.
+  accountRemoteRunSessionEvent(sessions, earlyResults, 'graphOutputsReady', undefined);
+  accountRemoteRunSessionEvent(sessions, earlyResults, 'graphOutputsReady', 'unknown' as RemoteRunRequestId);
+  assert.equal(earlyResults.size, 0, 'unidentified/unowned frames cannot acquire resources');
+  accountRemoteRunSessionEvent(sessions, earlyResults, 'graphOutputsReady', request);
+  assert.equal(earlyResults.has(request), true);
+  assert.equal(sessions.get(request), session);
+  session.abort();
+  assert.equal(cancelled, 1, 'the accepted tail retains cancellation ownership');
+  accountRemoteRunSessionEvent(sessions, earlyResults, 'abort', request);
+  assert.equal(earlyResults.has(request), true, 'an abort request is not a terminal');
+  assert.equal(disposed, 0);
+  accountRemoteRunSessionEvent(sessions, earlyResults, 'done', undefined);
+  assert.equal(sessions.size, 2, 'legacy terminals cannot dispose another owner');
+  accountRemoteRunSessionEvent(sessions, earlyResults, 'error', request);
+  accountRemoteRunSessionEvent(sessions, earlyResults, 'done', request);
+  await session.dispose();
+  assert.equal(disposed, 1);
+  assert.equal(earlyResults.size, 0);
+  assert.equal(sessions.has(request), false);
+  assert.equal(sessions.get(other), unrelated);
+  await unrelated.dispose();
+});
 
 function makeRunPayload(): Omit<OutgoingMessageMap['run'], 'requestId'> {
   return {

@@ -322,13 +322,20 @@ Accepting production downtime does not manufacture runtime provider evidence.
 
 ### Explicit operation-scoped maintenance exception
 
+The historical receipts below describe the private adoption procedure. New
+operations use the supported [`--maintenance-plan` contract](deployment-operations.md)
+with exact operator-values/manifest binding, frozen backup verification and
+same-layout validation for already-HA releases. Do not reuse the old launcher
+string-transform overlays. This implementation does not retroactively qualify
+that installation or authorize another deployment.
+
 An operator may not turn an aborted rehearsal into runtimeControl or
 runtimeAutoscaling evidence. If the human separately approves a direct offline
 maintenance cutover, keep that decision outside the promoted release manifest.
 The private2026-10-22 operation records qualification as `waived`, not `passed`.
 It uses an opt-in deployment-tool overlay pinned to the exact original launcher
 SHA256; the frozen application checkout, chart and image digests remain intact.
-The normal published launcher and qualification workflow are unchanged.
+At that operation, the normal published launcher and qualification workflow were unchanged.
 
 This exception is limited to one exact installed/target source+manifest pair,
 production context and namespace UID, reviewed compact singleton topology and

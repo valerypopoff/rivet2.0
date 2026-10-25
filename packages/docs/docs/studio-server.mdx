@@ -73,6 +73,25 @@ with one bundle-wide version choice before uploading. If the upload loses its
 connection, refresh the tree before retrying: it may already have completed, and
 uploading again creates another folder.
 
+## Follow a bundle run across editor tabs
+
+Open the bundle projects you want to inspect, then run a graph in any member.
+When a Subgraph calls another open member, that member's tab shows its own node
+outputs and execution activity. You can switch tabs while the caller is still
+running; there is no need to connect Remote Debugger. This works in Browser and
+Node execution modes in Rivet Server and in opened desktop bundles.
+
+Only called projects in the same bundle receive new data; closed tabs are not
+opened automatically. Abort, pause and user-input controls stay with the project
+that started the run. A tab running its own execution, observing Remote Debugger
+or displaying a loaded recording keeps that display. If it becomes free halfway
+through the caller's run, it waits for the next run rather than showing an
+incomplete execution history. Save dependency edits before running the caller:
+showing live results does not change which saved dependency version is executed.
+Open the tabs before starting the run. Reopening a tab, rebinding its file or
+moving it between bundles during execution makes it wait for the next run; old
+results are not attached to its new tab binding.
+
 ## Installation options
 
 Rivet Server uses PostgreSQL and S3-compatible object storage. Docker Compose or
@@ -261,6 +280,22 @@ While the project is published, `/workflows-latest/<draft-name>` runs the latest
 For a published endpoint, **Endpoint access** controls where _both_ the published and latest routes can be reached. **External** is the default, including for projects published before this control was added. **Internal network only** removes those routes from the external entry point; callers inside the server network can use the internal addresses shown in Project settings. For example, Docker Compose uses `http://api/internal/workflows/<name>` and `http://api/internal/workflows-latest/<draft-name>`; Kubernetes uses service-specific internal addresses instead. This setting takes effect immediately and does not publish draft changes. “External” describes network reachability, **not** anonymous access: the separate bearer-key requirement is under **App Settings → Workflow endpoints → Access control**. Keep that requirement enabled unless another trusted layer protects the routes.
 
 If someone saves the project after you open Project settings, a Publish, Update, or restore action that would capture executable content is rejected as stale. If someone changes its publication settings, any publication or access action from the older view is rejected. Nothing changes because of a rejected action. Refresh and review the current state, then explicitly try again if you still want the change. This prevents accidentally publishing a colleague's new draft. Moving or renaming a project in the editor keeps its published endpoint name and access policy; changing the endpoint name with **Update** changes its URL.
+
+## Maintenance handover during server updates
+
+On servers configured for overlapping developer-backend upgrades, editing and
+debugging can continue while the replacement starts. An existing editor run stays
+on its original backend until it finishes; it is not automatically restarted.
+
+Bundle preparation and backup-restore operations have one exclusive housekeeping
+owner. During its short handover, a new request may say **Maintenance handover in
+progress**. Wait and try again explicitly. If an upload or another modifying
+request lost its response, check its existing operation before retrying: a lost
+connection does not prove that the request failed. Never start a second restore
+to work around a handover warning.
+
+This configuration protects planned backend updates, not node failure or every
+part of the developer UI. The single web server is a separate availability limit.
 
 ## Publish a web app
 

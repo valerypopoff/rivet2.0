@@ -137,10 +137,15 @@ for (const executor of ['browser', 'nodejs'] as const) {
       const unavailableCorrelations: string[] = [];
       const unexpectedMutations: string[] = [];
       await page.addInitScript(
-        ({ executor, recordExecutions }) => {
+        ({ executor, recordExecutions, contextProjectId }) => {
           localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: executor, recordExecutions }));
+          if (contextProjectId) localStorage.setItem('project', JSON.stringify({
+            [`projectContext__"${contextProjectId}"`]: Object.fromEntries([
+              ['__proto__', { value: { type: 'string', value: 'portable-context' } }],
+            ]),
+          }));
         },
-        { executor, recordExecutions },
+        { executor, recordExecutions, contextProjectId: executor === 'browser' && scenario === 'enabled' ? parentId : undefined },
       );
       await mockHostedEditorBootstrap(page);
       // Node cases use the real server transport, including its HA owner
@@ -217,6 +222,12 @@ for (const executor of ['browser', 'nodejs'] as const) {
         expect(root.projectId).toBe(parentId);
         expect(root.status).toBe(scenario === 'failed-root' ? 'failed' : 'succeeded');
         const recorder = ExecutionRecorder.deserializeFromString(root.recordingSerialized);
+        if (executor === 'browser' && scenario === 'enabled') {
+          const start = recorder.events.find((event) => event.type === 'start');
+          if (start?.type !== 'start') throw new Error('Recording must contain its root start');
+          expect(Object.hasOwn(start.data.contextValues, '__proto__')).toBe(true);
+          expect(start.data.contextValues['__proto__']).toEqual({ type: 'string', value: 'portable-context' });
+        }
         expect(recorder.events.some((event) => event.type === 'start')).toBe(true);
         expect(recorder.events.some((event) => event.type === (scenario === 'failed-root' ? 'error' : 'done'))).toBe(
           true,

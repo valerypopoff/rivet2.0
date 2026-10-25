@@ -1,24 +1,294 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { GraphId, GraphRunId, NodeId, PortId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
+import {
+  createBuiltInRegistry,
+  type Project,
+  type ProjectId,
+  type GraphId,
+  type GraphRunId,
+  type NodeId,
+  type PortId,
+  type ProcessId,
+  type RootRunId,
+  type GraphExecutionMetadata,
+  type NodeGraph,
+} from '@valerypopoff/rivet2-core';
 import {
   createRunActivityJournal,
+  reduceRunActivityJournal,
+  type RunActivityEvent,
   type RunActivityJournal,
   type RunActivityNodeInvocation,
   type RunActivityRoot,
 } from '../../features/runActivity/runActivityJournal.js';
-import type { NodeRunDataWithRefs, StoredDataValue } from '../../state/dataFlow.js';
+import type {
+  NodeRunDataWithRefs,
+  StoredDataValue,
+  RunDataByNodeId,
+  ProcessDataForNode,
+} from '../../state/dataFlow.js';
 import {
   RUN_ACTIVITY_PREVIEW_MAX_CHARS,
   buildRunActivityViewModel,
+  createRunActivityViewModelProjector,
+  type ResolveRunActivityInvocation,
   previewStoredDataValue,
   selectRunActivityRoot,
 } from './buildRunActivityViewModel.js';
+import { createRunActivityInvocationResolver } from './runActivityInvocationResolver.js';
 import { filterRunActivityItems } from './filterRunActivityItems.js';
 
 const completedRootId = 'completed-root' as RootRunId;
 const olderActiveRootId = 'older-active' as RootRunId;
 const newerActiveRootId = 'newer-active' as RootRunId;
+
+test('incremental activity rows match uncached projection across updates, resolution changes, ancestry and root replacement', () => {
+  const journal = createRunActivityJournal();
+  let selected = root(newerActiveRootId, 1, 'running');
+  const first = invocation({
+    key: 'first',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'graph-run',
+    nodeId: 'first',
+    processId: 'process',
+  });
+  const second = invocation({
+    key: 'second',
+    sequence: 2,
+    graphId: 'main',
+    graphRunId: 'graph-run',
+    nodeId: 'second',
+    processId: 'process',
+  });
+  selected.nodeInvocationOrder = [first.key, second.key];
+  selected.nodeInvocationsByKey = { [first.key]: first, [second.key]: second };
+  journal.rootsById[selected.rootRunId] = selected;
+  journal.activeRootRunIds = [selected.rootRunId];
+  let resolution = { nodeTitle: 'Resolved first' };
+  const resolve: ResolveRunActivityInvocation = ({ invocation: item }) =>
+    item.key === first.key ? resolution : undefined;
+  const project = createRunActivityViewModelProjector();
+  const verify = () => {
+    const actual = project(journal, resolve);
+    assert.deepEqual(actual, buildRunActivityViewModel(journal, resolve));
+    return actual;
+  };
+  const original = verify();
+  assert.strictEqual(verify().items[1], original.items[1]);
+  selected = {
+    ...selected,
+    nodeInvocationsByKey: {
+      ...selected.nodeInvocationsByKey,
+      [first.key]: { ...first, status: 'error', errorSummary: 'Failed invocation' },
+    },
+  };
+  journal.rootsById[selected.rootRunId] = selected;
+  const changed = verify();
+  assert.notStrictEqual(changed.items[0], original.items[0]);
+  assert.strictEqual(changed.items[1], original.items[1]);
+  resolution = { nodeTitle: 'Renamed definition' };
+  const renamed = verify();
+  assert.notStrictEqual(renamed.items[0], changed.items[0]);
+  assert.strictEqual(renamed.items[1], changed.items[1]);
+  selected = { ...selected, graphRunsById: { ...selected.graphRunsById } };
+  journal.rootsById[selected.rootRunId] = selected;
+  assert.notStrictEqual(verify().items[1], renamed.items[1]);
+  journal.activeRootRunIds = [];
+  journal.latestCompletedRootRunId = undefined;
+  assert.equal(verify().status, 'idle');
+  journal.activeRootRunIds = [selected.rootRunId];
+  assert.notStrictEqual(verify().items[1], renamed.items[1]);
+});
+
+test('cached projection matches real journal lifecycle events, bounded retention and repeated replay replacement', () => {
+  const registry = createBuiltInRegistry();
+  const stable = registry.create('text');
+  const streaming = { ...registry.create('text'), isSplitRun: true };
+  const graph: NodeGraph = {
+    metadata: { id: 'lifecycle-main' as GraphId },
+    nodes: [stable, streaming],
+    connections: [],
+  };
+  const childGraph: NodeGraph = { ...graph, metadata: { id: 'lifecycle-child' as GraphId } };
+  const execution: GraphExecutionMetadata = {
+    rootRunId: newerActiveRootId,
+    graphId: graph.metadata!.id!,
+    graphRunId: 'lifecycle-run' as GraphRunId,
+  };
+  const processId = 'lifecycle-process' as ProcessId;
+  const child: GraphExecutionMetadata = {
+    ...execution,
+    graphId: childGraph.metadata!.id!,
+    graphRunId: 'lifecycle-child-run' as GraphRunId,
+    parentGraphRunId: execution.graphRunId,
+    executor: { nodeId: streaming.id, processId, parentGraphId: execution.graphId },
+  };
+  const limits = { completedRootCount: 1, nodeInvocationsPerRoot: 3 };
+  let journal = createRunActivityJournal(limits);
+  let now = 0;
+  const project = createRunActivityViewModelProjector();
+  const resolve: ResolveRunActivityInvocation = () => undefined;
+  const verify = () => {
+    const result = project(journal, resolve, { now });
+    assert.deepEqual(result, buildRunActivityViewModel(journal, resolve, { now }));
+    return result;
+  };
+  const emit = <K extends RunActivityEvent['type']>(type: K, data: Extract<RunActivityEvent, { type: K }>['data']) => {
+    journal = reduceRunActivityJournal(journal, { type, data, occurredAt: ++now } as RunActivityEvent);
+    return verify();
+  };
+  emit('graphStart', { graph, inputs: {}, execution });
+  emit('nodeStart', { node: stable, processId, inputs: {}, execution });
+  emit('nodeFinish', { node: stable, processId, outputs: {}, execution });
+  const before = emit('nodeStart', { node: streaming, processId, inputs: {}, execution });
+  const stableRow = before.items.find((item) => item.identity.nodeId === stable.id)!;
+  for (const index of [0, 1]) {
+    const partial = emit('partialOutput', {
+      node: streaming,
+      processId,
+      index,
+      execution,
+      outputs: { ['output' as PortId]: { type: 'string', value: `part ${index}` } },
+    });
+    assert.strictEqual(
+      partial.items.find((item) => item.identity.nodeId === stable.id),
+      stableRow,
+    );
+    assert.equal(partial.items.find((item) => item.identity.nodeId === streaming.id)!.status, 'running');
+  }
+  const streamed = journal.rootsById[execution.rootRunId]!;
+  assert.deepEqual(
+    Object.values(streamed.nodeInvocationsByKey).find((item) => item.nodeId === streaming.id)!.splitOutputIndices,
+    [0, 1],
+  );
+  emit('nodeOutputsCleared', { node: streaming, processId, execution });
+  emit('nodeFinish', { node: streaming, processId, outputs: {}, execution });
+  emit('graphStart', { graph: childGraph, inputs: {}, execution: child });
+  emit('nodeStart', { node: stable, processId, inputs: {}, execution: child });
+  const outputsReady = emit('graphOutputsReady', { graph, outputs: {}, execution });
+  assert.equal(outputsReady.status, 'outputs-ready');
+  assert.equal(journal.rootsById[execution.rootRunId]!.finishedAt, undefined);
+  emit('nodeFinish', { node: stable, processId, outputs: {}, execution: child });
+  assert.equal(emit('graphFinish', { graph: childGraph, outputs: {}, execution: child }).status, 'outputs-ready');
+  const capped = emit('nodeStart', { node: stable, processId: 'omitted' as ProcessId, inputs: {}, execution });
+  assert.equal(capped.items.length, 3);
+  assert.equal(capped.accounting!.incomplete, true);
+  assert.equal(journal.rootsById[execution.rootRunId]!.omittedNodeInvocationCount, 1);
+  assert.equal(emit('graphFinish', { graph, outputs: {}, execution }).status, 'completed');
+
+  const failed = { ...execution, rootRunId: 'failed-lifecycle' as RootRunId, graphRunId: 'failed-run' as GraphRunId };
+  emit('graphStart', { graph, inputs: {}, execution: failed });
+  emit('nodeStart', { node: stable, processId, inputs: {}, execution: failed });
+  const failure = emit('nodeError', { node: stable, processId, error: 'fixture failure', execution: failed });
+  assert.equal(failure.items[0]!.status, 'error');
+  assert.equal(emit('graphError', { graph, error: 'fixture failure', execution: failed }).status, 'failed');
+  assert.equal(journal.rootsById[execution.rootRunId], undefined, 'completed-root retention removes the prior root');
+  const aborted = {
+    ...execution,
+    rootRunId: 'aborted-lifecycle' as RootRunId,
+    graphRunId: 'aborted-run' as GraphRunId,
+  };
+  emit('graphStart', { graph, inputs: {}, execution: aborted });
+  emit('nodeStart', { node: stable, processId, inputs: {}, execution: aborted });
+  assert.equal(emit('graphAbort', { graph, successful: false, execution: aborted }).status, 'aborted');
+
+  let previousReplayRow: unknown;
+  for (let play = 0; play < 2; play++) {
+    // Recording ownership replaces its journal; replaying the same IDs must
+    // neither accumulate rows nor reuse the preceding play's cached row. React
+    // may batch replacement with the first replay event: do not reset the
+    // projector by artificially rendering an empty journal between plays.
+    journal = createRunActivityJournal(limits);
+    emit('graphStart', { graph, inputs: {}, execution, replayRecordedAt: 490 });
+    emit('nodeStart', { node: stable, processId, inputs: {}, execution, replayRecordedAt: 500 });
+    emit('nodeFinish', { node: stable, processId, outputs: {}, execution, replayRecordedAt: 520, durationMs: 20 });
+    const replay = emit('graphFinish', { graph, outputs: {}, execution, replayRecordedAt: 530 });
+    assert.equal(replay.items.length, 1);
+    assert.equal(replay.items[0]!.startedAt, 500);
+    assert.equal(replay.items[0]!.durationMs, 20);
+    assert.notStrictEqual(replay.items[0], previousReplayRow);
+    previousReplayRow = replay.items[0];
+  }
+});
+
+test('definition resolver keeps exact output identity, unsaved definitions and foreign-project isolation without rebuilding unchanged labels', () => {
+  const registry = createBuiltInRegistry(),
+    node = registry.create('text');
+  node.title = 'Saved title';
+  const graphId = 'resolver-graph' as GraphId;
+  const saved = { metadata: { id: graphId, name: 'Saved graph' }, nodes: [node], connections: [] };
+  const current = {
+    ...saved,
+    metadata: { ...saved.metadata, name: 'Unsaved graph' },
+    nodes: [{ ...node, title: 'Unsaved title' }],
+  };
+  const project: Project = {
+    metadata: { id: 'resolver-project' as ProjectId, title: '', description: '' },
+    graphs: { [graphId]: saved },
+  };
+  const selected = root(newerActiveRootId, 1, 'completed');
+  const item = invocation({
+    key: 'resolver-item',
+    sequence: 1,
+    graphId,
+    graphRunId: 'resolver-run',
+    nodeId: node.id,
+    processId: 'exact',
+  });
+  const graphRun = {
+    sequence: 1,
+    rootRunId: item.rootRunId,
+    graphRunId: item.graphRunId,
+    graphId,
+    projectId: project.metadata.id,
+    status: 'completed' as const,
+  };
+  selected.graphRunsById = { [item.graphRunId]: graphRun };
+  const process: ProcessDataForNode = {
+    rootRunId: item.rootRunId,
+    graphRunId: item.graphRunId,
+    graphId,
+    processId: item.processId,
+    data: {
+      status: { type: 'ok' },
+      outputData: { ['output' as PortId]: { type: 'string', storage: 'inline', value: 'exact output' } },
+    },
+  };
+  let data: RunDataByNodeId = { [node.id]: [{ ...process, processId: 'other' as ProcessId }, process] };
+  let labels = 0;
+  const name = registry.getDynamicDisplayName.bind(registry);
+  registry.getDynamicDisplayName = (type) => {
+    labels++;
+    return name(type);
+  };
+  const resolve = createRunActivityInvocationResolver(project, current, registry);
+  const context = { root: selected, graphRun, invocation: item };
+  const initial = resolve(context, data);
+  assert.equal(initial.nodeTitle, 'Unsaved title');
+  assert.equal(initial.graphName, 'Unsaved graph');
+  assert.strictEqual(initial.runData, process.data);
+  assert.strictEqual(resolve(context, { ...data }), initial);
+  assert.equal(labels, 1);
+  const replacement = { ...process, data: { ...process.data, outputData: undefined } };
+  data = { [node.id]: [replacement] };
+  assert.notStrictEqual(resolve(context, data), initial);
+  assert.equal(resolve(context, data).fullOutputAvailable, false);
+  assert.equal(labels, 1);
+  assert.equal(
+    resolve(
+      {
+        ...context,
+        graphRun: { ...graphRun, projectId: 'foreign' as ProjectId },
+        root: { ...selected, graphRunsById: {} },
+      },
+      data,
+    ).navigable,
+    false,
+  );
+  const reopened = createRunActivityInvocationResolver(project, { ...current, nodes: [] }, registry);
+  assert.equal(reopened(context, data).navigable, false);
+});
 
 test('selects the newest active root before the latest completed root', () => {
   const journal = createRunActivityJournal();
@@ -648,6 +918,41 @@ test('preserves the captured node title when the current graph title is blank', 
   assert.equal(viewModel.items[0]?.nodeTitle, 'Captured Text Title');
 });
 
+test('Decision AI activity titles alias legacy defaults without changing recorded titles or custom names', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const captured = invocation({
+    key: 'decision',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'evaluate',
+    processId: 'run',
+  });
+  selectedRoot.nodeInvocationsByKey[captured.key] = captured;
+  selectedRoot.nodeInvocationOrder = [captured.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+  for (const [nodeType, nodeTitle, expected] of [
+    ['classifierEvaluate', 'Classifier Evaluate', 'Decision AI run'],
+    ['classifierQuestion', 'Classifier Question', 'Decision AI Question'],
+    ['classifierProfile', 'Classifier Profile', 'Decision AI Profile'],
+    ['classifierEvaluate', 'My Classifier route', 'My Classifier route'],
+    ['classifierEvaluate', ' Classifier Evaluate ', 'Classifier Evaluate'],
+    ['text', 'Classifier Evaluate', 'Classifier Evaluate'],
+  ] as const) {
+    captured.nodeType = nodeType;
+    captured.nodeTitle = nodeTitle;
+    const before = structuredClone(journal);
+    for (const resolved of [undefined, { nodeType, nodeTitle }]) {
+      const model = buildRunActivityViewModel(journal, () => resolved);
+      assert.equal(model.items[0]?.nodeTitle, expected);
+      assert.equal(filterRunActivityItems(model.items, { filter: 'all', graphId: '', query: expected }).length, 1);
+    }
+    assert.deepEqual(journal, before);
+  }
+});
+
 test('searches every displayed model attempt and tool call instead of only row summaries', () => {
   const journal = createRunActivityJournal();
   const selectedRoot = root(newerActiveRootId, 1, 'completed');
@@ -1082,6 +1387,16 @@ test('classifier activity includes winning routing, failed usage, physical reque
   assert.equal(model.accounting?.completionTokens, 5);
   assert.equal(model.accounting?.knownCostUsd, 0.00004 + 0.00002);
   assert.equal(model.accounting?.costStatus, 'known');
+  const retainedAttempt = classifier.profileAttempts[0]!;
+  for (const name of ['Classifier Profile', 'My Classifier route', ' Classifier Profile ']) {
+    retainedAttempt.profileName = name;
+    const renamed = buildRunActivityViewModel(journal, () => ({ inspectable: true }));
+    const displayed = name === 'Classifier Profile' ? 'Decision AI Profile' : name.trim();
+    assert.ok(renamed.items[0]!.children![0]!.label.startsWith(`Profile: ${displayed} · `));
+    assert.equal(filterRunActivityItems(renamed.items, { filter: 'all', graphId: '', query: displayed }).length, 1);
+    assert.equal(retainedAttempt.profileName, name, 'Presentation/search must not mutate the journal');
+  }
+  retainedAttempt.profileName = 'First classifier';
   selectedRoot.omittedNodeInvocationCount = 1;
   const cappedRoot = buildRunActivityViewModel(journal, () => undefined).accounting!;
   assert.equal(cappedRoot.incomplete, true);

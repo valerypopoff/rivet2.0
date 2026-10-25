@@ -150,8 +150,12 @@ yarn check:file-tree
 The check prints repository file counts by top-level area and package, including
 tracked files plus unignored untracked files. It fails if known generated/local
 output paths are unignored, and reports import-boundary review candidates. The
-import-boundary section is report-only: long relative imports and source deep
-imports need human review before any enforcement rule is added.
+import-boundary section enforces package deep-import rejection and an exact-edge
+ratchet for existing long relative imports. Review the explicit inventory at
+`scripts/checks/import-boundary-debt.json`; remove an entry when its dependency
+is removed, and prefer a public contract over adding an allowance. New edges
+cannot be offset by removing unrelated edges. The Core CodeRunner runtime graph
+also cannot reach its public package barrel.
 
 For install-state problems, run the direct check first. It does not require
 Yarn's PnP loader, so it still works when the loader files are missing:

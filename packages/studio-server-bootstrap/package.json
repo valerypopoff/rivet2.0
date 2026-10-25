@@ -8,9 +8,9 @@
     "@smithy/node-http-handler": "^4.4.5",
     "pg": "^8.16.3",
     "tar": "^7.4.3",
-    "undici": "^6.28.1"
+    "undici": "^6.29.1"
   },
-  "version": "1.30.0",
+  "version": "1.32.0",
   "scripts": {
     "build": "node --check bootstrap.mjs && node --check config.mjs && node --check node-executor-proxy-settings.mjs && node --check runtime-libraries-sync.mjs && node --check legacy-restore-participant.mjs && node --check state.mjs && node --check sync.mjs"
   }

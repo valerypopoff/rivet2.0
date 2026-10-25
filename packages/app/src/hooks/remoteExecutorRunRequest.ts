@@ -8,6 +8,24 @@ import type {
   ProjectId,
 } from '@valerypopoff/rivet2-core';
 import type { ExecutorSessionRuntime } from './executorSession.js';
+import type { EditorRunSession } from './editorRunSession.js';
+
+/** Request cleanup runs before display admission; never infer an owner from a legacy frame. */
+export function accountRemoteRunSessionEvent(
+  sessions: Map<RemoteRunRequestId, EditorRunSession>,
+  earlyResults: Set<RemoteRunRequestId>,
+  message: keyof ProcessEventMessageMap,
+  requestId: RemoteRunRequestId | undefined,
+): void {
+  if (!requestId) return;
+  if (message === 'graphOutputsReady' && sessions.has(requestId)) earlyResults.add(requestId);
+  if (message === 'done' || message === 'error') {
+    earlyResults.delete(requestId);
+    const session = sessions.get(requestId);
+    sessions.delete(requestId);
+    session?.disposeInBackground();
+  }
+}
 
 export type ActiveRemoteRunRequestRef = {
   current: RemoteRunRequestId | null;

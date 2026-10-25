@@ -996,6 +996,61 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.deepEqual(validations, ['access-middle:access-leaf']);
   });
 
+  void it('retains live descendant access checks after discovery and does not reuse approval in a later root run', async () => {
+    const leafEffect = makeTestNode('live-access-leaf-effect');
+    const leaf = makeProject(makeGraph('live-access-leaf', [leafEffect], []));
+    leaf.metadata.id = 'live-access-leaf' as ProjectId;
+    const middleEffect = makeTestNode('live-access-middle-effect');
+    const child = makeSubgraphNode('live-access-child', 'live-access-leaf' as GraphId);
+    child.data.targetProjectId = leaf.metadata.id;
+    const middle = makeProject(
+      makeGraph('live-access-middle', [makeGraphInputNode('live-access-input'), middleEffect, child], []),
+    );
+    middle.metadata.id = 'live-access-middle' as ProjectId;
+    const gate = makeTestNode('live-access-gate');
+    const call = makeSubgraphNode('live-access-root-call', 'live-access-middle' as GraphId);
+    call.data.targetProjectId = middle.metadata.id;
+    const processor = createProcessor(makeGraph('live-access-root', [gate, call], [connect(gate.id, call.id)]));
+    let denied = false,
+      revokeAtGate = true;
+    const checks: string[] = [];
+    const nodeErrors: string[] = [];
+    processor.on('nodeError', ({ error }) => {
+      nodeErrors.push(String(error));
+    });
+    AsyncTestNodeImpl.handlers.set(gate.id, () => {
+      denied = revokeAtGate;
+      return { output: { type: 'string', value: 'admit child' } };
+    });
+    const loader = {
+      loadTarget: async (target) => {
+        checks.push(`load:${target.callerProjectId}:${target.projectId}:${target.version}`);
+        if (denied) throw new Error('Live bundle access revoked');
+        return { project: target.projectId === middle.metadata.id ? middle : leaf };
+      },
+      validateTarget: async (target) => {
+        checks.push(`validate:${target.callerProjectId}:${target.projectId}:${target.version}`);
+        if (denied) throw new Error('Live bundle access revoked');
+      },
+    };
+    await assert.rejects(
+      processor.processGraph({ ...testProcessContext(), subgraphProjectLoader: loader }),
+      /failed to process/,
+    );
+    assert.ok(nodeErrors.some((error) => error.includes('Live bundle access revoked')));
+    assert.equal(AsyncTestNodeImpl.runCounts.get(middleEffect.id) ?? 0, 0);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(leafEffect.id) ?? 0, 0);
+    assert.ok(checks.includes(`validate:${middle.metadata.id}:${leaf.metadata.id}:latest`));
+    const firstCheckCount = checks.length;
+    denied = false;
+    revokeAtGate = false;
+    await processor.processGraph({ ...testProcessContext(), subgraphProjectLoader: loader });
+    assert.equal(AsyncTestNodeImpl.runCounts.get(middleEffect.id), 1);
+    assert.equal(AsyncTestNodeImpl.runCounts.get(leafEffect.id), 1);
+    assert.ok(checks.length > firstCheckCount);
+    assert.equal(checks.filter((check) => check.startsWith('load:')).length, 4);
+  });
+
   void it('keeps Saved latest and Published snapshots of one project distinct', async () => {
     const latestSource = makeTestNode('latest-version-source');
     const publishedSource = makeTestNode('published-version-source');

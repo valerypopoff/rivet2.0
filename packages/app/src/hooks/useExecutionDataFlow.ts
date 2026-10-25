@@ -1,6 +1,5 @@
 import { useLatest } from 'ahooks';
-import { produce } from 'immer';
-import { useAtomValue, useSetAtom, useStore } from 'jotai';
+import { useAtomValue } from 'jotai';
 import { useRef } from 'react';
 import {
   type GraphExecutionMetadata,
@@ -8,36 +7,16 @@ import {
   type ProcessEvents,
   type ProcessId,
 } from '@valerypopoff/rivet2-core';
-import { useDataRefs } from '../providers/ProvidersContext';
-import { lastRecordingState } from '../state/execution';
-import {
-  currentGraphViewState,
-  selectedGraphRunByViewState,
-  type NodeRunData,
-  lastRunDataByNodeState,
-  selectedLLMChatOutputPageByInvocationState,
-  selectedProcessPageNodesState,
-} from '../state/dataFlow';
+import { currentGraphViewState, type NodeRunData } from '../state/dataFlow';
 import { previousDataPerNodeToKeepState } from '../state/settings';
 import { evaluationsRunningState } from '../state/evaluations';
-import { type ProcessQuestions, userInputModalQuestionsState } from '../state/userInput';
-import {
-  clearExecutionDataRefs,
-  collectStoredRefIds,
-  deleteStoredRefIds,
-  storeNodeDataForHistory,
-} from '../utils/executionDataStorage';
+import { clearExecutionDataRefs } from '../utils/executionDataStorage';
 import { projectState } from '../state/savedGraphs';
-import { removeLLMChatOutputHistorySelectionsForProcess } from '../utils/llmChatOutputHistory.js';
 import { shouldFollowLatestNodeProcess } from '../state/selectors/executionSelectors.js';
-import { markStreamingOutputWatchTerminal } from './streamingOutputWatchTerminal.js';
 import { isLiveCalledProjectExecutionEvent } from '../utils/executionIdentity.js';
-import {
-  updateNodeRunData,
-  isTerminalNodeRunStatus,
-  prepareNodeRunDataForStorage,
-  removeUserInputQuestionsForProcess,
-} from './executionDataTransitions.js';
+import { removeUserInputQuestionsForProcess } from './executionDataTransitions.js';
+import { setDataForNodeInSnapshot } from './projectExecutionSnapshotEvents.js';
+import { useExecutionSnapshotWriter } from './useExecutionSnapshotWriter.js';
 
 export type ExecutionDataFlowApi = {
   clearNodeRunDataPreservationForNextStart: () => void;
@@ -61,23 +40,10 @@ export type ExecutionDataFlowApi = {
 };
 
 export function useExecutionDataFlow(): ExecutionDataFlowApi {
-  const dataRefs = useDataRefs();
-  const store = useStore();
-  const setLastRunData = useSetAtom(lastRunDataByNodeState);
-  const setLLMChatOutputPageSelections = useSetAtom(selectedLLMChatOutputPageByInvocationState);
-  const setSelectedPage = useSetAtom(selectedProcessPageNodesState);
-  const setUserInputQuestions = useSetAtom(userInputModalQuestionsState);
-  const setLastRecordingState = useSetAtom(lastRecordingState);
+  const writer = useExecutionSnapshotWriter();
+  const { store, refStore: dataRefs } = writer;
   const evaluationRunning = useAtomValue(evaluationsRunningState);
   const evaluationRunningLatest = useLatest(evaluationRunning);
-  const previousDataPerNodeToKeep = useAtomValue(previousDataPerNodeToKeepState);
-  const currentGraphView = useAtomValue(currentGraphViewState);
-  const selectedGraphRunByView = useAtomValue(selectedGraphRunByViewState);
-  const lastRunData = useAtomValue(lastRunDataByNodeState);
-  const project = useAtomValue(projectState);
-  const currentGraphViewLatest = useLatest(currentGraphView);
-  const selectedGraphRunByViewLatest = useLatest(selectedGraphRunByView);
-  const lastRunDataLatest = useLatest(lastRunData);
   const nodeIdsToPreserveOnNextStartRef = useRef<NodeId[] | undefined>(undefined);
   const suppressedPreloadedNodeIdsRef = useRef<Set<NodeId>>(new Set());
 
@@ -111,81 +77,43 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     data: Partial<NodeRunData>,
     options: { ignoreIfTerminal?: boolean } = {},
   ): boolean => {
-    const isExistingProcessTerminal = () =>
-      isTerminalNodeRunStatus(
-        store.get(lastRunDataByNodeState)[nodeId]?.find((process) => process.processId === processId)?.data.status,
+    let applied = false;
+    writer.mutate((snapshot) => {
+      const next = setDataForNodeInSnapshot(
+        snapshot,
+        { node: { id: nodeId } as ProcessEvents['nodeStart']['node'], processId, execution },
+        data,
+        {
+          projectId: store.get(projectState).metadata.id,
+          refStore: dataRefs,
+          previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
+          ignoreIfTerminal: options.ignoreIfTerminal,
+          policy: { selectProcessPage: false },
+        },
       );
-
-    // A detached partial observer can outlive its terminal event. Check the
-    // live store before allocating a stable output ref for such an update.
-    if (options.ignoreIfTerminal && isExistingProcessTerminal()) {
-      return false;
-    }
-
-    if (data.status && data.status.type !== 'running') {
-      setUserInputQuestions((questions) => removeUserInputQuestionsForProcess(questions, nodeId, processId));
-    }
-    const storedData = storeNodeDataForHistory(prepareNodeRunDataForStorage(data), dataRefs, {
-      nodeId,
-      processId,
-      projectId: project.metadata.id,
+      applied = next !== snapshot;
+      return next;
     });
-    const result = updateNodeRunData(store.get(lastRunDataByNodeState), {
-      nodeId,
-      processId,
-      execution,
-      data: storedData,
-      ignoreIfTerminal: options.ignoreIfTerminal,
-      previousDataPerNodeToKeep,
-    });
-    if (!result.applied) {
-      deleteStoredRefIds(dataRefs, collectStoredRefIds(storedData));
-      return false;
-    }
-    store.set(lastRunDataByNodeState, result.runData);
-    deleteStoredRefIds(dataRefs, result.obsoleteRefIds);
-    const evictedProcessIds = result.evictedProcessIds;
-    if (evictedProcessIds.length > 0) {
-      setLLMChatOutputPageSelections((previous) =>
-        evictedProcessIds.reduce(
-          (selections, evictedProcessId) =>
-            removeLLMChatOutputHistorySelectionsForProcess({
-              nodeId,
-              processId: evictedProcessId,
-              selections,
-            }),
-          previous,
-        ),
-      );
-    }
-    return true;
+    return applied;
   };
 
   const setSelectedNodePageLatest = (nodeId: NodeId, execution: GraphExecutionMetadata | undefined) => {
-    const view = currentGraphViewLatest.current;
-    const selectionByView = selectedGraphRunByViewLatest.current ?? {};
-    const shouldFollowLatest =
-      view != null &&
+    const view = store.get(currentGraphViewState);
+    writer.mutate((snapshot) =>
+      view &&
       execution?.graphId === view.graphId &&
-      shouldFollowLatestNodeProcess(selectionByView[view.key], execution);
-
-    if (!shouldFollowLatest) {
-      return;
-    }
-
-    setSelectedPage((prev) => ({ ...prev, [nodeId]: 'latest' }));
-  };
-
-  const onStreamingOutputWatchSummary = (event: ProcessEvents['streamingOutputWatchSummary']) => {
-    setLastRunData((previous) =>
-      produce(previous, (draft) => {
-        markStreamingOutputWatchTerminal(draft, event);
-      }),
+      shouldFollowLatestNodeProcess(snapshot.selectedGraphRunByView[view.key], execution)
+        ? { ...snapshot, selectedProcessPageNodes: { ...snapshot.selectedProcessPageNodes, [nodeId]: 'latest' } }
+        : snapshot,
     );
   };
 
+  const onStreamingOutputWatchSummary = (event: ProcessEvents['streamingOutputWatchSummary']) => {
+    writer.event('streamingOutputWatchSummary', event);
+  };
+
   const onUserInput = (data: ProcessEvents['userInput']) => {
-    const { node, processId, inputStrings, execution, isReplay } = data;
+    const { node, execution, isReplay } = data;
     // RecordingPlayer re-emits historical prompts for observability. Their
     // recorded answers are already part of the replay, so they must never
     // create an interactive modal even if a future caller bypasses the normal
@@ -194,19 +122,7 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
       return;
     }
 
-    const questions: ProcessQuestions = {
-      nodeId: node.id,
-      processId,
-      questions: inputStrings,
-    };
-
-    setUserInputQuestions((currentQuestions) => {
-      const previousQuestions = currentQuestions[node.id] ?? [];
-      return {
-        ...currentQuestions,
-        [node.id]: [...previousQuestions, questions],
-      };
-    });
+    writer.event('userInput', data, { policy: { selectProcessPage: false } });
 
     if (!isLiveCalledProjectExecutionEvent(data)) setSelectedNodePageLatest(node.id, execution);
   };
@@ -215,16 +131,24 @@ export function useExecutionDataFlow(): ExecutionDataFlowApi {
     node,
     processId,
   }: Pick<ProcessEvents['nodeFinish'], 'node' | 'processId'>) => {
-    setUserInputQuestions((questions) => removeUserInputQuestionsForProcess(questions, node.id, processId));
+    writer.mutate((snapshot) => ({
+      ...snapshot,
+      userInputQuestions: removeUserInputQuestionsForProcess(snapshot.userInputQuestions ?? {}, node.id, processId),
+    }));
   };
 
   const onEvaluationStart = () => {
     clearNodeRunDataPreservationForNextStart();
-    setLastRecordingState(undefined);
-    setUserInputQuestions({});
-    setLastRunData({});
-    setLLMChatOutputPageSelections({});
-    clearExecutionDataRefs(dataRefs, lastRunDataLatest.current ?? {});
+    writer.mutate((snapshot) => {
+      clearExecutionDataRefs(dataRefs, snapshot.lastRunDataByNode);
+      return {
+        ...snapshot,
+        lastRecording: undefined,
+        userInputQuestions: {},
+        lastRunDataByNode: {},
+        selectedLLMChatOutputPageByInvocation: {},
+      };
+    });
   };
 
   return {

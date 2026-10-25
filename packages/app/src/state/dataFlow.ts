@@ -13,7 +13,6 @@ import {
   type GraphExecutionMetadata,
   type GraphRunId,
   type RootRunId,
-  type ProjectId,
   type FrozenNodeOutputsByGraph,
   type AgentTraceEvent,
   type LLMChatOutputSnapshotKind,
@@ -23,7 +22,10 @@ import { graphNavigationStackState } from './graphBuilder.js';
 import type { GraphViewKey } from '../domain/graphEditing/navigationActions.js';
 import { getGraphSelectionOptions } from './selectors/executionSelectors.js';
 import type { ProcessQuestions } from './userInput.js';
-import { createRunActivityJournal, type RunActivityJournal } from '../features/runActivity/runActivityJournal.js';
+import type { RunActivityJournal } from '../features/runActivity/runActivityJournal.js';
+export { createEmptyProjectExecutionSnapshot } from './projectExecutionSnapshot.js';
+import { executionSnapshotField } from './projectExecutionStore.js';
+export { executionSnapshotsState as projectExecutionSnapshotsState } from './projectExecutionStore.js';
 
 export type GraphRunSelection =
   | GraphRunId
@@ -62,6 +64,8 @@ export type ProcessDataForNode = {
 export type RunDataByNodeId = Record<NodeId, ProcessDataForNode[]>;
 
 export type ProjectExecutionSnapshot = {
+  /** Runtime-only legacy terminal reconciliation, owned by this project view. */
+  completedRootRunIds?: RootRunId[];
   graphPaused: boolean;
   graphRunHistoryByView: Record<GraphViewKey, GraphRunRecord[]>;
   graphRunning: boolean;
@@ -215,26 +219,26 @@ export const currentGraphViewState = atom((get) => {
   return navigation.stack[navigation.index];
 });
 
-export const lastRunDataByNodeState = atom<RunDataByNodeId>({});
+export const lastRunDataByNodeState = executionSnapshotField('lastRunDataByNode');
 
 export const lastRunDataState = atomFamily((nodeId: NodeId) => atom((get) => get(lastRunDataByNodeState)[nodeId]));
 
-export const graphRunHistoryByViewState = atom<Record<GraphViewKey, GraphRunRecord[]>>({});
+export const graphRunHistoryByViewState = executionSnapshotField('graphRunHistoryByView');
 
-export const selectedGraphRunByViewState = atom<Record<GraphViewKey, GraphRunSelection>>({});
+export const selectedGraphRunByViewState = executionSnapshotField('selectedGraphRunByView');
 
-export const runningGraphsState = atom<GraphId[]>([]);
+export const runningGraphsState = executionSnapshotField('runningGraphs');
 
-export const rootGraphState = atom<GraphId | undefined>(undefined);
+export const rootGraphState = executionSnapshotField('rootGraph');
 
-export const graphRunningState = atom(false);
+export const graphRunningState = executionSnapshotField('graphRunning');
 
-export const graphStartTimeState = atom<number | undefined>(undefined);
+export const graphStartTimeState = executionSnapshotField('graphStartTime');
 
 /** Metadata-only activity for the current and most recent root execution. */
-export const runActivityJournalState = atom<RunActivityJournal>(createRunActivityJournal());
+export const runActivityJournalState = executionSnapshotField('runActivityJournal');
 
-export const graphPausedState = atom(false);
+export const graphPausedState = executionSnapshotField('graphPaused');
 
 export const resolvedGraphSelectionState = atom((get) => {
   const currentGraphView = get(currentGraphViewState);
@@ -248,18 +252,18 @@ export const resolvedGraphSelectionState = atom((get) => {
   });
 });
 
-export const selectedProcessPageNodesState = atom<Record<NodeId, PageValue>>({});
+export const selectedProcessPageNodesState = executionSnapshotField('selectedProcessPageNodes');
 
 /** UI-only round choice; history itself stays in NodeRunData and recordings. */
-export const selectedLLMChatOutputPageByInvocationState = atom<Record<string, LLMChatOutputPageValue>>({});
+export const selectedLLMChatOutputPageByInvocationState = executionSnapshotField(
+  'selectedLLMChatOutputPageByInvocation',
+);
 
 export function getLLMChatOutputHistorySelectionKey(nodeId: NodeId, processId: ProcessId, splitIndex: number): string {
   return `${nodeId}:${processId}:${splitIndex}`;
 }
 
-export const frozenNodeOutputsState = atom<FrozenNodeOutputsByGraph>({});
-
-export const projectExecutionSnapshotsState = atom<Record<ProjectId, ProjectExecutionSnapshot | undefined>>({});
+export const frozenNodeOutputsState = executionSnapshotField('frozenNodeOutputs', (value) => value!);
 
 export const selectedProcessPageState = atomFamily((nodeId: NodeId) =>
   atom(
@@ -290,23 +294,4 @@ export const selectedLLMChatOutputPageState = atomFamily((key: string) =>
 export function removeExecutionNodeStateFamilies(nodeId: NodeId): void {
   lastRunDataState.remove(nodeId);
   selectedProcessPageState.remove(nodeId);
-}
-
-export function createEmptyProjectExecutionSnapshot(): ProjectExecutionSnapshot {
-  return {
-    graphPaused: false,
-    graphRunHistoryByView: {},
-    graphRunning: false,
-    graphStartTime: undefined,
-    frozenNodeOutputs: {},
-    lastRecording: undefined,
-    lastRunDataByNode: {},
-    rootGraph: undefined,
-    runActivityJournal: createRunActivityJournal(),
-    runningGraphs: [],
-    selectedGraphRunByView: {},
-    selectedLLMChatOutputPageByInvocation: {},
-    selectedProcessPageNodes: {},
-    userInputQuestions: {},
-  };
 }

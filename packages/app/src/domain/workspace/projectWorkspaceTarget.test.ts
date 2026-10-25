@@ -11,6 +11,17 @@ import {
 
 const graphView = createRootGraphViewContext('graph' as GraphId);
 
+test('invalid inherited or incomplete stored targets fall back to graph policy without throwing', () => {
+  for (const target of [Object, Object.prototype, { type: 'unknown' }, { type: 'graph' }]) {
+    assert.equal(isProjectWorkspaceTargetValid(target as never, { graphs: {} }), false);
+    assert.deepEqual(getProjectWorkspaceLeavePolicy(target as never), {
+      commitLiveGraph: true,
+      persistGraphViewport: true,
+    });
+    assert.deepEqual(getProjectWorkspaceTargetCapabilities(target as never), { canRun: true, hasCanvas: true });
+  }
+});
+
 test('resource targets restore only while their project resource remains valid', () => {
   const uiGraphId = 'ui' as UiGraphId;
   const prefabId = 'prefab' as NodePrefabId;

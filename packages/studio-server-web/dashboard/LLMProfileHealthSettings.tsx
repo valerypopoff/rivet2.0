@@ -55,7 +55,7 @@ export const LLMProfileHealthSettings: FC<{
   activeProject: WorkflowProjectItem;
   onOpenRecording: (recordingId: string) => void;
 }> = ({ activeProject, onOpenRecording, family = 'llm' }) => {
-  const label = family === 'classifier' ? 'Classifier' : 'LLM';
+  const label = family === 'classifier' ? 'Decision AI' : 'LLM';
   const admin = family === 'classifier' ? hostedClassifierProfileHealthAdmin : hostedLLMProfileHealthAdmin;
   const catalogProjectId = activeProject.projectMetadataId as ProjectId | undefined;
   const [projectContext, setProjectContext] = useState<{

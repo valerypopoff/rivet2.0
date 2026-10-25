@@ -3,6 +3,7 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
+import { classifyStartupFence, assertFenceIntent } from './execution-autoscaler-fence.mjs';
 
 const enc = encodeURIComponent;
 const fenceAnnotation = 'rivet.dev/execution-retirement-fence';
@@ -61,12 +62,18 @@ export function createKubernetesTransport({
     json(method, path, body, contentType = 'application/json') {
       return new Promise((resolve, reject) => {
         const auth = credentials();
+        const payload = body === undefined ? undefined : JSON.stringify(body);
         const request = (base.protocol === 'https:' ? https : http).request(
           new URL(path, base),
           {
             ...auth,
             method,
-            headers: { ...auth.headers, accept: 'application/json', 'content-type': contentType },
+            headers: {
+              ...auth.headers,
+              accept: 'application/json',
+              'content-type': contentType,
+              ...(payload === undefined ? {} : { 'content-length': Buffer.byteLength(payload) }),
+            },
           },
           (response) => {
             const chunks = [];
@@ -99,7 +106,7 @@ export function createKubernetesTransport({
         );
         request.once('close', () => clearTimeout(timer));
         request.once('error', reject);
-        request.end(body === undefined ? undefined : JSON.stringify(body));
+        request.end(payload);
       });
     },
     exec(path, command) {
@@ -196,7 +203,14 @@ export function createExecutionAutoscalerIO({
     parseRetirement(await api.exec(`${ns}/pods/${enc(name)}/exec`, ['node', '/opt/rivet/retire-backend.mjs']));
   const ownerFor = async (target) => {
     const owner = await api.json('GET', sts);
-    if (owner?.metadata.uid !== target.workloadUid) throw new Error('Execution workload UID changed.');
+    if (
+      owner?.metadata.uid !== target.workloadUid ||
+      owner.metadata.deletionTimestamp ||
+      owner.spec.updateStrategy?.type !== 'OnDelete' ||
+      owner.metadata.labels?.['app.kubernetes.io/instance'] !== release ||
+      owner.spec.template.spec.containers.find((c) => c.name === 'api')?.image !== image
+    )
+      throw new Error('Execution workload UID, image or ownership changed.');
     return owner;
   };
   const confirmDrained = async (target) => {
@@ -209,14 +223,17 @@ export function createExecutionAutoscalerIO({
     )
       throw new Error('Execution owner is not confirmed drained.');
   };
-  const editFence = async (target, remove) => {
+  const editFence = async (target, remove, expected, authorize) => {
     const owner = await ownerFor(target);
     const value = owner.spec.template.metadata?.annotations?.[fenceAnnotation];
+    if (expected !== undefined && (value ?? null) !== expected)
+      throw Error('Startup fence template precondition changed.');
     if (remove && value === undefined) return;
     if (value !== undefined && value !== target.name) throw new Error('Another startup fence owns this workload.');
     const annotations = { ...owner.spec.template.metadata?.annotations };
     if (remove) delete annotations[fenceAnnotation];
     else annotations[fenceAnnotation] = target.name;
+    await authorize?.();
     await api.json(
       'PATCH',
       sts,
@@ -228,11 +245,25 @@ export function createExecutionAutoscalerIO({
       'application/json-patch+json',
     );
   };
-  const fencePod = async (target) => {
+  const fencePod = async (target, expected, authorize) => {
     const pod = await owned(target);
+    if (expected !== undefined) {
+      const status = await retirement(target.name);
+      if (
+        status.protocol !== 1 ||
+        status.incarnation !== target.incarnation ||
+        status.state !== 'serving' ||
+        status.operationId
+      )
+        throw Error('Startup fence process changed before metadata write.');
+      if ((await owned(target)).metadata.resourceVersion !== pod.metadata.resourceVersion)
+        throw Error('Startup fence pod changed during process inspection.');
+    }
     const value = pod.metadata.annotations?.[fenceAnnotation];
-    if (value !== undefined && value !== target.name) throw new Error('Another startup fence owns this pod.');
+    if (expected !== undefined && (value ?? null) !== expected) throw Error('Startup fence pod precondition changed.');
+    classifyStartupFence(value, target.name, workload);
     if (!pod.metadata.resourceVersion) throw new Error('Pod startup fence resourceVersion is unconfirmed.');
+    await authorize?.();
     await api.json(
       'PATCH',
       `${ns}/pods/${enc(target.name)}`,
@@ -248,7 +279,64 @@ export function createExecutionAutoscalerIO({
       'application/json-patch+json',
     );
   };
+  const inspectFence = async (target) => {
+    const owner = await ownerFor(target);
+    const pod = await owned(target);
+    const status = await retirement(target.name);
+    if (
+      status.protocol !== 1 ||
+      status.incarnation !== target.incarnation ||
+      status.state !== 'serving' ||
+      status.operationId
+    )
+      throw Error('Startup fence process is not the original serving incarnation.');
+    // Re-read identity after the process query. A replacement must not inherit authority.
+    await owned(target);
+    const template = owner.spec.template.metadata?.annotations?.[fenceAnnotation];
+    if (template !== undefined && template !== target.name) throw Error('Another startup fence owns this workload.');
+    const value = pod.metadata.annotations?.[fenceAnnotation];
+    return {
+      template: template ?? null,
+      pod: value ?? null,
+      podKind: classifyStartupFence(value, target.name, workload),
+    };
+  };
+  const prepareFence = async (target) => {
+    const observed = await inspectFence(target);
+    return {
+      protocol: 1,
+      name: target.name,
+      uid: target.uid,
+      workloadUid: target.workloadUid,
+      incarnation: target.incarnation,
+      operationId: target.operationId,
+      steps: {
+        template: { before: observed.template, confirmed: false },
+        pod: { before: observed.pod, confirmed: false },
+      },
+    };
+  };
+  const convergeFence = async (target, intent, { authorize, confirm }) => {
+    assertFenceIntent(intent, target);
+    for (const resource of ['template', 'pod']) {
+      const observed = await inspectFence(target);
+      const step = intent.steps[resource];
+      if (observed[resource] !== target.name) {
+        if (step.confirmed || observed[resource] !== step.before)
+          throw Error('Startup fence metadata diverged from its recorded intent.');
+        // Only metadata may converge. The caller renews the exact journal lease
+        // before each conditional write; no exec/scale/delete command is retried.
+        if (resource === 'template') await editFence(target, false, step.before, authorize);
+        else await fencePod(target, step.before, authorize);
+        if ((await inspectFence(target))[resource] !== target.name) throw Error('Startup fence write is unconfirmed.');
+      }
+      if (!step.confirmed) await confirm(resource);
+    }
+  };
   return {
+    inspectFence,
+    prepareFence,
+    convergeFence,
     // Template annotation covers a new pod UID; the live pod annotation covers
     // a container restart with the SAME UID. Never clear the latter on a busy
     // or retired pod: it disappears only with that exact pod's removal.
@@ -396,6 +484,7 @@ export function createExecutionAutoscalerIO({
       }
       return {
         uid: owner.metadata.uid,
+        resourceVersion: owner.metadata.resourceVersion,
         replicas: owner.spec.replicas,
         pods: result.map((pod) => ({
           ...pod,
@@ -404,9 +493,14 @@ export function createExecutionAutoscalerIO({
         startupFence: owner.spec.template.metadata?.annotations?.[fenceAnnotation],
       };
     },
-    async scale(uid, from, to) {
+    async scale(uid, from, to, expectedResourceVersion) {
       const scale = await api.json('GET', `${sts}/scale`);
-      if (scale?.metadata.uid !== uid || scale.spec.replicas !== from) throw new Error('Scale precondition changed.');
+      if (
+        scale?.metadata.uid !== uid ||
+        scale.spec.replicas !== from ||
+        (expectedResourceVersion !== undefined && scale.metadata.resourceVersion !== expectedResourceVersion)
+      )
+        throw new Error('Scale precondition changed.');
       await api.json(
         'PATCH',
         `${sts}/scale`,

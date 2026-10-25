@@ -5,6 +5,7 @@ import {
   TextNodeImpl,
   GetDatasetRowNodeImpl,
   GraphOutputNodeImpl,
+  CodeNodeImpl,
   serializeProject,
   type PortId,
   type DatasetId,
@@ -153,6 +154,54 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     page.waitForFunction(() => Boolean((window as any).bundleHost), { timeout: 120_000 }),
     initializationError,
   ]);
+  const decoded = await page.evaluate(
+    async ({ app, contents }) => {
+      const { deserializeProjectAsync } = await import(`/@fs/${app}/utils/deserializeProject.ts`);
+      const project = await deserializeProjectAsync(contents, 'unicode.rivet-project');
+      return project.metadata;
+    },
+    { app, contents: serializeProject(fixture.child.project) as string },
+  );
+  expect(decoded.id).toBe(fixture.child.project.metadata.id);
+  expect(decoded.title).toBe(fixture.child.project.metadata.title);
+  const cancellation = await page.evaluate(async (app) => {
+    const { createWorkerRequests } = await import(`/@fs/${app}/utils/workerRequests.ts`);
+    // Stand in for synchronous archive parsing queued after accepted work.
+    // A deadline alone must not leave the next project stuck behind this loop.
+    const url = URL.createObjectURL(
+      new Blob(
+        [
+          `
+      self.onmessage = ({ data: request }) => {
+        if (request.data === 'obsolete') { while (true) {} }
+        self.postMessage({ id: request.id, type: request.type + ':result', result: request.data });
+      };
+    `,
+        ],
+        { type: 'text/javascript' },
+      ),
+    );
+    const workers: Worker[] = [];
+    const request = createWorkerRequests(() => {
+      const worker = new Worker(url);
+      workers.push(worker);
+      return worker;
+    });
+    try {
+      const live = request('parse', 'accepted', { timeoutMs: 5000 });
+      const controller = new AbortController();
+      const obsolete = request('parse', 'obsolete', { signal: controller.signal }).catch((error: Error) => error.name);
+      controller.abort();
+      const result = await live;
+      const cancelled = await obsolete;
+      const next = await request('parse', 'next', { timeoutMs: 5000 });
+      return { result, cancelled, next, workers: workers.length };
+    } finally {
+      workers.forEach((worker) => worker.terminate());
+      URL.revokeObjectURL(url);
+    }
+  }, app);
+  expect(cancellation).toEqual({ result: 'accepted', cancelled: 'AbortError', next: 'next', workers: 2 });
   await page.locator('.file-menu-button').click();
   await page.getByRole('menuitem', { name: 'Open project', exact: true }).click();
   await page.waitForFunction(() => Boolean((window as any).bundlePickerOptions));
@@ -188,10 +237,10 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
     await page.evaluate((id) => (window as any).bundleHost.activateProject(id), fixture.child.project.metadata.id),
   ).toBe(true);
   await expect(page.locator(`.node[data-nodeid="${childOutput.id}"]`)).toContainText('child-result');
-  // Desktop activation names this saved project after its file. The tab also
-  // displays the filename suffix, which is not part of the target label.
+  // Metadata owns the project title, including Unicode. The tab also displays
+  // a filename suffix, which is not part of the target label.
   await expect(page.locator('.projects-container .project.active .project-name')).toHaveText(
-    'child [child.rivet-project]',
+    `${fixture.child.project.metadata.title} [child.rivet-project]`,
   );
   expect(
     await page.evaluate((id) => (window as any).bundleHost.activateProject(id), fixture.root.project.metadata.id),
@@ -212,7 +261,7 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   await page.waitForFunction(() => (window as any).bundleReadBlocked === true);
   // Snapshot refresh clears the previous reference definitions. Pending
   // discovery keeps the tab title without inventing a resolved graph name.
-  await expect(targetLabel).toHaveText(`child / ${(subgraph as SubGraphNode).data.graphId}`);
+  await expect(targetLabel).toHaveText(`${fixture.child.project.metadata.title} / ${(subgraph as SubGraphNode).data.graphId}`);
   await page.evaluate(() => (window as any).releaseBundleRead());
   await expect(targetLabel).toHaveText(`${fixture.child.project.metadata.title} / ${childGraph.metadata!.name}`);
   await expect(page.locator(`.node[data-nodeid="${suffix.id}"]`)).toBeVisible();
@@ -335,4 +384,88 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   await run.click();
   await expect(page.locator(`.node[data-nodeid="${cancelledOutput.id}"]`)).toContainText('only-after-retry');
   await expect(run).not.toContainText('Abort');
+  // Display replacement must fence old events, not cancel an accepted live
+  // processor. The second code node proves execution continued after the gate.
+  const acceptedProject = structuredClone(cancelledProject);
+  const gate = CodeNodeImpl.create();
+  gate.data.code = `window.bindingRunSteps.push('accepted');
+    await window.bindingRunGate;
+    return { output: { type: 'string', value: 'old-binding-result' } };`;
+  gate.data.outputNames = ['output'];
+  const continued = CodeNodeImpl.create();
+  continued.data.code = `window.bindingRunSteps.push('continued'); return inputs;`;
+  continued.data.inputNames = ['output'];
+  continued.data.outputNames = ['output'];
+  continued.visualData.x = 350;
+  acceptedProject.graphs[acceptedProject.metadata.mainGraphId!]!.nodes = [gate, continued, cancelledOutput];
+  acceptedProject.graphs[acceptedProject.metadata.mainGraphId!]!.connections = [
+    { outputNodeId: gate.id, outputId: 'output' as PortId, inputNodeId: continued.id, inputId: 'output' as PortId },
+    {
+      outputNodeId: continued.id,
+      outputId: 'output' as PortId,
+      inputNodeId: cancelledOutput.id,
+      inputId: 'value' as PortId,
+    },
+  ];
+  await page.evaluate((project) => {
+    (window as any).bindingRunSteps = [];
+    (window as any).bindingRunGate = new Promise<void>((resolve) => {
+      (window as any).releaseBindingRun = resolve;
+    });
+    (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+      project,
+      path: '/bundle/projects/nested/root.rivet-project',
+    });
+  }, acceptedProject);
+  await run.click();
+  await expect.poll(() => page.evaluate(() => (window as any).bindingRunSteps)).toEqual(['accepted']);
+  expect(
+    await page.evaluate(
+      (project) =>
+        (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+          project,
+          path: '/bundle/projects/nested/root.rivet-project',
+        }),
+      cancelledProject,
+    ),
+  ).toBe(true);
+  await page.evaluate(() => (window as any).releaseBindingRun());
+  await expect.poll(() => page.evaluate(() => (window as any).bindingRunSteps)).toEqual(['accepted', 'continued']);
+  await expect(page.locator(`.node[data-nodeid="${cancelledOutput.id}"]`)).not.toContainText('old-binding-result');
+
+  // A stale *preparation* has not accepted execution yet. Replacing its binding
+  // while environment resolution is suspended must prevent it from starting.
+  await page.evaluate((project) => {
+    (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+      project,
+      path: '/bundle/projects/nested/root.rivet-project',
+    });
+    (window as any).bindingRunSteps = [];
+    (window as any).environmentReadBlocked = false;
+    (window as any).environmentReadGate = new Promise<void>((resolve) => {
+      (window as any).releaseEnvironmentRead = () => {
+        (window as any).blockEnvironmentReads = false;
+        resolve();
+      };
+    });
+    (window as any).blockEnvironmentReads = true;
+  }, acceptedProject);
+  await run.click();
+  await page.waitForFunction(() => (window as any).environmentReadBlocked === true);
+  expect(
+    await page.evaluate(
+      (project) =>
+        (window as any).bundleHost.replaceProjectSnapshot(project.metadata.id, {
+          project,
+          path: '/bundle/projects/nested/root.rivet-project',
+        }),
+      cancelledProject,
+    ),
+  ).toBe(true);
+  await page.evaluate(() => (window as any).releaseEnvironmentRead());
+  // A fresh command succeeds on the replacement after the old preparation
+  // settles; none of the obsolete authored code may have run in the meantime.
+  await run.click();
+  await expect(page.locator(`.node[data-nodeid="${cancelledOutput.id}"]`)).toContainText('only-after-retry');
+  expect(await page.evaluate(() => (window as any).bindingRunSteps)).toEqual([]);
 });

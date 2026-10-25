@@ -117,7 +117,7 @@ test('Direct-provider request diagnostics retain the exact wire body and stable 
   }
 });
 
-test('Opt-in request diagnostic reconstruction stays within the graph deadline', async () => {
+test('Opt-in request diagnostics no longer honor removed run-node timeout values', async () => {
   const parse = JSON.parse;
   const now = Date.now;
   const fetch = globalThis.fetch;
@@ -139,8 +139,9 @@ test('Opt-in request diagnostic reconstruction stays within the graph deadline',
         { state: { type: 'string', value: 'diagnostic-clock' }, question1: { type: 'object', value: question } },
         context(),
       );
-      if (diagnostics) await assert.rejects(run, /timed out/);
-      else await run;
+      const result = await run;
+      assert.equal(result.answers?.type, 'object');
+      assert.equal(result.requestBody?.type, diagnostics ? 'object' : undefined);
     }
   } finally {
     JSON.parse = parse;
@@ -434,7 +435,7 @@ test('Legacy custom descriptors still receive normalized graph evidence', async 
   }
 });
 
-test('Evaluate rejects a legacy custom provider result returned after the original deadline', async () => {
+test('Inline custom providers receive no run-node deadline and ignore saved timeout values', async () => {
   const now = Date.now;
   let clock = now();
   let calls = 0;
@@ -444,9 +445,11 @@ test('Evaluate rejects a legacy custom provider result returned after the origin
     defaultModel: 'test',
     browserExecutionSupported: false,
     credentialNames: { programmaticName: 'testKey', environmentVariableName: 'TEST_KEY' },
-    evaluate: async () => {
+    evaluate: async (args) => {
       calls++;
-      clock += 1000;
+      assert.equal(args.timeoutMs, undefined);
+      assert.equal(args.deadline, undefined);
+      clock += 600_000;
       return {
         requestBody: {},
         responseBody: {},
@@ -459,13 +462,11 @@ test('Evaluate rejects a legacy custom provider result returned after the origin
   Date.now = () => clock;
   try {
     const node = ClassifierEvaluateNodeImpl.create();
-    await assert.rejects(
-      new ClassifierEvaluateNodeImpl({
-        ...node,
-        data: { ...node.data, provider: provider.id, timeoutMs: 1000 },
-      }).process({ question1: { type: 'object', value: question } }, { ...context(), settings: { testKey: 'test' } }),
-      /timed out/,
-    );
+    const result = await new ClassifierEvaluateNodeImpl({
+      ...node,
+      data: Object.assign(node.data, { provider: provider.id, timeoutMs: 1000 }),
+    }).process({ question1: { type: 'object', value: question } }, { ...context(), settings: { testKey: 'test' } });
+    assert.equal(result.answers?.type, 'object');
     assert.equal(calls, 1);
   } finally {
     Date.now = now;

@@ -35,14 +35,39 @@ class TestWorker extends EventTarget {
   terminate() {
     this.terminated = true;
   }
-  respond(result: unknown) {
+  respond(result: unknown, request = this.request!) {
     this.dispatchEvent(
-      new MessageEvent('message', { data: { id: this.request!.id, type: this.request!.type + ':result', result } }),
+      new MessageEvent('message', { data: { id: request.id, type: request.type + ':result', result } }),
     );
   }
 }
 Object.defineProperty(globalThis, 'Worker', { value: TestWorker, configurable: true });
 const { deserializeProjectAsync } = await import('../overrides/utils/deserializeProject.js');
+
+test('desktop deserialization actually dispatches to its own worker and settles the returned project', async () => {
+  const desktop = await import('../../app/src/utils/deserializeProject.js');
+  const pending = desktop.deserializeProjectAsync('desktop', 'desktop.rivet-project');
+  const worker = TestWorker.instances.at(-1)!;
+  assert.equal(worker.request?.type, 'deserializeProject');
+  worker.respond({ metadata: { id: 'desktop' } });
+  assert.equal((await pending).metadata.id, 'desktop');
+});
+
+test('worker failure rejects all accepted requests once without replay and ignores stale results', async () => {
+  const a = deserializeProjectAsync('a');
+  const b = deserializeProjectAsync('b');
+  const settled = Promise.allSettled([a, b]);
+  const old = TestWorker.instances.at(-1)!;
+  old.dispatchEvent(new MessageEvent('messageerror'));
+  assert.ok((await settled).every((result) => result.status === 'rejected'));
+  assert.equal(old.terminated, true);
+  const next = deserializeProjectAsync('next');
+  const fresh = TestWorker.instances.at(-1)!;
+  assert.notEqual(old, fresh);
+  old.respond({ metadata: { id: 'stale' } });
+  fresh.respond({ metadata: { id: 'fresh' } });
+  assert.equal((await next).metadata.id, 'fresh');
+});
 
 test('cancelling deserialization terminates obsolete work and a new request can complete', async () => {
   const controller = new AbortController();
@@ -77,6 +102,20 @@ test('cancelling one parse preserves another request sharing the worker', async 
   assert.equal(worker.terminated, false);
   worker.respond({ metadata: { id: 'next' } });
   assert.equal((await next).metadata.id, 'next');
+});
+
+test('cancelled queued parsing is retired once the remaining accepted request settles', async () => {
+  const live = deserializeProjectAsync('live');
+  const worker = TestWorker.instances.at(-1)!;
+  const liveRequest = worker.request!;
+  const controller = new AbortController();
+  const cancelled = deserializeProjectAsync('queued-obsolete', undefined, { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(cancelled, /abort/i);
+  assert.equal(worker.terminated, false, 'accepted work must be allowed to finish');
+  worker.respond({ metadata: { id: 'live' } }, liveRequest);
+  assert.equal((await live).metadata.id, 'live');
+  assert.equal(worker.terminated, true, 'obsolete queued parsing must not block the next project selection');
 });
 
 test('hosted preparation and deferred import share one configurable deadline', async (t) => {

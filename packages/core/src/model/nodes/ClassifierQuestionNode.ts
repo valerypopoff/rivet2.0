@@ -12,7 +12,6 @@ import {
 } from '../nodeBodyMarkdown.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
 import { ClassifierQuestionPreparation } from '../classifier/preparation.js';
-import { assertClassifierJson } from '../classifier/json.js';
 import {
   abbreviate,
   assertClassifierEntry,
@@ -21,6 +20,7 @@ import {
   getInstructionsInputDefinition,
   getInterpolationInputDefinitions,
   getQuestionInputValue,
+  getQuestionInstructionsInput,
   getStringInput,
   getStructuredInput,
   interpolateQuestionText,
@@ -37,7 +37,10 @@ import type {
   ClassifierQuestionType,
   ClassifierScoreCriterionData,
   ClassifierScoreQuestionDefinition,
+  ClassifierBoxQuestionDefinition,
 } from '../classifier/types.js';
+import { prepareClassifierQuestion } from '../classifier/questions.js';
+import { ClassifierValueBudget } from '../classifier/limits.js';
 
 export type ClassifierQuestionNodeData = ClassifierQuestionBaseData & {
   questionType: ClassifierQuestionType;
@@ -67,7 +70,7 @@ export type ClassifierQuestionNodeData = ClassifierQuestionBaseData & {
 export type ClassifierQuestionNode = ChartNode<'classifierQuestion', ClassifierQuestionNodeData>;
 
 export type ClassifierQuestionBodySection = Readonly<{
-  id: 'identity' | 'instructions' | 'criteria';
+  id: 'identity' | 'instructions' | 'criteria' | 'capability';
   fields: readonly Readonly<{ label: string; value: string }>[];
   summary?: string | undefined;
 }>;
@@ -96,7 +99,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
   static create(): ClassifierQuestionNode {
     return {
       type: 'classifierQuestion',
-      title: 'Classifier Question',
+      title: 'Decision AI Question',
       id: nanoid() as NodeId,
       visualData: { x: 0, y: 0, width: 280 },
       data: {
@@ -124,7 +127,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
     const data = this.data;
     const inputs: NodeInputDefinition[] = [];
     if (data.useInstructionsInput) inputs.push(getInstructionsInputDefinition());
-    if (data.useCriteriaInput) {
+    if (data.questionType !== 'box' && data.useCriteriaInput) {
       inputs.push(getCriteriaInputDefinition(getCriteriaInputTypes(data.questionType)));
     } else if (data.questionType === 'noul') {
       const criteriaType = getCriteriaType(data);
@@ -142,7 +145,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
           data.instructionsLines,
           data.instructionsObjectTemplate,
         );
-    if (!data.useCriteriaInput) {
+    if (data.questionType !== 'box' && !data.useCriteriaInput) {
       if (data.questionType === 'choice') {
         if (getCriteriaType(data) === 'text') templates.push(...(data.options ?? []).map((option) => option.value));
         else {
@@ -187,6 +190,7 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
           { value: 'noul', label: 'Noul' },
           { value: 'choice', label: 'Choice' },
           { value: 'score', label: 'Score' },
+          { value: 'box', label: 'Bounding Box' },
         ],
         defaultValue: 'choice',
         allowOptionWrap: false,
@@ -246,7 +250,8 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
         type: 'group',
         label: 'Criteria',
         presentation: 'section',
-        hideIf: (data) => data.questionType === 'noul' && Boolean(data.useCriteriaInput),
+        hideIf: (data) =>
+          data.questionType === 'box' || (data.questionType === 'noul' && Boolean(data.useCriteriaInput)),
         editors: [
           {
             type: 'dropdown',
@@ -381,10 +386,10 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
 
   static getUIData(): NodeUIData {
     return {
-      contextMenuTitle: 'Classifier Question',
-      infoBoxTitle: 'Classifier Question',
-      infoBoxBody: 'Builds one typed classifier question without making a network request.',
-      group: ['Classifier'],
+      contextMenuTitle: 'Decision AI Question',
+      infoBoxTitle: 'Decision AI Question',
+      infoBoxBody: 'Builds one typed Decision AI question without making a network request.',
+      group: ['Decision AI'],
     };
   }
 
@@ -393,7 +398,10 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
     const data = this.data;
     preparation.capture(data.questionId);
     // Reject impossible cardinalities before resolving even Instructions.
-    const criteria = data.useCriteriaInput ? getQuestionInputValue(inputs, 'criteria', 'Criteria') : undefined;
+    const criteria =
+      data.questionType !== 'box' && data.useCriteriaInput
+        ? getQuestionInputValue(inputs, 'criteria', 'Criteria')
+        : undefined;
     if (data.questionType === 'score') {
       const count = data.useCriteriaInput
         ? Array.isArray(criteria)
@@ -412,26 +420,30 @@ export class ClassifierQuestionNodeImpl extends NodeImpl<ClassifierQuestionNode>
           ).length;
       if (count < 2 || count > 255) throw new Error('Choice questions require 2 to 255 options.');
     }
-    if (data.useInstructionsInput) preparation.capture(getQuestionInputValue(inputs, 'instructions', 'Instructions'));
     const questionId = requireQuestionId(data.questionId);
-    const instructions = data.useInstructionsInput
-      ? getStructuredInput(inputs, 'instructions', 'Instructions')
-      : resolveAuthoredClassifierEntry({
-          type: data.instructionsType,
-          text: data.instructions,
-          lines: data.instructionsLines,
-          objectTemplate: data.instructionsObjectTemplate,
-          inputs,
-          context,
-          label: 'Instructions',
-          preparation,
-        });
-    assertClassifierInstructions(instructions);
+    const instructionInput = data.useInstructionsInput
+      ? getQuestionInstructionsInput(inputs, preparation)
+      : {
+          instructions: resolveAuthoredClassifierEntry({
+            type: data.instructionsType,
+            text: data.instructions,
+            lines: data.instructionsLines,
+            objectTemplate: data.instructionsObjectTemplate,
+            inputs,
+            context,
+            label: 'Instructions',
+            preparation,
+          }),
+        };
+    const { instructions } = instructionInput;
+    if (data.useInstructionsInput) preparation.capture(instructionInput);
+    if (!instructionInput.instructionsMessages) assertClassifierInstructions(instructions);
 
     const question = createQuestionDefinition(data, inputs, context, questionId, instructions, preparation);
-    assertClassifierJson(question, 'Question', false, preparation.check);
+    if (instructionInput.instructionsMessages) question.instructionsMessages = instructionInput.instructionsMessages;
+    const prepared = prepareClassifierQuestion(question, new ClassifierValueBudget(preparation.check));
     preparation.check();
-    return { ['question' as PortId]: { type: 'object', value: question } };
+    return { ['question' as PortId]: { type: 'object', value: prepared } };
   }
 }
 
@@ -455,11 +467,12 @@ function getNoulCriteriaInputDefinition(
 }
 
 function getQuestionTypeLabel(questionType: ClassifierQuestionType): string {
+  if (questionType === 'box') return 'Bounding Box';
   return questionType === 'noul' ? 'Noul' : questionType[0]!.toUpperCase() + questionType.slice(1);
 }
 
 /**
- * Shared presentation model for the app's Classifier card. Keep this data-only
+ * Shared presentation model for the app's Decision AI card. Keep this data-only
  * so the Core Markdown fallback and the app's LLM-style React body cannot
  * disagree about what a saved question represents.
  */
@@ -476,10 +489,15 @@ export function getClassifierQuestionBodySections(
       ],
     },
     instructions,
-    {
-      id: 'criteria',
-      fields: [{ label: 'Criteria', value: data.useCriteriaInput ? 'input' : getCriteriaSummary(data) }],
-    },
+    data.questionType === 'box'
+      ? {
+          id: 'capability',
+          fields: [{ label: 'Requires', value: 'Jev 1.14 and an image (experimental)' }],
+        }
+      : {
+          id: 'criteria',
+          fields: [{ label: 'Criteria', value: data.useCriteriaInput ? 'input' : getCriteriaSummary(data) }],
+        },
   ];
 }
 
@@ -514,7 +532,12 @@ function createQuestionDefinition(
   questionId: string,
   instructions: ClassifierEntry,
   preparation: ClassifierQuestionPreparation,
-): ClassifierChoiceQuestionDefinition | ClassifierScoreQuestionDefinition | ClassifierNoulQuestionDefinition {
+):
+  | ClassifierChoiceQuestionDefinition
+  | ClassifierScoreQuestionDefinition
+  | ClassifierNoulQuestionDefinition
+  | ClassifierBoxQuestionDefinition {
+  if (data.questionType === 'box') return { questionId, type: 'box', instructions };
   if (data.questionType === 'choice') {
     return createChoiceQuestion(data, inputs, context, questionId, instructions, preparation);
   }
@@ -750,4 +773,4 @@ function hasClassifierCriteriaValue(value: unknown): boolean {
   return Object.keys(value).length > 0;
 }
 
-export const classifierQuestionNode = nodeDefinition(ClassifierQuestionNodeImpl, 'Classifier Question');
+export const classifierQuestionNode = nodeDefinition(ClassifierQuestionNodeImpl, 'Decision AI Question');

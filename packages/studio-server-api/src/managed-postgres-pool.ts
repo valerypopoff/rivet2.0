@@ -95,6 +95,11 @@ export class ManagedPostgresPoolRegistry {
     const poolConfig = withManagedPostgresPoolMax(config, this.#env);
     const key = getPoolKey(poolConfig, poolConfig.max!);
     let entry = this.#entries.get(key);
+    if (entry?.endPromise) {
+      throw new Error(
+        'Managed PostgreSQL pool is closing or its close is unconfirmed. Wait for confirmed release; a failed close requires process recovery.',
+      );
+    }
     if (!entry) {
       entry = {
         pool: this.#createPool(poolConfig),
@@ -116,11 +121,13 @@ export class ManagedPostgresPoolRegistry {
           entry!.referenceCount -= 1;
           if (entry!.referenceCount > 0) return;
 
+          // Mark closing before invoking the driver, including a synchronous
+          // throw. Keep the exact owner visible/fenced until acknowledgement.
+          entry!.endPromise ??= Promise.resolve().then(() => entry!.pool.end());
+          await entry!.endPromise;
           if (this.#entries.get(key) === entry) {
             this.#entries.delete(key);
           }
-          entry!.endPromise ??= entry!.pool.end();
-          await entry!.endPromise;
         })();
         return releasePromise;
       },

@@ -1,4 +1,4 @@
-{{- if and .Values.ha.enabled (ne .Values.ha.controlPlane.mode "singleton") }}
+{{- if and .Values.ha.enabled (eq .Values.ha.controlPlane.mode "replicated") }}
 apiVersion: v1
 kind: Service
 metadata:

@@ -13,16 +13,17 @@ import {
   type ProcessEventMessageMap,
   type ProcessEvents,
   type ProjectId,
+  type GraphExecutionMetadata,
   GptTokenizerTokenizer,
   logRuntimeDebug,
   logRuntimeError,
   logRuntimeInfo,
   AgentResponseTraceCollector,
-  serializeDatasets,
-  serializeProject,
 } from '@valerypopoff/rivet2-core';
 import { produce } from 'immer';
 import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
+import { projectBindingRegistryState } from '../state/projectBindings.js';
+import { bindExecutionTerminal, type ExecutionSourceKind } from '../domain/execution/executionEventNormalization.js';
 import { useEffect, useRef } from 'react';
 import { toast, type Id as ToastId } from 'react-toastify';
 import { TauriNativeApi } from '../model/native/TauriNativeApi';
@@ -48,22 +49,14 @@ import { graphState } from '../state/graph';
 import {
   currentProjectLoadedRecordingState,
   isCurrentLoadedRecordingForTab,
-  lastRecordingState,
   loadedRecordingState,
   recordingPlaybackStartingState,
 } from '../state/execution';
 import { fillMissingSettingsFromEnvironmentVariables } from '../utils/tauri';
 import { getLLMChatV2ApiKeyEnvVarNames } from '../utils/chatV2ProviderEnv';
 import { applyEvaluationRunEvent, applyEvaluationRunSnapshot, evaluationsState } from '../state/evaluations';
+import { createEvaluationEventCollector, type EvaluationRunPurpose } from '@valerypopoff/rivet2-evaluations';
 import {
-  createEvaluationEventCollector,
-  EvaluationGraphExecutionError,
-  type EvaluationRecordingReference,
-  type EvaluationRunPurpose,
-  type PortableJson,
-} from '@valerypopoff/rivet2-evaluations';
-import {
-  createEmptyProjectExecutionSnapshot,
   frozenNodeOutputsState,
   graphRunningState,
   graphRunHistoryByViewState,
@@ -94,13 +87,16 @@ import { cloneFrozenNodeOutputsForExecutor } from '../utils/frozenNodeOutputs.js
 import { recordingStatusAfterAbort, shouldCaptureExecutionRecording } from '../utils/recordingCapturePolicy.js';
 import { dispatchGraphExecutionEvent } from './graphExecutionEventDispatch.js';
 import {
-  applyProcessEventToProjectExecutionSnapshots,
-  shouldRouteProjectEventToSnapshot,
+  captureProjectExecutionActivity,
+  routeProjectExecutionDisplay,
   updateOpenProjectExecutionSnapshot,
 } from './projectExecutionSnapshotRouting.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
 import { formatEvaluationCompletionToast } from '../utils/evaluationRunSummary.js';
 import { executeEvaluationRunLifecycle } from '../utils/evaluationExecutionLifecycle.js';
+import { createEvaluationRecordingPersistence } from '../utils/evaluationRecordingPersistence.js';
+import { executeEvaluationGraph } from '../utils/evaluationGraphExecution.js';
+import { prepareEditorRecordingPersistence, persistEditorRunRecording } from '../utils/editorRunRecording.js';
 import {
   captureEditorRun,
   evaluationInputsToGraphOutputs,
@@ -110,15 +106,6 @@ import {
 import { EditorRunSession } from './editorRunSession.js';
 import { resetRecordingPlaybackDisplay } from './recordingPlaybackDisplay.js';
 import { getRecordingPlaybackGraphId } from '../utils/recordingPlayback.js';
-
-function createEvaluationRecordingReference(): EvaluationRecordingReference {
-  const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  return {
-    id: `evaluation-recording-${id}`,
-    retention: 'temporary',
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-  };
-}
 
 /**
  * Yield to the macrotask queue so the browser can repaint.
@@ -178,7 +165,6 @@ export function useLocalExecutor() {
   const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
   const recordingPlaybackStarting = useAtomValue(recordingPlaybackStartingState);
   const setRecordingPlaybackStarting = useSetAtom(recordingPlaybackStartingState);
-  const setLastRecordingState = useSetAtom(lastRecordingState);
   const [evaluations, setEvaluationsState] = useAtom(evaluationsState);
   const recordExecutions = useAtomValue(recordExecutionsState);
   const showNodeRunDurations = useAtomValue(showNodeRunDurationsState);
@@ -241,55 +227,29 @@ export function useLocalExecutor() {
     message: K,
     data: ProcessEventMessageMap[K],
     dispatchActive: () => void,
+    source?: object,
+    kind?: ExecutionSourceKind,
   ) {
-    routeBundleExecution(runProjectId, message, data);
-    const activeProjectId = store.get(projectState).metadata.id as ProjectId | undefined;
-    const openedProjectsState = store.get(projectsState).openedProjects;
-
-    if (activeProjectId === runProjectId) {
-      dispatchActive();
-      return;
-    }
-
-    if (
-      !shouldRouteProjectEventToSnapshot({
-        activeProjectId,
-        isProjectOpen: Boolean(openedProjectsState[runProjectId]),
-        projectId: runProjectId,
-      })
-    ) {
-      return;
-    }
-
-    store.set(projectExecutionSnapshotsState, (previousSnapshots) =>
-      applyProcessEventToProjectExecutionSnapshots({
-        data,
-        message,
-        projectId: runProjectId,
-        refStore: dataRefs,
-        snapshots: previousSnapshots,
-        previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
-      }),
-    );
+    routeBundleExecution(runProjectId, message, data, source, kind);
+    routeProjectExecutionDisplay({
+      store,
+      projectId: runProjectId,
+      message,
+      data,
+      refStore: dataRefs,
+      previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
+      interactive: dispatchActive,
+    });
   }
 
   function setLastRecordingForProject(runProjectId: ProjectId, recording: string) {
-    if (store.get(projectState).metadata.id === runProjectId) {
-      setLastRecordingState(recording);
-      return;
-    }
-
-    if (!store.get(projectsState).openedProjects[runProjectId]) {
-      return;
-    }
-
-    store.set(projectExecutionSnapshotsState, (previousSnapshots) => ({
-      ...previousSnapshots,
-      [runProjectId]: {
-        ...(previousSnapshots[runProjectId] ?? createEmptyProjectExecutionSnapshot()),
-        lastRecording: recording,
-      },
-    }));
+    updateOpenProjectExecutionSnapshot(
+      store,
+      runProjectId,
+      (snapshot) => ({ ...snapshot, lastRecording: recording }),
+      undefined,
+      true,
+    );
   }
 
   function markInactiveLocalRunFailed(runProjectId: ProjectId, error: unknown) {
@@ -311,9 +271,11 @@ export function useLocalExecutor() {
     processor: GraphProcessor,
     runProjectId: ProjectId,
     withDisplayOwnership: (dispatch: () => void) => void,
+    kind: ExecutionSourceKind,
   ) {
+    let rootExecution: GraphExecutionMetadata | undefined;
     const routeLocalEvent: typeof routeLocalProcessEvent = (projectId, message, data, dispatchActive) => {
-      withDisplayOwnership(() => routeLocalProcessEvent(projectId, message, data, dispatchActive));
+      withDisplayOwnership(() => routeLocalProcessEvent(projectId, message, data, dispatchActive, processor, kind));
     };
     // nodeStart and nodeFinish use awaited emit in GraphProcessor, so returning
     // a Promise here pauses the processor until the macrotask yield completes,
@@ -336,13 +298,16 @@ export function useLocalExecutor() {
     // start and graphStart are already awaited by GraphProcessor, so yielding
     // here also creates a macrotask boundary before node processing begins.
     processor.on('start', async (data: ProcessEvents['start']) => {
+      rootExecution = data.execution;
       routeLocalEvent(runProjectId, 'start', data, () => eventDispatcher.start(data));
       await yieldToMacrotask();
     });
-    processor.on('done', (data) => {
+    processor.on('done', (raw) => {
+      const data = bindExecutionTerminal(raw, rootExecution);
       routeLocalEvent(runProjectId, 'done', data, () => eventDispatcher.done(data));
     });
-    processor.on('abort', (data) => {
+    processor.on('abort', (raw) => {
+      const data = bindExecutionTerminal(raw, rootExecution);
       routeLocalEvent(runProjectId, 'abort', data, () => eventDispatcher.abort(data));
     });
     processor.on('graphAbort', (data) => {
@@ -370,6 +335,8 @@ export function useLocalExecutor() {
       routeLocalEvent(runProjectId, 'toolCallFinished', data, () => eventDispatcher.toolCallFinished(data));
     });
     processor.on('graphStart', async (data: ProcessEvents['graphStart']) => {
+      if (data.execution?.projectId === runProjectId && !data.execution.parentGraphRunId)
+        rootExecution = data.execution;
       routeLocalEvent(runProjectId, 'graphStart', data, () => eventDispatcher.graphStart(data));
       await yieldToMacrotask();
     });
@@ -394,7 +361,8 @@ export function useLocalExecutor() {
     processor.on('resume', (data) => {
       routeLocalEvent(runProjectId, 'resume', data, () => eventDispatcher.resume(data));
     });
-    processor.on('error', (data) => {
+    processor.on('error', (raw) => {
+      const data = bindExecutionTerminal(raw, rootExecution);
       routeLocalEvent(runProjectId, 'error', data, () => eventDispatcher.error(data));
     });
     processor.on('nodeExcluded', (data) => {
@@ -422,35 +390,38 @@ export function useLocalExecutor() {
    * observer and already keys every event by root/graph run identity, so feed
    * it the complete stream directly.
    */
-  function attachEvaluationRunActivity(processor: GraphProcessor) {
-    processor.on('start', (data) => currentExecution.onRunActivityEvent('start', data));
-    processor.on('done', (data) => currentExecution.onRunActivityEvent('done', data));
-    processor.on('abort', (data) => currentExecution.onRunActivityEvent('abort', data));
-    processor.on('error', (data) => currentExecution.onRunActivityEvent('error', data));
-    processor.on('graphStart', (data) => currentExecution.onRunActivityEvent('graphStart', data));
-    processor.on('graphFinish', (data) => currentExecution.onRunActivityEvent('graphFinish', data));
-    processor.on('graphError', (data) => currentExecution.onRunActivityEvent('graphError', data));
-    processor.on('graphAbort', (data) => currentExecution.onRunActivityEvent('graphAbort', data));
-    processor.on('graphOutputsReady', (data) => currentExecution.onRunActivityEvent('graphOutputsReady', data));
-    processor.on('nodeStart', (data) => currentExecution.onRunActivityEvent('nodeStart', data));
-    processor.on('nodeFinish', (data) => currentExecution.onRunActivityEvent('nodeFinish', data));
-    processor.on('nodeError', (data) => currentExecution.onRunActivityEvent('nodeError', data));
-    processor.on('nodeExcluded', (data) => currentExecution.onRunActivityEvent('nodeExcluded', data));
-    processor.on('nodeOutputsCleared', (data) => currentExecution.onRunActivityEvent('nodeOutputsCleared', data));
-    processor.on('streamingOutputWatchSummary', (data) =>
-      currentExecution.onRunActivityEvent('streamingOutputWatchSummary', data),
-    );
-    processor.on('partialOutput', (data) => currentExecution.onRunActivityEvent('partialOutput', data));
-    processor.on('progress', (data) => currentExecution.onRunActivityEvent('progress', data));
-    processor.on('llmCallFinished', (data) => currentExecution.onRunActivityEvent('llmCallFinished', data));
-    processor.on('llmProfileAttempt', (data) => currentExecution.onRunActivityEvent('llmProfileAttempt', data));
-    processor.on('toolCallFinished', (data) => currentExecution.onRunActivityEvent('toolCallFinished', data));
+  function attachEvaluationRunActivity(
+    processor: GraphProcessor,
+    activity: ReturnType<typeof captureProjectExecutionActivity>,
+  ) {
+    processor.on('start', (data) => activity.event('start', data));
+    processor.on('done', (data) => activity.event('done', data));
+    processor.on('abort', (data) => activity.event('abort', data));
+    processor.on('error', (data) => activity.event('error', data));
+    processor.on('graphStart', (data) => activity.event('graphStart', data));
+    processor.on('graphFinish', (data) => activity.event('graphFinish', data));
+    processor.on('graphError', (data) => activity.event('graphError', data));
+    processor.on('graphAbort', (data) => activity.event('graphAbort', data));
+    processor.on('graphOutputsReady', (data) => activity.event('graphOutputsReady', data));
+    processor.on('nodeStart', (data) => activity.event('nodeStart', data));
+    processor.on('nodeFinish', (data) => activity.event('nodeFinish', data));
+    processor.on('nodeError', (data) => activity.event('nodeError', data));
+    processor.on('nodeExcluded', (data) => activity.event('nodeExcluded', data));
+    processor.on('nodeOutputsCleared', (data) => activity.event('nodeOutputsCleared', data));
+    processor.on('streamingOutputWatchSummary', (data) => activity.event('streamingOutputWatchSummary', data));
+    processor.on('partialOutput', (data) => activity.event('partialOutput', data));
+    processor.on('progress', (data) => activity.event('progress', data));
+    processor.on('llmCallFinished', (data) => activity.event('llmCallFinished', data));
+    processor.on('llmProfileAttempt', (data) => activity.event('llmProfileAttempt', data));
+    processor.on('toolCallFinished', (data) => activity.event('toolCallFinished', data));
   }
 
   const tryRunGraph = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
     const recordingToReplay = loadedRecording;
     const runProjectId = project.metadata.id;
     const ownerWasOpen = store.get(projectsState).openedProjects[runProjectId] != null;
+    const bindingToken = store.get(projectBindingRegistryState).get(runProjectId)?.token;
+    const workspaceToken = store.get(projectBindingRegistryState).getWorkspaceToken();
     const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;
     const readPlaybackHistory = () =>
       store.get(projectState).metadata.id === runProjectId
@@ -458,7 +429,13 @@ export function useLocalExecutor() {
         : store.get(projectExecutionSnapshotsState)[runProjectId]?.graphRunHistoryByView;
     let playbackHistory: ReturnType<typeof readPlaybackHistory>;
     const ownsPlaybackDisplay = () => {
-      if (!recordingToReplay) return true;
+      if (store.get(projectBindingRegistryState).getWorkspaceToken() !== workspaceToken) return false;
+      if (!recordingToReplay)
+        return (
+          bindingToken === undefined || store.get(projectBindingRegistryState).isCurrent(runProjectId, bindingToken)
+        );
+      // A recording has its own immutable recorder/history identity. An explicit
+      // path move may transfer it, but a reopened tab cannot inherit that identity.
       const current = store.get(loadedRecordingState);
       // Once reserved, immutable display history follows the run across tab
       // switches. A different recording can be selected in another open tab
@@ -526,6 +503,8 @@ export function useLocalExecutor() {
         projectData,
         plugins: { appPluginStates: pluginStates, currentGraph: savedGraph, registry: projectNodeRegistry },
         options,
+        settings: savedSettings,
+        context: projectContext,
       });
       options = captured.options;
       const tempProject = captured.project;
@@ -534,8 +513,7 @@ export function useLocalExecutor() {
       // the user happens to be viewing. Keep malformed-artifact failures in
       // RecordingPlayer by retaining a valid fallback processor graph.
       const graphToRun = recordedGraphId && tempProject.graphs[recordedGraphId] ? recordedGraphId : captured.graphId;
-      const contextValues = getProjectContextValues(projectContext);
-      const runSettings = structuredClone(savedSettings);
+      const { contextValues, settings: runSettings } = captured;
       // Capture before any awaited preparation can select another tab's data.
       const entryDatasets =
         !recordingToReplay && ioProvider.readProjectBundle && loadedProject.path
@@ -565,19 +543,11 @@ export function useLocalExecutor() {
         recordExecutions,
         isPlayback: recordingToReplay != null,
       });
-      const localRecordingProjectPath =
-        shouldRecordExecution && loadedProject.path && localExecutionRecordingPersistence
-          ? loadedProject.path
-          : undefined;
-      const localRecordingProvider =
-        localRecordingProjectPath &&
-        localExecutionRecordingPersistence &&
-        (await localExecutionRecordingPersistence.getCapability().catch(() => false))
-          ? localExecutionRecordingPersistence
-          : undefined;
-      const localRecordingCorrelationId = localRecordingProvider
-        ? `rvt-local-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
-        : undefined;
+      const localRecordingPersistence = await prepareEditorRecordingPersistence({
+        eligible: shouldRecordExecution,
+        projectPath: loadedProject.path,
+        provider: localExecutionRecordingPersistence,
+      });
       const localRecordingStartedAt = shouldRecordExecution ? performance.now() : undefined;
       const localRecordingCreatedAt = shouldRecordExecution ? new Date().toISOString() : undefined;
 
@@ -638,56 +608,38 @@ export function useLocalExecutor() {
         localRecordingErrorMessage ??= event.error instanceof Error ? event.error.message : event.error;
       });
       if (recorder) {
-        finalizeCapturedRecording = async () => {
-          const durationMs = Math.max(0, performance.now() - localRecordingStartedAt!);
-          try {
-            const recordingSerialized = recorder.serialize();
-            setLastRecordingForProject(runProjectId, recordingSerialized);
-            if (!localRecordingProvider || !localRecordingCorrelationId || !localRecordingProjectPath) return;
-            const projectContents = serializeProject(tempProject) as string;
-            const datasetsContents = serializeDatasets(await datasetProvider.exportDatasetsForProject(runProjectId));
-            await localRecordingProvider.persist({
-              createdAt: localRecordingCreatedAt,
-              projectId: runProjectId,
-              projectPath: localRecordingProjectPath,
-              projectContents,
-              datasetsContents,
-              recordingSerialized,
-              status: localRecordingStatus,
-              durationMs,
-              errorMessage: localRecordingErrorMessage,
-              executionIdentity: {
-                correlationId: localRecordingCorrelationId,
-                graphId: graphToRun,
-              },
-            });
-          } catch (error) {
-            if (localRecordingProvider && localRecordingCorrelationId) {
-              await localRecordingProvider.markUnavailable(localRecordingCorrelationId).catch((outcomeError) => {
-                logRuntimeDebug('Local editor recording could not report a failed local artifact.', {
-                  error: outcomeError,
-                  graphId: graphToRun,
-                  projectId: runProjectId,
-                });
-              });
-            }
-            logRuntimeDebug('Local editor recording was not retained by the hosted server.', {
-              error,
-              graphId: graphToRun,
-              projectId: runProjectId,
-            });
-          }
-        };
+        finalizeCapturedRecording = () =>
+          persistEditorRunRecording({
+            source: 'browser',
+            recorder,
+            project: tempProject,
+            graphId: graphToRun,
+            startedAt: localRecordingStartedAt!,
+            createdAt: localRecordingCreatedAt!,
+            status: localRecordingStatus,
+            errorMessage: localRecordingErrorMessage,
+            persistence: localRecordingPersistence,
+            exportDatasets: () => datasetProvider.exportDatasetsForProject(runProjectId),
+            onSerialized: (recording) => {
+              if (ownsPlaybackDisplay()) setLastRecordingForProject(runProjectId, recording);
+            },
+          });
       }
 
-      attachGraphEvents(processor, runProjectId, (dispatch) => {
-        if (!ownsPlaybackDisplay()) {
-          runSession.abort(new DOMException('Recording playback owner changed.', 'AbortError'));
-          return;
-        }
-        dispatch();
-        if (recordingToReplay) playbackHistory = readPlaybackHistory();
-      });
+      attachGraphEvents(
+        processor,
+        runProjectId,
+        (dispatch) => {
+          if (!ownsPlaybackDisplay()) {
+            if (recordingToReplay)
+              runSession.abort(new DOMException('Recording playback owner changed.', 'AbortError'));
+            return;
+          }
+          dispatch();
+          if (recordingToReplay) playbackHistory = readPlaybackHistory();
+        },
+        recordingToReplay ? 'recording' : 'browser',
+      );
 
       let results: GraphOutputs;
 
@@ -722,6 +674,8 @@ export function useLocalExecutor() {
           },
         );
         preparation.signal.throwIfAborted();
+        if (!ownsPlaybackDisplay())
+          throw new Error('The project binding changed while preparing the run. Run it again from the current tab.');
         results = await processor.processGraph(
           {
             settings: runtimeSettings,
@@ -734,12 +688,12 @@ export function useLocalExecutor() {
               bundleRuntime?.projectReferenceLoader ?? new TauriProjectReferenceLoader(pathPolicy),
             subgraphProjectLoader: bundleRuntime?.subgraphProjectLoader ?? subgraphProjectLoader,
             onSubgraphProjectRun:
-              shouldRecordExecution && localRecordingProvider ? persistSubgraphProjectRun : undefined,
+              shouldRecordExecution && localRecordingPersistence ? persistSubgraphProjectRun : undefined,
             editorExecutionCache: getEditorExecutionCache(tempProject.metadata.id),
             llmProfileHealthStore,
-            ...(localRecordingCorrelationId == null
+            ...(localRecordingPersistence == null
               ? {}
-              : { llmProfileHealthExecutionCorrelationId: localRecordingCorrelationId }),
+              : { llmProfileHealthExecutionCorrelationId: localRecordingPersistence.correlationId }),
           },
           options.inputs ?? {},
           contextValues,
@@ -751,6 +705,10 @@ export function useLocalExecutor() {
       if (responseTrace) options.onResponseTrace?.(responseTrace);
       return results;
     } catch (e) {
+      // Failure accounting belongs to the accepted execution, even if its tab
+      // was replaced and can no longer receive presentation updates.
+      localRecordingStatus = 'failed';
+      localRecordingErrorMessage = e instanceof Error ? e.message : String(e);
       if (!ownsPlaybackDisplay()) {
         if (options.throwOnError) throw e;
         return undefined;
@@ -763,8 +721,6 @@ export function useLocalExecutor() {
         if (options.throwOnError) throw preparation.signal.reason;
         return undefined;
       }
-      localRecordingStatus = 'failed';
-      localRecordingErrorMessage = e instanceof Error ? e.message : String(e);
       const runProjectIsActive = store.get(projectState).metadata.id === runProjectId;
       if (runProjectIsActive) {
         currentExecution.clearNodeRunDataPreservationForNextStart();
@@ -793,6 +749,7 @@ export function useLocalExecutor() {
       return undefined;
     } finally {
       const cleanupProcessorRun = () => {
+        if (processor) routeBundleExecution.settle(processor);
         responseTraceCollector?.dispose();
         const ownsRun = activeRunControllersByProjectId.current.get(runProjectId) === runSession;
         if (ownsRun) activeRunControllersByProjectId.current.delete(runProjectId);
@@ -862,6 +819,7 @@ export function useLocalExecutor() {
       const runProjectId = projectForEvaluation.metadata.id;
       const bundleManifestPath = store.get(projectsState).openedProjects[runProjectId]?.bundleManifestPath;
       if (!runProjectId) throw new Error('Cannot run an evaluation without a project id.');
+      const activity = captureProjectExecutionActivity(store, runProjectId, dataRefs);
 
       if (evaluationAbortControllersByProjectId.current.has(runProjectId)) {
         throw new Error('An evaluation is already running for this project.');
@@ -872,7 +830,8 @@ export function useLocalExecutor() {
       // than only the graph runs that start afterwards.
       const evaluationAbortController = new AbortController();
       evaluationAbortControllersByProjectId.current.set(runProjectId, evaluationAbortController);
-      const isActiveEvaluationProject = () => store.get(projectState).metadata.id === runProjectId;
+      const isActiveEvaluationProject = () =>
+        activity.isCurrent() && store.get(projectState).metadata.id === runProjectId;
       const ensureActiveEvaluationProject = () => {
         if (evaluationAbortController.signal.aborted) throw evaluationAbortController.signal.reason;
         if (isActiveEvaluationProject()) return;
@@ -937,10 +896,9 @@ export function useLocalExecutor() {
               captureNodeTimings: showNodeRunDurations,
             });
             const recorder = new ExecutionRecorder();
-            const recording = createEvaluationRecordingReference();
             processor.executor = 'browser';
             recorder.record(processor);
-            attachEvaluationRunActivity(processor);
+            attachEvaluationRunActivity(processor, activity);
             processor.on('llmCallFinished', captured.llmCallFinished);
             processor.on('llmProfileAttempt', captured.llmProfileAttempt);
             processor.on('toolCallFinished', captured.toolCallFinished);
@@ -948,83 +906,65 @@ export function useLocalExecutor() {
               void processor.abort();
             };
             signal?.addEventListener('abort', abort, { once: true });
-            const persistRecording = async (): Promise<EvaluationRecordingReference | undefined> => {
-              if (recorder.events.length === 0) return undefined;
-              try {
-                await evaluationRunStore.putRecording({
-                  projectId: runProjectId,
-                  runId: metadata.evaluationRunId,
-                  trialId: `${metadata.caseId}:${metadata.trialIndex}`,
-                  reference: recording,
-                  serialized: recorder.serialize(),
-                  createdAt: new Date().toISOString(),
-                });
-                return recording;
-              } catch (error) {
-                // A failed artifact write must not turn a valid model verdict
-                // into a broken evaluation. The compact run remains usable.
+            const persistRecording = createEvaluationRecordingPersistence({
+              recorder,
+              store: evaluationRunStore,
+              projectId: runProjectId,
+              metadata,
+              onFailure: (error) => {
                 recordingPersistenceFailureCount += 1;
                 logRuntimeDebug('Evaluation recording was not retained.', {
                   error,
                   graphId,
                   evaluationRunId: metadata.evaluationRunId,
                 });
-                return undefined;
-              }
-            };
+              },
+            });
             try {
-              const bundle = await readProjectBundleForExecution(ioProvider, loadedProject.path, bundleManifestPath);
-              signal?.throwIfAborted();
-              const bundleRuntime = bundle?.createRuntime(
-                evaluationProject,
-                new InMemoryDatasetProvider(structuredClone(await entryDatasets)),
-              );
-              signal?.throwIfAborted();
-              const runtimeSettings = await fillMissingSettingsFromEnvironmentVariables(
-                savedSettings,
-                projectNodeRegistry.getPlugins(),
-                {
-                  environmentProvider,
-                  extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(evaluationProject),
+              return await executeEvaluationGraph({
+                captured,
+                startedAt,
+                signal,
+                persistRecording,
+                execute: async () => {
+                  const bundle = await readProjectBundleForExecution(
+                    ioProvider,
+                    loadedProject.path,
+                    bundleManifestPath,
+                  );
+                  signal?.throwIfAborted();
+                  const bundleRuntime = bundle?.createRuntime(
+                    evaluationProject,
+                    new InMemoryDatasetProvider(structuredClone(await entryDatasets)),
+                  );
+                  signal?.throwIfAborted();
+                  const runtimeSettings = await fillMissingSettingsFromEnvironmentVariables(
+                    savedSettings,
+                    projectNodeRegistry.getPlugins(),
+                    {
+                      environmentProvider,
+                      extraEnvVarNames: getLLMChatV2ApiKeyEnvVarNames(evaluationProject),
+                    },
+                  );
+                  signal?.throwIfAborted();
+                  return processor.processGraph(
+                    {
+                      settings: runtimeSettings,
+                      nativeApi: new TauriNativeApi(),
+                      datasetProvider: bundleRuntime?.datasetProvider ?? datasetProvider,
+                      audioProvider,
+                      tokenizer: new GptTokenizerTokenizer(),
+                      llmProfileHealthStore,
+                      evaluation: metadata,
+                      projectPath: loadedProject.path ?? undefined,
+                      projectReferenceLoader:
+                        bundleRuntime?.projectReferenceLoader ?? new TauriProjectReferenceLoader(pathPolicy),
+                      subgraphProjectLoader: bundleRuntime?.subgraphProjectLoader ?? subgraphProjectLoader,
+                    },
+                    evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
+                    getProjectContextValues(projectContext),
+                  );
                 },
-              );
-              signal?.throwIfAborted();
-              const outputs = await processor.processGraph(
-                {
-                  settings: runtimeSettings,
-                  nativeApi: new TauriNativeApi(),
-                  datasetProvider: bundleRuntime?.datasetProvider ?? datasetProvider,
-                  audioProvider,
-                  tokenizer: new GptTokenizerTokenizer(),
-                  llmProfileHealthStore,
-                  evaluation: metadata,
-                  projectPath: loadedProject.path ?? undefined,
-                  projectReferenceLoader:
-                    bundleRuntime?.projectReferenceLoader ?? new TauriProjectReferenceLoader(pathPolicy),
-                  subgraphProjectLoader: bundleRuntime?.subgraphProjectLoader ?? subgraphProjectLoader,
-                },
-                evaluationInputsToGraphOutputs(evaluationProject, graphId, inputs),
-                getProjectContextValues(projectContext),
-              );
-              const portableOutputs = Object.fromEntries(
-                Object.entries(outputs).map(([key, value]) => [key, value.value as PortableJson]),
-              );
-              captured.metrics.durationMs = Date.now() - startedAt;
-              const persistedRecording = await persistRecording();
-              return {
-                outputs: portableOutputs,
-                metrics: captured.metrics,
-                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
-                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
-              };
-            } catch (error) {
-              captured.metrics.durationMs = Math.max(captured.metrics.durationMs, Date.now() - startedAt);
-              const persistedRecording = await persistRecording();
-              if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-              throw new EvaluationGraphExecutionError(error instanceof Error ? error.message : String(error), {
-                metrics: captured.metrics,
-                ...(persistedRecording === undefined ? {} : { recording: persistedRecording }),
-                ...(captured.providerAttempts.length === 0 ? {} : { providerAttempts: captured.providerAttempts }),
               });
             } finally {
               signal?.removeEventListener('abort', abort);

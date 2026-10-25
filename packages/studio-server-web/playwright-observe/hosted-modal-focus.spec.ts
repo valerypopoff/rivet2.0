@@ -3,13 +3,40 @@ import { mockHostedEditorBootstrap, openHostedDashboardFixture } from './helpers
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 import { serializeProject } from '@valerypopoff/rivet2-core';
 
-async function setupFocusFixture(page: Page): Promise<string[]> {
+async function setupFocusFixture(page: Page, protectedInput = false): Promise<string[]> {
   await seedHostedEditorProject(page, {
     graphId: 'focus-graph',
     loaded: true,
     projectId: 'focus-project',
     projectPath: '/workflows/Focus fixture.rivet-project',
     title: 'Focus fixture',
+    extraGraphs: protectedInput
+      ? [
+          {
+            id: 'caller-graph',
+            name: 'Caller graph',
+            nodes: [
+              {
+                id: 'protected-input',
+                type: 'text',
+                title: 'Caller source',
+                data: { text: 'source' },
+                visualData: { x: 100, y: 120, width: 250 },
+              },
+              {
+                id: 'caller',
+                type: 'subGraph',
+                title: 'Uses protected input',
+                data: { graphId: 'focus-graph' },
+                visualData: { x: 500, y: 120, width: 250 },
+              },
+            ],
+            connections: [
+              { outputNodeId: 'protected-input', outputId: 'output', inputNodeId: 'caller', inputId: 'input' },
+            ],
+          },
+        ]
+      : [],
     graph: {
       nodes: [
         {
@@ -19,6 +46,17 @@ async function setupFocusFixture(page: Page): Promise<string[]> {
           data: { text: 'local focus regression output' },
           visualData: { x: 100, y: 120, width: 300 },
         },
+        ...(protectedInput
+          ? [
+              {
+                id: 'protected-input',
+                type: 'graphInput',
+                title: 'Protected input',
+                data: { id: 'input', dataType: 'string' },
+                visualData: { x: 450, y: 120, width: 250 },
+              },
+            ]
+          : []),
       ],
     },
   });
@@ -462,6 +500,106 @@ test('a native modeless dialog does not block sidebar resize', async ({ page }) 
   await expect(resizer).toHaveAttribute('aria-disabled', 'true');
   await dialog.evaluate((element: HTMLDialogElement) => element.close());
   await expect(resizer).toHaveAttribute('aria-disabled', 'false');
+});
+
+test('graph-input cut confirmation blocks background commands and cannot delete in a switched graph', async ({
+  page,
+}) => {
+  const writes = await setupFocusFixture(page, true);
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const input = editor.locator('.node[data-nodeid="protected-input"]');
+  const nodes = editor.locator('.node[data-nodeid]');
+  const dialog = editor.getByRole('dialog');
+  const selectInput = async () => {
+    const box = (await input.boundingBox())!;
+    await page.keyboard.down('Shift');
+    await page.mouse.move(box.x - 12, box.y - 12);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width + 12, box.y + box.height + 12, { steps: 5 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await expect(input).toHaveClass(/selected/);
+  };
+  await selectInput();
+  await page.keyboard.press('Control+X');
+  await expect(dialog).toContainText('Delete Graph Input?');
+  // The real confirmation uses autoFocus=false. Window-retargeted events must
+  // not bypass modal admission, regardless of the active element.
+  const consumed = await dialog.evaluate((element) =>
+    ['x', 'd', 'v'].map((key) => {
+      const event = new KeyboardEvent('keydown', {
+        key,
+        code: `Key${key.toUpperCase()}`,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      element.ownerDocument.defaultView!.dispatchEvent(event);
+      return event.defaultPrevented;
+    }),
+  );
+  expect(consumed).toEqual([false, false, false]);
+  await expect(nodes).toHaveCount(2);
+  // A host activation can switch graphs independently of the dialog focus trap.
+  await editor
+    .locator('[data-graphid="caller-graph"] .graph-item-select')
+    .evaluate((element: HTMLElement) => element.click());
+  await expect(input.locator('.node-title')).toContainText('Caller source');
+  await dialog.getByRole('button', { name: 'Delete Input', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(nodes).toHaveCount(2);
+  await expect(input).toBeVisible();
+  await editor.locator('[data-graphid="focus-graph"]').click();
+  await selectInput();
+  await page.keyboard.press('Control+X');
+  await expect(dialog).toContainText('Delete Graph Input?');
+  await dialog.getByRole('button', { name: 'Delete Input', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(input).toHaveCount(0);
+  await expect(nodes).toHaveCount(1);
+  await editor.locator('.node-canvas').click({ position: { x: 600, y: 350 } });
+  await page.keyboard.press('Control+Z');
+  await expect(input).toBeVisible();
+  await expect(nodes).toHaveCount(2);
+  expect(writes).toEqual([]);
+});
+
+test('native editor dialog controls own clipboard keys without explicit ARIA roles', async ({ page }) => {
+  const writes = await setupFocusFixture(page);
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const nodes = editor.locator('.node[data-nodeid]');
+  await nodes.first().locator('.node-title').click();
+  await page.keyboard.press('Control+C');
+  await editor.locator('.node-canvas').evaluate((canvas) => {
+    const dialog = canvas.ownerDocument.createElement('dialog');
+    dialog.id = 'clipboard-native-dialog';
+    dialog.innerHTML = '<button>Confirm clipboard test</button>';
+    canvas.ownerDocument.body.append(dialog);
+    dialog.showModal();
+    dialog.querySelector('button')!.focus();
+  });
+  const button = editor.getByRole('button', { name: 'Confirm clipboard test' });
+  await expect(button).toBeFocused();
+  for (const key of ['Control+X', 'Control+V', 'Control+D']) await page.keyboard.press(key);
+  const consumed = await button.evaluate((element) =>
+    ['copy', 'cut', 'paste'].map((type) => {
+      const event = new ClipboardEvent(type, { bubbles: true, cancelable: true });
+      element.dispatchEvent(event);
+      return event.defaultPrevented;
+    }),
+  );
+  expect(consumed).toEqual([false, false, false]);
+  await expect(nodes).toHaveCount(1);
+  await editor.locator('#clipboard-native-dialog').evaluate((dialog: HTMLDialogElement) => {
+    dialog.close();
+    dialog.remove();
+  });
+  await nodes.first().locator('.node-title').click();
+  await page.keyboard.press('Control+D');
+  await expect(nodes).toHaveCount(2);
+  await page.keyboard.press('Control+Z');
+  await expect(nodes).toHaveCount(1);
+  expect(writes).toEqual([]);
 });
 
 test('an editor modal locks resize only while its iframe is visible', async ({ page }) => {

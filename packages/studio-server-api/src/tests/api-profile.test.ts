@@ -40,6 +40,8 @@ const relevantEnvKeys = [
   'RIVET_REQUIRE_UI_GATE_KEY',
   'RIVET_SERVER_UI_AUTH_MODE',
   'RIVET_DEPLOYMENT_TOPOLOGY',
+  'RIVET_HA_CONTROL_PLANE_MODE',
+  'RIVET_LEGACY_RESTORE_ROOT',
   'RIVET_LOCAL_METADATA_CONTROL_ROOT',
   'RIVET_LOCAL_METADATA_BOOT_REVISION',
   'RIVET_LEGACY_RESTORE_ENABLED',
@@ -217,18 +219,27 @@ test('a timed-out body keeps its original 408 without a second API error respons
     const server = await startServer('control');
     configureRequestReceiveDeadlines(server.server, true, 50);
     const loggedErrors: unknown[][] = [];
-    t.mock.method(console, 'error', (...args: unknown[]) => { loggedErrors.push(args); });
+    t.mock.method(console, 'error', (...args: unknown[]) => {
+      loggedErrors.push(args);
+    });
     try {
       const status = await new Promise<number | undefined>((resolve, reject) => {
-        const req = http.request(`${server.baseUrl}/api/projects/save`, {
-          method: 'POST',
-          headers: { ...trustedProxyHeaders(), 'content-type': 'application/json', 'content-length': '4' },
-          signal: AbortSignal.timeout(5_000),
-        }, (res) => {
-          res.on('error', reject);
-          res.on('end', () => { req.destroy(); resolve(res.statusCode); });
-          res.resume();
-        });
+        const req = http.request(
+          `${server.baseUrl}/api/projects/save`,
+          {
+            method: 'POST',
+            headers: { ...trustedProxyHeaders(), 'content-type': 'application/json', 'content-length': '4' },
+            signal: AbortSignal.timeout(5_000),
+          },
+          (res) => {
+            res.on('error', reject);
+            res.on('end', () => {
+              req.destroy();
+              resolve(res.statusCode);
+            });
+            res.resume();
+          },
+        );
         req.on('error', reject);
         req.write('{"'); // Leave the declared body incomplete until its deadline.
       });
@@ -238,7 +249,9 @@ test('a timed-out body keeps its original 408 without a second API error respons
       const health = await fetch(`${server.baseUrl}/healthz`, { headers: { connection: 'close' } });
       assert.equal(health.status, 200);
       await health.arrayBuffer();
-    } finally { await server.close(); }
+    } finally {
+      await server.close();
+    }
   });
 });
 
@@ -391,6 +404,58 @@ test('control-plane deployment status is authenticated and describes the single-
       await server.close();
     }
   });
+});
+
+test('overlap deployment status separates observed developer readiness from housekeeping availability', async () => {
+  await withApiEnv(
+    { RIVET_DEPLOYMENT_TOPOLOGY: 'replicated', RIVET_HA_CONTROL_PLANE_MODE: 'singleton-overlap' },
+    async () => {
+      process.env.RIVET_LEGACY_RESTORE_ROOT = path.join(process.env.RIVET_APP_DATA_ROOT!, 'no-owner-yet');
+      const snapshot = {
+        ok: true,
+        profile: 'control' as const,
+        state: 'ready' as 'ready' | 'draining',
+        checkedAt: null,
+        checks: [],
+      };
+      const app = createApiApp('control', { health: { getLiveness: () => snapshot, getReadiness: () => snapshot } });
+      const server = http.createServer(app);
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const address = server.address();
+      assert.ok(address && typeof address !== 'string');
+      const read = async () => {
+        const res = await fetch(`http://127.0.0.1:${address.port}/api/deployment-status`, {
+          headers: trustedProxyHeaders(),
+        });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('cache-control'), 'no-store');
+        return res.json();
+      };
+      try {
+        const ready = await read();
+        assert.equal(ready.servingReadiness.ready, true);
+        assert.equal(ready.housekeepingReadiness.state, 'handover');
+        snapshot.ok = false;
+        snapshot.state = 'draining';
+        assert.equal((await read()).servingReadiness.ready, false);
+        snapshot.ok = true;
+        snapshot.state = 'ready';
+        setLegacyRestorePaused(true);
+        assert.deepEqual((await read()).servingReadiness, {
+          ready: false,
+          state: 'maintenance',
+          checkedAt: null,
+          code: 'restore_maintenance',
+        });
+      } finally {
+        setLegacyRestorePaused(false);
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await disposeRuntimeLibrariesBackend();
+      }
+    },
+  );
 });
 
 test('invalid deployment topology fails API startup preconditions', async () => {
@@ -795,7 +860,9 @@ test('execution profile exposes published execution routes and hides control-pla
     try {
       const unauthenticated = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`);
       assert.equal(unauthenticated.status, 403);
-      const projection = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`, { headers: trustedProxyHeaders() });
+      const projection = await fetch(`${server.baseUrl}/internal/app-settings/proxy-config`, {
+        headers: trustedProxyHeaders(),
+      });
       assert.equal(projection.status, 200);
       assert.equal(projection.headers.get('cache-control'), 'no-store');
       assert.doesNotMatch(await projection.text(), /phase4-shared-key|clientSecret|storageAccessKey/);

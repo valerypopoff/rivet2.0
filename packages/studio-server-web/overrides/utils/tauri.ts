@@ -1,13 +1,8 @@
 // Override for packages/app/src/utils/tauri.ts
 // Adds isHostedMode(), routes getEnvVar() through API backend
 
-import {
-  getClassifierProviderEnvironmentVariableNames,
-  type RivetPlugin,
-  type Settings,
-  type StringPluginConfigurationSpec,
-} from '@valerypopoff/rivet2-core';
-import { entries } from '../../../core/src/utils/typeSafety';
+import type { RivetPlugin, RuntimeSettings, Settings } from '@valerypopoff/rivet2-core';
+import { resolveEnvironmentSettings } from '../../../app/src/utils/resolveEnvironmentSettings';
 import type { EnvironmentProvider, PathPolicyProvider } from '../../../app/src/providers/ProvidersContext.js';
 import { RIVET_API_BASE_URL, RIVET_HOSTED_MODE } from '../../../studio-server-shared/hosted-env';
 import { ENVIRONMENT_VARIABLES_CHANGED_CHANNEL } from '../../../studio-server-shared/environment-variable-events';
@@ -107,78 +102,12 @@ export async function getEnvVar(name: string): Promise<string | undefined> {
   return undefined;
 }
 
-export async function fillMissingSettingsFromEnvironmentVariables(
+export function fillMissingSettingsFromEnvironmentVariables(
   settings: Partial<Settings>,
   plugins: RivetPlugin[],
-  optionsOrExtraEnvVarNames: string[] | { extraEnvVarNames?: string[]; environmentProvider?: EnvironmentProvider } = [],
-) {
-  const options = Array.isArray(optionsOrExtraEnvVarNames)
-    ? { extraEnvVarNames: optionsOrExtraEnvVarNames }
-    : optionsOrExtraEnvVarNames;
-  const environmentProvider = options.environmentProvider ?? getDefaultEnvironmentProvider();
-  const lookups = new Map<string, Promise<string | undefined>>();
-  const getProviderEnvVar = (name: string) => {
-    let value = lookups.get(name);
-    if (!value) {
-      value = environmentProvider.getEnvVar(name);
-      lookups.set(name, value);
-    }
-    return value;
-  };
-  const resolveSetting = (value: string | undefined, envVarName: string) =>
-    value ? Promise.resolve(value) : getProviderEnvVar(envVarName);
-  const pluginEnvVarNames = new Set<string>(getClassifierProviderEnvironmentVariableNames());
-
-  for (const plugin of plugins) {
-    const stringConfigs = entries(plugin.configSpec ?? {}).filter(([, c]) => c.type === 'string') as [
-      string,
-      StringPluginConfigurationSpec,
-    ][];
-    for (const [configName, config] of stringConfigs) {
-      if (config.pullEnvironmentVariable) {
-        const envVarName =
-          typeof config.pullEnvironmentVariable === 'string'
-            ? config.pullEnvironmentVariable
-            : config.pullEnvironmentVariable === true
-              ? configName
-              : undefined;
-        if (envVarName) {
-          pluginEnvVarNames.add(envVarName);
-        }
-      }
-    }
-  }
-
-  for (const envVarName of (options.extraEnvVarNames ?? []).map((name) => name.trim()).filter(Boolean)) {
-    pluginEnvVarNames.add(envVarName);
-  }
-
-  const [openAiKey, openAiOrganization, openAiEndpoint, pluginEnvEntries] = await Promise.all([
-    resolveSetting(settings.openAiApiKey || settings.openAiKey, 'OPENAI_API_KEY'),
-    resolveSetting(settings.openAiOrganization, 'OPENAI_ORG_ID'),
-    resolveSetting(settings.openAiEndpoint, 'OPENAI_ENDPOINT'),
-    Promise.all(
-      [...pluginEnvVarNames].map(async (envVarName) => [envVarName, await getProviderEnvVar(envVarName)] as const),
-    ),
-  ]);
-
-  const fullSettings: Settings = {
-    ...settings,
-    openAiKey: openAiKey ?? '',
-    openAiApiKey: openAiKey ?? '',
-    openAiOrganization: openAiOrganization ?? '',
-    openAiEndpoint: openAiEndpoint ?? '',
-    pluginSettings: settings.pluginSettings,
-    pluginEnv: {},
-  };
-
-  for (const [envVarName, envVarValue] of pluginEnvEntries) {
-    if (envVarValue) {
-      fullSettings.pluginEnv![envVarName] = envVarValue;
-    }
-  }
-
-  return fullSettings;
+  options: string[] | { extraEnvVarNames?: string[]; environmentProvider?: EnvironmentProvider } = [],
+): Promise<RuntimeSettings> {
+  return resolveEnvironmentSettings(settings, plugins, getDefaultEnvironmentProvider(), options);
 }
 
 export async function allowDataFileNeighbor(projectFilePath: string): Promise<void> {

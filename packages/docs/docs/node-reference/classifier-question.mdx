@@ -1,24 +1,25 @@
 ---
 id: classifier-question
-title: Classifier Question Node
-sidebar_label: Classifier Question
+title: Decision AI Question Node
+sidebar_label: Decision AI Question
 ---
 
 ## Overview
 
-Builds one serializable typed question for a classifier provider. It does not make a network request. **Question ID** is preserved exactly and becomes the key in Classifier Evaluate's aggregate **Answers** object.
+Builds one serializable typed question for a Decision AI provider. It does not make a network request. **Question ID** is preserved exactly and becomes the key in Decision AI run's aggregate **Answers** object.
 
-The same question format works with **Jev**, **Liquid AI d1**, **OpenAI Decisions**, **Microsoft Decision-1 through OpenRouter**, and **Perplexity Decisions**. Choose the provider in Classifier Evaluate; no manual question conversion is needed. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See [provider setup and limits](./classifier-evaluate.mdx).
+The same Choice, Score and Noul text/JSON question format works with **Jev**, **Liquid AI d1**, **OpenAI Decisions**, **Microsoft Decision-1 through OpenRouter**, **Perplexity Decisions**, and **SubQ Snap**. Choose the provider in Decision AI run; no manual question conversion is needed. Bounding Box requires a compatible Jev model. OpenAI serializes structured entries as text and maps Noul to its native predicate type. Image Instructions require a compatible provider as described below. Provider limits still apply: Perplexity rejects null Score levels and allows at most 128 questions per request. See [provider setup and limits](./classifier-evaluate.mdx).
 
 ## Settings
 
-- **Question type**: choose **Choice**, **Score**, or **Noul**.
+- **Question type**: choose **Choice**, **Score**, **Noul**, or **Bounding Box**.
 - **Question ID**: non-empty static key for the answer map.
 - **Instructions type**: choose **Text**, **List of lines**, or **Object**. Text opens the multiline text editor, List of lines provides add/delete controls, and Object opens an interpolated JSON template. Every form supports `{{variable}}`; the complete value may instead come from the **Instructions** input.
 - **Criteria type**: choose one shared **Text**, **List of lines**, or **Object** representation for the active question's criteria.
 - **Choice**: **Criteria** contains 2–255 reorderable rows. Each row has an exact, unique **Name** and an optional description represented using the selected Criteria type.
 - **Score**: **Criteria** contains 2–10 ordered entries using the selected Criteria type. Its order defines numeric positions beginning at zero; returned scores may be fractional. The Text form uses compact sortable name rows.
 - **Noul**: the **Criteria** section contains optional paired **true** and **false** values using the selected Criteria type. Each value may independently come from an input port. A Noul answer is a zero-to-one probability, not an automatic boolean.
+- **Bounding Box**: locate one target in an image. There are no Criteria controls or Criteria inputs. Supported by `jev-1.14.0`, `jev-latest`, and `jev-preview`; Jev 1.13 and other currently integrated providers are rejected. Supply an image through shared State or this question's Instructions. Inactive criteria settings stay saved when switching types.
 
 Choice and Score can accept their complete criteria through the **Criteria** input toggle. Switching the question type or a structured-entry type retains inactive authored values so an author can switch back without recreating them.
 
@@ -26,10 +27,25 @@ Choice and Score can accept their complete criteria through the **Criteria** inp
 
 **Instructions** and complete **Criteria** inputs are added only when their corresponding input mode is enabled. Noul exposes separate lowercase **true** and **false** ports when their individual input controls are enabled. Structured inputs preserve arrays as one value. Interpolation references in active text, line-list, and JSON-template fields add optional inputs.
 
-Images are not part of a question definition. Connect them to Classifier Evaluate's **State** input, directly or through an assembled User message, as shared evidence for all questions. Ordinary text interpolation such as `{{images}}` still works, but does not provide image evidence.
+For **Jev** and **OpenAI `gpt-6-luna`**, the **Instructions** input also accepts images and assembled **User** messages. Use **Image + Text → Assemble Message (User) → Instructions** to combine a picture and a question. **Assemble Prompt** is optional when combining several already assembled User messages; do not connect raw Image/Text outputs to its Message inputs. An image alone can also connect directly to Instructions. These images belong only to that question, not to every question in the request. Other providers reject this evidence explicitly; an ordered Profile chain can advance to a compatible provider without dropping it. Jev images remain experimental and must meet its PNG/JPEG and dimension limits.
 
-**Question** (`object`) contains `{ questionId, type, instructions, criteria? }`. Connect it directly or through an Array node to [Classifier Evaluate](./classifier-evaluate.mdx).
+Connect images to Decision AI run's **State** instead when all questions need the same evidence. Ordinary text interpolation such as `{{images}}` still produces text, not image evidence. Criteria inputs remain text/JSON; this feature does not add image-valued criteria.
+
+Array can also combine User messages without changing their meaning when they contain no images. An empty Image Array or an empty User-message list (including a fully filtered Assemble Prompt) is rejected instead of becoming an empty JSON question. Ordinary text lists and JSON instructions keep their existing meaning.
+
+**Question** (`object`) contains `{ questionId, type, instructions, criteria? }`. Assembled/image Instructions use an additional serializable `instructionsMessages` field with ordered text/image parts and empty `instructions`. Connect it directly or through an Array node to [Decision AI run](./classifier-evaluate.mdx).
+
+## Bounding Box answers
+
+Bounding Box uses native type `box`. The run node returns `Answers.<Question ID>.box`
+with `top`, `bottom`, `left`, and `right`, plus `confidence` alongside `box`.
+The documented coordinates are fractions of the image size from its top-left;
+multiply horizontal edges by image width and vertical edges by image height to
+get pixels. Rivet preserves the provider's numbers without clamping or rescaling.
+The feature is experimental. It always returns one box, even when the target
+is absent: use a separate Noul question to check visibility before using the box.
+See [TypeSafe Box](https://docs.typesafe.ai/primitives/box).
 
 ## Preparation limits
 
-Question construction checks cancellation and has its own 30-second preparation budget. Active templates, referenced values and resolved entries share a cumulative 32 MiB work budget. JSON depth is limited to 64, expanded values and tokens per template to 100,000. Impossible Choice/Score counts, oversized interpolation expansion and deeply nested JSON templates fail before costly construction/parsing. No content is silently truncated. These are resource safety limits, not provider capacity guarantees; the subsequent Evaluate request has a separate overall timeout.
+Question construction checks cancellation and has its own 30-second preparation budget. Active templates, referenced values and resolved entries share a cumulative 32 MiB work budget. JSON depth is limited to 64, expanded values and tokens per template to 100,000. Impossible Choice/Score counts, oversized interpolation expansion and deeply nested JSON templates fail before costly construction/parsing. No content is silently truncated. These are resource safety limits, not provider capacity guarantees; request timing is configured on Profile nodes, not the run node.

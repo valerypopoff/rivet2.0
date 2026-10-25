@@ -11,7 +11,7 @@ const ready = (pod) => !pod.metadata?.deletionTimestamp &&
  * preflight rejects the known no-health-check and timed-out NEG-ready cases.
  * It is an observation, not a custom readiness controller or a PDB substitute. */
 export function assertGkeFrontendAvailability(pods, nodes, release, controlPlaneMode = 'replicated', edgeProfile = 'regional') {
-  assert.ok(['replicated', 'singleton'].includes(controlPlaneMode), 'unknown control availability policy');
+  assert.ok(['replicated', 'singleton', 'singleton-overlap'].includes(controlPlaneMode), 'unknown control availability policy');
   assert.ok(['regional', 'compact'].includes(edgeProfile), 'unknown GKE edge profile');
   const compact = edgeProfile === 'compact';
   const proxyMinimum = compact ? 2 : 6;
@@ -23,7 +23,7 @@ export function assertGkeFrontendAvailability(pods, nodes, release, controlPlane
   // Surplus replicas could hide the endpoint-loss risk we need to exercise.
   if (compact) assert.equal(proxies.length, 2, 'Compact qualification requires exactly two steady-state proxies');
   const web = frontend.filter(p => component(p) === 'web');
-  const webMinimum = controlPlaneMode === 'singleton' ? 1 : 2;
+  const webMinimum = controlPlaneMode !== 'replicated' ? 1 : 2;
   assert.ok(proxies.length >= proxyMinimum && web.length >= webMinimum, `GKE proof requires ${proxyMinimum} proxies and ${webMinimum} web replicas`);
   assert.equal(new Set(frontend.map(p => p.metadata.uid)).size, frontend.length, 'frontend UID evidence is duplicated');
   const zones = new Map();

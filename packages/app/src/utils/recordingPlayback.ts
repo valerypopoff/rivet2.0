@@ -1,5 +1,10 @@
 import type { GraphId, RecordedEvents } from '@valerypopoff/rivet2-core';
 
+/** Hosted replay copies are detached snapshots, not editable source-project files. */
+export function isRecordingSnapshotPath(path: string | null | undefined): boolean {
+  return path?.startsWith('recording://') === true;
+}
+
 /** Hosted child artifacts have no root start; never substitute the currently viewed graph. */
 export function getRecordingPlaybackGraphId(events: readonly RecordedEvents[]): GraphId | undefined {
   const start = events.find(

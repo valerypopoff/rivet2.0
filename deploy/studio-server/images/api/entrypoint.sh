@@ -24,6 +24,11 @@ deployment_runner_slot_id="${RIVET_RUNNER_SLOT_ID:-}"
 deployment_api_port="${PORT:-}"
 load_optional_dotenv_preserving_deployment_storage /vault/dotenv
 
+if [ "${RIVET_HA_CONTROL_PLANE_MODE:-}" = singleton-overlap ] && [ "${RIVET_HA_MAINTENANCE:-}" = 1 ] && [ "${RIVET_MAINTENANCE_LOCK_INHERITED:-}" != 1 ]; then
+  echo 'Overlap maintenance requires the kernel-lock supervisor.' >&2
+  exit 1
+fi
+
 # Kubernetes sets this deployment-owned policy separately from user/Vault env.
 # Apply it after dotenv loading so API replicas remain verify-only even if a
 # stale secret contains the public schema mode variable.

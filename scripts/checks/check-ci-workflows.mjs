@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseDocument } from 'yaml';
+import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 
 const rootDir = process.cwd();
 
@@ -92,10 +93,24 @@ assert.equal(buildJobs['package-lint'].strategy['fail-fast'], false);
 assert.equal(buildJobs['package-lint'].needs, undefined, 'Source-only lint must not wait for compiled artifacts.');
 assert.deepEqual(asArray(buildJobs['package-tests'].needs), ['compiled-artifacts']);
 assert.equal(buildJobs['package-tests'].strategy['max-parallel'], 6);
-assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 6);
+assert.equal(buildJobs['package-lint'].strategy['max-parallel'], 2);
+assert.deepEqual(
+  buildJobs['package-lint'].strategy.matrix.include.flatMap((entry) => entry.command.split(/\s*&&\s*/)).sort(),
+  [
+    '@valerypopoff/rivet2-core',
+    '@valerypopoff/rivet2-node',
+    '@valerypopoff/rivet2-evaluations',
+    '@valerypopoff/rivet-app',
+    '@valerypopoff/rivet-app-executor',
+    '@valerypopoff/rivet2-cli',
+  ]
+    .map((workspace) => `yarn workspace ${workspace} run lint`)
+    .sort(),
+  'Grouped lint retains all six workspaces exactly once.',
+);
 assert.deepEqual(
   [...buildJobs['package-tests'].strategy.matrix.include, ...buildJobs['supporting-tests'].strategy.matrix.include]
-    .map((entry) => entry.command)
+    .flatMap((entry) => entry.command.split(/\s*&&\s*yarn\s+/))
     .sort(),
   [
     'test:app --shard-index 0 --shard-count 4',
@@ -308,6 +323,22 @@ assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
+assert.deepEqual(studioJobs['editor-regression'].strategy.matrix.include, [
+  { shard: '1/3', label: 1 },
+  { shard: '2/3', label: 2 },
+  { shard: '3/3', label: 3 },
+]);
+assert.equal(studioJobs['editor-regression'].strategy['fail-fast'], false);
+assert.equal(studioJobs['editor-regression'].strategy['max-parallel'], 3);
+assert.equal(
+  findStep(studioJobs['editor-regression'], 'Run hosted editor regressions', 'Editor shards').env
+    .RIVET_EDITOR_TEST_SHARD,
+  '${{ matrix.shard }}',
+);
+assert.match(
+  findStep(studioJobs['editor-regression'], 'Upload Playwright failure artifacts', 'Editor shards').with.name,
+  /matrix\.label/,
+);
 const executorRetirement = findStep(
   studioJobs['editor-regression'],
   'Verify accepted executor retirement',
@@ -328,6 +359,11 @@ assert.match(
   /studio-server:build && yarn studio-server:verify:executor-retirement/,
 );
 assert.equal(executorRetirement.run, 'yarn studio-server:verify:executor-retirement');
+assert.equal(
+  executorRetirement.if,
+  'matrix.label == 1',
+  'Retirement coverage runs exactly once, not once per browser shard.',
+);
 const subgraphLoader = findStep(studioJobs['web-tests'], 'Verify hosted executor Subgraph loader', 'Web tests');
 assert.equal(subgraphLoader.run, 'yarn workspace @valerypopoff/rivet-studio-server-executor run test:runtime');
 assert.ok(
@@ -355,20 +391,19 @@ assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
 const deploymentContracts = studioJobs['deployment-contracts'];
-assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'gateway']);
+assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'deployment', 'gateway']);
 assert.equal(deploymentContracts.strategy['fail-fast'], false);
-assert.equal(deploymentContracts.strategy['max-parallel'], 2);
+assert.equal(deploymentContracts.strategy['max-parallel'], 3);
 for (const [lane, names] of [
   [
     'managed',
     [
-      'Set Up Kubernetes Tools',
       'Verify compiled migrations on PostgreSQL',
       'Verify async endpoint completion with managed storage',
       'Verify VM-to-managed copy, retry, and exact readback',
-      'Verify Kubernetes and deployment contracts',
     ],
   ],
+  ['deployment', ['Set Up Kubernetes Tools', 'Verify Kubernetes and deployment contracts']],
   [
     'gateway',
     [
@@ -532,6 +567,7 @@ assertIncludesAll(
     'verify-repository',
     'build-and-push',
     'release-manifest',
+    'scan-images',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
     'promote-images',
@@ -552,6 +588,7 @@ const promotionCondition = String(imageJobs['promote-images'].if);
 for (const requiredGate of [
   'verify-repository',
   'build-and-push',
+  'scan-images',
   'fast-container-smoke',
   'managed-kubernetes-release-gate',
   'managed-kubernetes-provider-gate',
@@ -573,6 +610,70 @@ assert.match(
   'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
 assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push']);
+const scanImages = imageJobs['scan-images'];
+assert.deepEqual(asArray(scanImages.needs), ['release-manifest']);
+assert.deepEqual(scanImages.strategy.matrix.service, ['proxy', 'web', 'api', 'executor']);
+for (const target of imageJobs['build-and-push'].strategy.matrix.include) {
+  assert.deepEqual(
+    target.platforms.split(','),
+    imagePlatforms[target.service],
+    'Every published architecture must be scanned',
+  );
+}
+assert.equal(scanImages.strategy['fail-fast'], false);
+assert.deepEqual(scanImages.permissions, { actions: 'read', contents: 'read', packages: 'read' });
+const scanStep = findStep(scanImages, 'Scan every published architecture', 'Container security');
+assert.match(scanStep.run, /scan-container-images\.mjs/);
+assert.match(scanStep.run, /--manifest artifacts\/studio-server-release-manifest\/candidate-release-manifest\.json/);
+assert.match(scanStep.run, /--service \$\{\{ matrix\.service \}\}/);
+assert.equal(scanStep['continue-on-error'], undefined, 'Container security must fail closed');
+const scanEvidence = findStep(scanImages, 'Retain container vulnerability evidence', 'Container security');
+assert.equal(scanEvidence.if, '${{ always() }}');
+assert.equal(scanEvidence.with['if-no-files-found'], 'error');
+for (const file of [
+  'deploy/studio-server/images/proxy/Dockerfile',
+  'deploy/studio-server/compose/docker-compose.dev.yml',
+  'deploy/studio-server/scripts/verify-proxy-dns.mjs',
+  'deploy/studio-server/scripts/verify-trusted-client-proxy.mjs',
+]) {
+  const refs = read(file).match(/nginx:[\w.-]+(?:@sha256:[a-f0-9]{64})?/g) ?? [];
+  assert.ok(refs.length && refs.every((reference) => reference === nginxImage), `${file}: NGINX reference drift`);
+}
+assert.match(read('deploy/studio-server/images/proxy/Dockerfile'), /brotli-libs>=1\.2\.1-r0/);
+assert.equal(
+  parseDocument(read('deploy/studio-server/compose/docker-compose.yml')).toJS().services.web.build.dockerfile,
+  'deploy/studio-server/images/web/Dockerfile',
+  'Compose source builds must not bypass the hardened production web image.',
+);
+for (const service of ['api', 'executor', 'web']) {
+  const dockerfile = read(`deploy/studio-server/images/${service}/Dockerfile`);
+  const references = [
+    ...dockerfile.matchAll(/^(?:FROM |ARG NODE_IMAGE=)(node:[\w.-]+(?:@sha256:[a-f0-9]{64})?)/gm),
+  ].map((match) => match[1]);
+  assert.ok(
+    references.length && references.every((reference) => reference === runtimeNodeImage),
+    `${service}: Node base drift`,
+  );
+  if (service !== 'web') {
+    assert.ok(dockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
+    assert.match(dockerfile, /ARG TARGETARCH/);
+    assert.match(dockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH"/);
+    assert.match(dockerfile, /COPY --from=esbuild-security \/out\/esbuild \/app\/node_modules\/esbuild\/bin\/esbuild/);
+    assert.match(dockerfile, /npm install -g npm@11\.21\.1/);
+    assert.match(dockerfile, /--prefix \/tmp\/rivet-npm-security[^\n]+undici@6\.29\.1/);
+    assert.match(dockerfile, /node \/opt\/rivet\/harden-package-manager-caches\.mjs npm/);
+    assert.match(dockerfile, /node \/tmp\/verify-runtime-dependencies\.mjs npm/);
+    assert.match(dockerfile, /COPY --from=esbuild-security \/out\/@esbuild/);
+    assert.match(dockerfile, /remove-dependency-test-fixtures\.mjs \/app\/node_modules/);
+  }
+}
+assert.match(read('deploy/studio-server/images/api/Dockerfile'), /pnpm@10\.34\.8/);
+const esbuildVersion = JSON.parse(read('package.json')).resolutions.esbuild;
+assert.ok(
+  read('deploy/studio-server/images/lib/rebuild-esbuild.sh')
+    .replaceAll('\r\n', '\n')
+    .includes(`version=${esbuildVersion}\n`),
+);
 assert.deepEqual(
   asArray(imageJobs['managed-kubernetes-release-gate'].needs),
   ['changes', 'build-and-push', 'release-manifest'],
@@ -586,6 +687,7 @@ assertIncludesAll(
     'verify-repository',
     'build-and-push',
     'release-manifest',
+    'scan-images',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
     'managed-kubernetes-provider-gate',
@@ -971,11 +1073,59 @@ assert.match(
 
 const reusableDesktop = parseWorkflow('.github/workflows/desktop-release.yml');
 const reusableJobs = reusableDesktop.workflow.jobs;
+assert.equal(
+  reusableDesktop.workflow.on.workflow_call.inputs.allow_docs_only.default,
+  false,
+  'Stable/manual callers keep the full native-release behavior by default.',
+);
+const desktopPlan = reusableJobs['release-plan'];
+assert.equal(desktopPlan.permissions.contents, 'read');
+assert.equal(findActionStep(desktopPlan, 'actions/checkout@v6', 'Desktop planning').with['fetch-depth'], 1);
+const desktopPlanStep = findStep(
+  desktopPlan,
+  'Select native build or documentation-only publication',
+  'Desktop planning',
+);
+assert.equal(desktopPlanStep.run, 'node scripts/ci/desktop-release-plan.mjs');
+assert.equal(desktopPlanStep.env.ALLOW_DOCS_ONLY, '${{ inputs.allow_docs_only }}');
+for (const jobName of ['build-desktop-web', 'verify-ai-graph-builder-assets']) {
+  assert.equal(reusableJobs[jobName].needs, 'release-plan');
+  assert.match(reusableJobs[jobName].if, /needs\.release-plan\.outputs\.native == 'true'/);
+}
+const pagesGate = reusableJobs['publish-pages'].if;
+assert.match(pagesGate, /always\(\)/);
+assert.match(pagesGate, /!cancelled\(\)/, 'Skipped native jobs must not make canceled runs publish.');
+assert.match(pagesGate, /needs\.release-plan\.result == 'success'/);
+assert.match(pagesGate, /needs\.build-docs\.result == 'success'/);
+for (const jobName of ['build-desktop-web', 'verify-ai-graph-builder-assets', 'build-windows', 'build-macos']) {
+  assert.ok(pagesGate.includes(`needs.${jobName}.result == 'success'`));
+  assert.ok(pagesGate.includes(`needs.${jobName}.result == 'skipped'`));
+}
+const docsReuse = findStep(
+  reusableJobs['publish-pages'],
+  'Preserve published desktop downloads for documentation-only update',
+  'Docs-only Pages',
+);
+assert.match(docsReuse.if, /asset_freshness.*true.*native == 'false'/);
+assert.equal(docsReuse.env.REUSE_PUBLISHED_DESKTOP_RELEASE, '1');
+assert.equal(docsReuse.env.PRESERVED_DESKTOP_COMMIT, '${{ needs.release-plan.outputs.desktop_commit }}');
+for (const name of [
+  'Publish desktop release assets',
+  'Add release downloads to docs site',
+  'Download Windows bundles',
+  'Download Apple Silicon macOS bundles',
+  'Download Intel macOS bundles',
+]) {
+  assert.match(
+    findStep(reusableJobs['publish-pages'], name, 'Native desktop publication').if,
+    /needs\.release-plan\.outputs\.native == 'true'/,
+  );
+}
 for (const buildJob of ['build-desktop-web', 'build-docs']) {
   assert.equal(
     reusableJobs[buildJob].needs,
-    undefined,
-    `${buildJob} must run concurrently with graph asset verification.`,
+    'release-plan',
+    `${buildJob} must run concurrently after release planning.`,
   );
 }
 const desktopWebUpload = findStep(
@@ -987,9 +1137,68 @@ assert.equal(desktopWebUpload.with?.name, 'rivet-${{ inputs.channel }}-desktop-w
 assert.equal(desktopWebUpload.with?.overwrite, true);
 assert.equal(desktopWebUpload.with?.['if-no-files-found'], 'error');
 assert.ok(
-  reusableJobs['build-desktop-web'].steps.findIndex((step) => step.name === 'Seal desktop frontend artifact') <
+  reusableJobs['build-desktop-web'].steps.findIndex((step) => step.name === 'Verify exact Build frontend') <
     reusableJobs['build-desktop-web'].steps.indexOf(desktopWebUpload),
 );
+const buildFrontendUpload = findStep(
+  buildJobs['frontend-build'],
+  'Upload desktop frontend',
+  'Single frontend producer',
+);
+assert.equal(buildFrontendUpload.with.name, 'rivet-desktop-web-${{ github.sha }}');
+assert.equal(buildFrontendUpload.with.overwrite, true);
+assert.equal(buildFrontendUpload.with['if-no-files-found'], 'error');
+assert.equal(buildFrontendUpload.if, "github.event_name == 'push'", 'PRs must not publish unused release handoffs.');
+assert.equal(
+  findStep(buildJobs['frontend-build'], 'Seal desktop frontend artifact', 'Single frontend producer').run,
+  'node scripts/ci/desktop-web-artifact.mjs create',
+);
+assert.ok(
+  !reusableJobs['build-desktop-web'].steps.some((step) => /rivet-app run build/.test(step.run ?? '')),
+  'Desktop Release must not compile a second frontend.',
+);
+assert.equal(reusableJobs['build-desktop-web'].permissions.actions, 'read');
+assert.equal(reusableJobs['build-desktop-web'].permissions.contents, 'read');
+const exactFrontend = findStep(
+  reusableJobs['build-desktop-web'],
+  'Download exact Build frontend',
+  'Exact run consumer',
+);
+assert.equal(exactFrontend.with['run-id'], '${{ steps.build.outputs.run_id }}');
+assert.equal(exactFrontend.with['artifact-ids'], '${{ steps.build.outputs.artifact_id }}');
+assert.equal(exactFrontend.with['github-token'], '${{ github.token }}');
+assert.equal(exactFrontend.with.path, 'packages/app');
+const publicationSteps = reusableJobs['publish-pages'].steps;
+const successfulBuild = findStep(
+  reusableJobs['publish-pages'],
+  'Require successful exact Build before publication',
+  'Publication safety',
+);
+assert.equal(successfulBuild.run, 'node scripts/ci/desktop-build-evidence.mjs validated');
+assert.equal(successfulBuild.env.BUILD_RUN_ID, '${{ needs.build-desktop-web.outputs.build_run_id }}');
+assert.equal(successfulBuild.env.BUILD_RUN_ATTEMPT, '${{ needs.build-desktop-web.outputs.build_run_attempt }}');
+assert.equal(successfulBuild.if, "steps.freshness.outputs.current == 'true'");
+assert.equal(successfulBuild['continue-on-error'], undefined, 'A failed Build gate must stop all publication.');
+const assetFreshness = findStep(
+  reusableJobs['publish-pages'],
+  'Confirm release is still current before publishing assets',
+  'Post-wait branch freshness',
+);
+assert.ok(
+  publicationSteps.indexOf(successfulBuild) < publicationSteps.indexOf(assetFreshness),
+  'Recheck the branch after waiting for Build; manual releases can become stale during that wait.',
+);
+for (const name of [
+  'Publish desktop release assets',
+  'Add release downloads to docs site',
+  'Preserve published desktop downloads for documentation-only update',
+  'Upload Pages artifact',
+]) {
+  const step = findStep(reusableJobs['publish-pages'], name, 'Build-gated publication');
+  assert.ok(publicationSteps.indexOf(successfulBuild) < publicationSteps.indexOf(step));
+  assert.ok(publicationSteps.indexOf(assetFreshness) < publicationSteps.indexOf(step));
+  assert.doesNotMatch(step.if ?? '', /always\(\)|failure\(\)/, 'Publication must retain implicit success gating.');
+}
 for (const nativeJob of ['build-windows', 'build-macos']) {
   assert.deepEqual(asArray(reusableJobs[nativeJob].needs), ['build-desktop-web']);
   const download = findStep(reusableJobs[nativeJob], 'Download shared desktop frontend', nativeJob);
@@ -1008,7 +1217,7 @@ assert.match(
 assert.equal(reusableJobs['publish-pages'].concurrency.group, 'rivet-docs-pages');
 assertIncludesAll(
   asArray(reusableJobs['publish-pages'].needs),
-  ['verify-ai-graph-builder-assets', 'build-windows', 'build-macos', 'build-docs'],
+  ['release-plan', 'verify-ai-graph-builder-assets', 'build-windows', 'build-macos', 'build-docs'],
   'Desktop publication gate',
 );
 for (const [jobName, stepName] of [
@@ -1065,6 +1274,32 @@ assert.match(
   'Pages publication must recheck the branch head immediately before its transaction.',
 );
 
+const pagesRetryFreshness = findStep(
+  reusableJobs['publish-pages'],
+  'Confirm release is still current before retrying Pages',
+  'Fresh Pages retry',
+);
+const pagesRetry = findStep(
+  reusableJobs['publish-pages'],
+  'Deploy to GitHub Pages (attempt 2 of 2)',
+  'Fresh Pages retry',
+);
+assert.equal(
+  pagesRetry.if,
+  "steps.retry_freshness.outputs.current == 'true' && steps.deployment_first_attempt.outcome == 'failure'",
+);
+assert.equal(pagesRetryFreshness.run, assetFreshness.run, 'Every retry must perform a real branch-head check.');
+assert.equal(
+  pagesRetryFreshness.if,
+  "steps.pages_freshness.outputs.current == 'true' && steps.deployment_first_attempt.outcome == 'failure'",
+);
+assert.ok(
+  publicationSteps.indexOf(
+    findStep(reusableJobs['publish-pages'], 'Wait for GitHub Pages cancellation to settle', 'Fresh Pages retry'),
+  ) < publicationSteps.indexOf(pagesRetryFreshness),
+);
+assert.ok(publicationSteps.indexOf(pagesRetryFreshness) < publicationSteps.indexOf(pagesRetry));
+
 for (const workflowPath of [
   '.github/workflows/developer-windows-release.yml',
   '.github/workflows/official-windows-release.yml',
@@ -1082,6 +1317,10 @@ for (const workflowPath of [
     `${workflowPath} must keep manual releases out of the push cancellation group.`,
   );
   assert.equal(caller.workflow.jobs.release.uses, './.github/workflows/desktop-release.yml');
+  assert.equal(
+    caller.workflow.jobs.release.with.allow_docs_only,
+    workflowPath.includes('developer-') ? true : undefined,
+  );
 }
 
 const taggedDesktopRelease = parseWorkflow('.github/workflows/release.yml');

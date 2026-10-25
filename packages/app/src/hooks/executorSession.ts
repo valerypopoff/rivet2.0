@@ -165,6 +165,7 @@ export function createExecutorSessionRuntime(options: {
   let currentStatus: ExecutorSessionStatus = 'idle';
   let currentTarget: ExecutorSessionTarget | null = null;
   let activeGraphRunRequestId: RemoteRunRequestId | null = null;
+  let activeRunDisplayBinding: { requestId: RemoteRunRequestId; lifetime: string | undefined } | undefined;
   let reconnectingTimeout: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = 0;
   let resumeCapability: string | undefined;
@@ -431,6 +432,7 @@ export function createExecutorSessionRuntime(options: {
         resumeSequence = 0;
         pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
         activeGraphRunRequestId = null;
+        activeRunDisplayBinding = undefined;
       }
 
       if (!isInternalExecutorTarget(closedTarget) && !latestObservation) {
@@ -706,16 +708,51 @@ export function createExecutorSessionRuntime(options: {
         });
         const rootProject = rootId == null ? undefined : eventRouting.rootProjects.get(rootId);
         const currentProjectLifetime = rootProjectId == null ? undefined : options.getProjectLifetime?.(rootProjectId);
+        const internalBindingMatches =
+          !isInternalExecutorTarget(socketTarget) ||
+          !activeRunDisplayBinding ||
+          (processEvent.requestId != null && processEvent.requestId !== activeRunDisplayBinding.requestId) ||
+          activeRunDisplayBinding.lifetime === currentProjectLifetime;
         const admission: RemoteEventAdmission = {
           projectId: rootProjectId,
           sourceDisplayAllowed:
             !options.getProjectLifetime ||
             (currentProjectLifetime != null &&
-              (rootProject == null || rootProject.lifetime === currentProjectLifetime)),
+              (rootProject == null || rootProject.lifetime === currentProjectLifetime) &&
+              internalBindingMatches),
           decision,
           before,
           after: before ? summarizeRemoteDebuggerRoutingState(eventRouting) : undefined,
         };
+        // Request settlement is not display admission. An explicitly identified
+        // accepted request still returns its result after its tab was replaced.
+        // Never infer a modifying request's owner from an unscoped legacy frame.
+        if (
+          admission.sourceDisplayAllowed === false &&
+          isInternalExecutorTarget(socketTarget) &&
+          processEvent.requestId
+        ) {
+          if (processEvent.message === 'graphOutputsReady')
+            pendingGraphExecutions.resolvePendingGraphExecution(
+              processEvent.requestId,
+              (processEvent.data as ProcessEventMessageMap['graphOutputsReady']).outputs as GraphOutputs,
+            );
+          else if (processEvent.message === 'done')
+            pendingGraphExecutions.resolvePendingGraphExecution(
+              processEvent.requestId,
+              (processEvent.data as ProcessEventMessageMap['done']).results as GraphOutputs,
+            );
+          else if (processEvent.message === 'error')
+            pendingGraphExecutions.rejectPendingGraphExecution(
+              processEvent.requestId,
+              (processEvent.data as ProcessEventMessageMap['error']).error,
+            );
+          if (
+            (processEvent.message === 'done' || processEvent.message === 'error') &&
+            activeGraphRunRequestId === processEvent.requestId
+          )
+            activeGraphRunRequestId = null;
+        }
         for (const handler of [...debuggerMessageHandlers]) {
           runExecutorSessionCallback(
             () => handler(processEvent.message, processEvent.data, processEvent.requestId, admission),
@@ -769,6 +806,7 @@ export function createExecutorSessionRuntime(options: {
     currentRemoteUploadAllowed = false;
     pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session replaced'));
     activeGraphRunRequestId = null;
+    activeRunDisplayBinding = undefined;
     notifySessionStateChanged();
 
     if (oldSocket && oldSocket.readyState !== WebSocket.CLOSED) {
@@ -821,6 +859,7 @@ export function createExecutorSessionRuntime(options: {
     clearReconnectTimeout();
     pendingGraphExecutions.rejectAllPendingGraphExecutions(new Error('executor session disconnected'));
     activeGraphRunRequestId = null;
+    activeRunDisplayBinding = undefined;
     notifySessionStateChanged();
 
     if (socketToClose && socketToClose.readyState !== WebSocket.CLOSED) {
@@ -936,6 +975,11 @@ export function createExecutorSessionRuntime(options: {
       });
     },
     setActiveGraphRunRequestId(requestId) {
+      if (requestId != null && activeRunDisplayBinding?.requestId !== requestId)
+        activeRunDisplayBinding = {
+          requestId,
+          lifetime: options.projectId == null ? undefined : options.getProjectLifetime?.(options.projectId),
+        };
       activeGraphRunRequestId = requestId;
     },
     setDatasetProvider(datasetProvider) {

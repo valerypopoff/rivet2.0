@@ -34,7 +34,7 @@ preview. Repeated subgraph calls, split runs, and multiple invocations of the
 same node remain separate rows.
 
 Expand a row to inspect the metadata available for that invocation, including
-recorded LLM calls, classifier requests, profile decisions and tool calls.
+recorded LLM calls, Decision AI requests, profile decisions and tool calls.
 Rivet calls out result origin only when a value was replayed, preloaded, or came
 from an older runtime whose origin cannot be verified; ordinary executions do
 not repeat that expected detail on every row.
@@ -58,7 +58,7 @@ after the graph's outputs are ready.
 Use the filters to focus on:
 
 - **All** activity
-- **Models and tools**, including classifiers
+- **Models and tools**, including Decision AI nodes
 - **Errors**
 
 When several graphs participated in the run, you can also select a graph.
@@ -77,9 +77,9 @@ not all lead to whichever invocation happened most recently.
 Depending on the row, the actions can also include:
 
 - **Open full output** for the existing node-output viewer
-- **Inspect response** for the shared LLM Chat / Classifier Evaluate summary
+- **Inspect response** for the shared LLM Chat / Decision AI run summary
 
-Classifier summaries show requests, retries, profile fallback and suspension
+Decision AI summaries show requests, retries, profile fallback and suspension
 decisions, HTTP status, failure reasons, timing, tokens and estimated cost.
 The same inspector is available from the eye on the node's inline or fullscreen
 output, without enabling optional diagnostics. Request/response bodies remain

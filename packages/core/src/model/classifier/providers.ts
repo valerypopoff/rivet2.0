@@ -5,11 +5,14 @@ import {
   OPENAI_DEFAULT_CREDENTIAL_NAMES,
   OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
   PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
+  SUBQ_DEFAULT_CREDENTIAL_NAMES,
+  BASETEN_DEFAULT_CREDENTIAL_NAMES,
 } from './credentials.js';
 import type { DataValue } from '../DataValue.js';
 import { assertLiquidImageLimits } from './images.js';
 import {
   prepareClassifierState,
+  inspectStateMessages,
   systemOneState,
   type ClassifierStateMessage,
   type PreparedClassifierState,
@@ -17,8 +20,11 @@ import {
 import { validateClassifierEvaluationResponse } from './response.js';
 import { createOpenAIDecisionRequest, validateOpenAIDecisionResponse } from './openai.js';
 import { assertPerplexityDecisionLimits, perplexityDecisionState, PERPLEXITY_DECISION_MODELS } from './perplexity.js';
-import { prepareClassifierQuestion } from './questions.js';
+import { prepareClassifierQuestion, createQuestionMap } from './questions.js';
+import { assertJevImageLimits, JEV_IMAGE_MODELS, JEV_BOX_MODELS, createJevDecisionRequest } from './jev.js';
+import { assertSubQDecisionLimits, SUBQ_DECISION_MODELS, subqDecisionState } from './subq.js';
 import { classifierArrayValues } from './json.js';
+import { assertBasetenDecisionLimits, BASETEN_DECISION_MODELS, basetenDecisionState } from './baseten.js';
 import {
   assertClassifierResourceLimits,
   ClassifierValueBudget,
@@ -42,16 +48,18 @@ export const LIQUID_SYSTEM_ONE_ENDPOINT = 'https://api.liquid.ai/decisions/v1/sy
 export const OPENAI_DECISIONS_ENDPOINT = 'https://api.openai.com/v1/decisions';
 export const OPENROUTER_DECISIONS_ENDPOINT = 'https://openrouter.ai/api/alpha/decisions';
 export const PERPLEXITY_DECISIONS_ENDPOINT = 'https://api.perplexity.ai/v1/decisions';
+export const SUBQ_DECISIONS_ENDPOINT = 'https://api.subq.ai/v1/systemone';
+export const BASETEN_DECISIONS_ENDPOINT = 'https://inference.baseten.co/v1/systemone';
 
-/** Jev's published USD rates. Keep this Core-owned rather than graph-authored. */
+/** Jev 1.13/1.14 USD rates, verified 2026-10-24: https://docs.typesafe.ai/models */
 export const JEV_TOKEN_PRICING = {
   inputPerMillionTokens: 0.042,
   outputPerMillionTokens: 0,
 } as const;
 
-/** Liquid d1's published USD rates: https://www.liquid.ai/blog/d1-decision-model */
+/** Liquid d1 USD rates, verified 2026-10-26: https://www.liquid.ai/pricing */
 export const LIQUID_TOKEN_PRICING = {
-  inputPerMillionTokens: 0.04,
+  inputPerMillionTokens: 0.02,
   outputPerMillionTokens: 0,
 } as const;
 
@@ -68,9 +76,15 @@ export type ClassifierProvider = {
   id: string;
   label: string;
   defaultModel: string;
+  /** Curated UI choices, not a runtime allowlist or a pricing/capability promise. */
+  modelOptions?: readonly { value: string; label: string }[];
+  /** Provider-owned model guidance shared by inline and Profile editors. */
+  modelHelp?: string;
   credentialNames: ClassifierCredentialNames;
   browserExecutionSupported: boolean;
   supportsImages?: (model: string) => boolean;
+  supportsQuestionImages?: (model: string) => boolean;
+  supportsBoxQuestions?: (model: string) => boolean;
   /** A stricter provider request limit also bounds preparation before encoding. */
   maxRequestBytes?: number;
   /** Legacy shorthand: pricing for defaultModel only, never arbitrary models. */
@@ -128,8 +142,9 @@ export type ClassifierProviderEvaluateArgs = {
   stateMessages?: ClassifierStateMessage[];
   /** Optional Rivet wrapper for the graph entry; ordinary provider calls use state/stateMessages. */
   stateInput?: DataValue;
-  timeoutMs: number;
-  /** An earlier node deadline includes State normalization in the request budget. */
+  /** Optional per-profile/request deadline; absent means caller cancellation only. */
+  timeoutMs?: number;
+  /** Optional absolute deadline for direct programmatic provider calls. */
   deadline?: number;
   /** Opt-in retry policy for non-authentication, non-validation HTTP errors. */
   retryOnNon200?: boolean;
@@ -147,6 +162,7 @@ export type PreparedClassifierEvaluation = {
 type ClassifierProviderSpec = Omit<ClassifierProvider, 'evaluate' | 'evaluateInput'> & {
   endpoint: string;
   buildRequest(args: PreparedClassifierEvaluation): Record<string, unknown>;
+  requestHeaders?(args: PreparedClassifierEvaluation): Record<string, string>;
   validateResponse: typeof validateClassifierEvaluationResponse;
   checkState?(state: PreparedClassifierState, check: () => void): void;
   checkRequest?(request: PreparedClassifierEvaluation, check: () => void): void;
@@ -156,6 +172,8 @@ export type ApiCompatibleClassifierProviderConfig = {
   id: string;
   label: string;
   defaultModel: string;
+  modelOptions?: ClassifierProvider['modelOptions'];
+  modelHelp?: string;
   credentialNames: ClassifierCredentialNames;
   /** Static, provider-owned endpoint. It must never come from graph data. */
   endpoint: string;
@@ -189,23 +207,51 @@ export function createApiCompatibleClassifierProvider(
   });
 }
 
-export const jevClassifierProvider = createApiCompatibleClassifierProvider({
+export const jevClassifierProvider = createClassifierProvider({
   id: 'jev',
   label: 'Jev',
   defaultModel: 'jev-latest',
+  modelOptions: ['jev-latest', 'jev-preview', 'jev-1.14.0', 'jev-1.13.0'].map((value) => ({ value, label: value })),
+  modelHelp:
+    'Jev images are experimental: use still PNG/JPEG, 280–1568 pixels per side. Image requests enable TypeSafe’s experimental image API.',
   credentialNames: JEV_DEFAULT_CREDENTIAL_NAMES,
   endpoint: JEV_SYSTEM_ONE_ENDPOINT,
-  modelPricing: [{ models: ['jev-latest', 'jev-preview', 'jev-1.13.0'], pricing: JEV_TOKEN_PRICING }],
+  browserExecutionSupported: false,
+  modelPricing: [{ models: ['jev-latest', 'jev-preview', 'jev-1.13.0', 'jev-1.14.0'], pricing: JEV_TOKEN_PRICING }],
+  supportsImages: (model) => JEV_IMAGE_MODELS.includes(model),
+  supportsQuestionImages: (model) => JEV_IMAGE_MODELS.includes(model),
+  supportsBoxQuestions: (model) => JEV_BOX_MODELS.includes(model),
+  checkState: (state, check) => {
+    if (state.kind === 'messages') assertJevImageLimits(state.images, check);
+  },
+  checkRequest: ({ questions }, check) => {
+    for (const question of questions)
+      if (question.instructionsMessages)
+        assertJevImageLimits(inspectStateMessages(question.instructionsMessages, check), check);
+  },
+  buildRequest: createJevDecisionRequest,
+  requestHeaders: ({ state, questions }): Record<string, string> =>
+    (state.kind === 'messages' && state.images.length) ||
+    questions.some(
+      (question) =>
+        question.type === 'box' ||
+        question.instructionsMessages?.some(({ parts }) => parts.some((part) => part.type === 'image')),
+    )
+      ? { 'TypeSafe-Danger-Zone-Images': 'true' }
+      : {},
+  validateResponse: validateClassifierEvaluationResponse,
 });
 
 export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
   id: 'liquid',
   label: 'Liquid AI',
   defaultModel: 'd1',
+  modelOptions: ['d1', 'd1.1'].map((value) => ({ value, label: value })),
+  modelHelp: 'Images belong in shared State, not Question Instructions.',
   credentialNames: LIQUID_DEFAULT_CREDENTIAL_NAMES,
   endpoint: LIQUID_SYSTEM_ONE_ENDPOINT,
   modelPricing: [{ models: ['d1'], pricing: LIQUID_TOKEN_PRICING }],
-  supportsImages: (model) => model === 'd1',
+  supportsImages: (model) => model === 'd1' || model === 'd1.1',
   maxRequestBytes: 4_500_000,
   checkState: (state, check) => {
     if (state.kind === 'messages') assertLiquidImageLimits(state.images, check);
@@ -219,6 +265,7 @@ export const openrouterClassifierProvider = createApiCompatibleClassifierProvide
   id: 'openrouter',
   label: 'OpenRouter',
   defaultModel: 'microsoft/microsoft-decision-1',
+  modelOptions: [{ value: 'microsoft/microsoft-decision-1', label: 'Microsoft Decision-1' }],
   credentialNames: OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
   endpoint: OPENROUTER_DECISIONS_ENDPOINT,
   modelPricing: [
@@ -236,10 +283,12 @@ export const openaiClassifierProvider: ClassifierProvider = createClassifierProv
   id: 'openai',
   label: 'OpenAI',
   defaultModel: 'gpt-6-luna',
+  modelOptions: [{ value: 'gpt-6-luna', label: 'gpt-6-luna' }],
   credentialNames: OPENAI_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: OPENAI_DECISIONS_ENDPOINT,
   supportsImages: (model) => model === 'gpt-6-luna',
+  supportsQuestionImages: (model) => model === 'gpt-6-luna',
   modelPricing: [
     {
       models: ['gpt-6-luna'],
@@ -259,6 +308,7 @@ export const perplexityClassifierProvider: ClassifierProvider = createClassifier
   id: 'perplexity',
   label: 'Perplexity',
   defaultModel: 'pplx-decider-v1.1-27b',
+  modelOptions: PERPLEXITY_DECISION_MODELS.map((value) => ({ value, label: value })),
   credentialNames: PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: PERPLEXITY_DECISIONS_ENDPOINT,
@@ -278,6 +328,53 @@ export const perplexityClassifierProvider: ClassifierProvider = createClassifier
   validateResponse: validateClassifierEvaluationResponse,
 });
 
+/** Current model catalog rate, not the older launch article's $0.05/MTok.
+ * https://docs.subq.ai/using-the-api/models/ (verified 2026-10-24).
+ */
+export const subqClassifierProvider: ClassifierProvider = createClassifierProvider({
+  id: 'subq',
+  label: 'SubQ',
+  defaultModel: 'subq-snap-1.1',
+  modelOptions: SUBQ_DECISION_MODELS.map((value) => ({ value, label: value })),
+  credentialNames: SUBQ_DEFAULT_CREDENTIAL_NAMES,
+  browserExecutionSupported: false,
+  endpoint: SUBQ_DECISIONS_ENDPOINT,
+  supportsImages: (model) => SUBQ_DECISION_MODELS.includes(model),
+  modelPricing: [{ models: SUBQ_DECISION_MODELS, pricing: { inputPerMillionTokens: 0.04, outputPerMillionTokens: 0 } }],
+  maxRequestBytes: 13 * 1024 * 1024,
+  checkRequest: assertSubQDecisionLimits,
+  buildRequest: ({ model, state, questions }) => ({
+    model,
+    ...subqDecisionState(state),
+    questions: createQuestionMap(questions),
+  }),
+  validateResponse: validateClassifierEvaluationResponse,
+});
+
+/** Native Baseten API reference uses Bearer authentication (not dedicated-deployment Api-Key). */
+export const basetenClassifierProvider: ClassifierProvider = createClassifierProvider({
+  id: 'baseten',
+  label: 'Baseten',
+  defaultModel: BASETEN_DECISION_MODELS[0],
+  modelOptions: [
+    { value: BASETEN_DECISION_MODELS[0], label: 'Elephant-1' },
+    { value: BASETEN_DECISION_MODELS[1], label: 'Mammoth-1' },
+  ],
+  modelHelp: 'Images belong in shared State, not Question Instructions.',
+  credentialNames: BASETEN_DEFAULT_CREDENTIAL_NAMES,
+  browserExecutionSupported: false,
+  endpoint: BASETEN_DECISIONS_ENDPOINT,
+  supportsImages: (model) => BASETEN_DECISION_MODELS.some((id) => id === model),
+  checkRequest: assertBasetenDecisionLimits,
+  buildRequest: ({ model, state, questions }) => ({
+    model,
+    state: basetenDecisionState(state),
+    questions: createQuestionMap(questions),
+  }),
+  validateResponse: validateClassifierEvaluationResponse,
+  // A temporary free promotion is not permanent pricing. Unknown cost stays unknown.
+});
+
 /** Ordered so adding compatible providers does not alter authored IDs. */
 export const classifierProviders: readonly ClassifierProvider[] = [
   jevClassifierProvider,
@@ -285,11 +382,14 @@ export const classifierProviders: readonly ClassifierProvider[] = [
   openaiClassifierProvider,
   openrouterClassifierProvider,
   perplexityClassifierProvider,
+  subqClassifierProvider,
+  basetenClassifierProvider,
 ];
 
 type ClassifierOperation = {
   signal: AbortSignal;
   deadline: number;
+  timeoutMessage: string;
   check(attemptSignal?: AbortSignal): void;
 };
 
@@ -308,7 +408,7 @@ export class ClassifierProviderError extends Error {
     options?: ErrorOptions,
   ) {
     super(message, options);
-    this.name = 'ClassifierProviderError';
+    this.name = 'DecisionAIProviderError';
   }
 }
 
@@ -320,40 +420,40 @@ export function classifierFailureKind(kind: ClassifierProviderError['kind'], sta
 export function classifierErrorMessage(error: unknown, apiKey?: string): string {
   try {
     const text =
-      error instanceof Error ? error.message : typeof error === 'string' ? error : 'Classifier request failed.';
+      error instanceof Error ? error.message : typeof error === 'string' ? error : 'Decision AI request failed.';
     return (apiKey ? text.split(apiKey).join('[redacted]') : text).slice(0, 2000);
   } catch {
-    return 'Classifier request failed with unreadable error metadata.';
+    return 'Decision AI request failed with unreadable error metadata.';
   }
 }
 
 function createOperation(args: ClassifierProviderEvaluateArgs, label: string): ClassifierOperation {
   if (
-    !Number.isFinite(args.timeoutMs) ||
-    args.timeoutMs <= 0 ||
+    (args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) ||
     (args.deadline !== undefined && !Number.isFinite(args.deadline))
   )
-    throw new Error('Classifier timeout and deadline must be finite, with a positive timeout.');
+    throw new Error('Decision AI timeout and deadline must be finite, with a positive timeout.');
   const now = Date.now();
-  const deadline = Math.min(now + args.timeoutMs, args.deadline ?? Infinity);
+  const deadline = Math.min(args.timeoutMs === undefined ? Infinity : now + args.timeoutMs, args.deadline ?? Infinity);
   // Node turns overflowing setTimeout delays into 1 ms, not a long timeout.
-  if (deadline - now > MAX_TIMER_DELAY_MS)
-    throw new Error(`Classifier effective timeout must not exceed ${MAX_TIMER_DELAY_MS} ms.`);
-  const timeoutError = () =>
-    new ClassifierProviderError(`${label} request timed out after ${args.timeoutMs} ms.`, 'timeout');
+  if (Number.isFinite(deadline) && deadline - now > MAX_TIMER_DELAY_MS)
+    throw new Error(`Decision AI effective timeout must not exceed ${MAX_TIMER_DELAY_MS} ms.`);
+  const timeoutMessage = `${label} request timed out${args.timeoutMs === undefined ? '' : ` after ${args.timeoutMs} ms`}.`;
   return {
     signal: args.signal,
     deadline,
+    timeoutMessage,
     check(attemptSignal) {
       throwIfAborted(args.signal, label);
-      if (Date.now() >= deadline || attemptSignal?.aborted) throw timeoutError();
+      if (Date.now() >= deadline || attemptSignal?.aborted)
+        throw new ClassifierProviderError(timeoutMessage, 'timeout');
     },
   };
 }
 
 /** A plain specification and one runner for both graph and direct provider inputs. */
 function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvider {
-  const { endpoint, buildRequest, validateResponse, checkState, checkRequest, ...provider } = spec;
+  const { endpoint, buildRequest, requestHeaders, validateResponse, checkState, checkRequest, ...provider } = spec;
   const evaluate = async (input: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult> => {
     // Reject removed evidence fields before object spread can read a getter or
     // discard non-enumerable/inherited content.
@@ -361,16 +461,16 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
     const args = { ...input, fetchImplementation: input.fetchImplementation ?? fetch };
     const operation = createOperation(args, provider.label);
     operation.check();
-    if (typeof args.model !== 'string') throw new Error('Classifier model must be a nonblank string.');
+    if (typeof args.model !== 'string') throw new Error('Decision AI model must be a nonblank string.');
     const budget = new ClassifierValueBudget(operation.check, provider.maxRequestBytes);
     budget.inspect(args.model);
-    if (args.model.trim() === '') throw new Error('Classifier model must be a nonblank string.');
+    if (args.model.trim() === '') throw new Error('Decision AI model must be a nonblank string.');
     if (typeof args.apiKey !== 'string' || args.apiKey.trim() === '' || /[\r\n]/.test(args.apiKey))
-      throw new Error('Classifier API key must be a nonblank string without line breaks.');
+      throw new Error('Decision AI API key must be a nonblank string without line breaks.');
     if (!Array.isArray(args.questions) || args.questions.length === 0)
-      throw new Error('Classifier Evaluate requires at least one question.');
+      throw new Error('Decision AI run requires at least one question.');
     if (args.questions.length > CLASSIFIER_LIMITS.questions)
-      throw new Error('Classifier Evaluate supports at most 1000 questions.');
+      throw new Error('Decision AI run supports at most 1000 questions.');
     const state = prepareClassifierState(args, budget);
     const questions: PreparedClassifierQuestion[] = [];
     const ids = new Set<string>();
@@ -381,9 +481,34 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
       ids.add(question.questionId);
       questions.push(question);
     }
+    let imageCount = state.kind === 'messages' ? state.images.length : 0;
+    for (const question of questions) {
+      const images = question.instructionsMessages
+        ? inspectStateMessages(question.instructionsMessages, operation.check)
+        : [];
+      imageCount += images.length;
+      if (question.type === 'box') {
+        if (!provider.supportsBoxQuestions?.(args.model))
+          throw new ClassifierProviderError(
+            `${provider.label} model '${args.model}' does not support Bounding Box questions.`,
+            'capability',
+          );
+        if (!(state.kind === 'messages' && state.images.length) && !images.length)
+          throw new ClassifierProviderError(
+            `Bounding Box question '${question.questionId}' requires an image in shared State or its own Instructions.`,
+            'capability',
+          );
+      }
+      if (images.length && !provider.supportsQuestionImages?.(args.model))
+        throw new ClassifierProviderError(
+          `${provider.label} model '${args.model}' does not support images in question instructions. Use a compatible Jev or OpenAI profile.`,
+          'capability',
+        );
+    }
+    if (imageCount > 128) throw new Error('State and questions together must contain at most 128 images.');
     if (state.kind === 'messages' && state.images.length && !provider.supportsImages?.(args.model))
       throw new ClassifierProviderError(
-        `${provider.label} model '${args.model}' does not support classifier images.`,
+        `${provider.label} model '${args.model}' does not support Decision AI images.`,
         'capability',
       );
     try {
@@ -392,7 +517,7 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
     } catch (error) {
       operation.check();
       throw new ClassifierProviderError(
-        error instanceof Error ? error.message : `${provider.label} does not support this classifier evidence.`,
+        error instanceof Error ? error.message : `${provider.label} does not support this Decision AI evidence.`,
         'capability',
         undefined,
         { cause: error },
@@ -401,7 +526,7 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
     operation.check();
     const result = await callClassifierHttp(
       args,
-      { ...provider, endpoint, validateResponse },
+      { ...provider, endpoint, requestHeaders, validateResponse },
       { model: args.model, state, questions },
       buildRequest,
       operation,
@@ -423,7 +548,7 @@ function normalizeModelPricing(
 
 export function getClassifierProvider(id: string | undefined): ClassifierProvider {
   const provider = classifierProviders.find((candidate) => candidate.id === (id || jevClassifierProvider.id));
-  if (!provider) throw new Error(`Unknown classifier provider '${id}'.`);
+  if (!provider) throw new Error(`Unknown Decision AI provider '${id}'.`);
   return provider;
 }
 
@@ -474,25 +599,18 @@ export function calculateClassifierUsageCost(
   return Number.isFinite(totalCost) && totalCost >= 0 ? totalCost : undefined;
 }
 
-function createQuestionMap(
-  questions: readonly PreparedClassifierQuestion[],
-): Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>> {
-  const result = Object.create(null) as Record<string, Omit<ClassifierQuestionDefinition, 'questionId'>>;
-  for (const question of questions) {
-    const providerQuestion =
-      question.type === 'noul' && question.criteria === undefined
-        ? { type: question.type, instructions: question.instructions }
-        : { type: question.type, instructions: question.instructions, criteria: question.criteria };
-    Object.defineProperty(result, question.questionId, { enumerable: true, value: providerQuestion });
-  }
-  return result;
-}
-
 async function callClassifierHttp(
   args: ClassifierProviderEvaluateArgs & { fetchImplementation: typeof fetch },
   spec: Pick<
     ClassifierProviderSpec,
-    'endpoint' | 'label' | 'maxRequestBytes' | 'validateResponse' | 'defaultModel' | 'pricing' | 'modelPricing'
+    | 'endpoint'
+    | 'label'
+    | 'maxRequestBytes'
+    | 'validateResponse'
+    | 'defaultModel'
+    | 'pricing'
+    | 'modelPricing'
+    | 'requestHeaders'
   >,
   prepared: PreparedClassifierEvaluation,
   buildRequest: ClassifierProviderSpec['buildRequest'],
@@ -500,8 +618,9 @@ async function callClassifierHttp(
 ): Promise<ClassifierProviderEvaluationResult> {
   const { apiKey, fetchImplementation, retryOnNon200, retryOnNon200CooldownMs, retryOnNon200RepeatTimes } = args;
   const { endpoint, label: providerLabel, validateResponse, maxRequestBytes } = spec;
-  const { signal, deadline } = operation;
+  const { signal, deadline, timeoutMessage } = operation;
   const request = buildRequest(prepared);
+  const requestHeaders = spec.requestHeaders?.(prepared);
   const configuredRetryCount = retryOnNon200 ? normalizeClassifierNon200RetryCount(retryOnNon200RepeatTimes) : 0;
   const configuredCooldownMs = normalizeClassifierNon200RetryCooldownMs(retryOnNon200CooldownMs);
   let automaticRetryCount = 0;
@@ -559,7 +678,9 @@ async function callClassifierHttp(
     const controller = new AbortController();
     const onAbort = () => controller.abort(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(new Error(`${providerLabel} request timeout`)), remainingMs);
+    const timer = Number.isFinite(remainingMs)
+      ? setTimeout(() => controller.abort(new Error(`${providerLabel} request timeout`)), remainingMs)
+      : undefined;
     const cleanupAttempt = () => {
       clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
@@ -572,7 +693,7 @@ async function callClassifierHttp(
         fetchImplementation(endpoint, {
           method: 'POST',
           redirect: 'error',
-          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          headers: { ...requestHeaders, Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: requestJson,
           signal: controller.signal,
         }),
@@ -591,9 +712,7 @@ async function callClassifierHttp(
         undefined,
         kind,
         undefined,
-        kind === 'timeout'
-          ? `${providerLabel} request timed out after ${args.timeoutMs} ms.`
-          : `${providerLabel} transport request failed.`,
+        kind === 'timeout' ? timeoutMessage : `${providerLabel} transport request failed.`,
       );
       operation.check(controller.signal);
       if (automaticRetryCount >= MAX_AUTOMATIC_ATTEMPTS - 1) {
@@ -619,22 +738,26 @@ async function callClassifierHttp(
         response.status,
         signal.aborted ? undefined : 'timeout',
         undefined,
-        signal.aborted
-          ? `${providerLabel} request was canceled.`
-          : `${providerLabel} request timed out after ${args.timeoutMs} ms.`,
+        signal.aborted ? `${providerLabel} request was canceled.` : timeoutMessage,
       );
       throw error;
     }
 
     if (!response.ok) {
+      // A valid key can lack access to a model. Do not diagnose 403 as an invalid key.
+      const accessDeniedMessage =
+        response.status === 403
+          ? `${providerLabel} access denied (HTTP 403). Check API key permissions and requested model access.`
+          : undefined;
       report(
         'failure',
         response.status,
         'http',
         undefined,
-        response.status === 401 || response.status === 403
-          ? `${providerLabel} authentication failed (HTTP ${response.status}). Check the ${providerLabel} API key.`
-          : `${providerLabel} rejected the request (HTTP ${response.status}).`,
+        accessDeniedMessage ??
+          (response.status === 401
+            ? `${providerLabel} authentication failed (HTTP ${response.status}). Check the ${providerLabel} API key.`
+            : `${providerLabel} rejected the request (HTTP ${response.status}).`),
       );
       const retryable = RETRYABLE_STATUSES.has(response.status);
       const permanent = [400, 401, 402, 403, 413, 422].includes(response.status);
@@ -662,7 +785,7 @@ async function callClassifierHttp(
       // neither the final error nor the next bounded retry may depend on it.
       discardResponseBody(response);
       // Diagnostic collection introduces an await after receiving the rejection.
-      // Caller cancellation and the overall deadline still outrank HTTP suppression.
+      // Caller cancellation and any active request deadline outrank HTTP suppression.
       // Do not check the diagnostic-only controller: its 1 s cap preserves the HTTP error.
       operation.check();
       if (willRetry) {
@@ -679,7 +802,7 @@ async function callClassifierHttp(
       }
       if (response.status === 401 || response.status === 403) {
         throw new ClassifierProviderError(
-          `${providerLabel} authentication failed. Check the ${providerLabel} API key.`,
+          accessDeniedMessage ?? `${providerLabel} authentication failed. Check the ${providerLabel} API key.`,
           'http',
           response.status,
         );
@@ -725,7 +848,7 @@ async function callClassifierHttp(
         kind,
         undefined,
         kind === 'timeout'
-          ? `${providerLabel} request timed out after ${args.timeoutMs} ms.`
+          ? timeoutMessage
           : error instanceof ClassifierResourceLimitError
             ? error.message
             : kind === 'transport'
@@ -755,10 +878,10 @@ async function callClassifierHttp(
         response.status,
         'response-validation',
         classifierAttemptUsage(body, spec, args.model),
-        error instanceof Error ? error.message : `${providerLabel} returned an invalid classifier response.`,
+        error instanceof Error ? error.message : `${providerLabel} returned an invalid Decision AI response.`,
       );
       throw new ClassifierProviderError(
-        error instanceof Error ? error.message : `${providerLabel} returned an invalid classifier response.`,
+        error instanceof Error ? error.message : `${providerLabel} returned an invalid Decision AI response.`,
         'response-validation',
         undefined,
         { cause: error },
@@ -869,22 +992,28 @@ function throwAbort(signal: AbortSignal, providerLabel: string): never {
   throw signal.reason instanceof Error ? signal.reason : new Error(`${providerLabel} request aborted.`);
 }
 
-function waitForRetry(delayMs: number, signal: AbortSignal, providerLabel: string): Promise<void> {
+async function waitForRetry(delayMs: number, signal: AbortSignal, providerLabel: string): Promise<void> {
   throwIfAborted(signal, providerLabel);
-  if (delayMs <= 0) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason instanceof Error ? signal.reason : new Error(`${providerLabel} request aborted.`));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
+  // Without a request deadline, authored/provider waits can exceed one timer.
+  // Chunk the wait instead of overflowing to 1 ms or retrying before it expires.
+  while (delayMs > 0) {
+    const chunkMs = Math.min(delayMs, MAX_TIMER_DELAY_MS);
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        reject(signal.reason instanceof Error ? signal.reason : new Error(`${providerLabel} request aborted.`));
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, chunkMs);
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    throwIfAborted(signal, providerLabel);
+    delayMs -= chunkMs;
+  }
 }
 
 function getRetryDelayMs(retryAfter: string | null, attempt: number, deadline: number): number {

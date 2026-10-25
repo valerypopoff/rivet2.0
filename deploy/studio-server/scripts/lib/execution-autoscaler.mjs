@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { journalForReleaseOperation } from './release-operation-journal.mjs';
+import { assertFenceIntent } from './execution-autoscaler-fence.mjs';
 
 export function autoscalerPolicy(input) {
   const policy = {
@@ -91,17 +92,115 @@ export function recommendExecutionReplicas(snapshot, policy) {
   );
 }
 
+const routingObservationEpochs = new WeakMap();
+
+/** During an HA roll only monotonic growth is shared. The deployer never
+ * removes an execution ordinal or reduces its replica count in this mode. */
+async function scaleUpDuringRollout({
+  io,
+  record,
+  release,
+  namespace,
+  manifestDigest,
+  workload,
+  image,
+  policy,
+  shouldStop,
+  now,
+}) {
+  journalForReleaseOperation(record, 'ha', { release, namespace }, now);
+  const binding = record.cooperativeScaling;
+  if (
+    record.phase === 'preflight' &&
+    record.leaseExpiresAt <= now() &&
+    !record.owner &&
+    record.completed?.length === 0 &&
+    record.previousManifestDigest === manifestDigest &&
+    binding?.previousImage === image &&
+    binding.workload === workload &&
+    record.workloads?.some((w) => w.name === workload && w.uid === binding.uid && w.role === 'execution')
+  ) {
+    const snapshot = await io.snapshot({ demand: false });
+    if (snapshot.uid !== binding.uid || snapshot.startupFence || shouldStop())
+      throw Error('Abandoned HA preflight baseline is unconfirmed.');
+    // Preflight is durably before every template/retirement command. CAS-close
+    // only that expired, untouched attempt so the installed controller can
+    // resume its ordinary policy on the next tick, without metrics or replay.
+    await io.writeJournal(
+      {
+        ...record,
+        phase: 'complete',
+        abortedBeforeTemplates: true,
+        runner: `preflight-recovery-${record.runner}`,
+        leaseExpiresAt: now(),
+      },
+      record.resourceVersion,
+    );
+    return { state: 'rollout-preflight-released' };
+  }
+  if (
+    binding?.protocol !== 1 ||
+    binding.workload !== workload ||
+    binding.image !== image ||
+    binding.policyDigest !== autoscalerPolicyDigest(policy) ||
+    record.manifestDigest !== manifestDigest ||
+    binding.maxReplicas !== policy.maxReplicas ||
+    !binding.uid ||
+    !record.workloads?.some((w) => w.name === workload && w.uid === binding.uid && w.role === 'execution')
+  )
+    throw new Error('HA scale-up requires the exact rollout workload, image and policy.');
+  const snapshot = await io.snapshot();
+  if (
+    snapshot.uid !== binding.uid ||
+    !snapshot.resourceVersion ||
+    snapshot.startupFence ||
+    snapshot.pods.some((pod) => pod.operationId && pod.operationId !== record.owner?.operationId)
+  )
+    throw new Error('HA scale-up owner or retirement is unconfirmed.');
+  const demand = recommendExecutionReplicas(snapshot, policy);
+  const retiring = record.owner?.name?.startsWith(`${binding.workload}-`) === true;
+  const desired = Math.min(policy.maxReplicas, demand + (retiring ? 1 : 0));
+  if (desired <= snapshot.replicas) return { state: 'rollout-observing', desired, scaleDownPaused: true };
+  const confirmed = await io.readJournal();
+  if (
+    shouldStop() ||
+    confirmed?.resourceVersion !== record.resourceVersion ||
+    confirmed.token !== record.token ||
+    confirmed.protocol !== 1 ||
+    confirmed.phase === 'complete'
+  )
+    throw new Error('HA scale-up ownership changed; obtain a fresh observation.');
+  // UID/current-replica/resourceVersion preconditions in IO prevent concurrent
+  // growth from overwriting another successful increase. Lost replies are
+  // resolved by the next fresh snapshot; no withdrawal or deletion is issued.
+  await io.scale(snapshot.uid, snapshot.replicas, desired, snapshot.resourceVersion);
+  return { state: 'rollout-scaled-up', replicas: desired, scaleDownPaused: true };
+}
+
 /** One bounded reconciliation, no background mutations or automatic retries.
  * The shared deployment journal is also our lease. An unfinished retirement
  * remains owned across controller restarts and blocks competing release tools.
  * API failures after a write are observed on a later tick, never replayed. */
-export async function reconcileExecutionAutoscaling({
+export async function reconcileExecutionAutoscaling(options) {
+  try {
+    return await reconcileExecutionAutoscalingTick(options);
+  } catch (error) {
+    // A journal GET/CAS failure may prevent persisting the reset below. Keep a
+    // process-local epoch too, so a short outage never revives old route proof.
+    if (options.io && typeof options.io === 'object') routingObservationEpochs.set(options.io, randomUUID());
+    throw error;
+  }
+}
+
+async function reconcileExecutionAutoscalingTick({
   io,
   release,
   namespace,
   manifestDigest,
   policy: input,
   runner,
+  workload,
+  image,
   now = Date.now,
   uuid = randomUUID,
   shouldStop = () => false,
@@ -111,6 +210,19 @@ export async function reconcileExecutionAutoscaling({
   const policy = autoscalerPolicy(input),
     policyDigest = autoscalerPolicyDigest(policy);
   const observed = await io.readJournal();
+  if (observed?.protocol === 1 && observed.phase !== 'complete' && observed.cooperativeScaling)
+    return scaleUpDuringRollout({
+      io,
+      record: observed,
+      release,
+      namespace,
+      manifestDigest,
+      workload,
+      image,
+      policy,
+      shouldStop,
+      now,
+    });
   const prior = journalForReleaseOperation(observed, 'autoscaling', { release, namespace }, now);
   if (prior?.leaseExpiresAt > now() && prior.runner !== runner) return { state: 'leased' };
   if (
@@ -145,8 +257,23 @@ export async function reconcileExecutionAutoscaling({
   };
   if (record.phase === 'complete' && (record.manifestDigest !== manifestDigest || record.policyDigest !== policyDigest))
     record = { ...record, lowSince: null, lastSampleAt: null };
+  // Fence steps belong to a retirement, not to later capacity growth. Earlier
+  // records can retain completed history in an interrupted ordinary scale-up.
+  if (record.phase === 'scaling' && !record.target && record.scale?.nextPhase === 'complete')
+    record = { ...record, fence: null };
+  if (record.phase !== 'complete' && record.fence) assertFenceIntent(record.fence, record.target);
+  const previousRoutingAbsence = record.phase === 'withdrawing' ? record.target.routingAbsence : null;
   record = await io.writeJournal(
-    { ...record, manifestDigest, policyDigest, runner, leaseExpiresAt: now() + 120000 },
+    {
+      ...record,
+      manifestDigest,
+      policyDigest,
+      runner,
+      leaseExpiresAt: now() + 120000,
+      // Clear proof before any observation can fail. Only a successful route
+      // sample below restores it; restarts and interrupted ticks start afresh.
+      ...(record.phase === 'withdrawing' ? { target: { ...record.target, routingAbsence: null } } : {}),
+    },
     observed?.resourceVersion,
   );
   const save = async (changes) => {
@@ -179,7 +306,20 @@ export async function reconcileExecutionAutoscaling({
     // A lost acknowledgement leaves the durable intent for observation only.
     await save({ phase: nextPhase, scale: null, lastScaleAt: now(), lowSince: null });
   };
-  let completedObservation = false;
+  const convergeFence = () =>
+    io.convergeFence(record.target, record.fence, {
+      authorize: fenced,
+      confirm: async (resource) => {
+        await save({
+          fence: {
+            ...record.fence,
+            steps: { ...record.fence.steps, [resource]: { ...record.fence.steps[resource], confirmed: true } },
+          },
+        });
+      },
+    });
+  let completedObservation = false,
+    failure;
   try {
     // Completion of an already-issued removal is not a load decision. In
     // particular, a Metrics API outage must not strand an otherwise settled
@@ -200,7 +340,7 @@ export async function reconcileExecutionAutoscaling({
     if (record.phase === 'unfencing') {
       if (await io.isFenced(record.target))
         throw new Error('Startup-unfence intent is unconfirmed; inspect without replaying.');
-      await save({ phase: 'complete', target: null, removal: null, lastScaleAt: now(), lowSince: null });
+      await save({ phase: 'complete', target: null, fence: null, removal: null, lastScaleAt: now(), lowSince: null });
       return { state: 'settled' };
     }
     if (record.phase === 'removing') {
@@ -249,24 +389,30 @@ export async function reconcileExecutionAutoscaling({
         (p) => p.uid !== tail?.uid && p.ready && p.state === 'serving' && !p.operationId,
       );
       if (!tail || peers.length < 2) throw new Error('Two serving peers are required before withdrawing an owner.');
+      const retirementTarget = {
+        name: tail.name,
+        uid: tail.uid,
+        incarnation: tail.incarnation,
+        workloadUid: snapshot.uid,
+        operationId: uuid(),
+        withdrawnAt: now(),
+      };
+      const fence = await io.prepareFence(retirementTarget);
       await save({
         phase: 'fencing',
-        target: {
-          name: tail.name,
-          uid: tail.uid,
-          incarnation: tail.incarnation,
-          workloadUid: snapshot.uid,
-          operationId: uuid(),
-          withdrawnAt: now(),
-        },
+        target: retirementTarget,
+        fence,
+        fenceRepair: null,
         lowSince: null,
       });
       await io.confirmPeers(record.target, snapshot.pods);
       await fenced();
-      await io.fence(record.target);
+      await convergeFence();
       return { state: 'fencing' };
     }
     if (record.phase === 'fencing') {
+      // Legacy unfinished journals lack step provenance and remain observation-only.
+      if (record.fence) await convergeFence();
       if (!(await io.isFenced(record.target)))
         throw new Error('Startup-fence intent is unconfirmed; inspect without replaying.');
       if (!(await io.fenceObserved(record.target))) return { state: 'waiting-for-startup-fence' };
@@ -281,9 +427,29 @@ export async function reconcileExecutionAutoscaling({
     if (record.phase === 'withdrawing') {
       if (target.state === 'checking') return { state: 'checking-withdrawal' };
       if (target.state !== 'withdrawing') throw new Error('Unexpected withdrawal state.');
-      if ((await io.routed(record.target)) || now() - record.target.withdrawnAt < policy.withdrawalSeconds * 1000)
+      if (await io.routed(record.target)) return { state: 'waiting-for-routing' };
+      const observedAt = now();
+      const epoch = routingObservationEpochs.get(io) ?? null;
+      const continuous =
+        previousRoutingAbsence?.runner === runner &&
+        previousRoutingAbsence.epoch === epoch &&
+        Number.isFinite(previousRoutingAbsence.since) &&
+        Number.isFinite(previousRoutingAbsence.observedAt) &&
+        previousRoutingAbsence.since <= previousRoutingAbsence.observedAt &&
+        previousRoutingAbsence.observedAt <= observedAt &&
+        observedAt - previousRoutingAbsence.observedAt <= policy.pollSeconds * 2500;
+      const routingAbsence = {
+        runner,
+        epoch,
+        since: continuous ? previousRoutingAbsence.since : observedAt,
+        observedAt,
+      };
+      const observedTarget = { ...record.target, routingAbsence };
+      if (observedAt - routingAbsence.since < policy.withdrawalSeconds * 1000) {
+        await save({ target: observedTarget });
         return { state: 'waiting-for-routing' };
-      await save({ phase: 'draining' });
+      }
+      await save({ phase: 'draining', target: observedTarget });
       await fenced();
       await io.retire(record.target, 'begin');
       return { state: 'draining' };
@@ -315,19 +481,32 @@ export async function reconcileExecutionAutoscaling({
       await io.scale(snapshot.uid, snapshot.replicas, snapshot.replicas - 1);
     }
     return { state: replace ? 'replacing-drained-owner' : 'scaled-down' };
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
     // Do not overwrite another runner after an uncertain journal write. Failed
     // observations reset the low-load window, so missing samples never shrink.
-    const owner = await io.readJournal();
-    if (owner?.resourceVersion === record.resourceVersion && owner.runner === runner && owner.token === record.token) {
-      await io.writeJournal(
-        {
-          ...record,
-          leaseExpiresAt: now(),
-          ...(!completedObservation && record.phase === 'complete' ? { lowSince: null, lastSampleAt: null } : {}),
-        },
-        record.resourceVersion,
-      );
+    try {
+      const owner = await io.readJournal();
+      if (
+        owner?.resourceVersion === record.resourceVersion &&
+        owner.runner === runner &&
+        owner.token === record.token
+      ) {
+        await io.writeJournal(
+          {
+            ...record,
+            leaseExpiresAt: now(),
+            ...(!completedObservation && record.phase === 'complete' ? { lowSince: null, lastSampleAt: null } : {}),
+          },
+          record.resourceVersion,
+        );
+      }
+    } catch (error) {
+      if (failure)
+        throw new AggregateError([failure, error], 'Reconciliation failed and lease release is unconfirmed.');
+      throw error;
     }
   }
 }

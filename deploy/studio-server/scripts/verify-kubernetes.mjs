@@ -188,14 +188,30 @@ async function main() {
   const { tempDir, envPath } = writeLocalVerificationEnv();
 
   try {
+    // Kernel ownership/descendant inheritance is mandatory, never a Windows skip.
+    await spawnProgram(nodeBin, ['deploy/studio-server/scripts/verify-housekeeping-linux.mjs']);
     await spawnProgram(nodeBin, [
       '--test',
       'deploy/studio-server/scripts/studio-server-release-manifest.test.mjs',
       'deploy/studio-server/scripts/managed-release-cutover.test.mjs',
+      'deploy/studio-server/scripts/maintenance-deployment-plan.test.mjs',
+      'deploy/studio-server/scripts/maintenance-validation.test.mjs',
+      'deploy/studio-server/scripts/deployment-workflow.test.mjs',
+      'deploy/studio-server/scripts/deployment-operation.test.mjs',
+      'deploy/studio-server/scripts/housekeeping-handover.test.mjs',
+      'deploy/studio-server/scripts/backend-overlap-preflight.test.mjs',
+      'deploy/studio-server/scripts/backend-overlap-helm.test.mjs',
+      'deploy/studio-server/scripts/deployment-safety.test.mjs',
+      'deploy/studio-server/scripts/deployment-command.test.mjs',
+      'deploy/studio-server/scripts/fixture-file-lock.test.mjs',
+      'deploy/studio-server/scripts/execution-fence-recovery.test.mjs',
+      'deploy/studio-server/scripts/installed-upgrade-plan.test.mjs',
+      'deploy/studio-server/scripts/kubernetes-release-settlement.test.mjs',
       'deploy/studio-server/scripts/ha-release-evidence.test.mjs',
       'deploy/studio-server/scripts/ha-release-gate.test.mjs',
       'deploy/studio-server/scripts/ha-gke-availability.test.mjs',
       'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
+      'deploy/studio-server/scripts/ha-rollout-headroom.test.mjs',
       'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
       'deploy/studio-server/scripts/ha-control-topology.test.mjs',
       'deploy/studio-server/scripts/ha-kubernetes-control-topology.test.mjs',

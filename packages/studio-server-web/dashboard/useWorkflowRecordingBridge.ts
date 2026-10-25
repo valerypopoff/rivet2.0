@@ -4,12 +4,14 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import { activateLoadedRecordingState, clearLoadedRecordingForPathState } from '../../app/src/state/execution';
 import { getWorkflowRecordingIdFromVirtualProjectPath } from '../../studio-server-shared/workflow-recording-types';
-import { fetchWorkflowRecordingArtifactText } from './workflowApi';
+import { fetchWorkflowRecordingArtifactText, fetchWorkflowRecordingSummary } from './workflowApi';
+import type { RecordingRunDetails } from '../../app/src/utils/recordingPresentation';
 import { getRecordingPlaybackGraphId } from '../../app/src/utils/recordingPlayback';
 
 export type LoadedWorkflowRecording = {
   path: string;
   recorder: ExecutionRecorder;
+  summary?: RecordingRunDetails;
 };
 
 export function getRecordingStartGraphId(recorder: ExecutionRecorder): string | undefined {
@@ -17,10 +19,15 @@ export function getRecordingStartGraphId(recorder: ExecutionRecorder): string | 
 }
 
 export async function fetchLoadedWorkflowRecording(recordingId: string): Promise<LoadedWorkflowRecording> {
-  const serializedRecording = await fetchWorkflowRecordingArtifactText(recordingId, 'recording');
+  const [serializedRecording, summary] = await Promise.all([
+    fetchWorkflowRecordingArtifactText(recordingId, 'recording'),
+    // Older servers/files still replay. Missing metadata must never claim success.
+    fetchWorkflowRecordingSummary(recordingId).catch(() => undefined),
+  ]);
   return {
     path: `${recordingId}.rivet-recording`,
     recorder: ExecutionRecorder.deserializeFromString(serializedRecording),
+    summary,
   };
 }
 
