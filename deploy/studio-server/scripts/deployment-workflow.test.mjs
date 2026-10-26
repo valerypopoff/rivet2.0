@@ -139,24 +139,67 @@ test('changed scripts or namespace identity fail before an adapter starts', asyn
   assert.deepEqual(await fs.readdir(f.artifactsDir), []);
 });
 
+test('preflight requires both observed local-prerequisite checks with private evidence', async (t) => {
+  const f = await fixture(t);
+  for (const flaw of [null, 'missing-capacity', 'unobserved', 'empty-evidence']) {
+    const options = {
+      ...f.options,
+      runAdapter: async (_script, requestPath, receiptPath) => {
+        const request = JSON.parse(await fs.readFile(requestPath, 'utf8'));
+        const directory = path.dirname(receiptPath);
+        const receipt = { ...request, kind: 'rivet-deployment-preflight', passed: true, checks: {} };
+        for (const name of ['dependencies', 'capacity']) {
+          await fs.writeFile(
+            path.join(directory, name),
+            flaw === 'empty-evidence' ? '' : 'observed local prerequisite',
+          );
+          receipt.checks[name] = { passed: true, observed: flaw !== 'unobserved', evidence: name };
+        }
+        if (flaw === 'missing-capacity') delete receipt.checks.capacity;
+        await fs.writeFile(receiptPath, JSON.stringify(receipt));
+      },
+    };
+    const result = runDeploymentStage(f.approval, 'preflight', f.context, options);
+    if (flaw) await assert.rejects(result, /prerequisites are unverified|preflight evidence is empty/);
+    else assert.equal((await result).verified, true);
+  }
+});
+
 test('backend acceptance requires both real journeys and the exact pod/process identity', async (t) => {
   const f = await fixture(t);
   const context = { ...f.context, backendCandidate: { uid: 'exact-pod', incarnation: 'exact-process' } };
   assert.equal((await runDeploymentStage(f.approval, 'backend', context, f.options)).verified, true);
   for (const change of [
-    (r) => { r.backendCandidate.uid = 'replacement'; },
-    (r) => { r.backendCandidate.incarnation = 'replacement'; },
-    (r) => { delete r.checks.editorSession; },
-    (r) => { r.checks.developerApi.observed = false; },
-  ]) await assert.rejects(runDeploymentStage(f.approval, 'backend', context, { ...f.options,
-    runAdapter: async (_script, request, receipt, options) => {
-      const { executeMaintenanceBackupAdapter } = await import('./lib/maintenance-deployment-plan.mjs');
-      await executeMaintenanceBackupAdapter(f.approval.scripts.acceptance, request, receipt, options);
-      const result = JSON.parse(await fs.readFile(receipt, 'utf8')); change(result);
-      await fs.writeFile(receipt, JSON.stringify(result));
+    (r) => {
+      r.backendCandidate.uid = 'replacement';
     },
-  }), /another backend|acceptance failed/);
-  await assert.rejects(runDeploymentStage(f.approval, 'backend', { ...context, backendCandidate: { uid: 'exact-pod' } }, f.options), /another backend/);
+    (r) => {
+      r.backendCandidate.incarnation = 'replacement';
+    },
+    (r) => {
+      delete r.checks.editorSession;
+    },
+    (r) => {
+      r.checks.developerApi.observed = false;
+    },
+  ])
+    await assert.rejects(
+      runDeploymentStage(f.approval, 'backend', context, {
+        ...f.options,
+        runAdapter: async (_script, request, receipt, options) => {
+          const { executeMaintenanceBackupAdapter } = await import('./lib/maintenance-deployment-plan.mjs');
+          await executeMaintenanceBackupAdapter(f.approval.scripts.acceptance, request, receipt, options);
+          const result = JSON.parse(await fs.readFile(receipt, 'utf8'));
+          change(result);
+          await fs.writeFile(receipt, JSON.stringify(result));
+        },
+      }),
+      /another backend|acceptance failed/,
+    );
+  await assert.rejects(
+    runDeploymentStage(f.approval, 'backend', { ...context, backendCandidate: { uid: 'exact-pod' } }, f.options),
+    /another backend/,
+  );
 });
 
 test('a cutover checkpoint needs a live quiesced lease and verifies frozen recovery bytes', async (t) => {

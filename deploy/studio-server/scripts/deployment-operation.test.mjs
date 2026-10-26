@@ -293,7 +293,7 @@ for (const mode of modes) {
     const f = fixture(mode);
     f.state.failCompletion = true;
     await assert.rejects(f.run(), /completion acknowledgement|Cutover paused/);
-    assert.equal(f.state.journal.phase, mode === 'maintenance' ? 'resuming' : 'complete');
+    assert.equal(f.state.journal.phase, 'complete');
     assert.equal(f.state.stopped, true);
   });
 }

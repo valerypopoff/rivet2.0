@@ -346,7 +346,7 @@ test('terminal old migration hooks do not deadlock recovery; active hooks and al
   assert.equal(blocksCutoverStop({}), true);
 });
 
-test('lost completion acknowledgement cannot leave paused traffic behind a completed journal', async () => {
+test('lost completion acknowledgement after final apply never closes healthy traffic again', async () => {
   const state = fixture();
   let loseOnce = true;
   const replaceJournal = async (record, version) => {
@@ -357,11 +357,10 @@ test('lost completion acknowledgement cannot leave paused traffic behind a compl
     }
     return saved;
   };
-  await assert.rejects(runManagedReleaseCutover({ ...state.options, replaceJournal }), /Cutover paused/);
-  assert.equal(state.journal.phase, 'resuming');
-  assert.deepEqual(state.operations.slice(-2), ['hpa:off', 'scale:0']);
-  await runManagedReleaseCutover({ ...state.options, replaceJournal, resumeToken: state.journal.token });
+  await assert.rejects(runManagedReleaseCutover({ ...state.options, replaceJournal }), /--acceptance-only/);
   assert.equal(state.journal.phase, 'complete');
+  assert.equal(state.operations.at(-1), 'resume');
+  assert.equal(state.journal.finalApply.protocol, 1);
 });
 
 test('ordinary releases validate completed journals and wait for the owning runner to finish', async () => {
@@ -560,7 +559,7 @@ test('a quiesced checkpoint precedes installation and settlement completes befor
   assert.equal(Object.hasOwn(contexts[1], 'workloads'), false);
 });
 
-test('failed settlement closes admission again and cannot mark the journal complete', async () => {
+test('failed final observation leaves traffic active and supports exact verification-only completion', async () => {
   const state = fixture();
   await assert.rejects(
     runManagedReleaseCutover({
@@ -570,12 +569,38 @@ test('failed settlement closes admission again and cannot mark the journal compl
         throw new Error('old owners remain');
       },
     }),
-    /Cutover paused/,
+    /--verify-only/,
   );
   assert.equal(state.journal.phase, 'resuming');
-  assert.deepEqual(state.operations.slice(-4), ['resume', 'settlement-failed', 'hpa:off', 'scale:0']);
-  await runManagedReleaseCutover({ ...state.options, resumeToken: state.journal.token });
+  assert.deepEqual(state.operations.slice(-2), ['resume', 'settlement-failed']);
+  const before = [...state.operations];
+  await runManagedReleaseCutover({
+    ...state.options,
+    resumeToken: state.journal.token,
+    verificationOnly: true,
+    verifyExisting: async () => state.operations.push('verify'),
+  });
+  assert.deepEqual(state.operations, [...before, 'verify']);
   assert.equal(state.journal.phase, 'complete');
+  assert.equal(state.journal.verificationOnlyRecovery, true);
+});
+
+test('verification-only recovery refuses an unconfirmed final apply and never runs mutation callbacks', async () => {
+  const state = fixture(() => true);
+  await assert.rejects(runManagedReleaseCutover(state.options), /Cutover paused/);
+  const before = [...state.operations];
+  await assert.rejects(
+    runManagedReleaseCutover({
+      ...state.options,
+      resumeToken: state.journal.token,
+      verificationOnly: true,
+      verifyExisting: async () => {
+        throw Error('must not run');
+      },
+    }),
+    /confirmed final apply/,
+  );
+  assert.deepEqual(state.operations, before);
 });
 
 test('failed frozen checkpoint prevents candidate installation and retains exact-plan recovery', async () => {
@@ -627,7 +652,7 @@ test('lease expiration during settlement cannot produce a completion acknowledge
         state.setTime(200_000);
       },
     }),
-    /closing admission is unconfirmed/,
+    /verification is incomplete/,
   );
   assert.equal(state.journal.phase, 'resuming');
 });

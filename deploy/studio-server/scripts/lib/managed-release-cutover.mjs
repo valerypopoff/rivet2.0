@@ -121,6 +121,8 @@ export async function runManagedReleaseCutover({
   validate,
   resume,
   settle,
+  verificationOnly = false,
+  verifyExisting,
   stopValidationBeforeResume = false,
   now = Date.now,
   uuid = randomUUID,
@@ -155,7 +157,15 @@ export async function runManagedReleaseCutover({
       throw new Error(
         `An unfinished cutover owns this release. Recover using --resume-cutover ${journal.token}, its exact manifest and operation plan.`,
       );
+    if (
+      verificationOnly &&
+      (journal.phase !== 'resuming' || journal.finalApply?.protocol !== 1 || typeof verifyExisting !== 'function')
+    )
+      throw Error(
+        'Verification-only recovery requires a confirmed final apply in the exact resuming cutover; inspect ordinary recovery instead.',
+      );
   } else {
+    if (verificationOnly) throw Error('Verification-only recovery requires an unfinished cutover.');
     if (resumeToken) throw new Error('No unfinished cutover matches the recovery token.');
     const resources = checkedInventory(await inventory());
     // Offline rendering and live inventory may outlast the approval window.
@@ -210,6 +220,11 @@ export async function runManagedReleaseCutover({
     setHeartbeat,
     clearHeartbeat,
     onFailure: async (error, operation) => {
+      if (verificationOnly || operation.record.finalApply?.protocol === 1)
+        throw Error(
+          `Final-apply verification is incomplete; no further workload mutations were attempted. Inspect --resume-cutover ${operation.record.token} --verify-only (or --acceptance-only if already complete).\n${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
       // Finish any in-flight renewal before inspecting or updating ownership.
       // Otherwise a late CAS can invalidate cleanup's resource version or phase.
       // No automatic rollback or resume. If final resume partly committed,
@@ -227,16 +242,7 @@ export async function runManagedReleaseCutover({
             if (owner.phase !== 'quiescing') throw new Error('Untouched cutover phase changed.');
             await operation.complete({ abortedBeforeQuiescence: true });
           }
-        } else {
-          if (owner.phase === 'complete') {
-            // The completion CAS may have committed while its acknowledgement was
-            // lost. Closing traffic must also restore durable recovery ownership;
-            // otherwise a normal rollout could mistake the now-paused release for
-            // a completed cutover and an exact-token recovery would be rejected.
-            await operation.checkpoint({ phase: 'resuming' });
-          }
-          await closeAdmission(operation);
-        }
+        } else await closeAdmission(operation);
       } catch (closingError) {
         throw new AggregateError(
           [error, closingError],
@@ -268,15 +274,27 @@ export async function runManagedReleaseCutover({
         resourceVersion: operation.record.resourceVersion,
       });
 
-      // Recovery always re-quiesces and reruns verify-only validation. It never
+      if (verificationOnly) {
+        await safety.checkOwnedBaseline(operation.record, runner, now);
+        safety.confirmSettlement(await verifyExisting(operation.record));
+        assertLease();
+        await operation.complete({ verificationOnlyRecovery: true });
+        return;
+      }
+
+      // Ordinary recovery re-quiesces and reruns fenced validation. It never
       // assumes that a lost Helm acknowledgement means nothing committed.
       await step('quiescing', async () => {
         await safety.checkOwnedBaseline(operation.record, runner, now);
+        await operation.checkpoint({ finalApply: null, recoveryCheckpoint: null });
         quiescenceAttempted = true;
         await closeAdmission(operation);
         await waitForStopped();
       });
-      await step('quiesced', () => safety.checkpoint({ ...operation.record, ...context() }, runner, now));
+      await step('quiesced', async () => {
+        const checkpoint = await safety.checkpoint({ ...operation.record, ...context() }, runner, now);
+        await operation.checkpoint({ recoveryCheckpoint: checkpoint });
+      });
       await step('validating', async () => {
         safety.assertReadyForTemplates();
         await installValidation();
@@ -289,6 +307,9 @@ export async function runManagedReleaseCutover({
         }
         assertLease();
         await resume();
+        // This is acknowledgement, not intent. An interrupted/lost Helm reply
+        // cannot manufacture permission to use verification-only recovery.
+        await operation.checkpoint({ finalApply: { protocol: 1, inventory: checkedInventory(await inventory()) } });
       });
       await step('resuming', async () => safety.confirmSettlement(await settle(context())));
       await operation.complete();

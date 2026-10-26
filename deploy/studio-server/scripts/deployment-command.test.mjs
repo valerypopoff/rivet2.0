@@ -8,6 +8,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { parse, parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
+import { assertNoOperatorRolloutGuards } from './deploy-kubernetes-release.mjs';
 
 // test-style: fixture-read: Read generated Helm fixture values, stand-in state, requests and command result receipts.
 import {
@@ -24,6 +26,13 @@ import {
 } from './lib/ha-release-evidence.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
+test('fresh operator inputs reject stale rollout guards without rewriting bound recovery inputs', () => {
+  const stale = 'ha:\n  rolloutResourceVersions:\n    rivet-backend: "old-version"\n';
+  assert.throws(() => assertNoOperatorRolloutGuards(stale, new Map()), /private guards from another operation/);
+  assert.doesNotThrow(() => assertNoOperatorRolloutGuards('ha:\n  rolloutResourceVersions: {}', new Map()));
+  for (const option of ['--env-file', '--plan-only', '--acceptance-only', '--resume-ha', '--resume-cutover'])
+    assert.doesNotThrow(() => assertNoOperatorRolloutGuards(stale, new Map([[option, 'explicit']])));
+});
 const hash = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`;
 const merge = (a, b) => {
   for (const [key, value] of Object.entries(b))
@@ -38,7 +47,14 @@ const request=process.argv[process.argv.indexOf('--request')+1], receipt=process
 const r=JSON.parse(await fs.readFile(request,'utf8')), directory=path.dirname(receipt), fixture=process.env.RIVET_COMMAND_FIXTURE;
 await fs.appendFile(path.join(fixture,'adapters.ndjson'),JSON.stringify({stage:r.stage,requestId:r.requestId,operationId:r.operationId})+'\\n');
 const state=JSON.parse(await fs.readFile(path.join(fixture,'state.json'),'utf8'));
-if(r.stage==='backup'&&state.fault==='backupFail')process.exit(2);
+if(r.stage==='before'&&['completedAutoscalerAdvance','samplingAutoscalerAdvance','busyAutoscalerAdvance'].includes(state.fault)){
+ const record=JSON.parse(state.journal.data.record);
+ if(state.fault==='busyAutoscalerAdvance'){record.phase='scaling';record.leaseExpiresAt=Date.now()+120000;}
+ if(state.fault==='samplingAutoscalerAdvance')record.leaseExpiresAt=Date.now()+15000;
+ state.journal.data.record=JSON.stringify(record);state.journal.metadata.resourceVersion=String(++state.version);
+ state.autoscalerAdvancedDuringBaseline=true;await fs.writeFile(path.join(fixture,'state.json'),JSON.stringify(state));
+}
+if((r.stage==='backup'&&state.fault==='backupFail')||(r.stage==='preflight'&&state.fault==='preflightFail'))process.exit(2);
 let out={...r,passed:true};
 if(state.fault==='wrongInstallation')out.release='another-release';
 if(r.stage==='backup'){
@@ -46,7 +62,7 @@ if(r.stage==='backup'){
  databaseRestoreVerified:true,objectReferencesCovered:true,encryptionKeysRecoverable:true,unrelatedDataExcluded:true,artifacts:[]};
  for(const role of ['database','objects','keys','verification']){const data='synthetic fixture '+role;await fs.writeFile(path.join(directory,role),data);
  out.artifacts.push({role,path:role,sha256:'sha256:'+createHash('sha256').update(data).digest('hex')});}
-}else{out.kind='rivet-deployment-acceptance';out.checks={};for(const name of (r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
+}else{out.kind=r.stage==='preflight'?'rivet-deployment-preflight':'rivet-deployment-acceptance';out.checks={};for(const name of (r.stage==='preflight'?['dependencies','capacity']:r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
  await fs.writeFile(path.join(directory,name),'synthetic application journey');out.checks[name]={passed:true,observed:true,evidence:name};}}
 await fs.writeFile(receipt,JSON.stringify(out));`;
 
@@ -177,6 +193,7 @@ async function fixture(t, mode, fault) {
     execution: { enabled: false },
     executionController: { enabled: false },
   };
+  if (fault === 'gkeHpa') base.autoscaling.proxy = { enabled: true, minReplicas: 6, maxReplicas: 8 };
   if (mode === 'direct') {
     base.ha.enabled = false;
     base.availability.gkeGateway = false;
@@ -285,7 +302,31 @@ async function fixture(t, mode, fault) {
   );
   const seeded = JSON.parse(await fs.readFile(path.join(directory, 'state.json'), 'utf8'));
   seeded.fault = fault;
-  if (fault === 'backupFail') seeded.releaseStatus = 'pending-upgrade';
+  if (['completedAutoscalerAdvance', 'samplingAutoscalerAdvance', 'busyAutoscalerAdvance'].includes(fault)) {
+    seeded.journal = {
+      apiVersion: 'v1',
+      kind: 'ConfigMap',
+      metadata: {
+        name: releaseOperationJournalName('rivet'),
+        namespace: 'fixture',
+        uid: randomUUID(),
+        resourceVersion: String(++seeded.version),
+      },
+      data: {
+        record: JSON.stringify({
+          autoscalingProtocol: 1,
+          release: 'rivet',
+          namespace: 'fixture',
+          phase: 'complete',
+          token: randomUUID(),
+          runner: randomUUID(),
+          leaseExpiresAt: 0,
+          manifestDigest: seeded.installed.release.production.manifestDigest,
+        }),
+      },
+    };
+  }
+  if (fault === 'pendingRelease') seeded.releaseStatus = 'pending-upgrade';
   await fs.writeFile(path.join(directory, 'state.json'), JSON.stringify(seeded));
   await fs.writeFile(path.join(directory, 'calls.ndjson'), '');
   const preload = pathToFileURL(
@@ -399,7 +440,123 @@ async function fixture(t, mode, fault) {
 const clone = structuredClone;
 
 test(
-  'real deployment command never mistakes a pending release for bootstrap and blocks mutations when backup fails',
+  'real readiness preflight rejects a pending Helm release or unavailable local prerequisites without maintenance',
+  { timeout: 660000 },
+  async (t) => {
+    for (const fault of ['pendingRelease', 'preflightFail']) {
+      const f = await fixture(t, 'maintenance', fault);
+      const result = await f.invoke(['--preflight-only']);
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, fault === 'pendingRelease' ? /not deployed/ : /adapter did not complete/);
+      assert.equal(
+        (await f.calls()).some(
+          (c) =>
+            (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+            (c.kind === 'kubectl' && ['create', 'replace', 'scale', 'patch', 'delete', 'exec'].includes(c.args[0])),
+        ),
+        false,
+      );
+      assert.equal((await f.state()).journal, undefined);
+    }
+  },
+);
+
+test(
+  'real GKE-shaped HPA preflight and final-apply connection recovery never replay workloads or backup',
+  { timeout: 660000 },
+  async (t) => {
+    const f = await fixture(t, 'maintenance', 'gkeHpa');
+    const preflight = await f.invoke(['--preflight-only']);
+    assert.equal(preflight.code, 0, preflight.stdout + preflight.stderr);
+    assert.deepEqual(
+      (await f.stages()).map((s) => s.stage),
+      ['preflight'],
+    );
+    assert.equal((await f.state()).journal, undefined);
+    const stateFile = path.join(f.directory, 'state.json');
+    await fs.writeFile(stateFile, JSON.stringify({ ...(await f.state()), fault: 'settlementDisconnect' }));
+    const deployment = await f.invoke();
+    assert.equal(deployment.code, 1, deployment.stdout + deployment.stderr);
+    assert.match(deployment.stderr, /--verify-only/);
+    const record = JSON.parse((await f.state()).journal.data.record);
+    assert.equal(record.phase, 'resuming');
+    assert.equal(record.finalApply.protocol, 1);
+    assert.ok((await f.state()).pods.length > 0);
+    const mutations = (calls) =>
+      calls.filter(
+        (c) =>
+          (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+          (c.kind === 'kubectl' && ['scale', 'patch', 'delete', 'exec'].includes(c.args[0])),
+      ).length;
+    const before = mutations(await f.calls());
+    const stages = (await f.stages()).length;
+    const checkpoint = record.recoveryCheckpoint.directory;
+    const receipt = JSON.parse(await fs.readFile(path.join(checkpoint, 'receipt.json'), 'utf8'));
+    const artifact = path.join(checkpoint, receipt.artifacts[0].path);
+    const bytes = await fs.readFile(artifact);
+    await fs.writeFile(artifact, 'corrupted retained backup');
+    const rejected = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
+    assert.equal(rejected.code, 1, rejected.stdout + rejected.stderr);
+    assert.match(rejected.stderr, /checksum has changed/);
+    assert.equal(mutations(await f.calls()), before);
+    assert.equal((await f.stages()).length, stages);
+    assert.equal(JSON.parse((await f.state()).journal.data.record).phase, 'resuming');
+    await fs.writeFile(artifact, bytes);
+    const verified = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
+    assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+    assert.equal(mutations(await f.calls()), before);
+    assert.deepEqual(
+      (await f.stages()).slice(stages).map((s) => s.stage),
+      ['after'],
+    );
+    const completed = JSON.parse((await f.state()).journal.data.record);
+    assert.equal(completed.phase, 'complete');
+    assert.equal(completed.verificationOnlyRecovery, true);
+    const report = JSON.parse(
+      await fs.readFile(path.join(f.directory, 'artifacts/result/deployment-result.json'), 'utf8'),
+    );
+    assert.equal(report.outcome.infrastructure, 'existing-verified');
+    assert.equal(report.outcome.application, 'passed');
+  },
+);
+
+for (const fault of ['completedAutoscalerAdvance', 'samplingAutoscalerAdvance', 'busyAutoscalerAdvance'])
+  test(
+    `real maintenance command handles ${fault} autoscaler journal after baseline`,
+    { timeout: 660000 },
+    async (t) => {
+      const busy = fault === 'busyAutoscalerAdvance';
+      const f = await fixture(t, 'maintenance', fault);
+      const result = await f.invoke();
+      assert.equal((await f.state()).autoscalerAdvancedDuringBaseline, true);
+      assert.equal(result.code, busy ? 1 : 0, result.stdout + result.stderr);
+      if (busy) {
+        assert.match(result.stderr, /autoscaling operation owns this release/);
+        assert.equal(
+          (await f.calls()).some(
+            (r) =>
+              (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
+              (r.kind === 'helm' && r.args[0] === 'upgrade'),
+          ),
+          false,
+        );
+        assert.equal(JSON.parse((await f.state()).journal.data.record).autoscalingProtocol, 1);
+      } else {
+        const record = JSON.parse((await f.state()).journal.data.record);
+        if (fault === 'samplingAutoscalerAdvance')
+          assert.ok(
+            (await f.state()).samplingLeaseReads > 0,
+            'The command must observe the held sampling lease before waiting',
+          );
+        assert.equal(record.formatVersion, 1);
+        assert.equal(record.phase, 'complete');
+        assert.equal((await f.state()).installed.release.production.manifestDigest, f.digest);
+      }
+    },
+  );
+
+test(
+  'real deployment command blocks mutations when backup fails after successful prerequisites',
   { timeout: 660000 },
   async (t) => {
     const f = await fixture(t, 'rolling', 'backupFail');
@@ -408,7 +565,7 @@ test(
     assert.match(result.stderr, /adapter did not complete/);
     assert.deepEqual(
       (await f.stages()).map((r) => r.stage),
-      ['before', 'backup'],
+      ['preflight', 'before', 'backup'],
     );
     assert.equal(
       (await f.calls()).some(
@@ -431,7 +588,7 @@ test(
     assert.match(result.stderr, /receipt belongs to another attempt or installation/);
     assert.deepEqual(
       (await f.stages()).map((r) => r.stage),
-      ['before'],
+      ['preflight'],
     );
     assert.equal(
       (await f.calls()).some(
@@ -458,7 +615,7 @@ test(
     assert.equal((await f.state()).installed.release.production.manifestDigest, f.digest);
     assert.deepEqual(
       (await f.stages()).map((s) => s.stage),
-      ['before', 'backup', 'after'],
+      ['preflight', 'before', 'backup', 'after'],
     );
   },
 );

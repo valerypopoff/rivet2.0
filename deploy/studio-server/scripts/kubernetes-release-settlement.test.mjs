@@ -257,9 +257,16 @@ test('requires installed HPA identity, exact policy and healthy scaling conditio
 });
 
 test('supports clusters without the optional HPA observed-generation feature', () => {
-  const state = fixture({ automatic: true });
-  delete state.liveHpa.status.observedGeneration;
-  assert.equal(inspect(state).settled, true);
+  for (const generation of [2, 0, undefined]) {
+    const state = fixture({ automatic: true });
+    if (generation === undefined) delete state.liveHpa.metadata.generation;
+    else state.liveHpa.metadata.generation = generation;
+    delete state.liveHpa.status.observedGeneration;
+    for (const condition of state.liveHpa.status.conditions) delete condition.observedGeneration;
+    assert.equal(inspect(state).settled, true);
+    state.liveHpa.status.conditions.find((c) => c.type === 'ScalingActive').status = 'False';
+    assert.equal(inspect(state).settled, false, 'Missing optional epochs cannot hide unhealthy scaling');
+  }
 });
 
 test('normalizes HPA API defaults without hiding an explicit downscale-window difference', () => {

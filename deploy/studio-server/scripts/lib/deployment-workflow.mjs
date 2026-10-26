@@ -67,7 +67,7 @@ export async function runDeploymentStage(
   { artifactsDir, timeoutMs, runAdapter = executeMaintenanceBackupAdapter, now = Date.now } = {},
 ) {
   if (
-    !['backup', 'before', 'after', 'backend'].includes(stage) ||
+    !['preflight', 'backup', 'before', 'after', 'backend'].includes(stage) ||
     context.namespaceUid !== approval.policy.namespaceUid ||
     context.release !== approval.policy.release ||
     context.namespace !== approval.policy.namespace ||
@@ -87,7 +87,7 @@ export async function runDeploymentStage(
     !inside(await fs.realpath(approval.root), await fs.realpath(artifactsDir))
   )
     throw Error('Deployment artifacts escaped the repository.');
-  const adapter = stage === 'backup' ? 'backup' : 'acceptance';
+  const adapter = ['preflight', 'backup'].includes(stage) ? 'backup' : 'acceptance';
   const consistency = stage === 'backup' ? context.consistency ?? 'online' : undefined;
   if (
     stage === 'backup' &&
@@ -149,6 +149,25 @@ export async function runDeploymentStage(
   let report;
   if (stage === 'backup') {
     report = await verifyRecoveryReceipt(receipt, directory, request, { now });
+  } else if (stage === 'preflight') {
+    if (
+      receipt.kind !== 'rivet-deployment-preflight' ||
+      receipt.passed !== true ||
+      !['dependencies', 'capacity'].every(
+        (name) =>
+          receipt.checks?.[name]?.passed === true &&
+          receipt.checks[name].observed === true &&
+          typeof receipt.checks[name].evidence === 'string',
+      )
+    )
+      throw Error(
+        'Local deployment prerequisites are unverified. Update the reviewed backup adapter to support stage=preflight; no maintenance has started.',
+      );
+    for (const name of ['dependencies', 'capacity']) {
+      if (!(await fs.stat(await regular(directory, receipt.checks[name].evidence))).size)
+        throw Error('Deployment preflight evidence is empty.');
+    }
+    report = { verified: true, requestId, checks: ['dependencies', 'capacity'] };
   } else {
     const checks = stage === 'backend' ? ['developerApi', 'editorSession'] : ['workflow', 'webApp', 'remoteDebugger'];
     if (
@@ -278,8 +297,12 @@ export async function executeDeploymentWorkflow({
     if (verificationOnly && report.state === 'verifying') {
       report.outcome.infrastructure = 'verification-incomplete';
       const cause = await saveFailure('verification-incomplete', error);
+      const recovery =
+        report.operation?.phase && report.operation.phase !== 'complete'
+          ? `--resume-cutover ${report.operation.token} --verify-only`
+          : '--acceptance-only';
       throw Error(
-        `Installed-release verification failed; no release changes were made. Resolve the observation failure and retry --acceptance-only, not the deployment.\n${error instanceof Error ? error.message : String(error)}`,
+        `Installed-release verification failed; no release changes were made. Resolve the observation failure and retry ${recovery}, not the deployment.\n${error instanceof Error ? error.message : String(error)}`,
         { cause },
       );
     }
