@@ -180,6 +180,14 @@ jobs:
       - changes
       - build-studio-server
     runs-on: ubuntu-latest
+    # Only Chromium runs in the prepared image. Node tests retain host Docker
+    # access for real PostgreSQL/MinIO fixtures and their loopback endpoints.
+    env:
+      RIVET_CI_BROWSER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+      RIVET_CI_PLAYWRIGHT_VERSION: '1.62.1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3100/
+      PW_TEST_CONNECT_EXPOSE_NETWORK: '<loopback>'
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -200,6 +208,7 @@ jobs:
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Studio Server editor regressions (${{ matrix.shard }})"
       - name: Install dependencies
+        timeout-minutes: 3
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Download compiled Studio Server dependencies
         uses: actions/download-artifact@v7
@@ -213,22 +222,62 @@ jobs:
       - name: Verify accepted executor retirement
         if: matrix.label == 1
         run: yarn studio-server:verify:executor-retirement
-      - name: Install Playwright Chromium
-        run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
+      - name: Prepare browser runtime
+        id: browser-runtime
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          docker pull "$RIVET_CI_BROWSER_IMAGE"
+          container_id=$(docker create --init --ipc=host --publish 127.0.0.1:3100:3100 \
+            --label "rivet.ci.browser=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-${{ matrix.label }}" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
+            --workdir /workspace --env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+            "$RIVET_CI_BROWSER_IMAGE" node .yarn/releases/yarn-4.17.1.cjs \
+            workspace @valerypopoff/rivet-studio-server-web exec playwright run-server \
+            --host 0.0.0.0 --port 3100)
+          [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]
+          echo "container_id=$container_id" >> "$GITHUB_OUTPUT"
+          docker start "$container_id"
+          ready=false
+          for attempt in {1..30}; do
+            if docker logs "$container_id" 2>&1 | grep -Fq 'Listening on ws://0.0.0.0:3100/'; then
+              ready=true
+              break
+            fi
+            test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = true
+            sleep 1
+          done
+          docker logs "$container_id"
+          test "$ready" = true
+          yarn node scripts/ci/verify-browser-environment.mjs
+      - name: Report browser setup timing
+        if: ${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}
+        run: node scripts/ci/job-timing.mjs finish "Browser setup (${{ matrix.shard }})"
       - name: Run hosted editor regressions
+        timeout-minutes: 12
         env:
           PLAYWRIGHT_HEADLESS: 1
           PLAYWRIGHT_SLOW_MO: 0
           RIVET_EDITOR_TEST_SHARD: ${{ matrix.shard }}
         run: yarn studio-server:ui:ci
       - name: Upload Playwright failure artifacts
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: studio-server-editor-regression-${{ github.sha }}-${{ matrix.label }}
           path: artifacts/playwright
           if-no-files-found: ignore
           retention-days: 7
+      - name: Stop owned browser runtime
+        if: ${{ always() && steps.browser-runtime.outputs.container_id != '' }}
+        env:
+          CONTAINER_ID: ${{ steps.browser-runtime.outputs.container_id }}
+          EXPECTED_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.label }}
+        shell: bash
+        run: |
+          [[ "$CONTAINER_ID" =~ ^[a-f0-9]{64}$ ]]
+          test "$(docker inspect --format '{{ index .Config.Labels "rivet.ci.browser" }}' "$CONTAINER_ID")" = "$EXPECTED_OWNER"
+          docker rm -f "$CONTAINER_ID"
       - name: Report timing
         if: always()
         run: node scripts/ci/job-timing.mjs finish "Studio Server editor regressions (${{ matrix.shard }})"

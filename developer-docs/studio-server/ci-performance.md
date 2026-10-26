@@ -74,9 +74,9 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses three required matrix shards, each running two independent
-  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns the same 26
-  specs exactly once using measured file weights (623/615/620 seconds estimated
-  work). These weights balance work, not predict hosted wall time. Serial tests
+  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 29
+  selected specs exactly once using measured file weights (plus explicit estimates
+  for new specs). These weights balance work, not predict hosted wall time. Serial tests
   within each file, test-owned contexts/mocks/temporary paths, assertions and
   retry policy are unchanged. Each shard has separate reports and failure
   artifacts. Executor-retirement verification runs exactly once, on shard 1.
@@ -122,6 +122,72 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   it neither publishes assets nor labels old installers with the new docs SHA.
   The primary metadata commit is rechecked immediately before preparation.
   See [Build and CI](../BUILD-AND-CI.md#desktop-release-and-pages-workflows).
+
+## Browser environment reliability: October 26, 2026
+
+[Main image run 40341552808](https://github.com/valerypopoff/rivet2.0/actions/runs/40341552808)
+did not expose a slow-test regression: shard 2 spent about 16 minutes installing
+browser dependencies, including an Ubuntu mirror download of 15.9 MB taking
+15m24s. Its tests then hit the overall 20-minute job deadline before completion.
+The same 59 tests passed on develop in 4.7 minutes; main shards 1 and 3 completed
+their tests in 6.3 and 5.1 minutes. A cancelled shard is not a successful release,
+and image promotion correctly remained blocked.
+
+The three editor shards now connect to Chromium in the official Playwright
+1.62.1 Noble image, pinned by OCI digest in `studio-server-verify.yml`. It supplies
+browsers and Linux libraries without `apt` or browser downloads in each job.
+Node tests still run on the GitHub host: the hosted-Subgraph regressions start
+real Docker PostgreSQL/MinIO fixtures and must retain host loopback access.
+Moving the entire job into a browser container would break that contract.
+This is a disposable CI environment, not a production image. `setup-yarn` still
+selects Node 24. Verified exact-commit compiled artifacts, executor-retirement coverage, the
+three-shard selection, two workers, assertions and retry policy are unchanged.
+The browser-only container uses `--init --ipc=host`, a read-only checkout mount
+and `playwright run-server`, with its port published only on host `127.0.0.1:3100`.
+The test runner uses the matching `PW_TEST_CONNECT_WS_ENDPOINT` and exposes only
+`<loopback>` through `PW_TEST_CONNECT_EXPOSE_NETWORK`, so its ephemeral API
+fixture addresses remain reachable by Chromium too (including on Windows).
+Do not expose `*` or publish the control port on all host interfaces.
+The container has no Docker socket or production credentials. Its exact created
+ID is recorded before start, and cleanup checks the run/attempt/shard ownership
+label before removing that ID;
+there is no name scan or blanket Docker cleanup. See the
+[official container guidance](https://playwright.dev/docs/docker).
+
+`verify-browser-environment.mjs` rejects a mismatch between the installed
+Playwright package and the expected image version before connecting to the
+exact loopback browser endpoint. It renders a static page in a real offline
+Chromium context and closes the connection on success or failure.
+There is no fallback download, host executable override or test retry. Update
+the image tag/digest and `RIVET_CI_PLAYWRIGHT_VERSION` together when the resolved
+Playwright lockfile version changes; run the smoke and browser suite in that
+exact image before publishing. The workflow guard enforces the pin and bounds.
+
+Dependency installation has its own 3-minute limit, browser pull/start/smoke 4 minutes,
+and actual browser tests 12 minutes; the existing 20-minute whole-job ceiling
+remains. Setup gets an explicit timing summary before tests, the Playwright
+report records actual test time, and the final job summary retains total elapsed
+time. Image pull/runner initialization remain visible in GitHub's job timing,
+not hidden as test work. Browser reports are retained on successful and failed
+jobs unless the job is cancelled, when cleanup/artifact steps may not run.
+No increase in worker count or reduction in coverage compensates for a slow
+package mirror. Registry or image-pull failures remain real infrastructure
+failures; a prepared image reduces dependency churn, not all network risk.
+
+Local evidence must be distinguished from the next hosted run: an offline
+Chromium smoke or locally passing suite does not establish GitHub queue/pull
+time or release promotion. Do not treat a rerun as proof that setup was fixed.
+
+Local verification passed all 181 existing browser regressions through the
+browser-only container (11.3 minutes unsharded, two workers), including both real
+Docker-backed hosted-Subgraph scenarios, bundle download/upload, recording
+playback and remote debugging. All 11 focused CI regressions passed, including
+version/endpoint rejection, smoke cleanup and unchanged exact-once shard
+coverage. The earlier whole-job-container check passed 179 tests but could not
+run the two Docker-backed scenarios; that topology was rejected, not adopted
+with skipped tests. The exact workflow prepare/smoke/ownership-checked cleanup
+shell blocks also passed locally, and their new containers were removed.
+Hosted per-shard timings still require the next CI run.
 
 ## October 24 follow-up and evidence limits
 

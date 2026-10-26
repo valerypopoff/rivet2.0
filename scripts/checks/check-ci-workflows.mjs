@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseDocument } from 'yaml';
 import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
+import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
 
 const rootDir = process.cwd();
 
@@ -330,6 +331,40 @@ assert.deepEqual(studioJobs['editor-regression'].strategy.matrix.include, [
 ]);
 assert.equal(studioJobs['editor-regression'].strategy['fail-fast'], false);
 assert.equal(studioJobs['editor-regression'].strategy['max-parallel'], 3);
+const editorJob = studioJobs['editor-regression'];
+assert.equal(editorJob.container, undefined, 'Real Docker-backed test fixtures must retain their host loopback.');
+assert.match(
+  editorJob.env.RIVET_CI_BROWSER_IMAGE,
+  /^mcr\.microsoft\.com\/playwright:v\d+\.\d+\.\d+-noble@sha256:[a-f0-9]{64}$/,
+);
+assert.ok(editorJob.env.RIVET_CI_BROWSER_IMAGE.includes(`:v${editorJob.env.RIVET_CI_PLAYWRIGHT_VERSION}-noble@`));
+assert.equal(editorJob.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, '1');
+assert.equal(editorJob.env.PW_TEST_CONNECT_WS_ENDPOINT, browserCiEndpoint);
+assert.equal(editorJob.env.PW_TEST_CONNECT_EXPOSE_NETWORK, '<loopback>');
+assert.equal(editorJob['timeout-minutes'], 20);
+assert.equal(findStep(editorJob, 'Install dependencies', 'Editor shards')['timeout-minutes'], 3);
+const browserCheck = findStep(editorJob, 'Prepare browser runtime', 'Editor shards');
+const browserTests = findStep(editorJob, 'Run hosted editor regressions', 'Editor shards');
+assert.match(browserCheck.run, /yarn node scripts\/ci\/verify-browser-environment\.mjs/);
+assert.match(browserCheck.run, /docker create --init --ipc=host --publish 127\.0\.0\.1:3100:3100/);
+assert.match(browserCheck.run, /target=\/workspace,readonly/);
+assert.match(browserCheck.run, /--host 0\.0\.0\.0 --port 3100/);
+assert.ok(browserCheck.run.indexOf('echo "container_id=') < browserCheck.run.indexOf('docker start'));
+assert.equal(browserCheck['timeout-minutes'], 4);
+assert.equal(browserTests['timeout-minutes'], 12);
+assert.ok(editorJob.steps.indexOf(browserCheck) < editorJob.steps.indexOf(browserTests));
+assert.match(findStep(editorJob, 'Report browser setup timing', 'Editor shards').run, /job-timing\.mjs finish/);
+assert.equal(
+  findStep(editorJob, 'Report browser setup timing', 'Editor shards').if,
+  "${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}",
+  'Failed setup still reports elapsed time without admitting the test step.',
+);
+assert.equal(findStep(editorJob, 'Upload Playwright failure artifacts', 'Editor shards').if, '${{ !cancelled() }}');
+assert.doesNotMatch(editorJob.steps.map((step) => step.run ?? '').join('\n'), /playwright install|apt-get|\bnpx\b/);
+const browserCleanup = findStep(editorJob, 'Stop owned browser runtime', 'Editor shards');
+assert.equal(browserCleanup.if, "${{ always() && steps.browser-runtime.outputs.container_id != '' }}");
+assert.match(browserCleanup.run, /docker inspect --format.*rivet\.ci\.browser/);
+assert.match(browserCleanup.run, /docker rm -f "\$CONTAINER_ID"/);
 assert.equal(
   findStep(studioJobs['editor-regression'], 'Run hosted editor regressions', 'Editor shards').env
     .RIVET_EDITOR_TEST_SHARD,

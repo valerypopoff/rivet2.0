@@ -14,6 +14,7 @@ import { desktopReleasePlan } from './desktop-release-plan.mjs';
 import { desktopBuildEvidence } from './desktop-build-evidence.mjs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { browserCiEndpoint, verifyBrowserEnvironment } from './verify-browser-environment.mjs';
 import { createRequire } from 'node:module';
 
 const { createPagesHandler } = createRequire(import.meta.url)('../../postman/mocks/rivet-pages/contract.cjs');
@@ -168,6 +169,57 @@ test('desktop docs planning compares the complete push and published baseline wi
   const mixed = await plan('ok', { sha: code, event: { before: docs, after: code } });
   assert.equal(mixed.native, true);
   await assert.rejects(plan('ok', { sha: docs, event: { before: published, after: code } }), /identity/);
+});
+
+test('browser prerequisites reject version drift before launch and close Chromium after success or render failure', async () => {
+  for (const expectedVersion of [undefined, '', 'latest', '1.62.2']) {
+    await assert.rejects(
+      verifyBrowserEnvironment({
+        expectedVersion,
+        actualVersion: '1.62.1',
+        chromium: { connect: () => assert.fail('A mismatched image must never connect to a browser.') },
+      }),
+      /version mismatch/,
+    );
+  }
+  await assert.rejects(
+    verifyBrowserEnvironment({ expectedVersion: '1.62.1', actualVersion: '1.62.1', endpoint: 'ws://example.invalid/' }),
+    /exact loopback/,
+  );
+  for (const failure of [false, true]) {
+    let closed = 0;
+    const result = verifyBrowserEnvironment({
+      expectedVersion: '1.62.1',
+      actualVersion: '1.62.1',
+      endpoint: browserCiEndpoint,
+      chromium: {
+        async connect(endpoint, options) {
+          assert.equal(endpoint, browserCiEndpoint);
+          assert.deepEqual(options, { timeout: 15_000, exposeNetwork: '<loopback>' });
+          return {
+            version: () => 'synthetic-chromium',
+            close: async () => {
+              closed++;
+            },
+            async newContext(options) {
+              assert.deepEqual(options, { offline: true });
+              return {
+                newPage: async () => ({
+                  setContent: async () => {},
+                  locator: () => ({
+                    innerText: async () => (failure ? 'wrong page' : 'Rivet browser environment ready'),
+                  }),
+                }),
+              };
+            },
+          };
+        },
+      },
+    });
+    if (failure) await assert.rejects(result, /did not render/);
+    else assert.deepEqual(await result, { playwright: '1.62.1', chromium: 'synthetic-chromium', passed: true });
+    assert.equal(closed, 1);
+  }
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
