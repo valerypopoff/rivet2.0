@@ -158,6 +158,12 @@ are disposed. No backup, activation,
 save, upload or graph execution is retried, and this fixture-only wait does not
 claim uninterrupted availability during the intentionally destructive test.
 
+The browser-read deadline regression advances a test-owned monotonic clock to
+the deadline during its probe, then requires failure without another attempt
+and disposal of the failed API response. It does not assume that a real 50 ms
+timer permits exactly one attempt: early timer wakeups can legitimately admit
+another read before expiry. Production polling and its IO budgets are unchanged.
+
 The post-resumption backup/restore phase stages the backup tool, snapshot planner and UI-managed layout helper together, preserving their deployment-relative module paths under `/fixture-tools`. Only these exact, read-only fixture bindings are allowed on the API service. Staging checks each directory parent before creating its child, refuses symlink/junction ancestors, and never overwrites an existing tool. Behavioral packaging regressions import the staged backup entrypoints in a fresh Node process and verify that refused directory aliases leave their foreign targets untouched, so omitted dependencies and unsafe staging fail locally rather than after the earlier browser phases have passed.
 
 Conversion retains one decoded project/history or recording bundle at a time, rather than all artifact payloads. Gzip input is streamed and output is limited before concatenation; legacy size declarations are checked but not trusted for capacity. `RIVET_LOCAL_METADATA_MAX_BUNDLE_MIB` defaults to 32, accepts 1–128, and replaces the old aggregate `RIVET_LOCAL_METADATA_MAX_SOURCE_MIB` option. A project **including its retained history**, registered settings import, or runtime archive must fit the bundle budget. Large installations are supported when their individual bundles fit; an oversized bundle is refused, not skipped. Metadata/identity sets still scale with item count. The limits are conservative estimates, not reservations or a guarantee against OOM.
