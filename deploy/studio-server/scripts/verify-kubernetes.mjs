@@ -198,6 +198,7 @@ async function main() {
       'deploy/studio-server/scripts/maintenance-validation.test.mjs',
       'deploy/studio-server/scripts/deployment-workflow.test.mjs',
       'deploy/studio-server/scripts/deployment-readiness.test.mjs',
+      'deploy/studio-server/scripts/deployment-adapter-preflight.test.mjs',
       'deploy/studio-server/scripts/deployment-operation.test.mjs',
       'deploy/studio-server/scripts/housekeeping-handover.test.mjs',
       'deploy/studio-server/scripts/backend-overlap-preflight.test.mjs',

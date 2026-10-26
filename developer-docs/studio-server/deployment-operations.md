@@ -456,6 +456,68 @@ must be updated and their policy checksums reviewed **before a new operation**;
 do not change an unfinished operation's bound scripts/policy to adopt this stage.
 Exact recovery skips fresh preparation and retains its original policy.
 
+#### Implementing and preparing the private adapter
+
+`lib/deployment-adapter-preflight.mjs` provides the reusable local implementation
+of this contract. A reviewed private adapter calls `runDeploymentAdapterPreflight`
+for `stage=preflight`, and keeps actual recovery capture in a separate branch.
+Its requirements bind the installation and installed baseline, a nonempty
+checksummed dependency inventory, cached PostgreSQL image ID, explicit tool
+paths and positive database/object/copy/reserve capacity bounds. Capacity uses
+integer byte arithmetic and checks the actual output filesystem, including a
+small exclusive scratch-write/readback test. It never relaxes a capture bound
+merely because the machine has more free space.
+
+The fixed local checks are Helm version, **client-only** kubectl version, SQL
+proxy version, tar version, cached-image inspection and a reviewed operator
+probe. They do not pull images, start containers, authenticate to a cluster,
+read production keys or invoke backup/restore. Failures do not produce a passed
+receipt. Run this utility only inside the shared bounded adapter supervisor:
+the outer 60-second timeout owns whole-tree shutdown. Do not add nested timeouts
+that terminate just a probe parent and orphan its browser/SDK descendants.
+
+`deployment-adapter-local-probe.mjs` is the Windows installation probe. Its
+configuration is private and checksum-pinned. It verifies the exact clean
+installed-schema helper checkout, PostgreSQL and schema imports, an actual
+native esbuild transform, local Cloud SDK version, and DPAPI round-trip using
+**synthetic bytes**, not a production key. It uses file URLs for imports. A
+reviewed explicit esbuild binary is supplied to both this probe and the actual
+capture helpers, preventing a successful probe in one dependency tree from
+hiding a missing optional binary in the helper's tree.
+
+The probe discovers the real acceptance test through
+`yarn studio-server:ui:observe --config <reviewed-config> --list`, then launches
+headless Chromium against static local content with offline context and a
+closed proxy. Direct Node networking is blocked during imports. The reviewed
+acceptance test must additionally refuse execution when
+`RIVET_LOCAL_DEPLOYMENT_PREFLIGHT=1`; collection must not accidentally turn into
+live acceptance if runner arguments drift. These are local prerequisite tests,
+not a whole-UI or provider availability certificate.
+
+Preserve completed deployment packets. Create a new ignored private kit, seal
+new dependency/configuration/adapter hashes, and use a new policy. On Windows,
+restrict the whole kit to the operator, SYSTEM and Administrators; POSIX file
+modes alone do not establish Windows privacy. Do not copy a sealed kit to a new
+path and reuse hashes blindly: materialize the actual paths and re-review/reseal
+the dependencies before operation admission. Pin the recovery container by
+image ID, not an unchecked mutable tag. Keep production data and keys out of Git.
+
+Before a maintenance window, use the reviewed adapter's **online** backup path
+to qualify the complete capture/isolated-restore pipeline while production stays
+up. This is separately authorized read-only production capture, not the local
+preflight, and its elapsed time is outside downtime. It exposes real object
+growth, archive-size limits, credentials and storage dependencies early. It
+does not replace the fresh frozen checkpoint after quiescence. Keep generation
+and checksum checks when reusing local object bytes or retained cloud versions;
+do not speed up recovery by skipping validation or uploading production data.
+
+The next operation still needs a fresh live installation/settings snapshot,
+normal exact-source publication/CI, route planning and explicit deployment
+approval. A local readiness pass has no maintenance waiver, expiry extension,
+publication or deployment authority. Never treat a copied historical settings
+template as a fresh capture. Acceptance should resolve the actual current Helm
+authentication references rather than use stale settings from an older release.
+
 Use the normal exact manifest/source, values and policy arguments plus
 `--preflight-only` to run just these checks. Add the same maintenance selection
 and original plan if that is the proposed route. It needs no `--confirm`, writes
