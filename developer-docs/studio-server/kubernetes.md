@@ -1949,6 +1949,18 @@ Do not deploy the production overlay with ad hoc image tags or a raw `helm upgra
 
 Promoted manifests are published to `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest` under `manifest-<canonical-sha256>` tags. The publisher rejects a tag that does not equal the manifest's semantic digest and refuses to overwrite different content. The `production` retag command first pulls and validates that exact promoted artifact, requires the source and destination to use the same repository, and permits only the `production` destination. It retags the acknowledged immutable registry digest, not the source tag: a tag change after validation cannot substitute another artifact. The pointer advances only after repository/image gates pass, the candidate's predecessor is rechecked, its immutable manifest artifact is published, and the complete runtime image set is promoted. Treat the content-derived tags as permanent release evidence and exclude them from registry cleanup. The 90-day GitHub Actions artifact is a convenient downloadable copy, not the durable authority.
 
+First publication treats only an explicit missing-manifest response as permission
+to create a new content-addressed tag. Docker's containerd-style
+`failed to resolve reference "<reference>": <reference>: not found` is supported
+only when both references match the requested registry tag exactly. Bare
+`not found`, unrelated references, credential-helper errors, authentication
+denials, transport failures and mixed diagnostics are not absence evidence.
+The image-inspection bootstrap path supplies the same expected identity. A
+repeat after a lost publish acknowledgement pulls and validates existing content
+instead of rebuilding it; different content is still rejected before any push.
+Publication regressions exercise this whole sequence through the real publisher
+with a Docker-command stand-in, without writing to GHCR or advancing production.
+
 For ordinary deployment, `--manifest` is optional. The command pulls
 `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:production` with Docker,
 resolves this pull's acknowledged registry digest to an immutable local image ID,

@@ -26,8 +26,27 @@ function splitImageReference(reference) {
   return { repository: reference.slice(0, separator), tag: reference.slice(separator + 1) };
 }
 
-export function isMissingRegistryManifestError(output) {
-  return /manifest unknown|name unknown|unknown tag|repository (?:does not exist|not found)/iu.test(output);
+export function isMissingRegistryManifestError(output, reference) {
+  // Docker's containerd image store reports a missing tag differently. Accept
+  // only the exact requested reference, not arbitrary "not found" diagnostics
+  // from a credential helper, daemon or unrelated artifact. Mixed errors fail.
+  const diagnostic = output
+    .trim()
+    .replace(/^Error response from daemon:\s*/u, '')
+    .replace(/^ERROR:\s*/u, '');
+  if (/[\r\n]/u.test(diagnostic)) return false;
+  if (reference && referencePattern.test(reference)) {
+    const missing = `${reference}: not found`;
+    if (diagnostic === missing || diagnostic === `failed to resolve reference "${reference}": ${missing}`) return true;
+  }
+  // Registry/auth failures must never authorize bootstrap or publication.
+  if (
+    /unauthorized|forbidden|denied|authentication required|failed to authorize|error getting credentials/iu.test(
+      diagnostic,
+    )
+  )
+    return false;
+  return /manifest unknown|name unknown|unknown tag|repository (?:does not exist|not found)/iu.test(diagnostic);
 }
 
 export function assertContentAddressedManifestReference(reference, manifestDigest) {
@@ -162,7 +181,7 @@ export async function pullReleaseManifestArtifact(reference, outputPath, { allow
   await fs.rm(outputPath, { force: true });
   const pull = await execute('docker', ['pull', reference], { allowFailure: true });
   if (pull.exitCode !== 0) {
-    const missing = isMissingRegistryManifestError(`${pull.stdout}\n${pull.stderr}`);
+    const missing = isMissingRegistryManifestError(`${pull.stdout}\n${pull.stderr}`, reference);
     if (allowMissing && missing) {
       console.log(`No promoted release-manifest artifact exists at ${reference}.`);
       return null;
@@ -245,14 +264,14 @@ export async function pullReleaseManifestArtifact(reference, outputPath, { allow
   return result;
 }
 
-async function pushManifest(reference, inputPath) {
+export async function pushReleaseManifestArtifact(reference, inputPath, { execute = run } = {}) {
   const manifest = await readPromotedManifest(inputPath);
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-release-manifest-oci-'));
   try {
     const manifestDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
     assertContentAddressedManifestReference(reference, manifestDigest);
     const existingPath = path.join(temporaryDirectory, 'existing-release-manifest.json');
-    const artifact = await pullReleaseManifestArtifact(reference, existingPath, { allowMissing: true });
+    const artifact = await pullReleaseManifestArtifact(reference, existingPath, { allowMissing: true, execute });
     const existing = artifact?.manifest;
     if (existing) {
       const existingDigest = getStudioServerReleaseManifestDigest(existing, { requirePromoted: true });
@@ -270,7 +289,7 @@ async function pushManifest(reference, inputPath) {
       `${JSON.stringify(manifest, null, 2)}\n`,
       'utf8',
     );
-    await run('docker', [
+    await execute('docker', [
       'buildx',
       'build',
       '--file',
@@ -319,7 +338,7 @@ async function main() {
     return;
   }
   if (command === 'push') {
-    await pushManifest(imageReference(options, '--reference'), repositoryPath(options, '--input'));
+    await pushReleaseManifestArtifact(imageReference(options, '--reference'), repositoryPath(options, '--input'));
     return;
   }
   await retagReleaseManifestArtifact(imageReference(options, '--source'), imageReference(options, '--destination'));
