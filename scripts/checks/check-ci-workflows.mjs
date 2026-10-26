@@ -640,6 +640,12 @@ for (const file of [
   assert.ok(refs.length && refs.every((reference) => reference === nginxImage), `${file}: NGINX reference drift`);
 }
 assert.match(read('deploy/studio-server/images/proxy/Dockerfile'), /brotli-libs>=1\.2\.1-r0/);
+for (const packageName of ['curl', 'libcurl']) {
+  assert.ok(
+    read('deploy/studio-server/images/proxy/Dockerfile').includes(`'${packageName}>=8.23.0-r0'`),
+    `Proxy must retain the ${packageName} security floor; an unversioned cached APK layer can remain vulnerable.`,
+  );
+}
 assert.equal(
   parseDocument(read('deploy/studio-server/compose/docker-compose.yml')).toJS().services.web.build.dockerfile,
   'deploy/studio-server/images/web/Dockerfile',

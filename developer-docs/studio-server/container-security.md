@@ -22,6 +22,17 @@ The stock development/test image reference is not a release qualification;
 scan the final production image, including its added packages. Version/digest
 consistency is guarded by the workflow-policy check in `test:style`.
 
+The proxy also requires `curl>=8.23.0-r0` and `libcurl>=8.23.0-r0`. The
+October 26 CI inventory found both at 8.22.0-r0, blocked by
+[CVE-2026-92392](https://curl.se/docs/CVE-2026-92392.html), an HTTP/2-upload
+use-after-free fixed upstream in 8.23.0. These are two package findings for one
+advisory, not two independent vulnerabilities. An unversioned `apk add curl`
+does not refresh an already cached Docker layer when repository packages change.
+Raising these minimums invalidates the package-install layer; the build refuses
+older repository packages on either architecture. Keep curl for the existing proxy configuration
+refresh/health paths; do not remove it, disable HTTP/2 globally, suppress the
+finding or weaken the High/Critical gate to make publication pass.
+
 ## Release gate
 
 - The four service lanes consume the candidate manifest from this workflow
