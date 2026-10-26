@@ -22,12 +22,27 @@ import {
 import { createHaReleaseEvidence, selectHaBrowserContract, HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
-import { startHaBrowserProbe, publishHaBrowserBaseline, waitForHaFrontendReplacement } from './lib/ha-browser-probe.mjs';
+import {
+  startHaBrowserProbe,
+  publishHaBrowserBaseline,
+  waitForHaFrontendReplacement,
+} from './lib/ha-browser-probe.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
 const overlay = path.join(chart, 'overlays/managed-release-gate.yaml');
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** A schema-incompatible predecessor cannot participate in a rolling proof. */
+export function selectHaCertificationMode(candidate, previous) {
+  return previous?.database?.managedWorkflowSchema?.version >=
+    candidate.database.managedWorkflowSchema.minimumRollbackCompatibleVersion &&
+    previous?.evidence?.ha?.protocol === 3 &&
+    previous.evidence.ha.browserContract.protocol === HA_BROWSER_CONTRACT &&
+    !isDeepStrictEqual(previous.images, candidate.images)
+    ? 'mixed'
+    : 'bootstrap';
+}
 
 /** Certification validates an unpromoted candidate before any fixture mutation.
  * Deployment callers keep the identity helpers' promoted-only default. */
@@ -38,12 +53,7 @@ export function validateHaCertificationManifest(manifest, { rootDir, sourceSha, 
   assertReleaseManifestMatchesCurrentChart(candidate, rootDir, { requirePromoted: false });
   if (!isDeepStrictEqual(candidate.images, images)) throw Error('HA images must match the candidate manifest');
   assertStudioServerReleasePredecessor(candidate, previous);
-  const mode =
-    previous?.evidence?.ha?.protocol === 3 &&
-    previous.evidence.ha.browserContract.protocol === HA_BROWSER_CONTRACT &&
-    !isDeepStrictEqual(previous.images, candidate.images)
-      ? 'mixed'
-      : 'bootstrap';
+  const mode = selectHaCertificationMode(candidate, previous);
   return { candidate, mode, browserContract: selectHaBrowserContract(candidate, previous) };
 }
 
@@ -336,9 +346,17 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
     const kubectl = (args, extra = {}) =>
       gate.kubectl(['-n', gate.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
     rollout = await runHaKubernetesRollout({
-      safety: createDeploymentSafety({ mode: 'rolling', scope: 'rehearsal', checkBaseline: () => gate.assertProofContext(),
-        localIdentity: { release: gate.config.release, namespace: gate.config.namespace, context: gate.config.context,
-          candidateManifestDigest: images.api.digest } }),
+      safety: createDeploymentSafety({
+        mode: 'rolling',
+        scope: 'rehearsal',
+        checkBaseline: () => gate.assertProofContext(),
+        localIdentity: {
+          release: gate.config.release,
+          namespace: gate.config.namespace,
+          context: gate.config.context,
+          candidateManifestDigest: images.api.digest,
+        },
+      }),
       kube: kubectl,
       release: gate.config.release,
       namespace: gate.config.namespace,

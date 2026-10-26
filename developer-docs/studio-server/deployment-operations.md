@@ -13,6 +13,17 @@ folder parents from validated canonical paths. The move function's exact verifie
 body changes, so the release contract's minimum rollback-compatible schema is 17.
 Older schema-16 images cannot verify/restart after this migration. Do not widen
 their compatibility window or use automatic image rollback to bypass this gate.
+The Kubernetes release gate reads the exact predecessor image and schema version
+from the candidate's release lineage. If that version is below the rollback
+floor, it records the predecessor as incompatible instead of demanding a
+successful old-image verification. This does not certify rollback or prove the
+maintenance cutover in a provider environment. Compatible predecessors still
+must pass the old-image verification; missing or invalid predecessor metadata
+fails configuration rather than silently assuming incompatibility.
+When the predecessor is below that floor, the HA gate tests the candidate
+against itself and records bootstrap evidence, not a mixed-version certificate.
+That evidence cannot authorize a rolling upgrade from the old installation;
+the maintenance cutover remains necessary.
 The same unreleased migration adds immutable internal folder identities and the
 bounded namespace-mutation receipt table. Its DDL runs before parent repair to
 avoid altering a table with pending deferred trigger events. These are internal

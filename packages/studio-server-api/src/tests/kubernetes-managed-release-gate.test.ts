@@ -885,7 +885,7 @@ test('managed release gate requires every immutable candidate image digest', () 
   );
 });
 
-test('managed release gate accepts an exact prior API image only as a complete digest pair', () => {
+test('managed release gate requires an exact prior API image and its manifest-bound schema version', () => {
   assert.throws(
     () =>
       buildManagedReleaseGateConfig({
@@ -907,14 +907,42 @@ test('managed release gate accepts an exact prior API image only as a complete d
       }),
     /PREVIOUS_API_IMAGE_DIGEST must be a sha256 OCI digest/,
   );
+  for (const schema of ['', '0', '1.5', '17x', '9007199254740992']) {
+    assert.throws(
+      () =>
+        buildManagedReleaseGateConfig({
+          rootDir,
+          env: createEnvironment({
+            RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY: 'example.test/rivet/api',
+            RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST: digest('e'),
+            RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION: schema,
+          }),
+        }),
+      /PREVIOUS_API_SCHEMA_VERSION must be a positive integer/,
+    );
+  }
+  assert.throws(
+    () =>
+      buildManagedReleaseGateConfig({
+        rootDir,
+        env: createEnvironment({
+          RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY: 'example.test/rivet/api',
+          RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST: digest('e'),
+          RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION: '18',
+        }),
+      }),
+    /predecessor schema cannot be newer/,
+  );
   const config = buildManagedReleaseGateConfig({
     rootDir,
     env: createEnvironment({
       RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY: 'example.test/rivet/api',
       RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST: digest('e'),
+      RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION: '16',
     }),
   });
   assert.equal(imageReference(config.previousApiImage!), `example.test/rivet/api@${digest('e')}`);
+  assert.equal(config.previousApiImage!.schemaVersion, 16);
   assert.deepEqual(config.managedWorkflowSchema, {
     version: 17,
     minimumRollbackCompatibleVersion: 17,

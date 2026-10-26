@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import {
   HaReleaseGate,
   runHaReleaseRollout,
+  selectHaCertificationMode,
   validateHaCertificationManifest,
   withHaProofGeneration,
 } from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs, haRetirementProbeDelayMs } from './lib/ha-release-probes.mjs';
+import { HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
@@ -44,6 +46,59 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('predecessor schema verification respects the rollback floor without concealing compatible failures', async () => {
+  const artifacts = new Map();
+  const calls = [];
+  const gate = {
+    config: {
+      namespace: 'fixture',
+      registry: { secretName: 'registry' },
+      managedWorkflowSchema: { version: 17, minimumRollbackCompatibleVersion: 17 },
+      previousApiImage: { repository: 'example.test/api', digest: `sha256:${'e'.repeat(64)}`, schemaVersion: 16 },
+    },
+    artifact: async (name, value) => artifacts.set(name, value),
+    kubectl: async (args) => {
+      calls.push(args);
+      return { stdout: 'verified', stderr: '' };
+    },
+  };
+  await ManagedReleaseGate.prototype.verifyPreviousApiSchemaCompatibility.call(gate);
+  assert.equal(calls.length, 0);
+  assert.equal(JSON.parse(artifacts.get('previous-api-schema-compatibility.json')).status, 'incompatible');
+  assert.equal(JSON.parse(artifacts.get('previous-api-schema-compatibility.json')).previousSchemaVersion, 16);
+
+  gate.config.previousApiImage.schemaVersion = 17;
+  await ManagedReleaseGate.prototype.verifyPreviousApiSchemaCompatibility.call(gate);
+  assert.deepEqual(
+    calls.map((args) => args[0]),
+    ['apply', 'wait', 'logs'],
+  );
+  assert.equal(JSON.parse(artifacts.get('previous-api-schema-compatibility.json')).skipped, false);
+
+  gate.kubectl = async () => {
+    throw new Error('verification failed');
+  };
+  await assert.rejects(
+    ManagedReleaseGate.prototype.verifyPreviousApiSchemaCompatibility.call(gate),
+    /verification failed/,
+  );
+});
+
+test('HA certification never labels an incompatible schema transition as mixed-version', () => {
+  const candidate = {
+    database: { managedWorkflowSchema: { minimumRollbackCompatibleVersion: 17 } },
+    images: { api: 'new' },
+  };
+  const previous = {
+    database: { managedWorkflowSchema: { version: 16 } },
+    images: { api: 'old' },
+    evidence: { ha: { protocol: 3, browserContract: { protocol: HA_BROWSER_CONTRACT } } },
+  };
+  assert.equal(selectHaCertificationMode(candidate, previous), 'bootstrap');
+  previous.database.managedWorkflowSchema.version = 17;
+  assert.equal(selectHaCertificationMode(candidate, previous), 'mixed');
+});
 
 test('background and Evaluation drain fixtures outlive the real routing propagation window', () => {
   assert.equal(haRetirementProbeDelayMs - HA_ROUTING_PROPAGATION_MS, 45_000);
