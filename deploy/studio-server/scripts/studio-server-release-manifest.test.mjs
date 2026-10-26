@@ -24,6 +24,7 @@ import {
   assertProductionManifestRetag,
   isMissingRegistryManifestError,
   pullReleaseManifestArtifact,
+  pushReleaseManifestArtifact,
   retagReleaseManifestArtifact,
   PRODUCTION_RELEASE_MANIFEST_REFERENCE,
 } from './release-manifest-oci.mjs';
@@ -253,6 +254,22 @@ test('release-manifest OCI artifacts are data-only and registry failures fail cl
   assert.equal(isMissingRegistryManifestError('denied: permission_denied'), false);
   assert.equal(isMissingRegistryManifestError('unauthorized: authentication required'), false);
   assert.equal(isMissingRegistryManifestError('unexpected status: 503 Service Unavailable'), false);
+  const reference = 'ghcr.io/owner/release-manifest:manifest-fixture';
+  const missing = `failed to resolve reference "${reference}": ${reference}: not found`;
+  for (const prefix of ['', 'Error response from daemon: ', 'ERROR: ']) {
+    assert.equal(isMissingRegistryManifestError(`${prefix}${missing}\n`, reference), true);
+    assert.equal(isMissingRegistryManifestError(`${prefix}${reference}: not found`, reference), true);
+  }
+  for (const message of [
+    missing.replaceAll(reference, 'ghcr.io/other/image:fixture'),
+    'credential helper executable not found',
+    `${missing}\nTLS handshake timeout`,
+    'manifest unknown\nTLS handshake timeout',
+    `${missing}\nunauthorized: authentication required`,
+    'repository not found: permission denied',
+  ])
+    assert.equal(isMissingRegistryManifestError(message, reference), false);
+  assert.equal(isMissingRegistryManifestError(missing), false, 'modern errors require the requested identity');
 });
 
 test('Build Images automatically repairs an exact retained production lineage before manual fallback', () => {
@@ -277,7 +294,11 @@ test('Build Images automatically repairs an exact retained production lineage be
   assert.match(workflow, /One-time Studio Server release-lineage bootstrap required/);
   assert.match(workflow, /Another push or rerun cannot reconstruct that historical evidence/);
   assert.match(workflow, /The successful bootstrap creates the durable/);
-  assert.match(workflow, /isMissingRegistryManifestError\(fs\.readFileSync\(process\.argv\[1\], "utf8"\)\)/);
+  assert.match(
+    workflow,
+    /isMissingRegistryManifestError\(fs\.readFileSync\(process\.argv\[1\], "utf8"\), process\.argv\[2\]\)/,
+  );
+  assert.ok(workflow.includes('\' "$inspect_diagnostics" "$image"; then'));
   assert.match(
     workflow,
     /refusing to treat a registry failure as a missing release\."\s+cat "\$inspect_diagnostics" >&2\s+exit 1/,
@@ -548,6 +569,87 @@ function artifactDocker(
   };
   return { calls, execute, selectedDigest, imageId };
 }
+
+for (const lostAcknowledgement of [false, true])
+  test(`first manifest publication and repeat recover with lost acknowledgement=${lostAcknowledgement}`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-manifest-publish-'));
+    const input = path.join(directory, 'manifest.json');
+    const release = promoted();
+    const reference = `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:manifest-${getStudioServerReleaseManifestDigest(release).slice(7)}`;
+    fs.writeFileSync(input, JSON.stringify(release));
+    const artifact = artifactDocker(release);
+    let published = false;
+    let builds = 0;
+    let context;
+    const execute = async (program, args, options) => {
+      if (args[0] === 'pull' && !published)
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: `Error response from daemon: failed to resolve reference "${reference}": ${reference}: not found`,
+        };
+      if (args[0] !== 'buildx') return artifact.execute(program, args, options);
+      builds++;
+      assert.equal(program, 'docker');
+      assert.ok(args.includes('--push'));
+      assert.equal(args[args.indexOf('--tag') + 1], reference);
+      context = args.at(-1);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(context, 'release-manifest.json'), 'utf8')), release);
+      published = true;
+      if (lostAcknowledgement) throw new Error('publish acknowledgement lost');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    try {
+      if (lostAcknowledgement)
+        await assert.rejects(pushReleaseManifestArtifact(reference, input, { execute }), /acknowledgement lost/);
+      else await pushReleaseManifestArtifact(reference, input, { execute });
+      assert.equal(fs.existsSync(context), false);
+      await pushReleaseManifestArtifact(reference, input, { execute });
+      assert.equal(builds, 1, 'inspect the acknowledged content on retry, never republish it');
+      assert.equal(
+        artifact.calls.some((args) => ['start', 'run'].includes(args[0])),
+        false,
+      );
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+test('manifest publication refuses ambiguous registry errors, conflicting content and unqualified input before pushing', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-manifest-publish-rejected-'));
+  const input = path.join(directory, 'manifest.json');
+  const release = promoted();
+  const reference = `ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest:manifest-${getStudioServerReleaseManifestDigest(release).slice(7)}`;
+  fs.writeFileSync(input, JSON.stringify(release));
+  try {
+    for (const failure of [
+      'unauthorized: authentication required',
+      'credential helper executable not found',
+      'TLS handshake timeout',
+      'unexpected status: 503 Service Unavailable',
+      `failed to resolve reference "${reference}": ${reference}: not found\nunauthorized`,
+    ]) {
+      const docker = artifactDocker(release, { pullFailure: failure });
+      await assert.rejects(pushReleaseManifestArtifact(reference, input, docker), /Could not pull/);
+      assert.deepEqual(docker.calls, [['pull', reference]]);
+    }
+    const conflict = artifactDocker(promoted({}, { sourceSha: 'b'.repeat(40) }));
+    await assert.rejects(pushReleaseManifestArtifact(reference, input, conflict), /Refusing to overwrite/);
+    assert.equal(
+      conflict.calls.some((args) => args[0] === 'buildx'),
+      false,
+    );
+    const noCommands = { execute: () => assert.fail('Invalid input must not contact Docker') };
+    await assert.rejects(
+      pushReleaseManifestArtifact(reference.replace(/.$/, 'x'), input, noCommands),
+      /semantic digest/,
+    );
+    fs.writeFileSync(input, JSON.stringify(candidate()));
+    await assert.rejects(pushReleaseManifestArtifact(reference, input, noCommands), /promoted/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('promoted artifact extraction pins this pull, never starts a container, and cleans up on success and failure', async () => {
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-manifest-pull-test-'));

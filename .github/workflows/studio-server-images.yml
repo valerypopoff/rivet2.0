@@ -266,8 +266,8 @@ jobs:
               if ! node --input-type=module -e '
                 import fs from "node:fs";
                 import { isMissingRegistryManifestError } from "./deploy/studio-server/scripts/release-manifest-oci.mjs";
-                process.exit(isMissingRegistryManifestError(fs.readFileSync(process.argv[1], "utf8")) ? 0 : 1);
-              ' "$inspect_diagnostics"; then
+                process.exit(isMissingRegistryManifestError(fs.readFileSync(process.argv[1], "utf8"), process.argv[2]) ? 0 : 1);
+              ' "$inspect_diagnostics" "$image"; then
                 echo "::error::Could not inspect promoted image $image; refusing to treat a registry failure as a missing release."
                 cat "$inspect_diagnostics" >&2
                 exit 1
