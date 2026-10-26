@@ -5,6 +5,10 @@ export type ManagedReleaseGateImage = {
   digest: string;
 };
 
+export type ManagedReleaseGatePredecessorImage = ManagedReleaseGateImage & {
+  schemaVersion: number;
+};
+
 export type ManagedWorkflowSchemaReleaseContract = {
   version: number;
   minimumRollbackCompatibleVersion: number;
@@ -17,7 +21,7 @@ export type ManagedReleaseGateConfig = {
   namespace: string;
   release: string;
   images: Record<'proxy' | 'web' | 'api' | 'executor', ManagedReleaseGateImage>;
-  previousApiImage: ManagedReleaseGateImage | null;
+  previousApiImage: ManagedReleaseGatePredecessorImage | null;
   managedWorkflowSchema: ManagedWorkflowSchemaReleaseContract;
   imagePullPolicy: 'Always' | 'IfNotPresent';
   registry: {

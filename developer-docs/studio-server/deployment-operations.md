@@ -20,6 +20,10 @@ successful old-image verification. This does not certify rollback or prove the
 maintenance cutover in a provider environment. Compatible predecessors still
 must pass the old-image verification; missing or invalid predecessor metadata
 fails configuration rather than silently assuming incompatibility.
+The gate's JavaScript configuration and its adjacent TypeScript declaration
+must both describe the predecessor schema version. Run `yarn studio-server:build`
+as well as the focused release-gate tests: the test runner alone does not
+type-check that declaration.
 When the predecessor is below that floor, the HA gate tests the candidate
 against itself and records bootstrap evidence, not a mixed-version certificate.
 That evidence cannot authorize a rolling upgrade from the old installation;
