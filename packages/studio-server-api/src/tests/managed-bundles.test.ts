@@ -4,6 +4,108 @@ import { serializeProject, type Project, type ProjectId } from '@valerypopoff/ri
 import { createManagedBundleService } from '../routes/workflows/managed/bundles.js';
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
 import type { HttpError } from '../utils/httpError.js';
+import { importManagedProjectBundle } from '../routes/workflows/managed/bundle-import.js';
+import { createManagedWorkflowTransactionRunner } from '../routes/workflows/managed/transactions.js';
+import type { Pool } from 'pg';
+
+test('bundle batches stop new uploads on expiry and discard only their prepared members', async (t) => {
+  const start = Date.now();
+  let now = start;
+  t.mock.method(Date, 'now', () => now);
+  for (const mode of ['import', 'copy', 'compat-copy'] as const) {
+    for (const expiresDuring of ['source preparation', 'first upload'] as const) {
+      now = start;
+      const source = {
+        relative_path: 'Feature',
+        name: 'Feature',
+        parent_relative_path: '',
+        bundle_id: 'bundle',
+        namespace_id: 'source-folder',
+      };
+      const members = ['one', 'two'].map((id) => ({
+        workflow_id: id,
+        relative_path: `Feature/${id}.rivet-project`,
+        current_draft_revision_id: id,
+      }));
+      const projects = members.map((member) => ({
+        id: member.workflow_id,
+        name: member.workflow_id,
+        contents: serializeProject({
+          metadata: { id: member.workflow_id as ProjectId, title: member.workflow_id, description: '' },
+          graphs: {},
+        }) as string,
+        datasetsContents: null,
+      }));
+      const prepared: string[] = [],
+        discarded: string[] = [];
+      let mutationLeases = 0;
+      const client = {
+        query: async (sql: string) => {
+          if (sql.includes('FROM workflow_namespace_receipts') || sql.startsWith('SET TRANSACTION'))
+            return { rows: [] };
+          if (sql.includes('pg_advisory_xact_lock') || sql.startsWith('DELETE FROM workflow_namespace_receipts')) {
+            mutationLeases++;
+            return { rows: [] };
+          }
+          if (sql.startsWith('SELECT * FROM workflow_folders')) return { rows: [source] };
+          if (sql.startsWith('SELECT * FROM workflows')) return { rows: members };
+          mutationLeases++;
+          throw new Error(`Expired batch started a metadata mutation: ${sql}`);
+        },
+      };
+      const expire = () => {
+        now = start + 2000;
+      };
+      const context = {
+        initialize: async () => {},
+        pool: client,
+        db: { isUniqueViolation: () => false },
+        withTransaction: async <T>(run: (connection: typeof client) => Promise<T>) => run(client),
+        queries: {
+          assertFolderExists: async () => {
+            if (expiresDuring === 'source preparation') expire();
+          },
+          getRevision: async (_client: unknown, id: string) => ({ workflow_id: id }),
+        },
+        revisions: {
+          readRevisionContents: async (revision: { workflow_id: string }) => {
+            if (expiresDuring === 'source preparation') expire();
+            return projects.find((project) => project.id === revision.workflow_id)!;
+          },
+          createRevision: async (id: string) => {
+            prepared.push(id);
+            if (expiresDuring === 'first upload') expire();
+            return { revision_id: id, workflow_id: id, project_blob_key: id, dataset_blob_key: null };
+          },
+          discardPreparedRevision: async (revision: { revision_id: string }) => {
+            discarded.push(revision.revision_id);
+          },
+        },
+      } as unknown as ManagedWorkflowContext;
+      const receipt = { operationId: 'batch-expiry', expiresAt: new Date(start + 1000).toISOString() };
+      await assert.rejects(
+        mode === 'import'
+          ? importManagedProjectBundle(
+              context,
+              '',
+              { folderName: 'Imported', rootProjectId: 'one', projects },
+              { ...receipt, expectedDestinationId: null },
+            )
+          : createManagedBundleService(context).duplicate('bundle', {
+              automatic: true,
+              ...(mode === 'copy'
+                ? { relativePath: 'Feature', mutation: { ...receipt, expectedSource: { id: source.namespace_id } } }
+                : { receipt }),
+            }),
+        { status: 410 },
+        `${mode}: ${expiresDuring}`,
+      );
+      assert.equal(prepared.length, expiresDuring === 'first upload' ? 1 : 0, `${mode}: no later member starts`);
+      assert.deepEqual(discarded, prepared, `${mode}: every completed preparation is queued for safe cleanup`);
+      assert.equal(mutationLeases, 0, `${mode}: no catalog mutation is attempted`);
+    }
+  }
+});
 
 for (const failure of ['none', 'empty', 'name', 'path', 'missing', 'endpoint', 'web app', 'storage queue'] as const) {
   test(`bundle deletion is atomic and guarded (${failure})`, async () => {
@@ -148,6 +250,8 @@ for (const sourceName of ['Feature', '🎨'.repeat(127) + 'x']) {
     let invalidations = 0;
     const client = {
       async query(sql: string, params: unknown[] = []) {
+        if (sql.startsWith('SELECT namespace_id FROM workflow_folders'))
+          return { rows: [{ namespace_id: 'parent-id' }] };
         if (sql.includes('pg_advisory_xact_lock')) {
           locked = true;
           return { rows: [] };
@@ -171,6 +275,7 @@ for (const sourceName of ['Feature', '🎨'.repeat(127) + 'x']) {
     };
     const service = createManagedBundleService({
       initialize: async () => {},
+      pool: client,
       withTransaction: async (run: (connection: typeof client) => Promise<unknown>) => run(client),
       queries: {
         assertFolderExists: async (_client: unknown, parent: string) => {
@@ -399,7 +504,18 @@ for (const automatic of [false, true]) {
       };
       const context = {
         initialize: async () => {},
-        withTransaction: async <T>(run: (connection: typeof client) => Promise<T>) => run(client),
+        withTransaction: createManagedWorkflowTransactionRunner({
+          initialize: async () => {},
+          pool: {
+            connect: async () => ({
+              query: async (sql: string, params?: unknown[]) =>
+                ['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql) || sql.startsWith('SET LOCAL')
+                  ? { rows: [] }
+                  : client.query(sql, params),
+              release() {},
+            }),
+          } as unknown as Pool,
+        }).withTransaction,
         queries: {
           getRevision: async (_pool: unknown, id: string) => ({ workflow_id: id.slice('source-'.length) }),
         },

@@ -24,6 +24,7 @@ import { getManagedWorkflowStorageConfigFromSettings } from '../routes/workflows
 import { deserializeProject, serializeProject } from '@valerypopoff/rivet2-node';
 import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
 import { verifyExplicitBundleContract } from './helpers/explicit-bundle-contract.js';
+import { lockBundleTopology } from '../routes/workflows/managed/topology-lock.js';
 
 // This command creates its own services. It never accepts a deployment URL.
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 120_000 }).trim();
@@ -343,6 +344,9 @@ try {
     const writer = await pool.connect();
     try {
       await writer.query('BEGIN');
+      // Model the real import lock order: topology before parent/row locks.
+      // Taking the row lock first would deliberately create a deadlock with deletion.
+      await lockBundleTopology(writer);
       const writerPid = (await writer.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
       await writer.query('SELECT relative_path FROM workflow_folders WHERE relative_path = $1 FOR KEY SHARE', [
         parent.relativePath,

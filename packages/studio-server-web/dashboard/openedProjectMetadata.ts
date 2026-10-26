@@ -102,7 +102,7 @@ export function resolveHostedProjectMetadataUpdatesForPathMoves<
   current: T,
   moves: HostedProjectPathMove[],
 ): HostedProjectMetadataUpdateForPathMove[] {
-  const updatesByPath = new Map<string, { path: string; title: string }>();
+  const updatesByPath = new Map<string, { path: string; title?: string }>();
 
   for (const move of moves) {
     if (!shouldPreferPathTitle(move.toAbsolutePath)) {

@@ -6,8 +6,8 @@ import { createControlPlaneJsonBodyParser } from '../../middleware/body-parsers.
 import { requireAuth } from '../../middleware/auth.js';
 import { projectBundleJobs } from './project-bundle-jobs.js';
 import { createSavedBundleSource, createExplicitBundleSource } from './project-bundle.js';
-import { prepareProjectBundleImport } from './project-bundle-import.js';
-import { importProjectBundleWithBackend } from './storage-backend.js';
+import { mutateStructuralWithBackend } from './storage-backend.js';
+import { requireStructuralMutation, structuralMutationSchema } from './structural-contract.js';
 import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
 import { notifyWorkflowTreeChanged } from './workflow-tree-events.js';
 import { PROJECT_BUNDLE_UPLOAD_MAX_FILES } from '../../../../studio-server-shared/project-bundle-types.js';
@@ -65,6 +65,7 @@ projectBundleRouter.post(
     const input = z
       .object({
         folderRelativePath: z.string().max(4096),
+        mutation: structuralMutationSchema.optional(),
         files: z
           .array(z.object({ path: z.string().min(1).max(4096), contents: z.string() }).strict())
           .min(1)
@@ -76,8 +77,10 @@ projectBundleRouter.post(
       allowProjectFile: false,
       allowEmpty: true,
     });
-    const bundle = prepareProjectBundleImport(input.files);
-    const result = await importProjectBundleWithBackend(parent, bundle);
+    const result = await mutateStructuralWithBackend(
+      { operation: 'import-bundle', input: { parentRelativePath: parent, files: input.files } },
+      requireStructuralMutation(input.mutation, req),
+    );
     notifyWorkflowTreeChanged(req);
     res.status(201).json(result);
   }),

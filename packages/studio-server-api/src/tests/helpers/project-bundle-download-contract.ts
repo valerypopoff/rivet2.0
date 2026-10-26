@@ -1,6 +1,6 @@
 // test-style: fixture-read: reads only archives created through an owned test API.
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,11 +30,16 @@ export async function verifyProjectBundleDownload(options: {
   headers: Record<string, string>;
   verifyImport?: boolean;
 }) {
+  const admission = () => ({
+    operationId: randomUUID(),
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    expectedDestinationId: null,
+  });
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-bundle-backend-download-'));
   const request = async <T>(url: string, body?: unknown): Promise<T> => {
     const response = await fetch(url, {
       method: body === undefined ? 'GET' : 'POST',
-      headers: { ...options.headers, 'Content-Type': 'application/json' },
+      headers: { ...options.headers, 'Content-Type': 'application/json', 'X-Rivet-Namespace-Intent': '1' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(10_000),
     });
@@ -89,6 +94,7 @@ export async function verifyProjectBundleDownload(options: {
       await request<{ project: WorkflowProjectItem }>(`${options.workflowsBaseUrl}/projects/upload`, {
         folderRelativePath: '',
         fileName: 'Bundle child.rivet-project',
+        mutation: admission(),
         contents: serializeProject(fixture.child.project),
       })
     ).project;
@@ -116,6 +122,7 @@ export async function verifyProjectBundleDownload(options: {
       await request<{ project: WorkflowProjectItem }>(`${options.workflowsBaseUrl}/projects/upload`, {
         folderRelativePath: '',
         fileName: 'Bundle root.rivet-project',
+        mutation: admission(),
         contents: serializeProject(fixture.root.project),
       })
     ).project;
@@ -218,7 +225,7 @@ export async function verifyProjectBundleDownload(options: {
           const importedResponse = await fetch(`${options.workflowsBaseUrl}/project-bundles/import`, {
             method: 'POST',
             headers: { ...options.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
-            body: JSON.stringify({ folderRelativePath: '', files }),
+            body: JSON.stringify({ folderRelativePath: '', files, mutation: admission() }),
             signal: AbortSignal.timeout(30_000),
           });
           assert.equal(importedResponse.status, 201, await importedResponse.clone().text());
@@ -231,18 +238,32 @@ export async function verifyProjectBundleDownload(options: {
           const importedRoot = imported.projects.find((p) => p.projectMetadataId === imported.rootProjectId)!;
           assert.ok(importedRoot);
           const childMember = imported.projects.find((p) => p.projectMetadataId !== imported.rootProjectId)!;
-          const destination = await request<{ folder: { relativePath: string } }>(
+          const destination = await request<{ folder: { relativePath: string; namespaceId: string } }>(
             `${options.workflowsBaseUrl}/folders`,
             {
               name: `Moved bundle ${imported.rootProjectId.slice(0, 8)}`,
               parentRelativePath: '',
+              mutation: admission(),
             },
           );
-          const moved = await request<{ project: WorkflowProjectItem }>(`${options.workflowsBaseUrl}/move`, {
-            itemType: 'project',
-            sourceRelativePath: childMember.relativePath,
-            destinationFolderRelativePath: destination.folder.relativePath,
-          });
+          const moved =
+            childMember.namespaceProtocol === 1
+              ? await request<{ project: WorkflowProjectItem }>(`${options.workflowsBaseUrl}/namespace/mutate`, {
+                  ...admission(),
+                  expectedDestinationId: destination.folder.namespaceId,
+                  command: {
+                    kind: 'move',
+                    itemType: 'project',
+                    relativePath: childMember.relativePath,
+                    destinationRelativePath: destination.folder.relativePath,
+                  },
+                  expectedSource: { id: childMember.projectMetadataId, revisionId: childMember.revisionId },
+                })
+              : await request<{ project: WorkflowProjectItem }>(`${options.workflowsBaseUrl}/move`, {
+                  itemType: 'project',
+                  sourceRelativePath: childMember.relativePath,
+                  destinationFolderRelativePath: destination.folder.relativePath,
+                });
           assert.equal(moved.project.projectMetadataId, childMember.projectMetadataId);
           assert.equal(importedRoot.settings.status, 'unpublished');
           const endpoint = `imported-bundle-${imported.rootProjectId.slice(0, 8)}`;

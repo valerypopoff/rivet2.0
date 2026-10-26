@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { rootStructuralMutation } from './lib/structural-fixture-admission.mjs';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
@@ -247,9 +248,10 @@ async function main() {
     const fixtureContents = await fs.readFile(fixturePath, 'utf8');
     const upload = await request(baseUrl, '/api/workflows/projects/upload', {
       method: 'POST',
-      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      headers: { Cookie: cookie, 'Content-Type': 'application/json', 'X-Rivet-Namespace-Intent': '1' },
       body: JSON.stringify({
         folderRelativePath: '',
+        mutation: rootStructuralMutation(),
         fileName: 'candidate-smoke.rivet-project',
         contents: fixtureContents,
       }),

@@ -1,5 +1,4 @@
 import { createLegacyWorkflowCommands } from './legacy-workflow-commands.js';
-import type { PreparedProjectBundleImport } from './project-bundle-import.js';
 import { workflowFailure } from './workflow-failure.js';
 import { constants as fsConstants } from 'node:fs';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
@@ -218,17 +217,44 @@ export function getLocalWorkflowPendingCatalogOperationCount(): number {
   return peekWorkflowStorageServices()?.getLocalPendingOperationCount() ?? 0;
 }
 const getManagedBackend = () => getWorkflowStorageServices().getManaged();
+export const usesManagedNamespace = () => getWorkflowStorageServices().mode === 'managed';
+export async function mutateStructuralWithBackend(
+  command: import('../../../../studio-server-shared/workflow-mutation-contract.js').StructuralCommand,
+  mutation: import('../../../../studio-server-shared/workflow-mutation-contract.js').StructuralMutation,
+) {
+  if (!usesManagedNamespace()) throw createHttpError(409, 'Structural admission requires managed storage.');
+  return (await getManagedBackend()).mutateStructural(command, mutation);
+}
+export async function recoverStructuralWithBackend(operationId: string, hash: string) {
+  if (!usesManagedNamespace()) throw createHttpError(409, 'Structural admission requires managed storage.');
+  return (await getManagedBackend()).recoverStructural(operationId, hash);
+}
+export function requireGuardedNamespaceMutations(): void {
+  if (getWorkflowStorageServices().mode === 'managed')
+    throw createHttpError(
+      428,
+      'Refresh Rivet before changing project locations. Identity-guarded namespace mutations are required.',
+    );
+}
+export async function mutateWorkflowNamespaceWithBackend(
+  request: import('../../../../studio-server-shared/workflow-namespace-types.js').WorkflowNamespaceMutation,
+) {
+  if (getWorkflowStorageServices().mode !== 'managed')
+    throw createHttpError(409, 'Guarded namespace mutations require managed storage.');
+  return (await getManagedBackend()).mutateNamespace(request);
+}
+export async function recoverWorkflowNamespaceWithBackend(
+  request: import('../../../../studio-server-shared/workflow-namespace-types.js').WorkflowNamespaceMutation,
+) {
+  if (getWorkflowStorageServices().mode !== 'managed')
+    throw createHttpError(409, 'Guarded namespace mutations require managed storage.');
+  return (await getManagedBackend()).recoverNamespace(request);
+}
 export async function getExplicitBundleService() {
   const services = getWorkflowStorageServices();
   if (services.mode !== 'managed')
     throw createHttpError(409, 'Explicit bundles require PostgreSQL and S3 storage.', { expose: true });
   return (await services.getManaged()).bundles;
-}
-export async function importProjectBundleWithBackend(parent: string, bundle: PreparedProjectBundleImport) {
-  const services = getWorkflowStorageServices();
-  if (services.mode !== 'managed')
-    throw createHttpError(409, 'Bundle upload requires PostgreSQL and S3 storage.', { expose: true });
-  return (await services.getManaged()).importProjectBundle(parent, bundle);
 }
 const resetFilesystemLLMProfileHealthForProject = (id: ProjectId) =>
   getWorkflowStorageServices().resetLocalProjectHealth(id);
@@ -479,7 +505,10 @@ export async function getWorkflowTree() {
       }));
     },
   );
-  return { ...tree, capabilities: { explicitBundles: getWorkflowStorageServices().mode === 'managed' } };
+  return {
+    ...tree,
+    capabilities: { explicitBundles: usesManagedNamespace(), namespaceMutations: usesManagedNamespace() },
+  };
 }
 
 export async function listHostedProjectPaths(): Promise<string[]> {
@@ -533,6 +562,7 @@ export async function saveHostedProject(options: {
   expectedRevisionId?: string | null;
   projectId?: ProjectId;
   saveIntent?: HostedProjectSaveIntent;
+  structuralMutation?: import('../../../../studio-server-shared/workflow-mutation-contract.js').StructuralMutation;
 }): Promise<SaveHostedProjectResult> {
   return delegate<SaveHostedProjectResult, 'projects'>(
     'projects',

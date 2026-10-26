@@ -1,17 +1,10 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config as loadDotEnv } from 'dotenv';
-import {
-  DeleteObjectsCommand,
-  ListObjectsV2Command,
-  S3Client,
-} from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
 
-import {
-  getManagedWorkflowStorageConfig,
-  getWorkflowStorageBackendMode,
-} from '../routes/workflows/storage-config.js';
+import { getManagedWorkflowStorageConfig, getWorkflowStorageBackendMode } from '../routes/workflows/storage-config.js';
 import { createManagedWorkflowS3ClientConfig } from '../routes/workflows/managed/blob-store.js';
 import { getManagedDbPoolConfig } from '../routes/workflows/managed/db.js';
 
@@ -22,6 +15,7 @@ const WORKFLOW_TABLES = [
   'workflow_revisions',
   'workflows',
   'workflow_folders',
+  'workflow_namespace_receipts',
 ] as const;
 
 function loadNearestEnvFile(startDir: string): void {
@@ -80,24 +74,26 @@ async function deleteManagedObjects(): Promise<number> {
 
   try {
     while (true) {
-      const listed = await client.send(new ListObjectsV2Command({
-        Bucket: config.objectStorageBucket,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-      }));
+      const listed = await client.send(
+        new ListObjectsV2Command({
+          Bucket: config.objectStorageBucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        }),
+      );
 
-      const keys = (listed.Contents ?? [])
-        .map((entry) => entry.Key)
-        .filter((key): key is string => Boolean(key));
+      const keys = (listed.Contents ?? []).map((entry) => entry.Key).filter((key): key is string => Boolean(key));
 
       if (keys.length > 0) {
-        await client.send(new DeleteObjectsCommand({
-          Bucket: config.objectStorageBucket,
-          Delete: {
-            Objects: keys.map((key) => ({ Key: key })),
-            Quiet: true,
-          },
-        }));
+        await client.send(
+          new DeleteObjectsCommand({
+            Bucket: config.objectStorageBucket,
+            Delete: {
+              Objects: keys.map((key) => ({ Key: key })),
+              Quiet: true,
+            },
+          }),
+        );
         deletedCount += keys.length;
       }
 

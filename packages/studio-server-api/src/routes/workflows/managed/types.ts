@@ -3,6 +3,7 @@ import type { WorkflowRecordingExecutionIdentity } from '../../../../../studio-s
 type TimestampValue = Date | string;
 
 export type FolderRow = {
+  namespace_id?: string;
   bundle_id?: string | null;
   relative_path: string;
   name: string;
@@ -157,6 +158,8 @@ export type {
 export type TransactionHooks = {
   onCommit(task: () => Promise<void>): void;
   onRollback(task: () => Promise<void>): void;
+  /** Runs after releasing/discarding the client; never changes the primary result. */
+  onSettled?(task: (outcome: 'committed' | 'rolled-back' | 'unknown') => void): void;
 };
 
 export type ImportManagedWorkflowOptions = {

@@ -1,5 +1,29 @@
 import type { WorkflowFolderItem, WorkflowProjectItem } from './types';
-import { getParentRelativePath, normalizeWorkflowPath } from './workflowLibraryHelpers';
+import { flattenFolders, getParentRelativePath, normalizeWorkflowPath } from './workflowLibraryHelpers';
+
+/** Expansion follows immutable managed folder identity, never a replacement at
+ * the same path. Compatibility folders retain their historical path behavior. */
+export function reconcileExpandedFolders(
+  expanded: Record<string, boolean>,
+  before: WorkflowFolderItem[],
+  after: WorkflowFolderItem[],
+): Record<string, boolean> {
+  const previousIds = new Map(
+    flattenFolders(before)
+      .filter((folder) => folder.namespaceId)
+      .map((folder) => [folder.namespaceId!, folder.id]),
+  );
+  const next = Object.fromEntries(
+    flattenFolders(after).map((folder) => {
+      const previousId = folder.namespaceId ? previousIds.get(folder.namespaceId) : folder.id;
+      return [folder.id, previousId === undefined ? false : expanded[previousId] ?? false];
+    }),
+  );
+  return Object.keys(expanded).length === Object.keys(next).length &&
+    Object.entries(next).every(([id, value]) => expanded[id] === value)
+    ? expanded
+    : next;
+}
 
 export const remapExpandedFolderIds = (
   expandedFolders: Record<string, boolean>,

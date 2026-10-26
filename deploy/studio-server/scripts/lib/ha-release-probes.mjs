@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { rootStructuralMutation } from './structural-fixture-admission.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -12,8 +13,12 @@ import {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const haRetirementProbeDelayMs = HA_ROUTING_PROPAGATION_MS + 45_000;
 export function haProofTimeoutMs({ deploymentTimeoutSeconds = 600 }) {
-  assert.ok(Number.isSafeInteger(deploymentTimeoutSeconds) && deploymentTimeoutSeconds > 0 &&
-    Number.isSafeInteger(deploymentTimeoutSeconds * 1000), 'HA proof requires a positive whole-second deployment timeout');
+  assert.ok(
+    Number.isSafeInteger(deploymentTimeoutSeconds) &&
+      deploymentTimeoutSeconds > 0 &&
+      Number.isSafeInteger(deploymentTimeoutSeconds * 1000),
+    'HA proof requires a positive whole-second deployment timeout',
+  );
   return deploymentTimeoutSeconds * 1000;
 }
 async function until(description, check, timeout = 180_000) {
@@ -92,12 +97,17 @@ export class HaReleaseProbes {
         outgoingConnections: ['output1->"Tail" tail/input1'],
         visualData: '200/0/300/null//',
       },
-      '[tail]:delay "Tail"': { data: { delay: haRetirementProbeDelayMs, useDelayInput: false }, visualData: '400/0/300/null//' },
+      '[tail]:delay "Tail"': {
+        data: { delay: haRetirementProbeDelayMs, useDelayInput: false },
+        visualData: '400/0/300/null//',
+      },
     };
     const upload = await this.request('/api/workflows/projects/upload', {
       method: 'POST',
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
       body: JSON.stringify({
         folderRelativePath: '',
+        mutation: rootStructuralMutation(),
         fileName: 'ha-background.rivet-project',
         contents: stringify(project),
       }),
@@ -138,10 +148,15 @@ export class HaReleaseProbes {
     if (embeddedMaintenance) {
       const owner = restoreOwners[0];
       assert.equal(owner.metadata.labels['app.kubernetes.io/component'], 'backend');
-      assert.ok(owner.spec.containers.find((c) => c.name === 'backend').env.some((e) =>
-        e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton-overlap'));
-      const observed = JSON.parse((await this.kube(['exec', owner.metadata.name, '-c', 'backend', '--',
-        'node', '/opt/rivet/retire-backend.mjs'])).stdout);
+      assert.ok(
+        owner.spec.containers
+          .find((c) => c.name === 'backend')
+          .env.some((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton-overlap'),
+      );
+      const observed = JSON.parse(
+        (await this.kube(['exec', owner.metadata.name, '-c', 'backend', '--', 'node', '/opt/rivet/retire-backend.mjs']))
+          .stdout,
+      );
       assert.equal(observed.housekeeping?.state, 'owner');
       assert.equal(observed.housekeeping.podUid, owner.metadata.uid);
     } else assert.match(restoreOwners[0].metadata.name, /-maintenance-backend-0$/);
@@ -162,7 +177,9 @@ export class HaReleaseProbes {
       await this.startEditor(pod, pod.name.slice(0, -1) + (match[1] === '0' ? '1' : '0'));
       const runId = `ha-${randomUUID()}`;
       const submission = createHostedEvaluationSubmission({ runId, label: runId });
-      submission.projectContents = createHostedEvaluationFixtureContents(this.template, { trialDelayMs: haRetirementProbeDelayMs });
+      submission.projectContents = createHostedEvaluationFixtureContents(this.template, {
+        trialDelayMs: haRetirementProbeDelayMs,
+      });
       submission.projectPath = this.projectPath;
       submission.dataset.projectId = this.projectId;
       submission.dataset.cases = Array.from({ length: 6 }, (_, index) => ({
@@ -188,7 +205,12 @@ export class HaReleaseProbes {
       assert.equal(response.status, 200);
       assert.equal(response.body.output.value, JSON.stringify({ input: 'preserved' }));
       assert.ok(response.correlationId);
-      this.background.push({ pod: pod.name, uid: pod.uid, workflowId: this.backgroundWorkflowId, correlationId: response.correlationId });
+      this.background.push({
+        pod: pod.name,
+        uid: pod.uid,
+        workflowId: this.backgroundWorkflowId,
+        correlationId: response.correlationId,
+      });
     }
   }
   async startEditor(pod, neighbor, holdMs = 25_000) {
@@ -266,11 +288,17 @@ export class HaReleaseProbes {
       // background run settles. Its absence from the latest global page does
       // not mean it was lost. This owned fixture has only two retirement runs;
       // require a complete project-scoped page rather than relaxing durability.
-      const page = await this.request(`/api/workflows/recordings/workflows/${encodeURIComponent(background.workflowId)}/runs?page=1&pageSize=100&status=all`);
+      const page = await this.request(
+        `/api/workflows/recordings/workflows/${encodeURIComponent(background.workflowId)}/runs?page=1&pageSize=100&status=all`,
+      );
       background.recordingLookup = { workflowId: page.workflowId, totalRuns: page.totalRuns, hasMore: page.hasMore };
       assert.equal(page.hasMore, false, 'background fixture recording catalog must be complete');
-      const recordings = page.runs.filter((r) => r.workflowId === background.workflowId &&
-        r.executionIdentity?.surface === 'workflow_endpoint' && r.executionIdentity.correlationId === background.correlationId);
+      const recordings = page.runs.filter(
+        (r) =>
+          r.workflowId === background.workflowId &&
+          r.executionIdentity?.surface === 'workflow_endpoint' &&
+          r.executionIdentity.correlationId === background.correlationId,
+      );
       background.recordingLookup.matches = recordings.map(({ id, status }) => ({ id, status }));
       assert.equal(recordings.length, 1, 'one full-run recording must be durable before removing its owner');
       assert.equal(recordings[0].status, 'succeeded');

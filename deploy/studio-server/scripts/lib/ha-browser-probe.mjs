@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { rootStructuralMutation } from './structural-fixture-admission.mjs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -253,8 +254,10 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
     };
     const upload = await gate.requestWorkflow(baseUrl, '/api/workflows/projects/upload', {
       method: 'POST',
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
       body: JSON.stringify({
         folderRelativePath: '',
+        mutation: rootStructuralMutation(),
         fileName: `${marker}.rivet-project`,
         contents: stringify(project),
       }),

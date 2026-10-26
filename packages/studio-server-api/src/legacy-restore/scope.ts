@@ -10,6 +10,7 @@ import {
 
 /** Schema owners, not a prefix scan or CASCADE. Control and migration history are deliberately absent. */
 export const LEGACY_RESTORE_TABLES = [
+  'workflow_namespace_receipts',
   'workflow_folders',
   'workflows',
   'workflow_revisions',

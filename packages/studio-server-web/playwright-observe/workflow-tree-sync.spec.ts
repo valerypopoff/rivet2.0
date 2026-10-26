@@ -14,6 +14,7 @@ declare global {
   interface Window {
     __conflictSnapshots: HostedProjectConflictSnapshot[];
     __dropNextCapture: boolean;
+    __dropCaptures?: boolean;
     __captures: number;
     __savedProjects: number;
     __reconciliationStatuses: string[];
@@ -78,7 +79,7 @@ test.beforeEach(async ({ page }) => {
         if (event.data?.type === 'workflow-project-conflicts') window.__conflictSnapshots.push(event.data.snapshot);
         if (event.data?.type === 'workflow-project-reconciliation-captured') {
           window.__captures++;
-          if (window.__dropNextCapture) {
+          if (window.__dropNextCapture || window.__dropCaptures) {
             window.__dropNextCapture = false;
             event.stopImmediatePropagation();
           }
@@ -205,6 +206,91 @@ async function emitTreeChange(page: Page, payload: unknown): Promise<void> {
     ).__emitWorkflowTreeEvent?.('tree-changed', nextPayload);
   }, payload);
 }
+
+test('library mutations refresh without a ready editor and reconcile afresh when it becomes ready', async ({
+  page,
+}) => {
+  const state: TreeState = { folders: [], projects: [], revision: 0 };
+  const reads = { count: 0 };
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, reads);
+  const editorUrl = /\/\?editor(?:&|$)/;
+  await page.route(editorUrl, (route) => route.fulfill({ contentType: 'text/html', body: '<html></html>' }));
+  await page.route('**/api/workflows/folders', (route) => {
+    const folder: WorkflowFolderItem = {
+      id: 'Before editor',
+      name: 'Before editor',
+      relativePath: 'Before editor',
+      absolutePath: '/managed/workflows/Before editor',
+      updatedAt: '2026-10-27T00:00:00Z',
+      folders: [],
+      projects: [],
+    };
+    state.folders = [folder];
+    state.revision++;
+    return route.fulfill({ status: 201, json: { folder } });
+  });
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  page.once('dialog', (dialog) => void dialog.accept('Before editor'));
+  await page.getByRole('button', { name: '+ New folder' }).click();
+  await expect(page.locator('.folder-row', { hasText: 'Before editor' })).toBeVisible();
+  expect(await page.evaluate(() => window.__captures)).toBe(0);
+  const readsBeforeEditor = reads.count;
+  await page.unroute(editorUrl);
+  await page
+    .locator('iframe.dashboard-editor-frame')
+    .evaluate((frame: HTMLIFrameElement) => frame.contentWindow!.location.reload());
+  await expect.poll(() => page.evaluate(() => window.__captures)).toBeGreaterThan(0);
+  await expect.poll(() => reads.count).toBeGreaterThan(readsBeforeEditor);
+  await expect(page.locator('.folder-row', { hasText: 'Before editor' })).toBeVisible();
+});
+
+test('a ready but unavailable editor cannot block committed library updates', async ({ page }) => {
+  const state: TreeState = { folders: [], projects: [], revision: 0 };
+  const reads = { count: 0 };
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, reads);
+  let writes = 0;
+  await page.route('**/api/workflows/folders', (route) => {
+    writes++;
+    state.folders = [
+      {
+        id: 'Bridge unavailable',
+        name: 'Bridge unavailable',
+        relativePath: 'Bridge unavailable',
+        absolutePath: '/managed/workflows/Bridge unavailable',
+        updatedAt: '',
+        folders: [],
+        projects: [],
+      },
+    ];
+    state.revision++;
+    return route.fulfill({ status: 201, json: { folder: state.folders[0] } });
+  });
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await expect.poll(() => page.evaluate(() => window.__captures)).toBeGreaterThan(0);
+  await flushConflictMessages(page);
+  await page.evaluate(() => {
+    window.__dropCaptures = true;
+  });
+  page.once('dialog', (dialog) => void dialog.accept('Bridge unavailable'));
+  await page.getByRole('button', { name: '+ New folder' }).click();
+  // Every capture remains unavailable until the sidebar has independently updated.
+  await expect(page.locator('.folder-row', { hasText: 'Bridge unavailable' })).toBeVisible({ timeout: 12_000 });
+  expect(writes).toBe(1);
+  const beforeRecovery = reads.count;
+  const beforeCaptures = await page.evaluate(() => {
+    window.__dropCaptures = false;
+    return window.__captures;
+  });
+  await expect.poll(() => page.evaluate(() => window.__captures)).toBeGreaterThan(beforeCaptures);
+  await expect.poll(() => reads.count).toBeGreaterThan(beforeRecovery);
+  expect(writes).toBe(1);
+});
 
 async function dispatchProjectOpenedFromEditorFrame(page: Page, path: string): Promise<void> {
   await page.evaluate((projectPath) => {
@@ -776,6 +862,43 @@ test('a remote project rename updates the open tab title and notifies the user w
   expect(projectLoadRequests).toBe(1);
 });
 
+test('a managed inline rename retains its selected identity when a remote replacement is pending', async ({ page }) => {
+  const project = {
+    ...createProjectFixture('Selected project'),
+    namespaceProtocol: 1 as const,
+    projectMetadataId: 'selected-original',
+  };
+  const state: TreeState = { folders: [], projects: [project], revision: 0 };
+  const reads = { count: 0 };
+  let submittedIdentity: string | undefined;
+  await installMockEventSource(page);
+  await installTreeRoute(page, state, reads);
+  await page.route('**/api/workflows/namespace/mutate', async (route) => {
+    submittedIdentity = route.request().postDataJSON().expectedSource.id;
+    await route.fulfill({ status: 409, json: { error: 'The selected project was replaced. Refresh the library.' } });
+  });
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await page.locator('.project-row', { hasText: project.name }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename project' }).click();
+  const input = page.getByRole('textbox', { name: `Rename ${project.name}` });
+  await input.fill('Must not rename replacement');
+  state.projects = [{ ...project, projectMetadataId: 'replacement' }];
+  state.revision++;
+  await emitTreeChange(page, {
+    epoch: 'playwright-tree-sync',
+    revision: state.revision,
+    sourceClientId: 'other-administrator',
+  });
+  // Tree refreshes intentionally wait while inline editing is active. The
+  // server may already have replaced this path; do not adopt its new identity.
+  await input.press('Enter');
+  await expect.poll(() => submittedIdentity).toBe('selected-original');
+  await expect(page.locator('.Toastify__toast--error')).toContainText('was replaced');
+  expect(state.projects[0]!.projectMetadataId).toBe('replacement');
+});
+
 test('an overloaded committed rename reconciles the open tab and subsequent save without a tree event', async ({
   page,
 }) => {
@@ -954,11 +1077,18 @@ async function saveThroughEditor(page: Page) {
 
 /** A real serialized bridge round trip settles earlier revision publications. */
 async function flushConflictMessages(page: Page) {
+  // Sidebar recovery no longer waits for the editor. A visible recovered tree
+  // is not evidence that the iframe has installed its command listener yet.
+  await expect.poll(() => page.evaluate(() => window.__captures)).toBeGreaterThan(0);
   await page.evaluate(
     () =>
-      new Promise<void>((resolve) => {
+      new Promise<void>((resolve, reject) => {
         const requestId = `test-conflict-barrier:${crypto.randomUUID()}`;
         const frame = document.querySelector<HTMLIFrameElement>('.dashboard-editor-frame')!;
+        const timeout = setTimeout(() => {
+          window.removeEventListener('message', listener);
+          reject(new Error('Editor did not acknowledge the read-only conflict barrier'));
+        }, 5000);
         const listener = (event: MessageEvent) => {
           if (
             event.source !== frame.contentWindow ||
@@ -967,6 +1097,7 @@ async function flushConflictMessages(page: Page) {
           )
             return;
           window.removeEventListener('message', listener);
+          clearTimeout(timeout);
           resolve();
         };
         window.addEventListener('message', listener);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { rootStructuralMutation } from './lib/structural-fixture-admission.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -883,7 +884,7 @@ async function main() {
     const request = async (route, body, method = 'POST') => {
       const response = await fetch(config.baseUrl + route, {
         signal: AbortSignal.timeout(30_000),
-        headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+        headers: { Cookie: cookie, 'Content-Type': 'application/json', 'X-Rivet-Namespace-Intent': '1' },
         ...(body ? { method, body: JSON.stringify(body) } : {}),
       });
       assert.ok(response.ok, `${route}: ${response.status}`);
@@ -897,6 +898,7 @@ async function main() {
     );
     await request('/api/workflows/projects/upload', {
       folderRelativePath: '',
+      mutation: rootStructuralMutation(),
       fileName: 'rehearsal.rivet-project',
       contents,
     });

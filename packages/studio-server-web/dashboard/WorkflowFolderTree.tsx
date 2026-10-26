@@ -7,6 +7,7 @@ import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
 import { countProjectsInFolder, normalizeWorkflowPath } from './workflowLibraryHelpers';
 import { WorkflowProjectRow } from './WorkflowProjectRow';
 import { WorkflowBundleIcon } from './WorkflowBundleIcon';
+import { namespaceIdentity } from './workflowNamespaceMutations';
 
 type WorkflowFolderTreeProps = {
   folders: WorkflowFolderItem[];
@@ -138,6 +139,7 @@ export const WorkflowFolderTree: FC<WorkflowFolderTreeProps> = ({
           onContextMenu={rowIsBusy ? undefined : (event) => onFolderContextMenu(folder, event)}
           onDragStart={onDragStart({
             itemType: 'folder',
+            expectedSource: namespaceIdentity(folder),
             absolutePath: folder.absolutePath,
             relativePath: folder.relativePath,
             parentRelativePath: getParentRelativePath(folder.relativePath),

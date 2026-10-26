@@ -73,10 +73,11 @@ export const WorkflowLibraryModals: FC<{
     <>
       {controller.bundleDeleteFolder ? (
         <WorkflowBundleDeleteModal
-          key={controller.bundleDeleteFolder.bundleId}
+          key={`${controller.bundleDeleteFolder.namespaceId ?? controller.bundleDeleteFolder.id}:${controller.bundleDeleteFolder.bundleId}`}
           folder={controller.bundleDeleteFolder}
           onClose={controller.closeBundleDelete}
           onDeleted={controller.handleBundleDeleted}
+          onStructuralMutation={controller.onStructuralMutation}
         />
       ) : null}
       {controller.bundleConversionFailure ? (
@@ -87,10 +88,11 @@ export const WorkflowLibraryModals: FC<{
       ) : null}
       {controller.bundleUploadFolder ? (
         <WorkflowBundleUploadModal
-          key={controller.bundleUploadFolder.id}
+          key={controller.bundleUploadFolder.namespaceId ?? controller.bundleUploadFolder.id}
           folder={controller.bundleUploadFolder}
           onClose={controller.closeBundleUpload}
           onImported={controller.handleBundleImported}
+          onStructuralMutation={controller.onStructuralMutation}
         />
       ) : null}
       {controller.bundleFolder ? (
@@ -129,6 +131,7 @@ export const WorkflowLibraryModals: FC<{
           initialTab={settingsModalInitialTab}
           onClose={closeSettingsModal}
           onRefresh={() => refresh(false, { preserveVisibleTreeOnError: true })}
+          onStructuralMutation={controller.onStructuralMutation}
           onDeleteProject={onDeleteProject}
           onPreviewPublishedVersion={onOpenPublishedVersionPreview}
           onPublishedVersionRestored={handlePublishedVersionRestored}

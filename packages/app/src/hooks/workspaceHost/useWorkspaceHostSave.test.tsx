@@ -15,7 +15,11 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { getDefaultStore } from 'jotai';
 import { toast } from 'react-toastify';
-import type { IOProvider } from '../../io/IOProvider.js';
+import type { IOProvider, PathBasedIOProvider } from '../../io/IOProvider.js';
+import { createEmptyEvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
+import { useSaveProject } from '../useSaveProject.js';
+import { graphRunningState } from '../../state/dataFlow.js';
+import { executionSnapshotsState } from '../../state/projectExecutionSnapshot.js';
 import { ProvidersProvider } from '../../providers/ProvidersContext.js';
 import { MemoryStaticDataStore } from '../../providers/StaticDataStore.js';
 import { HostCallbacksProvider, type RivetAppHostProjectSavedEvent } from '../../providers/HostCallbacksContext.js';
@@ -44,13 +48,101 @@ import { configureHybridStorageBackend, MemoryAsyncStorage } from '../../state/s
 import { createBlankProjectWithDefaultGraph } from '../../utils/blankProject.js';
 import { addOpenedProject } from '../../utils/openedProjects.js';
 import type { RivetWorkspaceHost } from '../../host.js';
-import { useWorkspaceTransitions } from '../useWorkspaceTransitions.js';
 import { useWorkspaceHostSave } from './useWorkspaceHostSave.js';
 
-type SaveableIOProvider = IOProvider & {
-  canSaveProjectDataNoPrompt(path: string): boolean;
-  saveProjectDataNoPrompt(project: Project, path: string): Promise<string | void>;
-};
+type SaveableIOProvider = IOProvider &
+  Partial<PathBasedIOProvider> & {
+    canSaveProjectDataNoPrompt(path: string): boolean;
+    saveProjectDataNoPrompt(project: Project, path: string): Promise<string | void>;
+  };
+
+test('hosted identity-changing Save As preserves its source and only opens a confirmed current copy', async (t) => {
+  for (const scenario of ['current', 'switched', 'closed-reopened', 'replacement', 'running'] as const) {
+    await t.test(scenario, async () => {
+      const copy = createBlankProjectWithDefaultGraph();
+      copy.metadata.title = 'Saved copy';
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reads = 0,
+        datasetCommits = 0;
+      const fixture = await mountSaveHost(
+        createSaveableIOProvider({
+          saveProjectData: async () => {
+            await pending;
+            return {
+              kind: 'created-project',
+              path: 'copy.rivet-project',
+              projectId: copy.metadata.id,
+              revisionId: 'copy-revision',
+              title: copy.metadata.title,
+            };
+          },
+          readPathAsString: async () => '',
+          openFilePath: async () => '',
+          loadProjectDataNoPrompt: async () => {
+            reads++;
+            const loaded = scenario === 'replacement' ? createBlankProjectWithDefaultGraph() : copy;
+            return {
+              project: loaded,
+              evaluation: { evaluationData: createEmptyEvaluationProjectData(), evaluationDatasets: [] },
+              commit: async (isCurrent) => {
+                if (!isCurrent()) return false;
+                datasetCommits++;
+                return true;
+              },
+            };
+          },
+        }),
+      );
+      const store = getDefaultStore();
+      const sourceId = store.get(projectState).metadata.id;
+      const sourcePath = store.get(loadedProjectState).path;
+      const sourceTabPath = store.get(projectsState).openedProjects[sourceId]?.fsPath;
+      const cleanBefore = store.get(savedProjectContentDigestsState)[sourceId];
+      if (scenario === 'running') store.set(graphRunningState, true);
+      let saving!: Promise<boolean>;
+      try {
+        await act(async () => {
+          saving = fixture.saveProjectAs();
+          await Promise.resolve();
+        });
+        if (scenario === 'switched') {
+          const other = createBlankProjectWithDefaultGraph();
+          store.set(projectState, other);
+          store.set(projectsState, (state) => addOpenedProject(state, other));
+        }
+        if (scenario === 'closed-reopened') {
+          const original = store.get(projectsState);
+          store.set(projectsState, { openedProjects: {}, openedProjectsSortedIds: [] });
+          store.set(projectsState, original);
+        }
+        await act(async () => {
+          release();
+          assert.equal(await saving, true);
+        });
+        assert.equal(store.get(projectsState).openedProjects[sourceId]?.fsPath, sourceTabPath);
+        assert.equal(store.get(savedProjectContentDigestsState)[sourceId], cleanBefore);
+        assert.equal(store.get(projectUnsavedChangesState)[sourceId], true);
+        const autoOpened = scenario === 'current' || scenario === 'running';
+        assert.equal(reads, scenario === 'switched' || scenario === 'closed-reopened' ? 0 : 1);
+        assert.equal(datasetCommits, autoOpened ? 1 : 0);
+        assert.equal(Boolean(store.get(projectsState).openedProjects[copy.metadata.id]), autoOpened);
+        if (autoOpened) {
+          assert.equal(store.get(projectState).metadata.id, copy.metadata.id);
+          assert.equal(store.get(loadedProjectState).path, 'copy.rivet-project');
+        } else assert.notEqual(store.get(loadedProjectState).path, 'copy.rivet-project');
+        if (scenario === 'running') assert.equal(store.get(executionSnapshotsState)[sourceId]?.graphRunning, true);
+        if (!autoOpened && scenario !== 'switched') assert.equal(store.get(loadedProjectState).path, sourcePath);
+      } finally {
+        release();
+        await saving;
+        await fixture.unmount();
+      }
+    });
+  }
+});
 
 type MountedSaveHost = {
   saveCurrentProject: RivetWorkspaceHost['saveCurrentProject'];
@@ -657,6 +749,7 @@ async function mountSaveHost(
   const projectId = project.metadata.id as ProjectId;
   const mainGraph = project.graphs[project.metadata.mainGraphId as GraphId]!;
   const previousState = {
+    executionSnapshots: store.get(executionSnapshotsState),
     loadedRecording: store.get(loadedRecordingState),
     recordingIndicators: store.get(recordingTabIndicatorsState),
     recordingStarting: store.get(recordingPlaybackStartingState),
@@ -699,8 +792,8 @@ async function mountSaveHost(
   let saveProjectAs: (() => Promise<boolean>) | undefined;
   function Harness() {
     saveCurrentProject = useWorkspaceHostSave();
-    const transitions = useWorkspaceTransitions();
-    saveProjectAs = () => transitions.saveProject({ forceSaveAs: true });
+    const save = useSaveProject();
+    saveProjectAs = () => save.saveProjectAs();
     return null;
   }
 
@@ -738,6 +831,7 @@ async function mountSaveHost(
       store.set(loadedRecordingState, previousState.loadedRecording);
       store.set(recordingTabIndicatorsState, previousState.recordingIndicators);
       store.set(recordingPlaybackStartingState, previousState.recordingStarting);
+      store.set(executionSnapshotsState, previousState.executionSnapshots);
       configureHybridStorageBackend(restoreStorageBackend);
       restoreGlobals();
       dom.window.close();
@@ -747,7 +841,15 @@ async function mountSaveHost(
 
 function createSaveableIOProvider(
   overrides: Partial<
-    Pick<SaveableIOProvider, 'canSaveProjectDataNoPrompt' | 'saveProjectData' | 'saveProjectDataNoPrompt'>
+    Pick<
+      SaveableIOProvider,
+      | 'canSaveProjectDataNoPrompt'
+      | 'saveProjectData'
+      | 'saveProjectDataNoPrompt'
+      | 'readPathAsString'
+      | 'openFilePath'
+      | 'loadProjectDataNoPrompt'
+    >
   >,
 ): SaveableIOProvider {
   return {

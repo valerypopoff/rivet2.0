@@ -33,6 +33,11 @@ export async function verifyExplicitBundleRoundtrip(
   child: WorkflowProjectItem,
   unused: WorkflowProjectItem,
 ) {
+  const admission = (expectedDestinationId: string | null) => ({
+    operationId: randomUUID(),
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    expectedDestinationId,
+  });
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-explicit-roundtrip-'));
   const external = await backend.createWorkflowProjectItem('', `External ${randomUUID()}`);
   const empty = await backend.createWorkflowFolderItem('Empty', source.relativePath);
@@ -138,19 +143,29 @@ export async function verifyExplicitBundleRoundtrip(
     );
     assert.equal(prepareProjectBundleImport(legacyFiles).folders, undefined);
     const beforeRejectedImports = await backend.getTree();
+    const folders = [...beforeRejectedImports.folders];
+    for (let index = 0; index < folders.length; index++) folders.push(...folders[index]!.folders);
     for (const upload of [files, legacyFiles]) {
       for (const destination of [source.relativePath, `${source.relativePath}/Nested`]) {
         const nested = await fetch(`${base}/import`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ folderRelativePath: destination, files: upload }),
+          body: JSON.stringify({
+            folderRelativePath: destination,
+            files: upload,
+            mutation: admission(folders.find((folder) => folder.relativePath === destination)!.namespaceId!),
+          }),
           signal: AbortSignal.timeout(10_000),
         });
         assert.equal(nested.status, 409, await nested.text());
       }
     }
     assert.deepEqual(await backend.getTree(), beforeRejectedImports, 'rejected uploads leave the catalog unchanged');
-    imported = await request<ProjectBundleImportResult>(`${base}/import`, { folderRelativePath: '', files });
+    imported = await request<ProjectBundleImportResult>(`${base}/import`, {
+      folderRelativePath: '',
+      files,
+      mutation: admission(null),
+    });
     assert.ok(imported.folder.bundleId);
     assert.notEqual(imported.folder.bundleId, source.bundleId);
     assert.ok(imported.dependenciesFolder);

@@ -17,11 +17,70 @@ import {
   isTerminalJob,
   createCapacityCapabilityToken,
   getCapacityFixtureEndpoints,
+  cleanupCapacityFixture,
 } from '../../../../deploy/studio-server/scripts/kubernetes-published-capacity-gate.mjs';
 import { isWorkflowCapacityCapabilityValid } from '../workflow-capacity-capability.js';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
 const digest = (letter: string) => `sha256:${letter.repeat(64)}`;
+
+test('capacity fixture cleanup retains identity/revision fences, unpublishes its endpoint and never retries writes', async () => {
+  const fixture = {
+    relativePath: 'owned.rivet-project',
+    projectMetadataId: 'owned-id',
+    revisionId: 'revision',
+    namespaceProtocol: 1,
+  };
+  const snapshot = {
+    projectId: fixture.projectMetadataId,
+    draftRevisionId: fixture.revisionId,
+    publicationVersion: '1',
+    project: { settings: { publishedEndpointName: 'owned-endpoint' } },
+    webApps: [],
+  };
+  const calls: Array<{ route: string; options: any }> = [];
+  const request = async (route: string, options?: any) => {
+    calls.push({ route, options });
+    if (!options) return structuredClone(snapshot);
+    if (route.endsWith('/unpublish')) snapshot.project.settings.publishedEndpointName = '';
+    return {};
+  };
+  await cleanupCapacityFixture(request, fixture);
+  assert.equal(calls.length, 4);
+  assert.equal(calls[1]!.route, '/api/workflows/projects/unpublish');
+  const deletion = calls[3]!;
+  assert.equal(deletion.route, '/api/workflows/namespace/mutate');
+  assert.deepEqual(deletion.options.body.expectedSource, {
+    id: fixture.projectMetadataId,
+    revisionId: fixture.revisionId,
+  });
+  assert.equal(deletion.options.headers['X-Rivet-Namespace-Intent'], '1');
+  for (const change of [
+    { projectId: 'replacement' },
+    { draftRevisionId: 'edited' },
+    { webApps: [{ publishedSlug: 'unexpected' }] },
+  ]) {
+    let writes = 0;
+    await assert.rejects(
+      cleanupCapacityFixture(async (_route: string, options?: any) => {
+        if (options) writes++;
+        return { ...snapshot, ...change };
+      }, fixture),
+      /cleanup requires review/,
+    );
+    assert.equal(writes, 0);
+  }
+  let uncertainWrites = 0;
+  await assert.rejects(
+    cleanupCapacityFixture(async (_route: string, options?: any) => {
+      if (!options) return snapshot;
+      uncertainWrites++;
+      throw new Error('lost acknowledgement');
+    }, fixture),
+    /lost acknowledgement/,
+  );
+  assert.equal(uncertainWrites, 1);
+});
 
 function createEnvironment(configFile: string, valuesFile: string, overrides = {}) {
   return {
@@ -125,8 +184,14 @@ test('published capacity gate is explicit, staging-only, bounded, and redacts re
       JSON.stringify(redactPublishedCapacityGateConfig(config)).includes('prometheus-capacity-secret'),
       false,
     );
-    await fs.writeFile(configFile, JSON.stringify(providerConfigWithDownstreamQuery('max(test_provider_requests_in_flight)')));
-    const optionalQueryConfig = buildPublishedCapacityGateConfig({ rootDir, env: createEnvironment(configFile, valuesFile) });
+    await fs.writeFile(
+      configFile,
+      JSON.stringify(providerConfigWithDownstreamQuery('max(test_provider_requests_in_flight)')),
+    );
+    const optionalQueryConfig = buildPublishedCapacityGateConfig({
+      rootDir,
+      env: createEnvironment(configFile, valuesFile),
+    });
     assert.ok(optionalQueryConfig.capacity.prometheus);
     assert.equal(Object.keys(optionalQueryConfig.capacity.prometheus.queries).length, 3);
     await fs.writeFile(configFile, JSON.stringify(providerConfigWithDownstreamQuery('')));
@@ -440,10 +505,7 @@ test('capacity certification fails closed on malformed evidence and requires ove
   );
   const unavailablePod = structuredClone(snapshots);
   unavailablePod[1].podCount = 0;
-  assert.match(
-    evaluateCapacityCertificate(report, unavailablePod, config).join('\n'),
-    /execution pod was unavailable/,
-  );
+  assert.match(evaluateCapacityCertificate(report, unavailablePod, config).join('\n'), /execution pod was unavailable/);
   const optionalDownstreamConfig = {
     capacity: {
       ...config.capacity,

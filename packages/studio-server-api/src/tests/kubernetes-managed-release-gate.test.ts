@@ -916,8 +916,8 @@ test('managed release gate accepts an exact prior API image only as a complete d
   });
   assert.equal(imageReference(config.previousApiImage!), `example.test/rivet/api@${digest('e')}`);
   assert.deepEqual(config.managedWorkflowSchema, {
-    version: 16,
-    minimumRollbackCompatibleVersion: 15,
+    version: 17,
+    minimumRollbackCompatibleVersion: 17,
   });
 });
 

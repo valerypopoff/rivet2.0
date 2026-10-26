@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyFolderMoveToTree } from '../dashboard/workflowTreeOps.js';
+import { applyFolderMoveToTree, reconcileExpandedFolders } from '../dashboard/workflowTreeOps.js';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types.js';
 
 function folder(relativePath: string, bundleId: string | null = null): WorkflowFolderItem {
@@ -25,6 +25,20 @@ function project(relativePath: string, bundleId: string | null): WorkflowProject
     bundleId,
   } as WorkflowProjectItem;
 }
+
+test('managed expansion follows identity through moves, not old paths or replacements', () => {
+  const old = { ...folder('Old'), namespaceId: 'kept' };
+  old.folders = [{ ...folder('Old/Closed'), namespaceId: 'closed' }];
+  const moved = { ...folder('New'), namespaceId: 'kept' };
+  moved.folders = [{ ...folder('New/Closed'), namespaceId: 'closed' }];
+  const replacement = { ...folder('Old'), namespaceId: 'replacement' };
+  const legacy = folder('Legacy');
+  const expanded = { Old: true, 'Old/Closed': false, Legacy: true, Removed: true };
+  const next = reconcileExpandedFolders(expanded, [old, legacy], [moved, replacement, legacy]);
+  assert.deepEqual(next, { New: true, 'New/Closed': false, Old: false, Legacy: true });
+  assert.equal(expanded.Old, true);
+  assert.equal(reconcileExpandedFolders(next, [moved, replacement, legacy], [moved, replacement, legacy]), next);
+});
 
 for (const [from, to] of [
   [null, 'one'],

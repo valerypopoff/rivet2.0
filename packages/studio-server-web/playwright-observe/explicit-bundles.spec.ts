@@ -4,7 +4,7 @@ import type { WorkflowFolderItem } from '../dashboard/types';
 import { serializeProject, type ProjectId } from '@valerypopoff/rivet2-core';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 
-for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure'] as const) {
+for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure', 'managed unknown'] as const) {
   test(`non-empty bundle deletion requires a copyable exact name (${outcome})`, async ({ page }, testInfo) => {
     const project = projectBundleFixture().child.project;
     project.metadata.title = 'Member';
@@ -29,8 +29,27 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
       bundleId,
       folders: [],
       projects: [member],
+      ...(outcome === 'managed unknown' ? { namespaceId: '103632af-089c-4a0e-aa80-ed96dd1d5dbb' } : {}),
     };
-    const ordinary = { ...folder, id: 'Ordinary', name: 'Ordinary', relativePath: 'Ordinary', bundleId: null };
+    const ordinary = {
+      ...folder,
+      id: 'Ordinary',
+      name: 'Ordinary',
+      relativePath: 'Ordinary',
+      absolutePath: '/managed/workflows/Ordinary',
+      bundleId: null,
+      ...(outcome === 'managed unknown' ? { namespaceId: 'd92b7e7d-84fc-43ee-af26-3ee63e0f0a86' } : {}),
+      projects: [
+        {
+          ...member,
+          id: 'ordinary-member',
+          projectMetadataId: 'ordinary-project',
+          bundleId: null,
+          relativePath: 'Ordinary/Other.rivet-project',
+          absolutePath: '/managed/workflows/Ordinary/Other.rivet-project',
+        },
+      ],
+    };
     let removed = false,
       requests = 0,
       failedRefreshes = 0;
@@ -54,7 +73,7 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
       return route.fulfill({
         json: {
           root: '/managed/workflows',
-          capabilities: { explicitBundles: true },
+          capabilities: { explicitBundles: true, namespaceMutations: outcome === 'managed unknown' },
           folders: removed ? [ordinary] : [folder, ordinary],
           projects: [],
         },
@@ -65,7 +84,9 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
     );
     await page.route(`**/api/workflows/bundles/${bundleId}/delete`, async (route) => {
       requests++;
-      expect(route.request().postDataJSON()).toEqual({ name: 'Feature', relativePath: 'Feature' });
+      expect(route.request().postDataJSON()).toMatchObject({ name: 'Feature', relativePath: 'Feature' });
+      if (outcome === 'managed unknown')
+        expect(route.request().postDataJSON().mutation.expectedSource).toEqual({ id: folder.namespaceId });
       expect(route.request().headers()['x-rivet-bundle-intent']).toBe('1');
       await ready;
       if (outcome === 'blocked')
@@ -75,9 +96,15 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
         });
       if (outcome === 'lost response') return route.abort('failed');
       removed = true;
+      if (outcome === 'managed unknown') return route.abort('failed');
       return route.fulfill({
         json: { deleted: true, deletedProjects: [{ path: member.absolutePath, projectId: project.metadata.id }] },
       });
+    });
+    let receiptLookups = 0;
+    await page.route('**/api/workflows/namespace/receipt', (route) => {
+      receiptLookups++;
+      return route.fulfill({ json: { state: 'unknown' } });
     });
     await mockHostedEditorBootstrap(page);
     await page.goto('/');
@@ -91,6 +118,7 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
     await page.keyboard.press('Escape');
     const row = page.getByRole('button', { name: 'Expand Feature bundle', exact: true });
     await row.click();
+    await expect(page.locator('.project-row').filter({ hasText: 'Member' }).first()).toBeEnabled();
     await page.locator('.project-row').filter({ hasText: 'Member' }).first().dblclick();
     const editorTab = page
       .frameLocator('iframe.dashboard-editor-frame')
@@ -150,12 +178,17 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure']
     } finally {
       release();
     }
-    if (outcome === 'blocked' || outcome === 'lost response') {
+    if (outcome === 'blocked' || outcome === 'lost response' || outcome === 'managed unknown') {
       await expect(modal.getByRole('alert')).toContainText(
         outcome === 'blocked' ? 'Unpublish' : 'refresh the project tree before retrying',
       );
       await expect(editorTab).toBeVisible();
       await expect(submit).toBeEnabled();
+      if (outcome === 'managed unknown') {
+        await expect(page.getByRole('button', { name: 'Collapse Feature bundle', exact: true })).toHaveCount(0);
+        expect(receiptLookups).toBe(1);
+        expect(requests).toBe(1);
+      }
     } else {
       await expect(modal).toHaveCount(0);
       await expect(editorTab).toHaveCount(0);
@@ -389,7 +422,10 @@ test('folder conversion and one-click duplication preserve the tree without a mo
         }
         if (path.endsWith('/duplicate')) {
           duplicateAttempts++;
-          expect(body).toEqual({ automatic: true });
+          expect(body).toEqual({
+            automatic: true,
+            receipt: { operationId: expect.stringMatching(/^[0-9a-f-]{36}$/), expiresAt: expect.any(String) },
+          });
           if (duplicateAttempts === 1)
             return route.fulfill({ status: 409, json: { error: 'The bundle changed. Try duplicating it again.' } });
           await copyReady;
@@ -894,7 +930,10 @@ for (const editCheck of ['complete', 'predecessor editor', 'saving project'] as 
         if (path === '/api/projects/save') saves++;
         if (path.endsWith('/duplicate')) {
           duplicates++;
-          expect(route.request().postDataJSON()).toEqual({ automatic: true });
+          expect(route.request().postDataJSON()).toEqual({
+            automatic: true,
+            receipt: { operationId: expect.stringMatching(/^[0-9a-f-]{36}$/), expiresAt: expect.any(String) },
+          });
           return route.fulfill({
             status: 201,
             json: {

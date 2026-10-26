@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { rootStructuralMutation } from './lib/structural-fixture-admission.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import net from 'node:net';
@@ -941,15 +942,7 @@ export class ManagedReleaseGate {
     const port = await findFreePort();
     const child = spawn(
       this.kubectlBin,
-      [
-        '--context',
-        this.config.context,
-        '-n',
-        this.config.namespace,
-        'port-forward',
-        target,
-        `${port}:80`,
-      ],
+      ['--context', this.config.context, '-n', this.config.namespace, 'port-forward', target, `${port}:80`],
       {
         cwd: rootDir,
         shell: false,
@@ -987,8 +980,10 @@ export class ManagedReleaseGate {
     );
     const upload = await requestJson(baseUrl, '/api/workflows/projects/upload', {
       method: 'POST',
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
       body: JSON.stringify({
         folderRelativePath: '',
+        mutation: rootStructuralMutation(),
         fileName: 'managed-release-gate.rivet-project',
         contents: fixtureContents,
       }),

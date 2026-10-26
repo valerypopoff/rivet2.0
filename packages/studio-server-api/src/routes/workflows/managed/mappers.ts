@@ -105,6 +105,7 @@ export function mapWorkflowRowToProjectItem(
   const status = getWorkflowStatus(row);
 
   return {
+    namespaceProtocol: 1,
     id: row.workflow_id,
     projectMetadataId: row.workflow_id,
     revisionId: row.current_draft_revision_id,
@@ -139,6 +140,7 @@ export function mapWorkflowRowToProjectItem(
 export function mapFolderRowToFolderItem(row: FolderRow): WorkflowFolderItem {
   return {
     id: row.relative_path,
+    ...(row.namespace_id ? { namespaceId: row.namespace_id } : {}),
     bundleId: row.bundle_id ?? null,
     name: row.name,
     relativePath: row.relative_path,

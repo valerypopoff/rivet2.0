@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { WorkflowTreeResponse } from '../../../studio-server-shared/workflow-types';
 
 export type WorkflowFolderItem = {
   relativePath: string;
@@ -29,9 +30,7 @@ function normalizeRequestHeaders(headers?: HeadersInit): Record<string, string> 
     return Object.fromEntries(headers.entries());
   }
 
-  return Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => [key, String(value)]),
-  );
+  return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)]));
 }
 
 function getStorageModeFromEnv(): 'filesystem' | 'managed' {
@@ -41,10 +40,7 @@ function getStorageModeFromEnv(): 'filesystem' | 'managed' {
 }
 
 export function requireManagedStorageMode(): void {
-  test.skip(
-    getStorageModeFromEnv() !== 'managed',
-    'Managed workflow-path specs require RIVET_STORAGE_MODE=managed.',
-  );
+  test.skip(getStorageModeFromEnv() !== 'managed', 'Managed workflow-path specs require RIVET_STORAGE_MODE=managed.');
 }
 
 export function requireManagedMutationOptIn(): void {
@@ -74,8 +70,19 @@ export async function apiJson<T>(page: Page, input: string, init?: RequestInit):
 export async function createWorkflowFolder(page: Page, name: string): Promise<WorkflowFolderItem> {
   const response = await apiJson<{ folder: WorkflowFolderItem }>(page, '/api/workflows/folders', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    headers: { 'Content-Type': 'application/json', 'X-Rivet-Namespace-Intent': '1' },
+    body: JSON.stringify({
+      name,
+      ...(getStorageModeFromEnv() === 'managed'
+        ? {
+            mutation: {
+              operationId: crypto.randomUUID(),
+              expiresAt: new Date(Date.now() + 600_000).toISOString(),
+              expectedDestinationId: null,
+            },
+          }
+        : {}),
+    }),
   });
 
   return response.folder;
@@ -86,16 +93,33 @@ export async function createWorkflowProject(
   folderRelativePath: string,
   name: string,
 ): Promise<WorkflowProjectItem> {
+  let mutation;
+  if (getStorageModeFromEnv() === 'managed') {
+    const tree = await apiJson<WorkflowTreeResponse>(page, '/api/workflows/tree');
+    const folders = [...tree.folders];
+    for (let index = 0; index < folders.length; index++) folders.push(...folders[index]!.folders);
+    const expectedDestinationId =
+      folderRelativePath === ''
+        ? null
+        : folders.find((folder) => folder.relativePath === folderRelativePath)?.namespaceId;
+    if (expectedDestinationId === undefined) throw new Error('Fixture destination identity is unavailable.');
+    mutation = {
+      operationId: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      expectedDestinationId,
+    };
+  }
   const response = await apiJson<{ project: WorkflowProjectItem }>(page, '/api/workflows/projects', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ folderRelativePath, name }),
+    headers: { 'Content-Type': 'application/json', 'X-Rivet-Namespace-Intent': '1' },
+    body: JSON.stringify({ folderRelativePath, name, ...(mutation ? { mutation } : {}) }),
   });
 
   return response.project;
 }
 
 export async function deleteWorkflowProject(page: Page, relativePath: string): Promise<void> {
+  if (getStorageModeFromEnv() === 'managed') return deleteManagedItem(page, 'project', relativePath);
   await apiJson<{ deleted: true }>(page, '/api/workflows/projects', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
@@ -129,6 +153,7 @@ export async function cleanupWorkflowProject(page: Page, relativePath: string): 
 }
 
 export async function deleteWorkflowFolder(page: Page, relativePath: string): Promise<void> {
+  if (getStorageModeFromEnv() === 'managed') return deleteManagedItem(page, 'folder', relativePath);
   await apiJson<{ deleted: true }>(page, '/api/workflows/folders', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
@@ -136,11 +161,39 @@ export async function deleteWorkflowFolder(page: Page, relativePath: string): Pr
   });
 }
 
-export async function renameWorkflowFolderInline(
-  page: Page,
-  currentName: string,
-  nextName: string,
-): Promise<void> {
+async function deleteManagedItem(page: Page, itemType: 'project' | 'folder', relativePath: string): Promise<void> {
+  const tree = await apiJson<WorkflowTreeResponse>(page, '/api/workflows/tree');
+  const folders = [...tree.folders];
+  const projects = [...tree.projects];
+  for (let index = 0; index < folders.length; index++) {
+    folders.push(...folders[index]!.folders);
+    projects.push(...folders[index]!.projects);
+  }
+  const folder = folders.find((item) => item.relativePath === relativePath);
+  const project = projects.find((item) => item.relativePath === relativePath);
+  if (itemType === 'folder' && folder?.bundleId) {
+    await apiJson(page, `/api/workflows/bundles/${folder.bundleId}/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+      body: JSON.stringify({ name: folder.name, relativePath }),
+    });
+    return;
+  }
+  const id = itemType === 'folder' ? folder?.namespaceId : project?.projectMetadataId;
+  if (!id) throw new Error(`Managed cleanup item is unavailable: ${relativePath}`);
+  await apiJson(page, '/api/workflows/namespace/mutate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Rivet-Namespace-Intent': '1' },
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      command: { kind: 'delete', itemType, relativePath },
+      expectedSource: { id, ...(itemType === 'project' ? { revisionId: project!.revisionId } : {}) },
+    }),
+  });
+}
+
+export async function renameWorkflowFolderInline(page: Page, currentName: string, nextName: string): Promise<void> {
   const folderRow = page.locator('.folder-row', { hasText: currentName });
   await expect(folderRow).toBeVisible({ timeout: 30_000 });
 

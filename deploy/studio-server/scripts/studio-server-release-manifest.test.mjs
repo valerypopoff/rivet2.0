@@ -70,19 +70,28 @@ function promoted(overrides = {}, options = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 16,
-    minimumRollbackCompatibleVersion: 15,
+    version: 17,
+    minimumRollbackCompatibleVersion: 17,
   });
 });
 
 test('promotion preserves exact autoscaling evidence in the immutable manifest digest', () => {
   const release = candidate();
-  release.evidence.runtimeAutoscaling = { protocol: 1, candidateSourceSha: release.source.sha,
-    candidateImages: release.images, chartDigest: release.chart.contentDigest, policyDigest: 'e'.repeat(64),
-    provider: 'gke', requestSamples: 250, failedRequests: 0, checks: [...HA_AUTOSCALING_CHECKS] };
+  release.evidence.runtimeAutoscaling = {
+    protocol: 1,
+    candidateSourceSha: release.source.sha,
+    candidateImages: release.images,
+    chartDigest: release.chart.contentDigest,
+    policyDigest: 'e'.repeat(64),
+    provider: 'gke',
+    requestSamples: 250,
+    failedRequests: 0,
+    checks: [...HA_AUTOSCALING_CHECKS],
+  };
   const normalized = assertStudioServerReleaseManifest(release);
   assert.deepEqual(normalized.evidence.runtimeAutoscaling, release.evidence.runtimeAutoscaling);
-  const altered = structuredClone(release); altered.evidence.runtimeAutoscaling.policyDigest = 'f'.repeat(64);
+  const altered = structuredClone(release);
+  altered.evidence.runtimeAutoscaling.policyDigest = 'f'.repeat(64);
   assert.notEqual(getStudioServerReleaseManifestDigest(normalized), getStudioServerReleaseManifestDigest(altered));
   altered.evidence.runtimeAutoscaling.candidateSourceSha = '0'.repeat(40);
   assert.throws(() => assertStudioServerReleaseManifest(altered), /Automatic execution retirement/);
@@ -958,6 +967,7 @@ test('only promoted manifests can produce production Helm values', () => {
 
 test('forward rollback retains the migrated schema and restores only a compatible image set', () => {
   const originalRollbackRelease = promoted();
+  const previousVersion = originalRollbackRelease.database.managedWorkflowSchema.version;
   const rollbackRelease = {
     ...originalRollbackRelease,
     chart: { ...originalRollbackRelease.chart, contentDigest: digest('e') },
@@ -975,8 +985,8 @@ test('forward rollback retains the migrated schema and restores only a compatibl
       chart: { ...rollbackRelease.chart, contentDigest: digest('f') },
       database: {
         managedWorkflowSchema: {
-          version: 16,
-          minimumRollbackCompatibleVersion: 15,
+          version: previousVersion + 1,
+          minimumRollbackCompatibleVersion: previousVersion,
         },
       },
     },
@@ -986,8 +996,11 @@ test('forward rollback retains the migrated schema and restores only a compatibl
   const values = createForwardRollbackHelmValues({ failedRelease, rollbackRelease });
   assert.equal(values.workflowSchema.migrationJob.enabled, false);
   assert.equal(values.compatibility.legacyStartupSettingsFiles, true);
-  assert.deepEqual(values.workflowSchema.compatibility, { minimumVersion: 15, maximumVersion: 16 });
-  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, 16);
+  assert.deepEqual(values.workflowSchema.compatibility, {
+    minimumVersion: previousVersion,
+    maximumVersion: previousVersion + 1,
+  });
+  assert.equal(values.release.production.database.managedWorkflowSchemaVersion, previousVersion + 1);
   assert.equal(values.release.production.chart.contentDigest, digest('f'));
   assert.equal(values.images.api.repository, 'example.test/rivet/api');
 });
@@ -1002,14 +1015,14 @@ test('normal deployment never asks Helm to roll back a possibly migrated schema 
   assert.match(deployer, /candidate was intentionally not rolled back automatically/);
 });
 
-test('forward rollback refuses a schema that did not declare the previous release compatible', () => {
+test('schema-17 folder repair refuses rollback to the exact schema-16 predecessor', () => {
   const previous = promoted();
   const rollbackRelease = {
     ...previous,
     database: {
       managedWorkflowSchema: {
-        version: 14,
-        minimumRollbackCompatibleVersion: 2,
+        version: 16,
+        minimumRollbackCompatibleVersion: 15,
       },
     },
   };
@@ -1017,10 +1030,7 @@ test('forward rollback refuses a schema that did not declare the previous releas
     {
       ...promoted({}, { predecessorRelease: rollbackRelease, sourceSha: 'b'.repeat(40) }),
       database: {
-        managedWorkflowSchema: {
-          version: 15,
-          minimumRollbackCompatibleVersion: 15,
-        },
+        managedWorkflowSchema: readManagedWorkflowSchemaReleaseContract(rootDir),
       },
     },
     { requirePromoted: true },

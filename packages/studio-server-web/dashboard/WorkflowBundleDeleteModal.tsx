@@ -3,6 +3,9 @@ import Button from '@atlaskit/button';
 import ModalDialog, { ModalBody } from '@atlaskit/modal-dialog';
 import type { WorkflowFolderItem } from './types';
 import { requestWorkflowBundle } from './workflowApi';
+import { MutationOutcomeUnknownError } from './workflowNamespaceMutations';
+import { useWorkflowLibraryActionLifetime } from './useWorkflowLibraryActionLifetime';
+import type { LibraryMutationCompletion } from './workflowNamespaceReconciliation';
 import './WorkflowProjectBundleModal.css';
 
 export type WorkflowBundleDeleteResult = {
@@ -14,39 +17,55 @@ export function WorkflowBundleDeleteModal({
   folder,
   onClose,
   onDeleted,
+  onStructuralMutation,
 }: {
   folder: WorkflowFolderItem;
   onClose(): void;
-  onDeleted(result: WorkflowBundleDeleteResult): void;
+  onDeleted(result: WorkflowBundleDeleteResult, options: { closeModal: boolean }): void;
+  onStructuralMutation: LibraryMutationCompletion;
 }) {
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
+  const captureAction = useWorkflowLibraryActionLifetime(folder.namespaceId ?? folder.id);
   const close = () => {
     if (!pending.current) onClose();
   };
   const submit = async () => {
     if (pending.current || confirmation !== folder.name || !folder.bundleId) return;
+    const isCurrent = captureAction();
     pending.current = true;
     setBusy(true);
     setError('');
     let result: WorkflowBundleDeleteResult;
     try {
-      result = await requestWorkflowBundle<WorkflowBundleDeleteResult>(`/${folder.bundleId}/delete`, {
-        name: confirmation,
-        relativePath: folder.relativePath,
-      });
-    } catch (failure) {
-      setError(
-        `${failure instanceof Error ? failure.message : 'Could not delete bundle.'} If the response was lost, refresh the project tree before retrying.`,
+      result = await requestWorkflowBundle<WorkflowBundleDeleteResult>(
+        `/${folder.bundleId}/delete`,
+        {
+          name: confirmation,
+          relativePath: folder.relativePath,
+        },
+        undefined,
+        folder.namespaceId ? { expectedSource: { id: folder.namespaceId } } : undefined,
       );
+    } catch (failure) {
+      if (failure instanceof MutationOutcomeUnknownError) onStructuralMutation(failure.message);
+      if (isCurrent())
+        setError(
+          `${failure instanceof Error ? failure.message : 'Could not delete bundle.'} If the response was lost, refresh the project tree before retrying.`,
+        );
       return;
     } finally {
       pending.current = false;
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
-    onDeleted(result);
+    onStructuralMutation(
+      'Bundle deleted, but the project list could not refresh. Refresh the tree before trying again.',
+    );
+    // Closing matching deleted tabs is an identity-bound application effect,
+    // not a transient modal action. Only modal closure/notification is fenced.
+    onDeleted(result, { closeModal: isCurrent() });
   };
   return (
     <ModalDialog testId="workflow-bundle-delete-modal" label="Delete bundle" onClose={close}>

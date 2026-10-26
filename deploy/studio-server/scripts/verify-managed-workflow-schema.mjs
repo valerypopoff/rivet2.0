@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { containerServerConfig, createManagedCompose } from './lib/container-server-config.mjs';
+import { verifyFolderParentMigration } from './lib/verify-folder-parent-migration.mjs';
+import { verifyNamespaceMutations } from './lib/verify-namespace-mutations.mjs';
 
 // Use the API's compiled migration owner and dependency scope, just like the
 // migration image. No caller-provided database is accepted by this destructive test.
@@ -15,6 +17,7 @@ const {
   getManagedWorkflowSchemaCompatibilityWindow,
   CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
   MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE,
+  MANAGED_WORKFLOW_SCHEMA_MIGRATIONS,
 } = await import(
   '../../../packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/schema-migrations.js'
 );
@@ -116,6 +119,24 @@ try {
     (await withSchemaEnvironment(migrationEnv, () => migrateManagedWorkflowSchema(pool))).appliedVersions,
     [],
   );
+
+  // Retain the fresh-install assertion above as well as a real 16 -> 17 upgrade.
+  // This second database is inside the same newly owned disposable container.
+  await pool.query('CREATE DATABASE rivet_folder_migration_check');
+  const repairPool = new Pool({ ...pool.options, database: 'rivet_folder_migration_check' });
+  try {
+    await withSchemaEnvironment(migrationEnv, () =>
+      verifyFolderParentMigration(repairPool, {
+        migrations: MANAGED_WORKFLOW_SCHEMA_MIGRATIONS,
+        migrate: migrateManagedWorkflowSchema,
+        verify: verifyManagedWorkflowSchema,
+        options,
+      }),
+    );
+    await verifyNamespaceMutations(repairPool);
+  } finally {
+    await repairPool.end();
+  }
 
   // Preserve strict validation: accepting real catalog formatting must not
   // accept a same-named index that omits suspicious recordings.

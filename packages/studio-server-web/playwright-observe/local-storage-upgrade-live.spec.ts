@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
+import { rootStructuralMutation } from '../../../deploy/studio-server/scripts/lib/structural-fixture-admission.mjs';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { serializeDatasets, deserializeProject, serializeProject } from '@valerypopoff/rivet2-core';
 import {
@@ -199,7 +200,9 @@ test('production images support real UI conversion, online/offline rollback and 
 
   const api = async (route: string, data?: unknown, method = 'POST') => {
     const response =
-      data === undefined ? await page.request.get(route) : await page.request.fetch(route, { method, data });
+      data === undefined
+        ? await page.request.get(route)
+        : await page.request.fetch(route, { method, data, headers: { 'X-Rivet-Namespace-Intent': '1' } });
     expect(response.ok(), `${route}: ${response.status()} ${await response.text()}`).toBe(true);
     if (response.status() === 204) return;
     return response.json();
@@ -370,6 +373,7 @@ test('production images support real UI conversion, online/offline rollback and 
     code: "return { output: { type: 'any', value: { packageValue: require('example') } } };",
   } as never;
   await api('/api/workflows/projects/upload', {
+    mutation: rootStructuralMutation(),
     folderRelativePath: '',
     fileName: 'editor-library.rivet-project',
     contents: serializeProject(editorProject),

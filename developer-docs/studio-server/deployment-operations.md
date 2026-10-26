@@ -6,6 +6,52 @@ operator must explicitly select the context, release and namespace and confirm
 the release name. The clean tracked checkout, exact promoted manifest source,
 chart fingerprint, immutable images and schema controls remain mandatory.
 
+## Schema 17 folder-parent repair
+
+Schema 17 fixes managed folder moves and transactionally repairs inconsistent
+folder parents from validated canonical paths. The move function's exact verified
+body changes, so the release contract's minimum rollback-compatible schema is 17.
+Older schema-16 images cannot verify/restart after this migration. Do not widen
+their compatibility window or use automatic image rollback to bypass this gate.
+The same unreleased migration adds immutable internal folder identities and the
+bounded namespace-mutation receipt table. Its DDL runs before parent repair to
+avoid altering a table with pending deferred trigger events. These are internal
+authoring fields, not changes to project or portable bundle formats; see the
+[namespace mutation contract](project-bundles.md#namespace-mutation-contract-unreleased-schema-17).
+
+Adopting this version from schema 16 requires the supported maintenance upgrade:
+record the exact installation/release identities, take and verify the ordinary
+recovery backup, settle existing work under the approved interruption policy,
+then let the single migration owner apply the forward migration before candidate
+serving workloads start. If path validation fails, the transaction rolls back
+without repairing or replacing anything; investigate the reported topology before
+retrying. Do not delete ambiguous folders or recreate missing parents automatically.
+Existing backups remain recovery evidence, not permission to overwrite production.
+
+For a blocked path preflight, use this read-only query against the verified Rivet
+database to identify the rows requiring review. It mirrors the migration's path
+checks; the stored parent is diagnostic only and is never the source of repair.
+
+```sql
+WITH paths AS (
+  SELECT relative_path, parent_relative_path,
+    CASE WHEN position('/' in relative_path) = 0 THEN ''
+      ELSE regexp_replace(relative_path, '/[^/]+$', '') END AS expected_parent
+  FROM workflow_folders
+)
+SELECT paths.* FROM paths
+LEFT JOIN workflow_folders parent ON parent.relative_path = paths.expected_parent
+WHERE paths.relative_path = ''
+  OR paths.relative_path ~ '(^/|/$|//|(^|/)[.]{1,2}(/|$)|[[:cntrl:]])'
+  OR strpos(paths.relative_path, chr(92)) > 0
+  OR (paths.expected_parent <> '' AND parent.relative_path IS NULL)
+ORDER BY paths.relative_path;
+```
+
+The regression gate proves fresh install and 16-to-17 repair on a disposable local
+PostgreSQL database, including preservation of unrelated shared-database tables.
+It does not authorize a production migration, GCP change or deployment.
+
 `--timeout` accepts positive whole seconds, minutes or hours (for example `15m`).
 Conversion and validation happen before input files or manifests are read. Zero,
 malformed or oversized durations are rejected; milliseconds must fit Node's

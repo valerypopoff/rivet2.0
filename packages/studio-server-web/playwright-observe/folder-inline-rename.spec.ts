@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { serializeProject, type Project } from '@valerypopoff/rivet2-core';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 
 type MockWorkflowFolderItem = {
   id: string;
@@ -65,13 +66,30 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
   });
 }
 
-async function installFolderRenameRoutes(page: Page, state: {
-  folderName: string;
-  projectName?: string;
-  renameBlocker?: Promise<void>;
-  renameError?: string;
-  renameRequests: Array<{ relativePath?: string; newName?: string }>;
-}): Promise<void> {
+async function installFolderRenameRoutes(
+  page: Page,
+  state: {
+    folderName: string;
+    projectName?: string;
+    renameBlocker?: Promise<void>;
+    renameError?: string;
+    renameRequests: Array<{ relativePath?: string; newName?: string }>;
+  },
+): Promise<void> {
+  await mockHostedEditorBootstrap(page);
+  if (state.projectName)
+    await page.route('**/api/projects/load', (route) =>
+      route.fulfill({
+        json: {
+          contents: serializeProject({
+            metadata: { id: 'inline-rename-project', title: state.projectName, description: '' },
+            graphs: { main: { metadata: { id: 'main', name: 'Main' }, nodes: [], connections: [] } },
+          } as unknown as Project),
+          datasetsContents: null,
+          revisionId: null,
+        },
+      }),
+    );
   await page.route('**/api/workflows/tree', async (route) => {
     await fulfillJson(route, {
       root: '/managed/workflows',
@@ -115,12 +133,14 @@ async function installFolderRenameRoutes(page: Page, state: {
 
     await fulfillJson(route, {
       folder: createFolderFixture(state.folderName, state.projectName),
-      movedProjectPaths: state.projectName ? [
-        {
-          fromAbsolutePath: `/managed/workflows/${previousFolderName}/${state.projectName}.rivet-project`,
-          toAbsolutePath: `/managed/workflows/${state.folderName}/${state.projectName}.rivet-project`,
-        },
-      ] : [],
+      movedProjectPaths: state.projectName
+        ? [
+            {
+              fromAbsolutePath: `/managed/workflows/${previousFolderName}/${state.projectName}.rivet-project`,
+              toAbsolutePath: `/managed/workflows/${state.folderName}/${state.projectName}.rivet-project`,
+            },
+          ]
+        : [],
     });
   });
 }
@@ -215,7 +235,9 @@ test.describe('Workflow folder inline rename', () => {
     const renameInput = await startFolderRename(page, state.folderName);
     await renameInput.fill('codex-inline-closed-renamed');
     await renameInput.press('Enter');
-    await expect(page.locator('.folder-row.renaming', { hasText: state.folderName }).locator('.folder-rename-spinner')).toBeVisible();
+    await expect(
+      page.locator('.folder-row.renaming', { hasText: state.folderName }).locator('.folder-rename-spinner'),
+    ).toBeVisible();
 
     renameBlocker.resolve();
 

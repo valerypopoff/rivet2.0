@@ -160,7 +160,7 @@ export function useWorkflowLibraryTreeSync(options: {
   );
 
   const drain = useCallback(() => {
-    if (refreshInFlightRef.current || interactionActiveRef.current || !options.editorReady) {
+    if (refreshInFlightRef.current || interactionActiveRef.current) {
       return;
     }
 
@@ -192,18 +192,23 @@ export function useWorkflowLibraryTreeSync(options: {
       }
     };
     const lifetime = lifetimeRef.current;
-    void options
-      .captureReconciliation()
+    const editorReadyAtStart = options.editorReady;
+    void (editorReadyAtStart ? options.captureReconciliation() : Promise.resolve(null))
+      .catch(() => null)
       .then(async (context) => {
         if (lifetimeRef.current !== lifetime) return;
-        if (!context) {
-          retry();
-          return;
-        }
         const tree = await options.refreshFromRemoteChange();
         if (lifetimeRef.current !== lifetime) return;
         if (!tree) {
           retry();
+          return;
+        }
+        // The sidebar is useful without an iframe. Editor readiness/selection
+        // later queues a fresh authority capture and fetch, never this old tree.
+        if (!context) {
+          // "Ready" is only the last handshake. A timed-out/rejected capture
+          // must not starve the sidebar or consume this action's completion.
+          if (editorReadyAtStart) retry();
           return;
         }
         return options
@@ -273,7 +278,7 @@ export function useWorkflowLibraryTreeSync(options: {
 
   useEffect(() => {
     const currentState = currentSyncRef.current;
-    if (options.editorReady && (currentState || options.localRefreshSequence > 0)) {
+    if (currentState || options.localRefreshSequence > 0) {
       // Tree events can arrive before the iframe finishes its bridge handshake.
       // Replaying the current authoritative state here ensures an open tab is
       // still rebound instead of leaving a stale path until another mutation.
