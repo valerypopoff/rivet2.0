@@ -428,12 +428,16 @@ export function inspectReleaseSettlement({ resources, items, release, namespace,
       note(hpa, 'HPA identity does not match the release');
     if (serialized(hpaPolicy(hpa)) !== serialized(hpaPolicy(candidate)))
       note(hpa, 'installed HPA target or policy differs from the rendered configuration');
-    // HPAGeneration is optional on supported Kubernetes versions. When supplied,
-    // it must be current; its absence is not evidence that an HPA is unhealthy.
+    // HPAGeneration is optional on supported Kubernetes versions. Both metadata
+    // generation and observed-generation fields may be omitted. Validate any
+    // supplied number and compare epochs only when the server supplies both.
     if (
-      !Number.isInteger(hpa.metadata.generation) ||
+      (hpa.metadata.generation != null &&
+        (!Number.isInteger(hpa.metadata.generation) || hpa.metadata.generation < 0)) ||
       (hpa.status?.observedGeneration != null &&
-        (!Number.isInteger(hpa.status.observedGeneration) || hpa.status.observedGeneration < hpa.metadata.generation))
+        (!Number.isInteger(hpa.status.observedGeneration) ||
+          hpa.status.observedGeneration < 0 ||
+          (hpa.metadata.generation != null && hpa.status.observedGeneration < hpa.metadata.generation)))
     )
       note(hpa, 'HPA has not observed its current generation');
     if (
@@ -444,7 +448,8 @@ export function inspectReleaseSettlement({ resources, items, release, namespace,
             condition.status === 'True' &&
             (condition.observedGeneration == null ||
               (Number.isInteger(condition.observedGeneration) &&
-                condition.observedGeneration >= hpa.metadata.generation)),
+                condition.observedGeneration >= 0 &&
+                (hpa.metadata.generation == null || condition.observedGeneration >= hpa.metadata.generation))),
         ),
       )
     )

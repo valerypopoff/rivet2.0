@@ -170,7 +170,7 @@ export async function captureMaintenanceCheckpoint(approval, context, { artifact
   const verified = await verifyRecoveryReceipt(receipt, directory, request);
   await recoveryDirectory(approval.root, directory, directoryIdentity);
   await fs.writeFile(path.join(directory, 'verified.json'), `${JSON.stringify(verified)}\n`, { flag: 'wx', mode: 0o600 });
-  return verified;
+  return { ...verified, directory };
 }
 
 export async function executeMaintenanceBackupAdapter(script, request, receipt, { directory, timeoutMs,

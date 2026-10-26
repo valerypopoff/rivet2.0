@@ -133,6 +133,11 @@ function reconcile(resource, templateChanged = false) {
 }
 
 function apply(resources) {
+  for (const target of resources) {
+    const live = find(target.kind, target.metadata.name);
+    if (target.metadata.resourceVersion && target.metadata.resourceVersion !== live?.metadata.resourceVersion)
+      fail('Conflict: stale Helm workload resourceVersion');
+  }
   const wanted = new Set(resources.map((r) => `${r.kind}/${r.metadata.name}`));
   state.resources = state.resources.filter(
     (r) => r.kind === 'ReplicaSet' || wanted.has(`${r.kind}/${r.metadata.name}`),
@@ -153,6 +158,19 @@ function apply(resources) {
     if (live) state.resources.splice(state.resources.indexOf(live), 1);
     state.resources.push(copy);
     if (['Deployment', 'StatefulSet'].includes(copy.kind)) reconcile(copy, templateChanged);
+    if (copy.kind === 'HorizontalPodAutoscaler') {
+      // Ordinary GKE responses need not expose HPAGeneration. Do not let the
+      // stand-in invent optional fields that the verifier accidentally requires.
+      delete copy.metadata.generation;
+      copy.status = {
+        currentReplicas: copy.spec.minReplicas,
+        desiredReplicas: copy.spec.minReplicas,
+        conditions: [
+          { type: 'AbleToScale', status: 'True' },
+          { type: 'ScalingActive', status: 'True' },
+        ],
+      };
+    }
     if (copy.kind === 'PersistentVolumeClaim') {
       copy.spec.volumeName = 'fixture-volume';
       copy.status = { phase: 'Bound' };
@@ -179,6 +197,7 @@ function helm() {
       ? []
       : [{ name: state.release, namespace: state.namespace, status: state.releaseStatus ?? 'deployed' }];
   if (args[0] === 'get' && args[1] === 'values') return state.installed;
+  if (args[0] === 'get' && args[1] === 'manifest') return state.manifest;
   if (args[0] === 'history') return [];
   if (args[0] === 'status') return 'fixture release';
   if (args[0] === 'upgrade') {
@@ -200,6 +219,7 @@ function helm() {
         .map((d) => d.toJSON())
         .filter(Boolean),
     );
+    state.manifest = rendered;
     // Merge the actual values supplied by the command, in Helm precedence order.
     const merge = (a, b) => {
       for (const [k, v] of Object.entries(b))
@@ -212,6 +232,7 @@ function helm() {
       if (['--values', '-f'].includes(flags[i]))
         merge(state.installed, parseAllDocuments(fs.readFileSync(flags[i + 1], 'utf8'))[0].toJSON());
     }
+    if (flags.includes('workflowSchema.migrationJob.enabled=false')) state.finalReady = true;
     if (['lostTemplate', 'lostTemplateDiagnostics'].includes(state.fault) && !state.injected) {
       state.injected = true;
       fail('fixture lost template acknowledgement');
@@ -242,12 +263,23 @@ function kubectl() {
       name = args[2]?.startsWith('-') ? null : args[2];
     if (state.fault === 'unavailableInventory' && type.includes(',pod,'))
       fail('fixture management inventory unavailable');
+    if (state.fault === 'settlementDisconnect' && state.finalReady && type.includes(',pod,') && !state.injected) {
+      state.injected = true;
+      fail('fixture final observation connection lost');
+    }
     if (type === 'namespace') {
       state.namespaceReads = (state.namespaceReads ?? 0) + 1;
       if (state.fault === 'changedNamespace' && state.namespaceReads > 1) state.namespaceUid = 'replacement';
       return { metadata: { name: state.namespace, uid: state.namespaceUid } };
     }
-    if (type === 'configmap') return state.journal ?? '';
+    if (type === 'configmap') {
+      if (state.fault === 'samplingAutoscalerAdvance' && state.journal) {
+        const record = JSON.parse(state.journal.data.record);
+        if (record.autoscalingProtocol === 1 && record.leaseExpiresAt > Date.now())
+          state.samplingLeaseReads = (state.samplingLeaseReads ?? 0) + 1;
+      }
+      return state.journal ?? '';
+    }
     if (type === 'pod') return state.pods.find((p) => p.metadata.name === name) ?? '';
     if (type === 'node')
       return {
@@ -265,13 +297,14 @@ function kubectl() {
     if (types.some((t) => !t)) fail(`Unsupported fixture get: ${type}`);
     let items = state.resources.filter((r) => types.includes(r.kind));
     if (name) return items.find((r) => r.metadata.name === name) ?? '';
-    return { items: type.includes(',pod,') ? [...items, ...state.pods] : items };
+    return { items: type.split(',').includes('pod') ? [...items, ...state.pods] : items };
   }
   if (['create', 'replace'].includes(args[0])) {
     const value = readInput();
     if (value.kind !== 'ConfigMap') fail('Fixture only accepts owned journal writes.');
     if (value.metadata.resourceVersion !== state.journal?.metadata.resourceVersion)
       fail('Conflict: fixture journal resourceVersion');
+    if (value.metadata.uid && value.metadata.uid !== state.journal?.metadata.uid) fail('Conflict: fixture journal UID');
     value.metadata.uid = state.journal?.metadata.uid ?? randomUUID();
     touch(value);
     state.journal = value;

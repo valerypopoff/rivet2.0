@@ -228,8 +228,8 @@ writing `phase=complete`. Failure cleanup likewise waits for that queue. Failed
 heartbeats fence cleanup as well as normal workload mutations. Only an exact,
 still-owned **committed completion** can reconcile a lost completion response
 within the same invocation; an older phase or changed identity cannot clear a
-failed write. Maintenance can then record `resuming` before closing admission,
-preserving its existing exact-token recovery semantics. Other uncertain phases
+failed write. Maintenance never closes traffic after an acknowledged final
+apply merely because completion observation failed. Other uncertain phases
 remain for explicit recovery. Failure handlers retain both the original error
 and a cleanup error rather than replacing the recovery reason.
 The CLI applies the same rule to diagnostic export: a failed diagnostics write
@@ -246,6 +246,19 @@ and never replay an uncertain migration/template command.
 
 The continuous execution-autoscaler controller is not a deployment mode. Its
 existing cooperative-growth and shared-journal exclusion rules are unchanged.
+Maintenance takes its initial CAS version from the strategy's most recent
+journal inspection, not the earlier release-preparation snapshot. An idle
+autoscaler can legitimately update a completed journal during application
+baseline checks. That completed foreign-kind record remains eligible only
+after its identity/phase/lease checks pass; its current resourceVersion is
+retained even though the maintenance strategy sees no unfinished cutover.
+A newly busy autoscaler still blocks admission. A race after inspection still
+fails CAS and is never automatically retried or treated as successful ownership.
+The maintenance strategy may wait up to 30 seconds, using GET-only inspection,
+for a completed autoscaler's sampling lease to be released. Every observation is
+validated; an unfinished scaling/retirement operation still rejects admission.
+Lease timeout never permits takeover. The approval deadline is checked again
+before ownership, and there is no retry of a modifying request.
 Legacy direct Helm installs also retain their existing native locking; this
 runner does not invent a journal protocol or HA guarantees for that path.
 
@@ -254,6 +267,22 @@ This is an installation configuration, reviewed once and reused; changing its
 bytes or values requires a new operation. It contains no blanket permission to
 restore data or choose arbitrary production workflows. Local single-machine
 and offline render paths retain their existing behavior.
+
+Do not reuse `ha.rolloutResourceVersions` from saved Helm values as operator
+configuration: those are transient CAS guards from a particular rollout. Fresh
+deployments (including offline dry-runs) reject nonempty operator-supplied guards
+before any cluster access. Remove them while preparing new reviewed inputs and
+approval, not after admission. Read-only planning/acceptance and explicit-token
+recovery preserve their original bytes; never edit a pending operation's bound
+values to get past a conflict. A legacy paused operation may require a separately
+approved, exact-UID/lease-bound refresh of its transient guards. This does not
+authorize deleting guards blindly or replaying an uncertain Helm update.
+
+HPA settlement supports clusters where `HPAGeneration` is not enabled: metadata
+generation, status observed-generation and condition observed-generation can be
+absent. Supplied epochs are validated and compared when available; exact HPA
+UID/target/policy and `AbleToScale`/`ScalingActive` conditions remain mandatory.
+An omitted optional epoch is not permission to ignore an unhealthy autoscaler.
 
 ```json
 {
@@ -270,7 +299,8 @@ and offline render paths retain their existing behavior.
 The ordered workflow is:
 
 1. Check live installation identity and the installed-to-candidate version route.
-2. Run the approved application baseline (`stage=before`).
+2. Complete installed-state and local-readiness preflight, then run the approved
+   application baseline (`stage=before`).
 3. For ordinary rolling upgrades, capture and verify a fresh online recovery
    checkpoint. Every maintenance cutover takes a frozen checkpoint after
    quiescence instead; explicit maintenance plans retain their additional
@@ -371,7 +401,9 @@ admission. If that check fails on a fresh attempt, it records an aborted no-op
 and releases ownership without touching workloads or HPAs. If it fails during
 recovery, it preserves the unfinished journal for inspection without applying
 cleanup to potentially newer traffic. Only an attempt that reached quiescence
-may use the usual close-admission failure handler.
+may use the usual close-admission failure handler, and only until its final
+apply has been acknowledged. Confirmed final-apply verification failures leave
+traffic running; see the explicit recovery path below.
 Losing the acknowledgement for an untouched abort does not permit fallback
 traffic closure either: inspect the exact journal before any new operation.
 The separate same-image control-topology transfer carries this same workflow
@@ -389,6 +421,114 @@ maintenance or topology ownership; local paths without a policy retain their
 existing version-only check.
 
 ## Planning from the installed version
+
+### Mandatory non-disruptive preflight
+
+Every fresh production upgrade with an installation policy performs this before
+application baseline requests, recovery capture, journal ownership or maintenance:
+
+- Require exactly one deployed Helm release and the policy-bound namespace UID.
+- Read Helm's **installed** manifest and inspect its real controllers, pods and
+  HPAs (not the not-yet-running candidate). Observation is bounded to 30 seconds.
+- Refuse remaining execution startup fences; report the owning operation for
+  separate inspection rather than automatically repairing it.
+- Syntax-check the exact checksum-pinned local adapters. Source-quoting Node
+  diagnostics go only to `adapter-syntax-private.log`, never ordinary output.
+- Invoke the actual recovery adapter with `stage=preflight`, bounded to 60 seconds.
+  For an explicit maintenance plan this is that plan's backup adapter. Verify its
+  installation/input-bound prerequisite receipt, then reread the live baseline.
+
+The reviewed adapter must implement the new preflight stage. It must inspect
+local prerequisites without capturing/restoring production data or changing the
+cluster: imports and runtimes, required executables, locally available helper
+images, supported invocation paths (file URLs on Windows), output accessibility,
+and free space against a bounded database/object estimate and scratch-copy budget.
+It must not pull images, start maintenance or perform application journeys in
+this stage. Small private scratch files for local checks/evidence are allowed.
+This remains a reviewed adapter contract, not a sandbox for arbitrary scripts.
+
+The receipt echoes the usual request identity, uses
+`kind=rivet-deployment-preflight`, `passed=true`, and has
+`checks.dependencies` and `checks.capacity`, each with `observed=true`,
+`passed=true`, and an `evidence` path to a nonempty private file in that attempt
+directory. Unknown/partial receipts fail closed. Existing installation adapters
+must be updated and their policy checksums reviewed **before a new operation**;
+do not change an unfinished operation's bound scripts/policy to adopt this stage.
+Exact recovery skips fresh preparation and retains its original policy.
+
+Use the normal exact manifest/source, values and policy arguments plus
+`--preflight-only` to run just these checks. Add the same maintenance selection
+and original plan if that is the proposed route. It needs no `--confirm`, writes
+`deployment-preflight.json` and private prerequisite/settlement evidence, and
+does not claim a journal, apply Helm, prepare Secrets, run migrations, capture a
+backup or execute acceptance fixtures. It cannot combine with resume tokens,
+`--acceptance-only`, `--plan-only` or `--dry-run`.
+
+This is not authorization, provider qualification, or a held lease. A subsequent
+apply repeats it and still needs confirmation, backup, ownership and under-lease
+baseline checks. A completed preflight does not promise future quotas/capacity
+or eliminate a later infrastructure failure. The old offline dry-run and version
+route planner retain their narrower purposes.
+
+### Verification-only recovery of a confirmed final cutover
+
+Maintenance journals now retain the verified frozen checkpoint location and a
+versioned `finalApply` checkpoint. The latter is saved **only after** the final
+Helm command acknowledges success, and records actual workload and PVC UIDs.
+An observation timeout/disconnection or lost completion acknowledgement after
+this boundary never triggers automatic traffic closure, template replay or data
+rollback. The journal remains incomplete unless completion actually committed.
+
+After diagnosing the real failure, use all original source/manifest, policy,
+values, installation and (if present) maintenance-plan inputs, with:
+
+```text
+--resume-cutover <exact-original-token> --verify-only --confirm <release>
+```
+
+This explicitly claims only an expired lease of the same unfinished `resuming`
+cutover, with the original safety/workflow identity and a confirmed final apply.
+It rechecks:
+
+1. Original frozen request/receipt identity and every retained backup artifact's
+   checksum. It does not trust a `verified.json` marker or capture a new backup.
+2. Namespace and final workload/PVC UIDs, deployed Helm status, and the entire
+   stored final Helm manifest against the exact candidate render (ignoring only
+   hook objects and transient metadata resourceVersions).
+3. Fresh stable workload/HPA settlement, approved live environment/command,
+   storage-mount and service-account settings, no startup fences, and unchanged
+   installation/UIDs after observation. Same-image manual execution-setting
+   changes do not disappear behind an unchanged stored Helm manifest.
+4. Durable same-operation completion, then normal controller activation and
+   approved application acceptance. Workload procedure completion is still not
+   application acceptance.
+
+Only journal claim/heartbeat/completion/release writes are allowed in this path;
+there is no Helm apply, Secret update, migration, scale, deletion, backup capture
+or workload exec. Approved after-acceptance fixtures still execute, so it is not
+a generic read-only diagnostic. A failed check retains precise recovery guidance
+and leaves existing workloads untouched. Recovery never steals a valid lease.
+
+If final completion already committed, inspect it and use `--acceptance-only`
+instead. If final Helm acknowledgement/checkpoint is absent, validation is still
+active, resources changed identity, or retained bytes are unavailable, this path
+refuses admission. Inspect the actual operation and use ordinary exact-token
+recovery only when re-quiescence is appropriate; do not fabricate a marker or
+edit a journal to force verification. Historical journals do not acquire this
+capability merely because the deployment tool was updated. No automatic write
+retry, image rollback, backup restore or skipped failed check is introduced.
+
+### Regression evidence and its limits
+
+The actual command stand-in tests use real Helm renders, optional-generation-free
+GKE-shaped HPA responses, stale workload resourceVersion rejection, concurrent
+autoscaler journal changes/sampling leases and final-observation connection loss.
+They check failed prerequisites before mutations and verification recovery with
+corrupted backup bytes, retained identities and no additional deployment writes.
+Unit suites retain interrupted/unknown apply, lease loss and lost-acknowledgement
+coverage. The readiness suite runs in `studio-server:verify:kubernetes`.
+These are local simulated-control-plane results, not GKE/provider qualification
+or permission for another deployment or paid rehearsal.
 
 `--plan-only` reads the selected installation and writes `upgrade-plan.json`
 without applying resources or running adapters; it needs no `--confirm`.

@@ -11,9 +11,18 @@ import {
   assertCooperativeAutoscalingEvidence,
 } from './lib/ha-release-evidence.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import {
+  readAvailableReleaseJournal,
+  parseReleaseResources,
+  assertInstalledReleaseManifest,
+  assertInstalledExecutionSettings,
+  verifyRetainedCutoverCheckpoint,
+  assertCutoverVerificationInventory,
+  assertNoExecutionStartupFences,
+} from './lib/deployment-readiness.mjs';
 import { runHaKubernetesRollout, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
-import { releaseOperationJournalName, journalForReleaseOperation } from './lib/release-operation-journal.mjs';
+import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 import {
   readMaintenancePlan,
   assertMaintenanceBaseline,
@@ -77,6 +86,8 @@ const supportedOptions = new Set([
   '--deployment-policy',
   '--plan-only',
   '--acceptance-only',
+  '--preflight-only',
+  '--verify-only',
   '--resume-cutover',
   '--single-machine',
   '--env-file',
@@ -103,6 +114,8 @@ export function parseArgs(argv) {
       key === '--dry-run' ||
       key === '--plan-only' ||
       key === '--acceptance-only' ||
+      key === '--preflight-only' ||
+      key === '--verify-only' ||
       key === '--maintenance-cutover' ||
       key === '--single-machine' ||
       key === '--ha-control-plane-transition'
@@ -145,6 +158,25 @@ export function parseDeploymentTimeout(value) {
       '--timeout must be a positive whole-second duration such as 10m or 1h, within the supported timer range.',
     );
   return { timeout: value, timeoutMs };
+}
+
+/** Per-operation CAS versions are not reusable installation configuration. */
+export function assertNoOperatorRolloutGuards(bytes, options) {
+  if (
+    ['--env-file', '--plan-only', '--acceptance-only', '--resume-ha', '--resume-cutover'].some((key) =>
+      options.has(key),
+    )
+  )
+    return;
+  const documents = parseAllDocuments(String(bytes));
+  for (const document of documents) {
+    if (document.errors.length) throw document.errors[0];
+    const versions = document.toJSON()?.ha?.rolloutResourceVersions;
+    if (versions && Object.keys(versions).length)
+      throw Error(
+        'ha.rolloutResourceVersions contains private guards from another operation. Remove them from fresh reviewed operator inputs before deployment; never edit inputs for an unfinished operation. Inspect exact-token recovery instead.',
+      );
+  }
 }
 
 function insideRepository(candidate, name) {
@@ -392,6 +424,26 @@ async function main() {
       '--rollback-to requires an explicit --manifest for the failed release; the production pointer cannot identify it.',
     );
   const singleMachine = options.get('--single-machine') === true;
+  if (
+    options.has('--verify-only') &&
+    (!options.has('--resume-cutover') ||
+      options.has('--resume-ha') ||
+      [
+        '--acceptance-only',
+        '--preflight-only',
+        '--dry-run',
+        '--plan-only',
+        '--single-machine',
+        '--ha-control-plane-transition',
+        '--rollback-to',
+      ].some((key) => options.has(key)))
+  )
+    throw Error('--verify-only requires exact --resume-cutover recovery, not another verification/deployment mode.');
+  if (
+    options.has('--preflight-only') &&
+    ['--acceptance-only', '--plan-only', '--dry-run', '--resume-cutover', '--resume-ha'].some((key) => options.has(key))
+  )
+    throw Error('--preflight-only is a fresh non-disruptive readiness check, not recovery or another inspection mode.');
   const { timeout, timeoutMs } = parseDeploymentTimeout(options.get('--timeout') ?? '15m');
   if (
     options.has('--maintenance-plan') &&
@@ -416,6 +468,7 @@ async function main() {
   // Every lint/template/upgrade must consume the same settings bytes, even if an
   // operator edits the input while the release is waiting for a drain.
   const operatorValues = await fs.readFile(valuesPath);
+  assertNoOperatorRolloutGuards(operatorValues, options);
   const valuesDigest = `sha256:${createHash('sha256').update(operatorValues).digest('hex')}`;
   const dryRun = options.get('--dry-run') === true;
   const artifactsDir = insideRepository(
@@ -427,6 +480,7 @@ async function main() {
     !dryRun &&
     !options.has('--plan-only') &&
     !options.has('--acceptance-only') &&
+    !options.has('--preflight-only') &&
     required(options, '--confirm') !== release
   ) {
     throw new Error(`--confirm must equal the release name (${release}) before a cluster upgrade is allowed`);
@@ -635,28 +689,16 @@ async function main() {
     const kubectl = selectedKubectl;
     if (!kubectl) throw new Error('kubectl is required to inspect release cutover ownership.');
     const journalName = releaseOperationJournalName(release);
-    const savedJournal = await run(
-      kubectl,
-      [
-        '--namespace',
-        namespace,
-        '--request-timeout=30s',
-        'get',
-        'configmap',
-        journalName,
-        '--ignore-not-found',
-        '-o',
-        'json',
-      ],
-      { capture: true },
-    );
-    const journalResource = savedJournal.stdout.trim() ? JSON.parse(savedJournal.stdout) : null;
-    const sharedJournal = journalResource
-      ? { ...JSON.parse(journalResource.data.record), resourceVersion: journalResource.metadata.resourceVersion }
-      : null;
     const operationKind =
       haRequested && !options.has('--maintenance-cutover') && !options.has('--resume-cutover') ? 'ha' : 'cutover';
-    const pendingJournal = journalForReleaseOperation(sharedJournal, operationKind, { release, namespace });
+    const { resource: preparedJournalResource, record: pendingJournal } = await readAvailableReleaseJournal({
+      kube: (args) => run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true }),
+      name: journalName,
+      kind: operationKind,
+      release,
+      namespace,
+      timeoutMs,
+    });
     if (operationKind === 'cutover') {
       assertCutoverJournal(pendingJournal, { release, namespace });
       if (!options.has('--resume-cutover')) assertOrdinaryReleaseAllowed(pendingJournal, { release, namespace });
@@ -883,10 +925,105 @@ async function main() {
     };
     const kubeForRelease = (args, extra = {}) =>
       run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+    if (options.has('--verify-only') && !workflowContext)
+      throw Error('Verification-only cutover recovery requires the original production deployment policy.');
+    if (workflowContext && !workflowContext.recovering) {
+      // Run against the installed release, not candidate images that are not
+      // running yet. No journal, workload, Secret or fixture request is written.
+      const status = JSON.parse(
+        (
+          await run(
+            helmBin,
+            ['list', '--all', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
+            { capture: true },
+          )
+        ).stdout,
+      );
+      if (status.length !== 1 || status[0].status !== 'deployed')
+        throw Error('Installed Helm release is not deployed; inspect its exact operation before maintenance.');
+      const currentResources = parseReleaseResources(
+        (await run(helmBin, ['get', 'manifest', release, '--namespace', namespace], { capture: true })).stdout,
+      );
+      await waitForReleaseSettlement({
+        kube: kubeForRelease,
+        resources: currentResources,
+        release,
+        namespace,
+        timeoutMs: Math.min(timeoutMs, 30_000),
+        stableMs: 0,
+        artifact: (_name, value) => writeArtifact(artifactsDir, 'installed-preflight-settlement.json', value),
+      });
+      assertNoExecutionStartupFences(
+        JSON.parse(
+          (
+            await kubeForRelease([
+              'get',
+              'statefulset,pod',
+              '-l',
+              `app.kubernetes.io/instance=${release}`,
+              '-o',
+              'json',
+            ])
+          ).stdout,
+        ).items,
+      );
+      for (const script of new Set([
+        ...Object.values(deploymentPolicy.scripts),
+        ...(maintenance ? [maintenance.scriptPath] : []),
+      ])) {
+        try {
+          await run(process.execPath, ['--check', script], { capture: true });
+        } catch (error) {
+          // Node syntax diagnostics quote source lines, which may contain local
+          // credentials. Keep those bytes private rather than printing them.
+          await writeArtifact(artifactsDir, 'adapter-syntax-private.log', String(error));
+          throw Error(
+            'Deployment adapter syntax check failed. Inspect the private adapter-syntax log; maintenance has not started.',
+          );
+        }
+      }
+      const preflightApproval = maintenance
+        ? { ...deploymentPolicy, policy: { ...deploymentPolicy.policy, backup: maintenance.plan.backup } }
+        : deploymentPolicy;
+      const prerequisites = await runDeploymentStage(preflightApproval, 'preflight', workflowContext, {
+        artifactsDir,
+        timeoutMs: Math.min(timeoutMs, 60_000),
+      });
+      await assertInstalledBaseline();
+      await writeArtifact(
+        artifactsDir,
+        'deployment-preflight.json',
+        JSON.stringify(
+          {
+            formatVersion: 1,
+            passed: true,
+            observedAt: new Date().toISOString(),
+            ...workflowContext,
+            policyDigest: deploymentPolicy.digest,
+            prerequisites,
+            scope: 'installed-state-and-local-readiness',
+            qualification: 'not-established-by-preflight',
+            workloadMutations: false,
+            applicationJourneysRun: false,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    if (options.has('--preflight-only')) {
+      if (!workflowContext || workflowContext.recovering)
+        throw Error('Preflight requires an installed production release and policy.');
+      console.log(
+        `[${runnerName}] Installed-state and local-readiness preflight passed. No maintenance, backup, application journey or deployment was started.`,
+      );
+      return;
+    }
     const outcome = await executeDeploymentWorkflow({
       approval: deploymentPolicy,
       context: workflowContext,
       maintenance: Boolean(cutover),
+      verificationOnly: options.has('--verify-only'),
       artifactsDir,
       timeoutMs,
       artifact: (name, value) => writeArtifact(artifactsDir, name, value),
@@ -1038,38 +1175,64 @@ async function main() {
             const selector = `app.kubernetes.io/instance=${release}`;
             const inventory = async () => {
               const resources = JSON.parse(
-                (await kube(['get', 'deployment,statefulset,hpa', '-l', selector, '-o', 'json'])).stdout,
+                (await kube(['get', 'deployment,statefulset,hpa,pvc', '-l', selector, '-o', 'json'])).stdout,
               ).items;
               return {
                 workloads: resources
-                  .filter((item) => item.kind !== 'HorizontalPodAutoscaler')
+                  .filter((item) => ['Deployment', 'StatefulSet'].includes(item.kind))
                   .map((item) => ({
                     kind: item.kind.toLowerCase(),
                     name: item.metadata.name,
+                    uid: item.metadata.uid,
                     component: item.metadata.labels?.['app.kubernetes.io/component'],
                     replicas: item.spec.replicas ?? 1,
                   })),
                 autoscalers: resources
                   .filter((item) => item.kind === 'HorizontalPodAutoscaler')
                   .map((item) => item.metadata.name),
+                claims: resources
+                  .filter((item) => item.kind === 'PersistentVolumeClaim')
+                  .map((item) => ({ name: item.metadata.name, uid: item.metadata.uid })),
               };
             };
+            // A completed foreign-kind journal is returned as null by the
+            // strategy, but its freshly observed CAS version must be retained.
+            // The autoscaler may update it during application baseline checks.
+            let observedJournalVersion;
+            let observedJournalResource;
             const readJournal = async () => {
-              const result = await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json']);
-              if (!result.stdout.trim()) return null;
-              const resource = JSON.parse(result.stdout);
-              return journalForReleaseOperation(
-                { ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion },
-                'cutover',
-                { release, namespace },
-              );
+              const { resource, record } = await readAvailableReleaseJournal({
+                kube,
+                name,
+                kind: 'cutover',
+                release,
+                namespace,
+                timeoutMs,
+              });
+              const expectedUid = observedJournalResource?.metadata.uid ?? preparedJournalResource?.metadata.uid;
+              if (expectedUid && resource?.metadata.uid !== expectedUid)
+                throw Error('Cutover journal immutable identity changed; no further writes are allowed.');
+              observedJournalResource = resource;
+              observedJournalVersion = resource?.metadata.resourceVersion;
+              return record;
             };
             const saveJournal = async (record, resourceVersion) => {
               const { resourceVersion: _discard, ...data } = record;
               const resource = {
                 apiVersion: 'v1',
                 kind: 'ConfigMap',
-                metadata: { name, namespace, ...(resourceVersion ? { resourceVersion } : {}) },
+                metadata: {
+                  name,
+                  namespace,
+                  ...(resourceVersion
+                    ? {
+                        resourceVersion,
+                        uid: observedJournalResource?.metadata.uid,
+                        labels: observedJournalResource?.metadata.labels,
+                        annotations: observedJournalResource?.metadata.annotations,
+                      }
+                    : {}),
+                },
                 data: { record: JSON.stringify(data) },
               };
               const saved = JSON.parse(
@@ -1079,6 +1242,7 @@ async function main() {
                   })
                 ).stdout,
               );
+              observedJournalResource = saved;
               return { ...data, resourceVersion: saved.metadata.resourceVersion };
             };
             const maintenancePath = path.join(generatedValuesDir, 'maintenance-validation.json');
@@ -1120,7 +1284,7 @@ async function main() {
               resumeToken: options.get('--resume-cutover'),
               inventory,
               readJournal,
-              createJournal: (record) => saveJournal(record, sharedJournal?.resourceVersion),
+              createJournal: (record) => saveJournal(record, observedJournalVersion),
               replaceJournal: saveJournal,
               scale: (item, replicas) => kube(['scale', `${item.kind}/${item.name}`, `--replicas=${replicas}`]),
               removeAutoscaler: (hpa) => kube(['delete', 'hpa', hpa, '--ignore-not-found']),
@@ -1166,6 +1330,45 @@ async function main() {
               // Validation already ran and verified this exact schema migration.
               resume: () => upgrade(['--set', 'workflowSchema.migrationJob.enabled=false']),
               settle: () => settle(),
+              verificationOnly: options.has('--verify-only'),
+              verifyExisting: async (record) => {
+                await verifyRetainedCutoverCheckpoint(
+                  rootDir,
+                  record.recoveryCheckpoint?.directory,
+                  workflowContext,
+                  record.token,
+                  maintenance?.digest ?? deploymentPolicy.digest,
+                );
+                assertCutoverVerificationInventory(record.finalApply?.inventory, await inventory());
+                const status = JSON.parse(
+                  (
+                    await run(
+                      helmBin,
+                      ['list', '--all', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
+                      { capture: true },
+                    )
+                  ).stdout,
+                );
+                if (status.length !== 1 || status[0].status !== 'deployed')
+                  throw Error('Final Helm apply is not deployed; no verification completion is allowed.');
+                const stored = parseReleaseResources(
+                  (await run(helmBin, ['get', 'manifest', release, '--namespace', namespace], { capture: true }))
+                    .stdout,
+                );
+                assertInstalledReleaseManifest(renderedResources, stored);
+                const result = await settle();
+                assertInstalledExecutionSettings(
+                  renderedResources,
+                  JSON.parse((await kube(['get', 'deployment,statefulset', '-l', selector, '-o', 'json'])).stdout)
+                    .items,
+                );
+                assertNoExecutionStartupFences(
+                  JSON.parse((await kube(['get', 'statefulset,pod', '-l', selector, '-o', 'json'])).stdout).items,
+                );
+                assertCutoverVerificationInventory(record.finalApply.inventory, await inventory());
+                await assertInstalledBaseline();
+                return result;
+              },
             });
           } else {
             safety.assertReadyForTemplates();
