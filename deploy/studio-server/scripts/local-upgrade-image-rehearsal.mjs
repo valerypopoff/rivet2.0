@@ -220,6 +220,48 @@ export async function waitForRehearsalCondition(probe, timeoutMs, failureMessage
   throw new Error(failureMessage);
 }
 
+// Backend loopback readiness does not certify nginx's DNS/auth subrequest path
+// after a deliberate crash/restart. Retry only these browser fixture GETs, never
+// a backup, activation, save, upload or execution request.
+export async function waitForRehearsalBrowserRead(page, route, timeoutMs = 120_000) {
+  const expectedStatuses = { '/': 200, '/api/app-settings/local-upgrade/setup': 200, '/apps/sqlite-policy-app': 401 };
+  assert.ok(Object.hasOwn(expectedStatuses, route), 'Unsupported rehearsal read path.');
+  let response;
+  await waitForRehearsalCondition(
+    async (budget) => {
+      try {
+        const timeout = Math.min(5_000, budget);
+        response =
+          route === '/'
+            ? await page.goto(route, { timeout, waitUntil: 'domcontentloaded' })
+            : await page.request.get(route, { timeout, failOnStatusCode: false });
+      } catch (error) {
+        if (
+          /ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|net::ERR_CONNECTION_(REFUSED|RESET|CLOSED)|Timeout .* exceeded|socket hang up/.test(
+            error.message,
+          )
+        )
+          return false;
+        throw error;
+      }
+      assert.ok(response, 'Rehearsal browser navigation returned no response.');
+      if ([500, 502, 503, 504].includes(response.status())) {
+        await response.dispose?.();
+        return false;
+      }
+      assert.equal(
+        response.status(),
+        expectedStatuses[route],
+        `Rehearsal browser read ${route} returned HTTP ${response.status()}.`,
+      );
+      return true;
+    },
+    timeoutMs,
+    `Rehearsal browser read ${route} did not recover through the proxy.`,
+  );
+  return response;
+}
+
 async function waitReady(config) {
   await waitForRehearsalCondition(
     async (budget) => {

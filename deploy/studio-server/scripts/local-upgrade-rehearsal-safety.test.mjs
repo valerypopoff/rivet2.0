@@ -21,6 +21,7 @@ import {
   readOnlyRehearsalSqliteScript,
   webAppBindingProbeScript,
   waitForRehearsalCondition,
+  waitForRehearsalBrowserRead,
   readRehearsalSourceFingerprint,
   assertLegacyRehearsalSource,
   rehearsalComposeInvocation,
@@ -361,6 +362,101 @@ test('readiness polling supplies a bounded shared IO budget and accepts timely r
     },
     120_000,
     'not ready',
+  );
+});
+
+test('browser recovery waits for proxy/auth GET paths without replaying a mutation', async () => {
+  for (const route of ['/', '/api/app-settings/local-upgrade/setup', '/apps/sqlite-policy-app']) {
+    const expected = route.startsWith('/apps/') ? 401 : 200;
+    const statuses = [500, 502, 503, 504, expected];
+    let calls = 0;
+    let disposed = 0;
+    const read = async (path, options) => {
+      assert.equal(path, route);
+      assert.ok(options.timeout > 0 && options.timeout <= 5000);
+      if (route === '/') assert.equal(options.waitUntil, 'domcontentloaded');
+      else assert.equal(options.failOnStatusCode, false);
+      if (calls++ === 0) throw Error(route === '/' ? 'page.goto: net::ERR_CONNECTION_RESET' : 'connect ECONNRESET');
+      const status = statuses[calls - 2];
+      return {
+        status: () => status,
+        dispose: async () => {
+          disposed++;
+        },
+      };
+    };
+    const page = { goto: read, request: { get: read, post: () => assert.fail('Recovery must not replay a write.') } };
+    const response = await waitForRehearsalBrowserRead(page, route, 10_000);
+    assert.equal(response.status(), expected);
+    assert.equal(calls, 6);
+    assert.equal(disposed, 4, 'release failed response bodies before retry');
+  }
+});
+
+test('browser recovery remains bounded and never hides auth, route or client failures', async (t) => {
+  for (const status of [201, 204, 401, 403, 404]) {
+    let calls = 0;
+    await assert.rejects(
+      waitForRehearsalBrowserRead(
+        {
+          goto: async () => {
+            calls++;
+            return { status: () => status };
+          },
+        },
+        '/',
+        1000,
+      ),
+      new RegExp(`HTTP ${status}`),
+    );
+    assert.equal(calls, 1);
+  }
+  let calls = 0;
+  let disposed = 0;
+  let now = 0;
+  const clock = t.mock.method(performance, 'now', () => now);
+  await assert.rejects(
+    waitForRehearsalBrowserRead(
+      {
+        request: {
+          get: async (_route, options) => {
+            assert.equal(options.timeout, 50);
+            calls++;
+            // End the IO exactly at the deadline. Real timers can wake slightly
+            // early, legitimately allowing another attempt within a 50ms window.
+            now = 50;
+            return {
+              status: () => 500,
+              dispose: async () => {
+                disposed++;
+              },
+            };
+          },
+        },
+      },
+      '/api/app-settings/local-upgrade/setup',
+      50,
+    ),
+    /did not recover through the proxy/,
+  );
+  assert.equal(calls, 1);
+  assert.equal(disposed, 1);
+  clock.mock.restore();
+  await assert.rejects(waitForRehearsalBrowserRead({ goto: () => assert.fail() }, '/api/projects/save'), /Unsupported/);
+  await assert.rejects(
+    waitForRehearsalBrowserRead({ request: { get: async () => ({ status: () => 200 }) } }, '/apps/sqlite-policy-app'),
+    /HTTP 200/,
+  );
+  await assert.rejects(
+    waitForRehearsalBrowserRead(
+      {
+        goto: async () => {
+          throw Error('request context closed');
+        },
+      },
+      '/',
+    ),
+    /context closed/,
   );
 });
 

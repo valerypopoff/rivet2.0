@@ -6,6 +6,7 @@ import {
   controlLocalUpgradeRehearsal,
   loadLocalUpgradeRehearsal,
   recordLocalUpgradeRehearsalPhase,
+  waitForRehearsalBrowserRead,
 } from '../../../deploy/studio-server/scripts/local-upgrade-image-rehearsal.mjs';
 
 const manifest = process.env.RIVET_LOCAL_UPGRADE_REHEARSAL_MANIFEST;
@@ -24,11 +25,12 @@ test('production images support real UI conversion, online/offline rollback and 
   const control = (action: Parameters<typeof controlLocalUpgradeRehearsal>[1]) =>
     controlLocalUpgradeRehearsal(manifest!, action);
   const open = async () => {
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    // A recovered backend may be ready before nginx refreshes its upstream and
+    // authentication route. Wait for the actual read-only navigation to recover.
+    await waitForRehearsalBrowserRead(page, '/');
     await authenticateIfNeeded(page);
     const prompt = page.getByTestId('local-storage-upgrade-prompt');
-    const setupResponse = await page.request.get('/api/app-settings/local-upgrade/setup');
-    expect(setupResponse.ok()).toBe(true);
+    const setupResponse = await waitForRehearsalBrowserRead(page, '/api/app-settings/local-upgrade/setup');
     const setup = (await setupResponse.json()) as { eligible: boolean; liveSqlite: boolean };
     if (setup.eligible && !setup.liveSqlite) await expect(prompt).toBeVisible();
     if (await prompt.isVisible()) {
@@ -41,6 +43,15 @@ test('production images support real UI conversion, online/offline rollback and 
       .getByRole('tab', { name: 'Local storage upgrade', exact: true })
       .click();
     return page.getByRole('tabpanel', { name: 'Local storage upgrade', exact: true });
+  };
+  const waitForPublishedRecovery = async () => {
+    const setup = await waitForRehearsalBrowserRead(page, '/api/app-settings/local-upgrade/setup');
+    expect((await setup.json()).liveSqlite).toBe(true);
+    // /apps uses the execution upstream, independently of management/API DNS.
+    // This published fixture requires sign-in. Read its policy, do not replay a
+    // workflow POST to make a transient routing failure disappear.
+    const app = await waitForRehearsalBrowserRead(page, '/apps/sqlite-policy-app');
+    expect(await app.text()).toContain('Sign in required');
   };
   const copy = async () => {
     const panel = await open();
@@ -563,11 +574,13 @@ test('production images support real UI conversion, online/offline rollback and 
   expect((await runs.json()).runs.some((run: { id: string }) => run.id !== fixture.sourceRecordingId)).toBe(true);
   await evidence('recordings');
   await control('recreate');
+  await waitForPublishedRecovery();
   await verifyOperational();
   expect((await execute()).packageValue).toBe(84);
   expect((await execute()).environmentValue).toBe('sqlite-private-setting');
   expect((await load()).datasetsContents).toBe(datasetsContents);
   await control('drop-runtime-cache');
+  await waitForPublishedRecovery();
   expect((await execute()).packageValue).toBe(84);
   const tree = await page.request.get('/api/workflows/tree');
   expect(tree.ok()).toBe(true);
@@ -579,6 +592,7 @@ test('production images support real UI conversion, online/offline rollback and 
   await evidence('retained-source-proof');
   await control('assert-rollback-closed');
   await control('backup-and-restore-selected');
+  await waitForPublishedRecovery();
   expect((await execute()).packageValue).toBe(84);
   expect((await execute()).environmentValue).toBe('sqlite-private-setting');
   expect((await load()).datasetsContents).toBe(datasetsContents);
