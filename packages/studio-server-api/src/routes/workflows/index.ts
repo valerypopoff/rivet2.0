@@ -5,6 +5,10 @@ import { scheduledRunsRouter } from '../../scheduled-runs/router.js';
 import { localCatalogExecutorIoRouter } from '../../local-metadata/executor-io-route.js';
 import { projectBundleRouter } from './project-bundle-router.js';
 import { bundlesRouter } from './bundles-router.js';
+import { namespaceRouter } from './namespace-router.js';
+import { requireGuardedNamespaceMutations } from './storage-backend.js';
+import { usesManagedNamespace, mutateStructuralWithBackend } from './storage-backend.js';
+import { requireStructuralMutation, structuralMutationSchema } from './structural-contract.js';
 import { listIncomingProjectReferences } from './project-references.js';
 import { z } from 'zod';
 import { prepareWorkflowRecordingInputExtractor } from './recording-input-extractor.js';
@@ -81,6 +85,7 @@ export const workflowsRouter = Router();
 workflowsRouter.use('/scheduled-runs', scheduledRunsRouter);
 workflowsRouter.use('/project-bundles', projectBundleRouter);
 workflowsRouter.use('/bundles', bundlesRouter);
+workflowsRouter.use('/namespace', namespaceRouter);
 workflowsRouter.use('/local-catalog-io', localCatalogExecutorIoRouter);
 const timing = createResponseTimingMiddleware();
 const jsonBody = createControlPlaneJsonBodyParser();
@@ -131,6 +136,7 @@ const moveSchema = z.object({
 });
 
 const createFolderSchema = z.object({
+  mutation: structuralMutationSchema.optional(),
   name: workflowNameSchema,
   parentRelativePath: workflowFolderSchema,
 });
@@ -145,11 +151,13 @@ const deleteFolderSchema = z.object({
 });
 
 const createProjectSchema = z.object({
+  mutation: structuralMutationSchema.optional(),
   folderRelativePath: workflowFolderSchema,
   name: workflowNameSchema,
 });
 
 const uploadProjectSchema = z.object({
+  mutation: structuralMutationSchema.optional(),
   folderRelativePath: workflowFolderSchema,
   fileName: z.string(),
   contents: z.string(),
@@ -256,6 +264,7 @@ const pathOnlySchema = z.object({
 const publicationPathSchema = pathOnlySchema.extend({ preconditions: publicationPreconditionsSchema });
 
 const duplicateProjectSchema = z.object({
+  mutation: structuralMutationSchema.optional(),
   relativePath: workflowPathSchema,
   version: z.enum(['live', 'published']).optional(),
 });
@@ -638,6 +647,7 @@ workflowsRouter.post(
   validateBody(moveSchema),
   asyncHandler(async (req, res) => {
     const { itemType, sourceRelativePath, destinationFolderRelativePath } = req.body as z.infer<typeof moveSchema>;
+    requireGuardedNamespaceMutations();
     if (itemType === 'project' || itemType === 'folder') {
       const result = await moveWorkflowItemWithBackend(itemType, sourceRelativePath, destinationFolderRelativePath);
       if (itemType === 'folder' || result.movedProjectPaths.length > 0) notifyWorkflowTreeChanged(req);
@@ -655,7 +665,12 @@ workflowsRouter.post(
   validateBody(createFolderSchema),
   asyncHandler(async (req, res) => {
     const { name, parentRelativePath } = req.body as z.infer<typeof createFolderSchema>;
-    const folder = await createWorkflowFolderItemWithBackend(name, parentRelativePath);
+    const folder = usesManagedNamespace()
+      ? await mutateStructuralWithBackend(
+          { operation: 'create-folder', input: { name, parentRelativePath } },
+          requireStructuralMutation(req.body.mutation, req),
+        )
+      : await createWorkflowFolderItemWithBackend(name, parentRelativePath);
     notifyWorkflowTreeChanged(req);
     res.status(201).json({ folder });
   }),
@@ -668,6 +683,7 @@ workflowsRouter.patch(
   validateBody(renameFolderSchema),
   asyncHandler(async (req, res) => {
     const { relativePath, newName } = req.body as z.infer<typeof renameFolderSchema>;
+    requireGuardedNamespaceMutations();
     const result = await renameWorkflowFolderItemWithBackend(relativePath, newName);
     notifyWorkflowTreeChanged(req);
     res.json(result);
@@ -680,6 +696,7 @@ workflowsRouter.delete(
   validateBody(deleteFolderSchema),
   asyncHandler(async (req, res) => {
     const { relativePath } = req.body as z.infer<typeof deleteFolderSchema>;
+    requireGuardedNamespaceMutations();
     await deleteWorkflowFolderItemWithBackend(relativePath);
     notifyWorkflowTreeChanged(req);
     res.json({ deleted: true });
@@ -692,7 +709,12 @@ workflowsRouter.post(
   validateBody(createProjectSchema),
   asyncHandler(async (req, res) => {
     const { folderRelativePath, name } = req.body as z.infer<typeof createProjectSchema>;
-    const project = await createWorkflowProjectItemWithBackend(folderRelativePath, name);
+    const project = usesManagedNamespace()
+      ? await mutateStructuralWithBackend(
+          { operation: 'create-project', input: { name, parentRelativePath: folderRelativePath } },
+          requireStructuralMutation(req.body.mutation, req),
+        )
+      : await createWorkflowProjectItemWithBackend(folderRelativePath, name);
     notifyWorkflowTreeChanged(req);
     res.status(201).json({ project });
   }),
@@ -704,6 +726,7 @@ workflowsRouter.patch(
   validateBody(renameProjectSchema),
   asyncHandler(async (req, res) => {
     const { relativePath, newName } = req.body as z.infer<typeof renameProjectSchema>;
+    requireGuardedNamespaceMutations();
     const result = await renameWorkflowProjectItemWithBackend(relativePath, newName);
     if (result.movedProjectPaths.length > 0) notifyWorkflowTreeChanged(req);
     res.json(result);
@@ -716,7 +739,12 @@ workflowsRouter.post(
   validateBody(duplicateProjectSchema),
   asyncHandler(async (req, res) => {
     const { relativePath, version } = req.body as z.infer<typeof duplicateProjectSchema>;
-    const project = await duplicateWorkflowProjectItemWithBackend(relativePath, version ?? 'live');
+    const project = usesManagedNamespace()
+      ? await mutateStructuralWithBackend(
+          { operation: 'copy-project', input: { relativePath, version: version ?? 'live' } },
+          requireStructuralMutation(req.body.mutation, req),
+        )
+      : await duplicateWorkflowProjectItemWithBackend(relativePath, version ?? 'live');
     notifyWorkflowTreeChanged(req);
     res.status(201).json({ project });
   }),
@@ -728,7 +756,12 @@ workflowsRouter.post(
   validateBody(uploadProjectSchema),
   asyncHandler(async (req, res) => {
     const { folderRelativePath, fileName, contents } = req.body as z.infer<typeof uploadProjectSchema>;
-    const project = await uploadWorkflowProjectItemWithBackend(folderRelativePath, fileName, contents);
+    const project = usesManagedNamespace()
+      ? await mutateStructuralWithBackend(
+          { operation: 'upload-project', input: { parentRelativePath: folderRelativePath, fileName, contents } },
+          requireStructuralMutation(req.body.mutation, req),
+        )
+      : await uploadWorkflowProjectItemWithBackend(folderRelativePath, fileName, contents);
     notifyWorkflowTreeChanged(req);
     res.status(201).json({ project });
   }),
@@ -972,6 +1005,7 @@ workflowsRouter.delete(
   validateBody(pathOnlySchema),
   asyncHandler(async (req, res) => {
     const { relativePath } = req.body as z.infer<typeof pathOnlySchema>;
+    requireGuardedNamespaceMutations();
     const projectId = await deleteWorkflowProjectItemWithBackend(relativePath);
     notifyWorkflowTreeChanged(req);
     res.json({ deleted: true, projectId });

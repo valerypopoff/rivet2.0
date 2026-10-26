@@ -1,5 +1,6 @@
 import { expect, type FrameLocator, type Page, test } from '@playwright/test';
 import { createServer, type Server } from 'node:http';
+import { rootStructuralMutation } from '../../../deploy/studio-server/scripts/lib/structural-fixture-admission.mjs';
 import { deserializeProject, serializeProject, type Project } from '@valerypopoff/rivet2-core';
 
 import { authenticateIfNeeded } from './helpers/hostedEditorObserve';
@@ -13,11 +14,32 @@ import {
 
 type EditorRoot = Page | FrameLocator;
 type ExecutorMode = 'browser' | 'nodejs';
-const savedFixtures = new WeakMap<Page, { origin: string; relativePath: string }>();
+const savedFixtures = new WeakMap<Page, { origin: string; relativePath: string; projectId: string }>();
 
 test.afterEach(async ({ page }) => {
   const fixture = savedFixtures.get(page);
   if (!fixture) return;
+  const tree = await (await page.request.get(`${fixture.origin}/api/workflows/tree`)).json();
+  if (tree.capabilities?.namespaceMutations) {
+    const snapshot = await (
+      await page.request.get(
+        `${fixture.origin}/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(fixture.relativePath)}`,
+      )
+    ).json();
+    expect(snapshot.projectId).toBe(fixture.projectId);
+    const response = await page.request.post(`${fixture.origin}/api/workflows/namespace/mutate`, {
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
+      data: {
+        operationId: crypto.randomUUID(),
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        command: { kind: 'delete', itemType: 'project', relativePath: fixture.relativePath },
+        expectedSource: { id: fixture.projectId, revisionId: snapshot.draftRevisionId },
+      },
+    });
+    expect(response.ok()).toBe(true);
+    savedFixtures.delete(page);
+    return;
+  }
   const response = await page.request.delete(`${fixture.origin}/api/workflows/projects`, {
     data: { relativePath: fixture.relativePath },
   });
@@ -94,7 +116,9 @@ async function runAndVerifyEvaluation(options: {
   const graphId = 'evaluation-metrics-graph';
   const graph = accountingGraph(options.providerBaseUrl);
   const upload = await options.page.request.post(`${origin}/api/workflows/projects/upload`, {
+    headers: { 'X-Rivet-Namespace-Intent': '1' },
     data: {
+      mutation: rootStructuralMutation(),
       folderRelativePath: '',
       fileName: `${options.suiteName}.rivet-project`,
       contents: serializeProject({
@@ -108,7 +132,7 @@ async function runAndVerifyEvaluation(options: {
   });
   expect(upload.ok(), 'Save the evaluation fixture in the real local backend').toBe(true);
   const { project: saved } = await upload.json();
-  savedFixtures.set(options.page, { origin, relativePath: saved.relativePath });
+  savedFixtures.set(options.page, { origin, relativePath: saved.relativePath, projectId: saved.projectMetadataId });
   const loaded = await options.page.request.post(`${origin}/api/projects/load`, { data: { path: saved.absolutePath } });
   expect(loaded.ok()).toBe(true);
   const [project] = deserializeProject((await loaded.json()).contents);

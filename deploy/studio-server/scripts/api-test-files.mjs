@@ -141,6 +141,7 @@ export const defaultApiTestFiles = [
   'src/tests/sqlite-migration-source.test.ts',
   'src/tests/sqlite-settings-store.test.ts',
   'src/tests/sqlite-workflow-backend.test.ts',
+  'src/tests/structural-receipts.test.ts',
   'src/tests/trusted-clients.test.ts',
   'src/tests/ui-auth.test.ts',
   'src/tests/vm-migration-maintenance.test.ts',

@@ -5,7 +5,7 @@ import type { RecordingRow, RevisionRow, TransactionHooks, WorkflowRow } from '.
 
 /** Caller holds the topology lease and the workflow row FOR UPDATE. */
 export async function deleteManagedWorkflowProject(
-  context: ManagedWorkflowContext,
+  context: Pick<ManagedWorkflowContext, 'db' | 'mappers' | 'maintenance' | 'executionInvalidationController'>,
   client: PoolClient,
   hooks: TransactionHooks,
   workflow: WorkflowRow,

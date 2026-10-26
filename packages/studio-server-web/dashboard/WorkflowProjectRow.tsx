@@ -3,6 +3,7 @@ import type { WorkflowProjectItem } from './types';
 import { WorkflowInlineRenameInput } from './WorkflowInlineRenameInput';
 import { getWorkflowProjectDotStatus, getWorkflowProjectPublicationStatus } from './workflowProjectPublicationStatus';
 import type { DraggedWorkflowItem } from './workflowLibraryHelpers';
+import { namespaceIdentity } from './workflowNamespaceMutations';
 
 type WorkflowProjectRowProps = {
   project: WorkflowProjectItem;
@@ -97,6 +98,7 @@ export const WorkflowProjectRow: FC<WorkflowProjectRowProps> = ({
       disabled={!editorReady}
       onDragStart={onDragStart({
         itemType: 'project',
+        expectedSource: namespaceIdentity(project),
         absolutePath: project.absolutePath,
         relativePath: project.relativePath,
         parentRelativePath: getParentRelativePath(project.relativePath),

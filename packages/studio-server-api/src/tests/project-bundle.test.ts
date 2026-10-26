@@ -1235,13 +1235,28 @@ test('filesystem saved export HTTP requires auth and supports exact Range/If-Ran
             uploadFiles.push({ path, contents });
           },
         });
-        const unsupported = await fetch(`${url}/import`, {
+        const unguarded = await fetch(`${url}/import`, {
           method: 'POST',
           headers: { ...headers, 'X-Rivet-Bundle-Intent': '1' },
           body: JSON.stringify({ folderRelativePath: '', files: uploadFiles }),
         });
+        assert.equal(unguarded.status, 428);
+        assert.match(await unguarded.text(), /guarded operation is required/);
+        const unsupported = await fetch(`${url}/import`, {
+          method: 'POST',
+          headers: { ...headers, 'X-Rivet-Bundle-Intent': '1' },
+          body: JSON.stringify({
+            folderRelativePath: '',
+            files: uploadFiles,
+            mutation: {
+              operationId: randomUUID(),
+              expiresAt: new Date(Date.now() + 60000).toISOString(),
+              expectedDestinationId: null,
+            },
+          }),
+        });
         assert.equal(unsupported.status, 409);
-        assert.match(await unsupported.text(), /PostgreSQL and S3/);
+        assert.match(await unsupported.text(), /requires managed storage/);
         const started = await fetch(url, {
           method: 'POST',
           headers,

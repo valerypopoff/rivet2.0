@@ -9,6 +9,8 @@ export type RivetAppHostProjectSavedEvent = {
   pathChangedWhileSaving?: boolean;
   path: string | null;
   saveAs: boolean;
+  /** Persistence created another document; the source was not saved in place. */
+  createdCopy?: boolean;
 };
 
 export type RivetAppHostActiveProjectChangedEvent = {

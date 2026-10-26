@@ -30,7 +30,6 @@ import type {
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingWorkflowListResponse,
   WorkflowRunStatisticsCatalogResponse,
-  WorkflowRunStatisticsPeriod,
   WorkflowRunStatisticsQuery,
   WorkflowRunStatisticsResponse,
   WorkflowRunStatisticsSurface,
@@ -43,9 +42,60 @@ import type {
   WorkflowTreeResponse,
 } from './types';
 import { createResponseError, parseJsonResponse, parseTextResponse } from './apiRequest';
+import {
+  requestNamespaceMutation,
+  requestRecoverableMutation,
+  requestStructuralMutation,
+} from './workflowNamespaceMutations';
+import type { WorkflowNamespaceMutation } from '../../studio-server-shared/workflow-namespace-types';
+import type { StructuralCommand, StructuralMutation } from '../../studio-server-shared/workflow-mutation-contract';
 
 const API = RIVET_API_BASE_URL;
-export async function requestWorkflowBundle<T>(path: string, input: unknown, signal?: AbortSignal): Promise<T> {
+export async function requestWorkflowBundle<T>(
+  path: string,
+  input: unknown,
+  signal?: AbortSignal,
+  guards?: Omit<StructuralMutation, 'operationId' | 'expiresAt'> & { relativePath?: string },
+): Promise<T> {
+  const body = input as Record<string, unknown>;
+  const source =
+    guards?.expectedSource ?? (typeof body.namespaceId === 'string' ? { id: body.namespaceId } : undefined);
+  if (source || guards?.expectedDestinationId !== undefined) {
+    if (signal?.aborted) throw signal.reason;
+    const bundleId = path.split('/')[1]!;
+    const writeInput = /\/duplicate$/.test(path) ? { ...body, relativePath: guards?.relativePath } : body;
+    const command =
+      path === '/kind'
+        ? { operation: 'bundle-kind', input: writeInput }
+        : /\/delete$/.test(path)
+          ? { operation: 'delete-bundle', input: { bundleId, ...writeInput } }
+          : /\/duplicate$/.test(path)
+            ? { operation: 'copy-bundle', input: { bundleId, ...writeInput } }
+            : { operation: 'create-bundle', input: writeInput };
+    return requestStructuralMutation<T>({
+      api: API,
+      url: `${API}/workflows/bundles${path}`,
+      command: command as StructuralCommand,
+      input: writeInput,
+      preconditions: {
+        ...(source ? { expectedSource: source } : {}),
+        ...(guards?.expectedDestinationId !== undefined ? { expectedDestinationId: guards.expectedDestinationId } : {}),
+      },
+      headers: { 'X-Rivet-Bundle-Intent': '1', ...getWorkflowTreeMutationHeaders() },
+    });
+  }
+  if (/\/duplicate$/.test(path)) {
+    if (signal?.aborted) throw signal.reason;
+    return requestRecoverableMutation<T>({
+      mutateUrl: `${API}/workflows/bundles${path}`,
+      recoverUrl: `${API}/workflows/bundles${path}/recover`,
+      input: {
+        ...(input as object),
+        receipt: { operationId: crypto.randomUUID(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() },
+      },
+      headers: { 'X-Rivet-Bundle-Intent': '1', ...getWorkflowTreeMutationHeaders() },
+    });
+  }
   return workflowJsonResponse<T>(
     await fetch(`${API}/workflows/bundles${path}`, {
       method: 'POST',
@@ -163,10 +213,23 @@ export async function fetchWorkflowTree(): Promise<WorkflowTreeResponse> {
   return workflowJsonResponse<WorkflowTreeResponse>(response);
 }
 
-export async function uploadWorkflowBundle(folderRelativePath: string, files: ProjectBundleUploadFile[]) {
+export async function uploadWorkflowBundle(
+  folderRelativePath: string,
+  files: ProjectBundleUploadFile[],
+  expectedDestinationId?: string | null,
+) {
   const body = JSON.stringify({ folderRelativePath, files });
   if (new TextEncoder().encode(body).length > 100 * 1024 * 1024)
     throw new Error('Encoded bundle upload exceeds the 100 MiB request limit.');
+  if (expectedDestinationId !== undefined)
+    return requestStructuralMutation<ProjectBundleImportResult>({
+      api: API,
+      url: `${API}/workflows/project-bundles/import`,
+      command: { operation: 'import-bundle', input: { parentRelativePath: folderRelativePath, files } },
+      input: { folderRelativePath, files },
+      preconditions: { expectedDestinationId },
+      headers: { 'X-Rivet-Bundle-Intent': '1', ...getWorkflowTreeMutationHeaders() },
+    });
   const response = await fetch(`${API}/workflows/project-bundles/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1', ...getWorkflowTreeMutationHeaders() },
@@ -180,7 +243,12 @@ function parseWorkflowTreeSyncEvent(
 ): WorkflowTreeSyncState | WorkflowTreeChangeEvent | null {
   try {
     const parsed = JSON.parse(event.data) as Partial<WorkflowTreeChangeEvent>;
-    if (typeof parsed.epoch !== 'string' || !Number.isSafeInteger(parsed.revision) || parsed.revision < 0) {
+    if (
+      typeof parsed.epoch !== 'string' ||
+      typeof parsed.revision !== 'number' ||
+      !Number.isSafeInteger(parsed.revision) ||
+      parsed.revision < 0
+    ) {
       return null;
     }
     if ('sourceClientId' in parsed && parsed.sourceClientId !== null && typeof parsed.sourceClientId !== 'string') {
@@ -368,7 +436,22 @@ export async function deleteWorkflowRecording(recordingId: string): Promise<void
   await workflowJsonResponse<{ deleted: true }>(response);
 }
 
-export async function createWorkflowFolder(name: string, parentRelativePath = ''): Promise<WorkflowFolderItem> {
+export async function createWorkflowFolder(
+  name: string,
+  parentRelativePath = '',
+  expectedDestinationId?: string | null,
+): Promise<WorkflowFolderItem> {
+  if (expectedDestinationId !== undefined) {
+    const result = await requestStructuralMutation<{ folder: WorkflowFolderItem }>({
+      api: API,
+      url: `${API}/workflows/folders`,
+      command: { operation: 'create-folder', input: { name, parentRelativePath } },
+      input: { name, parentRelativePath },
+      preconditions: { expectedDestinationId },
+      headers: getWorkflowTreeMutationHeaders(),
+    });
+    return result.folder;
+  }
   const response = await fetch(`${API}/workflows/folders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -382,7 +465,15 @@ export async function createWorkflowFolder(name: string, parentRelativePath = ''
 export async function renameWorkflowFolder(
   relativePath: string,
   newName: string,
+  expectedSource?: WorkflowNamespaceMutation['expectedSource'],
 ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowMoveResponse['movedProjectPaths'] }> {
+  if (expectedSource)
+    return requestNamespaceMutation({
+      api: API,
+      headers: getWorkflowTreeMutationHeaders(),
+      command: { kind: 'rename', itemType: 'folder', relativePath, name: newName },
+      expectedSource,
+    });
   const response = await fetch(`${API}/workflows/folders`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -395,7 +486,19 @@ export async function renameWorkflowFolder(
   }>(response);
 }
 
-export async function deleteWorkflowFolder(relativePath: string): Promise<void> {
+export async function deleteWorkflowFolder(
+  relativePath: string,
+  expectedSource?: WorkflowNamespaceMutation['expectedSource'],
+): Promise<void> {
+  if (expectedSource) {
+    await requestNamespaceMutation({
+      api: API,
+      headers: getWorkflowTreeMutationHeaders(),
+      command: { kind: 'delete', itemType: 'folder', relativePath },
+      expectedSource,
+    });
+    return;
+  }
   const response = await fetch(`${API}/workflows/folders`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -405,7 +508,22 @@ export async function deleteWorkflowFolder(relativePath: string): Promise<void> 
   await workflowJsonResponse<{ deleted: true }>(response);
 }
 
-export async function createWorkflowProject(folderRelativePath: string, name: string): Promise<WorkflowProjectItem> {
+export async function createWorkflowProject(
+  folderRelativePath: string,
+  name: string,
+  expectedDestinationId?: string | null,
+): Promise<WorkflowProjectItem> {
+  if (expectedDestinationId !== undefined) {
+    const result = await requestStructuralMutation<{ project: WorkflowProjectItem }>({
+      api: API,
+      url: `${API}/workflows/projects`,
+      command: { operation: 'create-project', input: { name, parentRelativePath: folderRelativePath } },
+      input: { name, folderRelativePath },
+      preconditions: { expectedDestinationId },
+      headers: getWorkflowTreeMutationHeaders(),
+    });
+    return result.project;
+  }
   const response = await fetch(`${API}/workflows/projects`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -420,7 +538,19 @@ export async function uploadWorkflowProject(
   folderRelativePath: string,
   fileName: string,
   contents: string,
+  expectedDestinationId?: string | null,
 ): Promise<WorkflowProjectItem> {
+  if (expectedDestinationId !== undefined) {
+    const result = await requestStructuralMutation<{ project: WorkflowProjectItem }>({
+      api: API,
+      url: `${API}/workflows/projects/upload`,
+      command: { operation: 'upload-project', input: { parentRelativePath: folderRelativePath, fileName, contents } },
+      input: { folderRelativePath, fileName, contents },
+      preconditions: { expectedDestinationId },
+      headers: getWorkflowTreeMutationHeaders(),
+    });
+    return result.project;
+  }
   const response = await fetch(`${API}/workflows/projects/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -434,7 +564,15 @@ export async function uploadWorkflowProject(
 export async function renameWorkflowProject(
   relativePath: string,
   newName: string,
+  expectedSource?: WorkflowNamespaceMutation['expectedSource'],
 ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowMoveResponse['movedProjectPaths'] }> {
+  if (expectedSource)
+    return requestNamespaceMutation({
+      api: API,
+      headers: getWorkflowTreeMutationHeaders(),
+      command: { kind: 'rename', itemType: 'project', relativePath, name: newName },
+      expectedSource,
+    });
   const response = await fetch(`${API}/workflows/projects`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -450,7 +588,25 @@ export async function renameWorkflowProject(
 export async function duplicateWorkflowProjectVersion(
   relativePath: string,
   version: WorkflowProjectDownloadVersion,
+  source?: WorkflowProjectItem,
 ): Promise<WorkflowProjectItem> {
+  if (source?.namespaceProtocol === 1) {
+    const result = await requestStructuralMutation<{ project: WorkflowProjectItem }>({
+      api: API,
+      url: `${API}/workflows/projects/duplicate`,
+      command: { operation: 'copy-project', input: { relativePath, version } },
+      input: { relativePath, version },
+      preconditions: {
+        expectedSource: {
+          id: source.projectMetadataId!,
+          revisionId: source.revisionId,
+          publicationVersion: source.settings.publicationVersion,
+        },
+      },
+      headers: getWorkflowTreeMutationHeaders(),
+    });
+    return result.project;
+  }
   const response = await fetch(`${API}/workflows/projects/duplicate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -632,7 +788,22 @@ export async function moveWorkflowItem(
   itemType: 'folder' | 'project',
   sourceRelativePath: string,
   destinationFolderRelativePath: string,
+  expectedSource?: WorkflowNamespaceMutation['expectedSource'],
+  expectedDestinationId?: string | null,
 ): Promise<WorkflowMoveResponse> {
+  if (expectedSource)
+    return requestNamespaceMutation({
+      api: API,
+      headers: getWorkflowTreeMutationHeaders(),
+      command: {
+        kind: 'move',
+        itemType,
+        relativePath: sourceRelativePath,
+        destinationRelativePath: destinationFolderRelativePath,
+      },
+      expectedSource,
+      expectedDestinationId,
+    });
   const response = await fetch(`${API}/workflows/move`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -689,7 +860,17 @@ export async function updateWorkflowEndpointAccess(
   return data.project;
 }
 
-export async function deleteWorkflowProject(relativePath: string): Promise<WorkflowProjectDeleteResponse> {
+export async function deleteWorkflowProject(
+  relativePath: string,
+  expectedSource?: WorkflowNamespaceMutation['expectedSource'],
+): Promise<WorkflowProjectDeleteResponse> {
+  if (expectedSource)
+    return requestNamespaceMutation({
+      api: API,
+      headers: getWorkflowTreeMutationHeaders(),
+      command: { kind: 'delete', itemType: 'project', relativePath },
+      expectedSource,
+    });
   const response = await fetch(`${API}/workflows/projects`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },

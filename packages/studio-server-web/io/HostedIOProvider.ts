@@ -18,10 +18,13 @@ import {
   type IOProvider,
   type LoadedProjectData,
   type ProjectLoadOptions,
+  type ProjectSaveResult,
 } from '../../app/src/io/IOProvider.js';
 import type { EvaluationStore } from '@valerypopoff/rivet2-evaluations';
 import { getDefaultStore } from 'jotai';
 import { RIVET_API_BASE_URL } from '../../studio-server-shared/hosted-env';
+import { requestStructuralMutation } from '../dashboard/workflowNamespaceMutations';
+import { fetchWorkflowTree } from '../dashboard/workflowApi';
 import { apiReadBinary, apiReadText } from '../../studio-server-shared/api';
 import {
   getWorkflowPublishedVersionPreviewFromVirtualProjectPath,
@@ -115,7 +118,35 @@ async function apiSaveProject(options: {
 }): Promise<{
   path: string;
   revisionId: string | null;
+  project?: { projectMetadataId?: string; name: string };
 }> {
+  if (options.saveIntent === 'save-as' && (await getWorkflowStorageBackend()) === 'managed') {
+    const tree = await fetchWorkflowTree();
+    const relative = options.path.slice(MANAGED_WORKFLOW_VIRTUAL_ROOT.length).replace(/^\/+/, '');
+    const parent = relative.includes('/') ? relative.slice(0, relative.lastIndexOf('/')) : '';
+    const folders = [...tree.folders],
+      projects = [...tree.projects];
+    for (let index = 0; index < folders.length; index++) {
+      folders.push(...folders[index]!.folders);
+      projects.push(...folders[index]!.projects);
+    }
+    const ancestor = folders
+      .filter((folder) => parent === folder.relativePath || parent.startsWith(folder.relativePath + '/'))
+      .sort((a, b) => b.relativePath.length - a.relativePath.length)[0];
+    const existing = projects.find((project) => project.relativePath === relative);
+    return requestStructuralMutation({
+      api: API,
+      url: `${API}/projects/save`,
+      command: { operation: 'save-as', input: options },
+      input: options,
+      preconditions: {
+        expectedDestinationPath: ancestor?.relativePath ?? '',
+        expectedDestinationId: ancestor?.namespaceId ?? null,
+        ...(existing ? { expectedSource: { id: existing.projectMetadataId!, revisionId: existing.revisionId } } : {}),
+      },
+      headers: getWorkflowTreeMutationHeaders(),
+    });
+  }
   const response = await fetch(`${API}/projects/save`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...getWorkflowTreeMutationHeaders() },
@@ -340,7 +371,7 @@ export class HostedIOProvider implements IOProvider {
     URL.revokeObjectURL(url);
   }
 
-  async saveProjectData(project: Project): Promise<string | undefined> {
+  async saveProjectData(project: Project): Promise<ProjectSaveResult> {
     assertProjectIsWritable(project, getCurrentLoadedProjectPath());
     const finishSave = beginHostedProjectSave(project.metadata.id);
     try {
@@ -359,6 +390,11 @@ export class HostedIOProvider implements IOProvider {
         saveIntent: 'save-as',
       });
 
+      if (saved.project?.projectMetadataId && saved.project.projectMetadataId !== project.metadata.id) {
+        if (!saved.revisionId) throw new Error('The project copy was saved, but its revision could not be confirmed. Refresh the library.');
+        return { kind: 'created-project', path: saved.path, projectId: saved.project.projectMetadataId as ProjectId,
+          revisionId: saved.revisionId, title: saved.project.name };
+      }
       bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
       return saved.path;
     } finally {

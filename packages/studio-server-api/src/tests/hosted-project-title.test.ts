@@ -755,9 +755,6 @@ test('managed project rename changes catalog identity without creating a draft r
         isUniqueViolation: () => false,
       },
     } as never,
-    saveHostedProject: async () => {
-      throw new Error('rename must not save project contents');
-    },
   });
 
   const renamed = await catalogService.renameWorkflowProjectItem(workflow.relative_path, 'Managed Renamed Name');

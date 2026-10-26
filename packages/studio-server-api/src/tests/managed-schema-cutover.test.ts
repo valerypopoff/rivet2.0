@@ -6,6 +6,7 @@ import {
   SCHEMA_READER_ANNOTATION,
 } from '../managed-schema-cutover.js';
 import type { Pool } from 'pg';
+import { MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION as minimumReader } from '../routes/workflows/managed/schema-migrations.js';
 const release = 'fixture';
 const resource = (version?: number, replicas = 1, component = 'backend') => ({
   metadata: {
@@ -31,8 +32,8 @@ test('standalone migration distinguishes empty bootstrap, unversioned legacy and
     for (const state of [
       { version: 0, legacy: false },
       { version: 0, legacy: true },
-      { version: 14, legacy: true },
-      { version: 15, legacy: true },
+      { version: minimumReader - 1, legacy: true },
+      { version: minimumReader, legacy: true },
     ]) {
       const pool = {
         query: async (sql: string, params?: unknown[]) => ({
@@ -43,7 +44,7 @@ test('standalone migration distinguishes empty bootstrap, unversioned legacy and
           ],
         }),
       } as unknown as Pool;
-      if (state.legacy && state.version < 15)
+      if (state.legacy && state.version < minimumReader)
         await assert.rejects(assertManagedSchemaMigrationSafe(pool), /all readers and writers stopped/);
       else await assertManagedSchemaMigrationSafe(pool);
       process.env.RIVET_MANAGED_SCHEMA_OFFLINE = '1';
@@ -61,8 +62,10 @@ const list = (...items: ReturnType<typeof resource>[]) => ({ items });
 test('schema guard accepts bootstrap and compatible readers, not unknown or terminating old pods', () => {
   const empty = { pods: list(), deployments: list(), statefulsets: list(), autoscalers: list() };
   assert.doesNotThrow(() => assertManagedSchemaReadersCompatible(empty, release));
-  assert.doesNotThrow(() => assertManagedSchemaReadersCompatible({ ...empty, pods: list(resource(15)) }, release));
-  for (const version of [undefined, 14]) {
+  assert.doesNotThrow(() =>
+    assertManagedSchemaReadersCompatible({ ...empty, pods: list(resource(minimumReader)) }, release),
+  );
+  for (const version of [undefined, minimumReader - 1]) {
     assert.throws(
       () => assertManagedSchemaReadersCompatible({ ...empty, pods: list(resource(version)) }, release),
       /reader pod/,
@@ -94,14 +97,24 @@ test('schema guard accepts bootstrap and compatible readers, not unknown or term
   const scaler = resource(undefined, 1, 'autoscaler');
   assert.doesNotThrow(() =>
     assertManagedSchemaReadersCompatible(
-      { ...empty, pods: list(scaler), deployments: list(scaler), statefulsets: list(resource(15, 2, 'execution')) },
+      {
+        ...empty,
+        pods: list(scaler),
+        deployments: list(scaler),
+        statefulsets: list(resource(minimumReader, 2, 'execution')),
+      },
       release,
     ),
   );
   assert.throws(
     () =>
       assertManagedSchemaReadersCompatible(
-        { ...empty, pods: list(scaler), deployments: list(scaler), statefulsets: list(resource(14, 2, 'execution')) },
+        {
+          ...empty,
+          pods: list(scaler),
+          deployments: list(scaler),
+          statefulsets: list(resource(minimumReader - 1, 2, 'execution')),
+        },
         release,
       ),
     /reader controller/,

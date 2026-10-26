@@ -6,6 +6,49 @@ import * as managedMappers from '../routes/workflows/managed/mappers.js';
 import { ManagedWorkflowExecutionInvalidationController } from '../routes/workflows/managed/execution-invalidation.js';
 import type { RevisionRow, WebAppPublicationRow, WorkflowRow } from '../routes/workflows/managed/types.js';
 
+test('catalog adapters reject invalid runtime path/name types before opening a transaction', async () => {
+  const unexpected = () => assert.fail('Invalid inputs must not acquire resources');
+  const catalog = createManagedWorkflowCatalogService({
+    context: {
+      pool: {},
+      initialize: unexpected,
+      withTransaction: unexpected,
+      db: {},
+      queries: {},
+      revisions: {},
+      mappers: managedMappers,
+      blobStore: {},
+      executionInvalidationController: { queueCatalogInvalidation: unexpected },
+    } as never,
+  });
+  for (const invalid of [123, true, {}, []]) {
+    for (const attempt of [
+      () => catalog.renameWorkflowFolderItem(invalid, 'Valid'),
+      () => catalog.renameWorkflowFolderItem('Valid', invalid),
+      () => catalog.moveWorkflowFolder('Valid', invalid),
+      () => catalog.deleteWorkflowFolderItem(invalid),
+      () => catalog.renameWorkflowProjectItem(invalid, 'Valid'),
+      () => catalog.renameWorkflowProjectItem('Valid.rivet-project', invalid),
+      () => catalog.moveWorkflowProject('Valid.rivet-project', invalid),
+      () => catalog.deleteWorkflowProjectItem(invalid),
+      () => catalog.createWorkflowProjectItem('', invalid),
+      () => catalog.duplicateWorkflowProjectItem(invalid),
+    ])
+      await assert.rejects(attempt, { status: 400 });
+  }
+});
+
+// Tree metadata is captured in one read-only transaction; blob-backed legacy
+// stats must remain outside it so a slow object read cannot pin the snapshot.
+const treeReadClient = {
+  query: async (sql: string) => {
+    assert.equal(sql, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+  },
+};
+async function withTreeRead<T>(run: (client: typeof treeReadClient) => Promise<T>): Promise<T> {
+  return run(treeReadClient);
+}
+
 function createWorkflowRow(overrides: Partial<WorkflowRow> = {}): WorkflowRow {
   return {
     workflow_id: 'workflow-managed-stats',
@@ -88,9 +131,6 @@ for (const operation of ['create', 'rename', 'move', 'delete', 'duplicate', 'non
         mappers: managedMappers,
         executionInvalidationController: invalidation,
       } as never,
-      saveHostedProject: async () => {
-        throw Error('Unexpected project mutation');
-      },
     });
     const run = () =>
       operation === 'create' || operation === 'duplicate'
@@ -104,7 +144,11 @@ for (const operation of ['create', 'rename', 'move', 'delete', 'duplicate', 'non
     else await run();
     assert.deepEqual(
       events,
-      ['duplicate', 'nonempty', 'unchanged'].includes(operation) ? [] : ['write', 'notify', 'commit'],
+      ['duplicate', 'nonempty'].includes(operation)
+        ? []
+        : operation === 'unchanged'
+          ? ['commit']
+          : ['write', 'notify', 'commit'],
     );
   });
 }
@@ -223,9 +267,6 @@ function createCatalogForDeleteGuard(
       },
       dispose: async () => {},
     } as never,
-    saveHostedProject: async () => {
-      throw new Error('Unexpected saveHostedProject call');
-    },
   });
 }
 
@@ -265,9 +306,6 @@ test('managed reference catalog and snapshots read active project revisions only
   };
   const catalog = createManagedWorkflowCatalogService({
     context: context as never,
-    saveHostedProject: async () => {
-      throw new Error('Read-only scan');
-    },
   });
   const entries = await catalog.listWorkflowProjectReferenceCatalog();
   assert.equal(reads.length, 0);
@@ -297,12 +335,11 @@ test('managed workflow tree bulk-joins revision stats without per-project querie
     context: {
       pool: {} as never,
       initialize: async () => {},
-      withTransaction: async () => {
-        throw new Error('Unexpected transaction');
-      },
+      withTransaction: withTreeRead,
       db: {
         queryOne: async () => null,
-        queryRows: async (_client: unknown, sql: string) => {
+        queryRows: async (client: unknown, sql: string) => {
+          assert.equal(client, treeReadClient);
           sqlQueries++;
           return sql.includes('FROM workflows w') ? treeRows : [];
         },
@@ -312,7 +349,10 @@ test('managed workflow tree bulk-joins revision stats without per-project querie
         getManagedDbPoolConfig: () => ({}),
       },
       queries: {
-        listFolderRows: async () => [],
+        listFolderRows: async (client: unknown) => {
+          assert.equal(client, treeReadClient);
+          return [];
+        },
         listWorkflowRows: async () => [workflowRow],
         getWorkflowByRelativePath: async () => null,
         getWorkflowById: async () => null,
@@ -354,9 +394,6 @@ test('managed workflow tree bulk-joins revision stats without per-project querie
       },
       dispose: async () => {},
     } as never,
-    saveHostedProject: async () => {
-      throw new Error('Unexpected saveHostedProject call');
-    },
   });
 
   const tree = await catalog.getTree();
@@ -414,9 +451,7 @@ test('managed workflow tree exposes aggregate endpoint and web app publication s
     context: {
       pool: {} as never,
       initialize: async () => {},
-      withTransaction: async () => {
-        throw new Error('Unexpected transaction');
-      },
+      withTransaction: withTreeRead,
       db: {
         queryOne: async () => null,
         queryRows: async (_client: unknown, sql: string) =>
@@ -472,9 +507,6 @@ test('managed workflow tree exposes aggregate endpoint and web app publication s
       },
       dispose: async () => {},
     } as never,
-    saveHostedProject: async () => {
-      throw new Error('Unexpected saveHostedProject call');
-    },
   });
 
   const tree = await catalog.getTree();
@@ -536,6 +568,7 @@ test('managed workflow deletion removes project health in the same transaction b
 });
 
 test('managed workflow tree backfills legacy revision stats when metadata is missing', async () => {
+  let treeSnapshotOpen = false;
   const workflowRow = createWorkflowRow({
     workflow_id: 'workflow-managed-legacy-stats',
     current_draft_revision_id: 'revision-managed-legacy-stats',
@@ -578,13 +611,20 @@ test('managed workflow tree backfills legacy revision stats when metadata is mis
     context: {
       pool: {} as never,
       initialize: async () => {},
-      withTransaction: async () => {
-        throw new Error('Unexpected transaction');
+      withTransaction: async <T>(run: (client: typeof treeReadClient) => Promise<T>) => {
+        treeSnapshotOpen = true;
+        try {
+          return await withTreeRead(run);
+        } finally {
+          treeSnapshotOpen = false;
+        }
       },
       db: {
         queryOne: async () => null,
-        queryRows: async (_client: unknown, sql: string, params: unknown[] = []) => {
+        queryRows: async (client: unknown, sql: string, params: unknown[] = []) => {
           if (/UPDATE workflow_revisions/.test(sql)) {
+            assert.equal(treeSnapshotOpen, false, 'Backfill writes cannot run inside the read-only snapshot');
+            assert.notEqual(client, treeReadClient);
             updateQueries.push({ sql, params });
           }
           if (sql.includes('FROM workflows w')) return [createTreeRow(workflowRow, revisionRow)];
@@ -608,7 +648,10 @@ test('managed workflow tree backfills legacy revision stats when metadata is mis
         resolveExecutionPointerFromDatabase: async () => null,
       },
       revisions: {
-        readRevisionProjectContents: async () => projectContents,
+        readRevisionProjectContents: async () => {
+          assert.equal(treeSnapshotOpen, false, 'Release the tree snapshot before object-storage reads');
+          return projectContents;
+        },
         readRevisionContents: async () => ({
           contents: projectContents,
           datasetsContents: null,
@@ -635,9 +678,6 @@ test('managed workflow tree backfills legacy revision stats when metadata is mis
       },
       dispose: async () => {},
     } as never,
-    saveHostedProject: async () => {
-      throw new Error('Unexpected saveHostedProject call');
-    },
   });
 
   const tree = await catalog.getTree();
@@ -660,9 +700,7 @@ test('managed workflow tree falls back to zero stats when the draft revision is 
     context: {
       pool: {} as never,
       initialize: async () => {},
-      withTransaction: async () => {
-        throw new Error('Unexpected transaction');
-      },
+      withTransaction: withTreeRead,
       db: {
         queryOne: async () => null,
         queryRows: async (_client: unknown, sql: string) =>
@@ -712,9 +750,6 @@ test('managed workflow tree falls back to zero stats when the draft revision is 
       },
       dispose: async () => {},
     } as never,
-    saveHostedProject: async () => {
-      throw new Error('Unexpected saveHostedProject call');
-    },
   });
 
   const tree = await catalog.getTree();

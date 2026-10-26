@@ -1,5 +1,8 @@
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import { isEqual } from 'lodash-es';
+import { createElement } from 'react';
+import type { OpenCreatedProject } from '../io/IOProvider.js';
+import { getProjectActivationRevision } from '../utils/projectActivationCoordinator.js';
 import {
   type DataId,
   type GraphId,
@@ -34,7 +37,7 @@ import {
   projectState,
   savedProjectContentDigestsState,
 } from '../state/savedGraphs.js';
-import { renewProjectBindingState } from '../state/projectBindings.js';
+import { renewProjectBindingState, projectBindingRegistryState } from '../state/projectBindings.js';
 import { evaluationsState, resetEvaluationsForProjectLoad } from '../state/evaluations.js';
 import { useCenterViewOnGraph } from './useCenterViewOnGraph.js';
 import { useSaveCurrentGraph } from './useSaveCurrentGraph.js';
@@ -395,7 +398,7 @@ export function useWorkspaceTransitions() {
       });
     },
 
-    saveProject(options: { forceSaveAs?: boolean } = {}): Promise<boolean> {
+    saveProject(options: { forceSaveAs?: boolean; openCreatedProject?: OpenCreatedProject } = {}): Promise<boolean> {
       const projectId = store.get(projectState).metadata.id as ProjectId | undefined;
       if (!projectId) {
         return Promise.resolve(false);
@@ -420,6 +423,8 @@ export function useWorkspaceTransitions() {
           }
           const latestLoadedProject = store.get(loadedProjectState);
           const projectsAtSaveStart = store.get(projectsState);
+          const sourceBinding = store.get(projectBindingRegistryState).get(projectId);
+          const activationAtSaveStart = getProjectActivationRevision(store);
           const openedProjectPathAtSaveStart = projectsAtSaveStart.openedProjects[projectId]?.fsPath ?? null;
           const loadedProjectPathAtSaveStart = latestLoadedProject.path;
           const savePath = resolveOpenedProjectSavePath(projectsAtSaveStart, projectId, latestLoadedProject.path);
@@ -463,6 +468,69 @@ export function useWorkspaceTransitions() {
 
           if (shouldUseSaveAs) {
             const filePath = await ioProvider.saveProjectData(projectFileToPersist);
+
+            if (filePath && typeof filePath !== 'string') {
+              const copy = filePath;
+              // This save created another document. None of the original's
+              // path, revision, datasets, execution owner or clean flags change.
+              const sourceIsCurrent = () => {
+                const opened = store.get(projectsState).openedProjects[projectId];
+                const activeId = store.get(projectState).metadata.id;
+                return Boolean(
+                  opened &&
+                    opened.fsPath === openedProjectPathAtSaveStart &&
+                    sourceBinding &&
+                    store.get(projectBindingRegistryState).isCurrent(projectId, sourceBinding.token) &&
+                    (activeId === projectId || activeId === copy.projectId) &&
+                    !store.get(selectedOpeningProjectTabIdState),
+                );
+              };
+              try {
+                hostCallbacks.onProjectSaved?.({
+                  project: {
+                    ...projectToPersist,
+                    metadata: { ...projectToPersist.metadata, id: copy.projectId, title: copy.title },
+                  },
+                  path: copy.path,
+                  saveAs: true,
+                  createdCopy: true,
+                });
+              } catch (error) {
+                handleError(error, 'Project copy saved, but notification failed', { toastError: false });
+              }
+              let opened = false;
+              if (sourceIsCurrent() && getProjectActivationRevision(store) === activationAtSaveStart) {
+                try {
+                  opened = (await options.openCreatedProject?.(copy, sourceIsCurrent)) ?? false;
+                } catch (error) {
+                  handleError(error, 'Project copy saved, but could not be opened', { toastError: false });
+                }
+              }
+              if (opened) toast.success('Project copy saved. The original remains unchanged.');
+              else
+                toast.info(
+                  createElement(
+                    'span',
+                    null,
+                    `Project copy saved: ${copy.path}. `,
+                    options.openCreatedProject
+                      ? createElement(
+                          'button',
+                          {
+                            type: 'button',
+                            onClick: () => {
+                              void options.openCreatedProject!(copy).catch((error) =>
+                                handleError(error, 'Could not open saved copy'),
+                              );
+                            },
+                          },
+                          'Open copy',
+                        )
+                      : 'Open it from the project library.',
+                  ),
+                );
+              return true;
+            }
 
             if (filePath) {
               savedPath = filePath;

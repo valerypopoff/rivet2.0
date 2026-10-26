@@ -1377,6 +1377,18 @@ Workflow recording settings are documented in detail in [workflow-publication.md
 
 These retention limits have the same meaning in both storage modes. The per-endpoint cap is keyed by workflow plus historical endpoint name, so reusing an unpublished slug for another project cannot evict the first project's history. Filesystem mode removes SQLite rows and bundle directories. In managed mode, the singleton control-plane API runs retention at startup and on a bounded timer (five minutes by default); endpoint-serving replicas do not scan global history. The maintenance worker selects and deletes at most one configured batch of PostgreSQL rows per pass after validating and holding its PostgreSQL fencing lease in the same transaction and enqueues the resulting recording/replay blob keys in a durable outbox. It then rechecks that each key has no remaining database reference immediately before deleting it from object storage. Transient object-store failures stay pending with exponential backoff; a key still referenced is marked `blocked` for investigation rather than being deleted; a later deletion intent reopens it after its final reference is removed. Explicit recording and project deletion use the same outbox. Completed outbox rows are retained for seven days for auditability. Known pre-commit upload failures also use this outbox rather than immediately deleting: the worker validates ownership first, and a PostgreSQL outage leaves the object for reconciliation instead of risking a duplicate-key delete. Reconciliation now has one additional, separately typed workflow stale-upload policy: after a key survives the configured age for its current unresolved finding plus completed-scan proof, matches Rivet's immutable revision/recording artifact grammar, and still has no live metadata reference, `staleUploadRetention.mode: enforce` may queue it through the same outbox. The chart defaults to `audit`; returning it to `audit` or `disabled` blocks already queued stale-upload intents at the final delete boundary. This is still not a generic object-prefix reconciler: runtime-library cleanup and future object-store payload domains need separate policy/adapters.
 
+Recording uploads and metadata inserts are an exception to immediate pre-commit
+cleanup. Concurrent imports may use the same recording identity and artifact
+keys, and an INSERT connection failure can follow a successful commit. A failed
+upload waits for all accepted sibling uploads to settle, including when an
+adapter throws before returning a promise, then retains their keys;
+a failed INSERT is not automatically retried and likewise retains its keys.
+The original failure is reported without claiming whether a recording committed.
+Existing reconciliation may later identify genuinely unreferenced immutable keys;
+its default audit mode does not itself delete them. This conservative hold also
+applies to a definite INSERT error because another concurrent import may still
+be using the same keys.
+
 ## Dev and production modes
 
 The supported launchers all run the same managed control, execution and

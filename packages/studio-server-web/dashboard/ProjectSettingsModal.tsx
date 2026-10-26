@@ -126,6 +126,7 @@ type ProjectSettingsModalProps = {
   initialTab?: ProjectSettingsTab;
   onClose: () => void;
   onRefresh: () => Promise<WorkflowTreeResponse | null>;
+  onStructuralMutation?: (message: string) => void;
   onDeleteProject: (path: string, projectId?: string | null) => void;
   onPreviewPublishedVersion: (relativePath: string, versionId: string) => void;
   onPublishedVersionRestored: (response: WorkflowPublishedVersionRestoreResponse) => void | Promise<void>;
@@ -140,6 +141,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
   initialTab = 'workflow',
   onClose,
   onRefresh,
+  onStructuralMutation,
   onDeleteProject,
   onPreviewPublishedVersion,
   onPublishedVersionRestored,
@@ -187,6 +189,7 @@ export const ProjectSettingsModal: FC<ProjectSettingsModalProps> = ({
     onClose,
     onDeleteProject,
     onRefresh,
+    onStructuralMutation,
   });
 
   const displayProject = snapshotProject ?? activeProject;

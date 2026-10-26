@@ -224,6 +224,8 @@ export type WorkflowProjectStats = {
 };
 
 export type WorkflowProjectItem = {
+  /** Managed authoring mutations must carry the selected immutable identity. */
+  namespaceProtocol?: 1;
   id: string;
   /** Explicit Studio Server container membership, never inferred from references. */
   bundleId?: string | null;
@@ -264,7 +266,9 @@ export type WorkflowProjectDeleteResponse = {
 
 export type WorkflowFolderItem = {
   id: string;
-  /** Stable identity on a bundle root; ordinary folders have no identity. */
+  /** Immutable managed-folder identity; UI id remains the path for compatibility. */
+  namespaceId?: string;
+  /** Stable bundle identity on a bundle root; null for ordinary folders. */
   bundleId?: string | null;
   name: string;
   relativePath: string;
@@ -313,7 +317,7 @@ export const WORKFLOW_TREE_CLIENT_ID_HEADER = 'x-rivet-workflow-tree-client';
 
 export type WorkflowTreeResponse = {
   root: string;
-  capabilities?: { explicitBundles: boolean };
+  capabilities?: { explicitBundles: boolean; namespaceMutations?: boolean };
   folders: WorkflowFolderItem[];
   projects: WorkflowProjectItem[];
   sync: WorkflowTreeSyncState;

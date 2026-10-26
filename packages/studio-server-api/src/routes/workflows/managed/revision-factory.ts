@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 import { readScheduledRecordingFields } from '../../../../../studio-server-shared/workflow-recording-types.js';
 
 import {
@@ -7,7 +7,7 @@ import {
   createRevisionBlobKey,
   type ManagedWorkflowBlobStore,
 } from './blob-store.js';
-import { withManagedDbRetry, type ManagedWorkflowDbClient } from './db.js';
+import type { ManagedWorkflowDbClient } from './db.js';
 import type { ManagedObjectDeletionReason } from './maintenance.js';
 import { prepareManagedTextArtifact } from './artifact-descriptor.js';
 import { getWorkflowRecordingConfig } from '../recordings-config.js';
@@ -56,10 +56,24 @@ export function createManagedWorkflowRevisionFactory(options: {
       // reconciliation can inventory the former.
       await options.queueObjectDeletions('workflow-precommit-blob-cleanup', objectKeys);
     } catch (error) {
-      console.error(
-        `[managed-workflows] Failed to durably queue pre-commit blob cleanup after ${context}; leaving the objects untouched for reconciliation:`,
-        error,
-      );
+      try {
+        console.error(
+          `[managed-workflows] Failed to durably queue pre-commit blob cleanup after ${context}; leaving the objects untouched for reconciliation:`,
+          error,
+        );
+      } catch {
+        // Preserve the original write failure even if diagnostics also fail.
+      }
+    }
+  };
+
+  const retainRecordingArtifacts = (context: string): void => {
+    // Recording IDs can be reused by concurrent imports, so even a failed
+    // upload may have shared keys with an in-flight successful writer.
+    try {
+      console.warn(`[managed-workflows] ${context}; retaining recording artifacts for reconciliation.`);
+    } catch {
+      // Diagnostics must not hide the original upload or insert failure.
     }
   };
 
@@ -186,27 +200,40 @@ export function createManagedWorkflowRevisionFactory(options: {
       replayDatasetBlobKey = dataset?.descriptor.key ?? replayDatasetBlobKey;
 
       try {
+        // Adapters may throw before returning a promise. Schedule each call
+        // through a promise so one such throw cannot abandon an accepted sibling.
+        const upload = (run: () => Promise<void>) => Promise.resolve().then(run);
         const results = await Promise.allSettled([
-          recording
-            ? options.blobStore.putArtifact!(recording.descriptor, recording.bytes)
-            : options.blobStore.putText(recordingBlobKey, artifacts.recording, 'text/plain; charset=utf-8'),
-          project
-            ? options.blobStore.putArtifact!(project.descriptor, project.bytes, 'application/x-yaml; charset=utf-8')
-            : options.blobStore.putText(
-                replayProjectBlobKey,
-                artifacts.replayProject,
-                'application/x-yaml; charset=utf-8',
-              ),
+          upload(() =>
+            recording
+              ? options.blobStore.putArtifact!(recording.descriptor, recording.bytes)
+              : options.blobStore.putText(recordingBlobKey, artifacts.recording, 'text/plain; charset=utf-8'),
+          ),
+          upload(() =>
+            project
+              ? options.blobStore.putArtifact!(project.descriptor, project.bytes, 'application/x-yaml; charset=utf-8')
+              : options.blobStore.putText(
+                  replayProjectBlobKey,
+                  artifacts.replayProject,
+                  'application/x-yaml; charset=utf-8',
+                ),
+          ),
           replayDatasetBlobKey != null && artifacts.replayDataset != null
-            ? dataset
-              ? options.blobStore.putArtifact!(dataset.descriptor, dataset.bytes)
-              : options.blobStore.putText(replayDatasetBlobKey, artifacts.replayDataset, 'text/plain; charset=utf-8')
+            ? upload(() =>
+                dataset
+                  ? options.blobStore.putArtifact!(dataset.descriptor, dataset.bytes)
+                  : options.blobStore.putText(
+                      replayDatasetBlobKey!,
+                      artifacts.replayDataset!,
+                      'text/plain; charset=utf-8',
+                    ),
+              )
             : Promise.resolve(),
         ]);
         const failure = results.find((result) => result.status === 'rejected');
         if (failure?.status === 'rejected') throw failure.reason;
       } catch (error) {
-        await queueKnownBlobCleanup(cleanupContext, [recordingBlobKey, replayProjectBlobKey, replayDatasetBlobKey]);
+        retainRecordingArtifacts(cleanupContext);
         throw error;
       }
 
@@ -308,17 +335,11 @@ export function createManagedWorkflowRevisionFactory(options: {
       `;
 
       try {
-        if (client instanceof Pool) {
-          await withManagedDbRetry('recording insert', () => client.query(sql, params));
-        } else {
-          await client.query(sql, params);
-        }
+        // A network error can arrive after the insert committed. Do not replay
+        // it or queue its possibly live (and potentially shared) artifacts.
+        await client.query(sql, params);
       } catch (error) {
-        await queueKnownBlobCleanup(options.cleanupContext, [
-          row.recordingBlobKey,
-          row.replayProjectBlobKey,
-          row.replayDatasetBlobKey,
-        ]);
+        retainRecordingArtifacts(options.cleanupContext);
         throw error;
       }
     },

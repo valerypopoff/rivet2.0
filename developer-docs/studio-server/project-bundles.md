@@ -471,8 +471,421 @@ implementation boundaries, not a claim that a deployment has already been upgrad
 Coordinated publication, endpoint cutover and merge-back between copies remain
 outside this plan. Container-level download reuses the existing portable archive
 and job owner rather than introducing another transfer format or scheduler.
-Deployments apply migration 16 through the existing migration owner before serving
+Deployments apply migrations through the existing migration owner before serving
 the updated API; no manual project conversion or new Kubernetes component is needed.
+
+### Folder move consistency (schema 17)
+
+The managed PostgreSQL tree follows `workflow_folders.parent_relative_path`.
+Migration 1's move function rewrote paths but retained the moved root folder's
+old parent. A successful move could therefore reappear under its former parent
+on refresh, even though its projects already had their destination paths. This
+affected ordinary folders as well as explicit bundles; the browser was not the
+source of the stale hierarchy.
+
+Migration 17 replaces that function and assigns the destination parent to the
+moved root, retaining the two-phase path rewrite, wildcard escaping and topology
+lease. Historical migrations remain immutable. It also repairs existing parent
+metadata from canonical paths in the same transaction. Before writing, it checks
+that all folder paths are canonical and every non-root destination parent exists.
+Ambiguous or missing paths abort the migration for operator review; it does not
+invent folders or discard records. Bundle/workflow identities, revisions, dataset
+blobs, publications and endpoints are preserved. Unrelated application tables in
+a shared database are not changed.
+
+This function change alters the verified schema fingerprint. Schema-16 images
+cannot verify/restart against schema 17, so the rollback floor is 17 and adoption
+requires the supported maintenance upgrade, not a widened compatibility window
+or a manual live SQL patch. See [deployment contracts](deployment-operations.md#schema-17-folder-parent-repair).
+
+`verify-managed-workflow-schema.mjs` runs the real schema-16 failure, transactional
+repair, invalid-input rollback, nested/root/ordinary-folder moves, wildcard names,
+collision rejection and saved-data preservation on disposable PostgreSQL.
+Rejected repairs and moves compare the complete folder/workflow/revision/publication
+snapshot, including timestamps, rather than checking only that the root survives.
+`hosted-subgraph-auth.spec.ts` additionally drags an explicit bundle through the
+real HTTP API and checks the persisted tree and its visible location after reload.
+These are local regression checks, not production/provider qualification.
+
+### Concurrent tree reads
+
+A move is atomic in PostgreSQL, but the tree projection must be atomic too.
+Reading folders and projects through separate pool queries can mix the folder
+list from before a committed move with project paths from after it, temporarily
+placing bundle members at the root with `bundleId: null`. Publication headers can
+similarly disagree with the selected draft revision during a concurrent publish.
+
+The managed catalog captures folders, joined workflow/revision summaries and web
+app publication headers in one short `REPEATABLE READ, READ ONLY` transaction.
+Queries run sequentially on its single connection; no topology lock or writer
+lease is acquired. The connection is released before tree projection or legacy
+object-storage stats backfill, so slow blob reads do not hold a database snapshot.
+The HTTP tree shape and cached-stat bulk-query behavior are unchanged.
+
+The disposable PostgreSQL gate commits a real move between the folder and project
+reads. It verifies that the in-flight response retains one coherent old location,
+the next response sees the new location, both retain all members and bundle
+identity, and an injected read failure rolls back/releases the connection before
+a successful subsequent read. Unit coverage keeps stats backfill outside the
+read-only transaction, including its best-effort cache write.
+The same PostgreSQL gate checks moving an enclosing ordinary folder, empty bundles
+and two simultaneous moves of one source: one succeeds, the stale contender gets
+`P0002`, and the resulting parent topology remains canonical.
+
+### Namespace mutation contract (unreleased schema 17)
+
+The same unreleased migration gives every folder an immutable `namespace_id`.
+`id` remains its path in existing tree/UI contracts; `namespaceId` is additional
+authoring metadata and is never written into project files or portable archives.
+Managed project entries advertise `namespaceProtocol: 1` and retain their existing
+immutable project ID. Folder moves preserve `namespace_id`; deleting/recreating a
+path creates a different identity. This is not a rewrite of the hierarchy model.
+
+Managed move, rename and ordinary deletion requests use
+`POST /api/workflows/namespace/mutate`, with an operation UUID, ten-minute client
+admission deadline, command and expected source identity. A move also supplies the
+destination folder identity (`null` means the library root). Project deletion
+checks the draft revision the user confirmed. Stale/replaced sources or targets
+return 409 without modifying data. Even an empty bundle must use the dedicated
+name-confirmed bundle deletion route, not ordinary folder deletion.
+Old path-only HTTP mutation routes return 428
+in managed serving mode with refresh guidance; filesystem migration/fixture paths
+retain their compatibility behavior. Offline/internal adapters remain explicit
+trusted calls rather than HTTP compatibility bypasses.
+
+One managed transaction owns the topology lock, receipt check, identity checks,
+catalog operation and durable result. The catalog reuses that transaction; it
+never opens a nested connection while the lease is held. Ordinary folder creation
+and deletion acquire topology before parent/child checks and row locks too. This
+prevents a child from committing beneath a concurrently deleted parent.
+`managed/topology-lock.ts` is the single lock-key owner; bundle and namespace
+services share it rather than declaring separate coordination locks.
+Folder-to-bundle conversion also checks the selected `namespaceId` after acquiring
+the topology lock; it cannot convert a replacement folder that reused the path.
+Inline rename captures the selected item when editing begins, not from a row
+that may have been replaced by a background refresh while the user was typing.
+Unchanged-path operations reuse the guarded transaction too; they do not borrow
+a second pool connection while holding the only available connection.
+
+`workflow_namespace_receipts` binds each UUID to the complete canonical request
+and result. A repeated identical request returns its committed result; reusing an
+ID for another request fails. An unknown expired operation cannot start a write.
+Receipt reads are observational (`POST /namespace/recover`); they never retry work.
+The browser sends a modifying request once and, after an uncertain response, may
+look up its receipt once. An unknown outcome remains explicit and requires a
+library refresh, not a silent write retry. Admission is capped at 15 minutes by
+the server; receipts older than their deadline plus 24 hours are pruned in bounded
+batches during subsequent mutations. There is no extra worker or timer. Restore
+and explicit storage reset clear receipts with their owning catalog.
+
+One-click bundle duplication uses the same receipt policy and the digest-only
+`/namespace/receipt` lookup. The older `/:id/duplicate/recover` remains an
+observational compatibility adapter, not an unguarded write path.
+Accepted duplicates retain preparation outside SQL locks.
+Concurrent repeats may prepare unused immutable objects, but exactly one copied
+group commits; unused preparation uses the existing reference-aware cleanup.
+Recovery can return a committed result even if its source bundle was later deleted.
+All managed structural authoring paths now use this contract: folder/project
+creation, moves, renames, deletion, single-project copying/upload, bundle
+creation/conversion/copy/delete/import, and editor Save As. Publication and
+ordinary in-place saves retain their separate revision/publication contracts;
+they are not silently replayed or converted into structural commands.
+
+`workflow-mutation-contract.ts` owns the structural command/admission types and
+canonical digest bytes. `managed/structural-admission.ts` owns lock order,
+destination identity checks and transaction/receipt composition. Single-project
+creation/copy/upload is implemented once in `managed/project-creation.ts`; it no
+longer opens a save transaction while retaining a source transaction. Immutable
+artifact preparation happens outside SQL; identity, selected revision/publication,
+destination vacancy and prepared pointers are revalidated before one commit.
+An occupied explicitly named destination fails rather than overwriting another
+project. A generated copy/upload name may instead reprepare, as described below.
+
+Structural HTTP requests carry `mutation` (UUID, admission deadline and selected
+source/destination preconditions) and explicit namespace/bundle intent. Updated
+tree responses advertise `capabilities.namespaceMutations`; old unguarded managed
+writes are rejected with refresh guidance, never treated as an implicit opt-out.
+Legacy filesystem/SQLite adapters and offline migration callers retain their
+existing compatibility APIs; these are not a bypass for managed HTTP requests.
+Trusted internal calls still use the same preparation/commit implementation and
+lock order, but do not need an HTTP acknowledgement receipt for each new call.
+
+`POST /namespace/receipt` is authenticated, observational recovery by operation ID
+and the SHA-256 digest of the exact admitted command. Upload/archive contents are
+not resent for recovery, persisted in receipt rows, or echoed in diagnostics.
+The stored result is the exact HTTP response envelope, including folder/project
+wrappers. A committed result is returned even after later moves or deletion.
+
+Save As retains its ability to create missing folders: the browser captures the
+deepest existing ancestor identity and target revision. The writer verifies that
+ancestor and the still-missing chain before creating it under the topology lease.
+Ordinary saves remain immutable-project/revision-bound and do not take a global
+topology lock for content-only edits. A lost acknowledgement never reruns a save.
+This does not expose a new hosted File-menu action: hosted mode still hides Save
+As. Its API/provider fallback is verified separately from the ordinary UI authoring
+journey. Desktop/browser providers and their menu policy are unchanged.
+
+Release qualification probes send an explicit root-destination admission for their
+new fixture uploads (`lib/structural-fixture-admission.mjs`). They do not silently
+fall back after rejection or add a write retry. Additive admission fields remain
+readable by the retained older non-strict JSON fixture readers.
+Cross-owner notification probes select guarded rename from the created project's
+advertised protocol. Capacity cleanup records its created project identity and
+revision, inspects and unpublishes only that unchanged fixture, then uses guarded
+deletion. Replacement IDs, edited revisions or unexpected web-app publications
+block cleanup rather than following the path to somebody else's data.
+The existing source/compiled shared-contract layout is retained: exact new
+cross-package edges target the shared DTO/digest leaves and existing HTTP-error
+utility, and are reviewed individually in the import-boundary debt registry.
+The architecture gate is not weakened or changed to a count allowance.
+
+Rename and drag/drop share `reconcileNamespaceMove`. For the guarded protocol,
+sidebar and editor bindings come from the existing fresh, ID-bound reconciliation;
+the command response is not applied as an optimistic tree snapshot. Optimistic
+tree/path-only bridge updates are retained only for non-recovered compatibility
+responses. Drag identities are captured when the gesture starts. Project settings
+track the selected immutable project ID rather than following a replacement at
+the same path. Background mutation reconciliation queues the synchronization
+owner directly instead of fetching the full tree before its authoritative fetch.
+Existing revision/lifetime fences remain in place; unrelated foreground refresh
+paths are not rewritten by this consolidation.
+
+The real PostgreSQL gate includes the reproduced parent-delete and path-reuse
+failures, stale-folder identity, deletion revision guards, receipt replay/recovery,
+expired admission, replaced destinations, same-connection no-op paths and
+simultaneous duplication. The browser move regression loses
+the successful HTTP acknowledgement deliberately and checks recovery without a
+second modifying request, preserved unsaved editor changes, saving to the moved
+project's new path and persisted tree/reload verification. It also checks missing
+authentication/intent, cross-site intent, malformed admission (400) and rejection
+of legacy unguarded managed writes (428). The frontend transport suite covers
+network/5xx/invalid-JSON acknowledgements, unknown/failed recovery and 4xx rejection
+without a write retry. Existing inline-rename, ordinary move and compatibility
+bridge scenarios remain local browser regressions.
+The structural-authoring browser regression also loses successful create, copy,
+upload, conversion, bundle deletion and bundle import acknowledgements against
+disposable PostgreSQL/MinIO. It verifies persisted results after reload, one
+modifying request per operation and digest-only recovery. The real SQL/factory
+gate checks dataset preservation, no artifact uploads inside transactions,
+expired admission before preparation and replaced Save As ancestors without
+leaving partial folder chains. These are local checks, not provider qualification.
+
+### Persistence composition and operation ownership
+
+`managed/catalog-mutations.ts` is the SQL-only move/rename/delete implementation.
+Its explicit `CatalogTransaction` carries the leased client and commit/rollback
+hooks. The public catalog facade starts a topology-owned transaction for trusted
+standalone calls; namespace requests pass their existing transaction directly.
+Neither path replaces a context's transaction factory or borrows another pool
+connection. In-place saves and publication keep their separate revision contracts.
+`withCatalogTransaction` is the sole application-level topology-lock owner.
+Receipt execution requires that owned transaction and does not lock again;
+catalog SQL helpers consume the existing client/hooks. PostgreSQL statement
+triggers and stored-function locks remain defense in depth, not redundant
+application calls to remove.
+
+`remapOwnedDatasets` changes dataset metadata ownership on a private prepared copy,
+preserving dataset/row IDs and contents. Project copy and identity-changing Save
+As use it before object upload. Ordinary copying preserves authored references,
+target versions and unknown fields. Bundle copying separately retains its existing
+member-reference rewiring policy (including saved-latest internal targets); that
+policy is not applied to ordinary copies. Destination bundle membership remains
+authoritative: copying never grants access to protected members or automatically
+copies dependencies to conceal an unavailable reference.
+
+Generated project-copy/upload names use at most eight preparation attempts under
+the original admission deadline. Selected source revision/publication and
+destination identities stay frozen. Only a successfully returned pre-write name
+collision may reprepare outside SQL. No catalog/final-receipt write occurs for
+that decision. Exceptions, generic uniqueness errors and uncertain COMMIT/ROLLBACK
+acknowledgements stop immediately. The same logical UUID and prepared project ID
+are retained across attempts; the terminal catalog result and receipt commit
+together. Known-unused objects go through reference-aware cleanup; objects whose
+transaction outcome is uncertain remain untouched for reconciliation. Explicit
+names still conflict instead of being changed silently.
+Admission is also checked before every generated-name lookup and immediately
+before artifact upload: a slow/contended search cannot continue preparing new
+work after its original deadline. The transaction still rechecks admission after
+an already accepted upload; expiration never authorizes a retry.
+Bundle import and duplication apply the same boundary before **each member's**
+revision upload (including retained duplicate receipts). A slow source read may
+therefore prevent the first upload; expiry during an accepted upload prevents the
+next one. Completed preparations are queued through reference-aware cleanup and
+no partial bundle becomes visible. An in-flight upload is allowed to settle;
+expiration neither cancels it mid-write nor starts another preparation attempt.
+Identity-changing/structural Save As and reviewed ownership repair also recheck
+admission after their source/provenance reads and before preparing a new revision.
+Ordinary in-place saves have no structural admission clock and do not acquire the
+topology lock; their prepared objects still use the same conservative transaction
+settlement and cleanup rules described below.
+
+Receipt hashing retains its existing canonical encoding and wire aliases. The
+server deep-copies/freezes execution inputs and captures the admitted digest once,
+before its first await or SQL lease. Preparation, name reallocation, locked receipt
+lookup and receipt insertion reuse that capture. Working normalization uses a
+separate copy when needed. Large archive/project text is not rehashed under the
+topology lock, and caller mutations cannot change executed bytes after admission.
+The browser also serializes the modifying request and snapshots its headers
+before WebCrypto yields. Namespace recovery reuses its original serialized
+request; structural recovery uses the captured digest only. Caller changes while
+hashing or awaiting a response cannot change either request's admitted identity
+or bytes. This avoids reserializing large namespace payloads during recovery;
+it does not retry the modifying request or change receipt-hash semantics.
+Generated names and prepared artifact IDs are not inputs to the request hash.
+Recovery is observational, metadata-only, and never evidence that the old path
+still exists. The client marks recovered results out-of-band and does not apply
+their stale tree data or legacy path-only tab rebinding. An unknown outcome
+queues an observational refresh but never another modifying request. Explicit
+failures and confirmed commits remain distinct from an unavailable receipt.
+
+`createPreparedRevisions` owns sequential immutable revision preparation for
+project create/copy/upload, in-place and structural Save As, bundle
+duplicate/import and reviewed dataset repair. Where an admission exists, it checks
+before every new upload and tracks only successfully returned revision objects.
+After inserting a revision in SQL,
+the caller stages that exact object through the transaction hooks; a matching
+project/bundle ID or recovered receipt is not proof this preparation was adopted.
+A committed receipt recovered after concurrent preparation therefore leaves that
+request's unused objects eligible for cleanup rather than leaking them.
+
+The transaction runner reports `committed`, `rolled-back` or `unknown` only after
+releasing/discarding its client. A failed COMMIT acknowledgement stays **unknown**
+even if a later ROLLBACK command succeeds: COMMIT may already have taken effect.
+Rollback hooks run only after a confirmed rollback with no attempted COMMIT;
+otherwise even reference-aware deletion could race a still-pending commit.
+The preparation scope queues known-unused objects only after confirmed settlement,
+retains uncertain ones, and never opens a nested transaction or deletes objects
+directly. Accepted uploads settle before scope closure; expiry stops the next
+upload, not an accepted write. Cleanup and diagnostic failures do not change the
+primary saved result/error. An adapter without settlement hooks is conservatively
+unknown, never presumed rolled back. The production runner always supplies them.
+
+This is bounded in-process ownership, not a durable upload journal. A process
+crash or unavailable cleanup queue can leave orphaned objects; existing managed
+reconciliation inventories them conservatively. No write is automatically replayed
+to resolve uncertainty. Ordinary content-only saves retain their existing path,
+conflict handling and lock scope while benefiting from the same retention rule.
+The unused `importProjectBundleWithBackend` facade was removed; managed import
+still uses its existing owner and routes, with unchanged portable formats.
+
+Structural completion queues `useWorkflowLibraryTreeSync` through the existing
+tree owner. Sidebar refresh does not depend on editor readiness. When available,
+editor authority is captured before the fetch; otherwise the sidebar updates and
+editor readiness later queues a fresh capture/read. Per-action callbacks settle
+only from the fetch batch they preceded. One local completion queues one hint;
+overlapping completions and remote events may coalesce reads without consuming
+another action's callback. UI buttons settle after server acknowledgement, not
+after indefinite editor retries. Refresh/bridge errors cannot reclassify a saved
+operation as a failed write. Source lifetime/open intent and fresh identity guard
+auto-open/expansion; a quiet ready-editor mutation needs no preliminary list fetch.
+An earlier `editor-ready` handshake is not proof that its bridge is still usable.
+If the bounded capture times out or rejects, the sidebar still reads current
+server state and settles the queued mutation callbacks. Editor reconciliation
+remains pending and retries with a new capture and tree read; it never applies
+bindings using a missing context or replays the accepted mutation.
+Legacy path-only move metadata keeps its title optional: a move with an unchanged
+file name preserves the existing tab title; an actual rename supplies the new one.
+
+All structural completion paths, including bundle upload/delete and unknown
+outcomes, queue that same owner. `useWorkflowLibraryActionLifetime` fences only
+transient UI effects: late results cannot close a newer modal, show an obsolete
+error, expand a different selection or auto-open a copy after navigation. It does
+not suppress an accepted write's reconciliation or exact-ID deleted-tab closure.
+Managed creation auto-opens only the matching project from the fresh tree.
+Expanded managed folders follow their immutable namespace IDs across moves and
+renames; a replacement at the old path does not inherit expansion. Compatibility
+folders retain path-based behavior. Recovered acknowledgements never rewrite
+expansion before the authoritative read.
+
+The real SQL gate covers a non-empty dataset copy, folder conversion, bundle
+duplication, portable export/import and actual graph execution. It also covers
+independent copy/upload name allocation, identical-UUID concurrency, collisions
+followed by source/destination replacement or original-deadline expiry, bounded
+name contention, and a real commit whose acknowledgement is lost.
+Workspace tests cover hosted fork saves with current/switched/reopened tabs,
+path replacement before hydration and a retained running source execution.
+`workflow-namespace.test.ts` protects canonical hash semantics and stale recovered
+results, including caller-object changes while a digest or response is pending.
+`structural-receipts.test.ts` checks immutable capture/digest reuse with large
+payloads, exact revision adoption, accepted-upload settlement, known rollback,
+lost COMMIT/ROLLBACK acknowledgements, single application lock acquisition, and
+cleanup/observer/logger failures without masking persistence outcomes. Bundle
+source-conflict fixtures exercise the actual transaction runner rather than
+assuming a thrown callback proves rollback. The managed integration suite also
+preserves the folder-name rule that rejects `.rivet-project` destinations for folders.
+
+Fixed receipt-hash vectors exercise the real operation owners for namespace
+changes, project create/copy/upload, current and retained legacy bundle copies,
+bundle import, Save As and reviewed ownership repair. They include the legacy
+nested receipt, CRLF/Unicode text, optional defaults and null versus empty data.
+The fixed values make an encoder or envelope change visible rather than comparing
+two calls to the same encoder. They also check that a matching committed receipt
+is recovered even after its admission deadline. Partial revision-upload coverage
+verifies the factory queues its own exact keys once, and that an unavailable outbox
+and logger cannot mask the original upload error.
+
+Headless `workflow-tree-sync.spec.ts` verifies that creation updates the sidebar
+while the editor is unavailable, followed by a new authority capture/read when
+it becomes ready. `hosted-save-as.spec.ts` mounts the real workspace and
+`HostedIOProvider` against disposable PostgreSQL/MinIO: a fork opens a second tab,
+its next save updates the new identity, and the original revision stays intact.
+The latter uses a source Vite host (like `desktop-project-bundle.spec.ts`), not the
+compiled preview profile; it also exercises the actual bundle upload/delete
+modals after target replacement, with committed and unknown acknowledgements.
+Each case checks one modifying request, shared completion and no stale modal
+closure. `explicit-bundles.spec.ts` checks an unknown managed deletion receipt:
+the sidebar refreshes, while uncertainty is not converted into success or a
+second write. This does not add a hosted Save As menu. To run it, start
+the web workspace's `dev` command on an unused local port, set
+`PLAYWRIGHT_BASE_URL` to that URL, `PLAYWRIGHT_HEADLESS=1` and
+`PLAYWRIGHT_SLOW_MO=0`, then run:
+
+```sh
+yarn studio-server:ui:observe hosted-save-as.spec.ts
+```
+
+These checks do not qualify a deployed provider or apply the schema upgrade to
+an existing installation. Schema-17 adoption still follows the documented
+maintenance and recovery procedure; no audit or repair runs automatically.
+
+The compatibility gate also runs `project-bundle.test.ts`,
+`project-bundle-sqlite.test.ts` and `sqlite-workflow-backend.test.ts`, plus the
+desktop `TauriIOProvider`, workspace-save and load-project suites. The filesystem
+HTTP fixture distinguishes an unguarded import (428, refresh/admission required)
+from an admitted import on an unsupported backend (409, managed storage required).
+It must not weaken the admission guard to reach the old unsupported-backend
+assertion. Ordinary filesystem/SQLite exports, range downloads, project saves,
+moves and desktop provider behavior retain their compatibility coverage.
+
+Local verification does not constitute a production audit, schema-17 adoption or
+provider qualification. Production adoption and any reviewed historical repair
+are separate authorized operations; the path-based hierarchy remains deliberate
+design debt.
+
+### Existing dataset-ownership audit and reviewed repair
+
+Fixing future copies does not silently rewrite historical artifacts. The bounded
+read-only audit pages over current drafts and currently served snapshots. It
+returns project/revision IDs, artifact keys/hashes and mismatch counts, never
+dataset rows, project text or credentials. Run it only against an explicitly
+approved installation (production inspection requires separate authorization):
+
+```sh
+yarn node packages/studio-server-api/dist/studio-server-api/src/scripts/audit-dataset-ownership.js --read-only
+```
+
+Optional positional arguments are `afterRevisionId` and page size (1–100; default
+50). Use `nextCursor` for another bounded page. Its PostgreSQL connections default
+to read-only; no maintenance owner, migration or repair is started.
+
+`repairManagedDatasetOwnership` is an internal, explicitly reviewed primitive,
+not an HTTP route, general repair UI or automatic migration. Admission pins the
+target project/draft, project-content hash and dataset key/hash. A reviewed source
+revision must belong to the stated source project and contain the exact inherited
+sidecar. A mismatch alone is not provenance. Newer edits, altered artifacts or
+ambiguous owners block repair. It prepares a new forward draft outside SQL, then
+rechecks metadata under the topology lease and records its receipt atomically.
+Old/published revisions remain immutable; republishing is a separate action.
 
 ## Portable project bundles
 

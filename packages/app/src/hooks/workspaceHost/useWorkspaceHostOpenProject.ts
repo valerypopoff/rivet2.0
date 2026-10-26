@@ -291,35 +291,57 @@ export function useWorkspaceHostOpenProject() {
     return true;
   });
 
-  const openProjectPath = useStableCallback((path: string) => {
-    const alreadyOpenedProject = Object.values(store.get(projectsState).openedProjects).find(
-      (project) => project.fsPath === path,
-    );
-    if (alreadyOpenedProject) return activateProject(alreadyOpenedProject.projectId);
-    return runLatestProjectActivation(store, async (isCurrent, signal) => {
-      try {
-        if (!isPathBasedIOProvider(ioProvider)) {
-          throw new Error('The active IO provider does not support opening projects by path.');
-        }
-
-        const loadedProject = await ioProvider.loadProjectDataNoPrompt(path, { signal, deferCommit: true });
-        return await openLoadedProject({ ...loadedProject, path: loadedProject.path ?? path }, isCurrent);
-      } catch (error) {
-        if (!isCurrent()) return false;
-        callbacks.onOpenError?.({
-          error,
-          operation: 'openProjectPath',
-          path,
-        });
-        handleError(error, 'Failed to open project path', {
-          metadata: {
-            projectPath: path,
-          },
-        });
-        return false;
+  const openProjectPath = useStableCallback(
+    (path: string, guard?: { expectedProjectId?: ProjectId; isCurrent?: () => boolean }) => {
+      if (guard?.isCurrent?.() === false) return Promise.resolve(false);
+      const alreadyOpenedProject = Object.values(store.get(projectsState).openedProjects).find(
+        (project) => project.fsPath === path,
+      );
+      if (alreadyOpenedProject) {
+        if (guard?.expectedProjectId && alreadyOpenedProject.projectId !== guard.expectedProjectId)
+          return Promise.resolve(false);
+        return activateProject(
+          alreadyOpenedProject.projectId,
+          undefined,
+          guard?.isCurrent
+            ? {
+                isCurrent: guard.isCurrent,
+                signal: getProjectActivationSignal(store),
+              }
+            : undefined,
+        );
       }
-    });
-  });
+      return runLatestProjectActivation(store, async (isCurrent, signal) => {
+        try {
+          if (!isPathBasedIOProvider(ioProvider)) {
+            throw new Error('The active IO provider does not support opening projects by path.');
+          }
+
+          const loadedProject = await ioProvider.loadProjectDataNoPrompt(path, { signal, deferCommit: true });
+          if (!isCurrent() || guard?.isCurrent?.() === false) return false;
+          if (guard?.expectedProjectId && loadedProject.project.metadata.id !== guard.expectedProjectId)
+            throw new Error('The saved project path now belongs to a different project. Refresh the library.');
+          return await openLoadedProject(
+            { ...loadedProject, path: loadedProject.path ?? path },
+            () => isCurrent() && guard?.isCurrent?.() !== false,
+          );
+        } catch (error) {
+          if (!isCurrent()) return false;
+          callbacks.onOpenError?.({
+            error,
+            operation: 'openProjectPath',
+            path,
+          });
+          handleError(error, 'Failed to open project path', {
+            metadata: {
+              projectPath: path,
+            },
+          });
+          return false;
+        }
+      });
+    },
+  );
 
   const replaceCurrent = useStableCallback(
     (snapshot: RivetProjectSnapshotInput, options?: RivetProjectReplaceOptions) =>

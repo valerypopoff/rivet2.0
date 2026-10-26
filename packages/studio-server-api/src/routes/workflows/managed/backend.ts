@@ -4,6 +4,11 @@ import { importManagedProjectBundle } from './bundle-import.js';
 import { createManagedBundleService } from './bundles.js';
 import { validateManagedSubgraphTarget } from './subgraph-access.js';
 import { isLegacyRestorePaused } from '../../../legacy-restore/service.js';
+import { createManagedProject } from './project-creation.js';
+import { recoverMutationByHash } from './namespace-receipts.js';
+import { prepareProjectBundleImport } from '../project-bundle-import.js';
+import { previousStructuralResult } from './structural-admission.js';
+import { captureOperation } from './namespace-receipts.js';
 import type {
   WorkflowFolderItem,
   WorkflowEndpointAccess,
@@ -33,6 +38,8 @@ import type { ManagedWorkflowStorageConfig } from '../storage-config.js';
 import type { ManagedWorkflowOperations, ManagedWorkflowOperationsFactory } from './operations.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
 import { createManagedWorkflowCatalogService } from './catalog.js';
+import { mutateManagedNamespace, recoverManagedNamespace } from './namespace-mutations.js';
+import type { WorkflowNamespaceMutation } from '../../../../../studio-server-shared/workflow-namespace-types.js';
 import {
   listManagedReconciliationFindingDetails,
   type ManagedReconciliationFindingDetailQuery,
@@ -90,7 +97,6 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     });
     this.#catalog = createManagedWorkflowCatalogService({
       context: this.#context,
-      saveHostedProject: (options) => this.#revisions.saveHostedProject(options),
     });
     this.#publication = createManagedWorkflowPublicationService({
       context: this.#context,
@@ -196,6 +202,7 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     expectedRevisionId?: string | null;
     projectId?: string;
     saveIntent?: 'in-place' | 'save-as';
+    structuralMutation?: import('../../../../../studio-server-shared/workflow-mutation-contract.js').StructuralMutation;
   }): Promise<SaveHostedProjectResult> {
     return this.#revisions.saveHostedProject(options);
   }
@@ -222,6 +229,71 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
 
   async createWorkflowFolderItem(name: string, parentRelativePath: string) {
     return this.#catalog.createWorkflowFolderItem(name, parentRelativePath);
+  }
+
+  async mutateStructural(
+    command: import('../../../../../studio-server-shared/workflow-mutation-contract.js').StructuralCommand,
+    mutation: import('../../../../../studio-server-shared/workflow-mutation-contract.js').StructuralMutation,
+  ) {
+    switch (command.operation) {
+      case 'create-folder':
+        return this.#catalog.createWorkflowFolderItem(command.input.name, command.input.parentRelativePath, mutation);
+      case 'create-project':
+      case 'copy-project':
+      case 'upload-project':
+        return createManagedProject(this.#context, command, mutation);
+      case 'create-bundle':
+        return this.bundles.create(command.input.name, command.input.parentRelativePath, mutation);
+      case 'bundle-kind':
+        return this.bundles.setKind(
+          command.input.relativePath,
+          command.input.enabled,
+          command.input.namespaceId,
+          mutation,
+        );
+      case 'delete-bundle':
+        return this.bundles.delete(
+          command.input.bundleId,
+          { name: command.input.name, relativePath: command.input.relativePath },
+          mutation,
+        );
+      case 'copy-bundle':
+        return this.bundles.duplicate(command.input.bundleId, {
+          automatic: true,
+          relativePath: command.input.relativePath,
+          mutation,
+        });
+      case 'import-bundle': {
+        const captured = captureOperation(
+          { command, mutation },
+          (input) => input.mutation,
+          (input) => input.command,
+        );
+        const snapshot = captured.input;
+        const previous = await previousStructuralResult(this.#context, captured.admission);
+        if (previous.state === 'committed') return previous.result;
+        return importManagedProjectBundle(
+          this.#context,
+          snapshot.command.input.parentRelativePath,
+          prepareProjectBundleImport(snapshot.command.input.files),
+          snapshot.mutation,
+          snapshot.command,
+          captured.admission,
+        );
+      }
+    }
+  }
+
+  async recoverStructural(operationId: string, hash: string) {
+    await this.initialize();
+    return recoverMutationByHash(this.#context.pool, operationId, hash);
+  }
+
+  mutateNamespace(request: WorkflowNamespaceMutation) {
+    return mutateManagedNamespace(this.#context, request);
+  }
+  recoverNamespace(request: WorkflowNamespaceMutation) {
+    return recoverManagedNamespace(this.#context, request);
   }
 
   async renameWorkflowFolderItem(

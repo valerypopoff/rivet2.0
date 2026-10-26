@@ -9,6 +9,8 @@ import { createResponseTimingMiddleware } from '../utils/responseTiming.js';
 import { getWorkspaceRoot } from '../security.js';
 import { listHostedProjectPaths, loadHostedProject, saveHostedProject } from './workflows/storage-backend.js';
 import { notifyWorkflowTreeChanged } from './workflows/workflow-tree-events.js';
+import { usesManagedNamespace } from './workflows/storage-backend.js';
+import { structuralMutationSchema, requireStructuralMutation } from './workflows/structural-contract.js';
 
 export const projectsRouter = Router();
 const timing = createResponseTimingMiddleware();
@@ -19,6 +21,7 @@ const loadProjectSchema = z.object({
 });
 
 const saveProjectSchema = z.object({
+  mutation: structuralMutationSchema.optional(),
   path: z.string().min(1, 'path is required'),
   contents: z.string(),
   datasetsContents: z.string().nullable().optional().default(null),
@@ -69,6 +72,9 @@ projectsRouter.post(
       expectedRevisionId,
       projectId: projectId as ProjectId | undefined,
       saveIntent,
+      ...(usesManagedNamespace() && saveIntent === 'save-as'
+        ? { structuralMutation: requireStructuralMutation(req.body.mutation, req) }
+        : {}),
     });
     notifyWorkflowTreeChanged(req);
     res.json(result);

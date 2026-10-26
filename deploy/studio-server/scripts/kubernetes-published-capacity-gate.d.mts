@@ -44,6 +44,13 @@ export function createCapacityCapabilityToken(input: {
   lifetimeSeconds: number;
 }): string;
 export function getCapacityFixtureEndpoints(jobName: string): string[];
+export function cleanupCapacityFixture(
+  request: (
+    route: string,
+    options?: { method?: string; headers?: Record<string, string>; body?: unknown },
+  ) => Promise<any>,
+  project: { relativePath: string; projectMetadataId: string; revisionId: string; namespaceProtocol?: number },
+): Promise<unknown>;
 export function createPublishedCapacityLoadJobConfig(input: {
   serviceNamePrefix: string;
   namespace: string;

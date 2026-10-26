@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { toast } from 'react-toastify';
+import { namespaceIdentity, MutationOutcomeUnknownError } from './workflowNamespaceMutations';
+import { useWorkflowLibraryActionLifetime } from './useWorkflowLibraryActionLifetime';
 import {
   deleteWorkflowProject,
   fetchWorkflowProjectWebApps,
@@ -32,6 +34,7 @@ type UseProjectSettingsActionsOptions = {
   onDeleteProject: (path: string, projectId?: string | null) => void;
   // Tree refresh returns null on failure or when superseded by another refresh.
   onRefresh: () => Promise<WorkflowTreeResponse | null>;
+  onStructuralMutation?: (message: string) => void;
 };
 
 function createSlugFromWebAppName(name: string, fallback: string): string {
@@ -125,6 +128,9 @@ function publicationSnapshotFromProject(project: WorkflowProjectItem): WorkflowP
 
 export function useProjectSettingsActions(options: UseProjectSettingsActionsOptions) {
   const { activeProject, allProjects, isOpen, onClose, onDeleteProject, onRefresh } = options;
+  const captureDelete = useWorkflowLibraryActionLifetime(
+    isOpen ? activeProject.projectMetadataId ?? activeProject.absolutePath : null,
+  );
   const [settingsDraft, setSettingsDraft] = useState<WorkflowProjectSettingsDraft>({
     endpointName: activeProject.settings.endpointName,
   });
@@ -525,6 +531,7 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
   };
 
   const handleDeleteActiveProject = async () => {
+    const isCurrent = captureDelete();
     const shouldDelete = window.confirm(`Delete project "${activeProject.name}"? This cannot be undone.`);
     if (!shouldDelete) {
       return;
@@ -533,12 +540,15 @@ export function useProjectSettingsActions(options: UseProjectSettingsActionsOpti
     setDeletingProject(true);
 
     try {
-      const deletedProject = await deleteWorkflowProject(activeProject.relativePath);
+      const deletedProject = await deleteWorkflowProject(activeProject.relativePath, namespaceIdentity(activeProject));
       onDeleteProject(activeProject.absolutePath, deletedProject.projectId);
-      onClose();
-      await onRefresh();
+      if (isCurrent()) onClose();
+      if (options.onStructuralMutation)
+        options.onStructuralMutation('Project deleted, but library synchronization is pending.');
+      else await onRefresh();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete project');
+      if (err instanceof MutationOutcomeUnknownError) options.onStructuralMutation?.(err.message);
+      if (isCurrent()) toast.error(err.message || 'Failed to delete project');
     } finally {
       setDeletingProject(false);
     }

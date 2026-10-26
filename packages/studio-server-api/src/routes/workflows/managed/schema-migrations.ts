@@ -4,16 +4,18 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 import { MANAGED_BUNDLE_SCHEMA_SQL } from './bundle-schema.js';
+import { MANAGED_FOLDER_PARENT_MIGRATION_SQL } from './folder-parent-schema.js';
+import { MANAGED_NAMESPACE_SCHEMA_SQL } from './namespace-schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 16;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 17;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
-// Schema 15's running Evaluation headers rely on the fenced job ledger. Older
-// readers do not assemble that representation, even though the DDL is additive.
-export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 15;
+// Schema 17 corrects the move function and existing folder parents. Older
+// images verify a different function fingerprint and cannot safely restart.
+export const MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION = 17;
 
 const MANAGED_WORKFLOW_SCHEMA_LOCK = {
   classId: 8_071,
@@ -424,6 +426,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_BUNDLE_SCHEMA_SQL,
     checksum: '21c458310c5f0c66bfb4ad431cba5f2cea95c7366f2ffe2a5adf7d0fca3cbc29',
   },
+  {
+    version: 17,
+    name: 'managed-folder-parent-consistency',
+    sql: MANAGED_NAMESPACE_SCHEMA_SQL + MANAGED_FOLDER_PARENT_MIGRATION_SQL,
+    checksum: '6b248f441fef7673c2940c4daf93e62d9e5f1c1c7f0a0969d3ade3c7ce86c07a',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -463,6 +471,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'managed_reconciliation_state',
   'managed_reconciliation_findings',
   'workflow_folders',
+  'workflow_namespace_receipts',
   'workflows',
   'workflow_revisions',
   'workflow_published_versions',
@@ -484,6 +493,12 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['workflow_folders', 'namespace_id', 'uuid', 'NO'],
+  ['workflow_namespace_receipts', 'operation_id', 'uuid', 'NO'],
+  ['workflow_namespace_receipts', 'request_hash', 'text', 'NO'],
+  ['workflow_namespace_receipts', 'expires_at', 'timestamptz', 'NO'],
+  ['workflow_namespace_receipts', 'result', 'jsonb', 'NO'],
+  ['workflow_namespace_receipts', 'created_at', 'timestamptz', 'NO'],
   ['managed_maintenance_leases', 'lease_name', 'text', 'NO'],
   ['managed_maintenance_leases', 'holder_id', 'text', 'NO'],
   ['managed_maintenance_leases', 'fencing_token', 'int8', 'NO'],
@@ -716,6 +731,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
+  ['workflow_folders', 'namespace_id', 'gen_random_uuid()'],
+  ['workflow_namespace_receipts', 'created_at', 'now()'],
   ['managed_maintenance_leases', 'updated_at', 'now()'],
   ['managed_object_deletion_outbox', 'status', "'pending'::text"],
   ['managed_object_deletion_outbox', 'enqueued_at', 'now()'],
@@ -778,6 +795,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
+  ['workflow_namespace_receipts', 'workflow_namespace_receipts_expires_at_idx', ['expires_at'], null, [0]],
   ['rivet_schedules', 'rivet_schedules_due_idx', ['enabled', 'next_at'], null, [0, 0]],
   ['rivet_schedule_runs', 'rivet_schedule_runs_active_idx', ['status', 'lease_until'], null, [0, 0]],
   ['rivet_schedule_runs', 'rivet_schedule_runs_history_idx', ['schedule_id', 'scheduled_at'], null, [0, 0]],
@@ -926,6 +944,8 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['workflow_folders', 'u', 'UNIQUE (namespace_id)'],
+  ['workflow_namespace_receipts', 'p', 'PRIMARY KEY (operation_id)'],
   ['managed_maintenance_leases', 'p', 'PRIMARY KEY (lease_name)'],
   ['managed_maintenance_leases', 'c', 'CHECK ((char_length(lease_name) > 0))'],
   ['managed_maintenance_leases', 'c', 'CHECK ((char_length(holder_id) > 0))'],
@@ -1044,7 +1064,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_FUNCTION = {
   name: 'move_managed_workflow_folder',
   argumentTypes: 'text,text,text,text',
-  sourceChecksum: 'c4ae0930536809309e4200c9bd833921',
+  sourceChecksum: '91719e5ae18ad2bdfaa08d7c4dbc19ed',
   language: 'plpgsql',
   volatility: 'v',
   securityDefiner: false,

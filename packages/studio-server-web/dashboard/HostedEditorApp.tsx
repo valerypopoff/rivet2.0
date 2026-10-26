@@ -73,7 +73,7 @@ export const HostedEditorApp: FC = () => {
 
   const handleProjectSaved = useCallback(
     (event: RivetAppHostProjectSavedEvent) => {
-      reconcileHostedProjectTitleAfterSave(event);
+      if (!event.createdCopy) reconcileHostedProjectTitleAfterSave(event);
       setSavedProjectSignal({ projectId: event.project.metadata.id });
 
       if (!event.path) {

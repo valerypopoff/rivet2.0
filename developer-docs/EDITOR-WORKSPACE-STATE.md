@@ -25,6 +25,27 @@ transition.
 
 ## Transitions
 
+### Confirmed saves and hosted copies
+
+`IOProvider.saveProjectData` accepts the historical string/cancel result or a
+metadata-only `CreatedProjectSave` result. Desktop/browser Save As and same-ID
+saves retain their existing behavior. A hosted save that allocates a different
+identity returns `created-project`; it is not an in-place save acknowledgement.
+
+The workspace leaves the source tab's path, revision binding, datasets, dirty
+baseline and execution owner unchanged. It opens the confirmed copy through
+`useWorkspaceHostOpenProject`, which checks the expected project ID before
+committing deferred datasets/snapshots. Auto-open requires the initiating binding
+lifetime, path and navigation intent to remain current. A late result after a
+switch, close/reopen or rebind reports the saved path with an explicit Open copy
+action instead of stealing focus. A replaced path is rejected before hydration.
+The copy's normal guarded load establishes its clean baseline and revision state.
+
+Saving a copy remains successful if opening or notifying the host fails. The
+`createdCopy` host event describes the new identity and never marks the source
+clean. Save deduplication remains per workspace/project; a second save is not
+used to conceal an uncertain first write.
+
 - [`useWorkspaceTransitions.ts`](../packages/app/src/hooks/useWorkspaceTransitions.ts)
   is the transition coordinator.
 - [`useProjectWorkspaceTarget.ts`](../packages/app/src/hooks/useProjectWorkspaceTarget.ts)

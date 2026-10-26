@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto';
+import type { StructuralMutation } from '../../../../../studio-server-shared/workflow-mutation-contract.js';
+import { previousStructuralResult, structuralTransaction, assertSaveAsDestination } from './structural-admission.js';
+import { captureOperation } from './namespace-receipts.js';
+import { createPreparedRevisions } from './prepared-revisions.js';
 import path from 'node:path';
-import { serializeProject } from '@valerypopoff/rivet2-node';
+import {
+  deserializeDatasets,
+  remapOwnedDatasets,
+  serializeDatasets,
+  serializeProject,
+} from '@valerypopoff/rivet2-node';
 import { type Pool, type PoolClient } from 'pg';
 
 import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
@@ -43,6 +52,7 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 export function createManagedWorkflowRevisionService(options: ManagedWorkflowRevisionServiceDependencies) {
+  const context = options.context;
   const deps = {
     pool: options.context.pool,
     initialize: options.context.initialize,
@@ -55,7 +65,6 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
     readRevisionContents: options.context.revisions.readRevisionContents,
     createRevision: options.context.revisions.createRevision,
     scheduleRevisionBlobCleanup: options.context.revisions.scheduleRevisionBlobCleanup,
-    discardPreparedRevision: options.context.revisions.discardPreparedRevision,
     insertRevision: options.context.revisions.insertRevision,
     syncWorkflowEndpointRows: options.context.endpointSync.syncWorkflowEndpointRows,
     mapWorkflowRowToProjectItem: options.context.mappers.mapWorkflowRowToProjectItem,
@@ -105,8 +114,29 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
       expectedRevisionId?: string | null;
       projectId?: string;
       saveIntent?: 'in-place' | 'save-as';
+      structuralMutation?: StructuralMutation;
     }): Promise<SaveHostedProjectResult> {
-      options = structuredClone(options);
+      const captured = captureOperation(
+        options,
+        (input) => input.structuralMutation,
+        (input) => ({
+          operation: 'save-as',
+          input: {
+            path: input.projectPath,
+            contents: input.contents,
+            datasetsContents: input.datasetsContents,
+            expectedRevisionId: input.expectedRevisionId ?? null,
+            projectId: input.projectId,
+            saveIntent: input.saveIntent ?? 'save-as',
+          },
+        }),
+      );
+      options = structuredClone(captured.input); // Normalized working bytes, never digest authority.
+      const admission = captured.admission;
+      if (options.structuralMutation) {
+        const previous = await previousStructuralResult<SaveHostedProjectResult>(context, admission);
+        if (previous.state === 'committed') return previous.result;
+      }
       const requestedRelativePath = parseManagedWorkflowProjectVirtualPath(options.projectPath);
       const submittedProject = parseHostedProjectContents(options.contents, 'Could not save project').project;
       const submittedProjectId = submittedProject.metadata.id;
@@ -129,6 +159,20 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
         throw conflict('This project no longer exists. Reopen it before saving.');
       if (observed && observed.workflow_id !== submittedProjectId)
         throw conflict('The save target belongs to a different project. Choose a new path or reopen the target.');
+      if (options.structuralMutation) {
+        const expected = options.structuralMutation.expectedSource;
+        if (
+          (observed &&
+            (!expected ||
+              observed.workflow_id !== expected.id ||
+              observed.current_draft_revision_id !== expected.revisionId)) ||
+          (!observed && expected)
+        )
+          throw conflict('The Save As target changed. Refresh before trying again.');
+        const parent =
+          path.posix.dirname(requestedRelativePath) === '.' ? '' : path.posix.dirname(requestedRelativePath);
+        await assertSaveAsDestination(deps.pool, parent, options.structuralMutation);
+      }
       const preparedPath = observed?.relative_path ?? requestedRelativePath;
       const observedMetadata = JSON.stringify(observed);
       const preparedName = path.posix.basename(preparedPath, WORKFLOW_PROJECT_EXTENSION);
@@ -138,6 +182,19 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
         options.contents = serializeProject(normalized.project, normalized.attachedData) as string;
       } else options.contents = normalized.contents;
       const preparedId = observed?.workflow_id ?? normalized.project.metadata.id;
+      if (preparedId !== submittedProjectId && options.datasetsContents !== null) {
+        try {
+          options.datasetsContents = serializeDatasets(
+            remapOwnedDatasets(
+              deserializeDatasets(options.datasetsContents),
+              submittedProjectId,
+              preparedId as typeof submittedProjectId,
+            ),
+          );
+        } catch {
+          throw createHttpError(400, 'Dataset ownership does not match the source project.');
+        }
+      }
       const payloads = new Map<string, ManagedRevisionContents>();
       for (const id of new Set([
         observed?.current_draft_revision_id,
@@ -168,13 +225,28 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
               publishedEndpointName: observed.published_endpoint_name,
             })
           : 'new-revision';
-      const preparedRevision =
-        saveTarget === 'current-draft' || saveTarget === 'published-revision'
-          ? null
-          : await deps.createRevision(preparedId, options.contents, options.datasetsContents);
-      let attached = false;
+      const preparations = createPreparedRevisions(context.revisions, admission);
+      let preparedRevision: RevisionRow | null = null;
       try {
-        const result = await deps.withTransaction(async (client, hooks) => {
+        preparedRevision =
+          saveTarget === 'current-draft' || saveTarget === 'published-revision'
+            ? null
+            : await preparations.prepare(preparedId, options.contents, options.datasetsContents);
+        const transact =
+          options.saveIntent === 'in-place'
+            ? <T>(run: (client: PoolClient, hooks: TransactionHooks) => Promise<T>) =>
+                deps.withTransaction((client, hooks) => {
+                  preparations.observe(hooks);
+                  return run(client, hooks);
+                })
+            : <T>(run: (client: PoolClient, hooks: TransactionHooks) => Promise<T>) =>
+                structuralTransaction(context, admission, run, preparations);
+        const result = await transact(async (client, hooks) => {
+          if (options.structuralMutation) {
+            const parent =
+              path.posix.dirname(requestedRelativePath) === '.' ? '' : path.posix.dirname(requestedRelativePath);
+            await assertSaveAsDestination(client, parent, options.structuralMutation);
+          }
           let relativePath = requestedRelativePath;
           let workflow: WorkflowRow | null;
           if (options.saveIntent === 'in-place') {
@@ -327,6 +399,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
 
           if (workflow) {
             await deps.insertRevision(client, revision);
+            preparations.stage(revision, hooks);
             await client.query(
               `
               UPDATE workflows
@@ -366,6 +439,7 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
               ],
             );
             await deps.insertRevision(client, revision);
+            preparations.stage(revision, hooks);
 
             workflow = await deps.getWorkflowByRelativePath(client, relativePath, { forUpdate: true });
           }
@@ -385,14 +459,9 @@ export function createManagedWorkflowRevisionService(options: ManagedWorkflowRev
             created,
           };
         });
-        attached = result.revisionId === preparedRevision?.revision_id;
         return result;
       } finally {
-        if (preparedRevision && !attached) {
-          // Reference-aware outbox cleanup also handles a commit with an
-          // uncertain network result. Never directly delete a prepared object.
-          await deps.discardPreparedRevision(preparedRevision);
-        }
+        await preparations.close();
       }
     },
 

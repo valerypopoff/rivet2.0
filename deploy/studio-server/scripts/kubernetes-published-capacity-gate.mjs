@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
+import { rootStructuralMutation } from './lib/structural-fixture-admission.mjs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -431,7 +432,9 @@ export function evaluateCapacityCertificate(report, snapshots, config) {
     failures.push('execution metrics were unavailable for one or more execution-pod samples');
   else if (
     config.capacity.requireExecutionMetrics &&
-    !workloadSnapshots.some((snapshot) => Number.isFinite(snapshot.metrics?.activeRuns) && snapshot.metrics.activeRuns > 0)
+    !workloadSnapshots.some(
+      (snapshot) => Number.isFinite(snapshot.metrics?.activeRuns) && snapshot.metrics.activeRuns > 0,
+    )
   )
     failures.push('no active published run was observed in execution-pod samples');
   if (snapshots.some((snapshot) => !snapshot.eventsAvailable))
@@ -469,8 +472,7 @@ export function evaluateCapacityCertificate(report, snapshots, config) {
         (snapshot) =>
           snapshot.prometheus?.available !== true ||
           Object.keys(config.capacity.prometheus.queries).some(
-            (name) =>
-              !Number.isFinite(snapshot.prometheus.values?.[name]) || snapshot.prometheus.values[name] < 0,
+            (name) => !Number.isFinite(snapshot.prometheus.values?.[name]) || snapshot.prometheus.values[name] < 0,
           ),
       )
     ) {
@@ -562,7 +564,7 @@ export class PublishedCapacityGate {
     this.configMapName = `${this.jobName}-config`;
     this.authorizationSecretName = `${this.jobName}-authorization`;
     this.capacityBearerToken = null;
-    this.fixturePaths = [];
+    this.fixtureProjects = [];
     this.snapshots = [];
     this.baselineRecordingDropsByPod = new Map();
     this.recordingDropsObserved = 0;
@@ -631,9 +633,10 @@ export class PublishedCapacityGate {
       const endpointName = `${this.jobName}-${scenario}`;
       const upload = await requestJson(this.config.baseUrl, '/api/workflows/projects/upload', {
         method: 'POST',
-        headers: this.config.requestHeaders,
+        headers: { ...this.config.requestHeaders, 'X-Rivet-Namespace-Intent': '1' },
         body: {
           folderRelativePath: '',
+          mutation: rootStructuralMutation(),
           fileName,
           contents: createCapacityFixtureContents(template, {
             title: `Capacity ${scenario} ${this.runToken}`,
@@ -642,7 +645,9 @@ export class PublishedCapacityGate {
         },
       });
       const relativePath = safeRelativePath(upload?.project?.relativePath);
-      this.fixturePaths.push(relativePath);
+      if (!upload.project.projectMetadataId || !upload.project.revisionId)
+        throw new Error('Capacity fixture creation did not return its immutable identity.');
+      this.fixtureProjects.push(upload.project);
       const publicationSnapshot = await requestJson(
         this.config.baseUrl,
         `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
@@ -896,12 +901,15 @@ export class PublishedCapacityGate {
         this.config.namespace,
         '--ignore-not-found=true',
       ]),
-      ...this.fixturePaths.map((relativePath) =>
-        requestJson(this.config.baseUrl, '/api/workflows/projects', {
-          method: 'DELETE',
-          headers: this.config.requestHeaders,
-          body: { relativePath },
-        }),
+      ...this.fixtureProjects.map((project) =>
+        cleanupCapacityFixture(
+          (route, options = {}) =>
+            requestJson(this.config.baseUrl, route, {
+              ...options,
+              headers: { ...this.config.requestHeaders, ...options.headers },
+            }),
+          project,
+        ),
       ),
     ]);
     if (this.tempDir) await fs.rm(this.tempDir, { recursive: true, force: true });
@@ -912,6 +920,49 @@ export class PublishedCapacityGate {
       );
     }
   }
+}
+
+/** Cleanup only the exact fixture revision created by this isolated gate. Never
+ * follow a replacement at its old path or retry an uncertain modifying request. */
+export async function cleanupCapacityFixture(request, project) {
+  const relativePath = safeRelativePath(project.relativePath);
+  const inspect = () => request(`/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`);
+  const assertOwned = (snapshot) => {
+    if (snapshot?.projectId !== project.projectMetadataId || snapshot?.draftRevisionId !== project.revisionId)
+      throw new Error('Capacity fixture changed; cleanup requires review.');
+    if (snapshot.webApps?.some((app) => app.publishedSlug || app.publishedAt))
+      throw new Error('Capacity fixture has unexpected published web apps; cleanup requires review.');
+  };
+  let snapshot = await inspect();
+  assertOwned(snapshot);
+  if (snapshot.project.settings.publishedEndpointName) {
+    await request('/api/workflows/projects/unpublish', {
+      method: 'POST',
+      body: {
+        relativePath,
+        preconditions: {
+          expectedProjectId: snapshot.projectId,
+          expectedPublicationVersion: snapshot.publicationVersion,
+        },
+      },
+    });
+    snapshot = await inspect();
+    assertOwned(snapshot);
+  }
+  if (project.namespaceProtocol === 1) {
+    const mutation = rootStructuralMutation();
+    delete mutation.expectedDestinationId;
+    return request('/api/workflows/namespace/mutate', {
+      method: 'POST',
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
+      body: {
+        ...mutation,
+        command: { kind: 'delete', itemType: 'project', relativePath },
+        expectedSource: { id: project.projectMetadataId, revisionId: project.revisionId },
+      },
+    });
+  }
+  return request('/api/workflows/projects', { method: 'DELETE', body: { relativePath } });
 }
 
 /**

@@ -21,7 +21,7 @@ async function until(check) {
 async function json(base, route, body, method) {
   const response = await fetch(base + route, {
     method: method ?? (body === undefined ? 'GET' : route.endsWith('/library') ? 'PUT' : 'POST'),
-    headers: { ...headers, 'content-type': 'application/json' },
+    headers: { ...headers, 'content-type': 'application/json', 'X-Rivet-Namespace-Intent': '1' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -103,18 +103,37 @@ for (const [origin, observer, direction] of [
     const name = `ha-notification-${randomUUID()}`;
     const created = await json(origin, `/api/workflows/${folderOnly ? 'folders' : 'projects'}`, {
       name,
+      mutation: {
+        operationId: randomUUID(),
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        expectedDestinationId: null,
+      },
       ...(folderOnly ? { parentRelativePath: '' } : { folderRelativePath: '' }),
     });
-    if (!folderOnly)
-      await json(
-        origin,
-        '/api/workflows/projects',
-        {
-          relativePath: created.project.relativePath,
-          newName: `${name}-renamed`,
-        },
-        'PATCH',
-      );
+    if (!folderOnly) {
+      if (created.project.namespaceProtocol === 1) {
+        await json(origin, '/api/workflows/namespace/mutate', {
+          operationId: randomUUID(),
+          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          command: {
+            kind: 'rename',
+            itemType: 'project',
+            relativePath: created.project.relativePath,
+            name: `${name}-renamed`,
+          },
+          expectedSource: { id: created.project.projectMetadataId, revisionId: created.project.revisionId },
+        });
+      } else
+        await json(
+          origin,
+          '/api/workflows/projects',
+          {
+            relativePath: created.project.relativePath,
+            newName: `${name}-renamed`,
+          },
+          'PATCH',
+        );
+    }
     await tree.wait((events) => events.some((e) => e.event === 'tree-changed' && e.data.revision > revision));
     const before = await json(origin, '/api/workflows/evaluation-runs/library'),
       marker = randomUUID();

@@ -69,6 +69,7 @@ export * from './model/NodeBodySpec.js';
 export * from './model/interpolationInputDefinition.js';
 export * from './integrations/DatasetProvider.js';
 export * from './model/Dataset.js';
+export { remapOwnedDatasets } from './model/DatasetOwnership.js';
 export type {
   DatasetRequestMap,
   DatasetRequestMessage,

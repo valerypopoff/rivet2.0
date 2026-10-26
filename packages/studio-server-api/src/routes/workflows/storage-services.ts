@@ -21,6 +21,17 @@ export interface LocalWorkflowResources extends WorkflowDataBackend, Disposable 
   cleanupRecordings(): Promise<number>;
 }
 export interface ManagedWorkflowResources extends WorkflowDataBackend, Disposable {
+  mutateStructural(
+    command: import('../../../../studio-server-shared/workflow-mutation-contract.js').StructuralCommand,
+    mutation: import('../../../../studio-server-shared/workflow-mutation-contract.js').StructuralMutation,
+  ): Promise<unknown>;
+  recoverStructural(operationId: string, hash: string): Promise<unknown>;
+  mutateNamespace(
+    request: import('../../../../studio-server-shared/workflow-namespace-types.js').WorkflowNamespaceMutation,
+  ): Promise<unknown>;
+  recoverNamespace(
+    request: import('../../../../studio-server-shared/workflow-namespace-types.js').WorkflowNamespaceMutation,
+  ): Promise<unknown>;
   readonly bundles: ReturnType<typeof import('./managed/bundles.js').createManagedBundleService>;
   importProjectBundle(parent: string, bundle: PreparedProjectBundleImport): Promise<ProjectBundleImportResult>;
   initialize(): Promise<void>;

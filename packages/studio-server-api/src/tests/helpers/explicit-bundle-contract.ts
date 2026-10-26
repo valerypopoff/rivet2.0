@@ -21,14 +21,34 @@ export async function verifyExplicitBundleContract(
   pool: Pool,
   http?: { baseUrl: string; headers: Record<string, string> },
 ) {
+  const admission = (guards: Record<string, unknown>) => ({
+    operationId: randomUUID(),
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    ...guards,
+  });
   if (http) {
     const url = `${http.baseUrl}/api/workflows/bundles`;
-    const body = JSON.stringify({ name: `HTTP bundle ${randomUUID()}`, parentRelativePath: '' });
+    const body = JSON.stringify({
+      name: `HTTP bundle ${randomUUID()}`,
+      parentRelativePath: '',
+      mutation: admission({ expectedDestinationId: null }),
+    });
     const headers = { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' };
+    const unguarded = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'Old client', parentRelativePath: '' }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    assert.equal(unguarded.status, 428, await unguarded.text());
     const invalid = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ name: 'Broken.rivet-project', parentRelativePath: '' }),
+      body: JSON.stringify({
+        name: 'Broken.rivet-project',
+        parentRelativePath: '',
+        mutation: admission({ expectedDestinationId: null }),
+      }),
       signal: AbortSignal.timeout(10_000),
     });
     assert.equal(invalid.status, 400, await invalid.text());
@@ -106,7 +126,12 @@ export async function verifyExplicitBundleContract(
     const response = await fetch(`${http.baseUrl}/api/workflows/bundles/kind`, {
       method: 'POST',
       headers: { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
-      body: JSON.stringify({ relativePath: candidate.relativePath, enabled: true }),
+      body: JSON.stringify({
+        relativePath: candidate.relativePath,
+        enabled: true,
+        namespaceId: candidate.namespaceId,
+        mutation: admission({ expectedSource: { id: candidate.namespaceId } }),
+      }),
       signal: AbortSignal.timeout(10_000),
     });
     assert.equal(response.status, 409, await response.clone().text());
@@ -333,7 +358,11 @@ export async function verifyExplicitBundleContract(
     const response = await fetch(`${http.baseUrl}/api/workflows/bundles/${sourceBundleId}/duplicate`, {
       method: 'POST',
       headers: { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
-      body: JSON.stringify({ automatic: true }),
+      body: JSON.stringify({
+        automatic: true,
+        relativePath: source.relativePath,
+        mutation: admission({ expectedSource: { id: source.namespaceId } }),
+      }),
       signal: AbortSignal.timeout(30_000),
     });
     assert.equal(response.status, 201, await response.clone().text());
@@ -423,7 +452,10 @@ export async function verifyExplicitBundleContract(
   }
   if (http) {
     const url = `${http.baseUrl}/api/workflows/bundles/${victim.bundleId}/delete`;
-    const body = JSON.stringify(confirmation);
+    const body = JSON.stringify({
+      ...confirmation,
+      mutation: admission({ expectedSource: { id: victim.folder.namespaceId } }),
+    });
     const headers = { ...http.headers, 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' };
     assert.equal(
       (

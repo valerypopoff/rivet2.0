@@ -4,16 +4,21 @@ import ModalDialog, { ModalBody } from '@atlaskit/modal-dialog';
 import { readBundleArchive, readBundleFolder } from './projectBundleUpload';
 import { uploadWorkflowBundle } from './workflowApi';
 import type { WorkflowFolderItem } from './types';
+import { MutationOutcomeUnknownError } from './workflowNamespaceMutations';
+import { useWorkflowLibraryActionLifetime } from './useWorkflowLibraryActionLifetime';
+import type { LibraryMutationCompletion } from './workflowNamespaceReconciliation';
 import './WorkflowProjectBundleModal.css';
 
 export function WorkflowBundleUploadModal({
   folder,
   onClose,
   onImported,
+  onStructuralMutation,
 }: {
   folder: WorkflowFolderItem;
   onClose(): void;
   onImported(folder: WorkflowFolderItem): void;
+  onStructuralMutation: LibraryMutationCompletion;
 }) {
   const folderInput = useRef<HTMLInputElement | null>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
@@ -21,8 +26,10 @@ export function WorkflowBundleUploadModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const captureAction = useWorkflowLibraryActionLifetime(folder.namespaceId ?? folder.id);
   const upload = async (files: File[], kind: 'folder' | 'archive') => {
     if (!files.length || busyRef.current) return;
+    const isCurrent = captureAction();
     busyRef.current = true;
     setBusy(true);
     setError('');
@@ -30,18 +37,27 @@ export function WorkflowBundleUploadModal({
     let imported: WorkflowFolderItem;
     try {
       const contents = kind === 'folder' ? await readBundleFolder(files) : await readBundleArchive(files[0]!);
+      if (!isCurrent()) return;
       setStatus('Uploading projects…');
-      const result = await uploadWorkflowBundle(folder.relativePath, contents);
+      const result = await uploadWorkflowBundle(
+        folder.relativePath,
+        contents,
+        folder.namespaceId ?? (folder.relativePath === '' ? null : undefined),
+      );
       imported = result.folder;
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Bundle upload failed.');
-      setStatus('');
+      if (error instanceof MutationOutcomeUnknownError) onStructuralMutation(error.message);
+      if (isCurrent()) {
+        setError(error instanceof Error ? error.message : 'Bundle upload failed.');
+        setStatus('');
+      }
       return;
     } finally {
       busyRef.current = false;
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
-    onImported(imported);
+    if (isCurrent()) onImported(imported);
+    else onStructuralMutation('Bundle imported, but library synchronization is pending.');
   };
   const close = () => {
     if (!busyRef.current) onClose();

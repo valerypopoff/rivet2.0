@@ -1,26 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
-import {
-  loadProjectAndAttachedDataFromString,
-  serializeProject,
-  type AttachedData,
-  type Project,
-} from '@valerypopoff/rivet2-node';
 
 import type {
   WorkflowFolderItem,
   WorkflowProjectDownloadVersion,
   WorkflowProjectItem,
-  WorkflowProjectPathMove,
   WorkflowProjectStats,
 } from '../../../../../studio-server-shared/workflow-types.js';
-import { WORKFLOW_PROJECT_EXTENSION } from '../../../../../studio-server-shared/workflow-types.js';
 import { badRequest, conflict, createHttpError } from '../../../utils/httpError.js';
-import { lockBundleTopology } from './bundles.js';
-import { deleteManagedWorkflowProject } from './project-deletion.js';
-import { createBlankProjectFile, sanitizeWorkflowName } from '../fs-helpers.js';
+import { captureOperation } from './namespace-receipts.js';
+import { createManagedProject } from './project-creation.js';
+import type { StructuralMutation } from '../../../../../studio-server-shared/workflow-mutation-contract.js';
+import { structuralTransaction, assertFolderIdentity, withCatalogTransaction } from './structural-admission.js';
+import { createManagedCatalogMutations } from './catalog-mutations.js';
+import type { WorkflowNamespaceCommand } from '../../../../../studio-server-shared/workflow-namespace-types.js';
+import { sanitizeWorkflowName } from '../fs-helpers.js';
 import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
-import { getWorkflowDownloadFileName, getWorkflowDuplicateProjectName } from '../workflow-project-naming.js';
+import { getWorkflowDownloadFileName } from '../workflow-project-naming.js';
 import type { WorkflowProjectReferenceSnapshot } from '../project-reference-snapshots.js';
 import {
   getManagedWorkflowFolderVirtualPath,
@@ -33,26 +28,10 @@ import {
   resolveManagedWorkflowRelativeReference,
 } from '../virtual-paths.js';
 import type { ManagedWorkflowContext } from './context.js';
-import type {
-  FolderMoveRow,
-  FolderRow,
-  RevisionRow,
-  SaveHostedProjectResult,
-  TransactionHooks,
-  WebAppPublicationRow,
-  WorkflowRow,
-} from './types.js';
+import type { RevisionRow, WebAppPublicationRow, WorkflowRow } from './types.js';
 
 type ManagedWorkflowCatalogServiceDependencies = {
   context: ManagedWorkflowContext;
-  saveHostedProject(options: {
-    projectPath: string;
-    contents: string;
-    datasetsContents: string | null;
-    expectedRevisionId?: string | null;
-    projectId?: string;
-    saveIntent?: 'in-place' | 'save-as';
-  }): Promise<SaveHostedProjectResult>;
 };
 
 type WorkflowTreeRow = WorkflowRow & {
@@ -76,27 +55,14 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     getCurrentDraftWorkflowRevision: options.context.queries.getCurrentDraftWorkflowRevision,
     getRevision: options.context.queries.getRevision,
     readRevisionProjectContents: options.context.revisions.readRevisionProjectContents,
-    readRevisionContents: options.context.revisions.readRevisionContents,
-    createRevision: options.context.revisions.createRevision,
-    insertRevision: options.context.revisions.insertRevision,
-    scheduleRevisionBlobCleanup: options.context.revisions.scheduleRevisionBlobCleanup,
     assertFolderExists: options.context.queries.assertFolderExists,
-    saveHostedProject: options.saveHostedProject,
     mapWorkflowRowToProjectItem: options.context.mappers.mapWorkflowRowToProjectItem,
     mapFolderRowToFolderItem: options.context.mappers.mapFolderRowToFolderItem,
     getWorkflowStatus: options.context.mappers.getWorkflowStatus,
     blobStore: options.context.blobStore,
-    queueWorkflowInvalidation: options.context.executionInvalidationController.queueWorkflowInvalidation.bind(
-      options.context.executionInvalidationController,
-    ),
-    queueGlobalInvalidation: options.context.executionInvalidationController.queueGlobalInvalidation.bind(
-      options.context.executionInvalidationController,
-    ),
     queueCatalogInvalidation: options.context.executionInvalidationController.queueCatalogInvalidation.bind(
       options.context.executionInvalidationController,
     ),
-    maintenance: options.context.maintenance,
-    isUniqueViolation: options.context.db.isUniqueViolation,
     workflowColumnsQualified: options.context.mappers.WORKFLOW_COLUMNS_QUALIFIED,
     getWorkflowProjectStatsFromContents,
   };
@@ -105,69 +71,6 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     totalNodeCount: 0,
     webAppCount: 0,
   } as const;
-
-  const moveFolderRelativePath = async (
-    sourceRelativePath: string,
-    targetRelativePath: string,
-  ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> => {
-    try {
-      return await deps.withTransaction(async (client, hooks) => {
-        await lockBundleTopology(client);
-        const temporaryPrefix = `.__move__-${randomUUID()}`;
-        const folderName = path.posix.basename(targetRelativePath);
-        const folderRow = await deps.queryOne<FolderMoveRow>(
-          client,
-          `
-            SELECT relative_path, name, parent_relative_path, updated_at, moved_relative_paths
-            FROM move_managed_workflow_folder($1, $2, $3, $4)
-          `,
-          [sourceRelativePath, temporaryPrefix, targetRelativePath, folderName],
-        );
-
-        if (!folderRow) {
-          throw createHttpError(500, 'Moved folder could not be loaded');
-        }
-
-        const movedProjectPaths = (folderRow.moved_relative_paths ?? []).map((relativePath) => ({
-          fromAbsolutePath: getManagedWorkflowProjectVirtualPath(relativePath),
-          toAbsolutePath: getManagedWorkflowProjectVirtualPath(
-            `${targetRelativePath}${relativePath.slice(sourceRelativePath.length)}`,
-          ),
-        }));
-
-        if (movedProjectPaths.length > 0) await deps.queueGlobalInvalidation(client, hooks);
-        else await deps.queueCatalogInvalidation(client);
-
-        return {
-          folder: deps.mapFolderRowToFolderItem({
-            ...folderRow,
-            ...(await deps.queryOne<{ bundle_id: string | null }>(
-              client,
-              'SELECT bundle_id FROM workflow_folders WHERE relative_path=$1',
-              [targetRelativePath],
-            )),
-          }),
-          movedProjectPaths,
-        };
-      });
-    } catch (error) {
-      if ((error as { code?: string })?.code === '23514') throw conflict('Bundles cannot contain other bundles.');
-      if (
-        typeof error === 'object' &&
-        error != null &&
-        'code' in error &&
-        String((error as { code?: unknown }).code ?? '') === 'P0002'
-      ) {
-        throw createHttpError(404, 'Folder not found');
-      }
-
-      if (deps.isUniqueViolation(error)) {
-        throw conflict(`Folder already exists: ${path.posix.basename(targetRelativePath)}`);
-      }
-
-      throw error;
-    }
-  };
 
   const getRevisionStats = async (
     revision: Pick<
@@ -210,84 +113,25 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     }
   };
 
-  const moveWorkflowProjectRelativePath = async (
-    sourceRelativePath: string,
-    targetRelativePath: string,
-  ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> => {
-    if (sourceRelativePath === targetRelativePath) {
-      const workflow = await deps.getWorkflowByRelativePath(deps.pool, sourceRelativePath);
-      if (!workflow) {
-        throw createHttpError(404, 'Project not found');
-      }
-
-      return {
-        project: deps.mapWorkflowRowToProjectItem(workflow),
-        movedProjectPaths: [],
-      };
-    }
-
-    return deps.withTransaction(async (client, hooks) => {
-      await lockBundleTopology(client);
-      const workflow = await deps.getWorkflowByRelativePath(client, sourceRelativePath, { forUpdate: true });
-      if (!workflow) {
-        throw createHttpError(404, 'Project not found');
-      }
-
-      if (await deps.getWorkflowByRelativePath(client, targetRelativePath)) {
-        throw conflict(`Project already exists: ${path.posix.basename(targetRelativePath)}`);
-      }
-
-      const folderRelativePath =
-        path.posix.dirname(targetRelativePath) === '.' ? '' : path.posix.dirname(targetRelativePath);
-      await deps.assertFolderExists(client, folderRelativePath);
-
-      const projectName = path.posix.basename(targetRelativePath, WORKFLOW_PROJECT_EXTENSION);
-
-      await client.query(
-        `
-          UPDATE workflows
-          SET name = $2,
-              file_name = $3,
-              relative_path = $4,
-              folder_relative_path = $5,
-              updated_at = NOW()
-          WHERE workflow_id = $1
-        `,
-        [
-          workflow.workflow_id,
-          projectName,
-          `${projectName}${WORKFLOW_PROJECT_EXTENSION}`,
-          targetRelativePath,
-          folderRelativePath,
-        ],
-      );
-
-      const movedWorkflow = await deps.getWorkflowByRelativePath(client, targetRelativePath, { forUpdate: true });
-      if (!movedWorkflow) {
-        throw createHttpError(500, 'Moved project could not be loaded');
-      }
-
-      await deps.queueWorkflowInvalidation(client, hooks, workflow.workflow_id);
-
-      return {
-        project: deps.mapWorkflowRowToProjectItem(movedWorkflow),
-        movedProjectPaths: [
-          {
-            fromAbsolutePath: getManagedWorkflowProjectVirtualPath(sourceRelativePath),
-            toAbsolutePath: getManagedWorkflowProjectVirtualPath(targetRelativePath),
-          },
-        ],
-      };
-    });
-  };
+  const operations = createManagedCatalogMutations(options.context);
+  const folderPath = (value: unknown, allowEmpty = false) =>
+    normalizeManagedWorkflowRelativePath(value, { allowProjectFile: false, allowEmpty });
+  const projectPath = (value: unknown) => normalizeManagedWorkflowRelativePath(value, { allowProjectFile: true });
+  const execute = (command: WorkflowNamespaceCommand) =>
+    withCatalogTransaction(options.context, (tx) => operations(tx, command));
 
   return {
     async getTree(): Promise<{ root: string; folders: WorkflowFolderItem[]; projects: WorkflowProjectItem[] }> {
       await deps.initialize();
-      const [folderRows, workflowRows, webAppRows] = await Promise.all([
-        deps.listFolderRows(),
-        deps.queryRows<WorkflowTreeRow>(
-          deps.pool,
+      // Folder paths, project membership and publication headers must describe
+      // one committed state. Separate pool queries can straddle an atomic move
+      // and incorrectly detach its projects. Release this read-only snapshot
+      // before projecting rows or backfilling legacy stats from object storage.
+      const [folderRows, workflowRows, webAppRows] = await deps.withTransaction(async (client) => {
+        await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+        const folderRows = await deps.listFolderRows(client);
+        const workflowRows = await deps.queryRows<WorkflowTreeRow>(
+          client,
           `
           SELECT ${deps.workflowColumnsQualified}, r.revision_id AS draft_revision_id,
             r.project_blob_key AS draft_project_blob_key,
@@ -296,16 +140,17 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
             ON r.revision_id = w.current_draft_revision_id AND r.workflow_id = w.workflow_id
           ORDER BY w.relative_path ASC`,
           [],
-        ),
-        deps.queryRows<WebAppPublicationRow>(
-          deps.pool,
+        );
+        const webAppRows = await deps.queryRows<WebAppPublicationRow>(
+          client,
           `
             SELECT app_id, workflow_id, revision_id, ui_graph_id, slug, slug_lookup_name, published_at
             FROM workflow_web_apps
           `,
           [],
-        ),
-      ]);
+        );
+        return [folderRows, workflowRows, webAppRows] as const;
+      });
       const webAppRowsByWorkflowId = new Map<string, WebAppPublicationRow[]>();
       for (const row of webAppRows) {
         const rows = webAppRowsByWorkflowId.get(row.workflow_id);
@@ -462,7 +307,16 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       return deps.blobStore.getText(loaded.revision.project_blob_key);
     },
 
-    async createWorkflowFolderItem(name: unknown, parentRelativePath: unknown) {
+    async createWorkflowFolderItem(name: unknown, parentRelativePath: unknown, mutation?: StructuralMutation) {
+      const captured = captureOperation(
+        { name, parentRelativePath, mutation },
+        (input) => input.mutation,
+        (input) => ({
+          operation: 'create-folder',
+          input: { name: input.name, parentRelativePath: input.parentRelativePath },
+        }),
+      );
+      ({ name, parentRelativePath, mutation } = captured.input);
       const folderName = sanitizeWorkflowName(name, 'folder name');
       const parentPath = normalizeManagedWorkflowRelativePath(parentRelativePath, {
         allowProjectFile: false,
@@ -475,7 +329,7 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         },
       );
 
-      return deps.withTransaction(async (client) => {
+      const result = await structuralTransaction(options.context, captured.admission, async (client) => {
         if (
           await deps.queryOne(client, 'SELECT relative_path FROM workflow_folders WHERE relative_path = $1', [
             folderRelativePath,
@@ -485,239 +339,92 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         }
 
         await deps.assertFolderExists(client, parentPath);
+        if (mutation) await assertFolderIdentity(client, parentPath, mutation.expectedDestinationId);
+        const namespaceId = randomUUID();
         await client.query(
           `
-            INSERT INTO workflow_folders (relative_path, name, parent_relative_path, updated_at)
-            VALUES ($1, $2, $3, NOW())
+            INSERT INTO workflow_folders (relative_path, name, parent_relative_path, namespace_id, updated_at)
+            VALUES ($1, $2, $3, $4, NOW())
           `,
-          [folderRelativePath, folderName, parentPath],
+          [folderRelativePath, folderName, parentPath, namespaceId],
         );
         await deps.queueCatalogInvalidation(client);
 
-        return deps.mapFolderRowToFolderItem({
-          relative_path: folderRelativePath,
-          name: folderName,
-          parent_relative_path: parentPath,
-          updated_at: new Date(),
-        });
-      });
-    },
-
-    async renameWorkflowFolderItem(
-      relativePath: unknown,
-      newName: unknown,
-    ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
-      const sourceRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: false });
-      const folderName = sanitizeWorkflowName(newName, 'new folder name');
-      const parentRelativePath =
-        path.posix.dirname(sourceRelativePath) === '.' ? '' : path.posix.dirname(sourceRelativePath);
-      const targetRelativePath = normalizeManagedWorkflowRelativePath(
-        parentRelativePath ? `${parentRelativePath}/${folderName}` : folderName,
-        {
-          allowProjectFile: false,
-        },
-      );
-
-      if (sourceRelativePath === targetRelativePath) {
-        const folderRow = await deps.queryOne<FolderRow>(
-          deps.pool,
-          `
-          SELECT relative_path, name, parent_relative_path, updated_at, bundle_id
-          FROM workflow_folders WHERE relative_path = $1
-        `,
-          [sourceRelativePath],
-        );
-        if (!folderRow) {
-          throw createHttpError(404, 'Folder not found');
-        }
-
         return {
-          folder: deps.mapFolderRowToFolderItem(folderRow),
-          movedProjectPaths: [],
+          folder: deps.mapFolderRowToFolderItem({
+            relative_path: folderRelativePath,
+            name: folderName,
+            parent_relative_path: parentPath,
+            namespace_id: namespaceId,
+            updated_at: new Date(),
+          }),
         };
-      }
-
-      if (targetRelativePath.startsWith(`${sourceRelativePath}/`)) {
-        throw badRequest('Cannot move a folder into itself');
-      }
-
-      return moveFolderRelativePath(sourceRelativePath, targetRelativePath);
-    },
-
-    async moveWorkflowFolder(
-      sourceRelativePath: unknown,
-      destinationFolderRelativePath: unknown,
-    ): Promise<{ folder: WorkflowFolderItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
-      const sourcePath = normalizeManagedWorkflowRelativePath(sourceRelativePath, { allowProjectFile: false });
-      const destinationFolderPath = normalizeManagedWorkflowRelativePath(destinationFolderRelativePath, {
-        allowProjectFile: false,
-        allowEmpty: true,
       });
-      const targetRelativePath = destinationFolderPath
-        ? `${destinationFolderPath}/${path.posix.basename(sourcePath)}`
-        : path.posix.basename(sourcePath);
-
-      if (destinationFolderPath === sourcePath || destinationFolderPath.startsWith(`${sourcePath}/`)) {
-        throw badRequest('Cannot move a folder into itself');
-      }
-
-      if (targetRelativePath === sourcePath) {
-        const folderRow = await deps.queryOne<FolderRow>(
-          deps.pool,
-          `
-          SELECT relative_path, name, parent_relative_path, updated_at, bundle_id
-          FROM workflow_folders WHERE relative_path = $1
-        `,
-          [sourcePath],
-        );
-        if (!folderRow) {
-          throw createHttpError(404, 'Folder not found');
-        }
-
-        return {
-          folder: deps.mapFolderRowToFolderItem(folderRow),
-          movedProjectPaths: [],
-        };
-      }
-
-      return moveFolderRelativePath(sourcePath, targetRelativePath);
+      return result.folder;
     },
 
+    async renameWorkflowFolderItem(relativePath: unknown, newName: unknown) {
+      const result = await execute({
+        kind: 'rename',
+        itemType: 'folder',
+        relativePath: folderPath(relativePath),
+        name: sanitizeWorkflowName(newName, 'new name'),
+      });
+      if (!result.folder || !result.movedProjectPaths) throw new Error('Invalid folder mutation result');
+      return { folder: result.folder, movedProjectPaths: result.movedProjectPaths };
+    },
+    async moveWorkflowFolder(sourceRelativePath: unknown, destinationFolderRelativePath: unknown) {
+      const result = await execute({
+        kind: 'move',
+        itemType: 'folder',
+        relativePath: folderPath(sourceRelativePath),
+        destinationRelativePath: folderPath(destinationFolderRelativePath, true),
+      });
+      if (!result.folder || !result.movedProjectPaths) throw new Error('Invalid folder mutation result');
+      return { folder: result.folder, movedProjectPaths: result.movedProjectPaths };
+    },
     async deleteWorkflowFolderItem(relativePath: unknown): Promise<void> {
-      const folderRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: false });
-
-      await deps.withTransaction(async (client) => {
-        // Lock before checking children: a bundle import may hold KEY SHARE
-        // while inserting its group. After waiting, inspect the committed tree.
-        const folder = await deps.queryOne(
-          client,
-          'SELECT relative_path FROM workflow_folders WHERE relative_path = $1 FOR UPDATE',
-          [folderRelativePath],
-        );
-        if (!folder) throw createHttpError(404, 'Folder not found');
-
-        const childFolder = await deps.queryOne(
-          client,
-          'SELECT relative_path FROM workflow_folders WHERE parent_relative_path = $1 LIMIT 1',
-          [folderRelativePath],
-        );
-        const childProject = await deps.queryOne(
-          client,
-          'SELECT workflow_id FROM workflows WHERE folder_relative_path = $1 LIMIT 1',
-          [folderRelativePath],
-        );
-        if (childFolder || childProject) {
-          throw conflict('Only empty folders can be deleted');
-        }
-
-        await client.query('DELETE FROM workflow_folders WHERE relative_path = $1', [folderRelativePath]);
-        await deps.queueCatalogInvalidation(client);
-      });
+      await execute({ kind: 'delete', itemType: 'folder', relativePath: folderPath(relativePath) });
     },
 
     async createWorkflowProjectItem(folderRelativePath: unknown, name: unknown): Promise<WorkflowProjectItem> {
-      const normalizedFolderPath = normalizeManagedWorkflowRelativePath(folderRelativePath, {
-        allowProjectFile: false,
-        allowEmpty: true,
+      return createManagedProject(options.context, {
+        operation: 'create-project',
+        input: {
+          parentRelativePath: folderPath(folderRelativePath, true),
+          name: sanitizeWorkflowName(name, 'project name'),
+        },
       });
-      const projectName = sanitizeWorkflowName(name, 'project name');
-      const relativePath = normalizedFolderPath
-        ? `${normalizedFolderPath}/${projectName}${WORKFLOW_PROJECT_EXTENSION}`
-        : `${projectName}${WORKFLOW_PROJECT_EXTENSION}`;
-
-      await deps.assertFolderExists(deps.pool, normalizedFolderPath);
-
-      const result = await deps.saveHostedProject({
-        projectPath: getManagedWorkflowProjectVirtualPath(relativePath),
-        contents: createBlankProjectFile(projectName),
-        datasetsContents: null,
-      });
-
-      return result.project;
     },
 
-    async renameWorkflowProjectItem(
-      relativePath: unknown,
-      newName: unknown,
-    ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
-      const sourceRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
-      const projectName = sanitizeWorkflowName(newName, 'new project name');
-      const folderRelativePath =
-        path.posix.dirname(sourceRelativePath) === '.' ? '' : path.posix.dirname(sourceRelativePath);
-      const targetRelativePath = folderRelativePath
-        ? `${folderRelativePath}/${projectName}${WORKFLOW_PROJECT_EXTENSION}`
-        : `${projectName}${WORKFLOW_PROJECT_EXTENSION}`;
-
-      return moveWorkflowProjectRelativePath(sourceRelativePath, targetRelativePath);
-    },
-
-    async moveWorkflowProject(
-      sourceRelativePath: unknown,
-      destinationFolderRelativePath: unknown,
-    ): Promise<{ project: WorkflowProjectItem; movedProjectPaths: WorkflowProjectPathMove[] }> {
-      const sourcePath = normalizeManagedWorkflowRelativePath(sourceRelativePath, { allowProjectFile: true });
-      const destinationFolderPath = normalizeManagedWorkflowRelativePath(destinationFolderRelativePath, {
-        allowProjectFile: false,
-        allowEmpty: true,
+    async renameWorkflowProjectItem(relativePath: unknown, newName: unknown) {
+      const result = await execute({
+        kind: 'rename',
+        itemType: 'project',
+        relativePath: projectPath(relativePath),
+        name: sanitizeWorkflowName(newName, 'new name'),
       });
-      const targetRelativePath = destinationFolderPath
-        ? `${destinationFolderPath}/${path.posix.basename(sourcePath)}`
-        : path.posix.basename(sourcePath);
-
-      return moveWorkflowProjectRelativePath(sourcePath, targetRelativePath);
+      if (!result.project || !result.movedProjectPaths) throw new Error('Invalid project mutation result');
+      return { project: result.project, movedProjectPaths: result.movedProjectPaths };
+    },
+    async moveWorkflowProject(sourceRelativePath: unknown, destinationFolderRelativePath: unknown) {
+      const result = await execute({
+        kind: 'move',
+        itemType: 'project',
+        relativePath: projectPath(sourceRelativePath),
+        destinationRelativePath: folderPath(destinationFolderRelativePath, true),
+      });
+      if (!result.project || !result.movedProjectPaths) throw new Error('Invalid project mutation result');
+      return { project: result.project, movedProjectPaths: result.movedProjectPaths };
     },
 
     async duplicateWorkflowProjectItem(
       relativePath: unknown,
       version: WorkflowProjectDownloadVersion = 'live',
     ): Promise<WorkflowProjectItem> {
-      const sourceRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
-
-      return deps.withTransaction(async (client) => {
-        const workflow = await deps.getWorkflowByRelativePath(client, sourceRelativePath, { forUpdate: true });
-        if (!workflow) {
-          throw createHttpError(404, 'Project not found');
-        }
-
-        const status = deps.getWorkflowStatus(workflow);
-        const sourceRevisionId =
-          version === 'published' ? workflow.published_revision_id : workflow.current_draft_revision_id;
-        if (version === 'published' && !sourceRevisionId) {
-          throw conflict('Published version is not available for this project');
-        }
-
-        const sourceRevision = await deps.getRevision(client, sourceRevisionId);
-        if (!sourceRevision) {
-          throw createHttpError(404, 'Project revision not found');
-        }
-
-        const sourceContents = await deps.readRevisionContents(sourceRevision);
-        const [sourceProject, sourceAttachedData] = loadProjectAndAttachedDataFromString(sourceContents.contents);
-        sourceProject.metadata.id = randomUUID() as typeof sourceProject.metadata.id;
-
-        for (let duplicateIndex = 0; ; duplicateIndex += 1) {
-          const duplicateProjectName = getWorkflowDuplicateProjectName(workflow.name, version, status, duplicateIndex);
-          const duplicateRelativePath = workflow.folder_relative_path
-            ? `${workflow.folder_relative_path}/${duplicateProjectName}${WORKFLOW_PROJECT_EXTENSION}`
-            : `${duplicateProjectName}${WORKFLOW_PROJECT_EXTENSION}`;
-
-          if (await deps.getWorkflowByRelativePath(client, duplicateRelativePath)) {
-            continue;
-          }
-
-          sourceProject.metadata.title = duplicateProjectName;
-          const serialized = serializeProject(sourceProject, sourceAttachedData);
-          if (typeof serialized !== 'string') {
-            throw createHttpError(400, 'Could not duplicate project');
-          }
-
-          const result = await deps.saveHostedProject({
-            projectPath: getManagedWorkflowProjectVirtualPath(duplicateRelativePath),
-            contents: serialized,
-            datasetsContents: null,
-          });
-          return result.project;
-        }
+      return createManagedProject(options.context, {
+        operation: 'copy-project',
+        input: { relativePath: projectPath(relativePath), version },
       });
     },
 
@@ -726,61 +433,12 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
       fileName: unknown,
       contents: unknown,
     ): Promise<WorkflowProjectItem> {
-      const normalizedFolderPath = normalizeManagedWorkflowRelativePath(folderRelativePath, {
-        allowProjectFile: false,
-        allowEmpty: true,
+      if (typeof fileName !== 'string' || typeof contents !== 'string')
+        throw badRequest('Missing project file name or contents.');
+      return createManagedProject(options.context, {
+        operation: 'upload-project',
+        input: { parentRelativePath: folderPath(folderRelativePath, true), fileName, contents },
       });
-      await deps.assertFolderExists(deps.pool, normalizedFolderPath);
-
-      if (typeof fileName !== 'string' || !fileName.trim()) {
-        throw createHttpError(400, 'Missing fileName');
-      }
-      if (typeof contents !== 'string' || !contents.trim()) {
-        throw createHttpError(400, 'Missing project contents');
-      }
-
-      let sourceProject: Project;
-      let attachedData: AttachedData;
-      try {
-        [sourceProject, attachedData] = loadProjectAndAttachedDataFromString(contents);
-      } catch {
-        throw createHttpError(400, 'Could not upload project: invalid project file');
-      }
-
-      const sourceBaseName = sanitizeWorkflowName(
-        fileName
-          .trim()
-          .replace(/\\/g, '/')
-          .split('/')
-          .pop()
-          ?.replace(/\.rivet-project$/i, '') ?? '',
-        'project file name',
-      );
-
-      for (let uploadIndex = 0; ; uploadIndex += 1) {
-        const uploadedProjectName = uploadIndex === 0 ? sourceBaseName : `${sourceBaseName} ${uploadIndex}`;
-        const uploadedRelativePath = normalizedFolderPath
-          ? `${normalizedFolderPath}/${uploadedProjectName}${WORKFLOW_PROJECT_EXTENSION}`
-          : `${uploadedProjectName}${WORKFLOW_PROJECT_EXTENSION}`;
-
-        if (await deps.getWorkflowByRelativePath(deps.pool, uploadedRelativePath)) {
-          continue;
-        }
-
-        sourceProject.metadata.id = randomUUID() as typeof sourceProject.metadata.id;
-        sourceProject.metadata.title = uploadedProjectName;
-        const serialized = serializeProject(sourceProject, attachedData);
-        if (typeof serialized !== 'string') {
-          throw createHttpError(400, 'Could not upload project: invalid project file');
-        }
-
-        const result = await deps.saveHostedProject({
-          projectPath: getManagedWorkflowProjectVirtualPath(uploadedRelativePath),
-          contents: serialized,
-          datasetsContents: null,
-        });
-        return result.project;
-      }
     },
 
     async listWorkflowProjectReferenceCatalog() {
@@ -870,18 +528,8 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
     },
 
     async deleteWorkflowProjectItem(relativePath: unknown): Promise<string | null> {
-      const normalizedRelativePath = normalizeManagedWorkflowRelativePath(relativePath, { allowProjectFile: true });
-
-      return deps.withTransaction(async (client, hooks) => {
-        await lockBundleTopology(client);
-        const workflow = await deps.getWorkflowByRelativePath(client, normalizedRelativePath, { forUpdate: true });
-        if (!workflow) {
-          throw createHttpError(404, 'Project not found');
-        }
-
-        await deleteManagedWorkflowProject(options.context, client, hooks, workflow);
-        return workflow.workflow_id;
-      });
+      const result = await execute({ kind: 'delete', itemType: 'project', relativePath: projectPath(relativePath) });
+      return result.projectId ?? null;
     },
   };
 }

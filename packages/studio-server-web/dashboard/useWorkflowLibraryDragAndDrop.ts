@@ -3,8 +3,15 @@ import { toast } from 'react-toastify';
 
 import type { WorkflowFolderItem, WorkflowProjectItem, WorkflowProjectPathMove } from './types';
 import { moveWorkflowItem } from './workflowApi';
-import { type DraggedWorkflowItem, ROOT_DROP_TARGET } from './workflowLibraryHelpers';
-import { applyFolderMoveToTree, remapExpandedFolderIds } from './workflowTreeOps';
+import { type DraggedWorkflowItem, ROOT_DROP_TARGET, flattenFolders, flattenProjects } from './workflowLibraryHelpers';
+import { remapExpandedFolderIds } from './workflowTreeOps';
+import {
+  reconcileNamespaceMove,
+  requiresFreshNamespaceTree,
+  type LibraryMutationCompletion,
+} from './workflowNamespaceReconciliation';
+import { useWorkflowLibraryActionLifetime } from './useWorkflowLibraryActionLifetime';
+import { MutationOutcomeUnknownError } from './workflowNamespaceMutations';
 
 type WorkflowDragState = {
   draggedItem: DraggedWorkflowItem | null;
@@ -13,21 +20,21 @@ type WorkflowDragState = {
 };
 
 export function useWorkflowLibraryDragAndDrop({
+  activePath,
   applyProjectPathMoves,
   flattenedFolders,
   folders,
   reconcileTree,
-  refresh,
   rootProjects,
   setExpandedFolders,
   setFolders,
   setRootProjects,
 }: {
+  activePath: string;
   applyProjectPathMoves: (moves: WorkflowProjectPathMove[]) => Promise<void>;
   flattenedFolders: WorkflowFolderItem[];
   folders: WorkflowFolderItem[];
-  reconcileTree: (message: string) => void;
-  refresh: (showLoading?: boolean) => Promise<unknown>;
+  reconcileTree: LibraryMutationCompletion;
   rootProjects: WorkflowProjectItem[];
   setExpandedFolders: Dispatch<SetStateAction<Record<string, boolean>>>;
   setFolders: Dispatch<SetStateAction<WorkflowFolderItem[]>>;
@@ -40,6 +47,7 @@ export function useWorkflowLibraryDragAndDrop({
   });
   const [movePending, setMovePending] = useState(false);
   const { draggedItem, dropTargetFolderPath, dragOverRoot } = state;
+  const captureAction = useWorkflowLibraryActionLifetime(activePath);
 
   const canDropIntoFolder = useCallback(
     (item: DraggedWorkflowItem | null, destinationPath: string) => {
@@ -80,6 +88,7 @@ export function useWorkflowLibraryDragAndDrop({
       }
 
       setMovePending(true);
+      const isCurrent = captureAction();
       try {
         const owner = (path: string) =>
           flattenedFolders.find(
@@ -100,8 +109,16 @@ export function useWorkflowLibraryDragAndDrop({
           draggedItem.itemType === 'folder'
             ? flattenedFolders.find((folder) => folder.relativePath === draggedItem.relativePath) ?? null
             : null;
-        const result = await moveWorkflowItem(draggedItem.itemType, draggedItem.relativePath, destinationPath);
-        if (result.folder) {
+        const result = await moveWorkflowItem(
+          draggedItem.itemType,
+          draggedItem.relativePath,
+          destinationPath,
+          draggedItem.expectedSource,
+          destinationPath === ''
+            ? null
+            : flattenedFolders.find((folder) => folder.relativePath === destinationPath)?.namespaceId,
+        );
+        if (result.folder && !requiresFreshNamespaceTree(result) && isCurrent()) {
           const movedFolder = result.folder;
           if (draggedItem.itemType === 'folder') {
             setExpandedFolders((previous) => ({
@@ -111,21 +128,38 @@ export function useWorkflowLibraryDragAndDrop({
           } else {
             setExpandedFolders((previous) => ({ ...previous, [movedFolder.id]: true }));
           }
-
-          if (sourceFolder && draggedItem.itemType === 'folder') {
-            const nextTree = applyFolderMoveToTree(folders, rootProjects, sourceFolder, movedFolder);
-            setFolders(nextTree.folders);
-            setRootProjects(nextTree.rootProjects);
-          }
         }
 
-        await applyProjectPathMoves(result.movedProjectPaths);
-        if (draggedItem.itemType === 'folder' && result.folder && sourceFolder) {
-          reconcileTree('Workflow moved, but failed to refresh the tree');
-        } else {
-          await refresh(false);
-        }
+        await reconcileNamespaceMove({
+          result,
+          sourceFolder,
+          folders,
+          rootProjects,
+          setFolders,
+          setRootProjects,
+          sourceProject: [...rootProjects, ...flattenProjects(folders)].find(
+            (project) => project.relativePath === draggedItem.relativePath,
+          ),
+          applyProjectPathMoves,
+          reconcileTree,
+          afterRead: (tree) => {
+            if (!isCurrent() || !tree || !result.folder?.namespaceId) return;
+            const current = flattenFolders(tree.folders).find(
+              (item) => item.namespaceId === result.folder!.namespaceId,
+            );
+            if (!current) return;
+            const ancestors = flattenFolders(tree.folders).filter(
+              (item) =>
+                current.relativePath === item.relativePath || current.relativePath.startsWith(`${item.relativePath}/`),
+            );
+            setExpandedFolders((previous) => ({
+              ...previous,
+              ...Object.fromEntries(ancestors.map((item) => [item.id, true])),
+            }));
+          },
+        });
       } catch (error) {
+        if (error instanceof MutationOutcomeUnknownError) reconcileTree(error.message);
         toast.error(error instanceof Error ? error.message : 'Failed to move workflow item');
       } finally {
         setMovePending(false);
@@ -134,12 +168,12 @@ export function useWorkflowLibraryDragAndDrop({
     },
     [
       applyProjectPathMoves,
+      captureAction,
       canDropIntoFolder,
       draggedItem,
       flattenedFolders,
       folders,
       reconcileTree,
-      refresh,
       reset,
       rootProjects,
       setExpandedFolders,

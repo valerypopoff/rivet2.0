@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { rootStructuralMutation } from './lib/structural-fixture-admission.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,19 +23,24 @@ const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
 
 /** A flaky operator connection may retry observations, never uncertain writes. */
-export async function withProviderReadRetry(args, operation, wait = (ms) => new Promise(r => setTimeout(r, ms))) {
+export async function withProviderReadRetry(args, operation, wait = (ms) => new Promise((r) => setTimeout(r, ms))) {
   let index = 0;
   while (index < args.length) {
     if (['-n', '--namespace'].includes(args[index])) index += 2;
     else if (args[index].startsWith('--request-timeout=')) index++;
     else break;
   }
-  const readOnly = args[index] === 'get' ||
-    (args[index] === 'config' && ['view', 'current-context'].includes(args[index + 1]));
+  const readOnly =
+    args[index] === 'get' || (args[index] === 'config' && ['view', 'current-context'].includes(args[index + 1]));
   for (let attempt = 0; ; attempt++) {
-    try { return await operation(); }
-    catch (error) {
-      if (!readOnly || attempt === 2 || !/Unable to connect to the server: net\/http: TLS handshake timeout/.test(String(error)))
+    try {
+      return await operation();
+    } catch (error) {
+      if (
+        !readOnly ||
+        attempt === 2 ||
+        !/Unable to connect to the server: net\/http: TLS handshake timeout/.test(String(error))
+      )
         throw error;
       await wait((attempt + 1) * 1000);
     }
@@ -66,7 +72,11 @@ export function assertProviderHaFrontendPolicy(values, identity) {
   if (new URL(identity.clusterServer).hostname.endsWith('.gke.goog'))
     assert.equal(identity.provider, 'gke', 'a GKE endpoint cannot skip the GKE frontend proof');
   if (identity.provider === 'gke')
-    assert.equal(values.availability?.gkeGateway, true, 'GKE HA qualification requires the guarded GKE availability profile');
+    assert.equal(
+      values.availability?.gkeGateway,
+      true,
+      'GKE HA qualification requires the guarded GKE availability profile',
+    );
 }
 
 export class ProviderHaReleaseGate extends ManagedReleaseGate {
@@ -217,8 +227,10 @@ export class ProviderHaReleaseGate extends ManagedReleaseGate {
     const request = (route, options) => this.requestWorkflow(this.config.baseUrl, route, options);
     const upload = await request('/api/workflows/projects/upload', {
       method: 'POST',
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
       body: JSON.stringify({
         folderRelativePath: '',
+        mutation: rootStructuralMutation(),
         fileName: 'managed-release-gate.rivet-project',
         contents,
       }),
@@ -327,9 +339,17 @@ async function main() {
       let report;
       try {
         if (gate.providerValues.availability?.gkeGateway)
-          await gate.artifact('provider-frontend-preflight.json', JSON.stringify(await waitForGkeFrontendAvailability(gate), null, 2));
+          await gate.artifact(
+            'provider-frontend-preflight.json',
+            JSON.stringify(await waitForGkeFrontendAvailability(gate), null, 2),
+          );
         phase = 'rollout';
-        report = await runHaReleaseRollout(gate, config.baseUrl, candidate.images, baseline.evidence.ha.browserContract);
+        report = await runHaReleaseRollout(
+          gate,
+          config.baseUrl,
+          candidate.images,
+          baseline.evidence.ha.browserContract,
+        );
         assert.equal(web.report.failures.length, 0, 'provider public web-app availability failed during rollout');
         phase = 'recovery';
         report.recovery = await verifyHaReleaseRecovery(gate, config.baseUrl, rootDir);

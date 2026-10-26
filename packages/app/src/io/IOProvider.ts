@@ -35,6 +35,17 @@ export type LoadedProjectData = {
   commit?: (isCurrent: () => boolean, skipProjects?: ReadonlySet<ProjectId>) => Promise<boolean>;
 };
 
+/** A confirmed new hosted identity is a separate copy, not an in-place save. */
+export type CreatedProjectSave = {
+  kind: 'created-project';
+  path: string;
+  projectId: ProjectId;
+  revisionId: string;
+  title: string;
+};
+export type ProjectSaveResult = string | CreatedProjectSave | undefined;
+export type OpenCreatedProject = (result: CreatedProjectSave, isCurrent?: () => boolean) => Promise<boolean>;
+
 /**
  * Evaluation attachments are an optional, one-way migration input. A bad
  * legacy payload must not prevent the project itself from opening or replace
@@ -57,7 +68,7 @@ export interface IOProvider {
   readonly projectSaveConfirmation?: 'download-only';
   saveGraphData(graphData: NodeGraph): Promise<void>;
 
-  saveProjectData(project: Project): Promise<string | undefined>;
+  saveProjectData(project: Project): Promise<ProjectSaveResult>;
 
   loadGraphData(callback: (graphData: NodeGraph) => void): Promise<void>;
 
