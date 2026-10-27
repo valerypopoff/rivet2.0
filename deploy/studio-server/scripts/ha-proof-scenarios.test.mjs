@@ -474,6 +474,7 @@ test('actual assembly CLI creates evidence without Kubernetes or registry access
     );
   const result = cli();
   assert.equal(result.status, 0, result.stderr);
+  // test-style: fixture-read: Read only the evidence JSON produced by this test's CLI invocation in its temporary directory.
   assert.equal(JSON.parse(await fs.readFile(env.RIVET_HA_EVIDENCE_OUTPUT, 'utf8')).protocol, 3);
   env.GITHUB_RUN_ATTEMPT = '2';
   env.RIVET_HA_EVIDENCE_OUTPUT += '.wrong-attempt';

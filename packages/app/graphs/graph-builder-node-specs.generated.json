@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:1e834995775a1725",
+  "catalogFingerprint": "fnv1a64:8582e5e3ba02d153",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
@@ -1395,7 +1395,7 @@
       "authoringChoiceId": "registered:llmProfile",
       "nodeType": "llmProfile",
       "displayName": "LLM Profile",
-      "description": "LLM Profile packages one reusable inference configuration into a typed llm config value. Connect it to an LLM Chat node whose Configuration is From profile . You can also collect several profile values into an ordered llm config[] array and use that as LLM Chat's fallback chain. If an LLM Chat is currently configured inline, use its Export LLM settings to profile node action to create and connect this node automatically with the chat's current provider and inference settings. The profile contains: provider and model OpenRouter model IDs, reasoning effort, and independent openRouterApiKey / OPENROUTER API KEY credentials the resolved API key and its source metadata Custom provider base URL and Completions/Responses API choice common generation parameters OpenAI Previous Response ID provider specific reasoning and thinking settings provider native capabilities such as OpenAI Web Search and",
+      "description": "Token pricing Expand Token pricing to see Default rates in USD per million tokens . Price overrides are optional; leaving them off uses reported/default estimates when available, otherwise cost stays unknown. Folding does not change your settings. The same controls are available directly on LLM Chat in Inline mode; in From profile mode, this profile is the pricing authority. Unknown means Rivet has no stored rate, not that the model is free. This panel does not fetch current provider prices. Enable Override token prices to enter input and output rates. Optional cached input/read and cache write rates apply only to cache counts reported by the provider; blank cache rates use the ordinary input rate. Use default rates fills the known input/output prices. Zero is allowed; input/output cannot be blank when enabled. Overrides also work for custom models and take precedence over provider repor",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

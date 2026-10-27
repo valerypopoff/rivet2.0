@@ -5,6 +5,28 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+## Keep release fixtures aligned without weakening checks
+
+Schema 18's current version differs from its rollback floor (17). Helm defaults
+and migration commands must use the current version. Forward rollback uses the
+previous image's own schema version as its lower reader bound, not that image's
+rollback floor; only the upper bound expands to the already-migrated successor.
+The successor's rollback floor determines whether that predecessor is permitted.
+Historical upgrade fixtures still begin
+at their original schema and assert all pending migrations rather than assuming
+that the repair under test is forever the last migration. Keep the chart, compiled
+PostgreSQL gate and release-manifest tests together when changing this contract.
+
+Node-settings tests assert the full editor group order, including the collapsed
+**Token pricing** section. Generated AI Graph Builder help must be refreshed after
+node-reference documentation changes with `yarn check:graph-builder-node-specs --write`
+and then verified without `--write`. Do not skip these checks to publish installers.
+
+The test-style guard's `fixture-read` annotation is for test-owned artifacts, not
+production source. The HA assembly CLI regression reads only the evidence JSON it
+created in its temporary directory; it does not need a source-reading allowlist
+entry. It still executes the CLI and checks exact run identity and rejected attempts.
+
 ## Hosted baseline: October 5, 2026
 
 | Run                                                                                                  | Measured bottleneck                                                                                                      |

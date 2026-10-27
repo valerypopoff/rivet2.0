@@ -15,6 +15,17 @@ schema 17 and the rollback-compatible floor remains 17, subject to the normal
 exact-image compatibility checks. A schema-18 binary must not serve against an
 unmigrated database because its recording queries require the new column.
 
+The checked-in Helm defaults must use the exact current schema (18), not the
+rollback floor (17), for both serving bounds. A release operation may widen the
+reader window only through the existing verified rollback procedure. Rollback
+values must not confuse a release's predecessor-compatibility floor with
+the schema its own queries require: the restored image's version is the lower
+reader bound and the already-migrated version is the upper bound. Chart
+rendering contracts compare migration commands with the API's current schema
+constant. Predecessor tests derive their newer-than-candidate rejection case from
+that constant; the disposable folder-repair gate still starts at schema 16 and
+asserts every forward migration, including 17's repair and 18's recording metadata.
+
 Use the existing approved migration/deployment route: certify recovery backups,
 run the single migration owner, then start compatible serving images. Do not
 manually add the column, bypass predecessor verification or infer provider/GKE
