@@ -15,6 +15,7 @@ import type {
 import { runChatV2Pipeline } from '../../../src/model/chat-v2/chatV2Pipeline.js';
 import { streamChatV2 } from '../../../src/model/chat-v2/aiSdkBridge.js';
 import { calculateChatV2Cost } from '../../../src/model/chat-v2/modelRegistry.js';
+import { RunCostLedger } from '../../../src/model/RunCostLedger.js';
 
 async function* mockStream(parts: ChatV2StreamPart[]): AsyncGenerator<ChatV2StreamPart> {
   for (const part of parts) {
@@ -716,6 +717,66 @@ void describe('runChatV2Pipeline', () => {
     assert.equal(events.length, 1);
     assert.equal(events[0]?.outcome, 'provider-failure');
     assert.equal(events[0]?.attemptIndex, 0);
+  });
+
+  void it('retains provider charges when cancellation races with completed response diagnostics', async () => {
+    for (const mode of ['generate', 'stream'] as const) {
+      for (const provider of ['openai', 'openrouter'] as const) {
+        const controller = new AbortController();
+        const reason = new Error('Cancelled after provider response');
+        const events: ChatV2CallFinishedEvent[] = [];
+        const ledger = new RunCostLedger();
+        const usage = { inputTokens: 10, outputTokens: 4, totalTokens: 14 };
+        const providerMetadata = { openrouter: { usage: { cost: 0.004 } } };
+        const context = createObservedContext(events, controller.signal);
+        const expected = provider === 'openrouter' ? 0.004 : calculateChatV2Cost('openai', 'gpt-5', 10, 4);
+        let calls = 0;
+        await assert.rejects(
+          runChatV2Pipeline({
+            provider,
+            model: createMockModel(),
+            modelId: 'gpt-5',
+            prompt: { type: 'string', value: 'Hello' },
+            emitPartialOutputs: mode === 'stream',
+            retryOnNon200: true,
+            retryOnNon200RepeatTimes: 2,
+            retryOnNon200CooldownMs: 0,
+            context: {
+              ...context,
+              onChatV2CallFinished: (event) => {
+                context.onChatV2CallFinished(event);
+                ledger.observeChat(event);
+              },
+            },
+            responseBodyCapture: {
+              bodies: [],
+              capture() {},
+              flush: async () => {
+                controller.abort(reason);
+              },
+            },
+            executeGenerate: async () => {
+              calls++;
+              return { text: 'Completed', totalUsage: usage, providerMetadata };
+            },
+            executeStream: async () => {
+              calls++;
+              return {
+                fullStream: mockStream([{ type: 'text-delta', id: 'text', text: 'Completed' }]),
+                usage,
+                providerMetadata,
+              };
+            },
+          }),
+          (error) => error === reason,
+        );
+        assert.equal(calls, 1);
+        assert.equal(events.length, 1);
+        assert.equal(events[0]?.outcome, 'aborted');
+        assert.equal(events[0]?.pricing.costUsd, expected, `${provider} ${mode} must retain completed-call usage`);
+        assert.deepEqual(ledger.snapshot(), { status: 'complete', knownCostUsd: expected });
+      }
+    }
   });
 
   void it('reports provider failures and aborts without letting observer failures affect the graph', async () => {

@@ -18,6 +18,7 @@ export type LLMProfileFieldSpec = {
 };
 
 export const llmProfileFieldSpecs = [
+  { key: 'tokenPricing' },
   { key: 'model', inputId: 'model', valueKind: 'string' },
   { key: 'useModelInput', valueKind: 'boolean', resolvedInputToggle: true },
   { key: 'temperature', inputId: 'temperature', valueKind: 'optional-number' },

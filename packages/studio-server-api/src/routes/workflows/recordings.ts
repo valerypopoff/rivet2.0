@@ -14,6 +14,7 @@ import type { RecordingRunScope } from './recording-workflow-scope.js';
 import type {
   WorkflowRecordingFilterStatus,
   WorkflowRecordingExecutionIdentity,
+  WorkflowRunCost,
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
   WorkflowRecordingRunKind,
@@ -97,6 +98,7 @@ type PersistWorkflowExecutionRecordingOptions = {
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
   durationMs: number;
+  cost?: WorkflowRunCost;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
   /** Runs after the replay is indexed but before normal retention can delete it. */
@@ -180,6 +182,7 @@ function toWorkflowRecordingRunSummary(row: WorkflowRecordingRunRow): WorkflowRe
     runKind: row.runKind,
     status: row.status,
     durationMs: row.durationMs,
+    cost: row.cost,
     endpointNameAtExecution: row.endpointNameAtExecution,
     executionIdentity: row.executionIdentity,
     errorMessage: row.errorMessage,
@@ -580,6 +583,7 @@ export async function getWorkflowRunStatistics(
   return buildWorkflowRunStatistics(
     await listWorkflowRecordingStatisticsRows(query.period.from, query.period.to, query.target),
     query,
+    { includeCost: true },
   );
 }
 
@@ -805,6 +809,7 @@ export async function persistWorkflowExecutionRecording(
       runKind: options.runKind,
       status: options.status,
       durationMs: Math.max(0, Math.round(options.durationMs)),
+      cost: options.cost,
       executionIdentity: options.executionIdentity,
       encoding: config.compression,
       hasReplayDataset,
@@ -838,6 +843,7 @@ export async function persistWorkflowExecutionRecording(
         runKind: options.runKind,
         status: options.status,
         durationMs: Math.max(0, Math.round(options.durationMs)),
+        cost: options.cost,
         endpointNameAtExecution: options.endpointName,
         executionIdentity: options.executionIdentity,
         errorMessage: options.errorMessage,

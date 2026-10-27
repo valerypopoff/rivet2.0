@@ -1,5 +1,56 @@
 # LLM Chat V2 Contract
 
+## Inline and profile token pricing
+
+LLM Chat in **Inline** mode and LLM Profile expose the same **Token pricing** editor, showing Rivet's catalog rates
+for the configured provider/model (USD per million tokens). Unknown rates are
+shown as unknown, never zero. This is local catalog information, not a live price
+lookup or billing quote. Dynamic model inputs may select a different model at runtime.
+All four AI settings surfaces use `getTokenPricingEditor` for a separate,
+initially collapsed **Token pricing** group. Fold state uses the ordinary editor
+group persistence and must not change or disable prices. Content says **Default
+rates** / **Use default rates** and explains that overrides are optional; leaving
+them off retains reported/default estimates where available and unknown otherwise.
+The standard `CollapsiblePanel` supplies stable React IDs for trigger/content
+relationships; the underlying widget's timestamp defaults collide when settings
+groups mount together. The pricing UI regression checks its unique ARIA linkage.
+Explicit `ariaControls` supplied by Run Activity/evaluation trial panels still
+target their existing child details; the widget wrapper gets a separate unique ID.
+
+Optional `tokenPricing` contains required finite, nonnegative
+`inputPerMillionTokens`/`outputPerMillionTokens` and optional
+`cacheReadPerMillionTokens`/`cacheWritePerMillionTokens`. Its presence enables
+manual pricing; absence retains existing behavior. Normalization snapshots and
+validates the object. It is profile-owned and survives extraction, serialization,
+and fallback, but does not enter provider requests or change health identity.
+In Inline mode the Chat node owns these settings. In **From profile** mode they
+are hidden and only the connected profile's rates apply; saved inline rates
+(including invalid inactive drafts) never override or block a profile. Switching
+back to Inline restores its saved settings. Exporting Inline settings to a profile
+copies the prices as detached data. The runtime validates and snapshots active
+prices before provider setup/dispatch, so a later graph edit cannot reprice a call.
+
+Each physical candidate uses its own prices. Explicit prices override even
+OpenRouter's reported dollar cost; without them, OpenRouter still uses reported
+cost and other providers retain catalog estimates. Token counts always come from
+the response, not the tokenizer. Cache reads/writes are subsets of SDK input tokens:
+subtract them once, then price each category. Unspecified cache rates use the
+ordinary input rate; unreported cache counts cannot receive a guessed discount.
+Missing/invalid usage, overflow or inconsistent cache counts remain unknown.
+Manual rates are flat and do not infer context premiums, tool fees or billing tiers.
+
+`modelRegistry.ts` resolves catalog rates, `tokenPricing.ts` validates/calculates
+manual rates, and both output normalization and the physical-call observer use
+the same cost resolver. Recorded root costs therefore include profile prices
+without changing recordings, statistics queries or old data. Existing recordings
+are not repriced. Regression owners: `tokenPricing.test.ts`,
+`providerProfileRequestEquivalence.test.ts`, and `llm-credential-names.spec.ts`.
+The shared editor uses current session-owned data for nested price updates,
+omits cleared cache keys, and cannot revive disabled pricing via a delayed edit.
+System-rate previews use the same trimmed model name as execution. Panel styling
+uses existing theme colors/components and price inputs must fit their grid;
+the headless profile regression checks layout as well as persisted field values.
+
 ## Provider metadata ownership
 
 `chatV2ProviderRegistry.ts` contains the closed, typed provider descriptors:

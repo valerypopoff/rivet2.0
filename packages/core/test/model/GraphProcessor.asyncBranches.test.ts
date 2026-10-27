@@ -2094,7 +2094,19 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const subgraph = makeSubgraphNode('child', child.metadata!.id);
     const root = makeGraph('root-with-watch', [subgraph], []);
     AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'string', value: 'final' } }));
-    AsyncTestNodeImpl.handlers.set(branch.id, () => ({ cost: { type: 'number', value: 3 } }));
+    AsyncTestNodeImpl.handlers.set(branch.id, (_inputs, context) => {
+      context.onChatV2CallFinished?.({
+        callId: 'watch-provider-call',
+        processId: context.processId,
+        nodeId: branch.id,
+        attemptIndex: 0,
+        provider: 'openai',
+        model: 'fixture',
+        outcome: 'success',
+        pricing: { status: 'known', costUsd: 0.25 },
+      } as never);
+      return { cost: { type: 'number', value: 3 } };
+    });
     const processor = createProcessor(root, [child]);
     let childCost: unknown;
     const summaries: ProcessEvents['streamingOutputWatchSummary'][] = [];
@@ -2106,6 +2118,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(childCost, 3);
     assert.equal(outputs.cost?.value, 3);
     assert.deepEqual(outputs.costBreakdown?.value, { llm: 0, classifier: 0, other: 3 });
+    assert.deepEqual(processor.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0.25 });
     assert.equal(summaries.length, 1);
     assert.equal(summaries[0]!.watchNode.id, watch.id);
   });
@@ -4580,13 +4593,35 @@ void describe('GraphProcessor scheduler boundaries', () => {
     );
     const branchStarted = deferred();
     const releaseBranch = deferred();
-    AsyncTestNodeImpl.handlers.set(source.id, () => ({
-      cost: { type: 'number', value: 2 },
-      output: { type: 'string', value: 'ready' },
-    }));
-    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs) => {
+    AsyncTestNodeImpl.handlers.set(source.id, (_inputs, context) => {
+      context.onChatV2CallFinished?.({
+        callId: 'foreground-call',
+        processId: context.processId,
+        nodeId: source.id,
+        attemptIndex: 0,
+        provider: 'openai',
+        model: 'fixture',
+        outcome: 'success',
+        pricing: { status: 'known', costUsd: 0.2 },
+      } as never);
+      return {
+        cost: { type: 'number', value: 2 },
+        output: { type: 'string', value: 'ready' },
+      };
+    });
+    AsyncTestNodeImpl.handlers.set(asyncLeaf.id, async (inputs, context) => {
       branchStarted.resolve();
       await releaseBranch.promise;
+      context.onChatV2CallFinished?.({
+        callId: 'background-call',
+        processId: context.processId,
+        nodeId: asyncLeaf.id,
+        attemptIndex: 0,
+        provider: 'openai',
+        model: 'fixture',
+        outcome: 'success',
+        pricing: { status: 'known', costUsd: 0.3 },
+      } as never);
       return {
         cost: { type: 'number', value: 3 },
         output: inputs['input' as PortId]!,
@@ -4597,6 +4632,9 @@ void describe('GraphProcessor scheduler boundaries', () => {
     const lifecycleEvents: string[] = [];
     let publishedOutputs: Outputs | undefined;
     let completedOutputs: Outputs | undefined;
+    processor.on('graphStart', () => {
+      assert.deepEqual(processor.getRunCostSnapshot(), { status: 'unknown', knownCostUsd: null });
+    });
     processor.on('graphOutputsReady', ({ outputs }) => {
       lifecycleEvents.push('outputs-ready');
       publishedOutputs = outputs;
@@ -4614,6 +4652,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(outputs.result?.value, 'ready');
     assert.equal(outputs.cost?.value, 2);
     assert.equal(publishedOutputs, outputs);
+    assert.deepEqual(processor.getRunCostSnapshot(), { status: 'partial', knownCostUsd: 0.2 });
     assert.deepEqual(outputs.costBreakdown?.value, { llm: 0, classifier: 0, other: 2 });
     assert.equal(processor.isRunning, true);
     assert.deepEqual(lifecycleEvents, ['outputs-ready']);
@@ -4624,6 +4663,7 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(processor.isRunning, false);
     assert.equal(outputs.cost?.value, 2);
     assert.equal(completedOutputs?.cost?.value, 5);
+    assert.deepEqual(processor.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0.5 });
     assert.deepEqual(outputs.costBreakdown?.value, { llm: 0, classifier: 0, other: 2 });
     assert.deepEqual(completedOutputs?.costBreakdown?.value, { llm: 0, classifier: 0, other: 5 });
     assert.notEqual(completedOutputs, outputs);

@@ -211,6 +211,7 @@ export async function* iterateSourceRecordingImports(
             runKind: metadata.run.runKind,
             status: metadata.run.status,
             durationMs: metadata.run.durationMs,
+            cost: metadata.run.cost,
             endpointName: metadata.run.endpointNameAtExecution,
             errorMessage: metadata.run.errorMessage ?? null,
             executionIdentity: metadata.run.executionIdentity,

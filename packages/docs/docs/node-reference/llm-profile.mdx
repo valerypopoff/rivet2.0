@@ -6,6 +6,29 @@ sidebar_label: LLM Profile
 
 ## Overview
 
+### Token pricing
+
+Expand **Token pricing** to see **Default rates** in **USD per million tokens**.
+Price overrides are optional; leaving them off uses reported/default estimates
+when available, otherwise cost stays unknown. Folding does not change your settings.
+The same controls are available directly on LLM Chat in **Inline** mode; in
+**From profile** mode, this profile is the pricing authority.
+Unknown means Rivet has no stored rate, not that the model is free. This panel
+does not fetch current provider prices.
+
+Enable **Override token prices** to enter input and output rates. Optional cached
+input/read and cache-write rates apply only to cache counts reported by the provider;
+blank cache rates use the ordinary input rate. **Use default rates** fills the known
+input/output prices. Zero is allowed; input/output cannot be blank when enabled.
+Overrides also work for custom models and take precedence over provider-reported
+dollar cost and automatic pricing tiers. Disable the override to restore normal
+pricing behavior. With an input-selected model, the override applies to that
+resolved model; the displayed system prices are only for the configured preview.
+
+Prices affect future call estimates, Cost outputs and retained Run statistics.
+They do not change provider requests or recalculate old recordings. Missing token
+usage remains unknown. These estimates are not provider invoices.
+
 LLM Profile packages one reusable inference configuration into a typed
 `llm-config` value. Connect it to an LLM Chat node whose **Configuration** is
 **From profile**. You can also collect several profile values into an ordered

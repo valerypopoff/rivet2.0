@@ -257,8 +257,8 @@ export function createManagedWorkflowRevisionFactory(options: {
       const identity = row.executionIdentity;
       const valuesClause =
         options.timestampMode === 'provided'
-          ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)'
-          : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)';
+          ? 'VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)'
+          : 'VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)';
       const params =
         options.timestampMode === 'provided'
           ? [
@@ -294,6 +294,7 @@ export function createManagedWorkflowRevisionFactory(options: {
               row.datasetCompressedBytes,
               row.datasetUncompressedBytes,
               identity?.surface === 'scheduled' ? JSON.stringify(readScheduledRecordingFields(identity)) : null,
+              row.cost ? JSON.stringify(row.cost) : null,
             ]
           : [
               row.recordingId,
@@ -327,6 +328,7 @@ export function createManagedWorkflowRevisionFactory(options: {
               row.datasetCompressedBytes,
               row.datasetUncompressedBytes,
               identity?.surface === 'scheduled' ? JSON.stringify(readScheduledRecordingFields(identity)) : null,
+              row.cost ? JSON.stringify(row.cost) : null,
             ];
       const sql = `
         INSERT INTO workflow_recordings (${RECORDING_COLUMNS})

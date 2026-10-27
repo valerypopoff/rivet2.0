@@ -9,7 +9,7 @@ import { MANAGED_NAMESPACE_SCHEMA_SQL } from './namespace-schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 17;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 18;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
@@ -26,6 +26,8 @@ const MANAGED_EVALUATION_PROJECTION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS eval
   ON evaluation_hosted_trial_jobs(project_id, run_id)
   WHERE status IN ('queued', 'claimed', 'accepted');
 `;
+
+const MANAGED_RECORDING_COST_SQL = 'ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS cost_json TEXT NULL;\n';
 
 const MANAGED_APP_SETTINGS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -432,6 +434,12 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_NAMESPACE_SCHEMA_SQL + MANAGED_FOLDER_PARENT_MIGRATION_SQL,
     checksum: '6b248f441fef7673c2940c4daf93e62d9e5f1c1c7f0a0969d3ade3c7ce86c07a',
   },
+  {
+    version: 18,
+    name: 'workflow-recording-cost',
+    sql: MANAGED_RECORDING_COST_SQL,
+    checksum: 'b216f9e7df3fc2dd54f2c42f36999600a0aba3542eea2bb1b0406d428325cc9b',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -621,6 +629,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['rivet_schedule_requests', 'resource_id', 'text', 'NO'],
   ['rivet_schedule_requests', 'json', 'text', 'NO'],
   ['workflow_recordings', 'scheduled_identity_json', 'text', 'YES'],
+  ['workflow_recordings', 'cost_json', 'text', 'YES'],
   ['llm_profile_health', 'project_id', 'text', 'YES'],
   ['llm_profile_health', 'entry_json', 'jsonb', 'YES'],
   ['llm_profile_health', 'updated_at', 'timestamptz', 'NO'],

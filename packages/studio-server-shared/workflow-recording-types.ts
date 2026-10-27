@@ -84,6 +84,7 @@ export type WorkflowRecordingRunSummary = {
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
   durationMs: number;
+  cost?: WorkflowRunCost;
   endpointNameAtExecution: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
   errorMessage?: string;
@@ -175,6 +176,45 @@ export type WorkflowRunStatisticsMetrics = {
   maxDurationMs: number | null;
 };
 
+/** Accounting is an estimate, not an invoice. Missing historical data is unknown. */
+export type WorkflowRunCost =
+  | { status: 'complete' | 'partial'; knownCostUsd: number }
+  | { status: 'unknown'; knownCostUsd: null };
+
+/** Untrusted metadata must never turn missing or invalid estimates into zero. */
+export function readWorkflowRunCost(value: unknown): WorkflowRunCost | undefined {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const cost = value as Record<string, unknown>;
+  if (cost.status === 'unknown' && cost.knownCostUsd === null) return { status: 'unknown', knownCostUsd: null };
+  if (
+    (cost.status === 'complete' || cost.status === 'partial') &&
+    typeof cost.knownCostUsd === 'number' &&
+    Number.isFinite(cost.knownCostUsd) &&
+    cost.knownCostUsd >= 0
+  ) {
+    return { status: cost.status, knownCostUsd: cost.knownCostUsd };
+  }
+  return undefined;
+}
+
+export type WorkflowRunCostStatistics = {
+  runCount: number;
+  completeCount: number;
+  partialCount: number;
+  unknownCount: number;
+  knownCostUsd: number | null;
+  averageCompleteCostUsd: number | null;
+};
+
+export type WorkflowRunCostBucket = WorkflowRunCostStatistics & { from: string; to: string };
+
 export type WorkflowRunStatisticsTarget =
   | {
       surface: 'endpoint';
@@ -248,6 +288,9 @@ export type WorkflowRunStatisticsResponse = {
   currentStatusCounts: WorkflowRunStatisticsStatusCounts;
   currentExcludedStatusCounts: WorkflowRunStatisticsStatusCounts;
   buckets: WorkflowRunStatisticsBucket[];
+  /** Present only when supported; uses the same outcome filters as duration statistics. */
+  cost?: WorkflowRunCostStatistics;
+  costBuckets?: WorkflowRunCostBucket[];
 };
 
 export const WORKFLOW_RECORDING_VIRTUAL_PROJECT_PATH_PREFIX = 'recording://';

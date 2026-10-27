@@ -6,7 +6,10 @@ import test from 'node:test';
 import { Pool } from 'pg';
 import { familyRows, verifyFamilyQueries } from './helpers/recording-family-fixture.js';
 import { checkStatisticsQueries, statisticsFixture } from './recording-statistics-sql.test.js';
-import type { RecordingStatisticsSqlRow } from '../routes/workflows/recording-statistics-sql.js';
+import {
+  recordingStatisticsRowsSql,
+  type RecordingStatisticsSqlRow,
+} from '../routes/workflows/recording-statistics-sql.js';
 import { createManagedWorkflowRecordingService } from '../routes/workflows/managed/recordings.js';
 import { migrateManagedWorkflowSchema } from '../routes/workflows/managed/schema-migrations.js';
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
@@ -19,6 +22,7 @@ type ExplainPlan = {
   'Actual Rows': number;
   'Actual Loops': number;
   'Rows Removed by Filter'?: number;
+  'Index Cond'?: string;
   Plans?: ExplainPlan[];
 };
 
@@ -219,6 +223,43 @@ async function verifySubRunPresence(database: Pool): Promise<void> {
     childGroups.every((plan) => plan['Actual Loops'] === 0),
     'child-only pages must not execute the presence aggregation',
   );
+
+  // Cost statistics use the same metadata-only projection, with the real
+  // migrated indexes. A narrow target must not materialize unrelated history.
+  await database.query(`UPDATE workflow_recordings SET cost_json = CASE recording_id
+    WHEN 'cursor-new' THEN '{"status":"partial","knownCostUsd":0.125}'
+    ELSE '{"status":"unknown","knownCostUsd":null}' END WHERE workflow_id = 'cursor'`);
+  const statisticsQuery = recordingStatisticsRowsSql('postgres', {
+    target: { surface: 'endpoint', workflowId: 'cursor' },
+    period: { from: '2026-10-19T00:00:00Z', to: '2026-10-20T00:00:00Z' },
+    runKind: 'both',
+    includeFailed: false,
+    includeWarnings: false,
+  });
+  const selected = await database.query<RecordingStatisticsSqlRow>(statisticsQuery.sql, statisticsQuery.values);
+  assert.deepEqual(
+    selected.rows.map((row) => JSON.parse(row.cost_json!)),
+    [
+      { status: 'unknown', knownCostUsd: null },
+      { status: 'partial', knownCostUsd: 0.125 },
+    ],
+  );
+  const statisticsExplain = await database.query(
+    `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statisticsQuery.sql}`,
+    statisticsQuery.values,
+  );
+  const statisticsPlan = statisticsExplain.rows[0]['QUERY PLAN'][0];
+  const indexed = nodes(statisticsPlan.Plan).filter((plan) => plan['Index Cond']?.includes('workflow_id'));
+  assert.ok(indexed.length > 0, 'a narrow statistics target must use an existing workflow index');
+  assert.ok(indexed.every((plan) => plan['Actual Rows'] + (plan['Rows Removed by Filter'] ?? 0) <= 2));
+  console.log(
+    JSON.stringify({
+      check: 'postgres-cost-statistics',
+      historyRows: 50000,
+      selectedRows: selected.rows.length,
+      executionMs: statisticsPlan['Execution Time'],
+    }),
+  );
 }
 
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', timeout: 60_000 }).trim();
@@ -263,11 +304,11 @@ try {
     created_at timestamptz NOT NULL, run_kind text NOT NULL, status text NOT NULL,
     duration_ms double precision NOT NULL, endpoint_name_at_execution text NOT NULL,
     execution_surface text, ui_graph_id_at_execution text, component_id_at_execution text,
-    ui_graph_name_at_execution text, component_type_at_execution text, component_label_at_execution text
+    ui_graph_name_at_execution text, component_type_at_execution text, component_label_at_execution text, cost_json text
   )`);
   for (const row of statisticsFixture) {
     const identity = row.executionIdentity;
-    await pool.query('INSERT INTO workflow_recordings VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)', [
+    await pool.query('INSERT INTO workflow_recordings VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)', [
       row.recordingId,
       row.workflowId,
       row.sourceProjectName,
@@ -282,6 +323,7 @@ try {
       identity?.uiGraphName ?? null,
       identity?.componentType ?? null,
       identity?.componentLabel ?? null,
+      row.cost ? JSON.stringify(row.cost) : null,
     ]);
   }
   const database = pool;
@@ -309,7 +351,7 @@ try {
     ]);
   await verifyFamilyQueries('managed', async (sql, values) => (await database.query<{ id: string }>(sql, values)).rows);
   console.log('PostgreSQL family pagination and complete child browsing passed.');
-  await test('PostgreSQL service sub-run presence, retention changes and bounded query plans', () =>
+  await test('PostgreSQL sub-run presence, retention and indexed cost statistics over retained history', () =>
     verifySubRunPresence(database));
 } finally {
   await pool?.end();

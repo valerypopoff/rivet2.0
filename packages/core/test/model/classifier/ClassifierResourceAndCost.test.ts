@@ -527,6 +527,7 @@ test('Real graphs account each provider cost with Usage details on or off, retry
         );
         const expected = (provider === 'jev' ? 0.042 : provider === 'liquid' ? 0.02 : 0.2) * (mode === 'split' ? 2 : 1);
         assert.equal(result.cost?.value, expected, `${provider}/${details}/${mode}`);
+        assert.deepEqual(processor.getRunCostSnapshot(), { status: 'partial', knownCostUsd: expected });
         assert.deepEqual(result.costBreakdown, { type: 'object', value: { llm: 0, classifier: expected, other: 0 } });
         assert.equal(calls, mode === 'split' ? 3 : 2);
         if (mode !== 'split') assert.equal((result.usage?.value as any).totalCost, details ? expected : undefined);
@@ -583,4 +584,114 @@ test('A mixed-provider graph sums both costs independently of diagnostic outputs
   );
   assert.equal(result.cost?.value, 0.042 + 0.2);
   assert.deepEqual(result.costBreakdown, { type: 'object', value: { llm: 0, classifier: 0.042 + 0.2, other: 0 } });
+});
+
+test('root accounting keeps repeated parallel child calls distinct without summing graph outputs', async () => {
+  const projects = ['a', 'b', 'c'].map((name) => {
+    const memberGraph = graph('jev', false);
+    memberGraph.metadata!.id = `graph-${name}` as GraphId;
+    return {
+      metadata: {
+        id: `project-${name}` as ProjectId,
+        title: name,
+        description: '',
+        mainGraphId: memberGraph.metadata!.id,
+      },
+      plugins: [],
+      graphs: { [memberGraph.metadata!.id]: memberGraph },
+    } satisfies Project;
+  });
+  for (let index = 0; index < 2; index++) {
+    const caller = projects[index]!;
+    const target = projects[index + 1]!;
+    const callerGraph = caller.graphs[caller.metadata.mainGraphId!]!;
+    const questions = callerGraph.nodes.find(
+      (node) => node.type === 'graphInput' && (node.data as { id?: string }).id === 'questions',
+    )!;
+    const model = callerGraph.nodes.find(
+      (node) => node.type === 'graphInput' && (node.data as { id?: string }).id === 'model',
+    )!;
+    const call = SubGraphNodeImpl.create();
+    call.data.targetProjectId = target.metadata.id;
+    call.data.graphId = target.metadata.mainGraphId!;
+    callerGraph.nodes.push(call);
+    callerGraph.connections.push(wire(questions, 'data', call, 'questions'), wire(model, 'data', call, 'model'));
+    if (index === 0) {
+      const repeated = SubGraphNodeImpl.create();
+      repeated.data = { ...call.data };
+      callerGraph.nodes.push(repeated);
+      callerGraph.connections.push(
+        wire(questions, 'data', repeated, 'questions'),
+        wire(model, 'data', repeated, 'model'),
+      );
+    }
+  }
+  let calls = 0;
+  let active = 0;
+  let peak = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    peak = Math.max(peak, ++active);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    active--;
+    return Response.json(reply('jev', 1_000));
+  };
+  const root = projects[0]!;
+  const processor = new GraphProcessor(root, root.metadata.mainGraphId!, createBuiltInRegistry());
+  await processor.processGraph(
+    {
+      ...testProcessContext(),
+      settings,
+      subgraphProjectLoader: {
+        loadTarget: async ({ projectId }) => ({
+          project: projects.find((project) => project.metadata.id === projectId)!,
+        }),
+      },
+    },
+    {
+      questions: { type: 'object', value: question },
+      model: { type: 'string', value: getClassifierProvider('jev').defaultModel },
+    },
+  );
+  const result = processor.getRunCostSnapshot();
+  assert.equal(result.status, 'complete');
+  assert.ok(result.knownCostUsd !== null && Math.abs(result.knownCostUsd - 5 * 0.000042) < 1e-12);
+  assert.equal(calls, 5, 'A once, B twice and C twice are distinct physical calls');
+  assert.ok(peak >= 2, 'the fixture must exercise concurrent attempts');
+});
+
+test('concurrent roots and a reused processor have independent accounting lifetimes', async () => {
+  const memberGraph = graph('jev', false);
+  const project: Project = {
+    metadata: {
+      id: 'independent-costs' as ProjectId,
+      title: 'Independent',
+      description: '',
+      mainGraphId: memberGraph.metadata!.id,
+    },
+    plugins: [],
+    graphs: { [memberGraph.metadata!.id]: memberGraph },
+  };
+  let zero = false;
+  globalThis.fetch = async (_url, init) => {
+    const { model } = JSON.parse(String(init?.body));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return Response.json({ ...reply('jev', zero ? 0 : model === 'jev-1.14.0' ? 1000 : 2000), model });
+  };
+  const processors = [0, 1].map(() => new GraphProcessor(project, memberGraph.metadata!.id!, createBuiltInRegistry()));
+  const run = (processor: GraphProcessor, model: string) =>
+    processor.processGraph(
+      { ...testProcessContext(), settings },
+      {
+        questions: { type: 'object', value: question },
+        model: { type: 'string', value: model },
+      },
+    );
+  await Promise.all([run(processors[0]!, 'jev-1.14.0'), run(processors[1]!, 'jev-1.13.0')]);
+  assert.deepEqual(processors[0]!.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0.000042 });
+  assert.deepEqual(processors[1]!.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0.000084 });
+  zero = true;
+  await run(processors[0]!, 'jev-1.14.0');
+  assert.deepEqual(processors[0]!.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0 });
+  assert.deepEqual(processors[1]!.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0.000084 });
 });

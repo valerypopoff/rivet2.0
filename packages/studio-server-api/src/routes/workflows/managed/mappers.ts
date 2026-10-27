@@ -63,6 +63,7 @@ const RECORDING_COLUMN_NAMES = [
   'dataset_compressed_bytes',
   'dataset_uncompressed_bytes',
   'scheduled_identity_json',
+  'cost_json',
 ] as const;
 
 export const WORKFLOW_COLUMNS = WORKFLOW_COLUMN_NAMES.join(', ');

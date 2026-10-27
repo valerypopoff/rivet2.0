@@ -15,6 +15,7 @@ import type { NodeId } from '../NodeBase.js';
 import type { ProjectId } from '../Project.js';
 import { normalizeChatV2CredentialNamesByProvider } from './chatV2CredentialNames.js';
 import { normalizeTemperature } from './temperature.js';
+import { validateTokenPricing } from '../tokenPricing.js';
 
 export {
   applyLLMProfileToNodeData,
@@ -147,6 +148,7 @@ export function scopeLLMProfileHealthIdentity(
 }
 
 function normalizeConfiguration(data: LLMChatV2NodeData): LLMChatV2ProfileData {
+  data = { ...data, tokenPricing: validateTokenPricing(data.tokenPricing) };
   for (const field of llmProfileStringDataKeys) {
     if (typeof data[field] !== 'string') {
       throw new Error(`LLM Profile ${field} must be a string.`);

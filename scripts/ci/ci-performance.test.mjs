@@ -223,10 +223,12 @@ test('browser prerequisites reject version drift before launch and close Chromiu
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 29);
+  assert.equal(editorCiSpecs.length, 31);
   assert.ok(editorCiSpecs.includes('evaluation-trial-orchestration.spec.ts'));
   assert.ok(editorCiSpecs.includes('partial-run-preload.spec.ts'));
   assert.ok(editorCiSpecs.includes('wire-viewport-culling.spec.ts'));
+  assert.ok(editorCiSpecs.includes('run-statistics-modal.spec.ts'));
+  assert.ok(editorCiSpecs.includes('run-cost-statistics.spec.ts'));
   assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
   assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);
   const selected = ['1/3', '2/3', '3/3'].flatMap(selectEditorCiSpecs);

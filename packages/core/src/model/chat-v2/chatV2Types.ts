@@ -2,6 +2,7 @@ import type { generateText, streamText, LanguageModelUsage, ModelMessage, TextSt
 import type { ChatMessage, GptFunction } from '../DataValue.js';
 import type { Outputs } from '../GraphProcessor.js';
 import type { InternalProcessContext } from '../ProcessContext.js';
+import type { TokenPricing } from '../tokenPricing.js';
 import type { AssistantMessageFunctionCallMode, StreamedFunctionCall } from '../chat/streamChatResponse.js';
 import type { ChatV2Provider } from './chatV2ProviderTypes.js';
 import type { ChatV2ResponseBodyCapture } from './chatV2ResponseBodyCapture.js';
@@ -154,6 +155,7 @@ export type StreamChatV2Result = {
 };
 
 export type RunChatV2PipelineOptions = {
+  tokenPricing?: TokenPricing | undefined;
   provider: ChatV2Provider;
   model: ChatV2Model;
   modelId: string;

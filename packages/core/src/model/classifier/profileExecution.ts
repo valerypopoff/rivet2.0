@@ -113,6 +113,7 @@ export async function runClassifierProfiles(input: {
   result: ClassifierProviderEvaluationResult;
   provider: ReturnType<typeof getClassifierProvider>;
   model: string;
+  tokenPricing?: ClassifierProviderEvaluateArgs['tokenPricing'];
 }> {
   const attempts: LLMAttempt[] = [];
   const { context } = input;
@@ -239,6 +240,7 @@ export async function runClassifierProfiles(input: {
         ...input.state,
         questions: input.questions,
         apiKey: profile.credential.value,
+        tokenPricing: profile.configuration.tokenPricing,
         model,
         ...(Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
         deadline: input.deadline,
@@ -278,7 +280,7 @@ export async function runClassifierProfiles(input: {
           skipReason: 'unreached',
         });
       }
-      return { result, provider, model };
+      return { result, provider, model, tokenPricing: profile.configuration.tokenPricing };
     } catch (error) {
       lastError = error;
       const providerError = error instanceof ClassifierProviderError ? error : undefined;

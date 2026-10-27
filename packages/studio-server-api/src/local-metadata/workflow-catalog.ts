@@ -24,7 +24,7 @@ import type {
 } from '../../../studio-server-shared/workflow-recording-types.js';
 
 import { ImmutableLocalArtifactStore, type LocalArtifact } from './immutable-artifact-store.js';
-import type { WorkflowRecordingExecutionIdentity } from '../../../studio-server-shared/workflow-recording-types.js';
+import type { WorkflowRecordingExecutionIdentity, WorkflowRunCost } from '../../../studio-server-shared/workflow-recording-types.js';
 import type { RuntimeLibraryManifest } from '../runtime-libraries/manifest.js';
 import { decodeMigrationSourceUtf8 } from '../scripts/migration-source-utf8.js';
 import type { ManagedWorkflowExecutionCache } from '../routes/workflows/managed/execution-cache.js';
@@ -84,6 +84,7 @@ export type LocalRecordingCatalogSnapshot = {
   runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
+  cost?: WorkflowRunCost;
   endpointName: string;
   errorMessage: string | null;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
@@ -2156,6 +2157,7 @@ export class LocalWorkflowCatalog {
       runKind: recording.runKind,
       status: recording.status,
       durationMs: recording.durationMs,
+      cost: recording.cost,
       endpointName: recording.endpointName,
       errorMessage: recording.errorMessage,
       executionIdentity: recording.executionIdentity,

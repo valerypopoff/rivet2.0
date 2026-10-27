@@ -10,6 +10,24 @@ Defines reusable provider, model, credential resolution and suspension settings 
 
 ## Settings and ports
 
+### Token pricing
+
+Expand **Token pricing** to see **Default rates** for the selected model,
+just like Decision AI run in **Inline** mode. With **From profile**, only this
+profile's prices apply. The panel also shows any known long-context tier.
+Enable **Override token prices** to use
+your own flat input/output **USD per million tokens** rates. Both are required;
+zero is valid. **Use default rates** copies known input/output rates. Unknown prices
+are not zero. The panel uses Rivet's local catalog, not a live price lookup.
+Overrides are optional: with them off, reported/default estimates are used when
+available and missing costs remain unknown. Folding preserves all settings.
+
+Cached-input/read and cache-write prices can also be stored, but current Decision
+AI APIs report only aggregate input/output usage: cache discounts cannot be applied
+without a reported breakdown. Every fallback profile uses its own rates. Overrides
+replace automatic model/context pricing and affect future Cost estimates and Run
+statistics, not API requests or old recordings. Missing usage stays unknown.
+
 SubQ Snap is also supported: choose **SubQ**, clear Model to use
 `subq-snap-1.1`, and configure the SubQ API key. Images, limits and cost accounting
 follow the same [SubQ setup](./classifier-evaluate.mdx#using-subq-snap) as inline

@@ -16,6 +16,7 @@ import {
 import { getClassifierModelEditor, getClassifierEvaluateBodySections } from './ClassifierEvaluateNode.js';
 import { formatNodeBodyMarkdownField } from '../nodeBodyMarkdown.js';
 import { profileSuspensionHints } from '../profileSuspensionHints.js';
+import { getTokenPricingEditor } from '../tokenPricingEditor.js';
 
 export type ClassifierProfileNode = ChartNode<'classifierProfile', ClassifierProfileConfiguration>;
 export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
@@ -51,6 +52,7 @@ export class ClassifierProfileNodeImpl extends NodeImpl<ClassifierProfileNode> {
   getEditors(): EditorDefinition<ClassifierProfileNode>[] {
     return [
       getClassifierModelEditor() as EditorDefinition<ClassifierProfileNode>,
+      getTokenPricingEditor<ClassifierProfileNode>(),
       {
         type: 'group',
         label: 'Decision AI profile suspension',

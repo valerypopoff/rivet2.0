@@ -2,6 +2,7 @@ import type { EditorDefinition } from '../EditorDefinition.js';
 import type { ChartNode } from '../NodeBase.js';
 import type { RivetUIContext } from '../RivetUIContext.js';
 import { profileSuspensionHints } from '../profileSuspensionHints.js';
+import { getTokenPricingEditor } from '../tokenPricingEditor.js';
 import { STREAM_RESPONSE_HELPER_MESSAGE } from './chatV2Shared.js';
 import {
   DEFAULT_LLM_CHAT_V2_RETRY_ON_NON_200_COOLDOWN_MS,
@@ -712,6 +713,7 @@ export async function getLLMChatV2Editors(
     ...(!usesProfile
       ? [
           getModelEditors(await getResolvedModelOptions(data, context)),
+          getTokenPricingEditor<LLMChatV2Node>(),
           ...getProviderEditors(),
           getParameterEditors(),
           ...(data.provider === 'custom' ? [] : [getReasoningEditors()]),
@@ -732,6 +734,7 @@ export async function getLLMProfileEditors(
   const profileData = data as LLMChatV2NodeData;
   return [
     getModelEditors(await getResolvedModelOptions(profileData, context)),
+    getTokenPricingEditor<LLMProfileEditorNode>(),
     ...getProviderEditors(),
     getParameterEditors(),
     ...(profileData.provider === 'custom' ? [] : [getReasoningEditors()]),

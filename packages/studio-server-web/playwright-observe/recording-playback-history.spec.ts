@@ -356,6 +356,11 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     // A graph name in the drawer header alone doesn't prove playback populated it.
     const activityRows = editor.locator('[aria-label="Run Activity"] .run-activity-row');
     await expect(activityRows.first()).toBeVisible();
+    const activityToggle = activityRows.first().locator('button.collapsible-panel-toggle');
+    await activityToggle.click();
+    const detailId = await activityToggle.getAttribute('aria-controls');
+    expect(detailId).toBeTruthy();
+    await expect(editor.locator(`[id="${detailId}"]`)).toHaveCount(1);
     await expect(
       activityRows.filter({ hasText: kind === 'root' ? 'Subgraph' : 'Recorded child output' }).first(),
     ).toBeVisible();

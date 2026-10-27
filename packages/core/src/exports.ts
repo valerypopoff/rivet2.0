@@ -60,6 +60,8 @@ export * from './plugins.js';
 export * from './model/classifier/credentials.js';
 export * from './model/classifier/migration.js';
 export * from './model/classifier/providers.js';
+export * from './model/tokenPricing.js';
+export { getChatV2SystemTokenPricing } from './model/chat-v2/modelRegistry.js';
 export * from './model/classifier/types.js';
 export * from './model/NodeRegistration.js';
 export * from './model/RegistryAssembly.js';

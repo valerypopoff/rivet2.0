@@ -5,7 +5,9 @@ import type {
   WorkflowRecordingExecutionIdentity,
   WorkflowRecordingRunKind,
   WorkflowRecordingStatus,
+  WorkflowRunCost,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
+import { readWorkflowRunCost } from '../../../../studio-server-shared/workflow-recording-types.js';
 import type { WorkflowRecordingRunRow } from './recordings-db.js';
 import { normalizeRivetCorrelationId } from '../../request-correlation.js';
 import { getWorkflowRecordingMetadataPath, pathExists } from './fs-helpers.js';
@@ -24,6 +26,7 @@ export type StoredWorkflowRecordingMetadataV2 = {
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
   durationMs: number;
+  cost?: WorkflowRunCost;
   encoding: WorkflowRecordingBlobEncoding;
   hasReplayDataset: boolean;
   recordingCompressedBytes: number;
@@ -78,6 +81,7 @@ export type NormalizedStoredWorkflowRecordingFields = {
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
   durationMs: number;
+  cost?: WorkflowRunCost;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
 };
@@ -188,6 +192,7 @@ export function normalizeStoredWorkflowRecordingFields(
     endpointNameAtExecution,
     createdAt,
     durationMs,
+    cost: readWorkflowRunCost(raw.cost),
     runKind,
     status,
     errorMessage: normalizeOptionalErrorMessage(raw.errorMessage),
@@ -224,6 +229,7 @@ export async function normalizeStoredWorkflowRecording(
         runKind: normalized.runKind,
         status: normalized.status,
         durationMs: normalized.durationMs,
+        cost: normalized.cost,
         endpointNameAtExecution: normalized.endpointNameAtExecution,
         executionIdentity: normalized.executionIdentity,
         errorMessage: normalized.errorMessage,
@@ -287,6 +293,7 @@ export async function normalizeStoredWorkflowRecording(
         runKind: normalized.runKind,
         status: normalized.status,
         durationMs: normalized.durationMs,
+        cost: normalized.cost,
         endpointNameAtExecution: normalized.endpointNameAtExecution,
         executionIdentity: normalized.executionIdentity,
         errorMessage: normalized.errorMessage,

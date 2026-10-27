@@ -36,7 +36,7 @@ import {
   type WebAppAccessPolicy,
 } from './storage-backend.js';
 import { isWorkflowRecordingEnabled, shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
-import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-server-shared/workflow-recording-types.js';
+import type { WorkflowRecordingExecutionIdentity, WorkflowRunCost } from '../../../../studio-server-shared/workflow-recording-types.js';
 import { createServingRuntimeOptions } from './hosted-processor.js';
 import { getExecutionErrorMessage, getExecutionOutputStatus } from './execution-session.js';
 // Shared execution preparation and policy; importing this module registers no HTTP routes.
@@ -208,6 +208,7 @@ export type WorkflowExecutionRecordingSnapshot = {
   recorder: ExecutionRecorder | null;
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
+  cost?: WorkflowRunCost;
   errorMessage?: string;
 };
 type RecordingEvidenceAvailability = 'available' | 'disabled' | 'queue-dropped' | 'persistence-failed';
@@ -470,6 +471,7 @@ export function enqueueExecutionRecording(
         runKind: options.runKind,
         status: recording.status,
         durationMs: recording.durationMs,
+        cost: recording.cost,
         errorMessage: recording.errorMessage,
         executionIdentity: options.executionIdentity,
         onPersisted: async (recordingId) => {
@@ -499,9 +501,10 @@ export function enqueueWebAppActionRecording(
     endpointName: string;
     runKind: 'published' | 'latest';
     executionIdentity?: WorkflowRecordingExecutionIdentity;
+    cost?: WorkflowRunCost;
   },
 ): void {
-  enqueueExecutionRecording(executionProject, { recorder, durationMs, status, errorMessage }, options);
+  enqueueExecutionRecording(executionProject, { recorder, durationMs, status, errorMessage, cost: options.cost }, options);
 }
 
 export function getGraphNameAtExecution(

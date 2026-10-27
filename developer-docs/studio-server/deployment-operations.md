@@ -6,6 +6,24 @@ operator must explicitly select the context, release and namespace and confirm
 the release name. The clean tracked checkout, exact promoted manifest source,
 chart fingerprint, immutable images and schema controls remain mandatory.
 
+## Schema 18 recording cost metadata
+
+Schema 18 adds nullable `workflow_recordings.cost_json` for root-run AI estimates.
+It does not rewrite historical recordings, project formats or published revisions;
+historical null values mean unknown, not zero. The migration is additive to
+schema 17 and the rollback-compatible floor remains 17, subject to the normal
+exact-image compatibility checks. A schema-18 binary must not serve against an
+unmigrated database because its recording queries require the new column.
+
+Use the existing approved migration/deployment route: certify recovery backups,
+run the single migration owner, then start compatible serving images. Do not
+manually add the column, bypass predecessor verification or infer provider/GKE
+qualification from local tests. Below schema 17, the existing maintenance adoption
+requirements described next still apply. See
+[cost accounting](recording-search-performance.md#cost-accounting-ownership-and-extension-contract)
+for coverage, retention and verification details. Implementation tests do not
+authorize production deployment.
+
 ## Schema 17 folder-parent repair
 
 Schema 17 fixes managed folder moves and transactionally repairs inconsistent

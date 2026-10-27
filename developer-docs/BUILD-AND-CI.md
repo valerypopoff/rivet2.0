@@ -1863,6 +1863,33 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-10-27)
+
+Every track last changed versions in `85615dc79`. Subsequent commits through
+`3f606677f` plus the pending AI accounting/pricing and Run statistics work prepare:
+
+| Track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.30.0` → `2.31.0` | Inline/profile pricing authoring, model selection, canvas-wire reliability, hosted Save As identity safety and collapsible-section accessibility. |
+| Public Core/Node/Evaluations/CLI | `2.24.0` → `2.25.0` | Additive root-run AI accounting and price overrides, Baseten Elephant/Mammoth and Liquid d1.1, dataset ownership hardening; Node/Evaluations/CLI are required lockstep companions. |
+| App executor | `2.16.0` → `2.17.0` | Bundles the new Core runtime; no sidecar protocol or package-local source change. |
+| Documentation site | `2.24.0` → `2.25.0` | Cost statistics/coverage, token-pricing configuration and Decision AI model guidance. |
+| Five private Studio Server packages | `1.32.0` → `1.33.0` | Cost statistics and recording metadata, guarded namespace/persistence operations, hosted access/Save As fixes, deployment recovery and security/CI hardening. Bootstrap and Executor remain family companions, not separate feature implementations. |
+
+Minor increments reflect compatible capabilities. Tauri/Cargo metadata follows
+App; the CLI Docker fallback follows the public npm family. Leave existing
+workspace ranges and Yarn resolutions alone. Do not bump Helm or schema numbers
+for this metadata change. The release already includes managed schema 18 and its
+rollback-compatible floor 17; migration 17 adoption may require maintenance from
+older installations. Ordinary backup, migration and exact-image release gates
+remain mandatory. See [deployment operation contracts](studio-server/deployment-operations.md).
+These versions are local release preparation, not publication or deployment.
+
+Validate with `node scripts/sync-desktop-version.mjs --check`,
+`node scripts/publish-npm-packages.mjs --check-versions`,
+`yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`.
+
 ### Prepared release versions (2026-10-25)
 
 All tracks last changed versions in `1ebeef366`. Changes since that baseline

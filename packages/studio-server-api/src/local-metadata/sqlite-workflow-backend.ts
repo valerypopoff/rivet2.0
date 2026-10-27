@@ -21,6 +21,7 @@ import type {
   WorkflowRecordingRunSummary,
   WorkflowRecordingRunsPageResponse,
 } from '../../../studio-server-shared/workflow-recording-types.js';
+import { readWorkflowRunCost } from '../../../studio-server-shared/workflow-recording-types.js';
 import type { LocalRecordingMetadata, LocalPublicationState } from './workflow-catalog.js';
 import { createCatalogWorker, type CatalogWorkerClient } from './catalog-worker-client.js';
 import { getWorkflowRecordingConfig } from '../routes/workflows/recordings-config.js';
@@ -1135,6 +1136,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
           runKind: saved.runKind,
           status: saved.status,
           durationMs: saved.durationMs,
+          cost: saved.cost,
           endpointName: saved.endpointName,
           errorMessage: saved.errorMessage ?? null,
           executionIdentity: saved.executionIdentity,
@@ -1209,6 +1211,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
       runKind: row.runKind,
       status: row.status,
       durationMs: row.durationMs,
+      cost: readWorkflowRunCost(row.cost),
       endpointNameAtExecution: row.endpointName,
       executionIdentity: row.executionIdentity,
       errorMessage: row.errorMessage ?? undefined,
@@ -1336,6 +1339,6 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     return buildWorkflowRunStatisticsCatalog(await this.#catalog.readRecordingStatisticsCatalog(surface), surface);
   }
   async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery) {
-    return buildWorkflowRunStatistics(await this.#catalog.readRecordingStatistics(query), query);
+    return buildWorkflowRunStatistics(await this.#catalog.readRecordingStatistics(query), query, { includeCost: true });
   }
 }

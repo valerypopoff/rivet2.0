@@ -568,6 +568,7 @@ describe('LLMProfileNodeImpl', () => {
       .map((editor) => editor.label);
     assert.deepEqual(profileGroups, [
       'Model',
+      'Token pricing',
       'OpenAI',
       'Anthropic',
       'Google',
@@ -576,6 +577,8 @@ describe('LLMProfileNodeImpl', () => {
       'LLM profile suspension',
       'Provider Advanced',
     ]);
+    const pricing = profileEditors.find((editor) => editor.type === 'group' && editor.label === 'Token pricing');
+    assert.equal(pricing?.type === 'group' && pricing.defaultOpen, false);
     const profileDataKeys = new Set<string>(llmChatV2ProfileDataKeys);
     const openAIGroup = profileEditors.find((editor) => editor.type === 'group' && editor.label === 'OpenAI') as any;
     const previousResponseIdEditor = openAIGroup.editors.find(

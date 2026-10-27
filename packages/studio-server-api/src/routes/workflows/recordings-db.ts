@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { readScheduledRecordingFields } from '../../../../studio-server-shared/workflow-recording-types.js';
+import { readScheduledRecordingFields, readWorkflowRunCost } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { getAppDataRoot } from '../../security.js';
 import type {
@@ -11,6 +11,7 @@ import type {
   WorkflowRecordingRunKind,
   WorkflowRecordingStatus,
   WorkflowRunStatisticsTarget,
+  WorkflowRunCost,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 import { normalizeRivetCorrelationId } from '../../request-correlation.js';
@@ -39,6 +40,7 @@ export type WorkflowRecordingRunRow = {
   runKind: WorkflowRecordingRunKind;
   status: WorkflowRecordingStatus;
   durationMs: number;
+  cost?: WorkflowRunCost;
   endpointNameAtExecution: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
   errorMessage?: string;
@@ -86,6 +88,7 @@ const RECORDING_RUN_COLUMNS = `
   component_label_at_execution AS componentLabelAtExecution,
   correlation_id AS correlationId,
   scheduled_identity_json AS scheduledIdentityJson,
+  cost_json AS costJson,
   error_message AS errorMessage,
   bundle_path AS bundlePath,
   encoding AS encoding,
@@ -145,8 +148,9 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_uncompressed_bytes,
     dataset_compressed_bytes,
     dataset_uncompressed_bytes,
-    scheduled_identity_json
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    scheduled_identity_json,
+    cost_json
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     workflow_id = excluded.workflow_id,
     created_at = excluded.created_at,
@@ -175,7 +179,8 @@ const UPSERT_RECORDING_RUN_SQL = `
     project_uncompressed_bytes = excluded.project_uncompressed_bytes,
     dataset_compressed_bytes = excluded.dataset_compressed_bytes,
     dataset_uncompressed_bytes = excluded.dataset_uncompressed_bytes,
-    scheduled_identity_json = excluded.scheduled_identity_json
+    scheduled_identity_json = excluded.scheduled_identity_json,
+    cost_json = excluded.cost_json
 `;
 
 type RecordingStatement = ReturnType<DatabaseSync['prepare']>;
@@ -223,6 +228,7 @@ function writeWorkflowRecordingRun(statement: RecordingStatement, row: WorkflowR
     row.datasetCompressedBytes,
     row.datasetUncompressedBytes,
     identity?.surface === 'scheduled' ? JSON.stringify(readScheduledRecordingFields(identity)) : null,
+    row.cost ? JSON.stringify(row.cost) : null,
   );
 }
 
@@ -368,6 +374,7 @@ function ensureRecordingRunIdentityColumns(db: DatabaseSync): void {
     ['component_label_at_execution', 'TEXT'],
     ['correlation_id', 'TEXT'],
     ['scheduled_identity_json', 'TEXT'],
+    ['cost_json', 'TEXT'],
   ] as const;
 
   for (const [name, type] of columns) {
@@ -724,7 +731,7 @@ export async function listWorkflowRecordingStatisticsRows(
     SELECT
       ${RECORDING_RUN_COLUMNS}
     FROM recording_runs
-    WHERE created_at >= ? AND created_at < ?
+    WHERE run_kind <> 'editor' AND created_at >= ? AND created_at < ?
     ${clause}
     ORDER BY created_at ASC, id ASC
   `,
@@ -875,6 +882,7 @@ function normalizeWorkflowRecordingRunRow(row: Record<string, unknown>): Workflo
     runKind: row.runKind === 'published' || row.runKind === 'editor' ? row.runKind : 'latest',
     status,
     durationMs: toNumber(row.durationMs),
+    cost: readWorkflowRunCost(row.costJson),
     endpointNameAtExecution: String(row.endpointNameAtExecution ?? ''),
     executionIdentity: getExecutionIdentity(row),
     errorMessage: toOptionalString(row.errorMessage),

@@ -12,6 +12,19 @@ Evaluates one shared state and optional images against a batch of independent ty
 
 **Configuration** selects **Inline** (the existing default) or **From profile**. Profile mode adds a required **Decision AI Profiles** input accepting one [Decision AI Profile](./classifier-profile.mdx) or an ordered Array of profiles. It hides inline model/credential inputs without deleting saved settings. **Export Decision AI settings to profile node** creates and wires a Profile, moves active model/key connections, and preserves evidence connections; the command supports Undo/Redo.
 
+In **Inline** mode, expand **Token pricing** to see **Default rates** and optionally use
+your own flat input/output **USD per million tokens** prices. Both are required
+when enabled; zero is valid. Unknown system rates are not zero. Optional cached
+read/write rates can be stored, but current Decision AI responses lack the cache
+breakdown needed to apply them. Prices use reported usage, not guessed token counts.
+Overrides affect future Cost/Usage estimates and Run statistics, not old recordings.
+Leave overrides off to use default estimates when available; missing costs stay
+unknown. Folding the section does not change saved prices.
+
+In **From profile** mode, pricing is controlled only by the connected profile,
+not saved inline values. Switching back to Inline restores those saved values.
+Exporting settings to a profile includes the price overrides.
+
 With automatic suspension enabled and supported by the host, each profile has a response deadline (0.5 seconds by default). There is no overall node or fallback-chain deadline. Retry controls remain owned by Decision AI run. Optional **Decision AI Attempts** and **Decision AI Profile Summary** outputs report candidate outcomes and failure reasons. On failure, enabled request/response diagnostics remain inspectable alongside the error; on caught exhaustion, Answers/Usage/Cost are excluded. Successful native bodies belong to the winning candidate, and Cost covers its successful usage only. Attempts also retain safe provider-reported usage from rejected answer batches; Response Inspector includes known failed-request estimates in its aggregate and marks unavailable charges partial/unknown.
 
 **Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.

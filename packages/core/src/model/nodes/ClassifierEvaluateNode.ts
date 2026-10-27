@@ -25,6 +25,8 @@ import { getNextVariadicPortIndex } from './variadicPortIndex.js';
 import { resolveClassifierApiKey } from '../classifier/credentials.js';
 import { classifierArrayValues, classifierInputDataValue } from '../classifier/json.js';
 import { normalizeClassifierState } from '../classifier/state.js';
+import { validateTokenPricing, type TokenPricing } from '../tokenPricing.js';
+import { getTokenPricingEditor } from '../tokenPricingEditor.js';
 import { CLASSIFIER_LIMITS, ClassifierValueBudget } from '../classifier/limits.js';
 import {
   calculateClassifierUsageCost,
@@ -177,6 +179,10 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
       { type: 'custom', label: 'Configuration', customEditorId: 'ClassifierConfiguration' },
       { ...getClassifierModelEditor(), hideIf: (data) => data.configurationMode === 'profile' },
       {
+        ...getTokenPricingEditor<ClassifierEvaluateNode>(),
+        hideIf: (data) => data.configurationMode === 'profile',
+      },
+      {
         type: 'group',
         label: 'Outputs',
         editors: [
@@ -185,7 +191,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
             label: 'Usage details',
             dataKey: 'outputUsage',
             helperMessage:
-              'Adds estimated totalCost to Usage only for recognized requested/returned models. Unknown pricing is omitted. Provider-specific premiums are not included.',
+              'Adds estimated totalCost to Usage using explicit token prices or known model rates. Unknown pricing is omitted. Provider-specific premiums are not included.',
           },
           {
             type: 'toggle',
@@ -364,6 +370,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     checkPreparation();
     if (this.data.configurationMode === 'profile')
       return this.processProfiles(inputs, context, checkPreparation, attempts, diagnostics);
+    const tokenPricing = validateTokenPricing(this.data.tokenPricing);
     const provider = getClassifierProvider(this.data.provider);
     if (!provider.browserExecutionSupported && context.executor === 'browser') {
       throw new Error(
@@ -421,6 +428,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
 
     const result = await (provider.evaluateInput ?? provider.evaluate).call(provider, {
       apiKey,
+      tokenPricing,
       model: modelValue,
       questions,
       retryOnNon200: this.data.retryOnNon200,
@@ -451,7 +459,10 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     });
     // Custom providers own their transport; caller cancellation still wins.
     checkPreparation();
-    return { ...this.projectResult(provider, modelValue, result, checkPreparation), ...this.profileEvidence(attempts) };
+    return {
+      ...this.projectResult(provider, modelValue, result, checkPreparation, tokenPricing),
+      ...this.profileEvidence(attempts),
+    };
   }
 
   private projectResult(
@@ -459,11 +470,17 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     modelValue: string,
     result: Awaited<ReturnType<ReturnType<typeof getClassifierProvider>['evaluate']>>,
     checkPreparation: () => void,
+    tokenPricing?: TokenPricing,
   ): Outputs {
-    const totalCost = calculateClassifierUsageCost(provider, result.response.usage, {
-      requestedModel: modelValue,
-      responseModel: result.response.model,
-    });
+    const totalCost = calculateClassifierUsageCost(
+      provider,
+      result.response.usage,
+      {
+        requestedModel: modelValue,
+        responseModel: result.response.model,
+      },
+      tokenPricing,
+    );
     // The provider's parsed response may also be exposed verbatim through the
     // diagnostic output. Do not mutate its Usage object while adding Rivet's
     // calculated accounting detail.
@@ -559,7 +576,7 @@ export class ClassifierEvaluateNodeImpl extends NodeImpl<ClassifierEvaluateNode>
     });
     check();
     return {
-      ...this.projectResult(selected.provider, selected.model, selected.result, check),
+      ...this.projectResult(selected.provider, selected.model, selected.result, check, selected.tokenPricing),
       ...this.profileEvidence(attempts, classifierProfileSummary(profiles, attempts)),
     };
   }

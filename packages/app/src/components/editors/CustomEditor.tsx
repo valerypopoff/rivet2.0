@@ -20,6 +20,7 @@ import { ClassifierModelEditor } from './custom/ClassifierModelEditor';
 import { ClassifierScoreCriteriaEditor } from './custom/ClassifierScoreCriteriaEditor';
 import { ClassifierChoiceCriteriaEditor } from './custom/ClassifierChoiceCriteriaEditor';
 import { SubgraphTargetEditor } from './custom/SubgraphTargetEditor';
+import { AIProfilePricingEditor } from './custom/AIProfilePricingEditor';
 
 export const CustomEditor: FC<
   SharedEditorProps & {
@@ -41,6 +42,7 @@ export const CustomEditor: FC<
     .with('LLMChatV2CredentialNames', () => <LLMChatV2CredentialNamesEditor {...props} editor={editor} />)
     .with('ClassifierCredentialNames', () => <ClassifierCredentialNamesEditor {...props} editor={editor} />)
     .with('ClassifierModel', () => <ClassifierModelEditor {...props} editor={editor} />)
+    .with('AIProfilePricing', () => <AIProfilePricingEditor {...props} />)
     .with('ClassifierScoreCriteria', () => <ClassifierScoreCriteriaEditor {...props} editor={editor} />)
     .with('ClassifierChoiceCriteria', () => <ClassifierChoiceCriteriaEditor {...props} editor={editor} />)
     .with('SubgraphTarget', () => <SubgraphTargetEditor {...props} />)

@@ -1,4 +1,5 @@
 import { GraphInvocationState, GraphSharedExecutionState } from './GraphExecutionState.js';
+import type { RunCostSnapshot } from './RunCostLedger.js';
 import { resolveChildInvocationOwnership } from './ChildInvocationOwnership.js';
 import {
   planStreamingWatchTopology,
@@ -1576,6 +1577,8 @@ export class GraphProcessor {
     const hostChatV2Observer = this.getRootProcessor().#run.context.onChatV2CallFinished;
     const hostLLMChatOutputSnapshotObserver = this.getRootProcessor().#run.context.onLLMChatOutputSnapshot;
     const hostLLMProfileAttemptObserver = this.getRootProcessor().#run.context.onLLMProfileAttempt;
+    // Capture the invocation's ledger, not a later run that reuses this processor.
+    const costLedger = this.getRootProcessor().#run.costLedger;
     this.#run.nodeProcessContextBase = {
       ...this.#run.context,
       abortGraph: (error) => {
@@ -1596,6 +1599,11 @@ export class GraphProcessor {
       graphOutputs: this.#run.graphOutputs,
       graphCallPath: this.#graphCallPath,
       onChatV2CallFinished: (event) => {
+        try {
+          costLedger.observeChat(event);
+        } catch {
+          costLedger.markUnobserved();
+        }
         try {
           const observerResult = hostChatV2Observer?.(event);
           if (observerResult != null && typeof (observerResult as PromiseLike<void>).then === 'function') {
@@ -1623,6 +1631,11 @@ export class GraphProcessor {
         emitDetached(this.#emitter, 'llmChatOutputSnapshot', this.#withExecution(event));
       },
       onLLMProfileAttempt: (event) => {
+        try {
+          costLedger.observeClassifier(event);
+        } catch {
+          costLedger.markUnobserved();
+        }
         try {
           const observerResult = hostLLMProfileAttemptObserver?.(event);
           if (observerResult != null && typeof (observerResult as PromiseLike<void>).then === 'function') {
@@ -3146,6 +3159,12 @@ export class GraphProcessor {
     return processor;
   }
 
+  /** Snapshot the root execution's observed provider estimates after completion. */
+  getRunCostSnapshot(): RunCostSnapshot {
+    const root = this.getRootProcessor();
+    return root.#run.costLedger.snapshot(root.isRunning);
+  }
+
   #getEnclosingStreamingWatchInvocation(): StreamingOutputWatchInvocation | undefined {
     let processor: GraphProcessor | undefined = this;
     while (processor) {
@@ -3266,6 +3285,12 @@ export class GraphProcessor {
       nodeAbortController.abort(getAbortSignalReason(this.#run.abortController.signal));
     }
     let continuationFinalized = false;
+    const costLedger = this.getRootProcessor().#run.costLedger;
+    const accountingKey = `${this.#run.graphRunId}:${processId}:${index}`;
+    let accountingEntered = false;
+    let observedPhysicalCall = false;
+    let cacheHit = false;
+    let accountingOutputs: Outputs | undefined;
     try {
       const createContextProfileStart = this.#startRuntimeProfile();
       let context: InternalProcessContext;
@@ -3278,7 +3303,12 @@ export class GraphProcessor {
           nodeAbortController,
           partialOutput,
           undefined,
-          markResultAsEditorCacheHit,
+          markResultAsEditorCacheHit
+            ? () => {
+                cacheHit = true;
+                markResultAsEditorCacheHit();
+              }
+            : undefined,
         );
       } finally {
         this.#finishRuntimeProfile('createNodeProcessContext', createContextProfileStart);
@@ -3288,10 +3318,25 @@ export class GraphProcessor {
       if (nodeAbortController.signal.aborted) {
         throw createGraphAbortErrorFromSignal(nodeAbortController.signal);
       }
+      if (node.type === 'llmChatV2') {
+        const observer = context.onChatV2CallFinished;
+        context.onChatV2CallFinished = (event) => {
+          observedPhysicalCall = true;
+          observer?.(event);
+        };
+      } else if (node.type === 'classifierEvaluate') {
+        const observer = context.onLLMProfileAttempt;
+        context.onLLMProfileAttempt = (event) => {
+          if (event.family === 'classifier' && event.attemptIndex !== undefined) observedPhysicalCall = true;
+          observer?.(event);
+        };
+      }
       const implementationProfileStart = this.#startRuntimeProfile();
       let results: Outputs;
       try {
+        accountingEntered = true;
         results = await instance.process(inputValues, context);
+        accountingOutputs = results;
       } finally {
         this.#finishRuntimeProfile('nodeImplementation', implementationProfileStart);
       }
@@ -3312,6 +3357,18 @@ export class GraphProcessor {
       this.#discardFailureOutputs(processId, index);
       return results;
     } finally {
+      if (accountingEntered && !cacheHit) {
+        try {
+          if (['chat', 'chatLoop', 'chatGoogle', 'chatAnthropic', 'chatHuggingFace', 'getEmbedding'].includes(node.type)) {
+            const cost = accountingOutputs?.['cost' as PortId];
+            costLedger.observeLegacy(accountingKey, cost?.type === 'number' ? cost.value : undefined);
+          } else if ((node.type === 'llmChatV2' || node.type === 'classifierEvaluate') && !observedPhysicalCall) {
+            costLedger.markUnobserved();
+          }
+        } catch {
+          costLedger.markUnobserved();
+        }
+      }
       if (!continuationFinalized) {
         this.#discardToolCallContinuation(processId, index);
       }

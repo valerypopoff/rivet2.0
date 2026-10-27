@@ -23,6 +23,22 @@ Use LLM Chat when you want to:
 
 The older [Chat Node](./chat.mdx) remains available for existing graphs, but new work should prefer LLM Chat.
 
+### Token pricing
+
+With **Configuration → Inline**, expand **Token pricing** to see **Default rates**
+and configure optional input, output, cached-input/read and cache-write
+prices in **USD per million tokens**. Input/output rates are required when enabled;
+zero is valid. Blank cache rates use the input rate, and cache discounts require
+provider-reported cache counts. **Use default rates** copies known input/output prices.
+Overrides are optional: leave them off to use reported costs or default rates
+when available. Otherwise, cost remains unknown. Folding the section preserves settings.
+Unknown rates are not free usage. Overrides use response token counts and take
+precedence over provider-reported dollar cost; old recordings are unchanged.
+
+With **From profile**, set prices on the connected [LLM Profile](./llm-profile.mdx)
+instead. Saved inline prices are inactive and return when you switch back to Inline.
+**Export LLM settings to profile node** transfers these settings too.
+
 ### OpenRouter
 
 Select **OpenRouter** and choose a model from its public catalog, or use the
@@ -40,7 +56,8 @@ to use provider defaults. OpenAI-only tools and Previous Response ID are not sho
 **Extra provider options** are raw OpenRouter request fields; for example,
 `{"provider":{"order":["OpenAI"],"require_parameters":true}}` controls routing.
 These overrides deliberately replace same-named generated fields. Usage and
-cost use OpenRouter's reported values; absent cost is unknown, not zero.
+cost use OpenRouter's reported values unless token prices are explicitly overridden;
+absent cost is unknown, not zero.
 Rejected structured replies can still incur costs, which remain in the call trace.
 Errors received within a stream keep their provider status for retries and suspension;
 an authentication error does not suspend the profile.

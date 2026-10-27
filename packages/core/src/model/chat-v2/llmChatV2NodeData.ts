@@ -6,6 +6,7 @@ import {
 } from './chatV2Retry.js';
 import type { ChatV2Provider } from './chatV2Types.js';
 import type { ChartNode, NodeId } from '../NodeBase.js';
+import type { TokenPricing } from '../tokenPricing.js';
 import { llmProfileDataKeys } from './llmProfileFieldRegistry.js';
 import type { CustomProviderApi } from './customProviderApi.js';
 import type { ChatV2CredentialNamesByProvider } from './chatV2CredentialNames.js';
@@ -23,6 +24,7 @@ export type LLMChatV2ToolChoiceMode = '' | 'auto' | 'function' | 'required';
 export type LLMChatV2ApiKeySource = 'environment' | 'input';
 export type LLMChatV2ConfigurationMode = 'inline' | 'profile';
 export type LLMChatV2NodeConfigData = ChatV2CommonNodeData & {
+  tokenPricing?: TokenPricing;
   configurationMode?: LLMChatV2ConfigurationMode;
   provider: ChatV2Provider;
   apiKeySource?: LLMChatV2ApiKeySource;

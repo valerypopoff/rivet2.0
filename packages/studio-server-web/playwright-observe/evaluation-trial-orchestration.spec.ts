@@ -109,6 +109,9 @@ for (const storageFails of [false, true]) {
     const trial = page.locator('.evaluation-trial');
     await expect(trial).toHaveCount(1);
     await trial.locator('button.collapsible-panel-toggle').click();
+    const detailId = await trial.locator('button.collapsible-panel-toggle').getAttribute('aria-controls');
+    expect(detailId).toBe(`evaluation-trial-${run.trials[0]!.id}`);
+    await expect(page.locator(`[id="${detailId}"]`)).toHaveCount(1);
     await expect(trial).toContainText('trial-result');
     if (storageFails) {
       expect(run.warnings.join(' ')).toMatch(/recording.*not.*retain/i);

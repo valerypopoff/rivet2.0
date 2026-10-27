@@ -11,7 +11,12 @@ import {
   createHostedRuntimeOptions,
   type HostedRuntimeDependencies,
 } from '../routes/workflows/hosted-runtime-policy.js';
-import { ExecutionSession } from '../routes/workflows/execution-session.js';
+import {
+  ExecutionSession,
+  getExecutionRunCostSnapshot,
+  finalizeExecutionRecordingAfterSettlement,
+  RECORDING_SETTLEMENT_TIMEOUT_MS,
+} from '../routes/workflows/execution-session.js';
 
 const input = { projectPath: '/workflows/main.rivet-project', datasetProvider: {} as DatasetProvider };
 
@@ -98,6 +103,117 @@ function processorFixture(tail: () => Promise<Record<string, { type: 'string'; v
   } as unknown as NodeCreatedProcessor;
   return { processor, disposals: () => disposals };
 }
+
+test('recorded cost is captured after the physical tail, before disposal, even after response failure', async (t) => {
+  t.mock.method(ExecutionRecorder.prototype, 'record', () => {});
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let settled = false;
+  let reads = 0;
+  const f = processorFixture(async () => {
+    await gate;
+    settled = true;
+    return { output: { type: 'string', value: 'done' } };
+  });
+  Object.assign(f.processor.processor, {
+    getRunCostSnapshot: () => {
+      reads++;
+      assert.equal(settled, true);
+      assert.equal(f.disposals(), 0);
+      return { status: 'complete', knownCostUsd: 0.125 };
+    },
+  });
+  Object.defineProperty(f.processor.processor, 'isRunning', { get: () => !settled });
+  const running = new ExecutionSession(f.processor, { recording: true }).run(() => {
+    throw new Error('response disconnected');
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(reads, 0);
+  release();
+  const result = await running;
+  assert.deepEqual(result.cost, { status: 'complete', knownCostUsd: 0.125 });
+  assert.equal(result.status, 'succeeded');
+  assert.equal(reads, 1);
+});
+
+test('unsettled and failed accounting reads cannot claim a complete cost', () => {
+  const processor = {
+    isRunning: true,
+    getRunCostSnapshot: () => ({ status: 'complete' as const, knownCostUsd: 0.5 }),
+  };
+  assert.deepEqual(getExecutionRunCostSnapshot(processor), { status: 'partial', knownCostUsd: 0.5 });
+  processor.isRunning = false;
+  assert.deepEqual(getExecutionRunCostSnapshot(processor), { status: 'complete', knownCostUsd: 0.5 });
+  processor.getRunCostSnapshot = () => {
+    throw new Error('accounting unavailable');
+  };
+  assert.deepEqual(getExecutionRunCostSnapshot(processor), { status: 'unknown', knownCostUsd: null });
+});
+
+test('transport cancellation finalizes once after physical settlement without delaying acknowledgement', async () => {
+  let settle!: () => void;
+  const completion = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  let running = true;
+  const writes: unknown[] = [];
+  const flush = finalizeExecutionRecordingAfterSettlement(
+    {
+      get isRunning() {
+        return running;
+      },
+      getRunCostSnapshot: () => ({ status: 'complete', knownCostUsd: running ? 0.5 : 0.75 }),
+      waitForRunCompletion: () => completion.then(() => ({})),
+    },
+    (cost) => writes.push(cost),
+  );
+  assert.deepEqual(writes, [], 'the terminal callback returns without waiting for the processor');
+  running = false;
+  settle();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  flush();
+  assert.deepEqual(writes, [{ status: 'complete', knownCostUsd: 0.75 }]);
+});
+
+test('settlement deadline and shutdown preserve unknown, zero and paid evidence exactly once', async (t) => {
+  for (const mode of ['deadline', 'shutdown'] as const)
+    for (const amount of [undefined, 0, 0.5])
+      await t.test(`${mode}/${amount ?? 'unknown'}`, async (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        let settle!: () => void;
+        const completion = new Promise<void>((resolve) => {
+          settle = resolve;
+        });
+        const writes: unknown[] = [];
+        let running = true;
+        const flush = finalizeExecutionRecordingAfterSettlement(
+          {
+            get isRunning() {
+              return running;
+            },
+            getRunCostSnapshot: () =>
+              running && amount === undefined
+                ? { status: 'unknown', knownCostUsd: null }
+                : { status: 'complete', knownCostUsd: running ? amount! : 0.75 },
+            waitForRunCompletion: () => completion.then(() => ({})),
+          },
+          (cost) => writes.push(cost),
+        );
+        if (mode === 'deadline') t.mock.timers.tick(RECORDING_SETTLEMENT_TIMEOUT_MS);
+        else flush();
+        running = false;
+        settle();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        flush();
+        assert.deepEqual(writes, [
+          amount === undefined
+            ? { status: 'unknown', knownCostUsd: null }
+            : { status: 'partial', knownCostUsd: amount },
+        ]);
+      });
+});
 
 test('a failed foreground delivery does not dispose or release a still-running execution', async (t) => {
   const createdAt = Date.parse('2026-10-19T10:00:00.000Z');

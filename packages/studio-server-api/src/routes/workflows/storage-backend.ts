@@ -1333,6 +1333,7 @@ export async function persistWorkflowExecutionRecordingWithBackend(options: {
   runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
+  cost?: import('../../../../studio-server-shared/workflow-recording-types.js').WorkflowRunCost;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
   onPersisted?: (recordingId: string) => Promise<void>;

@@ -1,4 +1,5 @@
 import CryptoJS from 'crypto-js';
+import { validateTokenPricing, type TokenPricing } from '../tokenPricing.js';
 import stableStringify from 'safe-stable-stringify';
 import type { NodeId } from '../NodeBase.js';
 import type { ProjectId } from '../Project.js';
@@ -19,6 +20,7 @@ import type {
 } from '../chat-v2/llmProfileHealthStore.js';
 
 export type ClassifierProfileConfiguration = {
+  tokenPricing?: TokenPricing;
   provider?: string;
   model?: string;
   useModelInput?: boolean;
@@ -48,6 +50,7 @@ export const DEFAULT_CLASSIFIER_PROFILE_OPEN_DURATION_MS = 300_000;
 
 export const classifierProfileInputIds = ['model', 'apiKey'] as const;
 export const classifierProfileDataKeys = [
+  'tokenPricing',
   'provider',
   'model',
   'useModelInput',
@@ -147,11 +150,12 @@ function normalizeDetachedProfile(value: unknown): ClassifierProfileValue {
     throw new Error('Unknown Decision AI API key source.');
   classifierProfileResponseTimeout(configuration);
   classifierProfileHealthPolicy(configuration);
+  configuration.tokenPricing = validateTokenPricing(configuration.tokenPricing);
   return {
     version: 1,
-    sourceNodeId: profile.sourceNodeId,
+    ...(profile.sourceNodeId === undefined ? {} : { sourceNodeId: profile.sourceNodeId }),
     // Blank names are absent, but authored whitespace must survive exact-default display aliases.
-    profileName: profile.profileName?.trim() ? profile.profileName : undefined,
+    ...(profile.profileName?.trim() ? { profileName: profile.profileName } : {}),
     credential: credential.value === undefined ? {} : { value: credential.value.trim() },
     configuration: {
       ...pickClassifierProfileData(configuration),
@@ -201,7 +205,12 @@ export function resolveClassifierProfile(
   }
   return normalizeClassifierProfileValue({
     version: 1,
-    configuration: { ...pickClassifierProfileData(data), provider: provider.id, model, useModelInput: false },
+    configuration: {
+      ...pickClassifierProfileData({ ...data, tokenPricing: validateTokenPricing(data.tokenPricing) }),
+      provider: provider.id,
+      model,
+      useModelInput: false,
+    },
     credential: value === undefined ? {} : { value },
     profileName: context.node.title,
     sourceNodeId: context.node.id,

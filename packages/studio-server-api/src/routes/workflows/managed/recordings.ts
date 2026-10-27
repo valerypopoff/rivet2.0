@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { readScheduledRecordingFields } from '../../../../../studio-server-shared/workflow-recording-types.js';
+import { readScheduledRecordingFields, readWorkflowRunCost } from '../../../../../studio-server-shared/workflow-recording-types.js';
 import { serializeDatasets, serializeProject, type Project } from '@valerypopoff/rivet2-node';
 
 import type {
@@ -289,6 +289,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       runKind: row.run_kind,
       status: row.status,
       durationMs: row.duration_ms,
+      cost: readWorkflowRunCost(row.cost_json),
       endpointNameAtExecution: row.endpoint_name_at_execution,
       executionIdentity: getExecutionIdentity(row),
       errorMessage: row.error_message ?? undefined,
@@ -490,6 +491,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           runKind: options.runKind,
           status: options.status,
           durationMs: Math.max(0, Math.round(options.durationMs)),
+          cost: options.cost,
           endpointNameAtExecution: options.endpointName,
           executionIdentity: options.executionIdentity,
           errorMessage: options.errorMessage ?? null,
@@ -737,7 +739,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       await deps.initialize();
       const statement = recordingStatisticsRowsSql('postgres', query);
       const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, statement.sql, statement.values);
-      return buildWorkflowRunStatistics(rows.map(statisticsSqlRow), query);
+      return buildWorkflowRunStatistics(rows.map(statisticsSqlRow), query, { includeCost: true });
     },
 
     async getWorkflowRecordingSummary(recordingId: string): Promise<WorkflowRecordingRunSummary> {
@@ -859,6 +861,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           status: options.status,
           durationMs: Math.max(0, Math.round(options.durationMs)),
           endpointNameAtExecution: options.endpointName,
+          cost: options.cost,
           executionIdentity: options.executionIdentity,
           errorMessage: options.errorMessage ?? null,
           recordingBlobKey: uploadedBlobs.recordingBlobKey,
