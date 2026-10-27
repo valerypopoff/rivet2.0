@@ -901,6 +901,19 @@ export class ManagedReleaseGate {
       return;
     }
 
+    if (previousApiImage.schemaVersion < this.config.managedWorkflowSchema.minimumRollbackCompatibleVersion) {
+      const details = {
+        status: 'incompatible',
+        reason: 'Predecessor schema is below the candidate rollback floor; a maintenance cutover is required.',
+        previousApiImage: imageReference(previousApiImage),
+        previousSchemaVersion: previousApiImage.schemaVersion,
+        schema: this.config.managedWorkflowSchema,
+      };
+      await this.artifact('previous-api-schema-compatibility.json', `${JSON.stringify(details, null, 2)}\n`);
+      console.log(`[${runnerName}] ${details.reason} The old API was not certified for the new schema.`);
+      return;
+    }
+
     const jobName = 'release-gate-previous-api-schema-verify';
     await this.kubectl(['apply', '-f', '-'], {
       input: renderPreviousApiSchemaVerificationJob(

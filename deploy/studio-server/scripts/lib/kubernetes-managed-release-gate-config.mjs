@@ -92,11 +92,13 @@ function buildImages(env) {
 function buildPreviousApiImage(env) {
   const repositoryName = 'RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY';
   const digestName = 'RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST';
+  const schemaName = 'RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION';
   const repository = String(env[repositoryName] ?? '').trim();
+  const schema = String(env[schemaName] ?? '').trim();
   const digest = String(env[digestName] ?? '')
     .trim()
     .toLowerCase();
-  if (!repository && !digest) {
+  if (!repository && !digest && !schema) {
     return null;
   }
   if (!repository || !digest) {
@@ -105,7 +107,12 @@ function buildPreviousApiImage(env) {
   if (!digestPattern.test(digest)) {
     throw new Error(`[kubernetes-managed-release-gate] ${digestName} must be a sha256 OCI digest`);
   }
-  return { repository, digest };
+  if (!/^[1-9]\d*$/.test(schema) || !Number.isSafeInteger(Number(schema))) {
+    throw new Error(
+      `[kubernetes-managed-release-gate] ${schemaName} must be a positive integer from the predecessor manifest`,
+    );
+  }
+  return { repository, digest, schemaVersion: Number(schema) };
 }
 
 export function buildManagedReleaseGateConfig({ rootDir, env = process.env, mode = 'smoke' } = {}) {
@@ -144,6 +151,12 @@ export function buildManagedReleaseGateConfig({ rootDir, env = process.env, mode
     secretName: registrySecretName,
   };
 
+  const previousApiImage = buildPreviousApiImage(env);
+  const managedWorkflowSchema = readManagedWorkflowSchemaReleaseContract(rootDir);
+  if (previousApiImage && previousApiImage.schemaVersion > managedWorkflowSchema.version) {
+    throw new Error('[kubernetes-managed-release-gate] predecessor schema cannot be newer than the candidate schema');
+  }
+
   return {
     mode,
     context,
@@ -151,8 +164,8 @@ export function buildManagedReleaseGateConfig({ rootDir, env = process.env, mode
     namespace,
     release,
     images: buildImages(env),
-    previousApiImage: buildPreviousApiImage(env),
-    managedWorkflowSchema: readManagedWorkflowSchemaReleaseContract(rootDir),
+    previousApiImage,
+    managedWorkflowSchema,
     imagePullPolicy: parseImagePullPolicy(env),
     registry,
 

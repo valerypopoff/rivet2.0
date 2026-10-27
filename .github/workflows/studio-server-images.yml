@@ -568,6 +568,7 @@ jobs:
           if jq -e '.lineage.predecessor != null' "$CANDIDATE_RELEASE_MANIFEST" >/dev/null; then
             repository="$(jq -er '.lineage.predecessor.images.api.repository' "$CANDIDATE_RELEASE_MANIFEST")"
             digest="$(jq -er '.lineage.predecessor.images.api.digest' "$CANDIDATE_RELEASE_MANIFEST")"
+            schema="$(jq -er '.lineage.predecessor.managedWorkflowSchemaVersion | select(type == "number" and . >= 1 and floor == .)' "$CANDIDATE_RELEASE_MANIFEST")"
             if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
               echo "::error::Candidate predecessor API digest is invalid: $digest"
               exit 1
@@ -575,6 +576,7 @@ jobs:
             {
               echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY=$repository"
               echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST=$digest"
+              echo "RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION=$schema"
             } >> "$GITHUB_ENV"
             echo "Using exact predecessor API image $repository@$digest for schema compatibility."
           else
