@@ -523,7 +523,11 @@ Current responsibilities:
 - reload project references
 - attach dataset lifecycle hooks
 - host user-input modal behavior
-- show read-only or recording borders
+- show read-only or recording borders. The recording-status frame starts directly
+  below the project tabs and encloses the full editor, including the graph sidebar
+  and pinned Data Bus rows. Unlike canvas controls, it must not add
+  `--data-bus-full-row-height` to its top offset. It remains pointer-transparent;
+  hosted replay browser regressions check its geometry with and without bus rows.
 - host secondary canvas-adjacent UI like navigation bar and graph execution selector
 - render the node settings panel only in Canvas mode. `NodeEditorRenderer` should stay gated behind `overlayOpenState === undefined` so selecting Prompt Designer, Evaluations, Data Studio, or another auxiliary workspace cannot leave node settings floating over that workspace. Opening Run Activity does not leave Canvas mode, so node settings remain available.
 

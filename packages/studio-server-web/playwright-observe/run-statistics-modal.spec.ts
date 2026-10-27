@@ -9,6 +9,7 @@ type StatisticsRequest = {
   includeFailed: boolean;
   includeWarnings: boolean;
   aggregation: 'auto' | 'day' | 'week';
+  costAggregation?: 'auto' | 'day' | 'week';
 };
 type CostMode = 'available' | 'partial' | 'unknown' | 'none';
 
@@ -71,7 +72,7 @@ function getStatisticsResponse(request: StatisticsRequest, costMode: CostMode = 
       costBuckets: [
         { from: request.period.from, to: secondBucketFrom, ...cost },
         { from: secondBucketFrom, to: request.period.to, ...cost },
-      ].slice(0, request.aggregation === 'week' ? 1 : 2),
+      ].slice(0, (request.costAggregation ?? request.aggregation) === 'week' ? 1 : 2),
     } : {}),
   };
 }
@@ -321,13 +322,19 @@ test.describe('Run statistics modal', () => {
     await durationGrouping.getByRole('button', { name: 'By week' }).click();
     await expect(timingStatistics.locator('.recharts-xAxis .recharts-cartesian-axis-tick')).toHaveCount(1);
     await expect(cost.locator('.recharts-xAxis .recharts-cartesian-axis-tick')).toHaveCount(2);
-    expect(statisticsRequests.slice(beforeSeparateGrouping).map((request) => request.aggregation).sort()).toEqual(['day', 'week']);
+    expect(
+      statisticsRequests.slice(beforeSeparateGrouping).map(({ aggregation, costAggregation }) =>
+        [aggregation, costAggregation]),
+    ).toEqual([['week', 'day']]);
     await expect(costGrouping.getByRole('button', { name: 'By day' })).toHaveAttribute('aria-pressed', 'true');
     const beforeMatchingGrouping = statisticsRequests.length;
     await costGrouping.getByRole('button', { name: 'By week' }).click();
     await expect(cost.locator('.recharts-xAxis .recharts-cartesian-axis-tick')).toHaveCount(1);
     await expect(durationGrouping.getByRole('button', { name: 'By week' })).toHaveAttribute('aria-pressed', 'true');
-    expect(statisticsRequests.slice(beforeMatchingGrouping).map((request) => request.aggregation)).toEqual(['week']);
+    expect(
+      statisticsRequests.slice(beforeMatchingGrouping).map(({ aggregation, costAggregation }) =>
+        [aggregation, costAggregation]),
+    ).toEqual([['week', 'week']]);
 
     await targetSelect.press('ArrowDown');
     await targetSelect.press('ArrowDown');

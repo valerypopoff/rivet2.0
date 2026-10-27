@@ -132,6 +132,8 @@ export async function checkStatisticsQueries(
         runKind,
         includeFailed: false,
         includeWarnings: true,
+        aggregation: 'day' as const,
+        costAggregation: 'week' as const,
       };
       const sqlRows = await read(recordingStatisticsRowsSql(dialect, query));
       assert.deepEqual(

@@ -6,7 +6,8 @@ export type TokenPricing = {
   cacheWritePerMillionTokens?: number;
 };
 
-function isTokenCount(value: unknown): value is number {
+/** Provider token counts must be exact, nonnegative integers before applying rates. */
+export function isReportedTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
@@ -50,7 +51,12 @@ export function calculateTokenUsageCost(
   const { inputTokens, outputTokens, inputTokenDetails } = usage ?? {};
   const read = inputTokenDetails?.cacheReadTokens === undefined ? 0 : inputTokenDetails.cacheReadTokens;
   const write = inputTokenDetails?.cacheWriteTokens === undefined ? 0 : inputTokenDetails.cacheWriteTokens;
-  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens) || !isTokenCount(read) || !isTokenCount(write))
+  if (
+    !isReportedTokenCount(inputTokens) ||
+    !isReportedTokenCount(outputTokens) ||
+    !isReportedTokenCount(read) ||
+    !isReportedTokenCount(write)
+  )
     return undefined;
   if (read + write > inputTokens) return undefined;
   const total =

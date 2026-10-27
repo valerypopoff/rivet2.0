@@ -338,21 +338,21 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
     const requestKey = statisticsQueryKey;
     setStatisticsLoading(true);
     setStatisticsError(null);
-    const query = {
-      target: selectedTarget.target,
-      period,
-      runKind,
-      includeFailed,
-      includeWarnings,
-    };
-    const durationRequest = fetchWorkflowRunStatistics({ ...query, aggregation: durationGrouping }, { signal: controller.signal });
-    // Matching groupings share one metadata-only response.
-    const costRequest = costGrouping === durationGrouping ? durationRequest
-      : fetchWorkflowRunStatistics({ ...query, aggregation: costGrouping }, { signal: controller.signal });
-    void Promise.all([durationRequest, costRequest])
-      .then(([duration, cost]) => {
+    void fetchWorkflowRunStatistics(
+      {
+        target: selectedTarget.target,
+        period,
+        runKind,
+        includeFailed,
+        includeWarnings,
+        aggregation: durationGrouping,
+        costAggregation: costGrouping,
+      },
+      { signal: controller.signal },
+    )
+      .then((nextStatistics) => {
         if (controller.signal.aborted) return;
-        setStatistics({ ...duration, cost: cost.cost, costBuckets: cost.costBuckets });
+        setStatistics(nextStatistics);
         setStatisticsResultKey(requestKey);
       })
       .catch((error: unknown) => {

@@ -29,7 +29,7 @@ Run statistics now use `recording-statistics-sql.ts` for both SQL engines:
 - Cost aggregation counts complete, partial and unknown evidence separately, preserves genuine zero, and averages only complete estimates. The shared **Include failed runs** and **Include runs with warnings** filters select one included population for duration metrics, costs, coverage and both charts. Outcome counts come from the matching population; only included categories' cards are displayed when either optional outcome is enabled. Older recordings have unknown costs; there is no backfill. PostgreSQL schema 18 adds nullable `workflow_recordings.cost_json`; filesystem and SQLite catalogs retain equivalent optional metadata. Migration/restore must preserve it. The release still needs the normal database migration and compatibility checks before deployment.
 - The Run statistics modal shows the known subtotal and complete-only average without a separate complete/partial/unknown count line. **Cost over time** always plots both USD series with distinct colors and a legend; it has no metric switcher. Partial-only buckets still plot the known subtotal while the unavailable average remains a gap, with an explanatory message. Missing fields from an older server display an unavailable message; unknown buckets never become zero-valued points. Statistics include retained recordings only, and disabled, lost or expired recordings cannot be represented.
 - **Duration** and **Cost** are separate bordered panels inside the common scrolling area. Shared outcome filters sit beside Period/Version in the common controls. The summary below them is one line: **N runs, Date 1 to Date 2**, counting the included population. The target is already in its selector; do not repeat its title, a run-outcomes heading or included/excluded prose. Both toggles off hides the entire outcome-card region. Enabling errors shows Succeeded/Errors; enabling warnings shows Succeeded/Warnings; enabling both shows all three. Percentages use the included population as denominator (success + enabled errors/warnings). A zero included denominator displays a dash rather than a fabricated percentage. Browser coverage exercises all four toggle combinations and asserts absence of excluded cards, not only their percentage text.
-- Each panel owns its independent **By day / By week** grouping control, initially **By day**; no **Auto** option is exposed. Period, target, version and outcome filters remain shared; changing a grouping does not change the other panel's selection. Equal groupings reuse one API response; different groupings use two metadata-only reads with the same shared filters. The combined query key and abort guard fence both responses, so a stale result cannot overwrite a newer target/grouping. No wire or storage contract changes are needed. Grouping choices persist across period and target changes within the mounted modal.
+- Each panel owns its independent **By day / By week** grouping control, initially **By day**; no **Auto** option is exposed. Period, target, version and outcome filters remain shared; changing a grouping does not change the other panel's selection. The modal sends one query with `aggregation` (duration) and optional `costAggregation` (cost). The backend reads the matching metadata once, then computes both charts and totals from that same population; recording arrival or retention cannot produce cross-request snapshot drift. Equal groupings also reuse their in-memory bucket partition. Omitting `costAggregation` preserves existing callers' shared grouping behavior. Both fields use the same validated enum; no schema migration or response-shape change is needed. Query-key/abort guards still reject stale responses. Grouping choices persist across period and target changes within the mounted modal.
 - The shared summary displays only **N runs, Date 1 to Date 2**; do not add a second cost-coverage count line. Coverage remains in API metadata and still governs subtotal/average calculations, incomplete-cost warnings and unavailable states. Shared outcome checkboxes are vertically centered against the Period/Version switchers, not their labels. Browser regressions compare the actual checkbox and switcher centers and verify the summary remains single-line content across all cost states. Grouping controls sit at the top right of their respective panels and wrap within them at narrow widths. Duration-specific definitions and cost-specific estimate explanations stay in their panels. Retain scrolling at narrow widths; do not reintroduce a single surrounding bordered box or panel-local outcome filters.
 - The selected **Workflow endpoint** scopes every outcome, duration, cost, coverage count and chart to that workflow's root recordings in the selected period/version. An endpoint target is identified by immutable workflow ID, so renaming its route retains its history. Referenced-project calls contribute inside that root's accounting; their separate child recordings, editor runs and web-app actions do not enter endpoint statistics. Changing targets hides the previous target's metrics while the new request is pending. Browser coverage switches between distinct cost/coverage fixtures to verify this boundary.
 - Neither path reads recording, replay, dataset or project artifacts. SQLite validates the projected metadata, and aggregate counts are checked before entering the response builder. Artifact integrity remains the responsibility of artifact readers and verification, not a reason to download every object for a count.
@@ -49,6 +49,15 @@ The ledger retains identities only for deduplicating physical-call observations.
 Complete means every observed supported AI attempt is priced, including a genuine zero-call or zero-usage run. Partial retains a known subtotal with missing attempt/price evidence. Unknown has no reliable subtotal. Legacy Chat, Chat Loop, Google, Anthropic, Hugging Face and embedding nodes lacking the physical-attempt contract cannot claim complete estimates; any valid positive legacy cost is only a partial subtotal. Arbitrary external calls from Code/plugin nodes remain outside the instrumented scope. A new AI integration must provide physical-attempt observations (including failure/usage evidence), stable attempt identity and honest unknown pricing before it can contribute complete accounting. Never adapt it by summing Subgraph outputs.
 
 Storage readers and statistics aggregation share `readWorkflowRunCost` as the metadata-validity contract. Do not duplicate status/amount validation in aggregators: malformed, negative or non-finite amounts remain unknown, while explicit zero remains a real estimate. Coverage counts and complete-only averages are calculated after this normalization.
+
+Rate-based pricing shares `isReportedTokenCount` across LLM catalog rates, explicit
+prices and Decision AI: counts must be nonnegative safe integers. Fractional,
+negative or unsafe values remain unpriced instead of entering a complete dollar
+estimate. An explicit provider-reported monetary amount (OpenRouter) remains
+independent of token-count availability/validity; genuine reported zero is valid.
+The pricing regression exercises both input/output validation and that monetary
+precedence, while the statistics regressions verify independent chart boundaries
+through the real HTTP validator and both SQL engines.
 
 Cancellation and cost coverage are independent. If a physical LLM response has already returned usage before cancellation arrives during diagnostic finalization, keep that usage (including OpenRouter's reported cost) in the aborted-attempt observation. The graph must still abort, with no retry or success result. Usage that never arrived remains unknown; do not wait indefinitely for late usage or reopen a finalized recording. `chatV2Pipeline.test.ts` covers this race in generate and stream modes for token-priced and provider-priced calls.
 
@@ -83,6 +92,20 @@ The statistics details panel owns vertical scrolling at every width. Do not swit
 The broader read-path audit also leaves two explicit profiling candidates: SQLite readiness performs full `quick_check`/foreign-key checks on the catalog, and structural/publication mutations still capture full history snapshots for CAS. Both can become costly as metadata/history grows. This patch does not throttle integrity checks or replace mutation consistency proofs just to improve a nominal timing. Evaluation run lists also intentionally return complete run documents under their current API contract; introducing summary pagination there is a separate API/UI change. Production measurements should distinguish these costs from the now metadata-only browsing paths.
 
 ## All-workflow scope
+
+The icon-only **Refresh run recordings** button follows the modal title. It starts
+a new controller reset generation, using the same initial state as an explicit
+close/reopen: Any workflow, All outcomes, page 1, 20 roots per page, no input filter
+and collapsed families. The dialog and backdrop remain mounted, so refresh does
+not restart their opening animations or lose focus. Resetting cancels the old
+catalog/run/search/child requests and fences late results, including a refresh
+during initial loading; the catalog effect depends explicitly on this generation.
+It does not reload the editor or replay writes. Dismissing via the backdrop still
+retains the existing session as before. Persistent input-path history is untouched.
+Refresh is disabled while opening or deleting a recording; it remains available
+during reads and after read failures. Browser regressions check request renewal,
+search replacement, reset defaults, stale catalog rejection, stable dialog identity
+and icon placement.
 
 The workflow-details card (name, status, endpoint and project path) is rendered only for an individual workflow. Any omits the entire card, including its heading; the runs panel and filters remain visible. Browser coverage checks both the default Any view and switching from a workflow back to Any.
 
@@ -190,14 +213,21 @@ Small 32 KiB artifacts were also slower with tokenization (17–19 ms versus und
 
 ## Verification and remaining limits
 
-Focused regression commands for all-workflow browsing and input search:
+Focused regression commands for all-workflow browsing, input search and statistics:
 
 ```sh
 yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/managed-recordings.test.ts src/tests/sqlite-workflow-backend.test.ts src/tests/recording-input-query-plan.test.ts src/tests/recording-input-filter.test.ts
 yarn workspace @valerypopoff/rivet-studio-server-api run test:files --test-name-pattern="all-workflow recordings" src/tests/workflow-recordings-http.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/recording-statistics.test.ts src/tests/recording-statistics-sql.test.ts src/tests/workflow-recordings-http.test.ts
 ```
 
-With the development server running, set `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`, then run `yarn studio-server:ui:observe run-recordings-modal.spec.ts`. This covers Any defaults, global pagination/filtering/deletion, retained recordings without a catalog project, stale counters, cancellation races, and narrow-screen control visibility. Use `PLAYWRIGHT_BASE_URL` if the server is not at the runner's default URL.
+With the development server running, set `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0`, then run `yarn studio-server:ui:observe run-recordings-modal.spec.ts`. This covers Any defaults, global pagination/filtering/deletion, retained recordings without a catalog project, stale counters, cancellation races, refresh without backdrop remounting, and narrow-screen control visibility. Use `PLAYWRIGHT_BASE_URL` if the server is not at the runner's default URL.
+
+`run-statistics-modal.spec.ts` checks independent chart grouping through a single
+request plus target/outcome scoping. `recording-playback-history.spec.ts` checks
+repeated playback, status colors and frame geometry with and without pinned Data
+Bus rows. These controlled browser fixtures do not constitute provider or
+production qualification.
 
 - Deterministic tests cover dense pagination (1,000 matches in 51 requests), sparse multi-window batching, budget expiry before admission, ready-result draining, cancellation, memory admission, handoff reuse/expiry, and worker recovery.
 - Compiled worker tests require an API build; they do not rely on the source-mode inline extractor.

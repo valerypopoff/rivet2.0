@@ -12,6 +12,12 @@ generate recordings, see the [recording API documentation](../api-reference/reco
 
 Open **Run recordings** and leave the workflow selector on **Any** to browse all workflows, or choose an individual workflow. **Any** is always the first option and the default for a newly opened recordings session. The workflow details card appears only when an individual workflow is selected. **Bad only**, pagination and **Filter by input** work in either mode. Input filters search captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
 
+Click the refresh icon beside **Run recordings** to reload the workflow list and
+recordings as if you closed and reopened the modal. It resets to **Any**, **All**,
+page 1 and 20 runs per page, clearing the current input search and expanded
+sub-runs. Your saved input-path history remains available. Refresh is temporarily
+disabled while a recording is opening or being deleted.
+
 ### Recording editor runs
 
 Enable **Record local graph executions** in Rivet settings to retain live hosted editor runs in **Run recordings**. Both Browser execution and Studio Server's internal Node executor can capture the parent run and called-project Subgraph runs, including successful runs with no LLM nodes. Server recording policy and retention still apply. Desktop or external Remote Debugger execution does not upload through this hosted-editor feature, and replaying an old recording does not create a new one.
@@ -36,6 +42,9 @@ both shows all three. Percentages use the included runs as their total.
 Each panel has its own **By day / By week** control, initially **By day**, so
 grouping one chart does not change the other. **Cost over time** always shows
 both **Known subtotal** and **Average per complete run**, distinguished by its legend.
+Both charts and the totals use the same recording snapshot, even with different
+grouping selections.
+Day/week boundaries use UTC; displayed dates use your browser's local time.
 
 For supported server AI calls, a root run includes work performed in referenced projects, including bundle members and background branches. Sub-runs are not added twice. Retries can incur additional cost; cached responses and recording playback do not create new provider charges in these estimates.
 

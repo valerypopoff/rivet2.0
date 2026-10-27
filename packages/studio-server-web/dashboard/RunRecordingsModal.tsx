@@ -1,4 +1,5 @@
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
+import RefreshIcon from '@atlaskit/icon/glyph/refresh';
 import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 
 import { getWorkflowProjectStatusLabel } from './projectSettingsForm';
@@ -45,12 +46,14 @@ function getWorkflowEndpoint(workflow: WorkflowRecordingWorkflowSummary): string
 
 export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   isOpen,
-  resetToken,
+  resetToken: externalResetToken,
   onDismiss,
   onClose,
   onOpenRecording,
   onFoundCountChange,
 }) => {
+  const [refreshToken, setRefreshToken] = useState(0);
+  const resetToken = `${externalResetToken}:${refreshToken}`;
   const [openingRecordingId, setOpeningRecordingId] = useState<string | null>(null);
   const [openingError, setOpeningError] = useState<string | null>(null);
   const openingAttemptRef = useRef(0);
@@ -224,7 +227,19 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
           <div className="project-settings-modal-shell run-recordings-shell" aria-busy={openingRecordingId !== null}>
             <div className="project-settings-modal-header-row run-recordings-header-row">
               <div className="project-settings-modal-heading run-recordings-heading">
-                <div className="project-settings-modal-title run-recordings-title">Run recordings</div>
+                <div className="run-recordings-title-row">
+                  <div className="project-settings-modal-title run-recordings-title">Run recordings</div>
+                  <button
+                    type="button"
+                    className="run-recordings-refresh-button"
+                    aria-label="Refresh run recordings"
+                    title="Refresh run recordings"
+                    disabled={openingRecordingId !== null || deletingRecordingId !== null}
+                    onClick={() => setRefreshToken((current) => current + 1)}
+                  >
+                    <RefreshIcon label="" size="small" />
+                  </button>
+                </div>
                 <div className="run-recordings-help">
                   Choose Any or a workflow, filter its run history, and open any recording in the editor.
                 </div>

@@ -73,7 +73,7 @@ function getNextInputSearchProgress(
   };
 }
 
-export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
+export function useRunRecordingsController(isOpen: boolean, resetToken: number | string = 0) {
   const [workflowsResponse, setWorkflowsResponse] = useState<WorkflowRecordingWorkflowListResponse | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(true);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -190,7 +190,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken = 0) {
       cancelled = true;
       abortController.abort();
     };
-  }, [isOpen, loadWorkflowRecordingWorkflows, workflowsResponse]);
+  }, [isOpen, loadWorkflowRecordingWorkflows, resetToken, workflowsResponse]);
 
   const workflows = useMemo(() => workflowsResponse?.workflows ?? [], [workflowsResponse]);
   const workflowsReady = workflowsResponse !== null;

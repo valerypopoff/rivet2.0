@@ -1,5 +1,10 @@
 import type { ClassifierCredentialNames } from './credentials.js';
-import { calculateTokenUsageCost, validateTokenPricing, type TokenPricing } from '../tokenPricing.js';
+import {
+  calculateTokenUsageCost,
+  isReportedTokenCount,
+  validateTokenPricing,
+  type TokenPricing,
+} from '../tokenPricing.js';
 import {
   JEV_DEFAULT_CREDENTIAL_NAMES,
   LIQUID_DEFAULT_CREDENTIAL_NAMES,
@@ -606,10 +611,8 @@ export function calculateClassifierUsageCost(
     !validRates(base) ||
     (tier != null &&
       (!Number.isSafeInteger(tier.aboveInputTokens) || tier.aboveInputTokens < 0 || !validRates(tier))) ||
-    !Number.isSafeInteger(usage.input_tokens) ||
-    usage.input_tokens < 0 ||
-    !Number.isSafeInteger(usage.output_tokens) ||
-    usage.output_tokens < 0
+    !isReportedTokenCount(usage.input_tokens) ||
+    !isReportedTokenCount(usage.output_tokens)
   ) {
     return undefined;
   }
@@ -941,10 +944,8 @@ function classifierAttemptUsage(
     Array.isArray(usage) ||
     !Object.hasOwn(usage, 'input_tokens') ||
     !Object.hasOwn(usage, 'output_tokens') ||
-    !Number.isSafeInteger(usage.input_tokens) ||
-    usage.input_tokens < 0 ||
-    !Number.isSafeInteger(usage.output_tokens) ||
-    usage.output_tokens < 0
+    !isReportedTokenCount(usage.input_tokens) ||
+    !isReportedTokenCount(usage.output_tokens)
   )
     return;
   const estimatedCostUsd =

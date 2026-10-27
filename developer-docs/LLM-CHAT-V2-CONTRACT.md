@@ -37,6 +37,10 @@ the response, not the tokenizer. Cache reads/writes are subsets of SDK input tok
 subtract them once, then price each category. Unspecified cache rates use the
 ordinary input rate; unreported cache counts cannot receive a guessed discount.
 Missing/invalid usage, overflow or inconsistent cache counts remain unknown.
+Catalog and override estimates share the same safe-integer token-count check;
+fractional and unsafe input/output counts cannot become a priced estimate.
+This does not discard a valid provider-reported dollar amount when token counts
+are missing or malformed.
 Manual rates are flat and do not infer context premiums, tool fees or billing tiers.
 
 `modelRegistry.ts` resolves catalog rates, `tokenPricing.ts` validates/calculates

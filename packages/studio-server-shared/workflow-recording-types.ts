@@ -270,10 +270,12 @@ export type WorkflowRunStatisticsQuery = {
   includeFailed: boolean;
   includeWarnings: boolean;
   /**
-   * Controls only the chart grouping. Omitting it preserves the adaptive
-   * grouping used by clients created before this field existed.
+   * Duration chart grouping, also used for cost unless costAggregation is set.
+   * Omitting it preserves the adaptive grouping used by older clients.
    */
   aggregation?: WorkflowRunStatisticsAggregation;
+  /** Cost chart grouping; defaults to aggregation. Both charts share one metadata snapshot. */
+  costAggregation?: WorkflowRunStatisticsAggregation;
 };
 
 export type WorkflowRunStatisticsBucket = WorkflowRunStatisticsMetrics & {

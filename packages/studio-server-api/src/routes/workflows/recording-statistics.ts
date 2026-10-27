@@ -40,6 +40,8 @@ const EMPTY_STATUS_COUNTS: WorkflowRunStatisticsStatusCounts = {
   suspicious: 0,
 };
 
+type StatisticsBucket = { from: string; to: string; rows: WorkflowRecordingStatisticsRow[] };
+
 export function buildWorkflowRunStatisticsCatalog(
   rows: readonly (WorkflowRecordingStatisticsRow & { totalRuns?: number })[],
   surface: WorkflowRunStatisticsSurface,
@@ -94,6 +96,9 @@ export function buildWorkflowRunStatistics(
   const currentRows = rows.filter((row) => isInPeriod(row, fromMs, toMs) && matchesQuery(row, query));
   const currentIncluded = currentRows.filter((row) => shouldIncludeStatus(row.status, query));
   const current = summarizeDurations(currentIncluded);
+  const aggregation = query.aggregation ?? 'auto';
+  const costAggregation = query.costAggregation ?? aggregation;
+  const buckets = groupBuckets(currentIncluded, query.period, aggregation);
 
   return {
     target: query.target,
@@ -101,11 +106,13 @@ export function buildWorkflowRunStatistics(
     current,
     currentStatusCounts: countStatuses(currentRows),
     currentExcludedStatusCounts: countStatuses(currentRows.filter((row) => !shouldIncludeStatus(row.status, query))),
-    buckets: buildBuckets(currentIncluded, query.period, query.aggregation ?? 'auto'),
+    buckets: buildBuckets(buckets),
     ...(options.includeCost === true
       ? {
           cost: summarizeCosts(currentIncluded),
-          costBuckets: buildCostBuckets(currentIncluded, query.period, query.aggregation ?? 'auto'),
+          costBuckets: buildCostBuckets(
+            costAggregation === aggregation ? buckets : groupBuckets(currentIncluded, query.period, costAggregation),
+          ),
         }
       : {}),
   };
@@ -141,12 +148,8 @@ function summarizeCosts(rows: readonly WorkflowRecordingStatisticsRow[]): Workfl
   };
 }
 
-function buildCostBuckets(
-  rows: readonly WorkflowRecordingStatisticsRow[],
-  period: WorkflowRunStatisticsPeriod,
-  aggregation: WorkflowRunStatisticsAggregation,
-): WorkflowRunCostBucket[] {
-  return groupBuckets(rows, period, aggregation).map(({ from, to, rows: bucket }) => ({
+function buildCostBuckets(buckets: StatisticsBucket[]): WorkflowRunCostBucket[] {
+  return buckets.map(({ from, to, rows: bucket }) => ({
     from,
     to,
     ...summarizeCosts(bucket),
@@ -157,7 +160,7 @@ function groupBuckets(
   rows: readonly WorkflowRecordingStatisticsRow[],
   period: WorkflowRunStatisticsPeriod,
   aggregation: WorkflowRunStatisticsAggregation,
-): { from: string; to: string; rows: WorkflowRecordingStatisticsRow[] }[] {
+): StatisticsBucket[] {
   const fromMs = parseTime(period.from);
   const toMs = parseTime(period.to);
   const bucketMs = getBucketDurationMs(toMs - fromMs);
@@ -300,12 +303,8 @@ function percentile(sortedValues: readonly number[], fraction: number): number |
   return lowerValue + (upperValue - lowerValue) * (index - lower);
 }
 
-function buildBuckets(
-  rows: readonly WorkflowRecordingStatisticsRow[],
-  period: WorkflowRunStatisticsPeriod,
-  aggregation: WorkflowRunStatisticsAggregation,
-): WorkflowRunStatisticsBucket[] {
-  return groupBuckets(rows, period, aggregation).map(({ from, to, rows: bucket }) => ({
+function buildBuckets(buckets: StatisticsBucket[]): WorkflowRunStatisticsBucket[] {
+  return buckets.map(({ from, to, rows: bucket }) => ({
     from,
     to,
     ...summarizeDurations(bucket),

@@ -94,6 +94,33 @@ test('run statistics calculate selected-period metrics and time buckets from met
   assert.equal(statistics.buckets.at(-1)?.p95DurationMs, 500);
 });
 
+test('independent duration and cost grouping uses the same included population', () => {
+  const rows = [3, 4, 5].map((day) =>
+    row({
+      createdAt: `2026-08-0${day}T12:00:00.000Z`,
+      cost: { status: 'complete', knownCostUsd: 0.25 },
+    }),
+  );
+  for (const [aggregation, costAggregation] of [['day', 'week'], ['week', 'day']] as const) {
+    const query = {
+      target: { surface: 'endpoint' as const, workflowId: 'workflow-a' },
+      period: { from: '2026-08-03T00:00:00.000Z', to: '2026-08-10T00:00:00.000Z' },
+      runKind: 'published' as const,
+      includeFailed: false,
+      includeWarnings: false,
+      aggregation,
+      costAggregation,
+    };
+    const statistics = buildWorkflowRunStatistics(rows, query, { includeCost: true });
+    assert.equal(statistics.buckets.length, aggregation === 'day' ? 3 : 1);
+    assert.equal(statistics.costBuckets?.length, costAggregation === 'day' ? 3 : 1);
+    assert.equal(statistics.current.runCount, 3);
+    assert.equal(statistics.cost?.runCount, 3);
+    assert.equal(statistics.cost?.knownCostUsd, 0.75);
+    assert.equal(statistics.cost?.averageCompleteCostUsd, 0.25);
+  }
+});
+
 test('shared outcome filters govern duration, cost, coverage and cost buckets', () => {
   for (const includeFailed of [false, true]) {
     for (const includeWarnings of [false, true]) {

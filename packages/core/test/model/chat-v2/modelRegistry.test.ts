@@ -49,6 +49,19 @@ void describe('LLM Chat V2 model pricing registry', () => {
     assert.equal(calculateChatV2Cost('custom', 'private-model', 10, 5), undefined);
     assert.equal(calculateChatV2UsageCost('openai', 'gpt-5.6-luna', { inputTokens: 10 }), undefined);
     assert.equal(calculateChatV2UsageCost('openai', 'gpt-5.6-luna', { outputTokens: 5 }), undefined);
+    for (const invalid of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN]) {
+      for (const usage of [{ inputTokens: invalid, outputTokens: 1 }, { inputTokens: 1, outputTokens: invalid }]) {
+        assert.equal(calculateChatV2UsageCost('openai', 'gpt-5.6-luna', usage), undefined);
+        assert.equal(calculateChatV2Cost('openai', 'gpt-5.6-luna', usage.inputTokens, usage.outputTokens), undefined);
+      }
+    }
+    assert.equal(calculateChatV2UsageCost('openai', 'gpt-5.6-luna', { inputTokens: 0, outputTokens: 0 }), 0);
+    for (const usage of [undefined, { inputTokens: 1.5, outputTokens: 1 }]) {
+      assert.equal(
+        calculateChatV2UsageCost('openrouter', 'private', usage, { openrouter: { usage: { cost: 0.5 } } }),
+        0.5,
+      );
+    }
   });
 
   void it('keeps explicitly unpriced legacy models selectable without inventing a zero cost', () => {

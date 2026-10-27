@@ -2,7 +2,7 @@ import { anthropicModels } from '../../plugins/anthropic/anthropic.js';
 import { generativeAiGoogleModels } from '../../plugins/google/google.js';
 import { openaiModels } from '../../utils/openai.js';
 import type { ChatV2Provider } from './chatV2Types.js';
-import { calculateTokenUsageCost, type TokenPricing } from '../tokenPricing.js';
+import { calculateTokenUsageCost, isReportedTokenCount, type TokenPricing } from '../tokenPricing.js';
 
 const TOKENS_PER_THOUSAND = 1_000;
 
@@ -111,7 +111,7 @@ export function calculateChatV2Cost(
   completionTokens: number,
 ): number | undefined {
   const model = getChatV2ModelInfo(provider, modelId);
-  if (model?.cost == null || !isFiniteNonNegative(promptTokens) || !isFiniteNonNegative(completionTokens)) {
+  if (model?.cost == null || !isReportedTokenCount(promptTokens) || !isReportedTokenCount(completionTokens)) {
     return undefined;
   }
 
@@ -140,7 +140,7 @@ export function calculateChatV2UsageCost(
         : undefined;
     return isFiniteNonNegative(cost) ? cost : undefined;
   }
-  if (!isFiniteNonNegative(usage?.inputTokens) || !isFiniteNonNegative(usage.outputTokens)) {
+  if (usage?.inputTokens == null || usage.outputTokens == null) {
     return undefined;
   }
 

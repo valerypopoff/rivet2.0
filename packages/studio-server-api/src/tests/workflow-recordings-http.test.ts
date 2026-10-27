@@ -987,33 +987,46 @@ test('filesystem recording statistics use indexed identities for endpoint and we
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         target: stableTarget,
-        period,
+        period: {
+          from: new Date(now.getTime() - 8 * 86_400_000).toISOString(),
+          to: new Date(now.getTime() + 8 * 86_400_000).toISOString(),
+        },
         runKind: 'published',
         includeFailed: false,
         includeWarnings: false,
         aggregation: 'week',
+        costAggregation: 'day',
       }),
     });
     assert.equal(statisticsResponse.ok, true);
-    const statistics = await readJson<{ current: { runCount: number; medianDurationMs: number | null } }>(
-      statisticsResponse,
-    );
+    const statistics = await readJson<{
+      current: { runCount: number; medianDurationMs: number | null };
+      buckets: Array<{ from: string; to: string }>;
+      costBuckets: Array<{ from: string; to: string }>;
+    }>(statisticsResponse);
     assert.equal(statistics.current.runCount, 1);
     assert.equal(statistics.current.medianDurationMs, 250);
+    assert.equal(statistics.buckets.length, 1);
+    assert.equal(statistics.costBuckets.length, 1);
+    assert.equal(Date.parse(statistics.buckets[0]!.to) - Date.parse(statistics.buckets[0]!.from), 7 * 86_400_000);
+    assert.equal(Date.parse(statistics.costBuckets[0]!.to) - Date.parse(statistics.costBuckets[0]!.from), 86_400_000);
 
-    const invalidAggregationResponse = await fetch(`${apiBaseUrl}/run-statistics/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        target: stableTarget,
-        period,
-        runKind: 'published',
-        includeFailed: false,
-        includeWarnings: false,
-        aggregation: 'month',
-      }),
-    });
-    assert.equal(invalidAggregationResponse.status, 400);
+    for (const field of ['aggregation', 'costAggregation']) {
+      const invalidAggregationResponse: Response = await fetch(`${apiBaseUrl}/run-statistics/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: stableTarget,
+          period,
+          runKind: 'published',
+          includeFailed: false,
+          includeWarnings: false,
+          [field]: 'month',
+        }),
+      });
+      assert.equal(invalidAggregationResponse.status, 400);
+      await invalidAggregationResponse.body?.cancel();
+    }
   });
 });
 
