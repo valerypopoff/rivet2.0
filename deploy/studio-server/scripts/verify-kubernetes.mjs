@@ -154,26 +154,38 @@ async function verifyProdRender(helmBin, managedWorkflowSchemaVersion, singleMac
     ]);
     console.log(`[${launcherName}] Linting the opt-in regional GKE HA availability profile...`);
     await spawnProgram(helmBin, [
-      'lint', './deploy/studio-server/helm',
-      '-f', './deploy/studio-server/helm/overlays/prod.yaml',
+      'lint',
+      './deploy/studio-server/helm',
+      '-f',
+      './deploy/studio-server/helm/overlays/prod.yaml',
       ...profileArgs,
-      '-f', './deploy/studio-server/helm/overlays/gke-ha.yaml',
+      '-f',
+      './deploy/studio-server/helm/overlays/gke-ha.yaml',
       ...prodImageArgs,
     ]);
     console.log(`[${launcherName}] Linting the fenced singleton phase of GKE HA adoption...`);
     const validationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-validation-render-'));
     const validationPath = path.join(validationDir, 'maintenance.json');
     try {
-      fs.writeFileSync(validationPath, JSON.stringify({
-        ...maintenanceValidationValues,
-        ha: { enabled: false },
-        replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 },
-      }));
+      fs.writeFileSync(
+        validationPath,
+        JSON.stringify({
+          ...maintenanceValidationValues,
+          ha: { enabled: false },
+          replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 },
+        }),
+      );
       await spawnProgram(helmBin, [
-        'lint', './deploy/studio-server/helm',
-        '-f', './deploy/studio-server/helm/overlays/prod.yaml', ...profileArgs,
-        '-f', './deploy/studio-server/helm/overlays/gke-ha.yaml', ...prodImageArgs,
-        '-f', validationPath,
+        'lint',
+        './deploy/studio-server/helm',
+        '-f',
+        './deploy/studio-server/helm/overlays/prod.yaml',
+        ...profileArgs,
+        '-f',
+        './deploy/studio-server/helm/overlays/gke-ha.yaml',
+        ...prodImageArgs,
+        '-f',
+        validationPath,
       ]);
     } finally {
       if (fs.existsSync(validationPath)) fs.unlinkSync(validationPath);
@@ -211,6 +223,7 @@ async function main() {
       'deploy/studio-server/scripts/kubernetes-release-settlement.test.mjs',
       'deploy/studio-server/scripts/ha-release-evidence.test.mjs',
       'deploy/studio-server/scripts/ha-release-gate.test.mjs',
+      'deploy/studio-server/scripts/ha-proof-scenarios.test.mjs',
       'deploy/studio-server/scripts/ha-gke-availability.test.mjs',
       'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
       'deploy/studio-server/scripts/ha-rollout-headroom.test.mjs',

@@ -19,7 +19,7 @@ import {
   assertReleaseManifestMatchesCurrentSource,
   assertStudioServerReleasePredecessor,
 } from './lib/studio-server-release-manifest.mjs';
-import { createHaReleaseEvidence, selectHaBrowserContract, HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
+import { selectHaBrowserContract, HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import {
@@ -27,6 +27,15 @@ import {
   publishHaBrowserBaseline,
   waitForHaFrontendReplacement,
 } from './lib/ha-browser-probe.mjs';
+import { createHaProofTiming, measureHaPhase, summarizeHaTiming } from './lib/ha-proof-timing.mjs';
+import { manageHaKindCluster, HA_KIND_CLUSTERS } from './ha-kind-cluster.mjs';
+import {
+  HA_PROOF_SCENARIOS,
+  haProofRunIdentity,
+  haScenarioBinding,
+  createHaScenarioReport,
+  assembleHaScenarioEvidence,
+} from './lib/ha-scenario-evidence.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
@@ -62,7 +71,9 @@ export function validateHaCertificationManifest(manifest, { rootDir, sourceSha, 
 export class HaReleaseGate extends ManagedReleaseGate {
   async assertLocalContext() {
     if (
-      !['rivet-ha-proof', 'kind-rivet-managed-release'].includes(this.config.context) ||
+      !['rivet-ha-proof', ...Object.values(HA_KIND_CLUSTERS).map((name) => `kind-${name}`)].includes(
+        this.config.context,
+      ) ||
       this.config.context !== this.config.allowedContext
     )
       throw new Error('HA gate is restricted to an explicitly allowed disposable local cluster.');
@@ -128,12 +139,14 @@ export class HaReleaseGate extends ManagedReleaseGate {
       throw Error(
         'HA preparation requires a fresh disposable namespace. Existing accepted work and Secrets were not changed.',
       );
-    await this.createNamespace();
-    await this.createRegistrySecret();
-    await this.installDependencies();
-    await this.apply(this.values(images, managedWorkflowSchema));
-    const baseUrl = await this.openProxy();
-    const state = await this.exercisePersistence(baseUrl);
+    await measureHaPhase(this, 'namespace-and-registry', async () => {
+      await this.createNamespace();
+      await this.createRegistrySecret();
+    });
+    await measureHaPhase(this, 'database-and-object-storage', () => this.installDependencies());
+    await measureHaPhase(this, 'initial-installation', () => this.apply(this.values(images, managedWorkflowSchema)));
+    const baseUrl = await measureHaPhase(this, 'test-edge', () => this.openProxy());
+    const state = await measureHaPhase(this, 'persisted-fixtures', () => this.exercisePersistence(baseUrl));
     await this.artifact('ha-persisted-state.json', JSON.stringify(state, null, 2));
     return { baseUrl, state };
   }
@@ -284,7 +297,7 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
     })
     .filter(Boolean);
   const probes = new HaReleaseProbes(gate, baseUrl, rootDir);
-  await probes.prepare();
+  await measureHaPhase(gate, 'workload-fixtures', () => probes.prepare());
   const baselineReference = before
     .find((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'web')
     ?.spec.containers.find((c) => c.name === 'web')?.image;
@@ -363,7 +376,13 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
       manifestDigest: images.api.digest,
       resources,
       timeoutMs: haProofTimeoutMs(gate.config),
-      artifact: (name, value) => gate.artifact(name, value),
+      artifact: (name, value) => {
+        if (name === 'ha-rollout.json') {
+          const record = JSON.parse(value);
+          gate.proofTiming?.status(`upgrade:${record.phase}:${record.owner?.name ?? 'none'}`);
+        }
+        return gate.artifact(name, value);
+      },
       beforeRetirement: async (pod) => {
         if (!frontendReplaced) {
           await waitForHaFrontendReplacement(gate, before, haProofTimeoutMs(gate.config));
@@ -371,9 +390,10 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
           await oldestBrowser.resumeAfterFrontendReplacement(before);
           frontendReplaced = true;
         }
-        await probes.beforeRetirement(pod);
+        await measureHaPhase(gate, `accepted-work:${pod.name}`, () => probes.beforeRetirement(pod));
       },
-      afterWithdrawal: (pod) => probes.afterWithdrawal(pod),
+      afterWithdrawal: (pod) =>
+        measureHaPhase(gate, `withdrawn-acceptance:${pod.name}`, () => probes.afterWithdrawal(pod)),
       applyTemplates: async (_workloads, guardedValues) => {
         await gate.apply(
           {
@@ -396,9 +416,12 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
           'ha-completed-values.json',
         ),
     });
-    workloadReport = await probes.finish();
-    workloadReport.browser = await browser.finish(before);
-    workloadReport.oldestBrowser = { ...(await oldestBrowser.finish(before)), image: baselineImage };
+    workloadReport = await measureHaPhase(gate, 'workload-acceptance', () => probes.finish());
+    workloadReport.browser = await measureHaPhase(gate, 'browser-acceptance', () => browser.finish(before));
+    workloadReport.oldestBrowser = {
+      ...(await measureHaPhase(gate, 'oldest-browser-acceptance', () => oldestBrowser.finish(before))),
+      image: baselineImage,
+    };
     while (traffic.report.samples < 100 && !failures.length) await pause(25);
   } finally {
     running = false;
@@ -431,7 +454,105 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
   return report;
 }
 
+/** Same runner for parallel CI and serial local comparison. Every scenario
+ * starts in a fresh namespace; recovery never inherits an implicit prior roll. */
+export async function runHaProofScenario(gate, { scenario, candidate, previous, mode, browserContract, runIdentity }) {
+  if (!HA_PROOF_SCENARIOS.includes(scenario)) throw Error('Choose a known HA proof scenario.');
+  const binding = haScenarioBinding(candidate, runIdentity, mode, browserContract);
+  gate.proofTiming = createHaProofTiming({ artifact: (name, text) => gate.artifact(name, text) });
+  try {
+    // Recovery faults historically run on the already-updated candidate, not
+    // against the predecessor. Preserve that boundary explicitly.
+    const baseline = scenario === 'upgrade' && mode === 'mixed' ? previous : candidate;
+    const prepared = await gate.prepare(baseline.images, baseline.database.managedWorkflowSchema);
+    const identity = async (name) =>
+      JSON.parse((await gate.kubectl(['get', 'namespace', name, '-o', 'json'], { capture: true })).stdout).metadata.uid;
+    const fixture = {
+      context: gate.config.context,
+      release: gate.config.release,
+      namespace: gate.config.namespace,
+      namespaceUid: await identity(gate.config.namespace),
+      clusterUid: await identity('kube-system'),
+    };
+    const report =
+      scenario === 'upgrade'
+        ? await measureHaPhase(gate, 'full-upgrade', () =>
+            gate.roll(prepared.baseUrl, candidate.images, browserContract),
+          )
+        : await measureHaPhase(gate, 'full-recovery', () =>
+            verifyHaReleaseRecovery(gate, prepared.baseUrl, rootDir, { faults: [scenario] }),
+          );
+    if (
+      fixture.namespaceUid !== (await identity(gate.config.namespace)) ||
+      fixture.clusterUid !== (await identity('kube-system'))
+    ) {
+      throw Error('HA fixture identity changed during observation.');
+    }
+    const result = createHaScenarioReport({ scenario, binding, fixture, report });
+    await measureHaPhase(gate, 'terminal-diagnostics', () => gate.capture(`ha-${scenario}-completed`));
+    await gate.artifact('ha-scenario-report.json', `${JSON.stringify(result, null, 2)}\n`);
+    return result;
+  } finally {
+    const timing = await gate.proofTiming.close();
+    await summarizeHaTiming(process.env.GITHUB_STEP_SUMMARY, scenario, timing);
+  }
+}
+
+async function loadCertification(config, env = process.env) {
+  const manifest = JSON.parse(await fs.readFile(env.RIVET_HA_CANDIDATE_MANIFEST, 'utf8'));
+  const sha = (await run('git', ['rev-parse', 'HEAD'], { capture: true })).stdout.trim();
+  await run('git', ['diff', '--quiet', 'HEAD', '--']);
+  const previous = env.RIVET_HA_PREDECESSOR_MANIFEST
+    ? assertStudioServerReleaseManifest(JSON.parse(await fs.readFile(env.RIVET_HA_PREDECESSOR_MANIFEST, 'utf8')), {
+        requirePromoted: true,
+      })
+    : null;
+  return {
+    ...validateHaCertificationManifest(manifest, { rootDir, sourceSha: sha, images: config.images, previous }),
+    previous,
+    runIdentity: haProofRunIdentity(env),
+  };
+}
+
+export async function assembleHaProofFiles({ directory, candidate, binding, output }) {
+  const files = await fs.readdir(directory);
+  const expected = HA_PROOF_SCENARIOS.map((s) => `${s}.json`);
+  if (files.length !== expected.length || !expected.every((f) => files.includes(f)))
+    throw Error('HA assembly requires exactly the three named scenario files.');
+  const reports = await Promise.all(
+    expected.map(async (name) => {
+      const file = path.join(directory, name);
+      const stat = await fs.lstat(file);
+      if (!stat.isFile() || stat.size > 16 * 1024 * 1024) throw Error('Invalid or oversized HA scenario artifact.');
+      const report = JSON.parse(await fs.readFile(file, 'utf8'));
+      if (`${report.scenario}.json` !== name) throw Error('HA artifact scenario name mismatch.');
+      return report;
+    }),
+  );
+  const evidence = assembleHaScenarioEvidence(reports, candidate, binding);
+  await fs.mkdir(path.dirname(output), { recursive: true });
+  // Refuse to overwrite a prior certificate; upload runs only on success.
+  await fs.writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`, { flag: 'wx' });
+  return evidence;
+}
+
 async function main() {
+  if (process.argv[2] === 'assemble') {
+    // Assembly reads source/manifests and artifacts only; no registry credentials,
+    // Kubernetes context or cloud access are required.
+    const manifest = assertStudioServerReleaseManifest(
+      JSON.parse(await fs.readFile(process.env.RIVET_HA_CANDIDATE_MANIFEST, 'utf8')),
+    );
+    const proof = await loadCertification({ images: manifest.images });
+    const binding = haScenarioBinding(proof.candidate, proof.runIdentity, proof.mode, proof.browserContract);
+    await assembleHaProofFiles({
+      directory: process.env.RIVET_HA_SCENARIO_REPORTS,
+      candidate: proof.candidate,
+      binding,
+      output: process.env.RIVET_HA_EVIDENCE_OUTPUT,
+    });
+    return;
+  }
   const config = buildManagedReleaseGateConfig({ rootDir, mode: 'smoke' });
   config.keepNamespace = true;
   const gate = new HaReleaseGate(
@@ -455,36 +576,57 @@ async function main() {
       const baseUrl = await gate.openProxy();
       await verifyHaReleaseRecovery(gate, baseUrl, rootDir);
       await gate.capture('ha-recovery-completed');
+    } else if (process.argv[2] === 'scenario') {
+      const proof = await loadCertification(config);
+      await runHaProofScenario(gate, { ...proof, scenario: process.argv[3] });
     } else if (process.argv[2] === 'certify') {
-      const manifest = JSON.parse(await fs.readFile(process.env.RIVET_HA_CANDIDATE_MANIFEST, 'utf8'));
-      const sha = (await run('git', ['rev-parse', 'HEAD'], { capture: true })).stdout.trim();
-      await run('git', ['diff', '--quiet', 'HEAD', '--']);
-      const previous = process.env.RIVET_HA_PREDECESSOR_MANIFEST
-        ? assertStudioServerReleaseManifest(
-            JSON.parse(await fs.readFile(process.env.RIVET_HA_PREDECESSOR_MANIFEST, 'utf8')),
-            { requirePromoted: true },
-          )
-        : null;
-      const { candidate, mode, browserContract } = validateHaCertificationManifest(manifest, {
-        rootDir,
-        sourceSha: sha,
-        images: config.images,
-        previous,
-      });
-      // A predecessor image must migrate/serve its own schema, not the
-      // candidate source contract loaded by this runner. Candidate rollout
-      // retains the candidate's exact migration contract below.
-      const baseline = mode === 'mixed' ? previous : candidate;
-      const prepared = await gate.prepare(baseline.images, baseline.database.managedWorkflowSchema);
-      const report = await gate.roll(prepared.baseUrl, config.images, browserContract);
-      report.recovery = await verifyHaReleaseRecovery(gate, prepared.baseUrl, rootDir);
-      await gate.artifact('ha-report.json', JSON.stringify(report, null, 2));
-      const evidence = createHaReleaseEvidence(report, candidate, mode);
+      const proof = await loadCertification(config);
+      const reports = [];
+      for (const scenario of HA_PROOF_SCENARIOS) {
+        const context = `kind-${HA_KIND_CLUSTERS[scenario]}`;
+        const isolated = new HaReleaseGate(
+          {
+            ...config,
+            context,
+            allowedContext: context,
+            namespace: `${config.namespace}-${scenario.toLowerCase()}`,
+            artifactsDir: path.join(config.artifactsDir, scenario),
+          },
+          gate.kubectlBin,
+          gate.helmBin,
+        );
+        const clusterOptions = {
+          receipt: path.join(isolated.config.artifactsDir, 'cluster.json'),
+          kubeconfig: path.join(rootDir, 'artifacts/ha-private', randomUUID(), scenario, 'kubeconfig'),
+          owner: { ...proof.runIdentity, scenario },
+        };
+        const previousKubeconfig = process.env.KUBECONFIG;
+        process.env.KUBECONFIG = path.resolve(clusterOptions.kubeconfig);
+        try {
+          await manageHaKindCluster('create', clusterOptions);
+          reports.push(await runHaProofScenario(isolated, { ...proof, scenario }));
+        } finally {
+          try {
+            await isolated.close();
+          } finally {
+            try {
+              await manageHaKindCluster('cleanup', clusterOptions);
+            } finally {
+              if (previousKubeconfig === undefined) delete process.env.KUBECONFIG;
+              else process.env.KUBECONFIG = previousKubeconfig;
+            }
+          }
+        }
+      }
+      const evidence = assembleHaScenarioEvidence(
+        reports,
+        proof.candidate,
+        haScenarioBinding(proof.candidate, proof.runIdentity, proof.mode, proof.browserContract),
+      );
       await gate.artifact('ha-evidence.json', JSON.stringify(evidence, null, 2));
-      await gate.capture('ha-certified');
     } else
       throw new Error(
-        'Choose prepare, roll, recovery or certify explicitly. Mixed certification requires exact manifests.',
+        'Choose prepare, roll, recovery, scenario, assemble or certify explicitly. Certification requires exact manifests.',
       );
     completed = true;
   } catch (error) {

@@ -251,6 +251,137 @@ Preserved same-site downloads also validate their declared byte count, rejecting
 shortened HTTP 200 bodies before writing assets/metadata. The actual Pages CLI
 regression uses synthetic HTTP responses, not a stubbed fetch.
 
+## Parallel HA image qualification
+
+The image workflow's HA critical path is three independent, required scenarios:
+`upgrade`, `lostAcknowledgement`, and `leaseLoss`. The matrix has at most three
+concurrent jobs and disables fail-fast. Each owns a separate four-node Kind
+cluster, PostgreSQL/MinIO, private kubeconfig, namespace and scenario artifacts.
+The managed Kubernetes and hard-spread scheduling gates run once in the upgrade
+lane. Only that lane installs a browser; its existing headless retained/oldest
+browser checks are unchanged. Both recovery lanes still complete the **entire**
+rollout after injection. No routing, heartbeat, graceful-shutdown, sample or
+workload assertion is shortened to improve wall time.
+
+Recovery setup explicitly installs the candidate with the same HA topology and
+persists the ordinary workflow/web-app fixtures. It rejects an unfinished
+release journal before injecting a fault. This replaces the implicit dependency
+on the normal upgrade's already-updated namespace: recovery is candidate-to-
+candidate, as before, while the upgrade lane alone proves the predecessor-to-
+candidate transition. Schema-incompatible predecessors produce bootstrap, not
+mixed-version, evidence and still require a maintenance cutover in production.
+If a fresh fixture has no release journal, the real rollout command first
+completes a no-change operation. It must leave all ordinary pod UIDs unchanged;
+an attempted retirement fails the baseline. Fault injection then starts a new
+operation from that acknowledged completed journal, retaining the original
+real-API journal-reuse coverage without a second replacement rollout. No
+completed record is fabricated or inserted by fixture SQL.
+
+`kubernetes-ha-release-gate.mjs scenario <name>` uses the existing rollout,
+fault transport, probes and production safety checks. New version-1 internal
+scenario reports bind the full candidate manifest digest, SHA, images, chart,
+predecessor and browser baseline to the repository/run/attempt. They also retain
+the exact cluster (`kube-system` namespace UID) and test namespace identities.
+Reports are checked after observation for fixture replacement. Each recovery
+report includes the protected original UID, exact-once accepted begin, unchanged
+recovery token, completed journal, all five before/after ordinary owner identities
+and the accepted lease-loss editor receipt. The acknowledged baseline journal
+and resumed operation have separate exported tokens; a baseline token in runner
+options alone is not evidence. Each lane must independently retain
+at least 100 successful traffic samples with no failed requests. Observation
+windows are never summed or merged to satisfy that requirement.
+
+The read-only `managed-kubernetes-ha-evidence` job downloads exactly the three
+named current-run/current-attempt artifacts. It verifies their individual
+observations and calls the existing certificate creator; missing, duplicate,
+foreign, mismatched, oversized or unknown-format reports fail closed. Separate
+clusters and namespaces are required. The public v3 certificate remains
+unchanged because its behavioral guarantees are retained. Image promotion
+requires both the full matrix and this assembly job to succeed.
+The assembler retains the original `managed-kubernetes-release-gate` check name
+so an existing required status does not disappear when matrix jobs gain suffixes.
+Rerunning only part of a failed attempt cannot mix earlier evidence into a new certificate;
+rerun the complete qualification attempt instead. Assembly does not access
+Kubernetes or cloud credentials; the workflow reads only the immutable predecessor
+manifest from GHCR in addition to its Actions artifacts.
+
+`ha-kind-cluster.mjs` refuses pre-existing clusters and kubeconfig files. It
+records exact immutable Docker container IDs only after acknowledged creation,
+then checks the owner run/attempt/scenario and current Kind labels before
+removing those IDs and their anonymous volumes. Unknown partial creation or a
+changed inventory is held for inspection, not deleted by prefix. Cleanup uses a
+dedicated kubeconfig, never the user's active context. Do not upload that private
+kubeconfig. Cleanup runs with `always()`, followed by diagnostics upload; job
+success includes cleanup success. A hard runner cancellation can still prevent
+these steps, so GitHub's disposable-runner teardown remains the final containment
+boundary. There are no GCP resources in this gate.
+
+`ha-timing.json` records bounded monotonic setup, workload, rollout/recovery and
+acceptance phases. Logs show the current retirement phase/owner every 30 seconds,
+without bodies, credentials or error stacks. Timing artifact failures never
+replace the behavioral result; timing does not extend deadlines or retry writes.
+GitHub still reports setup, cleanup and total job time separately.
+
+For a controlled **local** serial comparison, `certify` invokes those same three
+scenario implementations sequentially, creating and ownership-cleaning a fresh
+cluster for each rather than retaining another certification implementation.
+Supply the exact candidate/predecessor manifests, digest-pinned image settings,
+and their explicit `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`
+binding. The tracked checkout must match the candidate. Kind 0.27, Docker,
+Helm/Kubectl, registry read access and the matching Playwright browser are required.
+The wrapper refuses an existing cluster with a reserved proof name. Private
+kubeconfigs stay under ignored `artifacts/ha-private/`; reports stay under the
+chosen HA artifacts directory. This is disposable local evidence, not GKE
+qualification or authorization to deploy.
+Use a fresh artifacts directory for a new comparison; creation receipts and
+previous certificates are never overwritten to disguise a new attempt.
+
+Verification commands include the complete `yarn studio-server:build`,
+`yarn node --test deploy/studio-server/scripts/ha-proof-scenarios.test.mjs`,
+the existing HA evidence/gate suites, workflow/style/structure/doc-link checks,
+and real local scenario execution. The assembly CLI regression uses an isolated
+Git repository and actual certificate files; it does not mock certificate
+creation. Compare serial/parallel behavior on identical candidate inputs and
+measure hosted wall time, queue time and total runner-minutes separately.
+Parallelism may consume more runner-minutes. No fixed duration or hosted speedup
+is promised before measurement.
+
+Local verification scope (October 27): the complete Studio Server build,
+Kubernetes contract/render suite (including real Linux ownership and executable
+deployment-recovery tests), 58 focused HA/evidence/assembly CLI regressions, CI
+policy/classification, documentation and style checks passed. Earlier Kind
+attempts were interrupted during image loading. The operator subsequently
+reported possible manual container interruptions; the original observations
+do not establish a Docker Desktop defect.
+
+Subsequent uninterrupted diagnostic attempts were not successful qualification:
+
+- A preloaded cluster lost Kubernetes controller/scheduler leases and never
+  created its database Pods before the existing readiness deadline expired.
+- Fresh normal-image-pull fixtures reached Rivet installation and saved-fixture
+  acceptance. The lease-loss case completed its no-change journal baseline
+  without replacing an ordinary owner, then failed on an actual
+  `etcdserver: request timed out` journal update and a traffic timeout.
+- The upgrade's real headless browser retained its page and unsaved edit,
+  reconnected its session, resumed the accepted run and displayed the expected
+  output. The local forwarded HTTP connection subsequently stopped accepting
+  requests (`ECONNREFUSED`); the recording response was not observed and the
+  browser acceptance failed. The cause of that transport loss is not established.
+  Completed output is not a substitute for recording/whole-upgrade acceptance.
+
+These diagnostic runs reused existing digest-pinned images from source
+`9fae0a32c21e677ac9db4182efef9d95be14e19d` (image build run `40415803069`),
+not a new release of the uncommitted tooling. Their reports remain under ignored
+`artifacts/ha-local-verification/`; every recorded test node was removed with
+its anonymous volumes, without restarting Docker or touching regular local
+Rivet, GCP or production. Shared image caches and private diagnostics are retained.
+No failed observation was retried into success or used to issue a v3 certificate.
+The complete three-scenario real-container proof, headless acceptance and
+same-input timing comparison remain release-validation work in an uninterrupted
+healthy local cluster or the isolated GitHub jobs. Do not make the mandatory
+matrix optional to work around these local validation failures, and do not
+claim a hosted speedup before measuring it.
+
 ## Verification
 
 The first optimization was measured on successful develop runs: Studio

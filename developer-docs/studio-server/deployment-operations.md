@@ -28,7 +28,10 @@ When the predecessor is below that floor, the HA gate tests the candidate
 against itself and records bootstrap evidence, not a mixed-version certificate.
 That evidence cannot authorize a rolling upgrade from the old installation;
 the maintenance cutover remains necessary.
-The same unreleased migration adds immutable internal folder identities and the
+Parallel release qualification keeps upgrade and both recovery windows separate;
+promotion requires their exact-run evidence assembly as described in
+[GitHub Actions performance](ci-performance.md#parallel-ha-image-qualification).
+Schema 17 also adds immutable internal folder identities and the
 bounded namespace-mutation receipt table. Its DDL runs before parent repair to
 avoid altering a table with pending deferred trigger events. These are internal
 authoring fields, not changes to project or portable bundle formats; see the
@@ -593,13 +596,15 @@ baseline checks. A completed preflight does not promise future quotas/capacity
 or eliminate a later infrastructure failure. The old offline dry-run and version
 route planner retain their narrower purposes.
 
-### Verification-only recovery of a confirmed final cutover
+### Verification-only recovery after final cutover intent
 
 Maintenance journals now retain the verified frozen checkpoint location and a
-versioned `finalApply` checkpoint. The latter is saved **only after** the final
-Helm command acknowledges success, and records actual workload and PVC UIDs.
-An observation timeout/disconnection or lost completion acknowledgement after
-this boundary never triggers automatic traffic closure, template replay or data
+versioned `finalApply` checkpoint. Protocol 2 records intent before final Helm,
+then records its real acknowledgement **before** inspecting inventory. It never
+changes `acknowledged: false` into true because later reads look healthy.
+Observed workload, HPA and PVC identities are recorded separately.
+An uncertain final apply, observation disconnection or lost completion reply
+never triggers automatic traffic closure, template replay or data
 rollback. The journal remains incomplete unless completion actually committed.
 
 After diagnosing the real failure, use all original source/manifest, policy,
@@ -610,18 +615,29 @@ values, installation and (if present) maintenance-plan inputs, with:
 ```
 
 This explicitly claims only an expired lease of the same unfinished `resuming`
-cutover, with the original safety/workflow identity and a confirmed final apply.
+cutover, with the original safety/workflow identity and a recorded final-apply
+intent or legacy protocol-1 acknowledged inventory.
 It rechecks:
 
 1. Original frozen request/receipt identity and every retained backup artifact's
    checksum. It does not trust a `verified.json` marker or capture a new backup.
+   Schema-changing waivers also reverify retained restored-copy migration proof,
+   its exact candidate image/schema binding and verification artifact bytes.
 2. Namespace and final workload/PVC UIDs, deployed Helm status, and the entire
    stored final Helm manifest against the exact candidate render (ignoring only
-   hook objects and transient metadata resourceVersions).
+   hook objects, transient metadata resourceVersions and policy-bounded elastic
+   replica counts).
+   If post-Helm inventory was lost, match the complete approved controller/HPA
+   name/kind set and the original PVC UIDs, freeze the observed current controller
+   identities, then reconfirm them after settlement. Intentional controller/HPA
+   recreation during maintenance is not compared to its obsolete pre-stop UID.
 3. Fresh stable workload/HPA settlement, approved live environment/command,
    storage-mount and service-account settings, no startup fences, and unchanged
    installation/UIDs after observation. Same-image manual execution-setting
    changes do not disappear behind an unchanged stored Helm manifest.
+   Kubernetes may omit a literal empty `EnvVar.value` that Helm renders as `""`;
+   only that omission is equivalent. Nonempty values, `valueFrom` sources,
+   environment ordering, arguments and commands still retain their checks.
 4. Durable same-operation completion, then normal controller activation and
    approved application acceptance. Workload procedure completion is still not
    application acceptance.
@@ -633,8 +649,28 @@ a generic read-only diagnostic. A failed check retains precise recovery guidance
 and leaves existing workloads untouched. Recovery never steals a valid lease.
 
 If final completion already committed, inspect it and use `--acceptance-only`
-instead. If final Helm acknowledgement/checkpoint is absent, validation is still
-active, resources changed identity, or retained bytes are unavailable, this path
+instead, without a maintenance plan or cutover flags. It checks the exact installed
+candidate/schema and normal final acceptance without re-demanding qualification
+that maintenance explicitly waived. It cannot apply a release or turn a waiver
+into qualification evidence. Both recovery routes use the same checks for deployed
+Helm status, stored candidate configuration, live execution settings and startup
+fences before and after stable observation, then recheck namespace/release identity.
+The final full inventory is checked with the same settlement inspector: readiness,
+controller/pod identities, revisions, capacity and HPA policy must still match the
+stable window's fingerprint. A pod that becomes unready or is replaced just after
+that window invalidates completion, even if settings and images are unchanged.
+Final reads must also remain within the bounded observation-gap allowance
+(2.5–10 seconds). Slow management reads require fresh verification, never a Helm
+replay or an automatic workload restart.
+Acceptance-only verification cannot mark a failed Helm release or same-image
+settings drift as successful merely because its application journey passes.
+Helm may retain a higher historical replica count after a busy upgrade: only
+explicitly autoscaled targets may differ, and their saved counts must be within
+the candidate's unchanged bounds. This reuses settlement's capacity policy;
+static developer capacity, HPA/controller policy and application settings stay exact.
+If final-apply intent is absent, validation is still active, the installed
+Helm release differs from the candidate, resources change during observation,
+or retained bytes are unavailable, this path
 refuses admission. Inspect the actual operation and use ordinary exact-token
 recovery only when re-quiescence is appropriate; do not fabricate a marker or
 edit a journal to force verification. Historical journals do not acquire this
@@ -643,13 +679,57 @@ retry, image rollback, backup restore or skipped failed check is introduced.
 
 ### Regression evidence and its limits
 
+Implementation ownership stays within `deploy/studio-server/scripts/`:
+
+| Owner | Responsibility |
+| --- | --- |
+| `deploy-kubernetes-release.mjs` | Select the complete route and coordinate the shared final-configuration checks. |
+| `lib/managed-release-cutover.mjs` | Own maintenance phases, final-apply intent/acknowledgement and exact-token recovery. |
+| `lib/maintenance-deployment-plan.mjs` | Validate explicit approvals, frozen metadata/artifacts and restored-copy migration proof. |
+| `lib/deployment-readiness.mjs` | Compare approved manifests, live execution settings and retained identities. |
+| `lib/kubernetes-release-settlement.mjs` | Own replica bounds, stable health observation and its final freshness/identity check. |
+| `lib/ha-scenario-evidence.mjs` | Assemble independent exact-run qualification observations; never turn a maintenance waiver into a certificate. |
+
+New deployment modes should reuse these owners. Do not add another environment
+normalizer, capacity parser, write-retry loop or operation-specific safety bypass.
+
 The actual command stand-in tests use real Helm renders, optional-generation-free
 GKE-shaped HPA responses, stale workload resourceVersion rejection, concurrent
 autoscaler journal changes/sampling leases and final-observation connection loss.
 They check failed prerequisites before mutations and verification recovery with
 corrupted backup bytes, retained identities and no additional deployment writes.
+The schema-changing waiver cases use an older installed schema and an exact
+candidate without HA evidence. They cover missing migration approval, unavailable
+restore prerequisites before downtime, failed restored-copy validation before live
+DDL, lost final Helm replies, failed post-Helm inventory, verification-only
+completion and subsequent acceptance-only checks. Intentional removal/recreation
+of the autoscaler during validation is followed by a fresh completed controller
+sample; the old Deployment UID is not reused as controller identity.
+Acceptance-only regressions reject failed Helm status, changed stored/live
+settings and startup fences before any after-acceptance fixture runs; bounded
+historical HPA-grown capacity remains acceptable without workload mutations.
+They also inject readiness loss and pod replacement between stable observation
+and the final inventory read, requiring verification-only refusal without writes.
+Migration-proof regressions reject redirected checkpoint directories and unknown
+or mismatched receipt stages, including when both retained files were edited.
 Unit suites retain interrupted/unknown apply, lease loss and lost-acknowledgement
 coverage. The readiness suite runs in `studio-server:verify:kubernetes`.
+Migration adapter receipts in command stand-ins are synthetic: they prove the
+orchestration and refusal rules, not that a particular production backup/image
+has been migration-tested. Each real schema-changing operation still requires
+the reviewed adapter to produce actual restored-copy proof from its own frozen
+checkpoint. Run the focused route cases with:
+
+```powershell
+yarn node --test deploy/studio-server/scripts/maintenance-deployment-plan.test.mjs deploy/studio-server/scripts/managed-release-cutover.test.mjs deploy/studio-server/scripts/deployment-readiness.test.mjs deploy/studio-server/scripts/deployment-command.test.mjs
+yarn workspace @valerypopoff/rivet-studio-server-api run test:migration-managed
+```
+
+The existing PostgreSQL/MinIO integration separately verifies real scoped
+restoration, writer fencing, deployment migration ownership, unrelated SQL/S3
+preservation and supervised recovery using synthetic local data. Keep it distinct
+from the command stand-in's synthetic migration receipts and from any operation's
+required exact-image, frozen-checkpoint proof.
 These are local simulated-control-plane results, not GKE/provider qualification
 or permission for another deployment or paid rehearsal.
 
@@ -683,15 +763,19 @@ includes `upgrade-scale-up-only` and `paused-upgrade-scale-up` alongside the v1
 checks. Historical v1 receipts remain readable but do not authorize the new
 coordination. Local regression success is not v2 provider qualification.
 
-## Explicit same-schema maintenance exception
+## Explicit maintenance route, including forward schema changes
 
 `--maintenance-cutover --maintenance-plan <private-plan.json>` admits a reviewed
 interruption with qualification recorded as **waived**, not passed. It replaces
 operation-local source-string transforms; do not patch the deployment program to
-skip gates. This exception requires an existing promoted installation, an
-unchanged managed schema, a fresh frozen recovery checkpoint, and a bound
+skip gates. This route requires an existing promoted installation, a fresh
+frozen recovery checkpoint, and a bound
 namespace UID. It cannot be combined with rollback, topology transfer,
 single-machine mode or `--resume-ha`.
+The combined route decision is exported as `deployment-route.json` before
+application journeys, backup capture, journal acquisition or workload changes.
+It binds the installed and target releases/schemas, maintenance approval and
+qualification status; it never marks waived qualification as passed.
 
 The plan is a regular file within this repository (normally ignored under the
 operation's `artifacts/` directory). Its exact bytes are hashed into the shared
@@ -716,19 +800,76 @@ cutover journal. Example shape; placeholders are intentionally not valid approva
   "backup": {
     "script": "artifacts/<operation>/reviewed-backup-adapter.mjs",
     "sha256": "sha256:<reviewed-adapter-bytes-digest>"
+  },
+  "schemaMigration": {
+    "fromVersion": 16,
+    "toVersion": 17,
+    "script": "artifacts/<installation>/reviewed-migration-validation.mjs",
+    "sha256": "sha256:<reviewed-migration-adapter-bytes-digest>"
   }
 }
 ```
 
 The installed manifest must itself be promoted and hash to the recorded live
 Helm manifest digest. It need not be the immediate **published** predecessor;
-the same-schema maintenance procedure stops old readers before starting the
+the maintenance procedure stops old readers before starting the
 candidate. It does not certify mixed-version compatibility or reverse-image
 rollback. Other applications sharing a DB instance remain outside this release's
 ownership and must be excluded from the recovery adapter's scope.
 The plan also binds the operator values/environment file checksum. All release
 modes read that input once and use a private frozen copy for rendering and Helm,
 so editing a settings file during a long drain cannot redirect the later phase.
+
+Omit `schemaMigration` for an unchanged schema. A forward schema change requires
+this explicit extra approval: versions must match the exact baseline/candidate,
+and the migration adapter's bytes must match the reviewed checksum. A downgrade,
+unknown live schema, missing adapter or mismatched transition fails before
+downtime. A two-stage/intermediate deployment cannot bypass these rules.
+
+### Restored-copy migration validation
+
+The installation's reusable migration adapter uses the same private
+`--request/--receipt` protocol as backup adapters. It accepts two stages:
+
+1. `migration-preflight`: before downtime, verify the pinned candidate API image
+   and local restore environment are actually available. Return kind
+   `rivet-maintenance-migration-preflight`, `passed`, `supportsSchemaMigration`,
+   `candidateImageVerified`, `restoreEnvironmentReady` and `unrelatedDataExcluded`
+   as true, with checksummed nonempty verification evidence. This stage must not
+   start a production migration, capture production data or modify workloads.
+2. `migration-validation`: after release readers stop and the fresh frozen
+   checkpoint is verified, restore **that checkpoint** only into isolated local
+   scratch storage, run the exact candidate image's migration, verify its target
+   schema and saved-data preservation, and settle all children before returning.
+   Never point the candidate migration at production during this stage.
+
+Both requests include `schemaMigration` with `fromVersion`, `toVersion` and
+`candidateApiImage` (repository plus immutable digest). The actual validation
+also binds the checkpoint request ID, checkpoint receipt SHA-256 and local
+checkpoint directory to the original token, plan and release identities.
+`checkpointReceiptDigest` hashes the UTF-8 bytes of
+`JSON.stringify(parsedCheckpointReceipt)`, not the receipt file's whitespace.
+Echo these bindings, `formatVersion: 1`, a fresh `verifiedAt`, and an `artifacts`
+inventory containing at least one `role: verification` file with its SHA-256.
+The receipt must echo the exact request `stage` and `checkpointDirectory` as well;
+retained validation must still name its own original frozen checkpoint directory.
+Redirecting both request and receipt to another location cannot pass recovery.
+The validation receipt kind is `rivet-maintenance-migration-validation`; require
+all of `isolatedRestore`, `migrationApplied`, `targetSchemaVerified`,
+`preservedDataVerified`, `oldDatabaseReadersStopped` and `unrelatedDataExcluded`
+to be true. The reviewed adapter owns the actual restore/migration and any
+installation-specific read-only checks for Rivet database consumers outside the
+Helm release. An unclassified consumer blocks migration, not another app's data.
+
+The tool verifies the bindings and bytes, rechecks that validation did not alter
+the backup, and admits live migration only after this proof. A failed, timed-out
+or uncertain adapter pauses the owned cutover without applying candidate DDL.
+There is no automatic adapter retry, schema rollback or production backup restore.
+The existing single migration owner and database restore/job fences still apply.
+Downtime includes frozen capture and restored-copy migration validation; this
+route deliberately makes no HA/zero-downtime claim. The adapter is reviewed once
+per installation and consumes release identities from requests, not per-release
+source-string patches.
 
 The two-hour deadline limits **new admission**. It is rechecked immediately before
 ownership acquisition, after inventory, so slow preflight reads do not admit an
@@ -786,11 +927,23 @@ checksums are streamed, so large object archives are not loaded into memory.
 The checkpoint directory's physical identity and repository containment are
 rechecked after the adapter returns and before recording verified success;
 replacing it with a symlink/junction or another directory invalidates the result.
+Checkpoint request/receipt bytes must stay unchanged during verification. The
+backup adapter may create its receipt, but may not rewrite its input request;
+the migration adapter may create its own proof, but may not edit the frozen
+parent metadata. Both proof paths compare persisted metadata to the bytes they
+actually validated before returning success. A mismatch preserves partial files
+and blocks `verified.json` and live installation rather than trusting a stale
+in-memory object.
 An object inventory alone is not recovery data: the reviewed adapter must ensure
 the referenced object versions can actually be recovered. The deployment tool
 verifies binding, inventory and bytes; the adapter's reviewed implementation is
 responsible for the actual scoped restore/reference/key checks. A receipt is
 not provider availability qualification.
+
+Release-owned workload/HPA changes use freshly inspected immutable UID and
+resourceVersion preconditions. Unknown reader controllers or active migration
+Jobs block quiescence. An ordinary recovery may explicitly quiesce again; it
+retains previous final-apply metadata as history before leaving `resuming`.
 
 Failed/uncertain adapters block installation. Their logs stay in
 `adapter-private.log`, not console output. Inspect them privately; never commit

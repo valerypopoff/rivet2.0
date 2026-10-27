@@ -18,6 +18,7 @@ import {
   assertInstalledExecutionSettings,
   verifyRetainedCutoverCheckpoint,
   assertCutoverVerificationInventory,
+  assertCutoverVerificationTarget,
   assertNoExecutionStartupFences,
 } from './lib/deployment-readiness.mjs';
 import { runHaKubernetesRollout, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
@@ -27,9 +28,12 @@ import {
   readMaintenancePlan,
   assertMaintenanceBaseline,
   captureMaintenanceCheckpoint,
+  preflightMaintenanceMigration,
 } from './lib/maintenance-deployment-plan.mjs';
 import {
   waitForReleaseSettlement,
+  assertReleaseSettlementCurrent,
+  releaseSettlementResourceTypes,
   waitForExecutionAutoscalerActivation,
 } from './lib/kubernetes-release-settlement.mjs';
 import { createMaintenanceValidationValues, getMaintenanceValidationTargets } from './lib/maintenance-validation.mjs';
@@ -508,6 +512,7 @@ async function main() {
         context: selectedContext,
         candidateDigest,
         valuesDigest,
+        manifest,
         allowExpiredForRecovery: options.has('--resume-cutover'),
       })
     : null;
@@ -608,6 +613,7 @@ async function main() {
     if (
       !maintenance &&
       !options.has('--plan-only') &&
+      !options.has('--acceptance-only') &&
       (singletonControlRequested || options.has('--ha-control-plane-transition') || edgeProfile === 'compact')
     )
       assertRuntimeControlEvidence(
@@ -626,7 +632,8 @@ async function main() {
       throw new Error(
         'HA reverse-image replacement is not certified by a forward mixed-version certificate. Repair forward; no automatic image/schema rollback was attempted.',
       );
-    if (haRequested && !maintenance && !options.has('--plan-only')) assertHaUpgradeEvidence(manifest, null);
+    if (haRequested && !maintenance && !options.has('--plan-only') && !options.has('--acceptance-only'))
+      assertHaUpgradeEvidence(manifest, null);
     const autoscalerResource = renderedResources.find(
       (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler',
     );
@@ -640,7 +647,7 @@ async function main() {
         autoscalerResource.spec.template.spec.containers[0].env.find((e) => e.name === 'RIVET_AUTOSCALER_CONFIG').value,
       );
       deploymentAutoscalingPolicyDigest = autoscalerPolicyDigest(config.policy);
-      if (!maintenance && !options.has('--plan-only'))
+      if (!maintenance && !options.has('--plan-only') && !options.has('--acceptance-only'))
         assertCooperativeAutoscalingEvidence(
           manifest.evidence.runtimeAutoscaling,
           manifest,
@@ -707,6 +714,7 @@ async function main() {
     let workflowContext;
     if (
       !maintenance &&
+      !options.has('--acceptance-only') &&
       exists &&
       (deploymentPolicy ||
         options.has('--plan-only') ||
@@ -769,10 +777,49 @@ async function main() {
       if (ns.metadata.uid !== deploymentPolicy.policy.namespaceUid)
         throw Error('Deployment policy namespace identity changed.');
     }
+    const kubeForRelease = (args, extra = {}) =>
+      run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+    // Both non-replaying recovery routes must prove the same final settings,
+    // not just match image digests or trust Helm's release identity metadata.
+    const assertFinalCandidateConfiguration = async (settlement, retainedExecution = []) => {
+      const status = JSON.parse(
+        (
+          await run(
+            helmBin,
+            ['list', '--all', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
+            { capture: true },
+          )
+        ).stdout,
+      );
+      if (status.length !== 1 || status[0].status !== 'deployed')
+        throw Error('Final Helm apply is not deployed; no verification completion is allowed.');
+      const stored = parseReleaseResources(
+        (await run(helmBin, ['get', 'manifest', release, '--namespace', namespace], { capture: true })).stdout,
+      );
+      assertInstalledReleaseManifest(renderedResources, stored, { release, namespace });
+      const items = JSON.parse(
+        (await kubeForRelease(['get', releaseSettlementResourceTypes, '-o', 'json'])).stdout,
+      ).items;
+      assertInstalledExecutionSettings(renderedResources, items);
+      assertNoExecutionStartupFences(
+        items.filter((item) => item.metadata.labels?.['app.kubernetes.io/instance'] === release),
+      );
+      if (settlement)
+        assertReleaseSettlementCurrent({
+          settlement,
+          resources: renderedResources,
+          items,
+          release,
+          namespace,
+          retainedExecution,
+        });
+    };
     if (options.has('--acceptance-only')) {
       if (
         !workflowContext ||
         installedDigest !== candidateDigest ||
+        installed?.release?.production?.database?.managedWorkflowSchemaVersion !==
+          manifest.database.managedWorkflowSchema.version ||
         options.has('--resume-ha') ||
         options.has('--resume-cutover') ||
         options.has('--maintenance-cutover') ||
@@ -783,8 +830,8 @@ async function main() {
         throw Error(
           'Acceptance-only verification requires the installed exact candidate, a deployment policy and no unfinished operation.',
         );
-      const kube = (args) =>
-        run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true });
+      const kube = kubeForRelease;
+      const retainedExecution = retainedTopologyExecution(pendingJournal, workflowContext, deploymentPolicy.digest);
       await executeDeploymentWorkflow({
         approval: deploymentPolicy,
         context: { ...workflowContext, recovering: true },
@@ -817,15 +864,18 @@ async function main() {
           }),
         run: async (safety) => {
           await safety.checkBaseline();
+          await assertFinalCandidateConfiguration();
           const settlement = await waitForReleaseSettlement({
             kube,
             resources: renderedResources,
             release,
             namespace,
             timeoutMs,
-            retainedExecution: retainedTopologyExecution(pendingJournal, workflowContext, deploymentPolicy.digest),
+            retainedExecution,
             artifact: (name, value) => writeArtifact(artifactsDir, name, value),
           });
+          await safety.checkBaseline();
+          await assertFinalCandidateConfiguration(settlement, retainedExecution);
           safety.confirmSettlement(settlement);
           return settlement;
         },
@@ -847,12 +897,13 @@ async function main() {
       );
       return;
     }
+    let maintenanceSchema;
     if (maintenance) {
       const ns = JSON.parse(
         (await run(kubectl, ['--request-timeout=30s', 'get', 'namespace', namespace, '-o', 'json'], { capture: true }))
           .stdout,
       );
-      assertMaintenanceBaseline(maintenance, {
+      maintenanceSchema = assertMaintenanceBaseline(maintenance, {
         installed,
         manifest,
         namespaceUid: ns.metadata.uid,
@@ -899,6 +950,29 @@ async function main() {
       throw new Error('Maintenance cutover cannot be combined with forward rollback.');
     if (cutover && !exists)
       throw new Error('Maintenance cutover requires an installed release. Bootstrap with the normal install path.');
+    // This is the combined route decision, made before application journeys,
+    // backups, journal acquisition or any workload/Secret mutation.
+    await writeArtifact(
+      artifactsDir,
+      'deployment-route.json',
+      JSON.stringify(
+        {
+          formatVersion: 1,
+          release,
+          namespace,
+          candidateManifestDigest: candidateDigest,
+          installedManifestDigest: installedDigest ?? null,
+          route: cutover ? 'maintenance' : haRollout ? 'rolling' : exists ? 'direct' : 'bootstrap',
+          qualification: maintenance ? 'waived' : 'required',
+          installedSchemaVersion: installed?.release?.production?.database?.managedWorkflowSchemaVersion ?? null,
+          targetSchemaVersion: manifest.database.managedWorkflowSchema.version,
+          schemaMigration: maintenanceSchema ?? null,
+          dataSafetyWaived: false,
+        },
+        null,
+        2,
+      ),
+    );
     const assertInstalledBaseline = async () => {
       if (!exists) return;
       const current = JSON.parse(
@@ -923,8 +997,6 @@ async function main() {
         liveNamespace,
       );
     };
-    const kubeForRelease = (args, extra = {}) =>
-      run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
     if (options.has('--verify-only') && !workflowContext)
       throw Error('Verification-only cutover recovery requires the original production deployment policy.');
     if (workflowContext && !workflowContext.recovering) {
@@ -970,6 +1042,7 @@ async function main() {
       for (const script of new Set([
         ...Object.values(deploymentPolicy.scripts),
         ...(maintenance ? [maintenance.scriptPath] : []),
+        ...(maintenance?.migrationScriptPath ? [maintenance.migrationScriptPath] : []),
       ])) {
         try {
           await run(process.execPath, ['--check', script], { capture: true });
@@ -989,6 +1062,12 @@ async function main() {
         artifactsDir,
         timeoutMs: Math.min(timeoutMs, 60_000),
       });
+      const migrationPrerequisites = maintenance
+        ? await preflightMaintenanceMigration(maintenance, {
+            artifactsDir,
+            timeoutMs: Math.min(timeoutMs, 60_000),
+          })
+        : null;
       await assertInstalledBaseline();
       await writeArtifact(
         artifactsDir,
@@ -1001,6 +1080,7 @@ async function main() {
             ...workflowContext,
             policyDigest: deploymentPolicy.digest,
             prerequisites,
+            migrationPrerequisites,
             scope: 'installed-state-and-local-readiness',
             qualification: 'not-established-by-preflight',
             workloadMutations: false,
@@ -1122,8 +1202,7 @@ async function main() {
           });
         try {
           if (haRollout) {
-            const kube = (args, extra = {}) =>
-              run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+            const kube = kubeForRelease;
             const preservePath = path.join(generatedValuesDir, 'ha-preserved-capacity.json');
             const frozenPath = path.join(generatedValuesDir, 'ha-frozen-autoscalers.json');
             const preserve = async (guardedValues) => {
@@ -1169,14 +1248,36 @@ async function main() {
               },
             });
           } else if (cutover) {
-            const kube = async (args, extra = {}) =>
-              run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+            const kube = kubeForRelease;
             const name = journalName;
             const selector = `app.kubernetes.io/instance=${release}`;
             const inventory = async () => {
               const resources = JSON.parse(
-                (await kube(['get', 'deployment,statefulset,hpa,pvc', '-l', selector, '-o', 'json'])).stdout,
+                (
+                  await kube([
+                    'get',
+                    'deployment,statefulset,hpa,pvc,daemonset,cronjob,replicationcontroller,job',
+                    '-l',
+                    selector,
+                    '-o',
+                    'json',
+                  ])
+                ).stdout,
               ).items;
+              if (
+                resources.some(
+                  (item) =>
+                    ['DaemonSet', 'CronJob', 'ReplicationController'].includes(item.kind) ||
+                    (item.kind === 'Job' &&
+                      !(
+                        item.metadata.labels?.['app.kubernetes.io/component'] === 'workflow-schema-migration' &&
+                        item.status?.conditions?.some(
+                          (condition) => ['Complete', 'Failed'].includes(condition.type) && condition.status === 'True',
+                        )
+                      )),
+                )
+              )
+                throw Error('Maintenance cannot prove ownership of every database reader controller.');
               return {
                 workloads: resources
                   .filter((item) => ['Deployment', 'StatefulSet'].includes(item.kind))
@@ -1184,12 +1285,17 @@ async function main() {
                     kind: item.kind.toLowerCase(),
                     name: item.metadata.name,
                     uid: item.metadata.uid,
+                    resourceVersion: item.metadata.resourceVersion,
                     component: item.metadata.labels?.['app.kubernetes.io/component'],
                     replicas: item.spec.replicas ?? 1,
                   })),
                 autoscalers: resources
                   .filter((item) => item.kind === 'HorizontalPodAutoscaler')
-                  .map((item) => item.metadata.name),
+                  .map((item) => ({
+                    name: item.metadata.name,
+                    uid: item.metadata.uid,
+                    resourceVersion: item.metadata.resourceVersion,
+                  })),
                 claims: resources
                   .filter((item) => item.kind === 'PersistentVolumeClaim')
                   .map((item) => ({ name: item.metadata.name, uid: item.metadata.uid })),
@@ -1286,8 +1392,47 @@ async function main() {
               readJournal,
               createJournal: (record) => saveJournal(record, observedJournalVersion),
               replaceJournal: saveJournal,
-              scale: (item, replicas) => kube(['scale', `${item.kind}/${item.name}`, `--replicas=${replicas}`]),
-              removeAutoscaler: (hpa) => kube(['delete', 'hpa', hpa, '--ignore-not-found']),
+              scale: async (item, replicas) => {
+                const live = JSON.parse((await kube(['get', item.kind, item.name, '-o', 'json'])).stdout);
+                if (!item.uid || live.metadata.uid !== item.uid)
+                  throw Error('Maintenance workload identity changed before quiescing.');
+                return kube([
+                  'patch',
+                  item.kind,
+                  item.name,
+                  '--type=json',
+                  '-p',
+                  JSON.stringify([
+                    { op: 'test', path: '/metadata/uid', value: item.uid },
+                    { op: 'test', path: '/metadata/resourceVersion', value: live.metadata.resourceVersion },
+                    { op: 'test', path: '/spec/replicas', value: live.spec.replicas },
+                    { op: 'replace', path: '/spec/replicas', value: replicas },
+                  ]),
+                ]);
+              },
+              removeAutoscaler: async (hpa) => {
+                const raw = (await kube(['get', 'hpa', hpa.name, '--ignore-not-found', '-o', 'json'])).stdout;
+                if (!raw.trim()) return;
+                const live = JSON.parse(raw);
+                if (!hpa.uid || live.metadata.uid !== hpa.uid)
+                  throw Error('Maintenance HPA identity changed before quiescing.');
+                return kube(
+                  [
+                    'delete',
+                    '--raw',
+                    `/apis/autoscaling/v2/namespaces/${namespace}/horizontalpodautoscalers/${hpa.name}`,
+                    '-f',
+                    '-',
+                  ],
+                  {
+                    input: JSON.stringify({
+                      apiVersion: 'v1',
+                      kind: 'DeleteOptions',
+                      preconditions: { uid: hpa.uid, resourceVersion: live.metadata.resourceVersion },
+                    }),
+                  },
+                );
+              },
               waitForStopped,
               installValidation: async () => {
                 // A cutover must own the shared CAS journal and stop old readers
@@ -1338,35 +1483,18 @@ async function main() {
                   workflowContext,
                   record.token,
                   maintenance?.digest ?? deploymentPolicy.digest,
+                  maintenance,
                 );
-                assertCutoverVerificationInventory(record.finalApply?.inventory, await inventory());
-                const status = JSON.parse(
-                  (
-                    await run(
-                      helmBin,
-                      ['list', '--all', '--namespace', namespace, '--filter', `^${release}$`, '--output', 'json'],
-                      { capture: true },
-                    )
-                  ).stdout,
-                );
-                if (status.length !== 1 || status[0].status !== 'deployed')
-                  throw Error('Final Helm apply is not deployed; no verification completion is allowed.');
-                const stored = parseReleaseResources(
-                  (await run(helmBin, ['get', 'manifest', release, '--namespace', namespace], { capture: true }))
-                    .stdout,
-                );
-                assertInstalledReleaseManifest(renderedResources, stored);
+                const observed = await inventory();
+                const expectedInventory =
+                  record.finalApply?.inventory ??
+                  assertCutoverVerificationTarget(renderedResources, observed, record.claims);
+                assertCutoverVerificationInventory(expectedInventory, observed);
+                await assertFinalCandidateConfiguration();
                 const result = await settle();
-                assertInstalledExecutionSettings(
-                  renderedResources,
-                  JSON.parse((await kube(['get', 'deployment,statefulset', '-l', selector, '-o', 'json'])).stdout)
-                    .items,
-                );
-                assertNoExecutionStartupFences(
-                  JSON.parse((await kube(['get', 'statefulset,pod', '-l', selector, '-o', 'json'])).stdout).items,
-                );
-                assertCutoverVerificationInventory(record.finalApply.inventory, await inventory());
+                assertCutoverVerificationInventory(expectedInventory, await inventory());
                 await assertInstalledBaseline();
+                await assertFinalCandidateConfiguration(result);
                 return result;
               },
             });
