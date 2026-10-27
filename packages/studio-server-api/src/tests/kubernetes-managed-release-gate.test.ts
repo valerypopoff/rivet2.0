@@ -18,6 +18,10 @@ import { assertCandidateManifestImages } from '../../../../deploy/studio-server/
 import { buildManagedProviderGateConfig } from '../../../../deploy/studio-server/scripts/lib/kubernetes-managed-provider-gate-config.mjs';
 import { summarizePodStartupState } from '../../../../deploy/studio-server/scripts/lib/kubernetes-workload-diagnostics.mjs';
 import { assertRuntimeReadiness } from '../../../../deploy/studio-server/scripts/lib/kubernetes-runtime-readiness.mjs';
+import {
+  CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+  MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION,
+} from '../routes/workflows/managed/schema-migrations.js';
 
 const rootDir = path.resolve(import.meta.dirname, '../../../..');
 const { ManagedReleaseGate } = await import(
@@ -928,7 +932,7 @@ test('managed release gate requires an exact prior API image and its manifest-bo
         env: createEnvironment({
           RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_REPOSITORY: 'example.test/rivet/api',
           RIVET_K8S_RELEASE_GATE_PREVIOUS_API_IMAGE_DIGEST: digest('e'),
-          RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION: '18',
+          RIVET_K8S_RELEASE_GATE_PREVIOUS_API_SCHEMA_VERSION: String(CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION + 1),
         }),
       }),
     /predecessor schema cannot be newer/,
@@ -944,8 +948,8 @@ test('managed release gate requires an exact prior API image and its manifest-bo
   assert.equal(imageReference(config.previousApiImage!), `example.test/rivet/api@${digest('e')}`);
   assert.equal(config.previousApiImage!.schemaVersion, 16);
   assert.deepEqual(config.managedWorkflowSchema, {
-    version: 17,
-    minimumRollbackCompatibleVersion: 17,
+    version: CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
+    minimumRollbackCompatibleVersion: MINIMUM_ROLLBACK_COMPATIBLE_MANAGED_WORKFLOW_SCHEMA_VERSION,
   });
 });
 

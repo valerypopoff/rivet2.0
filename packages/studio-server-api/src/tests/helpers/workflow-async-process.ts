@@ -13,6 +13,7 @@ type AsyncWorkflowOptions = {
   storage?: Record<string, unknown>;
   failure?: 'foreground' | 'serialization';
   requireUiAuth?: boolean;
+  costProviderUrl?: string;
 };
 type AsyncWorkflowProcess = {
   baseUrl: string;
@@ -66,6 +67,7 @@ async function startOwnedProcess(
     ...(options.endpointName ? { RIVET_ASYNC_TEST_ENDPOINT_NAME: options.endpointName } : {}),
     ...(options.projectName ? { RIVET_ASYNC_TEST_PROJECT_NAME: options.projectName } : {}),
     ...(options.failure ? { RIVET_ASYNC_TEST_FAILURE: options.failure } : {}),
+    ...(options.costProviderUrl ? { RIVET_ASYNC_TEST_COST_PROVIDER_URL: options.costProviderUrl } : {}),
   });
   const child = fork(new URL('./workflow-async-server.mts', import.meta.url), [], {
     env,

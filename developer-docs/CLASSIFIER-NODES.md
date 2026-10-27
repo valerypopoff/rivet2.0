@@ -1,5 +1,49 @@
 # Decision AI node family (internal Classifier contract)
 
+## Inline and profile token pricing
+
+Decision AI run in **Inline** mode and Decision AI Profile share the LLM **Token pricing** editor: local system
+rates plus an optional flat USD-per-million-token override (`tokenPricing`). Input
+and output rates are mandatory when enabled; zero is valid, missing/negative/
+nonfinite values fail configuration. Cached-read and cache-write rates are optional.
+Current Decision AI response contracts expose only aggregate input/output tokens,
+so cache fields cannot discount those calls; the UI states this explicitly.
+Pricing lives in its own initially collapsed **Token pricing** settings group,
+shared with LLM nodes via `getTokenPricingEditor`. Folding is presentation-only
+and preserves settings. The panel labels stored rates **Default rates**, offers
+**Use default rates**, and states that manual overrides are optional.
+In **From profile** mode the inline editor is hidden and only the selected
+profile owns pricing, even if the node retains old/invalid inline values. Inline
+prices are validated and detached before dispatch, then that same snapshot is
+passed to attempt accounting and the successful Cost/Usage projection. Invalid
+active rates fail before HTTP. Mode switches retain saved inline settings;
+export-to-profile copies rates without sharing the source object's identity.
+
+`getClassifierSystemTokenPricing` displays the selected model's catalog entry,
+including its long-context tier where present. Unknown custom models stay unknown
+unless explicitly priced. Manual rates replace automatic context tiers and model
+alias pricing checks for that profile, not the request's model selection. They
+never alter API payloads. `profileExecution.ts` passes each candidate's detached
+prices to the provider's physical-attempt accounting and the successful node output.
+Rejected answer batches with usable usage retain that attempt's estimate. Run
+statistics include all observed attempts, not just the successful fallback output.
+Missing usage stays unknown. Changing prices does not reset suspension identity
+or recalculate retained recordings; no database/schema change is required.
+Authored profile resolution canonicalizes optional price fields before the strict
+JSON snapshot: clearing a cache field must omit it, not leave nested `undefined`
+that fails until save/reload. This does not relax JSON validation on incoming
+programmatic/serialized profile values. The editor patches the latest owning
+node, removes cleared keys, and ignores delayed field edits after an override is
+disabled. Regression tests cover batched sibling edits and clearing both caches.
+Normalized profile values must also omit absent `sourceNodeId`/`profileName`
+properties rather than emit `undefined`. An individually valid value must remain
+valid when composed into an Array fallback chain; blank authored titles are
+absent display metadata, not a malformed nested JSON field. Keep strict rejection
+of accessors, sparse arrays and non-JSON external values unchanged.
+
+See `tokenPricing.test.ts`, `ClassifierProfiles.test.ts` and the shared profile UI
+regressions in `llm-credential-names.spec.ts`.
+
 Decision AI is the visible name of the first-party Classifier family, not a new
 runtime primitive or plugin. The palette group is **Decision AI**; nodes are
 **Decision AI Question**, **Decision AI Profile** and **Decision AI run**.

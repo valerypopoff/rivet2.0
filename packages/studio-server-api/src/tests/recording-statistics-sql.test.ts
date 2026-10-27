@@ -30,9 +30,15 @@ export const statisticsFixture = Array.from({ length: 240 }, (_, index) => {
     workflowId: index % 3 ? 'workflow-a' : 'workflow-b',
     sourceProjectName: `Project ${index}`,
     createdAt: new Date(Date.UTC(2026, 7, 4, Math.floor(index / 12))).toISOString(),
-    runKind: index % 2 ? 'latest' : 'published',
+    runKind: index % 31 === 0 ? 'editor' : index % 2 ? 'latest' : 'published',
     status: (['succeeded', 'failed', 'suspicious'] as const)[index % 3]!,
     durationMs: index * 13,
+    cost:
+      index % 3 === 0
+        ? { status: 'complete' as const, knownCostUsd: index / 1000 }
+        : index % 3 === 1
+          ? { status: 'partial' as const, knownCostUsd: index / 2000 }
+          : undefined,
     endpointNameAtExecution: index % 8 === 7 || identity?.surface === 'web_app_action' ? '/apps/renamed' : 'endpoint',
     executionIdentity: identity && {
       ...identity,
@@ -41,6 +47,60 @@ export const statisticsFixture = Array.from({ length: 240 }, (_, index) => {
         : {}),
     },
   } satisfies WorkflowRecordingStatisticsRow & { recordingId: string };
+});
+
+test('SQLite statistics exclude editor runs even if their execution surface is missing or conflicting', () => {
+  const db = sqliteFixture();
+  try {
+    const insert = db.prepare('INSERT INTO recordings VALUES (?, ?, ?)');
+    for (const [index, identity, endpoint] of [
+      [0, undefined, 'endpoint'],
+      [1, { surface: 'workflow_endpoint' }, 'endpoint'],
+      [2, { surface: 'web_app_action', uiGraphId: 'ui', componentId: 'button' }, '/app'],
+      [3, undefined, '/app'],
+    ] as const) {
+      const recordingId = `editor-only-${index}`;
+      insert.run(
+        recordingId,
+        'editor-only',
+        JSON.stringify({
+          recordingId,
+          workflowId: 'editor-only',
+          sourceProjectName: 'Editor',
+          createdAt: '2026-08-04T12:00:00.000Z',
+          runKind: 'editor',
+          status: 'succeeded',
+          durationMs: 1,
+          endpointName: endpoint,
+          executionIdentity: identity,
+        }),
+      );
+    }
+    for (const surface of ['endpoint', 'web_app'] as const) {
+      const catalog = recordingStatisticsCatalogSql('sqlite', surface);
+      const rows = db.prepare(catalog.sql).all(...catalog.values) as RecordingStatisticsSqlRow[];
+      assert.equal(
+        rows.some((row) => row.workflow_id === 'editor-only'),
+        false,
+      );
+    }
+    for (const target of [
+      { surface: 'endpoint' as const, workflowId: 'editor-only' },
+      { surface: 'web_app' as const, workflowId: 'editor-only', uiGraphId: 'ui', componentId: 'button' },
+      { surface: 'web_app' as const, workflowId: 'editor-only', legacyEndpointName: '/app' },
+    ]) {
+      const statement = recordingStatisticsRowsSql('sqlite', {
+        target,
+        period: { from: '2026-08-04T00:00:00.000Z', to: '2026-08-05T00:00:00.000Z' },
+        runKind: 'both',
+        includeFailed: true,
+        includeWarnings: true,
+      });
+      assert.equal(db.prepare(statement.sql).all(...statement.values).length, 0);
+    }
+  } finally {
+    db.close();
+  }
 });
 
 export async function checkStatisticsQueries(
@@ -59,6 +119,7 @@ export async function checkStatisticsQueries(
   }
   const targets: WorkflowRunStatisticsTarget[] = [
     { surface: 'endpoint', workflowId: 'workflow-a' },
+    { surface: 'endpoint', workflowId: 'workflow-b' },
     { surface: 'web_app', workflowId: 'workflow-a', uiGraphId: 'ui', componentId: 'button' },
     { surface: 'web_app', workflowId: 'workflow-b', legacyEndpointName: '/apps/renamed' },
     { surface: 'endpoint', workflowId: 'missing' },
@@ -71,11 +132,13 @@ export async function checkStatisticsQueries(
         runKind,
         includeFailed: false,
         includeWarnings: true,
+        aggregation: 'day' as const,
+        costAggregation: 'week' as const,
       };
       const sqlRows = await read(recordingStatisticsRowsSql(dialect, query));
       assert.deepEqual(
-        buildWorkflowRunStatistics(sqlRows.map(statisticsSqlRow), query),
-        buildWorkflowRunStatistics(baseline, query),
+        buildWorkflowRunStatistics(sqlRows.map(statisticsSqlRow), query, { includeCost: true }),
+        buildWorkflowRunStatistics(baseline, query, { includeCost: true }),
       );
       for (const row of sqlRows) {
         assert.equal(row.workflow_id, target.workflowId);

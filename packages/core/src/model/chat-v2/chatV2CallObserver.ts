@@ -144,10 +144,17 @@ export function notifyChatV2CallFinished(
   const normalizedUsage = safelyRead(() => normalizeObservedUsage(rawUsage));
   const modelInfo = safelyRead(() => getChatV2ModelInfo(options.provider, options.modelId));
   const calculatedCost = safelyRead(() =>
-    calculateChatV2UsageCost(options.provider, options.modelId, rawUsage, params.result?.providerMetadata),
+    calculateChatV2UsageCost(
+      options.provider,
+      options.modelId,
+      resultUsage ?? errorUsage,
+      params.result?.providerMetadata,
+      options.tokenPricing,
+    ),
   );
   const costUsd = toUsageNumber(calculatedCost);
-  const hasKnownPricing = modelInfo?.cost != null || (options.provider === 'openrouter' && costUsd != null);
+  const hasKnownPricing =
+    options.tokenPricing != null || modelInfo?.cost != null || (options.provider === 'openrouter' && costUsd != null);
   const finishReason =
     safelyRead(() => params.result?.finishReason) ??
     getErrorProperty(params.error, 'finishReason', (value): value is string => typeof value === 'string');

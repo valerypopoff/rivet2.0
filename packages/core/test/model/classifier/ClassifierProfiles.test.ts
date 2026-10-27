@@ -42,6 +42,75 @@ import {
 } from '../../../src/index.js';
 import { testProcessContext } from '../../testUtils.js';
 import { ExecutionRecorder } from '../../../src/recording/ExecutionRecorder.js';
+import { RunCostLedger } from '../../../src/model/RunCostLedger.js';
+
+test('profile fallback uses each physical attempt pricing in outputs and root ledger without changing requests', async () => {
+  const ledger = new RunCostLedger();
+  const requests: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    requests.push(body);
+    return requests.length === 1
+      ? Response.json({ model: 'jev-latest', usage: { input_tokens: 1000, output_tokens: 0 }, answers: {} })
+      : reply('jev');
+  };
+  const outputs = await evaluate(
+    [
+      profile('jev', { tokenPricing: { inputPerMillionTokens: 2, outputPerMillionTokens: 8 } }),
+      profile('jev', { tokenPricing: { inputPerMillionTokens: 5, outputPerMillionTokens: 0 } }),
+    ],
+    context({ onLLMProfileAttempt: (event) => ledger.observeClassifier(event) }),
+    {},
+    { outputUsage: true, tokenPricing: { inputPerMillionTokens: -999, outputPerMillionTokens: -999 } },
+  );
+  assert.equal(outputs.cost?.value, 0.005);
+  assert.equal((outputs.usage?.value as { totalCost: number }).totalCost, 0.005);
+  assert.deepEqual(ledger.snapshot(), { status: 'complete', knownCostUsd: 0.007 });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.equal(Object.hasOwn(requests[0]!, 'tokenPricing'), false);
+});
+
+test('inline Decision AI pricing uses a detached per-call snapshot in outputs and accounting', async () => {
+  const ledger = new RunCostLedger();
+  const node = ClassifierEvaluateNodeImpl.create();
+  const rates = { inputPerMillionTokens: 2, outputPerMillionTokens: 8 };
+  node.data = {
+    ...node.data,
+    configurationMode: 'inline',
+    model: 'private-model',
+    tokenPricing: rates,
+    outputUsage: true,
+    apiKeySource: 'input',
+  };
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls++;
+    const request = JSON.parse(String(init?.body));
+    assert.equal(Object.hasOwn(request, 'tokenPricing'), false);
+    rates.inputPerMillionTokens = 999; // An edit after dispatch must not reprice accepted work.
+    return Response.json({
+      model: 'private-model-resolved',
+      answers: { q: { type: 'noul', noul: 0.8 } },
+      usage: { input_tokens: 1000, output_tokens: 100 },
+    });
+  };
+  const outputs = await new ClassifierEvaluateNodeImpl(node).process(
+    {
+      state: { type: 'string', value: '' },
+      question1: { type: 'object', value: question },
+      apiKey: { type: 'string', value: 'fixture' },
+    },
+    context({ onLLMProfileAttempt: (event) => ledger.observeClassifier(event) }),
+  );
+  assert.equal(calls, 1);
+  assert.equal(outputs.cost?.value, 0.0028);
+  assert.equal((outputs.usage?.value as { totalCost: number }).totalCost, 0.0028);
+  assert.deepEqual(ledger.snapshot(), { status: 'complete', knownCostUsd: 0.0028 });
+  node.data.tokenPricing = { inputPerMillionTokens: -1, outputPerMillionTokens: 0 };
+  await assert.rejects(new ClassifierEvaluateNodeImpl(node).process({}, context()), /Token pricing/);
+  assert.equal(calls, 1, 'invalid rates must fail before another request');
+});
 
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import fs from 'node:fs/promises';
 import test from 'node:test';
+import type { WorkflowRunCost } from '../../../studio-server-shared/workflow-recording-types.js';
 
 import { getExpectedProxyAuthToken, getExpectedUiSessionToken } from '../auth.js';
 import { writeRuntimeLimitSettings } from '../runtime-limit-settings.js';
@@ -1382,9 +1383,10 @@ test('published filesystem web app actions use authenticated same-origin WebSock
       assert.equal(workflow.totalRuns, 1);
 
       const runPage = await readJson<{
-        runs: Array<{ endpointNameAtExecution?: string }>;
+        runs: Array<{ endpointNameAtExecution?: string; cost?: WorkflowRunCost }>;
       }>(await fetch(`${apiBaseUrl}/recordings/workflows/${workflow.workflowId}/runs?page=1&pageSize=20&status=all`));
       assert.equal(runPage.runs[0]?.endpointNameAtExecution, '/apps/published-web-app-socket-action');
+      assert.deepEqual(runPage.runs[0]?.cost, { status: 'complete', knownCostUsd: 0 });
     } finally {
       closeWebSocket(socket);
     }
@@ -1665,10 +1667,14 @@ test('filesystem web app actions appear in run recordings for published and late
         endpointNameAtExecution: string;
         runKind: string;
         status: string;
+        cost?: WorkflowRunCost;
       }>;
     }>(await fetch(`${apiBaseUrl}/recordings/workflows/${encodeURIComponent(workflowId)}/runs?page=1&pageSize=20&status=all`));
 
     assert.equal(runsResponse.totalRuns, 2);
+    assert.deepEqual(runsResponse.runs.map((run) => run.cost), [
+      { status: 'complete', knownCostUsd: 0 }, { status: 'complete', knownCostUsd: 0 },
+    ]);
     assert.deepEqual(
       runsResponse.runs.map((recording) => recording.endpointNameAtExecution).sort(),
       ['/apps-latest/recorded-web-app-action', '/apps/recorded-web-app-action'],

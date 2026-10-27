@@ -28,7 +28,11 @@ function checkedInventory(resources) {
         !Number.isInteger(item.replicas) ||
         item.replicas < 0,
     ) ||
-    resources.autoscalers.some((name) => typeof name !== 'string' || !resourceName.test(name))
+    resources.autoscalers.some((item) =>
+      typeof item === 'string'
+        ? !resourceName.test(item)
+        : !resourceName.test(item?.name ?? '') || !item.uid || !item.resourceVersion,
+    )
   )
     throw new Error('Unknown release workload: the cutover cannot prove complete reader ownership.');
   return resources;
@@ -86,6 +90,19 @@ export function assertCutoverJournal(journal, { release, namespace }) {
       !journal.resourceVersion)
   )
     throw new Error('Cutover journal identity or format does not match this release.');
+  const final = journal?.finalApply;
+  if (
+    final &&
+    (!['resuming', 'complete'].includes(journal.phase) ||
+      ![1, 2].includes(final.protocol) ||
+      (final.protocol === 2 &&
+        (!Number.isFinite(Date.parse(final.intendedAt)) ||
+          typeof final.acknowledged !== 'boolean' ||
+          (final.acknowledged &&
+            (!Number.isFinite(Date.parse(final.acknowledgedAt)) ||
+              Date.parse(final.acknowledgedAt) < Date.parse(final.intendedAt))))))
+  )
+    throw Error('Cutover final-apply intent or acknowledgement is invalid.');
 }
 
 /** Even a completed journal is owned until its runner releases the lease. */
@@ -159,10 +176,12 @@ export async function runManagedReleaseCutover({
       );
     if (
       verificationOnly &&
-      (journal.phase !== 'resuming' || journal.finalApply?.protocol !== 1 || typeof verifyExisting !== 'function')
+      (journal.phase !== 'resuming' ||
+        ![1, 2].includes(journal.finalApply?.protocol) ||
+        typeof verifyExisting !== 'function')
     )
       throw Error(
-        'Verification-only recovery requires a confirmed final apply in the exact resuming cutover; inspect ordinary recovery instead.',
+        'Verification-only recovery requires a recorded final-apply intent in the exact resuming cutover; inspect ordinary recovery instead.',
       );
   } else {
     if (verificationOnly) throw Error('Verification-only recovery requires an unfinished cutover.');
@@ -186,6 +205,7 @@ export async function runManagedReleaseCutover({
       phase: 'quiescing',
       workloads,
       autoscalers: resources.autoscalers,
+      claims: resources.claims,
     };
   }
 
@@ -220,7 +240,7 @@ export async function runManagedReleaseCutover({
     setHeartbeat,
     clearHeartbeat,
     onFailure: async (error, operation) => {
-      if (verificationOnly || operation.record.finalApply?.protocol === 1)
+      if (verificationOnly || [1, 2].includes(operation.record.finalApply?.protocol))
         throw Error(
           `Final-apply verification is incomplete; no further workload mutations were attempted. Inspect --resume-cutover ${operation.record.token} --verify-only (or --acceptance-only if already complete).\n${error instanceof Error ? error.message : String(error)}`,
           { cause: error },
@@ -278,12 +298,22 @@ export async function runManagedReleaseCutover({
         await safety.checkOwnedBaseline(operation.record, runner, now);
         safety.confirmSettlement(await verifyExisting(operation.record));
         assertLease();
-        await operation.complete({ verificationOnlyRecovery: true });
+        await operation.complete({
+          verificationOnlyRecovery: true,
+          finalApply: { ...operation.record.finalApply, verifiedByObservation: true },
+        });
         return;
       }
 
       // Ordinary recovery re-quiesces and reruns fenced validation. It never
       // assumes that a lost Helm acknowledgement means nothing committed.
+      if (operation.record.finalApply) {
+        await safety.checkOwnedBaseline(operation.record, runner, now);
+        // Keep the strict phase invariant: clear active final-apply authority
+        // while still resuming, retaining its actual acknowledgement as history.
+        // Only explicit ordinary recovery reaches this branch, never verify-only.
+        await operation.checkpoint({ previousFinalApply: operation.record.finalApply, finalApply: null });
+      }
       await step('quiescing', async () => {
         await safety.checkOwnedBaseline(operation.record, runner, now);
         await operation.checkpoint({ finalApply: null, recoveryCheckpoint: null });
@@ -306,10 +336,15 @@ export async function runManagedReleaseCutover({
           await waitForStopped();
         }
         assertLease();
+        // Intent permits explicit inspection after an uncertain Helm response,
+        // never automatic replay or an invented acknowledgement.
+        const finalApply = { protocol: 2, intendedAt: new Date(now()).toISOString(), acknowledged: false };
+        await operation.checkpoint({ finalApply });
         await resume();
-        // This is acknowledgement, not intent. An interrupted/lost Helm reply
-        // cannot manufacture permission to use verification-only recovery.
-        await operation.checkpoint({ finalApply: { protocol: 1, inventory: checkedInventory(await inventory()) } });
+        const acknowledged = { ...finalApply, acknowledged: true, acknowledgedAt: new Date(now()).toISOString() };
+        // Record the actual reply before another management read can fail.
+        await operation.checkpoint({ finalApply: acknowledged });
+        await operation.checkpoint({ finalApply: { ...acknowledged, inventory: checkedInventory(await inventory()) } });
       });
       await step('resuming', async () => safety.confirmSettlement(await settle(context())));
       await operation.complete();

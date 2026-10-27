@@ -26,6 +26,7 @@ import type {
 } from '../../../../studio-server-shared/workflow-types.js';
 import type {
   WorkflowRecordingExecutionIdentity,
+  WorkflowRunCost,
   WorkflowRecordingFilterStatus,
   WorkflowRecordingInputFilter,
   WorkflowRecordingRunsPageResponse,
@@ -85,6 +86,7 @@ export type PersistWorkflowExecutionRecordingOptions = {
   runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
+  cost?: WorkflowRunCost;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
   /** Runs only after durable recording metadata commits. */

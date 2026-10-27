@@ -25,6 +25,7 @@ import type { ChatV2PipelineRoundOptions, RunChatV2PipelineOptions } from './cha
 import { parseCustomProviderApi } from './customProviderApi.js';
 import { parseChatV2Provider, type ResolvedChatV2ProviderConfig } from './providerOptions.js';
 import { restoreOpenAICompatibleInstructionRoles } from './developerMessageRoles.js';
+import { validateTokenPricing } from '../tokenPricing.js';
 
 /** A fully executable model/profile selection plus safe configuration facts. */
 export type ResolvedLLMModelCandidate = {
@@ -42,6 +43,7 @@ export async function resolveLLMModelCandidate(params: {
 }): Promise<ResolvedLLMModelCandidate> {
   const { plan, profile } = params;
   const effectiveData = profile ? applyLLMProfileToNodeData(plan.data, profile) : plan.data;
+  const tokenPricing = validateTokenPricing(effectiveData.tokenPricing);
   if (hasLLMChatV2ToolResponseFormatConflict(effectiveData)) {
     throw new Error(LLM_CHAT_V2_TOOL_RESPONSE_FORMAT_CONFLICT_COPY.paragraphs[0]);
   }
@@ -104,6 +106,7 @@ export async function resolveLLMModelCandidate(params: {
     requestBodyOverlay,
     runOptions: {
       ...baseRunOptions,
+      tokenPricing,
       provider,
       model: resolvedProvider.model,
       modelId,

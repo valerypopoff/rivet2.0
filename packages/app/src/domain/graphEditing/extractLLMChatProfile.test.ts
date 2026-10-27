@@ -37,6 +37,7 @@ function createChatNode(): LLMChatV2Node {
       useTemperatureInput: true,
       useHeadersInput: true,
       useExtraProviderOptionsInput: true,
+      tokenPricing: { inputPerMillionTokens: 2, outputPerMillionTokens: 8, cacheWritePerMillionTokens: 3 },
     },
   };
 }
@@ -101,6 +102,8 @@ test('extractLLMChatConfigurationToProfile moves profile-owned inputs and keeps 
   assert.equal(result.nextChatNode.data.configurationMode, 'profile');
   assert.equal(result.profileNode.data.provider, 'custom');
   assert.equal(result.profileNode.data.model, 'custom-model');
+  assert.deepEqual(result.profileNode.data.tokenPricing, chatNode.data.tokenPricing);
+  assert.notEqual(result.profileNode.data.tokenPricing, chatNode.data.tokenPricing);
   assert.equal(result.profileNode.data.useModelInput, true);
   assert.equal(result.profileNode.data.apiKeySource, 'input');
   assert.deepEqual(result.profileNode.data.providerApiKeyNames, chatNode.data.providerApiKeyNames);

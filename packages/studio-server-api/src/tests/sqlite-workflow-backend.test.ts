@@ -2762,6 +2762,7 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
         runKind: 'published',
         status,
         durationMs: index + 1,
+        cost: index === 0 ? { status: 'complete', knownCostUsd: 0 } : index === 1 ? { status: 'partial', knownCostUsd: 0.5 } : undefined,
         executionIdentity: { surface: 'workflow_endpoint' },
         onPersisted: async (id) => {
           assert.equal(await backend.readWorkflowRecordingArtifact(id, 'recording'), recordingSerialized);
@@ -2769,6 +2770,7 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
             await backend.listWorkflowRecordingRunsPage({ workflowId: item.projectMetadataId!, page: 1, pageSize: 100 })
           ).runs.find((run) => run.id === id)!;
           assert.equal(summary.recordingUncompressedBytes, Buffer.byteLength(recordingSerialized));
+          assert.deepEqual(summary.cost, index === 0 ? { status: 'complete', knownCostUsd: 0 } : index === 1 ? { status: 'partial', knownCostUsd: 0.5 } : undefined);
           assert.ok(summary.recordingCompressedBytes < summary.recordingUncompressedBytes / 2);
         },
       });
@@ -2883,6 +2885,9 @@ test('SQLite recordings persist before callbacks, support bounded input search, 
       includeWarnings: true,
     });
     assert.equal(statistics.current.runCount, 3);
+    assert.deepEqual(statistics.cost, {
+      runCount: 3, completeCount: 1, partialCount: 1, unknownCount: 1, knownCostUsd: 0.5, averageCompleteCostUsd: 0,
+    });
     assert.equal(
       (await backend.listWorkflowRecordingWorkflows()).workflows.find(
         (workflow) => workflow.workflowId === item.projectMetadataId,

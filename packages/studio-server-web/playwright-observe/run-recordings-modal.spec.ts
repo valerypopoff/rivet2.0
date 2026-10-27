@@ -953,6 +953,91 @@ async function deleteFirstRun(page: Page, modal: Locator) {
 }
 
 test.describe('Run recordings modal', () => {
+  test('refresh starts a fresh recordings session and replaces an in-flight input search', async ({ page }, testInfo) => {
+    const search = responseGate();
+    let catalogLoads = 0;
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname.endsWith('/recordings/workflows')) catalogLoads += 1;
+    });
+    await installRunRecordingRoutes(page, {
+      beforeRuns: async (url) => {
+        if (url.searchParams.has('inputPath')) await search.promise;
+      },
+    });
+    try {
+      const modal = await openLatestFlowRecordings(page);
+      const refresh = modal.getByRole('button', { name: 'Refresh run recordings', exact: true });
+      await expect(refresh).toHaveText('');
+      await expect(refresh.locator('svg')).toHaveCount(1);
+      const titleBounds = await modal.locator('.run-recordings-title').boundingBox();
+      const refreshBounds = await refresh.boundingBox();
+      expect(refreshBounds!.x).toBeGreaterThan(titleBounds!.x + titleBounds!.width);
+      expect(
+        Math.abs(refreshBounds!.y + refreshBounds!.height / 2 - titleBounds!.y - titleBounds!.height / 2),
+      ).toBeLessThan(1);
+      await choosePageSizeTen(modal);
+      await modal.getByRole('button', { name: 'Next', exact: true }).click();
+      await expect(modal.locator('.run-recordings-page-status')).toHaveText('Page 2 of 2');
+      await modal.getByRole('button', { name: /^Bad only/ }).click();
+      await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+      await modal.getByRole('combobox', { name: 'Input JSON path' }).fill('$.foo');
+      await modal.getByLabel('Value', { exact: true }).fill('bar');
+      const searchStarted = page.waitForRequest((request) => new URL(request.url()).searchParams.has('inputPath'));
+      await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+      await searchStarted;
+      const previousLoads = catalogLoads;
+      const dialogElement = await modal.elementHandle();
+      const backdropElement = await page.getByTestId('run-recordings-modal--blanket').elementHandle();
+      await refresh.click();
+      await expect.poll(() => catalogLoads).toBe(previousLoads + 1);
+      expect(await dialogElement!.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await backdropElement!.evaluate((element) => element.isConnected)).toBe(true);
+      await expect(refresh).toBeFocused();
+      await expect(modal.locator('.run-recordings-select__single-value')).toHaveText('Any');
+      await expect(modal.getByRole('button', { name: '20', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(modal.getByRole('button', { name: /^All/ })).toHaveAttribute('aria-pressed', 'true');
+      await expect(modal.locator('.run-recordings-page-status')).toHaveCount(0);
+      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
+      await expect(modal.getByRole('combobox', { name: 'Input JSON path' })).toHaveCount(0);
+      search.release();
+      await expect(modal.locator('.run-recordings-input-search-status')).toHaveCount(0);
+      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
+      await page.screenshot({ path: testInfo.outputPath('refreshed.png') });
+    } finally {
+      search.release();
+    }
+  });
+
+  test('refresh during catalog loading starts a new read and ignores the older response', async ({ page }) => {
+    await installRunRecordingRoutes(page);
+    const firstLoad = responseGate();
+    let catalogLoads = 0;
+    await page.route('**/api/workflows/recordings/workflows', async (route) => {
+      const attempt = ++catalogLoads;
+      if (attempt === 1) await firstLoad.promise;
+      const { workflows } = createRunRecordingsFixture();
+      workflows[0]!.project.name = attempt === 1 ? 'Stale catalog' : 'Fresh catalog';
+      await route.fulfill({ json: { workflows } });
+    });
+    try {
+      await page.goto('/');
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      await page.getByRole('button', { name: 'Run recordings', exact: true }).click();
+      const modal = page.getByRole('dialog');
+      await expect.poll(() => catalogLoads).toBe(1);
+      await modal.getByRole('button', { name: 'Refresh run recordings', exact: true }).click();
+      await expect.poll(() => catalogLoads).toBe(2);
+      await expect(modal.locator('.run-recordings-runs-title')).toHaveText('14 Runs');
+      firstLoad.release();
+      await modal.locator('.run-recordings-select__control').click();
+      await expect(page.locator('.run-recordings-select__option', { hasText: 'Fresh catalog' })).toBeVisible();
+      await expect(page.locator('.run-recordings-select__option', { hasText: 'Stale catalog' })).toHaveCount(0);
+    } finally {
+      firstLoad.release();
+    }
+  });
+
   test('uses the live endpoint name instead of an unpublished draft rename', async ({ page }) => {
     await installRunRecordingRoutes(page);
     const { workflows } = createRunRecordingsFixture();
@@ -2037,6 +2122,7 @@ test.describe('Run recordings modal', () => {
         await expect(button).toBeDisabled();
       }
       expect(deletions).toHaveLength(1);
+      await expect(modal.getByRole('button', { name: 'Refresh run recordings', exact: true })).toBeDisabled();
       await selectPublishedFlow(page, modal);
       await expect(modal.locator('.run-recordings-run')).toHaveCount(2);
       await deleteFirstRun(page, modal);
@@ -2486,6 +2572,7 @@ test.describe('Run recordings modal', () => {
     await expect.poll(() => recordingFetches).toEqual(['recording-b-1']);
     await expect(modal).toBeVisible();
     await expect(modal.locator('.run-recordings-shell')).toHaveAttribute('aria-busy', 'true');
+    await expect(modal.getByRole('button', { name: 'Refresh run recordings', exact: true })).toBeDisabled();
     await expect(run.locator('.run-recordings-run-open-button')).toBeDisabled();
     await expect(run.locator('.run-recordings-run-delete-button')).toBeDisabled();
     await expect(run.getByRole('status')).toHaveText('Opening…');

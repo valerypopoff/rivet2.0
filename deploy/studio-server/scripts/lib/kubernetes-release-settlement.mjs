@@ -6,6 +6,9 @@ const releaseLabel = 'app.kubernetes.io/instance';
 const componentLabel = 'app.kubernetes.io/component';
 const workloadKinds = new Set(['Deployment', 'StatefulSet']);
 const controllerKinds = new Set(['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicationController', 'CronJob']);
+export const releaseSettlementResourceTypes =
+  'deployment,statefulset,daemonset,replicationcontroller,cronjob,replicaset,job,pod,hpa';
+const observationGapLimit = (stableMs) => Math.max(2_500, Math.min(10_000, stableMs / 2));
 const terminal = (pod) => ['Succeeded', 'Failed'].includes(pod.status?.phase);
 const key = (resource) => `${resource.kind}/${resource.metadata?.name}`;
 const owner = (resource) => resource.metadata?.ownerReferences?.find((reference) => reference.controller === true);
@@ -132,7 +135,9 @@ function executionAutoscaler(resources, release, namespace) {
   return { candidate, binding };
 }
 
-function replicaBounds(resources, expected, release, namespace) {
+/** One capacity policy for settlement and final stored-manifest verification. */
+export function releaseReplicaBounds(resources, release, namespace) {
+  const expected = resources.filter((resource) => workloadKinds.has(resource.kind));
   const bounds = new Map(
     expected.map((resource) => [
       key(resource),
@@ -191,7 +196,7 @@ export function inspectReleaseSettlement({ resources, items, release, namespace,
     throw new Error('Release settlement workload identity is missing or inconsistent.');
   if (new Set(expected.map(key)).size !== expected.length)
     throw new Error('Release settlement rendered duplicate workload identities.');
-  const bounds = replicaBounds(resources, expected, release, namespace);
+  const bounds = releaseReplicaBounds(resources, release, namespace);
   if (
     !Array.isArray(retainedExecution) ||
     new Set(retainedExecution.map((r) => r.name)).size !== retainedExecution.length ||
@@ -485,6 +490,29 @@ export function inspectReleaseSettlement({ resources, items, release, namespace,
   };
 }
 
+/** A final settings/identity check must not outlive the health observation it
+ * is completing. Reuse the same inspector and polling-gap bound as the wait. */
+export function assertReleaseSettlementCurrent({ settlement, now = Date.now, ...options }) {
+  const current = inspectReleaseSettlement(options);
+  const elapsed = now() - Date.parse(settlement?.observedAt);
+  if (
+    settlement?.settled !== true ||
+    settlement.healthy !== true ||
+    settlement.release !== options.release ||
+    settlement.namespace !== options.namespace ||
+    !Number.isFinite(settlement.stableMs) ||
+    settlement.stableMs < 0 ||
+    !Number.isFinite(elapsed) ||
+    elapsed < 0 ||
+    elapsed > observationGapLimit(settlement.stableMs) ||
+    !current.settled ||
+    current.fingerprint !== settlement.fingerprint
+  )
+    throw Error(
+      'Release health, identities or capacity changed after stable observation, or its evidence is stale. Repeat verification without replaying deployment.',
+    );
+}
+
 /** Wait for candidate workload settlement at live autoscaled capacity. This is
  * infrastructure acceptance; public traffic and application checks are separate. */
 export async function waitForReleaseSettlement({
@@ -523,19 +551,12 @@ export async function waitForReleaseSettlement({
   // A slow management-plane read is not evidence that workloads stayed healthy
   // throughout the blind interval. Allow ordinary list latency, but require
   // repeated fresh observations within the stability window.
-  const maximumObservationGapMs = Math.max(2_500, Math.min(10_000, stableMs / 2));
+  const maximumObservationGapMs = observationGapLimit(stableMs);
   let stableSince = null;
   let previousFingerprint;
   let previousObservedAt = null;
   while (true) {
-    const response = await kube([
-      'get',
-      'deployment,statefulset,daemonset,replicationcontroller,cronjob,replicaset,job,pod,hpa',
-      '--namespace',
-      namespace,
-      '-o',
-      'json',
-    ]);
+    const response = await kube(['get', releaseSettlementResourceTypes, '--namespace', namespace, '-o', 'json']);
     let items;
     try {
       items = JSON.parse(response.stdout).items;

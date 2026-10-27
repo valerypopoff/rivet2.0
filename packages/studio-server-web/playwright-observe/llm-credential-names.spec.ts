@@ -219,3 +219,125 @@ test('LLM Profile exposes the same built-in-provider credential contract', async
   await addNode(editor, 'LLM Profile');
   await expectOpenAiCredentialDefaults(editor);
 });
+
+for (const nodeName of ['LLM Profile', 'Decision AI Profile', 'LLM Chat', 'Decision AI run']) {
+  test(`${nodeName} shows system pricing and preserves explicit custom rates`, async ({ page }, testInfo) => {
+    const editor = await openEmptyProject(page, `pricing-${nodeName.replaceAll(' ', '-')}`);
+    await addNode(editor, nodeName);
+    const pricing = editor.getByRole('region', { name: 'Token pricing', exact: true });
+    const pricingSection = editor
+      .getByRole('button', { name: 'Token pricing', exact: true })
+      .and(editor.locator('button'));
+    await expect(pricingSection).toHaveAttribute('aria-expanded', 'false');
+    await expect(pricing).toBeHidden();
+    await pricingSection.click();
+    await expect(pricing).toBeVisible();
+    const contentId = await pricingSection.getAttribute('aria-controls');
+    expect(contentId).toBeTruthy();
+    await expect(pricing).toHaveAttribute('id', contentId!);
+    const labelledBy = await pricing.getAttribute('aria-labelledby');
+    await expect(editor.locator(`[id="${labelledBy}"]`)).toHaveCount(1);
+    await expect(pricing.getByLabel('Default token prices')).toContainText('Default rates: Input: $');
+    await expect(pricing).toContainText('Price overrides are optional.');
+    await expect(pricing).not.toContainText('Rivet rates');
+    const toggle = pricing.getByRole('checkbox', { name: 'Override token prices', exact: true });
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    const input = pricing.getByLabel('Input USD / 1M tokens', { exact: true });
+    const output = pricing.getByLabel('Output USD / 1M tokens', { exact: true });
+    await expect(input).not.toHaveValue('');
+    await input.fill('2.5');
+    await output.fill('0');
+    await pricing.getByLabel('Cached input (read) USD / 1M tokens', { exact: true }).fill('0.25');
+    await pricing.getByLabel('Cache write USD / 1M tokens', { exact: true }).fill('3');
+    await expect(pricing.getByRole('alert')).toHaveCount(0);
+    await pricingSection.click();
+    await expect(pricing).toBeHidden();
+    await pricingSection.click();
+    await expect(input).toHaveValue('2.5');
+    await expect(output).toHaveValue('0');
+    const fieldsFit = await pricing.evaluate((panel) => {
+      const bounds = panel.getBoundingClientRect();
+      return [...panel.querySelectorAll('input[type="number"]')].every((input) => {
+        const field = input.getBoundingClientRect();
+        return field.width > 60 && field.left >= bounds.left - 1 && field.right <= bounds.right + 1;
+      });
+    });
+    expect(fieldsFit, 'price inputs must fit inside the panel without horizontal overflow').toBe(true);
+    await pricing.screenshot({ path: testInfo.outputPath('profile-pricing.png') });
+    await page.keyboard.press('Escape');
+    await editor
+      .locator('.node', { has: editor.locator('.node-title', { hasText: new RegExp(`^${nodeName}$`) }) })
+      .dblclick();
+    await expect(input).toHaveValue('2.5');
+    await expect(output).toHaveValue('0');
+    await expect(pricing.getByLabel('Cached input (read) USD / 1M tokens', { exact: true })).toHaveValue('0.25');
+    await expect(pricing.getByLabel('Cache write USD / 1M tokens', { exact: true })).toHaveValue('3');
+    // Compose edits in a single browser task, without allowing a React render
+    // to make a stale nested-object snapshot appear correct.
+    await pricing.evaluate((panel) => {
+      const fields = [...panel.querySelectorAll<HTMLInputElement>('input[type="number"]')];
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      for (const [index, value] of ['3.5', '7', '', ''].entries()) {
+        setter.call(fields[index], value);
+        fields[index]!.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    await page.keyboard.press('Escape');
+    await editor
+      .locator('.node', { has: editor.locator('.node-title', { hasText: new RegExp(`^${nodeName}$`) }) })
+      .dblclick();
+    await expect(input).toHaveValue('3.5');
+    await expect(output).toHaveValue('7');
+    await expect(pricing.getByLabel('Cached input (read) USD / 1M tokens', { exact: true })).toHaveValue('');
+    await expect(pricing.getByLabel('Cache write USD / 1M tokens', { exact: true })).toHaveValue('');
+    await expect(pricing.getByRole('alert')).toHaveCount(0);
+    await pricing.getByRole('button', { name: 'Use default rates' }).click();
+    await expect(input).not.toHaveValue('3.5');
+    await pricing.evaluate((panel) => {
+      const oldInput = panel.querySelector<HTMLInputElement>('input[type="number"]')!;
+      panel.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(oldInput, '99');
+      oldInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect(toggle).not.toBeChecked();
+    await expect(input).toHaveCount(0);
+    if (nodeName === 'LLM Profile' || nodeName === 'LLM Chat') {
+      await selectProvider(editor, 'Custom');
+      await expect(pricing.getByLabel('Default token prices')).toContainText('Input: unknown');
+      await toggle.check();
+      await expect(pricing.getByRole('button', { name: 'Use default rates' })).toBeDisabled();
+      await expect(pricing.getByRole('alert')).toContainText('inputPerMillionTokens');
+      await input.fill('0');
+      await output.fill('0');
+      await expect(pricing.getByRole('alert')).toHaveCount(0);
+    }
+    if (nodeName === 'LLM Chat' || nodeName === 'Decision AI run') {
+      await toggle.check();
+      await input.fill('6');
+      await output.fill('9');
+      const label = nodeName === 'LLM Chat' ? 'LLM' : 'Decision AI';
+      const source = editor.getByRole('group', { name: `${label} configuration source`, exact: true });
+      await source.getByRole('button', { name: 'From profile', exact: true }).click();
+      await expect(pricing).toHaveCount(0);
+      await source.getByRole('button', { name: 'Inline', exact: true }).click();
+      await expect(toggle).toBeChecked();
+      await expect(input).toHaveValue('6');
+      await expect(output).toHaveValue('9');
+      await editor.getByRole('button', { name: `Export ${label} settings to profile node`, exact: true }).click();
+      await expect(source.getByRole('button', { name: 'From profile', exact: true })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      await page.keyboard.press('Escape');
+      const profileName = `${label} Profile`;
+      await editor
+        .locator('.node', { has: editor.locator('.node-title', { hasText: new RegExp(`^${profileName}$`) }) })
+        .dblclick();
+      if ((await pricingSection.getAttribute('aria-expanded')) === 'false') await pricingSection.click();
+      await expect(toggle).toBeChecked();
+      await expect(input).toHaveValue('6');
+      await expect(output).toHaveValue('9');
+    }
+  });
+}

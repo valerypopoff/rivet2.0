@@ -29,6 +29,7 @@ import './RunStatisticsModal.css';
 
 type PeriodPreset = '24h' | '7d' | '30d' | '90d' | 'custom';
 type RunKind = 'published' | 'latest' | 'both';
+type ChartGrouping = Exclude<WorkflowRunStatisticsAggregation, 'auto'>;
 
 type RunStatisticsModalProps = {
   isOpen: boolean;
@@ -52,6 +53,11 @@ const timestampFormatter = new Intl.DateTimeFormat(undefined, {
 // Green, yellow, and red are reserved for run outcomes in this modal.
 const CHART_MEDIAN_COLOR = '#5aa9ff';
 const CHART_P95_COLOR = '#c58aff';
+const costFormatter = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumSignificantDigits: 6 });
+
+function formatCost(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? 'Unavailable' : costFormatter.format(value);
+}
 
 function getPeriod(preset: Exclude<PeriodPreset, 'custom'>): WorkflowRunStatisticsPeriod {
   const to = new Date();
@@ -120,7 +126,8 @@ function getStatisticsQueryKey(
   runKind: RunKind,
   includeFailed: boolean,
   includeWarnings: boolean,
-  aggregation: WorkflowRunStatisticsAggregation,
+  durationGrouping: ChartGrouping,
+  costGrouping: ChartGrouping,
 ): string {
   return JSON.stringify([
     getWorkflowRunStatisticsTargetKey(target),
@@ -129,7 +136,8 @@ function getStatisticsQueryKey(
     runKind,
     includeFailed,
     includeWarnings,
-    aggregation,
+    durationGrouping,
+    costGrouping,
   ]);
 }
 
@@ -150,6 +158,19 @@ function MetricCard({ label, value }: { label: string; value: number | null }) {
       <div className="run-statistics-metric-label">{label}</div>
       <div className="run-statistics-metric-value">{formatDuration(value)}</div>
     </div>
+  );
+}
+
+function ChartGroupingControl({ label, value, onChange }: {
+  label: string;
+  value: ChartGrouping;
+  onChange: (value: ChartGrouping) => void;
+}) {
+  return (
+    <SegmentedControl label={label}>
+      <SegmentedControlButton selected={value === 'day'} onClick={() => onChange('day')}>By day</SegmentedControlButton>
+      <SegmentedControlButton selected={value === 'week'} onClick={() => onChange('week')}>By week</SegmentedControlButton>
+    </SegmentedControl>
   );
 }
 
@@ -176,10 +197,12 @@ function OutcomeCard({
 }) {
   return (
     <div className={`run-statistics-outcome-card ${tone}`}>
-      <div className="run-statistics-metric-label">{label}</div>
-      <div className="run-statistics-outcome-value">{formatPercentage(count, total)}</div>
+      <div className="run-statistics-outcome-heading">
+        <div className="run-statistics-metric-label">{label}</div>
+        <div className="run-statistics-outcome-value" title="Share of included runs">{total > 0 ? formatPercentage(count, total) : '—'}</div>
+      </div>
       <div className="run-statistics-outcome-count">
-        {count.toLocaleString()} of {total.toLocaleString()} {total === 1 ? 'run' : 'runs'}
+        {count.toLocaleString()} {count === 1 ? 'run' : 'runs'}
       </div>
     </div>
   );
@@ -240,7 +263,8 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('7d');
   const [period, setPeriod] = useState<WorkflowRunStatisticsPeriod>(() => getPeriod('7d'));
   const [runKind, setRunKind] = useState<RunKind>('published');
-  const [aggregation, setAggregation] = useState<WorkflowRunStatisticsAggregation>('auto');
+  const [durationGrouping, setDurationGrouping] = useState<ChartGrouping>('day');
+  const [costGrouping, setCostGrouping] = useState<ChartGrouping>('day');
   const [includeFailed, setIncludeFailed] = useState(false);
   const [includeWarnings, setIncludeWarnings] = useState(false);
   const [catalog, setCatalog] = useState<WorkflowRunStatisticsCatalogResponse | null>(null);
@@ -265,7 +289,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
     [catalog, catalogReady, selectedTargetKey],
   );
   const statisticsQueryKey = selectedTarget
-    ? getStatisticsQueryKey(selectedTarget.target, period, runKind, includeFailed, includeWarnings, aggregation)
+    ? getStatisticsQueryKey(selectedTarget.target, period, runKind, includeFailed, includeWarnings, durationGrouping, costGrouping)
     : null;
   const statisticsReady = Boolean(
     statistics &&
@@ -314,14 +338,18 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
     const requestKey = statisticsQueryKey;
     setStatisticsLoading(true);
     setStatisticsError(null);
-    void fetchWorkflowRunStatistics({
-      target: selectedTarget.target,
-      period,
-      runKind,
-      includeFailed,
-      includeWarnings,
-      aggregation,
-    }, { signal: controller.signal })
+    void fetchWorkflowRunStatistics(
+      {
+        target: selectedTarget.target,
+        period,
+        runKind,
+        includeFailed,
+        includeWarnings,
+        aggregation: durationGrouping,
+        costAggregation: costGrouping,
+      },
+      { signal: controller.signal },
+    )
       .then((nextStatistics) => {
         if (controller.signal.aborted) return;
         setStatistics(nextStatistics);
@@ -341,11 +369,10 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
 
   if (!isOpen) return null;
 
-  const selectedTitle = selectedTarget ? formatTargetLabel(selectedTarget) : '';
-  const excludedCurrent = statistics
-    ? statistics.currentExcludedStatusCounts.failed + statistics.currentExcludedStatusCounts.suspicious
-    : 0;
   const currentStatusTotal = statistics ? getStatusTotal(statistics.currentStatusCounts) : 0;
+  const includedStatusTotal = statistics ? statistics.currentStatusCounts.succeeded
+    + (includeFailed ? statistics.currentStatusCounts.failed : 0)
+    + (includeWarnings ? statistics.currentStatusCounts.suspicious : 0) : 0;
   const selectedPeriodLabel = validPeriod
     ? `${timestampFormatter.format(new Date(period.from))} to ${timestampFormatter.format(new Date(period.to))}`
     : 'Choose a valid period';
@@ -359,7 +386,7 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
               <div className="run-statistics-header-content">
                 <div className="project-settings-modal-heading run-statistics-heading">
                   <div className="project-settings-modal-title run-statistics-title">Run statistics</div>
-                  <div className="run-statistics-help">Compare processor execution time across retained run recordings.</div>
+                  <div className="run-statistics-help">Compare duration and estimated AI cost across retained run recordings.</div>
                 </div>
                 <SegmentedControl className="run-statistics-surface-switcher" label="Run type">
                   <SegmentedControlButton selected={surface === 'endpoint'} onClick={() => setSurface('endpoint')}>Endpoints</SegmentedControlButton>
@@ -410,12 +437,10 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                   </SegmentedControl>
                 </div>
                 <div className="run-statistics-control-group">
-                  <div className="run-recordings-field-label">Chart grouping</div>
-                  <SegmentedControl label="Chart grouping">
-                    <SegmentedControlButton selected={aggregation === 'auto'} onClick={() => setAggregation('auto')}>Auto</SegmentedControlButton>
-                    <SegmentedControlButton selected={aggregation === 'day'} onClick={() => setAggregation('day')}>By day</SegmentedControlButton>
-                    <SegmentedControlButton selected={aggregation === 'week'} onClick={() => setAggregation('week')}>By week</SegmentedControlButton>
-                  </SegmentedControl>
+                  <div className="run-statistics-status-options" role="group" aria-label="Included runs">
+                    <Checkbox label="Include failed runs" isChecked={includeFailed} onChange={(event) => setIncludeFailed(event.currentTarget.checked)} />
+                    <Checkbox label="Include runs with warnings" isChecked={includeWarnings} onChange={(event) => setIncludeWarnings(event.currentTarget.checked)} />
+                  </div>
                 </div>
               </div>
 
@@ -440,36 +465,24 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                 {catalogReady && !selectedTarget ? <div className="run-statistics-empty-state">Choose a target with recorded runs.</div> : null}
                 {selectedTarget ? (
                   <>
-                    <div>
-                      <div className="run-statistics-target-title">{selectedTitle}</div>
-                      <div className="run-statistics-period-label">{selectedPeriodLabel}</div>
-                    </div>
+                    <div className="run-statistics-period-label">{statisticsReady ? `${includedStatusTotal.toLocaleString()} ${includedStatusTotal === 1 ? 'run' : 'runs'}, ` : ''}{selectedPeriodLabel}</div>
                     {statisticsError && statisticsResultKey === statisticsQueryKey ? <div className="project-settings-error">{statisticsError}</div> : null}
                     {statisticsLoading ? <div className="run-statistics-empty-state">Calculating statistics...</div> : null}
                     {statisticsReady && currentStatusTotal > 0 ? (
                       <>
-                          <div className="run-statistics-outcomes" role="region" aria-label="Run outcomes">
-                            <div>
-                              <div className="run-statistics-chart-heading">Run outcomes</div>
-                              <div className="run-statistics-outcomes-help">All matching runs in the selected period and version.</div>
-                            </div>
+                          {includeFailed || includeWarnings ? <div className="run-statistics-outcomes" role="region" aria-label="Run outcomes">
                             <div className="run-statistics-outcome-cards">
-                              <OutcomeCard label="Succeeded" tone="succeeded" count={statistics.currentStatusCounts.succeeded} total={currentStatusTotal} />
-                              <OutcomeCard label="Errors" tone="failed" count={statistics.currentStatusCounts.failed} total={currentStatusTotal} />
-                              <OutcomeCard label="Warnings" tone="warning" count={statistics.currentStatusCounts.suspicious} total={currentStatusTotal} />
+                              <OutcomeCard label="Succeeded" tone="succeeded" count={statistics.currentStatusCounts.succeeded} total={includedStatusTotal} />
+                              {includeFailed ? <OutcomeCard label="Errors" tone="failed" count={statistics.currentStatusCounts.failed} total={includedStatusTotal} /> : null}
+                              {includeWarnings ? <OutcomeCard label="Warnings" tone="warning" count={statistics.currentStatusCounts.suspicious} total={includedStatusTotal} /> : null}
                             </div>
-                          </div>
+                          </div> : null}
                           <section className="run-statistics-section" role="region" aria-label="Timing statistics">
-                            <div className="run-statistics-section-heading">
-                              <div>
-                                <div className="run-statistics-chart-heading">Statistics</div>
-                                <div className="run-statistics-statistics-help">Successful runs are included by default. Add other outcomes to the timing analysis when useful.</div>
-                              </div>
-                              <div className="run-statistics-status-options">
-                                <Checkbox label="Include failed runs" isChecked={includeFailed} onChange={(event) => setIncludeFailed(event.currentTarget.checked)} />
-                                <Checkbox label="Include runs with warnings" isChecked={includeWarnings} onChange={(event) => setIncludeWarnings(event.currentTarget.checked)} />
-                              </div>
+                            <div className="run-statistics-chart-header">
+                              <div className="run-statistics-chart-heading">Duration</div>
+                              <ChartGroupingControl label="Duration chart grouping" value={durationGrouping} onChange={setDurationGrouping} />
                             </div>
+                            <div className="run-statistics-statistics-help">Processor execution time, excluding network and recording persistence.</div>
                             <div className="run-statistics-metrics">
                               <MetricCard label="Median" value={statistics.current.medianDurationMs} />
                               <MetricCard label="P95" value={statistics.current.p95DurationMs} />
@@ -496,11 +509,43 @@ export const RunStatisticsModal: FC<RunStatisticsModalProps> = ({ isOpen, onClos
                                 </div>
                               </div>
                             ) : null}
-                            <div className="run-statistics-notes">
-                              <span>{statistics.current.runCount.toLocaleString()} included {statistics.current.runCount === 1 ? 'run' : 'runs'}.</span>
-                              {excludedCurrent > 0 ? <span>{excludedCurrent.toLocaleString()} failed or warning {excludedCurrent === 1 ? 'run is' : 'runs are'} excluded.</span> : null}
-                              <span>Times measure processor execution, not network or recording persistence.</span>
+                          </section>
+                          <section className="run-statistics-section" role="region" aria-label="Cost statistics">
+                            <div className="run-statistics-chart-header">
+                              <div className="run-statistics-chart-heading">Cost</div>
+                              <ChartGroupingControl label="Cost chart grouping" value={costGrouping} onChange={setCostGrouping} />
                             </div>
+                            <div className="run-statistics-statistics-help">Supported LLM and Decision AI estimates for included runs, including called projects and background work; not provider invoices.</div>
+                            {statistics.cost && statistics.costBuckets ? (
+                              <>
+                                <div className="run-statistics-cost-metrics">
+                                  <div className="run-statistics-metric-card"><div className="run-statistics-metric-label">Known subtotal</div><div className="run-statistics-metric-value">{formatCost(statistics.cost.knownCostUsd)}</div></div>
+                                  <div className="run-statistics-metric-card"><div className="run-statistics-metric-label">Average per complete run</div><div className="run-statistics-metric-value">{formatCost(statistics.cost.averageCompleteCostUsd)}</div></div>
+                                </div>
+                                {statistics.cost.partialCount + statistics.cost.unknownCount > 0 ? <div className="run-statistics-notes">Known subtotal can omit costs from partial or unknown runs.</div> : null}
+                                {statistics.costBuckets.some((bucket) => bucket.knownCostUsd != null) ? (
+                                  <div className="run-statistics-chart-card">
+                                    <div className="run-statistics-chart-heading">Cost over time</div>
+                                    {!statistics.costBuckets.some((bucket) => bucket.averageCompleteCostUsd != null) ? (
+                                      <div className="run-statistics-empty-state">No complete cost estimates to average for these runs.</div>
+                                    ) : null}
+                                    <div className="run-statistics-chart">
+                                      <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={statistics.costBuckets.map((bucket) => ({ ...bucket, label: timestampFormatter.format(new Date(bucket.from)) }))} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                                          <CartesianGrid stroke="rgba(255, 255, 255, 0.08)" vertical={false} />
+                                          <XAxis dataKey="label" minTickGap={36} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} />
+                                          <YAxis tickFormatter={formatCost} tick={{ fill: 'var(--grey-light)', fontSize: 11 }} tickLine={false} axisLine={false} width={76} />
+                                          <Tooltip formatter={(value: number | undefined) => formatCost(value)} contentStyle={{ background: '#1f2228', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6 }} labelStyle={{ color: '#dfe1e6' }} />
+                                          <Legend wrapperStyle={{ fontSize: 12 }} />
+                                          <Line type="linear" dataKey="knownCostUsd" name="Known subtotal" stroke={CHART_MEDIAN_COLOR} strokeWidth={2} connectNulls={false} />
+                                          <Line type="linear" dataKey="averageCompleteCostUsd" name="Average per complete run" stroke={CHART_P95_COLOR} strokeWidth={2} connectNulls={false} />
+                                        </LineChart>
+                                      </ResponsiveContainer>
+                                    </div>
+                                  </div>
+                                ) : <div className="run-statistics-empty-state">No known cost estimates for these runs.</div>}
+                              </>
+                            ) : <div className="run-statistics-empty-state">Cost statistics are not available from this server yet.</div>}
                           </section>
                       </>
                     ) : null}

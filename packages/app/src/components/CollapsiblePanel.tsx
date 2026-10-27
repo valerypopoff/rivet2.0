@@ -1,7 +1,7 @@
 import { css } from '@emotion/react';
 import ChevronDownIcon from 'majesticons/line/chevron-down-line.svg?react';
 import ChevronUpIcon from 'majesticons/line/chevron-up-line.svg?react';
-import { type FC, type HTMLAttributes, type ReactNode } from 'react';
+import { useId, type FC, type HTMLAttributes, type ReactNode } from 'react';
 import Collapsible from 'react-collapsible';
 
 export const collapsiblePanelStyles = css`
@@ -131,37 +131,45 @@ export const CollapsiblePanel: FC<{
   rootProps?: Omit<HTMLAttributes<HTMLDivElement>, 'children' | 'className'> &
     Record<`data-${string}`, string | undefined>;
   toggleClassName?: string;
-}> = ({ ariaControls, children, className, helper, label, onToggle, open, rootProps, toggleClassName }) => (
-  <div {...rootProps} className={className} css={collapsiblePanelStyles}>
-    <Collapsible
-      open={open}
-      handleTriggerClick={onToggle}
-      trigger={
-        <CollapsiblePanelToggle
-          ariaControls={ariaControls}
-          label={label}
-          helper={helper}
-          toggleClassName={toggleClassName}
-        />
-      }
-      triggerClassName="collapsible-panel-toggle-container"
-      triggerOpenedClassName="collapsible-panel-toggle-container open"
-      triggerWhenOpen={
-        <CollapsiblePanelToggle
-          ariaControls={ariaControls}
-          label={label}
-          helper={helper}
-          isOpen
-          toggleClassName={toggleClassName}
-        />
-      }
-      transitionTime={150}
-      easing="ease-out"
-    >
-      {children}
-    </Collapsible>
-  </div>
-);
+}> = ({ ariaControls, children, className, helper, label, onToggle, open, rootProps, toggleClassName }) => {
+  // The widget's Date.now() defaults collide when several settings groups mount together.
+  const id = useId();
+  const contentId = `rivet-panel-content-${id}`;
+  const triggerId = `rivet-panel-trigger-${id}`;
+  return (
+    <div {...rootProps} className={className} css={collapsiblePanelStyles}>
+      <Collapsible
+        contentElementId={contentId}
+        triggerElementProps={{ id: triggerId }}
+        open={open}
+        handleTriggerClick={onToggle}
+        trigger={
+          <CollapsiblePanelToggle
+            ariaControls={ariaControls ?? contentId}
+            label={label}
+            helper={helper}
+            toggleClassName={toggleClassName}
+          />
+        }
+        triggerClassName="collapsible-panel-toggle-container"
+        triggerOpenedClassName="collapsible-panel-toggle-container open"
+        triggerWhenOpen={
+          <CollapsiblePanelToggle
+            ariaControls={ariaControls ?? contentId}
+            label={label}
+            helper={helper}
+            isOpen
+            toggleClassName={toggleClassName}
+          />
+        }
+        transitionTime={150}
+        easing="ease-out"
+      >
+        {children}
+      </Collapsible>
+    </div>
+  );
+};
 
 /**
  * A persistent panel that shares the settings-section visual language without

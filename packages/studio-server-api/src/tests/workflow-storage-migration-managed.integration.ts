@@ -552,6 +552,7 @@ fixture: try {
       runKind: 'published',
       status: 'succeeded',
       durationMs: 7,
+      cost: { status: 'partial', knownCostUsd: 0.125 },
       encoding: 'identity',
       hasReplayDataset: false,
       recordingCompressedBytes: Buffer.byteLength(recordingContents),
@@ -664,10 +665,30 @@ fixture: try {
       archive: path.join(browserBackupDirectory(control, id), 'backup.tar.gz'),
       secret: destination.settingsEncryptionKey,
       installation,
-      ...(process.env.RIVET_RESTORE_OVERLAP_LINUX === '1' ? { dockerServices: {
-        database: { ip: docker('inspect', '--format', '{{(index .NetworkSettings.Networks "bridge").IPAddress}}', owned[0]!), port: 5432 },
-        objects: { ip: docker('inspect', '--format', '{{(index .NetworkSettings.Networks "bridge").IPAddress}}', owned[1]!), port: 9000 },
-      } } : {}),
+      ...(process.env.RIVET_RESTORE_OVERLAP_LINUX === '1'
+        ? {
+            dockerServices: {
+              database: {
+                ip: docker(
+                  'inspect',
+                  '--format',
+                  '{{(index .NetworkSettings.Networks "bridge").IPAddress}}',
+                  owned[0]!,
+                ),
+                port: 5432,
+              },
+              objects: {
+                ip: docker(
+                  'inspect',
+                  '--format',
+                  '{{(index .NetworkSettings.Networks "bridge").IPAddress}}',
+                  owned[1]!,
+                ),
+                port: 9000,
+              },
+            },
+          }
+        : {}),
     });
     break fixture;
   }
@@ -1265,6 +1286,7 @@ fixture: try {
       runKind: 'published',
       status: 'succeeded',
       durationMs: 7,
+      cost: { status: 'unknown', knownCostUsd: null },
       endpointName: 'migration-fixture',
       errorMessage: null,
       recordingContents,
@@ -1312,6 +1334,11 @@ fixture: try {
       await target.initialize();
       assert.equal((await target.readWorkflowMigrationSnapshot('fixture.rivet-project'))?.contents, liveContents);
       assert.equal(await target.readWorkflowRecordingArtifact(recordingId, 'recording'), recordingContents);
+      const migratedRuns = await target.listWorkflowRecordingRunsPage({ workflowId: projectId, page: 1, pageSize: 20 });
+      assert.deepEqual(migratedRuns.runs.find((run) => run.id === recordingId)?.cost, {
+        status: 'unknown',
+        knownCostUsd: null,
+      });
       const migrated = (await target.listWorkflowProjectWebApps('fixture.rivet-project')).project;
       assert.equal(migrated.settings.status, 'unpublished');
       assert.equal(migrated.settings.publicationStatus, 'unpublished_changes');

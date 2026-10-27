@@ -62,6 +62,19 @@ if(r.stage==='backup'){
  databaseRestoreVerified:true,objectReferencesCovered:true,encryptionKeysRecoverable:true,unrelatedDataExcluded:true,artifacts:[]};
  for(const role of ['database','objects','keys','verification']){const data='synthetic fixture '+role;await fs.writeFile(path.join(directory,role),data);
  out.artifacts.push({role,path:role,sha256:'sha256:'+createHash('sha256').update(data).digest('hex')});}
+}else if(r.stage==='migration-validation'||r.stage==='migration-preflight'){
+ if(r.stage==='migration-validation'&&state.pods.length)throw Error('Old readers still exist during restored-copy migration validation');
+ if(state.fault==='migrationValidationFail'&&r.stage==='migration-validation')throw Error('Restored-copy migration failed');
+ if(state.fault==='migrationPreflightFail')throw Error('Migration prerequisites unavailable');
+ const data='synthetic restored-copy migration evidence';await fs.writeFile(path.join(directory,'migration.json'),data);
+ out={...out,kind:'rivet-maintenance-'+r.stage,passed:true,supportsSchemaMigration:true,candidateImageVerified:true,restoreEnvironmentReady:true,
+ isolatedRestore:true,migrationApplied:true,targetSchemaVerified:true,
+ preservedDataVerified:true,oldDatabaseReadersStopped:true,unrelatedDataExcluded:true,verifiedAt:new Date().toISOString(),
+ artifacts:[{role:'verification',path:'migration.json',sha256:'sha256:'+createHash('sha256').update(data).digest('hex')}]};
+ if(state.fault==='checkpointMetadataChanged'&&r.stage==='migration-validation'){
+  const file=path.join(r.checkpointDirectory,'receipt.json'), changed=JSON.parse(await fs.readFile(file,'utf8'));
+  changed.formatVersion=999;await fs.writeFile(file,JSON.stringify(changed));
+ }
 }else{out.kind=r.stage==='preflight'?'rivet-deployment-preflight':'rivet-deployment-acceptance';out.checks={};for(const name of (r.stage==='preflight'?['dependencies','capacity']:r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
  await fs.writeFile(path.join(directory,name),'synthetic application journey');out.checks[name]={passed:true,observed:true,evidence:name};}}
 await fs.writeFile(receipt,JSON.stringify(out));`;
@@ -84,7 +97,7 @@ test('deployment fixtures initialize an absent artifacts directory and remain is
   }
 });
 
-async function fixture(t, mode, fault) {
+async function fixture(t, mode, fault, schemaChange = false) {
   const directory = await createFixtureDirectory(root);
   t.after(async () => {
     await fs.rm(directory, { recursive: true, force: true });
@@ -165,8 +178,17 @@ async function fixture(t, mode, fault) {
       promotionEvidence: { workflow: 'Fixture only', runId: '1', runAttempt: 1 },
     });
   }
-  const previous = release('a'.repeat(40), 'a'),
-    candidate = release(sha, 'b', previous);
+  const previous = release('a'.repeat(40), 'a');
+  if (schemaChange)
+    previous.database.managedWorkflowSchema = {
+      version: previous.database.managedWorkflowSchema.version - 1,
+      minimumRollbackCompatibleVersion: previous.database.managedWorkflowSchema.version - 1,
+    };
+  const candidate = release(sha, 'b', previous);
+  if (schemaChange) {
+    delete candidate.evidence.ha;
+    delete candidate.evidence.runtimeControl;
+  }
   const selected = mode === 'topology' ? candidate : previous;
   const read = async (file) => parse(await fs.readFile(path.join(directory, file), 'utf8'));
   const base = merge(
@@ -193,7 +215,12 @@ async function fixture(t, mode, fault) {
     execution: { enabled: false },
     executionController: { enabled: false },
   };
-  if (fault === 'gkeHpa') base.autoscaling.proxy = { enabled: true, minReplicas: 6, maxReplicas: 8 };
+  if (fault === 'gkeHpa' || schemaChange) base.autoscaling.proxy = { enabled: true, minReplicas: 6, maxReplicas: 8 };
+  if (fault === 'controllerRecreation') {
+    base.autoscaling.executionController.enabled = true;
+    base.metrics = { enabled: true };
+    base.publishedExecutionAdmission = { mode: 'enforce', maxActiveRunsPerPod: 4 };
+  }
   if (mode === 'direct') {
     base.ha.enabled = false;
     base.availability.gkeGateway = false;
@@ -263,6 +290,34 @@ async function fixture(t, mode, fault) {
     acceptance: { script: 'artifacts/adapter.mjs', sha256: hash(adapter) },
   };
   await fs.writeFile(path.join(artifacts, 'policy.json'), JSON.stringify(policy));
+  if (schemaChange) {
+    await fs.writeFile(path.join(artifacts, 'baseline.json'), JSON.stringify(previous));
+    await fs.writeFile(
+      path.join(artifacts, 'maintenance-plan.json'),
+      JSON.stringify({
+        formatVersion: 1,
+        kind: 'rivet-maintenance-deployment',
+        release: 'rivet',
+        namespace: 'fixture',
+        context: 'fixture-context',
+        namespaceUid: state.namespaceUid,
+        installedManifestDigest: getStudioServerReleaseManifestDigest(previous),
+        installedManifestPath: 'artifacts/baseline.json',
+        candidateManifestDigest: getStudioServerReleaseManifestDigest(candidate),
+        valuesDigest: hash(await fs.readFile(path.join(artifacts, 'values.json'))),
+        issuedAt: new Date(Date.now() - 1000).toISOString(),
+        expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        reason: 'Explicit test-only schema-changing maintenance',
+        accepts: { interruption: true, qualificationWaived: true, dataLoss: false },
+        backup: policy.backup,
+        schemaMigration: {
+          fromVersion: previous.database.managedWorkflowSchema.version,
+          toVersion: candidate.database.managedWorkflowSchema.version,
+          ...policy.backup,
+        },
+      }),
+    );
+  }
   const bin = path.join(directory, 'bin');
   await fs.mkdir(bin);
   for (const name of ['helm.exe', 'kubectl.exe']) await fs.writeFile(path.join(bin, name), 'fixture executable marker');
@@ -358,6 +413,9 @@ async function fixture(t, mode, fault) {
           'rivet',
           '--timeout',
           '2h',
+          ...(schemaChange && !extra.includes('--acceptance-only')
+            ? ['--maintenance-plan', 'artifacts/maintenance-plan.json']
+            : []),
           ...(extra.includes('--acceptance-only')
             ? []
             : mode === 'maintenance'
@@ -440,6 +498,212 @@ async function fixture(t, mode, fault) {
 const clone = structuredClone;
 
 test(
+  'schema-changing waiver is rejected before downtime without its explicit migration-validation approval',
+  { timeout: 330000 },
+  async (t) => {
+    const f = await fixture(t, 'maintenance', null, true);
+    const planFile = path.join(f.directory, 'artifacts/maintenance-plan.json');
+    const plan = JSON.parse(await fs.readFile(planFile, 'utf8'));
+    delete plan.schemaMigration;
+    await fs.writeFile(planFile, JSON.stringify(plan));
+    const result = await f.invoke(['--preflight-only']);
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /explicit schemaMigration approval/);
+    assert.equal((await f.state()).journal, undefined);
+    assert.equal(
+      (await f.calls()).filter((c) => ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]))
+        .length,
+      0,
+    );
+  },
+);
+
+test(
+  'migration adapter prerequisites are checked before maintenance ownership and workload changes',
+  { timeout: 330000 },
+  async (t) => {
+    const f = await fixture(t, 'maintenance', 'migrationPreflightFail', true);
+    const result = await f.invoke(['--preflight-only']);
+    assert.equal(result.code, 1, result.stdout + result.stderr);
+    assert.equal((await f.state()).journal, undefined);
+    assert.equal(
+      (await f.calls()).filter((c) => ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]))
+        .length,
+      0,
+    );
+  },
+);
+
+test(
+  'permanent schema-changing maintenance accepts intentional autoscaler-controller recreation and fresh activation',
+  { timeout: 330000 },
+  async (t) => {
+    const f = await fixture(t, 'maintenance', 'controllerRecreation', true);
+    const controller = (state) =>
+      state.resources.find((r) => r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler');
+    const oldUid = controller(await f.state()).metadata.uid;
+    const result = await f.invoke();
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    const state = await f.state();
+    assert.notEqual(controller(state).metadata.uid, oldUid);
+    const activation = JSON.parse(
+      await fs.readFile(path.join(f.directory, 'artifacts/result/execution-autoscaler-activation.json'), 'utf8'),
+    );
+    assert.equal(activation.activated, true);
+    assert.equal(state.completedCutover.phase, 'complete');
+  },
+);
+
+for (const fault of ['lostFinalInventory', 'lostFinalApply'])
+  test(
+    `schema-changing maintenance ${fault} recovers by observation, never reapplying Helm`,
+    { timeout: 660000 },
+    async (t) => {
+      const f = await fixture(t, 'maintenance', fault, true);
+      const originalHpa = (await f.state()).resources.find((r) => r.kind === 'HorizontalPodAutoscaler').metadata.uid;
+      const deployment = await f.invoke();
+      assert.equal(deployment.code, 1, deployment.stdout + deployment.stderr);
+      assert.match(deployment.stderr, /--verify-only/);
+      const state = await f.state(),
+        record = JSON.parse(state.journal.data.record);
+      assert.equal(record.phase, 'resuming');
+      assert.equal(record.finalApply.acknowledged, fault !== 'lostFinalApply');
+      assert.equal(record.finalApply.inventory, undefined);
+      assert.notEqual(
+        state.resources.find((r) => r.kind === 'HorizontalPodAutoscaler').metadata.uid,
+        originalHpa,
+        'the final HPA is intentionally recreated after fenced validation',
+      );
+      assert.deepEqual(
+        (await f.stages()).map((s) => s.stage),
+        ['preflight', 'migration-preflight', 'before', 'backup', 'migration-validation'],
+      );
+      const count = (await f.calls()).filter(
+        (c) =>
+          (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+          (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+      ).length;
+      const verified = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
+      assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+      assert.equal(
+        (await f.calls()).filter(
+          (c) =>
+            (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+            (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+        ).length,
+        count,
+      );
+      const completed = JSON.parse((await f.state()).journal.data.record);
+      assert.equal(completed.phase, 'complete');
+      assert.equal(
+        completed.finalApply.acknowledged,
+        fault !== 'lostFinalApply',
+        'observation cannot invent a Helm reply',
+      );
+      assert.equal(completed.finalApply.verifiedByObservation, true);
+      assert.equal((await f.stages()).filter((s) => s.stage === 'migration-validation').length, 1);
+      const acceptance = await f.invoke(['--acceptance-only']);
+      assert.equal(acceptance.code, 0, acceptance.stdout + acceptance.stderr);
+      assert.equal(
+        (await f.calls()).filter(
+          (c) =>
+            (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+            (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+        ).length,
+        count,
+        'acceptance of the exact installed waived release cannot reapply workloads',
+      );
+      if (fault === 'lostFinalInventory') {
+        const settled = await f.state(),
+          stages = (await f.stages()).length;
+        const stateFile = path.join(f.directory, 'state.json');
+        for (const drift of [
+          'helm-status',
+          'helm-settings',
+          'live-settings',
+          'startup-fence',
+          'afterSettlementNotReady',
+          'afterSettlementPodReplaced',
+        ]) {
+          const changed = structuredClone(settled);
+          if (drift === 'helm-status') changed.releaseStatus = 'failed';
+          else if (drift === 'helm-settings') {
+            const resources = parseAllDocuments(changed.manifest)
+              .map((doc) => doc.toJSON())
+              .filter(Boolean);
+            resources
+              .find((r) => r.kind === 'StatefulSet')
+              .spec.template.spec.containers[0].env.push({ name: 'UNAPPROVED', value: 'changed' });
+            changed.manifest = resources.map((r) => JSON.stringify(r)).join('\n---\n');
+          } else if (drift.startsWith('afterSettlement')) changed.fault = drift;
+          else {
+            const owner = changed.resources.find((r) => r.kind === 'StatefulSet');
+            if (drift === 'live-settings')
+              owner.spec.template.spec.containers[0].env.push({ name: 'UNAPPROVED', value: 'changed' });
+            else {
+              owner.spec.template.metadata.annotations ??= {};
+              owner.spec.template.metadata.annotations['rivet.dev/execution-retirement-fence'] = 'stale';
+            }
+          }
+          await fs.writeFile(stateFile, JSON.stringify(changed));
+          const refused = await f.invoke(['--acceptance-only']);
+          assert.equal(refused.code, 1, `${drift}: ${refused.stdout}${refused.stderr}`);
+          assert.match(refused.stderr, /verification failed; no release changes were made/);
+          assert.equal((await f.stages()).length, stages, `${drift} cannot run application acceptance`);
+          assert.equal(
+            (await f.calls()).filter(
+              (c) =>
+                (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+                (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+            ).length,
+            count,
+          );
+        }
+        const historicalCapacity = structuredClone(settled);
+        const saved = parseAllDocuments(historicalCapacity.manifest)
+          .map((doc) => doc.toJSON())
+          .filter(Boolean);
+        saved.find(
+          (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'proxy',
+        ).spec.replicas = 7;
+        historicalCapacity.manifest = saved.map((r) => JSON.stringify(r)).join('\n---\n');
+        await fs.writeFile(stateFile, JSON.stringify(historicalCapacity));
+        const grown = await f.invoke(['--acceptance-only']);
+        assert.equal(grown.code, 0, grown.stdout + grown.stderr);
+        assert.equal(
+          (await f.stages()).length,
+          stages + 1,
+          'valid historical autoscaled capacity still permits acceptance',
+        );
+        assert.equal(
+          (await f.calls()).filter(
+            (c) =>
+              (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+              (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+          ).length,
+          count,
+        );
+      }
+    },
+  );
+
+test(
+  'failed restored-copy migration or altered checkpoint blocks live candidate templates and keeps the exact operation recoverable',
+  { timeout: 330000 },
+  async (t) => {
+    for (const fault of ['migrationValidationFail', 'checkpointMetadataChanged']) {
+      const f = await fixture(t, 'maintenance', fault, true);
+      const result = await f.invoke();
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      const record = JSON.parse((await f.state()).journal.data.record);
+      assert.equal(record.phase, 'quiesced', fault);
+      assert.equal((await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length, 0, fault);
+      assert.equal((await f.state()).pods.length, 0, fault);
+    }
+  },
+);
+
+test(
   'real readiness preflight rejects a pending Helm release or unavailable local prerequisites without maintenance',
   { timeout: 660000 },
   async (t) => {
@@ -480,7 +744,7 @@ test(
     assert.match(deployment.stderr, /--verify-only/);
     const record = JSON.parse((await f.state()).journal.data.record);
     assert.equal(record.phase, 'resuming');
-    assert.equal(record.finalApply.protocol, 1);
+    assert.equal(record.finalApply.protocol, 2);
     assert.ok((await f.state()).pods.length > 0);
     const mutations = (calls) =>
       calls.filter(

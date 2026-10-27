@@ -480,8 +480,13 @@ test('Classifier Evaluate groups provider, model and credentials in an initially
   );
   assert.deepEqual(
     editors.map((editor) => editor.label),
-    ['Configuration', 'Model', 'Outputs', 'Error behavior'],
+    ['Configuration', 'Model', 'Token pricing', 'Outputs', 'Error behavior'],
   );
+  const pricing = editors.find((editor) => editor.type === 'group' && editor.label === 'Token pricing');
+  assert.ok(pricing?.type === 'group');
+  assert.equal(pricing.defaultOpen, false);
+  assert.equal(pricing.hideIf?.({ configurationMode: 'profile' }), true);
+  assert.equal(pricing.hideIf?.({ configurationMode: 'inline' }), false);
   const modelEditor = modelGroup.editors.find((editor) => editor.type === 'custom' && editor.dataKey === 'model');
   assert.ok(modelEditor?.type === 'custom');
   assert.equal(modelEditor.customEditorId, 'ClassifierModel');

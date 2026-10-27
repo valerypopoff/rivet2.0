@@ -12,11 +12,47 @@ generate recordings, see the [recording API documentation](../api-reference/reco
 
 Open **Run recordings** and leave the workflow selector on **Any** to browse all workflows, or choose an individual workflow. **Any** is always the first option and the default for a newly opened recordings session. The workflow details card appears only when an individual workflow is selected. **Bad only**, pagination and **Filter by input** work in either mode. Input filters search captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
 
+Click the refresh icon beside **Run recordings** to reload the workflow list and
+recordings as if you closed and reopened the modal. It resets to **Any**, **All**,
+page 1 and 20 runs per page, clearing the current input search and expanded
+sub-runs. Your saved input-path history remains available. Refresh is temporarily
+disabled while a recording is opening or being deleted.
+
 ### Recording editor runs
 
 Enable **Record local graph executions** in Rivet settings to retain live hosted editor runs in **Run recordings**. Both Browser execution and Studio Server's internal Node executor can capture the parent run and called-project Subgraph runs, including successful runs with no LLM nodes. Server recording policy and retention still apply. Desktop or external Remote Debugger execution does not upload through this hosted-editor feature, and replaying an old recording does not create a new one.
 
 A parent may succeed even if a child fails when the Subgraph's error output handles that failure. Each recording retains its own outcome. An interrupted connection or failed upload may leave a run unavailable; do not assume a completed graph guarantees a retained recording.
+
+### Estimated cost statistics
+
+Open **Run statistics**, choose an endpoint or web-app action and a time period,
+then see separate **Duration** and **Cost** panels. **Workflow endpoint** selects
+a workflow's retained endpoint history, not a separate URL: renaming its endpoint
+does not split that workflow's history. Web-app action and editor runs are not
+mixed into its endpoint statistics.
+
+The **Include failed runs** and **Include runs with warnings** checkboxes beside
+Period/Version control both panels. The summary shows **N runs, Date 1 to Date 2**
+for the included runs, with no separate cost-coverage count line. With both
+checkboxes off, no outcome cards are shown. Enabling failed runs shows
+Succeeded/Errors cards; enabling warnings shows Succeeded/Warnings; enabling
+both shows all three. Percentages use the included runs as their total.
+
+Each panel has its own **By day / By week** control, initially **By day**, so
+grouping one chart does not change the other. **Cost over time** always shows
+both **Known subtotal** and **Average per complete run**, distinguished by its legend.
+Both charts and the totals use the same recording snapshot, even with different
+grouping selections.
+Day/week boundaries use UTC; displayed dates use your browser's local time.
+
+For supported server AI calls, a root run includes work performed in referenced projects, including bundle members and background branches. Sub-runs are not added twice. Retries can incur additional cost; cached responses and recording playback do not create new provider charges in these estimates.
+
+Coverage distinguishes **complete**, **partial** and **unknown** estimates among the included runs. Partial runs contribute only their known subtotal; the average includes complete estimates only. Unknown is not zero. Older recordings, unknown model prices and unavailable attempt evidence can leave coverage incomplete. Enable failed or warning runs above the panels to include their duration and cost evidence; they are excluded from both by default.
+
+Cancelling a web-app action does not erase costs from calls that already finished. Its recording normally waits for execution cleanup; if that cannot finish promptly, Rivet preserves the known subtotal as partial rather than presenting it as a complete total. If no priced call has finished, the estimate remains unknown—not $0. A provider-reported zero remains valid evidence.
+
+These are USD estimates for retained endpoint/web-app recordings—not provider billing totals. Editor runs and arbitrary external calls from Code or third-party plugins are outside this chart's scope. Disabled, lost or expired recordings are not counted. Runs are grouped by their start time and appear after final recording persistence, which can be later than an early HTTP response when background work continues.
 
 ### Roots and sub-runs
 

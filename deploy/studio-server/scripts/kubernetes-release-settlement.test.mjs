@@ -4,6 +4,7 @@ import {
   inspectReleaseSettlement,
   waitForReleaseSettlement,
   waitForExecutionAutoscalerActivation,
+  assertReleaseSettlementCurrent,
 } from './lib/kubernetes-release-settlement.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
@@ -115,6 +116,48 @@ function fixture({ kind = 'StatefulSet', replicas = 2, rendered = 2, name = 'exe
   return { resources, items, controller, candidate, replicaSet, pods, hpa, liveHpa, release, namespace };
 }
 const inspect = (state) => inspectReleaseSettlement(state);
+
+test('final verification preserves the stable health, identity, capacity and freshness window', () => {
+  const state = fixture(),
+    time = Date.now();
+  const settlement = {
+    ...inspect(state),
+    release,
+    namespace,
+    settled: true,
+    healthy: true,
+    observedAt: new Date(time).toISOString(),
+    stableMs: 30_000,
+  };
+  const verify = (current = state, now = time + 1000) =>
+    assertReleaseSettlementCurrent({ ...current, settlement, now: () => now });
+  assert.doesNotThrow(() => verify());
+  for (const change of [
+    (current) => {
+      current.pods[0].status.conditions.find((c) => c.type === 'Ready').status = 'False';
+    },
+    (current) => {
+      current.pods[0].metadata.uid = 'replacement';
+    },
+    (current) => {
+      current.controller.spec.replicas += 1;
+    },
+  ]) {
+    const current = fixture();
+    change(current);
+    assert.throws(() => verify(current), /after stable observation/);
+  }
+  for (const now of [time - 1, time + 10_001]) assert.throws(() => verify(state, now), /evidence is stale/);
+  assert.throws(
+    () =>
+      assertReleaseSettlementCurrent({
+        ...state,
+        settlement: { ...settlement, namespace: 'another-namespace' },
+        now: () => time,
+      }),
+    /after stable observation/,
+  );
+});
 
 function withExecutionAutoscaler(state = fixture({ replicas: 5 })) {
   const autoscaler = fixture({ kind: 'Deployment', replicas: 1, rendered: 1, name: 'autoscaler' });

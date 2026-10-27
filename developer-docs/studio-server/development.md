@@ -332,6 +332,10 @@ maintenance-mode chart rendering, reserved reader identity rejection and
 namespace-scoped schema guard configuration. A real old-to-new maintenance
 cutover still requires disposable-cluster rehearsal before promotion; static
 rendering cannot prove scheduling, RBAC authorization or termination behavior.
+The separately approved [explicit maintenance route](deployment-operations.md#explicit-maintenance-route-including-forward-schema-changes)
+may waive HA qualification, including for a forward schema change, but requires
+a verified frozen checkpoint and candidate migration on an isolated restored
+copy. That exception records waived qualification, not provider-test success.
 The cutover behavior suite also covers malformed completed journals, a completed
 runner's unreleased lease, expiration between controller mutations, failed
 renewal and renewal racing failure cleanup. Keep ordinary-rollout journal checks

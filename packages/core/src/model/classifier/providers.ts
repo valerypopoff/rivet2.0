@@ -1,5 +1,11 @@
 import type { ClassifierCredentialNames } from './credentials.js';
 import {
+  calculateTokenUsageCost,
+  isReportedTokenCount,
+  validateTokenPricing,
+  type TokenPricing,
+} from '../tokenPricing.js';
+import {
   JEV_DEFAULT_CREDENTIAL_NAMES,
   LIQUID_DEFAULT_CREDENTIAL_NAMES,
   OPENAI_DEFAULT_CREDENTIAL_NAMES,
@@ -120,6 +126,7 @@ export type ClassifierProviderEvaluationResult = {
 };
 
 export type ClassifierProviderEvaluateArgs = {
+  tokenPricing?: TokenPricing;
   /** Privacy-bounded physical-attempt observer; never includes bodies or credentials. */
   onAttempt?: (attempt: {
     attemptIndex: number;
@@ -458,7 +465,11 @@ function createClassifierProvider(spec: ClassifierProviderSpec): ClassifierProvi
     // Reject removed evidence fields before object spread can read a getter or
     // discard non-enumerable/inherited content.
     if ('images' in input) throw new Error('Pass image evidence through State, not a separate images field.');
-    const args = { ...input, fetchImplementation: input.fetchImplementation ?? fetch };
+    const args = {
+      ...input,
+      tokenPricing: validateTokenPricing(input.tokenPricing),
+      fetchImplementation: input.fetchImplementation ?? fetch,
+    };
     const operation = createOperation(args, provider.label);
     operation.check();
     if (typeof args.model !== 'string') throw new Error('Decision AI model must be a nonblank string.');
@@ -546,6 +557,15 @@ function normalizeModelPricing(
   );
 }
 
+export function getClassifierSystemTokenPricing(
+  providerId: string | undefined,
+  model?: string,
+): ClassifierTokenPricing | undefined {
+  const provider = getClassifierProvider(providerId);
+  return normalizeModelPricing(provider).find((entry) => entry.models.includes(model?.trim() || provider.defaultModel))
+    ?.pricing;
+}
+
 export function getClassifierProvider(id: string | undefined): ClassifierProvider {
   const provider = classifierProviders.find((candidate) => candidate.id === (id || jevClassifierProvider.id));
   if (!provider) throw new Error(`Unknown Decision AI provider '${id}'.`);
@@ -567,7 +587,13 @@ export function calculateClassifierUsageCost(
   provider: Pick<ClassifierProvider, 'pricing' | 'modelPricing'> & Partial<Pick<ClassifierProvider, 'defaultModel'>>,
   usage: ClassifierEvaluationResponse['usage'],
   models?: { requestedModel: string; responseModel: string },
+  tokenPricing?: TokenPricing,
 ): number | undefined {
+  if (tokenPricing !== undefined)
+    return calculateTokenUsageCost(tokenPricing, {
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+    });
   if (!models) return undefined;
   const entries = normalizeModelPricing(provider);
   const entry = entries.find(
@@ -585,10 +611,8 @@ export function calculateClassifierUsageCost(
     !validRates(base) ||
     (tier != null &&
       (!Number.isSafeInteger(tier.aboveInputTokens) || tier.aboveInputTokens < 0 || !validRates(tier))) ||
-    !Number.isSafeInteger(usage.input_tokens) ||
-    usage.input_tokens < 0 ||
-    !Number.isSafeInteger(usage.output_tokens) ||
-    usage.output_tokens < 0
+    !isReportedTokenCount(usage.input_tokens) ||
+    !isReportedTokenCount(usage.output_tokens)
   ) {
     return undefined;
   }
@@ -877,7 +901,7 @@ async function callClassifierHttp(
         'failure',
         response.status,
         'response-validation',
-        classifierAttemptUsage(body, spec, args.model),
+        classifierAttemptUsage(body, spec, args.model, args.tokenPricing),
         error instanceof Error ? error.message : `${providerLabel} returned an invalid Decision AI response.`,
       );
       throw new ClassifierProviderError(
@@ -887,7 +911,7 @@ async function callClassifierHttp(
         { cause: error },
       );
     }
-    report('success', response.status, undefined, classifierAttemptUsage(body, spec, args.model));
+    report('success', response.status, undefined, classifierAttemptUsage(body, spec, args.model, args.tokenPricing));
     return {
       // Preserve the direct-provider result contract, but graph runs with the
       // diagnostic disabled never allocate this second representation.
@@ -910,6 +934,7 @@ function classifierAttemptUsage(
   body: unknown,
   provider: Pick<ClassifierProvider, 'defaultModel' | 'pricing' | 'modelPricing'>,
   requestedModel: string,
+  tokenPricing?: TokenPricing,
 ): ClassifierAttemptUsage | undefined {
   if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'usage')) return;
   const { usage, model } = body as { usage?: ClassifierEvaluationResponse['usage']; model?: string };
@@ -919,15 +944,13 @@ function classifierAttemptUsage(
     Array.isArray(usage) ||
     !Object.hasOwn(usage, 'input_tokens') ||
     !Object.hasOwn(usage, 'output_tokens') ||
-    !Number.isSafeInteger(usage.input_tokens) ||
-    usage.input_tokens < 0 ||
-    !Number.isSafeInteger(usage.output_tokens) ||
-    usage.output_tokens < 0
+    !isReportedTokenCount(usage.input_tokens) ||
+    !isReportedTokenCount(usage.output_tokens)
   )
     return;
   const estimatedCostUsd =
     typeof model === 'string' && Object.hasOwn(body, 'model')
-      ? calculateClassifierUsageCost(provider, usage, { requestedModel, responseModel: model })
+      ? calculateClassifierUsageCost(provider, usage, { requestedModel, responseModel: model }, tokenPricing)
       : undefined;
   return {
     inputTokens: usage.input_tokens,

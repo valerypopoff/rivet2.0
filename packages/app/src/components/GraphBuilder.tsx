@@ -72,7 +72,7 @@ const Container = styled.div`
 
   .recording-border {
     position: absolute;
-    top: calc(var(--project-selector-height) + var(--data-bus-full-row-height, 0px));
+    top: var(--project-selector-height);
     left: 0;
     right: 0;
     bottom: 0;

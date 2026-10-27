@@ -33,6 +33,9 @@ const weightedSpecs = [
   // Crossing/curved/bent wire routes through pan, zoom, resize and culling.
   ['wire-viewport-culling.spec.ts', 25],
   ['tunnel-cache-retention.spec.ts', 1],
+  ['run-statistics-modal.spec.ts', 15],
+  // Real local PostgreSQL/MinIO + provider HTTP, including cancellation settlement.
+  ['run-cost-statistics.spec.ts', 60],
 ];
 
 export const editorCiSpecs = Object.freeze(weightedSpecs.map(([spec]) => spec));

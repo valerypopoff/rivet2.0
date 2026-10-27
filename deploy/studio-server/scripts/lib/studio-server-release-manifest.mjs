@@ -508,7 +508,10 @@ export function createForwardRollbackHelmValues({ failedRelease, rollbackRelease
     chart: failed.chart,
     images: rollback.images,
     compatibility: {
-      minimumVersion: rollbackSchema.minimumRollbackCompatibleVersion,
+      // The rollback floor names compatible predecessor images; it is not the
+      // schema required by this image's own queries. Only widen upward to the
+      // already-migrated successor, never below the rollback image's version.
+      minimumVersion: rollbackSchema.version,
       maximumVersion: activeSchema.version,
     },
     migrationJobEnabled: false,

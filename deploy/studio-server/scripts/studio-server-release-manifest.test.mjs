@@ -70,7 +70,7 @@ function promoted(overrides = {}, options = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 17,
+    version: 18,
     minimumRollbackCompatibleVersion: 17,
   });
 });
@@ -970,6 +970,12 @@ test('forward rollback retains the migrated schema and restores only a compatibl
   const previousVersion = originalRollbackRelease.database.managedWorkflowSchema.version;
   const rollbackRelease = {
     ...originalRollbackRelease,
+    database: {
+      managedWorkflowSchema: {
+        version: previousVersion,
+        minimumRollbackCompatibleVersion: previousVersion - 1,
+      },
+    },
     chart: { ...originalRollbackRelease.chart, contentDigest: digest('e') },
   };
   const failedRelease = assertStudioServerReleaseManifest(

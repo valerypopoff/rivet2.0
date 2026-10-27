@@ -17,6 +17,7 @@ import {
   RivetWebAppActionHttpError,
   type RivetWebAppBrowserStorageRpcEvent,
   type RivetWebAppWebSocketGateway,
+  type GraphProcessor,
 } from '@valerypopoff/rivet2-node';
 
 import { checkPostgresPoolHealth } from './managed-health.js';
@@ -47,6 +48,7 @@ import {
 } from './routes/workflows/recordings-config.js';
 import { readRuntimeLimitSettingsSync } from './runtime-limit-settings.js';
 import { getApiRuntimeProfile, type ApiRuntimeProfile } from './runtime-profile.js';
+import { finalizeExecutionRecordingAfterSettlement } from './routes/workflows/execution-session.js';
 import { PostgresRivetWebAppRunCoordinator } from './web-app-action-coordinator.js';
 import { createPostgresRivetWebAppRunStore } from './web-app-action-run-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../studio-server-shared/workflow-recording-types.js';
@@ -60,6 +62,9 @@ type RecorderEntry = {
   recorder: ExecutionRecorder | null;
   startedAt: number;
   executionIdentity: WorkflowRecordingExecutionIdentity;
+  processor: GraphProcessor;
+  finalizing?: boolean;
+  flush?: () => void;
 };
 
 export type WebAppActionWebSocketRuntime = {
@@ -602,6 +607,26 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
           // A socket can carry several concurrent actions. Keep an opaque key
           // per action context rather than reusing the socket request ID.
           const healthCorrelations = new WeakMap<object, string>();
+          const finishRecording = (
+            runId: string,
+            status: 'succeeded' | 'failed' | 'suspicious',
+            errorMessage?: string,
+          ) => {
+            const entry = recorders.get(runId);
+            if (!entry || entry.finalizing) return;
+            entry.finalizing = true;
+            entry.flush = finalizeExecutionRecordingAfterSettlement(entry.processor, (cost) => {
+              recorders.delete(runId);
+              enqueueWebAppActionRecording(
+                resolved.executionProject,
+                entry.recorder,
+                performance.now() - entry.startedAt,
+                status,
+                errorMessage,
+                { endpointName, runKind: route.routeKind, executionIdentity: entry.executionIdentity, cost },
+              );
+            });
+          };
           gateway.handleConnection(webSocket, {
             isAuthorized: authorization.isAuthorized,
             authorizeOperation: authorization.authorizeOperation,
@@ -630,6 +655,7 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
               recorders.set(runId, {
                 recorder,
                 startedAt: performance.now(),
+                processor,
                 executionIdentity: createWebAppActionRecordingIdentity(
                   resolved.executionProject,
                   actionContext.uiGraph,
@@ -640,44 +666,16 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
               });
             },
             onRunFinished({ result, runId }) {
-              const entry = recorders.get(runId);
-              recorders.delete(runId);
-              if (!entry) return;
-              enqueueWebAppActionRecording(
-                resolved.executionProject,
-                entry.recorder,
-                performance.now() - entry.startedAt,
-                getWorkflowRecordingStatusFromOutputs(result.outputs),
-                undefined,
-                {
-                  endpointName,
-                  runKind: route.routeKind,
-                  executionIdentity: entry.executionIdentity,
-                },
-              );
+              finishRecording(runId, getWorkflowRecordingStatusFromOutputs(result.outputs));
             },
             onRunFailed({ error, outcome, runId }) {
-              const entry = recorders.get(runId);
-              recorders.delete(runId);
-              if (!entry) return;
               const fallbackMessage =
                 outcome === 'cancelled'
                   ? 'Web app action was cancelled.'
                   : outcome === 'interrupted'
                     ? 'Web app action was interrupted.'
                     : 'Web app action failed.';
-              enqueueWebAppActionRecording(
-                resolved.executionProject,
-                entry.recorder,
-                performance.now() - entry.startedAt,
-                'failed',
-                error == null ? fallbackMessage : getWorkflowErrorMessage(error),
-                {
-                  endpointName,
-                  runKind: route.routeKind,
-                  executionIdentity: entry.executionIdentity,
-                },
-              );
+              finishRecording(runId, 'failed', error == null ? fallbackMessage : getWorkflowErrorMessage(error));
             },
           });
         });
@@ -707,7 +705,8 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
       accepting = false;
       server.off('upgrade', handleUpgrade);
       await gateway.dispose({ interrupt: options.interrupt ?? true });
-      for (const [runId] of recorders) recorders.delete(runId);
+      for (const entry of recorders.values()) entry.flush?.();
+      recorders.clear();
       await closeWebSocketServer(webSocketServer);
       await coordinator?.dispose();
       await poolLease?.release();

@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { ExecutionRecorder, type NodeCreatedProcessor, type DataValue } from '@valerypopoff/rivet2-node';
+type ExecutionRunCost = ReturnType<NodeCreatedProcessor['processor']['getRunCostSnapshot']>;
 
 export type ExecutionSessionResult = {
   createdAt: string;
@@ -9,7 +10,55 @@ export type ExecutionSessionResult = {
   durationMs: number;
   errorMessage?: string;
   failure?: { error: unknown };
+  cost?: ExecutionRunCost;
 };
+
+/** Unsettled executions retain a known subtotal, but never claim completeness. */
+export function getExecutionRunCostSnapshot(
+  processor: Pick<NodeCreatedProcessor['processor'], 'isRunning' | 'getRunCostSnapshot'>,
+): ExecutionRunCost {
+  try {
+    const cost = processor.getRunCostSnapshot();
+    return processor.isRunning && cost.status !== 'unknown'
+      ? { status: 'partial', knownCostUsd: cost.knownCostUsd }
+      : cost;
+  } catch {
+    return { status: 'unknown', knownCostUsd: null };
+  }
+}
+
+export const RECORDING_SETTLEMENT_TIMEOUT_MS = 5_000;
+
+/** A transport's terminal notification must not wait for cancellation cleanup.
+ * Capture after physical settlement, or a conservative subtotal at the bound.
+ * The returned flush is idempotent and lets shutdown preserve current evidence. */
+export function finalizeExecutionRecordingAfterSettlement(
+  processor: Pick<NodeCreatedProcessor['processor'], 'isRunning' | 'getRunCostSnapshot' | 'waitForRunCompletion'>,
+  persist: (cost: ExecutionRunCost) => void,
+): () => void {
+  let finalized = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const finish = () => {
+    if (finalized) return;
+    finalized = true;
+    clearTimeout(timer);
+    try {
+      persist(getExecutionRunCostSnapshot(processor));
+    } catch {
+      console.error('[workflow-execution] Recording finalization failed.');
+    }
+  };
+  try {
+    if (processor.isRunning) {
+      timer = setTimeout(finish, RECORDING_SETTLEMENT_TIMEOUT_MS);
+      timer.unref?.();
+      void processor.waitForRunCompletion().then(finish, finish);
+    } else finish();
+  } catch {
+    finish();
+  }
+  return finish;
+}
 export function getExecutionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -78,6 +127,9 @@ export class ExecutionSession {
       result.failure = { error };
     } finally {
       result.durationMs = performance.now() - startedAt;
+      if (this.recorder) {
+        result.cost = getExecutionRunCostSnapshot(this.processor.processor);
+      }
       disposeProcessor(this.processor);
     }
     return result;

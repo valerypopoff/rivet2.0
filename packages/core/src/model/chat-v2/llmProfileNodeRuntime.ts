@@ -1,4 +1,5 @@
 import { coerceTypeOptional } from '../../utils/coerceType.js';
+import { validateTokenPricing } from '../tokenPricing.js';
 import { getInputOrData } from '../../utils/inputs.js';
 import type { Inputs } from '../GraphProcessor.js';
 import type { PortId } from '../NodeBase.js';
@@ -108,7 +109,7 @@ export function resolveLLMProfileNodeValue(params: {
   return {
     version: LLM_PROFILE_VALUE_VERSION,
     credential,
-    configuration,
+    configuration: { ...configuration, tokenPricing: validateTokenPricing(configuration.tokenPricing) },
     ...(profileName === '' ? {} : { profileName }),
     ...(projectId == null
       ? {}

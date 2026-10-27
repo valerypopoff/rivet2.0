@@ -36,6 +36,41 @@
   line-height: 1.2;
 }
 
+.run-recordings-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-recordings-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--grey-light);
+  cursor: pointer;
+}
+
+.run-recordings-refresh-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--grey-lightest);
+}
+
+.run-recordings-refresh-button:focus-visible {
+  outline: 2px solid #5aa9ff;
+  outline-offset: 2px;
+}
+
+.run-recordings-refresh-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .run-recordings-help {
   margin-top: 2px;
   color: var(--grey-light);

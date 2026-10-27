@@ -5,6 +5,7 @@ import type {
   WorkflowRecordingExecutionIdentity,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 import type { WorkflowRecordingStatisticsRow } from './recording-statistics.js';
+import { readWorkflowRunCost } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 type Dialect = 'sqlite' | 'postgres';
 export type RecordingStatisticsSqlRow = {
@@ -24,6 +25,7 @@ export type RecordingStatisticsSqlRow = {
   component_label_at_execution: string | null;
   metadata_valid: number;
   total_runs?: number | string;
+  cost_json?: string | null;
 };
 
 /** A compact, common projection; artifact references and payloads never cross this boundary. */
@@ -32,7 +34,7 @@ function source(dialect: Dialect): string {
     return `SELECT recording_id, workflow_id, source_project_name, created_at, run_kind,
       status, duration_ms, endpoint_name_at_execution, execution_surface,
       ui_graph_id_at_execution, component_id_at_execution, ui_graph_name_at_execution,
-      component_type_at_execution, component_label_at_execution, 1 AS metadata_valid
+      component_type_at_execution, component_label_at_execution, cost_json, 1 AS metadata_valid
       FROM workflow_recordings`;
   const field = (name: string) => `json_extract(data, '$.${name}')`;
   return `SELECT recording_id, workflow_id,
@@ -45,6 +47,7 @@ function source(dialect: Dialect): string {
     ${field('executionIdentity.uiGraphName')} AS ui_graph_name_at_execution,
     ${field('executionIdentity.componentType')} AS component_type_at_execution,
     ${field('executionIdentity.componentLabel')} AS component_label_at_execution,
+    ${field('cost')} AS cost_json,
     COALESCE(${field('recordingId')} = recording_id AND ${field('workflowId')} = workflow_id
       AND json_type(data, '$.recordingId') = 'text' AND json_type(data, '$.workflowId') = 'text'
       AND json_type(data, '$.createdAt') = 'text'
@@ -93,7 +96,7 @@ export function recordingStatisticsRowsSql(dialect: Dialect, query: WorkflowRunS
   return {
     sql: bind(
       `WITH source AS (${source(dialect)}) SELECT * FROM source
-      WHERE created_at >= ?${dialect === 'postgres' ? '::timestamptz' : ''}
+      WHERE run_kind <> 'editor' AND created_at >= ?${dialect === 'postgres' ? '::timestamptz' : ''}
         AND created_at < ?${dialect === 'postgres' ? '::timestamptz' : ''}
         AND ${target.clause} ${query.runKind === 'both' ? '' : 'AND run_kind = ?'}
       ORDER BY created_at ASC, recording_id ASC`,
@@ -120,7 +123,7 @@ export function recordingStatisticsCatalogSql(dialect: Dialect, surface: Workflo
   return {
     sql: bind(
       `WITH source AS (${source(dialect)}), targets AS (
-      SELECT *, CASE WHEN execution_surface IN ('editor_local', 'subgraph_project', 'scheduled') THEN NULL
+      SELECT *, CASE WHEN run_kind = 'editor' OR execution_surface IN ('editor_local', 'subgraph_project', 'scheduled') THEN NULL
         WHEN ${stable} OR ${legacy} THEN 'web_app' ELSE 'endpoint' END AS target_surface,
         CASE WHEN ${stable} THEN ui_graph_id_at_execution END AS target_ui,
         CASE WHEN ${stable} THEN component_id_at_execution END AS target_component,
@@ -141,7 +144,7 @@ export function recordingStatisticsCatalogSql(dialect: Dialect, surface: Workflo
       CASE WHEN target_surface = 'web_app' THEN 'web_app_action' ELSE 'workflow_endpoint' END AS execution_surface,
       target_ui AS ui_graph_id_at_execution, target_component AS component_id_at_execution,
       ${labels.map((field) => `latest_${field} AS ${field}`).join(', ')},
-      group_valid AS metadata_valid, total_runs FROM ranked WHERE position = 1`,
+      group_valid AS metadata_valid, total_runs, NULL AS cost_json FROM ranked WHERE position = 1`,
       dialect,
     ),
     values: [surface],
@@ -164,6 +167,7 @@ export function statisticsSqlRow(
     status: row.status,
     durationMs: row.duration_ms,
     endpointNameAtExecution: row.endpoint_name_at_execution,
+    cost: readWorkflowRunCost(row.cost_json),
     executionIdentity: row.execution_surface
       ? {
           surface: row.execution_surface,

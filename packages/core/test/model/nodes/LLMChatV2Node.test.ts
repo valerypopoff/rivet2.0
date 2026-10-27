@@ -680,6 +680,7 @@ describe('LLMChatV2NodeImpl', () => {
 
     assert.deepEqual(groupLabels, [
       'Model',
+      'Token pricing',
       'OpenAI',
       'Anthropic',
       'Google',
@@ -1076,7 +1077,12 @@ describe('LLMChatV2NodeImpl', () => {
     const anthropicGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Anthropic') as any;
     const googleGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Google') as any;
 
-    assert.deepEqual(groupLabels.slice(groupLabels.indexOf('Model') + 1, groupLabels.indexOf('Model') + 4), [
+    const pricingIndex = groupLabels.indexOf('Token pricing');
+    assert.equal(pricingIndex, groupLabels.indexOf('Model') + 1);
+    const pricingGroup = editors.find((editor) => editor.type === 'group' && editor.label === 'Token pricing');
+    assert.ok(pricingGroup?.type === 'group');
+    assert.equal(pricingGroup.defaultOpen, false);
+    assert.deepEqual(groupLabels.slice(pricingIndex + 1, pricingIndex + 4), [
       'OpenAI',
       'Anthropic',
       'Google',

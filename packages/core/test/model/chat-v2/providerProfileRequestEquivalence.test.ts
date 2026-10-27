@@ -6,6 +6,7 @@ import { resolveLLMChatV2RuntimeConfig } from '../../../src/model/chat-v2/llmCha
 import type { LLMChatV2NodeData } from '../../../src/model/chat-v2/llmChatV2NodeData.js';
 import type { Inputs } from '../../../src/model/GraphProcessor.js';
 import type { InternalProcessContext } from '../../../src/model/ProcessContext.js';
+import { RunCostLedger } from '../../../src/model/RunCostLedger.js';
 
 const variants: Array<{ label: string; data: Partial<LLMChatV2NodeData> }> = [
   { label: 'OpenAI', data: { provider: 'openai' } },
@@ -126,7 +127,12 @@ for (const { label, data } of variants) {
       const profile = new LLMProfileNodeImpl({ ...profileBase, data: configuration });
       const profileOutputs = await profile.process(inputs, context);
       const fromProfile = await resolveLLMChatV2RuntimeConfig({
-        data: { ...configuration, configurationMode: 'profile', model: 'stale-inline-model' },
+        data: {
+          ...configuration,
+          configurationMode: 'profile',
+          model: 'stale-inline-model',
+          tokenPricing: { inputPerMillionTokens: -1, outputPerMillionTokens: -1 },
+        },
         nodeId: base.id,
         context,
         inputs: { ...inputs, llmProfile: profileOutputs.profile! } as Inputs,
@@ -141,7 +147,107 @@ for (const { label, data } of variants) {
         assert.equal(inlineResult?.rawUsage?.inputTokens, 10);
         assert.equal(inlineResult?.rawUsage?.outputTokens, 3);
         assert.deepEqual(profileResult, inlineResult, 'successful native parsing, usage and outputs stay equivalent');
+        const pricedProfile = new LLMProfileNodeImpl({
+          ...profileBase,
+          data: { ...configuration, tokenPricing: { inputPerMillionTokens: 2, outputPerMillionTokens: 8 } },
+        });
+        const pricedOutputs = await pricedProfile.process(inputs, context);
+        for (const mode of ['inline', 'profile'] as const) {
+          const ledger = new RunCostLedger();
+          const authoredRates = { inputPerMillionTokens: mode === 'inline' ? 2 : 999, outputPerMillionTokens: 8 };
+          const priced = await resolveLLMChatV2RuntimeConfig({
+            data: { ...configuration, configurationMode: mode, tokenPricing: authoredRates },
+            nodeId: base.id,
+            context: { ...context, onChatV2CallFinished: (event) => ledger.observeChat(event) },
+            inputs: mode === 'profile' ? ({ ...inputs, llmProfile: pricedOutputs.profile! } as Inputs) : inputs,
+          });
+          authoredRates.inputPerMillionTokens = 123;
+          priced.runOptions.emitPartialOutputs = false;
+          const result = await priced.runPipeline(priced.runOptions);
+          assert.deepEqual(requests.at(-1), requests[0], 'pricing never enters provider requests');
+          assert.equal(result.usage?.totalCost, 0.000044, `${mode} uses only its active configuration prices`);
+          assert.deepEqual(ledger.snapshot(), { status: 'complete', knownCostUsd: result.usage?.totalCost });
+        }
       }
     });
   }
 }
+
+test('invalid inline LLM pricing fails before HTTP, rather than making a paid call with unknown cost', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    throw new Error('Unexpected HTTP');
+  });
+  const node = LLMChatV2NodeImpl.create();
+  const context = {
+    settings: { chatNodeHeaders: {} },
+    getPluginConfig: () => '',
+    node,
+    signal: new AbortController().signal,
+  } as unknown as InternalProcessContext;
+  await assert.rejects(
+    resolveLLMChatV2RuntimeConfig({
+      data: {
+        ...node.data,
+        configurationMode: 'inline',
+        tokenPricing: { inputPerMillionTokens: -1, outputPerMillionTokens: 0 },
+      },
+      nodeId: node.id,
+      context,
+      inputs: { prompt: { type: 'string', value: 'Fixture' } } as Inputs,
+    }),
+    /Token pricing/,
+  );
+  assert.equal(calls, 0);
+});
+
+test('LLM fallback does not reuse the previous candidate token prices', async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () =>
+    ++calls === 1
+      ? Response.json({ error: { message: 'fixture rejected' } }, { status: 401 })
+      : Response.json(successfulResponse('custom', 'completions')),
+  );
+  const node = LLMChatV2NodeImpl.create();
+  const context = {
+    settings: { chatNodeHeaders: {} },
+    getPluginConfig: () => '',
+    signal: new AbortController().signal,
+    node,
+    processId: 'process',
+    trace: () => {},
+  } as unknown as InternalProcessContext;
+  const inputs = {
+    prompt: { type: 'string', value: 'Fixture' },
+    apiKey: { type: 'string', value: 'fixture-key' },
+  } as Inputs;
+  const profiles = [];
+  for (const rate of [2, 5]) {
+    const base = LLMProfileNodeImpl.create();
+    const profile = new LLMProfileNodeImpl({
+      ...base,
+      data: {
+        ...base.data,
+        provider: 'custom',
+        model: 'private',
+        apiKeySource: 'input',
+        customProviderBaseURL: 'https://fixture.invalid/v1',
+        tokenPricing: { inputPerMillionTokens: rate, outputPerMillionTokens: 0 },
+      },
+    });
+    profiles.push((await profile.process(inputs, context)).profile!.value);
+  }
+  const ledger = new RunCostLedger();
+  const runtime = await resolveLLMChatV2RuntimeConfig({
+    data: { ...node.data, configurationMode: 'profile' },
+    nodeId: node.id,
+    context: { ...context, onChatV2CallFinished: (event) => ledger.observeChat(event) },
+    inputs: { ...inputs, llmProfile: { type: 'llm-config[]', value: profiles } } as Inputs,
+  });
+  runtime.runOptions.emitPartialOutputs = false;
+  const result = await runtime.runPipeline(runtime.runOptions);
+  assert.equal(calls, 2);
+  assert.equal(result.usage?.totalCost, 0.00005);
+  assert.deepEqual(ledger.snapshot(), { status: 'partial', knownCostUsd: 0.00005 });
+});

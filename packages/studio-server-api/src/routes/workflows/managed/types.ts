@@ -1,4 +1,4 @@
-import type { WorkflowRecordingExecutionIdentity } from '../../../../../studio-server-shared/workflow-recording-types.js';
+import type { WorkflowRecordingExecutionIdentity, WorkflowRunCost } from '../../../../../studio-server-shared/workflow-recording-types.js';
 
 type TimestampValue = Date | string;
 
@@ -110,6 +110,7 @@ export type RecordingRow = {
   endpoint_name_at_execution: string;
   execution_surface: 'workflow_endpoint' | 'web_app_action' | 'editor_local' | 'subgraph_project' | 'scheduled' | null;
   scheduled_identity_json?: string | null;
+  cost_json?: string | null;
   graph_id_at_execution: string | null;
   graph_name_at_execution: string | null;
   revision_key_at_execution: string | null;
@@ -224,6 +225,7 @@ export type ImportManagedWorkflowRecordingOptions = {
   runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
+  cost?: WorkflowRunCost;
   endpointName: string;
   errorMessage?: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
@@ -252,6 +254,7 @@ export type RecordingInsertRowData = {
   runKind: 'published' | 'latest' | 'editor';
   status: 'succeeded' | 'failed' | 'suspicious';
   durationMs: number;
+  cost?: WorkflowRunCost;
   endpointNameAtExecution: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
   errorMessage: string | null;

@@ -75,6 +75,55 @@ test('workflow and recordings roots initialize separately', async () => {
   assert.equal(await workflowFs.pathExists(recordingsRoot), true);
 });
 
+test('filesystem run statistics exclude editor recordings without relying on execution surface', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'EditorStatistics');
+  const [project, attachedData] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  for (const [runKind, executionIdentity] of [
+    ['published', { surface: 'workflow_endpoint' }],
+    ['editor', undefined],
+    ['editor', { surface: 'workflow_endpoint' }],
+  ] as const) {
+    await workflowRecordings.persistWorkflowExecutionRecording({
+      workflowsRoot,
+      sourceProject: project,
+      sourceProjectPath: created.absolutePath,
+      executedProject: project,
+      executedAttachedData: attachedData,
+      executedDatasets: [],
+      endpointName: 'editor-statistics',
+      recordingSerialized: '{}',
+      runKind,
+      status: 'succeeded',
+      durationMs: 10,
+      executionIdentity,
+      cost: { status: 'complete', knownCostUsd: 0.125 },
+    });
+  }
+  await workflowRecordings.flushWorkflowExecutionRecordingPersistence();
+  const query = {
+    target: { surface: 'endpoint' as const, workflowId: project.metadata.id! },
+    period: { from: new Date(Date.now() - 60_000).toISOString(), to: new Date(Date.now() + 60_000).toISOString() },
+    runKind: 'both' as const,
+    includeFailed: true,
+    includeWarnings: true,
+  };
+  const rows = await workflowRecordingDb.listWorkflowRecordingStatisticsRows(
+    query.period.from,
+    query.period.to,
+    query.target,
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.runKind, 'published');
+  const statistics = await workflowRecordings.getWorkflowRunStatistics(workflowsRoot, query);
+  assert.equal(statistics.current.runCount, 1);
+  assert.equal(statistics.cost?.completeCount, 1);
+  assert.equal(statistics.cost?.knownCostUsd, 0.125);
+  assert.equal(
+    (await workflowRecordings.listWorkflowRunStatisticsCatalog(workflowsRoot, 'endpoint')).targets[0]?.totalRuns,
+    1,
+  );
+});
+
 test('filesystem recordings keep logical start time even when the earlier run completes last', async () => {
   const created = await workflowMutations.createWorkflowProjectItem('', 'StartTime');
   const [project, attached] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
@@ -433,6 +482,7 @@ test('recording index rebuild keeps workflow metadata from the newest bundle', a
       sourceProjectRelativePath: `${sourceProjectName}.rivet-project`,
       endpointNameAtExecution: 'metadata-order',
       createdAt,
+      cost: bundleName === 'a-newer' ? { status: 'complete', knownCostUsd: 0.125 } : undefined,
       runKind: 'published',
       status: 'succeeded',
       durationMs: 1,
@@ -462,6 +512,9 @@ test('recording index rebuild keeps workflow metadata from the newest bundle', a
   assert.equal(workflow.sourceProjectRelativePath, 'New project name.rivet-project');
   assert.equal(workflow.updatedAt, '2026-08-03T00:00:00.000Z');
   assert.equal(workflow.totalRuns, 2);
+  const rebuilt = await workflowRecordingDb.listWorkflowRecordingRunRowsForWorkflow(workflowId);
+  assert.deepEqual(rebuilt.find((run) => run.id === 'a-newer')?.cost, { status: 'complete', knownCostUsd: 0.125 });
+  assert.equal(rebuilt.find((run) => run.id === 'z-older')?.cost, undefined);
 });
 
 test('filesystem recording persistence writes bundles under the configured recordings root', async () => {

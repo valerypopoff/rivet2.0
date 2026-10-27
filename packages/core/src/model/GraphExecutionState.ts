@@ -18,6 +18,7 @@ import type { RivetStoredValueController } from './StoredValueStore.js';
 import type { KnowledgeStoreController } from '../integrations/KnowledgeStoreProvider.js';
 import type { ResolvedSubgraphProject } from './SubgraphProjectTarget.js';
 import type { GraphCostBreakdown } from './GraphBoundaryEffects.js';
+import { RunCostLedger } from './RunCostLedger.js';
 
 /** Invocation-owned fields; GraphProcessor resets them at the established initialization boundaries. */
 export class GraphInvocationState {
@@ -44,6 +45,7 @@ export class GraphInvocationState {
   successfulAbortTerminalProcessIds: Set<ProcessId> = undefined!;
   totalCost: number = 0;
   costBreakdown: GraphCostBreakdown | undefined;
+  costLedger = new RunCostLedger();
   ignoreNodes: Set<NodeId> = undefined!;
   hasPreloadedData = false;
   loadedProjects: Record<ProjectId, Project> = undefined!;
@@ -87,6 +89,7 @@ export class GraphInvocationState {
     this.successfulAbortTerminalProcessIds = new Set();
     this.totalCost = 0;
     this.costBreakdown = undefined;
+    this.costLedger = new RunCostLedger();
     this.nodeAbortControllers = new Map();
     this.loadedProjects = options.loadedProjects;
     this.graphInputNodeValues = options.sharedOverride?.graphInputNodeValues ?? {};

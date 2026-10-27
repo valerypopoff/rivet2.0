@@ -113,6 +113,7 @@ async function runChatV2WithRetry(
     const callId = createObservedChatV2CallId(options);
     const callStartedAt = Date.now();
     let callWasObserved = false;
+    let completedResponse: StreamChatV2Result | undefined;
     // AI SDK accessors such as usage and reasoning may settle after a request
     // has otherwise failed. Their diagnostic callbacks belong only to this
     // physical request: never let a retired retry/fallback candidate overwrite
@@ -160,6 +161,9 @@ async function runChatV2WithRetry(
         transportMode === 'generate'
           ? await generateChatV2(attemptChatOptions)
           : await streamChatV2(attemptChatOptions);
+      // Cancellation during diagnostic finalization must not erase usage
+      // already returned by this physical attempt. It still wins the outcome.
+      completedResponse = result;
       signal.throwIfAborted();
       await options.responseBodyCapture?.flush();
       signal.throwIfAborted();
@@ -209,6 +213,7 @@ async function runChatV2WithRetry(
           callId,
           attemptIndex: attempt,
           outcome: signal.aborted ? 'aborted' : 'provider-failure',
+          result: completedResponse,
           error,
           startedAt: callStartedAt,
           durationMs: Math.max(0, Date.now() - callStartedAt),

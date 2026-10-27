@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   blocksCutoverStop,
   assertOrdinaryReleaseAllowed,
+  assertCutoverJournal,
   requiresMaintenanceCutover,
   runManagedReleaseCutover as runMaintenanceStrategy,
   maintenanceValidationValues,
@@ -319,7 +320,7 @@ test('invalid recovery journal is rejected without workload changes', async () =
   assert.equal(state.operations.length, count);
 });
 
-test('a lost final resume acknowledgement closes admission and leaves durable recovery ownership', async () => {
+test('a lost final resume acknowledgement retains explicit intent without interrupting potentially healthy traffic', async () => {
   const state = fixture();
   await assert.rejects(
     runManagedReleaseCutover({
@@ -328,10 +329,25 @@ test('a lost final resume acknowledgement closes admission and leaves durable re
         throw new Error('lost resume acknowledgement');
       },
     }),
-    /Cutover paused/,
+    /--verify-only/,
   );
   assert.equal(state.journal.phase, 'resuming');
-  assert.deepEqual(state.operations.slice(-2), ['hpa:off', 'scale:0']);
+  assert.deepEqual(state.operations.slice(-2), ['install', 'validated']);
+  assert.equal(state.journal.finalApply.acknowledged, false);
+  const intent = structuredClone(state.journal.finalApply);
+  const count = state.operations.length;
+  await runManagedReleaseCutover({
+    ...state.options,
+    resumeToken: state.journal.token,
+    replaceJournal: async (record, version) => {
+      assertCutoverJournal({ ...record, resourceVersion: version }, { release: 'test', namespace: 'fixture' });
+      return state.options.replaceJournal(record, version);
+    },
+  });
+  assert.deepEqual(state.operations.slice(count), ['hpa:off', 'scale:0', 'stopped', 'install', 'validated', 'resume']);
+  assert.deepEqual(state.journal.previousFinalApply, intent);
+  assert.equal(state.journal.finalApply.acknowledged, true);
+  assert.equal(state.journal.phase, 'complete');
 });
 
 test('terminal old migration hooks do not deadlock recovery; active hooks and all reader pods still block', () => {
@@ -360,7 +376,7 @@ test('lost completion acknowledgement after final apply never closes healthy tra
   await assert.rejects(runManagedReleaseCutover({ ...state.options, replaceJournal }), /--acceptance-only/);
   assert.equal(state.journal.phase, 'complete');
   assert.equal(state.operations.at(-1), 'resume');
-  assert.equal(state.journal.finalApply.protocol, 1);
+  assert.equal(state.journal.finalApply.protocol, 2);
 });
 
 test('ordinary releases validate completed journals and wait for the owning runner to finish', async () => {
@@ -444,14 +460,14 @@ test('a late heartbeat is settled before lost-completion cleanup changes the jou
       throw new Error('lost resume acknowledgement');
     },
   });
-  const rejected = assert.rejects(running, /Cutover paused/);
+  const rejected = assert.rejects(running, /--verify-only/);
   await started;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(cleared, true);
   assert.notDeepEqual(state.operations.slice(-2), ['hpa:off', 'scale:0'], 'cleanup waits for the in-flight CAS');
   releaseRenewal();
   await rejected;
-  assert.deepEqual(state.operations.slice(-2), ['hpa:off', 'scale:0']);
+  assert.notDeepEqual(state.operations.slice(-2), ['hpa:off', 'scale:0']);
   assert.equal(state.journal.phase, 'resuming');
   await runManagedReleaseCutover({ ...state.options, resumeToken: state.journal.token });
   assert.equal(state.journal.phase, 'complete');
@@ -585,7 +601,7 @@ test('failed final observation leaves traffic active and supports exact verifica
   assert.equal(state.journal.verificationOnlyRecovery, true);
 });
 
-test('verification-only recovery refuses an unconfirmed final apply and never runs mutation callbacks', async () => {
+test('verification-only recovery refuses missing final-apply intent and never runs mutation callbacks', async () => {
   const state = fixture(() => true);
   await assert.rejects(runManagedReleaseCutover(state.options), /Cutover paused/);
   const before = [...state.operations];
@@ -598,9 +614,44 @@ test('verification-only recovery refuses an unconfirmed final apply and never ru
         throw Error('must not run');
       },
     }),
-    /confirmed final apply/,
+    /recorded final-apply intent/,
   );
   assert.deepEqual(state.operations, before);
+});
+
+test('Helm acknowledgement survives a failed following inventory read and verification never replays resume', async () => {
+  const state = fixture();
+  let applied = false,
+    failInventory = true;
+  const options = {
+    ...state.options,
+    resume: async () => {
+      applied = true;
+      state.operations.push('resume');
+    },
+    inventory: async () => {
+      if (applied && failInventory) {
+        failInventory = false;
+        throw Error('management disconnected after Helm');
+      }
+      return state.options.inventory();
+    },
+  };
+  await assert.rejects(runManagedReleaseCutover(options), /--verify-only/);
+  assert.equal(state.journal.finalApply.protocol, 2);
+  assert.equal(state.journal.finalApply.acknowledged, true);
+  assert.equal(state.journal.finalApply.inventory, undefined);
+  assert.equal(state.operations.at(-1), 'resume');
+  const before = [...state.operations];
+  await runManagedReleaseCutover({
+    ...options,
+    resumeToken: state.journal.token,
+    verificationOnly: true,
+    verifyExisting: async () => state.operations.push('inspect-existing'),
+  });
+  assert.deepEqual(state.operations, [...before, 'inspect-existing']);
+  assert.equal(state.journal.finalApply.acknowledged, true);
+  assert.equal(state.journal.finalApply.verifiedByObservation, true);
 });
 
 test('failed frozen checkpoint prevents candidate installation and retains exact-plan recovery', async () => {

@@ -97,7 +97,9 @@ export async function verifyFolderParentMigration(pool, { migrations, migrate, v
     await pool.query('DELETE FROM workflow_folders WHERE relative_path=$1', [invalid]);
   }
   const migrated = await migrate(pool);
-  assert.deepEqual(migrated, { currentVersion: 17, appliedVersions: [17] });
+  const forwardVersions = migrations.filter((migration) => migration.version > 16).map((migration) => migration.version);
+  assert.equal(forwardVersions[0], 17, 'The upgrade must still exercise the folder-parent repair.');
+  assert.deepEqual(migrated, { currentVersion: forwardVersions.at(-1), appliedVersions: forwardVersions });
   await verify(pool, options);
   assert.deepEqual(
     await snapshot(),

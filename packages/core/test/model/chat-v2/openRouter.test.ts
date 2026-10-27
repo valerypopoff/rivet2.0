@@ -86,8 +86,10 @@ function mockRequests(reply: (body: Record<string, any>, index: number) => Respo
   return requests;
 }
 
-void it('OpenRouter editor-cache hits preserve the response without re-adding runtime cost', async () => {
-  const { GraphProcessor, globalRivetNodeRegistry, TextNodeImpl } = await import('../../../src/index.js');
+void it('OpenRouter cache hits and repeated replay preserve responses without re-adding runtime cost', async () => {
+  const { GraphProcessor, globalRivetNodeRegistry, TextNodeImpl, ExecutionRecorder } = await import(
+    '../../../src/index.js'
+  );
   const requests = mockRequests();
   const chat = node({ cache: true, outputUsage: true });
   const prompt = TextNodeImpl.create();
@@ -109,9 +111,20 @@ void it('OpenRouter editor-cache hits preserve the response without re-adding ru
     settings: { openRouterApiKey: 'fixture' },
     editorExecutionCache: new Map(),
   };
+  const recorder = new ExecutionRecorder();
+  recorder.record(processor);
   const first = await processor.processGraph(host);
+  const saved = ExecutionRecorder.deserializeFromString(recorder.serialize());
   assert.equal(first.cost?.value, 0.004);
+  assert.deepEqual(processor.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0.004 });
   assert.equal((await processor.processGraph(host)).cost?.value, 0);
+  assert.deepEqual(processor.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0 });
+  processor.recordingPlaybackChatLatency = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    await processor.replayRecording(saved);
+    assert.deepEqual(processor.getRunCostSnapshot(), { status: 'complete', knownCostUsd: 0 });
+    assert.equal(requests.length, 1, 'replay must not call the provider or re-add historical charges');
+  }
   assert.equal(requests.length, 1);
   assert.equal(first.cost?.value, 0.004);
 });

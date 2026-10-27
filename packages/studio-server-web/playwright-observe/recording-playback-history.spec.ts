@@ -1,6 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { getUiFontScale, getUiFontSizeCssVariables } from '../../app/src/utils/uiFontSize';
-import { serializeProject, ExecutionRecorder, type GraphId, type ProjectId } from '@valerypopoff/rivet2-core';
+import {
+  createBuiltInRegistry,
+  serializeProject,
+  ExecutionRecorder,
+  type GraphId,
+  type ProjectId,
+} from '@valerypopoff/rivet2-core';
 import { createChildPlaybackFixture } from '../../app/src/hooks/fixtures/childPlaybackRecording.js';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowRecordingRunSummary } from '../../studio-server-shared/workflow-recording-types';
@@ -25,6 +31,14 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       kind === 'root'
         ? { ...fixture.parent, metadata: { ...fixture.parent.metadata, id: 'detached-replay' as ProjectId } }
         : fixture.child;
+    if (kind === 'root') {
+      const registry = createBuiltInRegistry();
+      // Topology-only nodes do not need execution events in the recorded history.
+      project.graphs['main' as GraphId]!.nodes.push(
+        registry.createDynamic('dataBus'),
+        registry.createDynamic('dataBus'),
+      );
+    }
     const liveTargetReads: string[] = [];
     const neighbor = {
       ...fixture.child,
@@ -303,6 +317,31 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     await expect(recordingInfo).not.toContainText('1.23 s');
     if (kind === 'root') await expect(recordingInfo).not.toContainText('Parent');
     await expect(editor.locator('.recording-border')).toHaveAttribute('data-recording-status', child.status);
+    if (kind === 'root') await expect(editor.locator('.radio-data-bus-rail .data-bus-group')).toHaveCount(2);
+    const frameBounds = await editor.locator('.recording-border').evaluate((frame) => {
+      const bounds = frame.getBoundingClientRect();
+      const tabs = document.querySelector('.projects-container')!.getBoundingClientRect();
+      const bus = document.querySelector('.radio-data-bus-rail')?.getBoundingClientRect();
+      return {
+        top: bounds.top,
+        left: bounds.left,
+        right: bounds.right,
+        viewportWidth: window.innerWidth,
+        tabsBottom: tabs.bottom,
+        busTop: bus?.top,
+        busBottom: bus?.bottom,
+        pointerEvents: getComputedStyle(frame).pointerEvents,
+      };
+    });
+    expect(frameBounds.top).toBeCloseTo(frameBounds.tabsBottom, 0);
+    expect(frameBounds.left).toBe(0);
+    expect(frameBounds.right).toBe(frameBounds.viewportWidth);
+    expect(frameBounds.pointerEvents).toBe('none');
+    if (kind === 'root') {
+      expect(frameBounds.top).toBeCloseTo(frameBounds.busTop!, 0);
+      expect(frameBounds.top).toBeLessThan(frameBounds.busBottom!);
+      await page.screenshot({ path: '../../artifacts/playwright/recording-databus-frame.png' });
+    }
     const color = child.status === 'failed' ? 'error' : child.status === 'suspicious' ? 'warning' : 'success';
     const recordingTabIcon = editor.locator('.projects-container .project.active .recording-tab-icon');
     await expect(recordingTabIcon).toHaveAttribute('data-recording-status', child.status);
@@ -356,6 +395,11 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     // A graph name in the drawer header alone doesn't prove playback populated it.
     const activityRows = editor.locator('[aria-label="Run Activity"] .run-activity-row');
     await expect(activityRows.first()).toBeVisible();
+    const activityToggle = activityRows.first().locator('button.collapsible-panel-toggle');
+    await activityToggle.click();
+    const detailId = await activityToggle.getAttribute('aria-controls');
+    expect(detailId).toBeTruthy();
+    await expect(editor.locator(`[id="${detailId}"]`)).toHaveCount(1);
     await expect(
       activityRows.filter({ hasText: kind === 'root' ? 'Subgraph' : 'Recorded child output' }).first(),
     ).toBeVisible();

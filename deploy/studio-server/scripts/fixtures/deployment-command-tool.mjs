@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { parseAllDocuments } from 'yaml';
 import { acquireFixtureFileLock } from './fixture-file-lock.mjs';
+import { autoscalerPolicyDigest } from '../lib/execution-autoscaler.mjs';
 
 const kind = process.argv[2];
 const original = process.argv.slice(3);
@@ -139,9 +140,18 @@ function apply(resources) {
       fail('Conflict: stale Helm workload resourceVersion');
   }
   const wanted = new Set(resources.map((r) => `${r.kind}/${r.metadata.name}`));
-  state.resources = state.resources.filter(
-    (r) => r.kind === 'ReplicaSet' || wanted.has(`${r.kind}/${r.metadata.name}`),
+  // Helm deletes omitted controllers; Kubernetes then garbage-collects their
+  // exact owner chains. In particular fenced validation removes the autoscaler.
+  const removed = new Set(
+    state.resources
+      .filter((r) => r.kind !== 'ReplicaSet' && !wanted.has(`${r.kind}/${r.metadata.name}`))
+      .map((r) => r.metadata.uid),
   );
+  for (const r of state.resources)
+    if (r.kind === 'ReplicaSet' && r.metadata.ownerReferences?.some((owner) => removed.has(owner.uid)))
+      removed.add(r.metadata.uid);
+  state.pods = state.pods.filter((p) => !p.metadata.ownerReferences?.some((owner) => removed.has(owner.uid)));
+  state.resources = state.resources.filter((r) => !removed.has(r.metadata.uid));
   for (const target of resources) {
     if (target.kind === 'Job') continue;
     let live = find(target.kind, target.metadata.name);
@@ -197,7 +207,17 @@ function helm() {
       ? []
       : [{ name: state.release, namespace: state.namespace, status: state.releaseStatus ?? 'deployed' }];
   if (args[0] === 'get' && args[1] === 'values') return state.installed;
-  if (args[0] === 'get' && args[1] === 'manifest') return state.manifest;
+  if (args[0] === 'get' && args[1] === 'manifest') {
+    if (['afterSettlementNotReady', 'afterSettlementPodReplaced'].includes(state.fault)) {
+      state.finalManifestReads = (state.finalManifestReads ?? 0) + 1;
+      if (state.finalManifestReads === 2) {
+        if (state.fault === 'afterSettlementNotReady')
+          state.pods[0].status.conditions.find((c) => c.type === 'Ready').status = 'False';
+        else state.pods[0].metadata.uid = randomUUID();
+      }
+    }
+    return state.manifest;
+  }
   if (args[0] === 'history') return [];
   if (args[0] === 'status') return 'fixture release';
   if (args[0] === 'upgrade') {
@@ -233,6 +253,10 @@ function helm() {
         merge(state.installed, parseAllDocuments(fs.readFileSync(flags[i + 1], 'utf8'))[0].toJSON());
     }
     if (flags.includes('workflowSchema.migrationJob.enabled=false')) state.finalReady = true;
+    if (state.finalReady && state.fault === 'lostFinalApply' && !state.injected) {
+      state.injected = true;
+      fail('fixture lost final Helm acknowledgement');
+    }
     if (['lostTemplate', 'lostTemplateDiagnostics'].includes(state.fault) && !state.injected) {
       state.injected = true;
       fail('fixture lost template acknowledgement');
@@ -261,6 +285,15 @@ function kubectl() {
   if (args[0] === 'get') {
     const type = args[1],
       name = args[2]?.startsWith('-') ? null : args[2];
+    if (
+      state.finalReady &&
+      state.fault === 'lostFinalInventory' &&
+      type.startsWith('deployment,statefulset,hpa,pvc') &&
+      !state.injected
+    ) {
+      state.injected = true;
+      fail('fixture inventory connection lost after acknowledged Helm');
+    }
     if (state.fault === 'unavailableInventory' && type.includes(',pod,'))
       fail('fixture management inventory unavailable');
     if (state.fault === 'settlementDisconnect' && state.finalReady && type.includes(',pod,') && !state.injected) {
@@ -273,6 +306,33 @@ function kubectl() {
       return { metadata: { name: state.namespace, uid: state.namespaceUid } };
     }
     if (type === 'configmap') {
+      if (state.fault === 'controllerRecreation' && state.finalReady && state.journal) {
+        const record = JSON.parse(state.journal.data.record);
+        if (record.phase === 'complete' && record.autoscalingProtocol !== 1) {
+          // Simulate the recreated controller's normal first tick only after
+          // the deployment lease has completed. Never hide an unfinished cutover.
+          const controller = state.resources.find((r) => component(r) === 'autoscaler');
+          const config = JSON.parse(
+            controller.spec.template.spec.containers[0].env.find((e) => e.name === 'RIVET_AUTOSCALER_CONFIG').value,
+          );
+          state.completedCutover = record;
+          state.journal.metadata.labels = { 'app.kubernetes.io/instance': state.release };
+          state.journal.data.record = JSON.stringify({
+            autoscalingProtocol: 1,
+            release: state.release,
+            namespace: state.namespace,
+            phase: 'complete',
+            token: randomUUID(),
+            runner: randomUUID(),
+            leaseExpiresAt: Date.now(),
+            lastSampleAt: Date.now(),
+            manifestDigest: config.manifestDigest,
+            policyDigest: autoscalerPolicyDigest(config.policy),
+            controllerUid: controller.metadata.uid,
+          });
+          touch(state.journal);
+        }
+      }
       if (state.fault === 'samplingAutoscalerAdvance' && state.journal) {
         const record = JSON.parse(state.journal.data.record);
         if (record.autoscalingProtocol === 1 && record.leaseExpiresAt > Date.now())
@@ -359,11 +419,14 @@ function kubectl() {
     return '';
   }
   if (args[0] === 'patch') {
-    const resource = find('Deployment', args[2]),
+    const resource = find(kinds[args[1]], args[2]),
       patch = JSON.parse(args.at(-1));
     if (patch[0].value !== resource.metadata.uid || patch[1].value !== resource.metadata.resourceVersion)
       fail('Conflict: fixture patch identity');
-    resource.spec.template = patch.at(-1).value;
+    if (patch.at(-1).path === '/spec/replicas') {
+      if (resource.spec.replicas !== patch[2].value) fail('Conflict: fixture replicas');
+      resource.spec.replicas = patch.at(-1).value;
+    } else resource.spec.template = patch.at(-1).value;
     reconcile(resource);
     return '';
   }
@@ -376,6 +439,17 @@ function kubectl() {
     }
     const name = args[2].split('/').at(-1),
       deletion = readInput();
+    if (args[2].includes('/horizontalpodautoscalers/')) {
+      const hpa = find('HorizontalPodAutoscaler', name);
+      if (
+        !hpa ||
+        hpa.metadata.uid !== deletion.preconditions.uid ||
+        hpa.metadata.resourceVersion !== deletion.preconditions.resourceVersion
+      )
+        fail('Conflict: fixture HPA identity');
+      state.resources = state.resources.filter((r) => r !== hpa);
+      return '';
+    }
     if (args[2].includes('/pods/')) {
       const pod = state.pods.find((p) => p.metadata.name === name);
       if (pod?.metadata.uid !== deletion.preconditions.uid) fail('Conflict: fixture deletion UID');

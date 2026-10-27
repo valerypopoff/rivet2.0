@@ -2,6 +2,30 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-27 — run cost statistics and persistence safety
+
+All tracks last changed versions in `85615dc79`. This preparation includes the
+subsequent commits through `3f606677f` and the pending cost-accounting, pricing
+controls and statistics UI changes.
+
+| Packages | Version | Changes since that track's last bump |
+| --- | --- | --- |
+| App | `2.30.0` → `2.31.0` | Optional inline/profile token-pricing controls, Decision AI model/custom-model selectors, reliable canvas-wire culling, identity-safe hosted Save As and collapsible-panel accessibility fixes. |
+| Core, Node, CLI, Evaluations | `2.24.0` → `2.25.0` | Core adds run-owned AI accounting across nested/background execution, authored token-pricing overrides, Baseten Elephant/Mammoth and Liquid d1.1 models, and dataset-ownership validation/remapping. Node, CLI and Evaluations have no package-local source changes and remain required public-family companions. |
+| App Executor | `2.16.0` → `2.17.0` | Rebuilt source-bundled Core/runtime companion for the accounting and provider capabilities; no separate sidecar protocol change or package-local source change. |
+| All five Studio Server packages | `1.32.0` → `1.33.0` | Root cost persistence/aggregation and dual-series Cost over time, independent duration/cost grouping, guarded structural mutations and folder-parent repair, identity-safe Save As, hosted bundle-access checks, migration/deployment recovery and container/CI hardening. API/Web/Shared change locally; Bootstrap is unchanged and Executor has regression-test changes only. Both remain lockstep companions. |
+| Docs | `2.24.0` → `2.25.0` | User-facing cost/coverage semantics, optional inline/profile token pricing and updated Decision AI model choices. |
+
+These are compatible feature releases; companions need not contain independent
+new features. Desktop Tauri/Cargo follows App and the CLI Docker default follows
+the public family. Existing `workspace:` ranges and Yarn resolutions remain
+unchanged. This version-only preparation does not change Helm metadata or add
+another schema migration. The already implemented managed migrations 17/18,
+rollback floor 17 and their deployment/adoption safeguards still apply; see
+[deployment operation contracts](studio-server/deployment-operations.md).
+No packages are published and no production changes are authorized by a version
+bump. See the [prepared release matrix](BUILD-AND-CI.md#prepared-release-versions-2026-10-27).
+
 ## Version update: 2026-10-25 — execution consolidation and image questions
 
 All tracks last changed versions in `1ebeef366`. This update covers subsequent

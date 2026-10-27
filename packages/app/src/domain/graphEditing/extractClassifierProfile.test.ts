@@ -12,6 +12,7 @@ test('Classifier extraction moves active model/key wires and midpoints, but not 
     timeoutMs: 90_000,
     outputRequestBody: true,
     retryOnNon200: true,
+    tokenPricing: { inputPerMillionTokens: 2, outputPerMillionTokens: 8, cacheReadPerMillionTokens: 0.5 },
   });
   const profile = ClassifierProfileNodeImpl.create();
   const wire = (inputId: string): NodeConnection => ({
@@ -31,6 +32,8 @@ test('Classifier extraction moves active model/key wires and midpoints, but not 
   });
   assert.equal(result.evaluateNode.data.configurationMode, 'profile');
   assert.equal(result.profileNode.data.provider, 'liquid');
+  assert.deepEqual(result.profileNode.data.tokenPricing, evaluate.data.tokenPricing);
+  assert.notEqual(result.profileNode.data.tokenPricing, evaluate.data.tokenPricing);
   assert.equal(result.profileNode.data.responseTimeoutMs, profile.data.responseTimeoutMs);
   assert.ok(!('timeoutMs' in result.profileNode.data));
   assert.ok(!('outputRequestBody' in result.profileNode.data));

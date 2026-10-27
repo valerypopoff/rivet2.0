@@ -4,6 +4,7 @@ import {
   assertInstalledReleaseManifest,
   assertInstalledExecutionSettings,
   assertCutoverVerificationInventory,
+  assertCutoverVerificationTarget,
   assertNoExecutionStartupFences,
   readAvailableReleaseJournal,
 } from './lib/deployment-readiness.mjs';
@@ -41,6 +42,43 @@ test('verification recovery requires identical final workload and storage identi
     assert.throws(() => assertNoExecutionStartupFences([item]), /startup fence remains/);
 });
 
+test('stored autoscaled capacity may differ only within its approved policy; static capacity and settings stay exact', () => {
+  const workload = {
+    kind: 'Deployment',
+    metadata: { name: 'proxy' },
+    spec: {
+      replicas: 2,
+      template: { spec: { containers: [{ name: 'proxy', env: [{ name: 'SETTING', value: 'approved' }] }] } },
+    },
+  };
+  const hpa = {
+    kind: 'HorizontalPodAutoscaler',
+    metadata: { name: 'proxy' },
+    spec: {
+      scaleTargetRef: { kind: 'Deployment', name: 'proxy' },
+      minReplicas: 2,
+      maxReplicas: 4,
+    },
+  };
+  const expected = [workload, hpa],
+    installed = structuredClone(expected);
+  installed[0].spec.replicas = 3;
+  const identity = { release: 'rivet', namespace: 'fixture' };
+  assert.doesNotThrow(() => assertInstalledReleaseManifest(expected, installed, identity));
+  assert.equal(installed[0].spec.replicas, 3, 'comparison must not edit saved or rendered resources');
+  assert.throws(() => assertInstalledReleaseManifest([workload], [installed[0]], identity), /differs/);
+  for (const replicas of [0, 1, 5, 2.5]) {
+    const changed = structuredClone(installed);
+    changed[0].spec.replicas = replicas;
+    assert.throws(() => assertInstalledReleaseManifest(expected, changed, identity), /capacity is outside/);
+  }
+  installed[0].spec.template.spec.containers[0].env[0].value = 'changed';
+  assert.throws(() => assertInstalledReleaseManifest(expected, installed, identity), /differs/);
+  const changedPolicy = structuredClone(expected);
+  changedPolicy[1].spec.maxReplicas = 5;
+  assert.throws(() => assertInstalledReleaseManifest(expected, changedPolicy, identity), /differs/);
+});
+
 test('same-image settings drift cannot pass verification, while API-defaulted mount fields can', () => {
   const resource = {
     kind: 'StatefulSet',
@@ -65,6 +103,78 @@ test('same-image settings drift cannot pass verification, while API-defaulted mo
   assert.doesNotThrow(() => assertInstalledExecutionSettings([resource], [live]));
   live.spec.template.spec.containers[0].env[0].value = 'another-database';
   assert.throws(() => assertInstalledExecutionSettings([resource], [live]), /execution settings differ/);
+});
+
+test('only literal empty env values may be omitted; sources, ordering, arguments and real values remain guarded', () => {
+  const resource = {
+    kind: 'StatefulSet',
+    metadata: { name: 'backend' },
+    spec: {
+      template: {
+        spec: {
+          containers: [
+            {
+              name: 'api',
+              env: [
+                { name: 'EMPTY', value: '' },
+                { name: 'VALUE', value: 'approved' },
+              ],
+              args: [''],
+            },
+          ],
+        },
+      },
+    },
+  };
+  const live = structuredClone(resource);
+  delete live.spec.template.spec.containers[0].env[0].value;
+  assert.doesNotThrow(() => assertInstalledExecutionSettings([resource], [live]));
+  assert.doesNotThrow(() => assertInstalledExecutionSettings([live], [resource]));
+  for (const mutate of [
+    (c) => {
+      c.env[0].value = 'changed';
+    },
+    (c) => {
+      c.env[0].value = null;
+    },
+    (c) => {
+      c.env[0].valueFrom = { secretKeyRef: { name: 'other', key: 'key' } };
+    },
+    (c) => {
+      c.env.reverse();
+    },
+    (c) => {
+      c.args = [];
+    },
+  ]) {
+    const changed = structuredClone(live);
+    mutate(changed.spec.template.spec.containers[0]);
+    assert.throws(() => assertInstalledExecutionSettings([resource], [changed]), /execution settings differ/);
+  }
+  const fromField = structuredClone(live);
+  fromField.spec.template.spec.containers[0].env[0].valueFrom = { fieldRef: { fieldPath: 'metadata.uid' } };
+  const defaulted = structuredClone(fromField);
+  defaulted.spec.template.spec.containers[0].env[0].valueFrom.fieldRef.apiVersion = 'v1';
+  assert.doesNotThrow(() => assertInstalledExecutionSettings([fromField], [defaulted]));
+  defaulted.spec.template.spec.containers[0].env[0].valueFrom.fieldRef.fieldPath = 'metadata.name';
+  assert.throws(() => assertInstalledExecutionSettings([fromField], [defaulted]), /execution settings differ/);
+});
+
+test('missing final inventory can adopt observed intended controllers, never changed storage or extra workloads', () => {
+  const resources = [{ kind: 'Deployment', metadata: { name: 'autoscaler' } }];
+  const claims = [{ name: 'data', uid: 'retained' }];
+  const current = {
+    workloads: [{ kind: 'deployment', name: 'autoscaler', uid: 'intentionally-recreated' }],
+    claims,
+    autoscalers: [],
+  };
+  assert.equal(assertCutoverVerificationTarget(resources, current, claims), current);
+  assert.throws(
+    () => assertCutoverVerificationTarget(resources, current, [{ name: 'data', uid: 'changed' }]),
+    /claim identities/,
+  );
+  assert.throws(() => assertCutoverVerificationTarget([], current, claims), /complete approved candidate/);
+  assert.throws(() => assertCutoverVerificationTarget(resources, current, undefined), /claim identities/);
 });
 
 test('journal admission waits only on completed sampling and refuses busy, changed or indefinitely held ownership', async () => {

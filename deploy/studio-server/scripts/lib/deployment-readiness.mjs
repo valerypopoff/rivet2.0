@@ -3,7 +3,8 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
 import { journalForReleaseOperation } from './release-operation-journal.mjs';
-import { verifyRecoveryReceipt } from './maintenance-deployment-plan.mjs';
+import { verifyRecoveryReceipt, verifyRetainedMaintenanceMigration } from './maintenance-deployment-plan.mjs';
+import { releaseReplicaBounds } from './kubernetes-release-settlement.mjs';
 
 /** Only GETs may wait for an idle controller's sampling lease. A newly busy
  * operation or a CAS race still fails closed; no write is retried here. */
@@ -63,18 +64,29 @@ export function parseReleaseResources(text) {
 
 /** Helm's stored manifest has no API-defaulted fields. Compare all declarative
  * settings, not just image tags. Hooks are separately executed, not installed
- * manifest objects; transient CAS versions are never application settings. */
-export function assertInstalledReleaseManifest(expected, installed) {
-  const normalize = (resources) =>
+ * manifest objects; transient CAS versions are never application settings.
+ * With installation identity, reuse settlement's bounds for elastic counts. */
+export function assertInstalledReleaseManifest(expected, installed, { release, namespace } = {}) {
+  const bounds = release && namespace ? releaseReplicaBounds(expected, release, namespace) : new Map();
+  const normalize = (resources, checkCapacity = false) =>
     resources
       .filter((r) => !r.metadata?.annotations?.['helm.sh/hook'])
       .map((resource) => {
         const value = structuredClone(resource);
         delete value.metadata.resourceVersion;
+        const capacity = bounds.get(`${value.kind}/${value.metadata.name}`);
+        if (capacity?.automatic) {
+          const replicas = value.spec.replicas ?? 1;
+          if (checkCapacity && (!Number.isInteger(replicas) || replicas < capacity.min || replicas > capacity.max))
+            throw Error('Installed Helm capacity is outside the approved autoscaling policy.');
+          // Helm deliberately preserves grown capacity during upgrades. Its
+          // historical replica count is not a different application setting.
+          delete value.spec.replicas;
+        }
         return value;
       })
       .sort((a, b) => `${a.kind}/${a.metadata.name}`.localeCompare(`${b.kind}/${b.metadata.name}`));
-  if (!isDeepStrictEqual(normalize(expected), normalize(installed)))
+  if (!isDeepStrictEqual(normalize(expected), normalize(installed, true)))
     throw Error(
       'Installed Helm configuration differs from the exact final candidate; verification cannot replace a deployment.',
     );
@@ -95,6 +107,23 @@ export function assertInstalledExecutionSettings(resources, items) {
       return actual && Object.entries(expected).every(([key, value]) => declared(value, actual[key]));
     return isDeepStrictEqual(expected, actual);
   };
+  const environment = (expected, actual) =>
+    Array.isArray(actual) &&
+    expected.length === actual.length &&
+    expected.every((entry, index) => {
+      const live = actual[index];
+      if (!live || entry.name !== live.name) return false;
+      if (entry.valueFrom !== undefined)
+        return (live.value === undefined || live.value === '') && declared(entry.valueFrom, live.valueFrom);
+      // EnvVar.value has omitempty semantics in Kubernetes. Do not apply this
+      // equivalence to args, arbitrary settings, or valueFrom references.
+      return (
+        live.valueFrom === undefined &&
+        (entry.value === undefined || typeof entry.value === 'string') &&
+        (live.value === undefined || typeof live.value === 'string') &&
+        (entry.value === undefined ? '' : entry.value) === (live.value === undefined ? '' : live.value)
+      );
+    });
   for (const resource of resources.filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind))) {
     const matches = items.filter(
       (item) => item.kind === resource.kind && item.metadata.name === resource.metadata.name,
@@ -102,7 +131,7 @@ export function assertInstalledExecutionSettings(resources, items) {
     if (matches.length !== 1) throw Error('Live workload configuration identity is missing or ambiguous.');
     const expected = resource.spec.template.spec,
       actual = matches[0].spec.template.spec;
-    const fields = ['env', 'envFrom', 'command', 'args', 'volumeMounts'];
+    const fields = ['envFrom', 'command', 'args', 'volumeMounts'];
     for (const group of ['containers', 'initContainers']) {
       const wanted = expected[group] ?? [],
         live = actual[group] ?? [];
@@ -110,7 +139,11 @@ export function assertInstalledExecutionSettings(resources, items) {
         wanted.length !== live.length ||
         wanted.some((container) => {
           const current = live.find((c) => c.name === container.name);
-          return !current || fields.some((field) => !declared(container[field] ?? [], current[field] ?? []));
+          return (
+            !current ||
+            !environment(container.env ?? [], current.env ?? []) ||
+            fields.some((field) => !declared(container[field] ?? [], current[field] ?? []))
+          );
         })
       )
         throw Error('Live workload execution settings differ from the approved candidate.');
@@ -125,7 +158,7 @@ export function assertInstalledExecutionSettings(resources, items) {
 
 /** Retained bytes are checked again, not trusted because verified.json exists.
  * This proves the original frozen checkpoint, not a new capture or restore. */
-export async function verifyRetainedCutoverCheckpoint(root, directory, context, token, planDigest) {
+export async function verifyRetainedCutoverCheckpoint(root, directory, context, token, planDigest, maintenance) {
   const contained = (base, file) => {
     const relative = path.relative(base, file);
     return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -155,6 +188,8 @@ export async function verifyRetainedCutoverCheckpoint(root, directory, context, 
   )
     throw Error('Retained checkpoint belongs to another installation or cutover.');
   const verified = await verifyRecoveryReceipt(receipt, directory, request);
+  if (maintenance?.plan.schemaMigration)
+    await verifyRetainedMaintenanceMigration(maintenance, directory, request, receipt);
   const final = await fs.lstat(directory, { bigint: true });
   if (
     !final.isDirectory() ||
@@ -164,6 +199,31 @@ export async function verifyRetainedCutoverCheckpoint(root, directory, context, 
   )
     throw Error('Retained recovery directory identity changed during verification.');
   return verified;
+}
+
+/** When final inventory inspection was lost, freeze observed target identities
+ * only after matching every controller name/kind and retained original claim.
+ * Subsequent settlement must reconfirm this same observed inventory. */
+export function assertCutoverVerificationTarget(resources, current, originalClaims) {
+  const expected = resources
+    .filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind))
+    .map((r) => `${r.kind.toLowerCase()}/${r.metadata.name}`)
+    .sort();
+  const actual = current.workloads.map((r) => `${r.kind}/${r.name}`).sort();
+  if (!isDeepStrictEqual(expected, actual) || new Set(actual).size !== actual.length)
+    throw Error('Observed final controllers do not match the complete approved candidate.');
+  const wantedHpas = resources
+    .filter((r) => r.kind === 'HorizontalPodAutoscaler')
+    .map((r) => r.metadata.name)
+    .sort();
+  if (
+    !Array.isArray(current.autoscalers) ||
+    current.autoscalers.some((item) => !item.uid) ||
+    !isDeepStrictEqual(wantedHpas, current.autoscalers.map((item) => item.name).sort())
+  )
+    throw Error('Observed final autoscalers do not match the complete approved candidate.');
+  assertCutoverVerificationInventory({ workloads: current.workloads, claims: originalClaims }, current);
+  return current;
 }
 
 export function assertCutoverVerificationInventory(expected, current) {
@@ -185,6 +245,20 @@ export function assertCutoverVerificationInventory(expected, current) {
     !isDeepStrictEqual(claims(expected), claims(current))
   )
     throw Error('Final persistent claim identities changed; verification-only recovery is not admitted.');
+  if (expected.autoscalers) {
+    const legacy = expected.autoscalers.every((item) => typeof item === 'string');
+    const identities = (items) =>
+      items
+        .map((item) =>
+          typeof item === 'string' ? { name: item } : { name: item.name, ...(legacy ? {} : { uid: item.uid }) },
+        )
+        .sort((a, b) => a.name.localeCompare(b.name));
+    if (
+      !Array.isArray(current.autoscalers) ||
+      !isDeepStrictEqual(identities(expected.autoscalers), identities(current.autoscalers))
+    )
+      throw Error('Final autoscaler identities changed; verification-only recovery is not admitted.');
+  }
 }
 
 export function assertNoExecutionStartupFences(items) {

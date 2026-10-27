@@ -351,13 +351,16 @@ const runStatisticsCatalogQuerySchema = z.object({
   surface: z.enum(['endpoint', 'web_app']),
 });
 
+const runStatisticsAggregationSchema = z.enum(['auto', 'day', 'week']);
+
 const runStatisticsQuerySchema = z.object({
   target: runStatisticsTargetSchema,
   period: runStatisticsPeriodSchema,
   runKind: z.enum(['published', 'latest', 'both']),
   includeFailed: z.boolean().default(false),
   includeWarnings: z.boolean().default(false),
-  aggregation: z.enum(['auto', 'day', 'week']).optional().default('auto'),
+  aggregation: runStatisticsAggregationSchema.optional().default('auto'),
+  costAggregation: runStatisticsAggregationSchema.optional(),
 });
 
 workflowsRouter.get('/tree/events', requireAuth, (req, res) => {

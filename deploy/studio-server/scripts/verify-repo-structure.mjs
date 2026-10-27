@@ -315,7 +315,7 @@ assert.match(imageWorkflowPermissions, /^\s+packages:\s+write\s*$/m);
 assert.match(imageWorkflow, /IMAGE_NAMESPACE: ghcr\.io\/valerypopoff\/rivet2\.0-studio-server/);
 assert.match(
   imageWorkflow,
-  /name: managed-kubernetes-release-gate-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  /name: managed-kubernetes-release-gate-\$\{\{ matrix\.scenario \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
 );
 assert.match(
   imageWorkflow,
@@ -335,11 +335,17 @@ for (const dockerfilePath of dockerfiles) {
 }
 
 const productionWeb = readText('deploy/studio-server/images/web/Dockerfile');
-assert.match(productionWeb, /studio-server-web\/production\/server\.mjs --bundle/,
-  'Production must bundle the source-owned, regression-tested immutable build server.');
+assert.match(
+  productionWeb,
+  /studio-server-web\/production\/server\.mjs --bundle/,
+  'Production must bundle the source-owned, regression-tested immutable build server.',
+);
 assert.match(productionWeb, /CMD \["node", "\/app\/web-server\.mjs"\]/);
-assert.match(readText('deploy/studio-server/compose/docker/Dockerfile.web'), /npm install -g serve@14\.2\.6/,
-  'The legacy Compose static server remains pinned until its separate runtime is migrated.');
+assert.match(
+  readText('deploy/studio-server/compose/docker/Dockerfile.web'),
+  /npm install -g serve@14\.2\.6/,
+  'The legacy Compose static server remains pinned until its separate runtime is migrated.',
+);
 
 const gitignore = readText('.gitignore');
 for (const pattern of ['/.data/', '/artifacts/playwright/', '.tools/']) {

@@ -5,6 +5,19 @@ import type { ChartNode, PortId } from '@valerypopoff/rivet2-node';
 
 if (!process.send || !process.env.RIVET_ASYNC_TEST_ROOT) throw new Error('Requires the isolated async test harness');
 const root = process.env.RIVET_ASYNC_TEST_ROOT;
+if (process.env.RIVET_ASYNC_TEST_COST_PROVIDER_URL) {
+  const providerUrl = new URL(process.env.RIVET_ASYNC_TEST_COST_PROVIDER_URL);
+  if (providerUrl.protocol !== 'http:' || providerUrl.hostname !== '127.0.0.1') throw new Error('Requires local cost provider');
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    // Test-only URL redirection; preserve the actual HTTP client and adapter.
+    if (String(input) === 'https://api.typesafe.ai/v1/systemone')
+      return nativeFetch(`${providerUrl.href.replace(/\/$/, '')}/v1/systemone`, init);
+    if (String(input) === 'https://openrouter.ai/api/v1/chat/completions')
+      return nativeFetch(`${providerUrl.href.replace(/\/$/, '')}/v1/chat/completions`, init);
+    return nativeFetch(input, init);
+  };
+}
 const endpointName = process.env.RIVET_ASYNC_TEST_ENDPOINT_NAME || 'async-acceptance';
 await fs.mkdir(path.join(root, 'app', 'settings'), { recursive: true });
 await fs.mkdir(path.join(root, 'workflows'), { recursive: true });
@@ -104,7 +117,10 @@ process.on('message', async (message: { id: number; command: string }) => {
       process.send?.({ id: message.id, result: true });
       return;
     }
-    if (message.command === 'seed-hosted-subgraph') {
+    if (message.command === 'seed-cost' || message.command === 'seed-cost-priced') {
+      const { seedRunCostFixture } = await import('./run-cost-fixture.js');
+      process.send?.({ id: message.id, result: await seedRunCostFixture(message.command === 'seed-cost-priced') });
+    } else if (message.command === 'seed-hosted-subgraph') {
       const { seedHostedSubgraphFixture } = await import('./hosted-subgraph-fixture.js');
       hostedSubgraphFixture = await seedHostedSubgraphFixture();
       process.send?.({ id: message.id, result: hostedSubgraphFixture });

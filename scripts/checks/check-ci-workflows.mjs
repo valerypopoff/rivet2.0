@@ -605,6 +605,7 @@ assertIncludesAll(
     'scan-images',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
+    'managed-kubernetes-ha-evidence',
     'promote-images',
   ],
   'Image jobs',
@@ -626,6 +627,7 @@ for (const requiredGate of [
   'scan-images',
   'fast-container-smoke',
   'managed-kubernetes-release-gate',
+  'managed-kubernetes-ha-evidence',
   'managed-kubernetes-provider-gate',
 ]) {
   assert.match(
@@ -731,6 +733,7 @@ assertIncludesAll(
     'scan-images',
     'fast-container-smoke',
     'managed-kubernetes-release-gate',
+    'managed-kubernetes-ha-evidence',
     'managed-kubernetes-provider-gate',
   ],
   'Image promotion dependencies',
@@ -817,22 +820,19 @@ const haGate = findStep(
   'Run HA Kubernetes Gate',
   'Managed Kubernetes release gate',
 );
-assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, 'kind-rivet-managed-release');
-assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, 'kind-rivet-managed-release');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_CONTEXT, '${{ matrix.context }}');
+assert.equal(haGate.env.RIVET_K8S_RELEASE_GATE_ALLOW_CONTEXT, '${{ matrix.context }}');
 assert.match(haGate.run, /\.lineage\.predecessor\.manifestDigest/);
-assert.match(haGate.run, /kubernetes-ha-release-gate\.mjs certify/);
+assert.match(haGate.run, /kubernetes-ha-release-gate\.mjs scenario/);
 assert.match(
   haGate.run,
-  /^\s*yarn node deploy\/studio-server\/scripts\/kubernetes-ha-release-gate\.mjs certify\s*$/m,
+  /^\s*yarn node deploy\/studio-server\/scripts\/kubernetes-ha-release-gate\.mjs scenario "\$RIVET_HA_SCENARIO"\s*$/m,
   'The HA gate imports workspace dependencies and must run with Yarn PnP resolution, not bare node.',
 );
 assert.doesNotMatch(haGate.run, /:production|allow-missing/);
 assert.equal(
-  findStep(
-    imageJobs['managed-kubernetes-release-gate'],
-    'Upload HA Release Evidence',
-    'Managed Kubernetes release gate',
-  ).with['if-no-files-found'],
+  findStep(imageJobs['managed-kubernetes-ha-evidence'], 'Upload HA Release Evidence', 'Managed Kubernetes release gate')
+    .with['if-no-files-found'],
   'error',
 );
 assert.match(
@@ -864,8 +864,70 @@ assert.equal(
     'Upload Managed Kubernetes Gate Artifacts',
     'Managed Kubernetes release gate',
   ).with?.name,
-  'managed-kubernetes-release-gate-${{ github.run_id }}-${{ github.run_attempt }}',
+  'managed-kubernetes-release-gate-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
   'Managed Kubernetes release-gate diagnostics must remain distinct per workflow attempt.',
+);
+const proofMatrix = imageJobs['managed-kubernetes-release-gate'];
+assert.deepEqual(proofMatrix.strategy.matrix.scenario, ['upgrade', 'lostAcknowledgement', 'leaseLoss']);
+assert.equal(
+  proofMatrix.strategy['fail-fast'],
+  false,
+  'A failed scenario must not cancel evidence/cleanup in its peers.',
+);
+assert.equal(proofMatrix.strategy['max-parallel'], 3);
+assert.deepEqual(
+  proofMatrix.strategy.matrix.include.map((x) => x.context),
+  ['kind-rivet-managed-release', 'kind-rivet-ha-lost-acknowledgement', 'kind-rivet-ha-lease-loss'],
+);
+for (const name of [
+  'Verify hard-spread scheduling with tainted nodes',
+  'Run Managed Kubernetes Gate',
+  'Install browser for full HA upgrade verification',
+]) {
+  assert.equal(findStep(proofMatrix, name, 'HA matrix').if, "matrix.scenario == 'upgrade'");
+}
+assert.match(findStep(proofMatrix, 'Delete Disposable Kind Cluster', 'HA matrix').run, /ha-kind-cluster\.mjs cleanup/);
+assert.match(findStep(proofMatrix, 'Delete Disposable Kind Cluster', 'HA matrix').if, /always\(\)/);
+assert.equal(
+  findStep(proofMatrix, 'Upload HA Scenario Observations', 'HA matrix').with.name,
+  'studio-server-ha-scenario-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}',
+);
+const assembly = imageJobs['managed-kubernetes-ha-evidence'];
+assert.equal(assembly.name, 'managed-kubernetes-release-gate', 'Keep the stable required-check identity.');
+assert.match(assembly.if, /always\(\)/, 'The required aggregate check must fail, not skip, after a scenario failure.');
+assert.match(
+  findStep(assembly, 'Require every HA scenario and its cleanup', 'HA assembler').run,
+  /needs\.managed-kubernetes-release-gate\.result.*!= 'success'/,
+);
+assert.deepEqual(assembly.needs, ['changes', 'release-manifest', 'managed-kubernetes-release-gate']);
+const reportDownloads = assembly.steps.filter((step) =>
+  String(step.with?.name).startsWith('studio-server-ha-scenario-'),
+);
+assert.deepEqual(
+  reportDownloads.map((step) => step.with.name),
+  ['upgrade', 'lostAcknowledgement', 'leaseLoss'].map(
+    (s) => `studio-server-ha-scenario-${s}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+  ),
+);
+assert.ok(
+  reportDownloads.every((step) => !step.with.pattern && !step.with['run-id']),
+  'HA assembly uses exact current-run artifacts, never latest/pattern lookup.',
+);
+assert.match(
+  findStep(assembly, 'Assemble exact HA evidence', 'HA assembler').run,
+  /yarn node .*kubernetes-ha-release-gate\.mjs assemble/,
+);
+assert.match(promotionCondition, /require_kind == 'true'[^)]*managed-kubernetes-ha-evidence\.result == 'success'/);
+assert.match(promotionCondition, /require_kind != 'true'[^)]*managed-kubernetes-ha-evidence\.result == 'skipped'/);
+assert.deepEqual(
+  findStep(proofMatrix, 'Upload Managed Kubernetes Gate Artifacts', 'HA diagnostics').with.path.trim().split(/\s+/),
+  [
+    'artifacts/kubernetes-managed-release-gate',
+    'artifacts/kubernetes-ha-release-gate',
+    'artifacts/ha-scheduling',
+    'artifacts/ha-cluster-receipt.json',
+  ],
+  'Private kubeconfigs and broad artifact roots must never be uploaded.',
 );
 assert.equal(
   findStep(

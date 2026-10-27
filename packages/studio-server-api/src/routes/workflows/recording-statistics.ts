@@ -1,4 +1,7 @@
-import { getWorkflowRunStatisticsTargetKey } from '../../../../studio-server-shared/workflow-recording-types.js';
+import {
+  getWorkflowRunStatisticsTargetKey,
+  readWorkflowRunCost,
+} from '../../../../studio-server-shared/workflow-recording-types.js';
 import type {
   WorkflowRecordingExecutionIdentity,
   WorkflowRecordingRunKind,
@@ -14,6 +17,9 @@ import type {
   WorkflowRunStatisticsSurface,
   WorkflowRunStatisticsTarget,
   WorkflowRunStatisticsTargetSummary,
+  WorkflowRunCost,
+  WorkflowRunCostStatistics,
+  WorkflowRunCostBucket,
 } from '../../../../studio-server-shared/workflow-recording-types.js';
 
 export type WorkflowRecordingStatisticsRow = {
@@ -25,6 +31,7 @@ export type WorkflowRecordingStatisticsRow = {
   durationMs: number;
   endpointNameAtExecution: string;
   executionIdentity?: WorkflowRecordingExecutionIdentity;
+  cost?: WorkflowRunCost;
 };
 
 const EMPTY_STATUS_COUNTS: WorkflowRunStatisticsStatusCounts = {
@@ -32,6 +39,8 @@ const EMPTY_STATUS_COUNTS: WorkflowRunStatisticsStatusCounts = {
   failed: 0,
   suspicious: 0,
 };
+
+type StatisticsBucket = { from: string; to: string; rows: WorkflowRecordingStatisticsRow[] };
 
 export function buildWorkflowRunStatisticsCatalog(
   rows: readonly (WorkflowRecordingStatisticsRow & { totalRuns?: number })[],
@@ -80,12 +89,16 @@ export function buildWorkflowRunStatisticsCatalog(
 export function buildWorkflowRunStatistics(
   rows: readonly WorkflowRecordingStatisticsRow[],
   query: WorkflowRunStatisticsQuery,
+  options: { includeCost?: boolean } = {},
 ): WorkflowRunStatisticsResponse {
   const fromMs = parseTime(query.period.from);
   const toMs = parseTime(query.period.to);
   const currentRows = rows.filter((row) => isInPeriod(row, fromMs, toMs) && matchesQuery(row, query));
   const currentIncluded = currentRows.filter((row) => shouldIncludeStatus(row.status, query));
   const current = summarizeDurations(currentIncluded);
+  const aggregation = query.aggregation ?? 'auto';
+  const costAggregation = query.costAggregation ?? aggregation;
+  const buckets = groupBuckets(currentIncluded, query.period, aggregation);
 
   return {
     target: query.target,
@@ -93,8 +106,78 @@ export function buildWorkflowRunStatistics(
     current,
     currentStatusCounts: countStatuses(currentRows),
     currentExcludedStatusCounts: countStatuses(currentRows.filter((row) => !shouldIncludeStatus(row.status, query))),
-    buckets: buildBuckets(currentIncluded, query.period, query.aggregation ?? 'auto'),
+    buckets: buildBuckets(buckets),
+    ...(options.includeCost === true
+      ? {
+          cost: summarizeCosts(currentIncluded),
+          costBuckets: buildCostBuckets(
+            costAggregation === aggregation ? buckets : groupBuckets(currentIncluded, query.period, costAggregation),
+          ),
+        }
+      : {}),
   };
+}
+
+function summarizeCosts(rows: readonly WorkflowRecordingStatisticsRow[]): WorkflowRunCostStatistics {
+  let completeCount = 0;
+  let partialCount = 0;
+  let unknownCount = 0;
+  let knownCostUsd = 0;
+  let averageCompleteCostUsd = 0;
+  for (const row of rows) {
+    const cost = readWorkflowRunCost(row.cost);
+    if (!cost || cost.status === 'unknown') {
+      unknownCount++;
+      continue;
+    }
+    knownCostUsd += cost.knownCostUsd;
+    if (cost.status === 'complete') {
+      completeCount++;
+      averageCompleteCostUsd += (cost.knownCostUsd - averageCompleteCostUsd) / completeCount;
+    } else {
+      partialCount++;
+    }
+  }
+  return {
+    runCount: rows.length,
+    completeCount,
+    partialCount,
+    unknownCount,
+    knownCostUsd: completeCount + partialCount > 0 && Number.isFinite(knownCostUsd) ? knownCostUsd : null,
+    averageCompleteCostUsd: completeCount > 0 ? averageCompleteCostUsd : null,
+  };
+}
+
+function buildCostBuckets(buckets: StatisticsBucket[]): WorkflowRunCostBucket[] {
+  return buckets.map(({ from, to, rows: bucket }) => ({
+    from,
+    to,
+    ...summarizeCosts(bucket),
+  }));
+}
+
+function groupBuckets(
+  rows: readonly WorkflowRecordingStatisticsRow[],
+  period: WorkflowRunStatisticsPeriod,
+  aggregation: WorkflowRunStatisticsAggregation,
+): StatisticsBucket[] {
+  const fromMs = parseTime(period.from);
+  const toMs = parseTime(period.to);
+  const bucketMs = getBucketDurationMs(toMs - fromMs);
+  const buckets = new Map<number, WorkflowRecordingStatisticsRow[]>();
+  for (const row of rows) {
+    const start = getBucketStartMs(parseTime(row.createdAt), aggregation, bucketMs);
+    const bucket = buckets.get(start) ?? [];
+    bucket.push(row);
+    buckets.set(start, bucket);
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([start, bucket]) => ({
+      from: new Date(Math.max(start, fromMs)).toISOString(),
+      to: new Date(Math.min(getBucketEndMs(start, aggregation, bucketMs), toMs)).toISOString(),
+      rows: bucket,
+    }));
 }
 
 export function getStatisticsQueryPeriod(input: { from: string; to: string }): WorkflowRunStatisticsPeriod {
@@ -111,6 +194,7 @@ function getTargetForRow(row: WorkflowRecordingStatisticsRow): WorkflowRunStatis
   // Local editor evidence exists solely to make a suspension diagnosable. It
   // must never create a production endpoint or web-app analytics target.
   if (
+    row.runKind === 'editor' ||
     identity?.surface === 'editor_local' ||
     identity?.surface === 'subgraph_project' ||
     identity?.surface === 'scheduled'
@@ -156,7 +240,7 @@ function matchesQuery(row: WorkflowRecordingStatisticsRow, query: WorkflowRunSta
 }
 
 function matchesTarget(row: WorkflowRecordingStatisticsRow, target: WorkflowRunStatisticsTarget): boolean {
-  if (row.workflowId !== target.workflowId) return false;
+  if (row.runKind === 'editor' || row.workflowId !== target.workflowId) return false;
   const identity = row.executionIdentity;
   if (target.surface === 'endpoint') {
     return identity?.surface === 'workflow_endpoint' || (!identity && !row.endpointNameAtExecution.startsWith('/'));
@@ -219,29 +303,12 @@ function percentile(sortedValues: readonly number[], fraction: number): number |
   return lowerValue + (upperValue - lowerValue) * (index - lower);
 }
 
-function buildBuckets(
-  rows: readonly WorkflowRecordingStatisticsRow[],
-  period: WorkflowRunStatisticsPeriod,
-  aggregation: WorkflowRunStatisticsAggregation,
-): WorkflowRunStatisticsBucket[] {
-  const fromMs = parseTime(period.from);
-  const toMs = parseTime(period.to);
-  const automaticBucketMs = getBucketDurationMs(toMs - fromMs);
-  const buckets = new Map<number, WorkflowRecordingStatisticsRow[]>();
-  for (const row of rows) {
-    const start = getBucketStartMs(parseTime(row.createdAt), aggregation, automaticBucketMs);
-    const bucketRows = buckets.get(start) ?? [];
-    bucketRows.push(row);
-    buckets.set(start, bucketRows);
-  }
-
-  return [...buckets.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([start, bucketRows]) => ({
-      from: new Date(Math.max(start, fromMs)).toISOString(),
-      to: new Date(Math.min(getBucketEndMs(start, aggregation, automaticBucketMs), toMs)).toISOString(),
-      ...summarizeDurations(bucketRows),
-    }));
+function buildBuckets(buckets: StatisticsBucket[]): WorkflowRunStatisticsBucket[] {
+  return buckets.map(({ from, to, rows: bucket }) => ({
+    from,
+    to,
+    ...summarizeDurations(bucket),
+  }));
 }
 
 function getBucketStartMs(

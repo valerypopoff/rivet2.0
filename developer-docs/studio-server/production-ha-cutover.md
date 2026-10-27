@@ -54,9 +54,14 @@ their disruption budgets during a Rivet upgrade.
 Without an explicit maintenance plan, the release CLI's `--maintenance-cutover`
 moves directly from stopping old pods to installing/validating the candidate;
 operators must arrange the consistent recovery baseline first. The separately
-approved, same-schema `--maintenance-plan` path now runs a hash-pinned recovery
-adapter after quiescence and before installation. It is not a backup-only mode
-and does not apply to legacy adoption or schema changes. See
+approved `--maintenance-plan` path runs a hash-pinned recovery adapter after
+quiescence and before installation. It also supports an exact forward schema
+change when `schemaMigration` explicitly approves that transition and a reviewed
+adapter validates the candidate migration against the frozen checkpoint restored
+into isolated scratch storage. Qualification remains waived, never passed;
+backup, reader-stop, ownership and final acceptance checks remain mandatory.
+It is not a backup-only mode and requires an exact promoted installed baseline,
+so it does not replace the initial legacy-adoption backup procedure. See
 [deployment operation contracts](deployment-operations.md) for its approval,
 data-isolation and exact-token recovery requirements. Do not interrupt a live
 command at an assumed phase or invent a prepare-only flag.
