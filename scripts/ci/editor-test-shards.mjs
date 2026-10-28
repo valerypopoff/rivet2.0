@@ -6,6 +6,7 @@ const weightedSpecs = [
   ['scheduled-runs.spec.ts', 101],
   ['fullscreen-output-search-paging.spec.ts', 16],
   ['hosted-modal-focus.spec.ts', 117],
+  ['hosted-editor-search-shortcuts.spec.ts', 22],
   ['hosted-dashboard-contracts.spec.ts', 27],
   ['hosted-executor-origin.spec.ts', 50],
   ['project-bundle.spec.ts', 55],

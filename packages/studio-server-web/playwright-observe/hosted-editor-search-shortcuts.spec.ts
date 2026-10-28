@@ -5,21 +5,54 @@ import {
   waitForDashboardReady,
   waitForFocusTag,
 } from './helpers/hostedEditorObserve';
-import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+import { seedHostedEditorProject, type SeedHostedEditorProjectOptions } from './helpers/hostedEditorStorage';
 
 const shortcutModifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const graphSearchInputSelector = '.search input[placeholder="Search..."]';
 
-async function openSeededEditorProject(page: Page, idPrefix: string, title: string): Promise<FrameLocator> {
+async function openSeededEditorProject(
+  page: Page,
+  idPrefix: string,
+  title: string,
+  extraGraphs: SeedHostedEditorProjectOptions['extraGraphs'] = [],
+): Promise<FrameLocator> {
   await seedHostedEditorProject(page, {
     graphId: `${idPrefix}-graph`,
     loaded: true,
     projectId: `${idPrefix}-project`,
     projectPath: `/workflows/${title}.rivet-project`,
     title,
+    extraGraphs,
   });
 
+  // Editor-only assertions must not depend on, or write to, an ambient API.
+  // Match root API paths, not Vite's /@fs/.../api/... source imports.
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 404, json: { error: 'Isolated search fixture' } }),
+  );
   await mockHostedEditorBootstrap(page);
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        folders: [],
+        projects: [
+          {
+            id: `${idPrefix}-project`,
+            projectMetadataId: `${idPrefix}-project`,
+            name: title,
+            fileName: `${title}.rivet-project`,
+            relativePath: `${title}.rivet-project`,
+            absolutePath: `/workflows/${title}.rivet-project`,
+            updatedAt: '2026-10-28T00:00:00Z',
+            settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+          },
+        ],
+        sync: { epoch: idPrefix, revision: 0 },
+      },
+    }),
+  );
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await authenticateIfNeeded(page);
@@ -60,6 +93,63 @@ test('iframe-focused Ctrl+F opens Rivet search instead of browser find', async (
   const graphSearchInput = visibleGraphSearchInput(frameLocator);
   await expect(graphSearchInput).toBeVisible();
   await expect(graphSearchInput).toBeFocused();
+});
+
+test('graph folder toggles preserve search while ordinary outside clicks and explicit dismissal still work', async ({
+  page,
+}) => {
+  const editor = await openSeededEditorProject(page, 'folder-search', 'Folder Search Project', [
+    { id: 'folder-search-child', name: 'Group/Nested/Child' },
+    { id: 'folder-search-other', name: 'Other/Sibling' },
+  ]);
+  const folder = (path: string) =>
+    editor.locator(`.graph-item[data-contextmenutype="graph-folder"][data-folderpath="${path}"] .graph-item-select`);
+  const child = editor.locator('.graph-item[data-graphid="folder-search-child"]');
+  const search = visibleGraphSearchInput(editor);
+  await editor.locator('.node-canvas').click();
+  await page.keyboard.press(`${shortcutModifier}+F`);
+  await search.fill('Child');
+  const result = editor.locator('.search-result-graph-name');
+  await expect(result).toHaveText('Group/Nested/Child');
+  await folder('Group').locator('svg').first().click();
+  await expect(child).toBeHidden();
+  await expect(search).toBeVisible();
+  await expect(search).toHaveValue('Child');
+  await expect(result).toHaveText('Group/Nested/Child');
+  await folder('Group').locator('.graph-item-name-text').click();
+  await expect(child).toBeVisible();
+  await folder('Group/Nested').click();
+  await expect(child).toBeHidden();
+  await expect(search).toBeVisible();
+  await folder('Group/Nested').click();
+  await expect(child).toBeVisible();
+  await folder('Group').click({ modifiers: [shortcutModifier] });
+  await expect(editor.locator('.graph-item[data-graphid="folder-search-other"]')).toBeHidden();
+  await expect(search).toHaveValue('Child');
+  await folder('Group').click({ modifiers: [shortcutModifier] });
+  await expect(child).toBeVisible();
+  await expect(search).toBeVisible();
+  await expect(editor.locator('.graph-item.selected[data-graphid="folder-search-graph"]')).toBeVisible();
+  await page.keyboard.press(`${shortcutModifier}+F`);
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue('Child');
+  await expect(result).toHaveText('Group/Nested/Child');
+
+  await child.locator('.graph-item-select').click();
+  await expect(search).toBeHidden();
+  await page.keyboard.press(`${shortcutModifier}+F`);
+  await expect(search).toHaveValue('Child');
+  await editor.locator('.node-canvas').click({ position: { x: 300, y: 400 } });
+  await expect(search).toBeHidden();
+  await page.keyboard.press(`${shortcutModifier}+F`);
+  await search.press('Escape');
+  await expect(search).toBeHidden();
+  await page.keyboard.press(`${shortcutModifier}+F`);
+  await expect(search).toHaveValue('Child');
+  await editor.locator('.search .stopSearching').click();
+  await expect(search).toBeHidden();
+  await page.keyboard.press(`${shortcutModifier}+F`);
+  await expect(search).toHaveValue('');
 });
 
 test('iframe-focused physical find shortcut works when event.key is not f', async ({ page }) => {
