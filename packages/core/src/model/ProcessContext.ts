@@ -1,5 +1,6 @@
 import type { Opaque } from 'type-fest';
 import type { ClassifierFailureKind, ClassifierAttemptUsage } from './classifier/types.js';
+import type { RunCostBreakdown } from './RunCostLedger.js';
 import {
   type RuntimeSettings,
   type NativeApi,
@@ -338,6 +339,8 @@ export type GraphExecutionMetadata = {
 };
 
 export type InternalProcessContext<T extends ChartNode = ChartNode> = ProcessContext & {
+  /** Current project-invocation subtree costs; absent in older custom execution contexts. */
+  getRunCostBreakdown?: () => RunCostBreakdown;
   /** Dataset snapshot belonging to this node's selected external Subgraph target. */
   subgraphTarget?: ResolvedSubgraphProject;
   /** Invocation-scoped live inputs for a named graph caller. Never serialized. */

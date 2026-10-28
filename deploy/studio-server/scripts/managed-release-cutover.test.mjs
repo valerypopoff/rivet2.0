@@ -261,6 +261,94 @@ test('same-layout maintenance stops fenced validation owners before reopening On
   ]);
   assert.equal(state.journal.phase, 'complete');
 });
+
+test('fresh cutover refreshes admission after inventory, before exactly one ownership claim', async () => {
+  const state = fixture();
+  let version = '1',
+    observedVersion,
+    reads = 0,
+    claims = 0;
+  await runManagedReleaseCutover({
+    ...state.options,
+    readJournal: async () => {
+      reads++;
+      observedVersion = version;
+      return state.options.readJournal();
+    },
+    inventory: async () => {
+      version = '2'; // An idle controller sampled after the first journal read.
+      return state.options.inventory();
+    },
+    createJournal: async (record) => {
+      claims++;
+      assert.equal(observedVersion, version, 'Inventory-time sampling invalidates the old CAS version');
+      return state.options.createJournal(record);
+    },
+  });
+  assert.ok(reads >= 2);
+  assert.equal(claims, 1);
+  assert.equal(state.journal.phase, 'complete');
+});
+
+test('a completed same-kind journal also uses the post-inventory version for its new claim', async () => {
+  const state = fixture();
+  await runManagedReleaseCutover(state.options);
+  const originalToken = state.journal.token;
+  let advanced = false;
+  await runManagedReleaseCutover({
+    ...state.options,
+    inventory: async () => {
+      if (!advanced) {
+        advanced = true;
+        await state.options.replaceJournal({ ...state.journal }, state.journal.resourceVersion);
+      }
+      return state.options.inventory();
+    },
+  });
+  assert.equal(advanced, true);
+  assert.notEqual(state.journal.token, originalToken);
+  assert.equal(state.journal.phase, 'complete');
+});
+
+test('new ownership or expired approval during the final journal read blocks every mutation', async () => {
+  for (const change of ['owner', 'active-complete', 'expiry', 'read-failure']) {
+    const state = fixture();
+    let reads = 0,
+      claims = 0;
+    await assert.rejects(
+      runManagedReleaseCutover({
+        ...state.options,
+        admissionExpiresAt: 2000,
+        readJournal: async () => {
+          if (++reads === 2) {
+            if (change === 'read-failure') throw Error('fresh read failed');
+            if (change === 'expiry') state.setTime(2000);
+            if (change === 'owner' || change === 'active-complete')
+              return {
+                formatVersion: 1,
+                release: 'test',
+                namespace: 'fixture',
+                phase: change === 'owner' ? 'quiescing' : 'complete',
+                token: 'other-token',
+                runner: 'other-runner',
+                manifestDigest: 'candidate',
+                leaseExpiresAt: 9000,
+                resourceVersion: 'new',
+              };
+          }
+          return state.options.readJournal();
+        },
+        createJournal: async (record) => {
+          claims++;
+          return state.options.createJournal(record);
+        },
+      }),
+      /unfinished cutover|runner still owns|admission deadline expired|fresh read failed/,
+    );
+    assert.equal(claims, 0, change);
+    assert.deepEqual(state.operations, [], change);
+  }
+});
 test('lost acknowledgement never resumes; exact-token recovery repeats paused validation', async () => {
   let fail = true;
   const state = fixture(() => fail);

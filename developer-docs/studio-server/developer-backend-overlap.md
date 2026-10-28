@@ -3,6 +3,10 @@
 Implemented as an opt-in protocol; local integrated qualification passed (2026-10-23).
 Not provider-qualified or enabled in production.
 This is planned-upgrade continuity, not node-failure HA or whole-UI availability.
+Schema-changing overlap qualifications must also satisfy the
+[rolling database contract](deployment-operations.md#rolling-database-compatibility-contract).
+DB compatibility does not qualify same-node placement, lock handover or editor
+session continuity, and passing those overlap checks does not certify a migration.
 The web server remains independent and single-instance. No GCP changes are part
 of local implementation or testing.
 

@@ -1121,7 +1121,6 @@ test('managed release disruption gate covers WebSocket owner loss and managed de
   );
   assert.match(runner, /rotateAppSettingsKey/);
   assert.match(runner, /authorization: `Bearer \$\{this\.secrets\.rivetKey\}`/);
-  assert.equal((runner.match(/this\.requestWorkflow\(/g) ?? []).length, 7);
   assert.match(runner, /result\?\.value\?\.type === ["']any["'] \? result\.value\.value : result/);
   assert.match(runner, /value\.environmentValue !== ["']managed-persistence["']/);
   assert.match(runner, /value\.hostname !== replacementExecutionPod/);

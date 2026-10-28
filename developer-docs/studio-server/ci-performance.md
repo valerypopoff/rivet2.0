@@ -16,6 +16,13 @@ Historical upgrade fixtures still begin
 at their original schema and assert all pending migrations rather than assuming
 that the repair under test is forever the last migration. Keep the chart, compiled
 PostgreSQL gate and release-manifest tests together when changing this contract.
+The existing managed lane now also exercises the real 17 → 18 rolling-policy
+lock timeout, rollback and queued-reader recovery. Schema-changing HA image
+qualification runs both image-owned recording repositories and binds their
+receipts into the certificate; an old-image startup verifier alone is insufficient.
+Unchanged-schema candidates avoid those extra image workers. See the
+[rolling DB contract](deployment-operations.md#rolling-database-compatibility-contract)
+for budgets, local image/source checks and evidence limits.
 
 Node-settings tests assert the full editor group order, including the collapsed
 **Token pricing** section. Generated AI Graph Builder help must be refreshed after
@@ -96,7 +103,7 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses three required matrix shards, each running two independent
-  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 31
+  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 32
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.

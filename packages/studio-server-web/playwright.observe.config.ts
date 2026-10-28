@@ -1,7 +1,9 @@
 import { defineConfig } from '@playwright/test';
+import path from 'node:path';
 
 const slowMo = Number.parseInt(process.env.PLAYWRIGHT_SLOW_MO ?? '300', 10);
 const headless = process.env.PLAYWRIGHT_HEADLESS === '1';
+const privateQualificationArtifacts = process.env.RIVET_QUALIFICATION_BROWSER_ARTIFACTS;
 
 export default defineConfig({
   testDir: './playwright-observe',
@@ -11,8 +13,21 @@ export default defineConfig({
   },
   fullyParallel: false,
   workers: 1,
-  outputDir: '../../artifacts/playwright/test-results',
-  reporter: [['list'], ['html', { open: 'never', outputFolder: '../../artifacts/playwright/report' }]],
+  outputDir: privateQualificationArtifacts
+    ? path.join(privateQualificationArtifacts, 'test-results')
+    : '../../artifacts/playwright/test-results',
+  reporter: [
+    ['list'],
+    [
+      'html',
+      {
+        open: 'never',
+        outputFolder: privateQualificationArtifacts
+          ? path.join(privateQualificationArtifacts, 'report')
+          : '../../artifacts/playwright/report',
+      },
+    ],
+  ],
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:8080',
     headless,

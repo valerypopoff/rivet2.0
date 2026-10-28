@@ -253,6 +253,60 @@ test('source disposal interrupts current receiver evidence without requiring the
   assert.deepEqual(router.inspect(), { sources: 0, roots: 0 });
 });
 
+test('source settlement cannot absorb or erase a fresh admission created by its callback', () => {
+  const coordinator = createExecutionObservationCoordinator();
+  const router = createLocalExecutionObservationRouter(coordinator);
+  const registry = createProjectBindingRegistry();
+  registry.reconcile({ a: { bundleKey: 'bundle' }, b: { bundleKey: 'bundle' } });
+  const source = {};
+  const projected: string[] = [];
+  const settled: string[] = [];
+  const options = {
+    bindings: registry.capture,
+    conflict: () => false,
+    project: (_id: ProjectId, _message: keyof ProcessEventMessageMap, data: unknown) => {
+      projected.push((data as { execution: GraphExecutionMetadata }).execution.rootRunId);
+    },
+    settle: (_id: ProjectId, root: string) => {
+      settled.push(root);
+      if (root === 'old') {
+        emit('start', 'a', 'new');
+        emit('graphStart', 'b', 'new');
+      }
+    },
+  };
+  function emit(message: keyof ProcessEventMessageMap, owner: string, root: string) {
+    router.receive(
+      'a' as ProjectId,
+      message,
+      {
+        execution: {
+          projectId: owner,
+          rootRunId: root,
+          graphRunId: `${owner}:${root}`,
+          graphId: owner,
+          ...(owner === 'a' ? {} : { parentGraphRunId: `a:${root}` }),
+        },
+      } as never,
+      options,
+      source,
+    );
+  }
+  emit('start', 'a', 'old');
+  emit('graphStart', 'b', 'old');
+  router.settle(source, options);
+  assert.deepEqual(settled, ['old'], 'only the detached admissions belong to this settlement');
+  assert.deepEqual(router.inspect(), { sources: 1, roots: 1 });
+  assert.equal(coordinator.inspect().roots, 1, 'fresh coordinator admission survives too');
+  emit('nodeFinish', 'b', 'old');
+  emit('nodeFinish', 'b', 'new');
+  assert.deepEqual(projected, ['old', 'new', 'new'], 'fresh traffic continues; old traffic stays retired');
+  router.settle(source, options);
+  assert.deepEqual(settled, ['old', 'new']);
+  assert.deepEqual(router.inspect(), { sources: 0, roots: 0 });
+  assert.equal(coordinator.inspect().roots, 0);
+});
+
 test('thousands of concurrent lifecycle sequences retain live fences and release all metadata on disposal', () => {
   const coordinator = createExecutionObservationCoordinator();
   const registry = createProjectBindingRegistry();

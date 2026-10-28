@@ -481,7 +481,10 @@ export const NavigationBar: FC = () => {
     }
 
     const handleWindowPointerDown = (event: PointerEvent) => {
-      if (graphSearchPanelRef.current?.contains(event.target as Node)) {
+      if (
+        graphSearchPanelRef.current?.contains(event.target as Node) ||
+        (event.target instanceof Element && event.target.closest('.graph-item[data-contextmenutype="graph-folder"]'))
+      ) {
         return;
       }
 

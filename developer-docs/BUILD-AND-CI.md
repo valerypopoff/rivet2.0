@@ -1438,11 +1438,75 @@ ancestor, so restoring at the root would move `packages/core/dist` to
 `core/dist` and make consumers fail module resolution even though the build job
 succeeded. `check-ci-workflows.mjs` guards both fan-outs.
 
-Studio Server deployment contracts fan out into two isolated lanes after that
-build: managed storage/schema checks and gateway/proxy checks. The final `verify`
-job still requires the complete matrix to succeed. Fixtures stay ordered within
-each lane, including the proxy's real DNS-cache expiry and outage/recovery waits;
-the optimization removes serialization between independent hosts, not coverage.
+Studio Server deployment contracts fan out into three isolated lanes after that
+build: managed storage/schema checks, deployment/Helm contracts and gateway/proxy
+checks. The final `verify` job requires the complete matrix to succeed.
+The real CLI journeys in `deployment-command.test.mjs` run in a Node test suite
+with concurrency bounded to three. Each journey owns a unique checkout, stand-in
+state/lock, simulated clock, receipts and child processes; its individual commands,
+interruption/recovery steps and assertions remain ordered. Do not share that
+mutable fixture between concurrent journeys or increase every deployment test's
+concurrency globally. The 20-minute CI deadline, per-command timeout, backup,
+lost-acknowledgement and no-write-replay assertions are unchanged.
+Other checks keep their existing ordering, including the proxy's real DNS-cache
+expiry and outage/recovery waits. No check is removed or converted to a warning.
+
+Local Node 24.21.0 Linux verification (2026-10-28) passes all 24 real CLI cases
+with no skips in 10m21s (`artifacts/deployment-command-concurrent-linux.log`).
+The test container has networking disabled; no Kubernetes cluster or cloud
+qualification is involved. The fixture-lock, operation-safety and CI support set
+passes 46 tests (`artifacts/deployment-command-concurrency-support.log`).
+
+The subsequent GitHub deployment lane passed in 11m33s. A separate repository
+contract failure happened before any checks: its full-history checkout stalled
+for the entire 15-minute job. That job now checks out only the current commit
+(three-minute checkout limit), then runs `scripts/ci/prepare-migration-history.mjs`
+before the unchanged migration-ledger verifier. Preparation fetches only the
+reviewed migration commit at depth three, without tags, other branches or
+historical blobs, and has a three-minute Git deadline/four-minute step limit.
+The shared pins in `deploy/studio-server/migration/evidence.mjs` identify the
+source, subtree import and consolidation commits. Preparation verifies parent
+links, source-tree identity and recursive tree availability; missing evidence
+fails the job, never skips the ledger or falls back to fetching all history.
+The real shallow-clone regression checks that HEAD, the working tree and remote
+refs stay unchanged. A server without partial-clone support may send blobs too;
+the exact-commit/depth and time bounds still apply.
+Inspection disables lazy fetching and all transport protocols, including on
+older Git versions, so a cache probe cannot secretly fetch unbounded history.
+Ancestry is read from raw commit headers: `git show --no-patch` can still
+prefetch historical diff blobs in a partial clone. The ledger itself also runs
+with transports disabled, so verification never downloads additional history.
+
+The repository checkout also sets `GIT_HTTP_LOW_SPEED_LIMIT=1024` and
+`GIT_HTTP_LOW_SPEED_TIME=30` for that step only. A stalled HTTP fetch must fail
+inside Git early enough for checkout's existing bounded read retries, instead
+of hanging until the three-minute step deadline and losing all retry attempts.
+The 15-minute job deadline and shallow/exact-evidence policy remain unchanged.
+The CI-performance regression uses a real loopback Git HTTP request whose body
+never arrives, and proves that Git's low-speed timeout—not the test's outer
+deadline—terminates the fetch. It uses a one-second threshold only in the fixture.
+
+Repository timing reports only run after timing started and outside cancellation,
+so checkout failures do not generate a misleading missing-script cleanup error.
+Local verification on 2026-10-28 passes all 13 CI-performance regressions on
+Windows and offline Linux Node 24.21.0. A separate fresh filtered, shallow checkout
+passes the real 517-file ledger with the explicit bounded fetch, unchanged HEAD
+and about 2.6 MB of Git objects (including the selected ledger destination files).
+
+`scripts/checks/check-ci-workflows.mjs` owns the checkout-depth, fetch deadlines
+and evidence-before-ledger ordering contract. The API proxy/image contract does
+not duplicate that policy: its old `fetch-depth: 0` assertion contradicted the
+bounded preparation and caused API shard 1 to fail after the repository job had
+passed. Verify changes here with the complete `proxy-image-contract.test.ts`
+suite as well as the CI-performance regressions and workflow-policy checker.
+
+A macOS job with no assigned runner and no steps/logs is distinct from a build
+failure. GitHub may annotate it with hosted-runner acquisition/internal-server
+errors and Apple Silicon capacity notices. Retry only the affected job/dependents
+after inspecting those annotations; do not alter compilation, signing or test
+policy to conceal unavailable infrastructure. A deployment-contract job cancelled
+at its deadline instead requires investigating test duration, not treating it as
+the same runner-allocation problem.
 
 ## `release.yml`
 

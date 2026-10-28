@@ -383,7 +383,7 @@ const sidebars = {
       label: 'Debug',
       collapsible: true,
       collapsed: false,
-      items: ['node-reference/graph-call-path', 'node-reference/project-name'],
+      items: ['node-reference/graph-call-path', 'node-reference/project-name', 'node-reference/ai-cost'],
     },
   ],
   cli: [

@@ -8,6 +8,7 @@ import {
   CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION,
   getManagedWorkflowSchemaCompatibilityWindow,
   getManagedWorkflowSchemaMode,
+  getManagedSchemaMigrationPolicy,
   MANAGED_WORKFLOW_SCHEMA_MIGRATIONS,
   MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS,
   MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS,
@@ -614,8 +615,9 @@ test('concurrent schema migrators serialize and apply each migration once', asyn
   assert.ok(results.every(({ currentVersion }) => currentVersion === 18));
   assert.equal(results.filter(({ appliedVersions }) => appliedVersions.length === 0).length, 3);
   assert.equal(
-    results.filter(({ appliedVersions }) => appliedVersions.join(',') === '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18')
-      .length,
+    results.filter(
+      ({ appliedVersions }) => appliedVersions.join(',') === '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18',
+    ).length,
     1,
   );
   assert.equal(
@@ -907,6 +909,31 @@ test('migration retries only a transient PostgreSQL lock failure in a fresh tran
   assert.equal(database.queryLog.filter((sql) => sql === 'BEGIN').length, 2);
   assert.equal(database.queryLog.filter((sql) => sql === 'ROLLBACK').length, 1);
   assert.match(warnings[0] ?? '', /transient PostgreSQL error 55P03/);
+});
+
+test('rolling migrations require reviewed expands, use short budgets and never retry lock failure', async () => {
+  assert.equal(getManagedSchemaMigrationPolicy({}), 'maintenance');
+  assert.throws(() => getManagedSchemaMigrationPolicy({ RIVET_MANAGED_SCHEMA_MIGRATION_POLICY: 'skip' }));
+  const unreviewed = createDatabase();
+  await assert.rejects(
+    migrateManagedWorkflowSchema(createPool(unreviewed), {
+      migrationPolicy: 'rolling',
+      logger: quietLogger,
+    }),
+    /requires maintenance/,
+  );
+  assert.equal(unreviewed.applyCount, 0);
+  const contended = createDatabase({ transientLockFailures: 1 });
+  await assert.rejects(
+    migrateManagedWorkflowSchema(createPool(contended), {
+      migrationPolicy: 'rolling',
+      logger: quietLogger,
+    }),
+    { code: '55P03' },
+  );
+  assert.equal(contended.queryLog.filter((sql) => sql === 'BEGIN').length, 1);
+  assert.ok(contended.queryLog.includes("SET LOCAL lock_timeout = '1000ms'"));
+  assert.ok(contended.queryLog.includes("SET LOCAL statement_timeout = '5000ms'"));
 });
 
 test('logger failures cannot change committed, failed, or retried migration outcomes', async (t) => {

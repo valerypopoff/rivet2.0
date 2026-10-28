@@ -1,6 +1,36 @@
 import { randomUUID } from 'node:crypto';
 import { autoscalerPolicy, recommendExecutionReplicas } from './execution-autoscaler.mjs';
-import { createExecutionAutoscalerIO, cpuQuantity } from './execution-autoscaler-kubernetes.mjs';
+import {
+  createExecutionAutoscalerIO,
+  cpuQuantity,
+  PendingExecutionCpuSample,
+} from './execution-autoscaler-kubernetes.mjs';
+
+class PendingProxyMetrics extends Error {}
+
+/** A replacement may be Ready before metrics-server's next scrape. Only this
+ * typed observation delay is waitable; identity/policy/capacity failures remain
+ * terminal. Every attempt reruns the complete checks, never a workload write. */
+export async function waitForHaHeadroom(
+  check,
+  { timeoutMs, now = Date.now, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
+) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
+    throw Error('Headroom observation requires a bounded timeout.');
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    try {
+      return await check();
+    } catch (error) {
+      if (
+        !(error?.cause instanceof PendingProxyMetrics || error?.cause instanceof PendingExecutionCpuSample) ||
+        now() >= deadline
+      )
+        throw error;
+      await pause(Math.min(1000, deadline - now()));
+    }
+  }
+}
 
 /** Read the same fenced, fresh CPU/admission observations as the controller,
  * without acquiring its journal or issuing any autoscaling command. */
@@ -68,6 +98,7 @@ export function createHaExecutionHeadroomGuard({
         workload: workload.name,
         service: config.service,
         image: expectedImage,
+        expectedUid: workload.uid,
         policy,
         port: config.port,
         now,
@@ -296,7 +327,7 @@ export function createHaProxyHeadroomGuard({
           const sample = metrics.items.find((value) => value.metadata.name === pod.metadata.name);
           const age = now() - Date.parse(sample?.timestamp);
           if (!Number.isFinite(age) || age < -5000 || age > metricsMaxAgeSeconds * 1000)
-            throw new Error('Proxy CPU sample is stale.');
+            throw new PendingProxyMetrics('Proxy CPU sample is missing or stale.');
           let requestCpu = 0,
             usageCpu = 0;
           for (const container of pod.spec.containers) {

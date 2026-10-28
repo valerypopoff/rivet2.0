@@ -10,6 +10,8 @@ import {
 import { HaReleaseProbes, haProofTimeoutMs, haRetirementProbeDelayMs } from './lib/ha-release-probes.mjs';
 import { HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
+import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
+import { probeSchemaLockContention, readSchemaRepositoryReceipt } from './lib/schema-compatibility-probe.mjs';
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
@@ -38,7 +40,7 @@ import path from 'node:path';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
-import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { resolveHelmBinOrThrow, resolveKubectlForwardBin } from './lib/k8s-tools.mjs';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
@@ -98,6 +100,249 @@ test('HA certification never labels an incompatible schema transition as mixed-v
   assert.equal(selectHaCertificationMode(candidate, previous), 'bootstrap');
   previous.database.managedWorkflowSchema.version = 17;
   assert.equal(selectHaCertificationMode(candidate, previous), 'mixed');
+});
+
+test('lock probe releases acquired connections when a later pool acquisition fails', async () => {
+  for (const failedAt of [1, 2, 3]) {
+    let acquired = 0,
+      released = 0;
+    const failure = Error('fixture pool exhausted');
+    const rollbackFailure = Error('fixture connection lost');
+    const dispositions = [];
+    const pool = {
+      connect: async () => {
+        if (++acquired === failedAt) throw failure;
+        const index = acquired;
+        return {
+          query: async () => {
+            if (failedAt === 3 && index === 1) throw rollbackFailure;
+            return { rows: [] };
+          },
+          release: (error) => {
+            released++;
+            dispositions.push(error);
+          },
+        };
+      },
+    };
+    await assert.rejects(
+      probeSchemaLockContention(pool, `rivet_schema_probe_${'a'.repeat(32)}`, { version: 18 }),
+      (error) => error === failure,
+    );
+    assert.equal(released, failedAt - 1, 'Every acquired lease must be returned');
+    if (failedAt === 3) assert.deepEqual(dispositions, [rollbackFailure, undefined]);
+  }
+});
+
+test('reader connection loss is observed immediately while contended DDL settles', async () => {
+  const failure = Error('fixture reader connection lost');
+  let index = 0,
+    releases = 0,
+    lost = false;
+  const pool = {
+    connect: async () => {
+      const role = index++;
+      return {
+        processID: 42,
+        query: async (sql) => {
+          if (role === 1 && sql === 'fixture DDL')
+            return new Promise((_, reject) =>
+              setTimeout(() => reject(Object.assign(Error('lock timeout'), { code: '55P03' })), 40),
+            );
+          if (role === 2 && sql.includes('WHERE recording_id=')) {
+            lost = true;
+            throw failure;
+          }
+          if (role === 2 && lost) throw failure;
+          if (sql.includes('pg_relation_filenode')) return { rows: [{ id: 1 }] };
+          if (sql.includes('pg_locks')) return { rowCount: 1, rows: [] };
+          return { rows: [] };
+        },
+        release: () => {
+          releases++;
+        },
+      };
+    },
+  };
+  await assert.rejects(
+    probeSchemaLockContention(pool, `rivet_schema_probe_${'a'.repeat(32)}`, { version: 18, sql: 'fixture DDL' }),
+    (error) => error === failure,
+  );
+  assert.equal(releases, 3);
+});
+
+test('local and Kubernetes schema receipts reject wrong roles, versions, incomplete rounds and missing lock proof', () => {
+  for (const [role, version] of [
+    ['previous', 17],
+    ['candidate', 18],
+  ]) {
+    const expected = { role, version, runId: 'a'.repeat(32) };
+    const row = { ...expected, rounds: 2, peerRowsRead: 2, ...(role === 'candidate' ? { lockContention: true } : {}) };
+    const text = (value) => `RIVET_SCHEMA_PROBE_RESULT ${JSON.stringify(value)}`;
+    assert.deepEqual(readSchemaRepositoryReceipt(text(row), expected), row);
+    for (const change of [
+      { role: 'other' },
+      { version: 19 },
+      { runId: 'b'.repeat(32) },
+      { rounds: 1 },
+      { peerRowsRead: 0 },
+      { lockContention: role === 'candidate' ? false : true },
+    ])
+      assert.throws(() => readSchemaRepositoryReceipt(text({ ...row, ...change }), expected));
+    assert.throws(() => readSchemaRepositoryReceipt(text(row) + '\n' + text(row), expected));
+  }
+});
+
+test('mixed schema gate launches two exact-image repository workers and rejects partial receipts', async () => {
+  for (const fault of [
+    null,
+    'missing',
+    'wrong-version',
+    'missing-lock',
+    'changed-image',
+    'changed-job',
+    'wrong-command',
+    'wrong-code',
+    'replaced-pod-after-log',
+    'partial-pods',
+    'wrong-owner',
+    'failed-pod',
+    'peer-pending',
+  ]) {
+    const artifacts = new Map(),
+      calls = [];
+    let jobs,
+      code,
+      logged = false;
+    let releasePeer,
+      peerStarted,
+      peerSettled = false;
+    const peerWait = new Promise((resolve) => {
+      releasePeer = resolve;
+    });
+    const started = new Promise((resolve) => {
+      peerStarted = resolve;
+    });
+    const podFor = (job) => ({
+      metadata: {
+        name: `${job.metadata.name}-pod`,
+        uid: `pod-${job.metadata.name}`,
+        ownerReferences: [
+          { kind: 'Job', controller: true, uid: fault === 'wrong-owner' ? 'foreign' : `uid-${job.metadata.name}` },
+        ],
+      },
+      spec: {
+        ...structuredClone(job.spec.template.spec),
+        containers: [
+          {
+            ...structuredClone(job.spec.template.spec.containers[0]),
+            image: fault === 'changed-image' ? 'foreign/image' : job.spec.template.spec.containers[0].image,
+            command:
+              fault === 'wrong-command'
+                ? ['node', '-e', 'console.log("fake")']
+                : job.spec.template.spec.containers[0].command,
+          },
+        ],
+        volumes: [{ name: 'probe', configMap: { name: fault === 'wrong-code' ? 'other-code' : code.metadata.name } }],
+      },
+      status: { phase: fault === 'failed-pod' ? 'Failed' : 'Succeeded' },
+    });
+    const gate = {
+      config: {
+        namespace: 'fixture',
+        registry: { secretName: 'registry' },
+        previousApiImage: { repository: 'fixture/api', digest: `sha256:${'a'.repeat(64)}`, schemaVersion: 17 },
+        images: { api: { repository: 'fixture/api', digest: `sha256:${'b'.repeat(64)}` } },
+        managedWorkflowSchema: { version: 18 },
+      },
+      artifact: async (n, v) => artifacts.set(n, v),
+      kubectl: async (args, extra) => {
+        calls.push(args);
+        if (args[0] === 'create') {
+          code = JSON.parse(extra.input).items.find((r) => r.kind === 'ConfigMap');
+          jobs = JSON.parse(extra.input).items.filter((r) => r.kind === 'Job');
+          assert.equal(jobs.length, 2);
+          for (const job of jobs) {
+            assert.equal(job.spec.backoffLimit, 0);
+            assert.equal(job.spec.template.spec.automountServiceAccountToken, false);
+            assert.ok(job.spec.template.spec.containers[0].image.includes('@sha256:'));
+          }
+        }
+        if (args[0] === 'get' && args[1] === 'configmap')
+          return { stdout: JSON.stringify({ ...code, metadata: { ...code.metadata, uid: 'code-uid' } }) };
+        if (args[0] === 'get' && args[1] === 'pod') {
+          const pod = podFor(jobs.find((j) => `${j.metadata.name}-pod` === args[2]));
+          if (fault === 'replaced-pod-after-log' && logged) pod.metadata.uid = 'replacement-pod';
+          return { stdout: JSON.stringify(pod) };
+        }
+        if (args[0] === 'get' && args[1] === 'job') {
+          const job = structuredClone(jobs.find((j) => j.metadata.name === args[2]));
+          job.metadata.uid = fault === 'changed-job' && peerSettled ? 'foreign' : `uid-${job.metadata.name}`;
+          return { stdout: JSON.stringify(job) };
+        }
+        if (args[0] === 'get' && args[1] === 'pods') {
+          const job = jobs.find((j) => args.includes(`job-name=${j.metadata.name}`));
+          return {
+            stdout: JSON.stringify({
+              ...(fault === 'partial-pods' ? { metadata: { continue: 'remaining' } } : {}),
+              items: [podFor(job)],
+            }),
+          };
+        }
+        if (args[0] === 'wait') {
+          if (fault === 'peer-pending') {
+            if (args[2].endsWith('-previous')) throw Error('fixture first worker failed');
+            peerStarted();
+            await peerWait;
+          }
+          peerSettled = true;
+        }
+        if (args[0] === 'logs') {
+          logged = true;
+          const job = jobs.find((j) => [`job/${j.metadata.name}`, `pod/${j.metadata.name}-pod`].includes(args.at(-1)));
+          const env = Object.fromEntries(job.spec.template.spec.containers[0].env.map((e) => [e.name, e.value]));
+          const result = {
+            role: env.RIVET_SCHEMA_PROBE_ROLE,
+            version: Number(env.RIVET_SCHEMA_PROBE_VERSION),
+            runId: env.RIVET_SCHEMA_PROBE_ID,
+            rounds: 2,
+            peerRowsRead: 2,
+            ...(env.RIVET_SCHEMA_PROBE_ROLE === 'candidate' ? { lockContention: fault !== 'missing-lock' } : {}),
+          };
+          if (fault === 'wrong-version') result.version = 16;
+          return {
+            stdout: fault === 'missing' ? '' : `RIVET_SCHEMA_PROBE_RESULT ${JSON.stringify(result)}`,
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      },
+    };
+    if (fault) gate.schemaCompatibility = { stale: true };
+    const run = () => ManagedReleaseGate.prototype.verifyMixedSchemaRepositories.call(gate);
+    if (fault === 'peer-pending') {
+      let settled = false;
+      const running = run().finally(() => {
+        settled = true;
+      });
+      running.catch(() => {});
+      await started;
+      await new Promise((resolve) => setImmediate(resolve));
+      const premature = settled;
+      releasePeer();
+      await assert.rejects(running);
+      assert.equal(premature, false, 'Failed qualification must await both accepted worker observations');
+    } else if (fault) {
+      await assert.rejects(run());
+      assert.equal(gate.schemaCompatibility, undefined);
+    } else {
+      assert.equal((await run()).lockContention, true);
+      assert.ok(artifacts.has('mixed-schema-repositories.json'));
+    }
+    if (fault)
+      assert.equal(gate.schemaCompatibility, undefined, 'A failed attempt cannot retain earlier success evidence');
+    assert.equal(calls.filter((c) => c[0] === 'create').length, 1, 'Never replay a fixture write');
+  }
 });
 
 test('background and Evaluation drain fixtures outlive the real routing propagation window', () => {
@@ -583,6 +828,46 @@ test('mixed HA baseline installs the predecessor exact schema without changing t
       job.spec.template.spec.containers[0].image,
       `${previousImages.api.repository}@${previousImages.api.digest}`,
     );
+    const maintenanceFile = path.join(dir, 'maintenance.json');
+    await fs.writeFile(
+      maintenanceFile,
+      JSON.stringify({
+        ...maintenanceValidationValues,
+        replicaCount: { ...maintenanceValidationValues.replicaCount, backend: 1 },
+      }),
+    );
+    for (const [flags, policy, backoff] of [
+      [[], 'maintenance', 2],
+      [['--is-upgrade'], 'rolling', 0],
+      [['--is-upgrade', '-f', maintenanceFile], 'maintenance', 2],
+    ]) {
+      const text = execFileSync(
+        resolveHelmBinOrThrow(rootDir),
+        [
+          'template',
+          'ha-fixture',
+          path.join(rootDir, 'deploy/studio-server/helm'),
+          '-n',
+          'ha-fixture',
+          '-f',
+          path.join(rootDir, 'deploy/studio-server/helm/overlays/managed-release-gate.yaml'),
+          '-f',
+          file,
+          ...flags,
+        ],
+        { encoding: 'utf8' },
+      );
+      const migration = parseAllDocuments(text)
+        .map((d) => d.toJS())
+        .find((r) => r?.kind === 'Job' && r.metadata.name.endsWith('workflow-schema-migration'));
+      assert.equal(migration.spec.backoffLimit, backoff);
+      assert.ok(
+        migration.spec.template.spec.containers[0].args[0].includes(
+          `RIVET_MANAGED_SCHEMA_MIGRATION_POLICY="${policy}"`,
+        ),
+        'Vault loading must not override the operation-selected migration policy',
+      );
+    }
     assert.deepEqual(gate.values().workflowSchema.compatibility, {
       minimumVersion: candidateSchema.version,
       maximumVersion: candidateSchema.version,
@@ -932,10 +1217,91 @@ test('provider close retains its operator namespace even when local cleanup is r
       stopped++;
     },
   };
+  gate.portForwardClosed = Promise.resolve();
   await gate.close();
   await gate.close();
   assert.equal(stopped, 1);
   assert.equal(gate.config.keepNamespace, true);
+});
+
+test('port-forward selects only a verified native Chocolatey kubectl target', () => {
+  const target = 'C:\\tools\\native\\kubectl.exe';
+  let inspected = 0;
+  const options = {
+    platform: 'win32',
+    find: () => 'C:\\tools\\kubectl.exe',
+    exists: (value) => value === target,
+    inspect: (_bin, args, settings) => {
+      inspected++;
+      assert.deepEqual(args, ['--shimgen-help']);
+      assert.equal(settings.timeout, 5_000);
+      return {
+        status: 1,
+        stdout: `This is a shim, generated by Chocolatey's ShimGenerator (shimgen).\n Target: '${target}'\n command (optional): ''\n`,
+      };
+    },
+  };
+  assert.equal(resolveKubectlForwardBin('kubectl', options), target);
+  assert.equal(resolveKubectlForwardBin('kubectl', { ...options, platform: 'linux' }), 'kubectl');
+  assert.equal(inspected, 1);
+  assert.equal(
+    resolveKubectlForwardBin('kubectl', {
+      ...options,
+      inspect: () => ({ stdout: '', error: Error('native unknown flag') }),
+    }),
+    'C:\\tools\\kubectl.exe',
+  );
+  assert.throws(() => resolveKubectlForwardBin('kubectl', { ...options, exists: () => false }), /native kubectl/);
+  for (const [value, command] of [
+    [target, '--context other'],
+    ['relative.exe', ''],
+  ]) {
+    assert.throws(
+      () =>
+        resolveKubectlForwardBin('kubectl', {
+          ...options,
+          inspect: () => ({
+            stdout: `This is a shim, generated by Chocolatey's ShimGenerator (shimgen).\n Target: '${value}'\n command (optional): '${command}'\n`,
+          }),
+        }),
+      /native kubectl/,
+    );
+  }
+});
+
+test('port-forward shutdown waits for close, is repeatable and fences cleanup when uncertain', async () => {
+  const gate = new ManagedReleaseGate({ keepNamespace: false }, 'unused', 'unused');
+  let kills = 0,
+    deletes = 0,
+    settled;
+  gate.deleteOwnedNamespace = async () => {
+    deletes++;
+  };
+  const child = {
+    killed: false,
+    kill() {
+      this.killed = true;
+      kills++;
+    },
+  };
+  gate.portForward = child;
+  gate.portForwardClosed = new Promise((resolve) => {
+    settled = resolve;
+  });
+  await assert.rejects(gate.stopPortForward({ timeoutMs: 5 }), /did not close/);
+  assert.equal(gate.portForward, child);
+  assert.equal(kills, 1);
+  const close = gate.close();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(deletes, 0);
+  assert.equal(gate.portForward, child);
+  settled();
+  await close;
+  assert.equal(deletes, 1);
+  assert.equal(kills, 1);
+  assert.equal(gate.portForward, null);
+  await gate.stopPortForward();
+  assert.equal(kills, 1);
 });
 
 test('expired provider rehearsal refuses work before contacting the cluster or reading credentials', async () => {

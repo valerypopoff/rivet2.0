@@ -155,6 +155,14 @@ shows its message text rather than a generic data-type label. Typed media and
 lazy function values remain summary-only because retaining their payloads in a
 compact activity preview would be unsafe or misleading.
 
+Excluded (`control-flow-excluded`) values display **Not ran**, including an AI
+Cost total with no known amount. Check the type before rendering inline data or
+a retained reference preview: missing/excluded numeric evidence must not become
+JavaScript `undefined`, an arbitrary excerpt, or another port's zero. A genuine
+numeric zero and an authored string containing `undefined` retain their values.
+AI Cost declares **Sum cost** as its primary preview and remains a generic reader,
+not a new model call or charge.
+
 The default bounds retain every active root plus the newest completed root,
 2,000 node invocations per root, 250 model-call rows per invocation, and 500
 tool-call rows per invocation. Totals and omitted-row counters remain truthful
@@ -477,6 +485,12 @@ All delivery paths reduce the same activity event contract:
 Additive fields must degrade safely when an older host, client, or recording
 does not provide them. Observer failures are non-fatal and must never change
 workflow scheduling, outputs, errors, cancellation, or cost accounting.
+Core's model/profile/output-page/tool observation callbacks capture their owning
+execution identity and stop forwarding after their processor is rebound to
+another root/graph invocation. Keeping only the old ledger reference is not
+enough: old traces must not enter a new recording or activity root under its
+current identity. Late accounting remains attached to its original ledger and
+host observer; it does not rewrite finalized recordings.
 Active-run dispatch and inactive-project snapshot projection keep Run Activity
 behind a separate error boundary from the primary execution-state update.
 

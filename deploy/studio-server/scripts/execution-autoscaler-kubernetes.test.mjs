@@ -1186,7 +1186,8 @@ test(
     });
     assert.deepEqual(await api.json('GET', '/kube/ok'), { kind: 'APIResourceList' });
     assert.equal(await api.json('GET', '/kube/missing'), null);
-    for (const path of ['/kube/json-error', '/kube/html-error', '/kube/hang'])
-      await assert.rejects(api.json('GET', path));
+    await assert.rejects(api.json('GET', '/kube/json-error'), /503/);
+    await assert.rejects(api.json('GET', '/kube/html-error'), /502/);
+    await assert.rejects(api.json('GET', '/kube/hang'), /deadline/);
   },
 );

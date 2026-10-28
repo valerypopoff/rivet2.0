@@ -13,7 +13,10 @@ import {
 import { projectBindingRegistryState, retireWorkspaceExecutionState } from '../state/projectBindings.js';
 import { localExecutionObservationState } from '../state/executionObservation.js';
 import { updateOpenProjectExecutionSnapshot } from './projectExecutionSnapshotRouting.js';
-import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import {
+  applyProcessEventToProjectExecutionSnapshot,
+  resetPassiveProjectExecutionDisplay,
+} from './projectExecutionSnapshotEvents.js';
 import { handleError } from '../utils/errorHandling.js';
 import { previousDataPerNodeToKeepState } from '../state/settings.js';
 import type { ExecutionSourceKind } from '../domain/execution/executionEventNormalization.js';
@@ -38,6 +41,26 @@ export function useBundleExecutionRouting() {
             store.get(projectExecutionSnapshotsState)[id]?.graphRunning,
         );
       },
+      reset(id: ProjectId, token: number, isCurrent: () => boolean) {
+        let applied = false;
+        try {
+          updateOpenProjectExecutionSnapshot(
+            store,
+            id,
+            (snapshot) => {
+              if (!isCurrent()) return snapshot;
+              const next = resetPassiveProjectExecutionDisplay(snapshot, refStore);
+              if (!isCurrent()) return snapshot;
+              applied = true;
+              return next;
+            },
+            token,
+          );
+        } catch (error) {
+          handleError(error, 'Failed to reset bundle execution display', { toastError: false });
+        }
+        return applied;
+      },
       settle(id: ProjectId, root: string, status: 'completed' | 'error' | 'aborted', token: number) {
         try {
           updateOpenProjectExecutionSnapshot(
@@ -56,12 +79,14 @@ export function useBundleExecutionRouting() {
         data: ProcessEventMessageMap[K],
         activityData: ProcessEventMessageMap[K] | false,
         token: number,
+        isCurrent: () => boolean,
       ) {
         try {
           updateOpenProjectExecutionSnapshot(
             store,
             id,
             (snapshot) => {
+              if (!isCurrent()) return snapshot;
               const result = applyProcessEventToProjectExecutionSnapshot({
                 message,
                 data,
@@ -71,7 +96,7 @@ export function useBundleExecutionRouting() {
                 snapshot,
                 previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
               });
-              return result.changed ? result.snapshot : snapshot;
+              return result.changed && isCurrent() ? result.snapshot : snapshot;
             },
             token,
           );

@@ -8,6 +8,7 @@ import {
   assertRuntimeControlEvidence,
   assertRuntimeAutoscalingEvidence,
   assertCooperativeAutoscalingEvidence,
+  assertOrdinaryRuntimeLayout,
 } from './ha-release-evidence.mjs';
 
 /** Publication is not installation. Walk only digest-verified promoted lineage,
@@ -84,6 +85,7 @@ export async function planInstalledUpgrade({
     try {
       if (current.ha?.enabled) {
         assertHaUpgradeEvidence(next, current);
+        assertOrdinaryRuntimeLayout(next.evidence.runtimeControl, current, autoscalingPolicyDigest);
         if (['singleton', 'singleton-overlap'].includes(current.ha.controlPlane?.mode))
           assertRuntimeControlEvidence(
             next.evidence.runtimeControl,

@@ -3,19 +3,11 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { migrationEvidence as evidence, migrationCommitParents } from '../migration/evidence.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..', '..', '..');
 const ledgerPath = path.join(rootDir, 'deploy', 'studio-server', 'migration', 'source-file-ledger.json');
-
-const evidence = Object.freeze({
-  version: 1,
-  sourceCommit: 'fed8964eb86e9db134e7a2742a4ef26d271f6439',
-  sourceTree: 'dff081c4d11d2fbda113967006b3fad9efb54509',
-  importCommit: '860d549b91001f8a282063ff097fd05e4318efb0',
-  importPrefix: '_import/studio-server',
-  migrationCommit: 'e2136da480fe4bcd830acb16a5f08763da70f389',
-});
 
 const removedFiles = new Map([
   ['.gitattributes', 'The monorepo owns line-ending policy; the standalone repository attribute was retired.'],
@@ -240,6 +232,7 @@ function git(args, options = {}) {
     cwd: rootDir,
     encoding: options.encoding ?? 'utf8',
     maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: '' },
   });
 }
 
@@ -366,7 +359,7 @@ function verifyLedger(ledger) {
     assert.equal(ledger[key], evidence[key], `Migration ledger ${key} changed unexpectedly`);
   }
 
-  const importParents = git(['show', '-s', '--format=%P', evidence.importCommit]).trim().split(/\s+/);
+  const importParents = migrationCommitParents(git(['cat-file', 'commit', evidence.importCommit]));
   assert.equal(
     importParents[1],
     evidence.sourceCommit,
@@ -374,9 +367,9 @@ function verifyLedger(ledger) {
   );
   assert.equal(git(['rev-parse', `${evidence.sourceCommit}^{tree}`]).trim(), evidence.sourceTree);
   assert.equal(git(['rev-parse', `${evidence.importCommit}:${evidence.importPrefix}`]).trim(), evidence.sourceTree);
-  assert.equal(
-    git(['show', '-s', '--format=%P', evidence.migrationCommit]).trim(),
-    evidence.importCommit,
+  assert.deepEqual(
+    migrationCommitParents(git(['cat-file', 'commit', evidence.migrationCommit])),
+    [evidence.importCommit],
     'The consolidation commit must directly follow the complete subtree import',
   );
 

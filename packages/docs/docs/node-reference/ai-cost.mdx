@@ -1,0 +1,35 @@
+---
+id: ai-cost
+title: AI Cost
+sidebar_label: AI Cost
+---
+
+## Overview
+
+AI Cost is a Debug node that reads observed AI cost estimates in USD for the current project invocation and the projects it calls. Caller and sibling-project spending is excluded. It uses the same call accounting as Run statistics, including retries and background work observed before the node executes. It does not calculate prices separately or sum graph outputs.
+
+For example, if A calls B and B calls C, a node in B includes B + C, while a node in C includes C only. Two calls to B have separate subtotals, even if they run in parallel. Ordinary graph calls within B share B's project-invocation subtotal. An explicit project call back into B starts a fresh subtree, even if the project ID matches. A node in the top-level project includes the entire run, matching the root recording's subtotal at that moment. Run statistics still aggregate the full root-run totals.
+
+## Inputs
+
+None by default. Enable **Conditional node** to expose Rivet's standard **if** input and control when the snapshot is taken. Connect the condition you want; a false or excluded condition skips the node.
+
+To wait for one or more branches regardless of whether their results are zero, false or empty, connect their outputs to a **Did Run** node and connect its **Ran** output to AI Cost's **if** input. Without a dependency, AI Cost can run before the AI work and return zero so far.
+
+## Outputs
+
+| Output           | Type     | Meaning                                                                      |
+| ---------------- | -------- | ---------------------------------------------------------------------------- |
+| LLM cost         | `number` | Known observed LLM estimates, including available legacy Chat estimates.     |
+| Decision AI cost | `number` | Known observed Decision AI estimates.                                        |
+| Sum cost         | `number` | Known subtotal for this project invocation and its descendant project calls. |
+
+No observed calls in a category means zero so far. Unknown prices are not zero: an entirely unknown category is excluded (shown as **Not ran**), and a partially known category returns its known subtotal. A warning identifies incomplete accounting. Prices come from the ordinary provider/default/profile-override rules, not this node.
+
+This is a point-in-time snapshot, not a provider invoice or the final run cost. In-flight calls without finished usage, later calls and later background work are not included yet. The final recording may therefore contain a larger amount. Cached responses and duplicate observations do not add new charges. Arbitrary external calls made in Code or third-party plugins are not automatically observable.
+
+## Settings
+
+None. The node is read-only and does not make provider requests or alter accounting.
+
+Run Activity previews **Sum cost**, not only the LLM portion. Reading the snapshot does not count as another AI call.

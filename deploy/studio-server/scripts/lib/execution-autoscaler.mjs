@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { journalForReleaseOperation } from './release-operation-journal.mjs';
+import { journalForReleaseOperation, haPreparationSettled } from './release-operation-journal.mjs';
 import { assertFenceIntent } from './execution-autoscaler-fence.mjs';
 
 export function autoscalerPolicy(input) {
@@ -110,9 +110,14 @@ async function scaleUpDuringRollout({
 }) {
   journalForReleaseOperation(record, 'ha', { release, namespace }, now);
   const binding = record.cooperativeScaling;
+  const installedPreflight =
+    record.phase === 'preflight' &&
+    record.previousManifestDigest === manifestDigest &&
+    binding?.previousImage === image;
   if (
     record.phase === 'preflight' &&
     record.leaseExpiresAt <= now() &&
+    haPreparationSettled(record) &&
     !record.owner &&
     record.completed?.length === 0 &&
     record.previousManifestDigest === manifestDigest &&
@@ -141,9 +146,9 @@ async function scaleUpDuringRollout({
   if (
     binding?.protocol !== 1 ||
     binding.workload !== workload ||
-    binding.image !== image ||
+    (!installedPreflight && binding.image !== image) ||
     binding.policyDigest !== autoscalerPolicyDigest(policy) ||
-    record.manifestDigest !== manifestDigest ||
+    (!installedPreflight && record.manifestDigest !== manifestDigest) ||
     binding.maxReplicas !== policy.maxReplicas ||
     !binding.uid ||
     !record.workloads?.some((w) => w.name === workload && w.uid === binding.uid && w.role === 'execution')

@@ -13,10 +13,15 @@ import {
   imageReference,
   renderManagedReleaseGateValues,
 } from './lib/kubernetes-managed-release-gate-config.mjs';
-import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { resolveHelmBinOrThrow, resolveKubectlForwardBin } from './lib/k8s-tools.mjs';
 import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manifest-images.mjs';
 import { summarizePodStartupState } from './lib/kubernetes-workload-diagnostics.mjs';
 import { assertRuntimeReadiness } from './lib/kubernetes-runtime-readiness.mjs';
+import {
+  assertProbedSchemaTransition,
+  assertSchemaCompatibilityEvidence,
+  readSchemaRepositoryReceipt,
+} from './lib/schema-compatibility-probe.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const mode = process.argv[2] ?? 'smoke';
@@ -57,8 +62,18 @@ function commandLine(program, args) {
   return [program, ...args].map((value) => (/[\s"]/u.test(value) ? JSON.stringify(value) : value)).join(' ');
 }
 
+const activeGateCommands = new Set();
+export async function waitForManagedGateCommands() {
+  await Promise.all([...activeGateCommands]);
+}
 async function run(program, args, options = {}) {
-  const { cwd = rootDir, input, capture = false, allowFailure = false, env = process.env } = options;
+  const {
+    cwd = rootDir,
+    input,
+    capture = process.env.RIVET_QUALIFICATION_RECEIPT_STDOUT === '1',
+    allowFailure = false,
+    env = process.env,
+  } = options;
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {
       cwd,
@@ -78,8 +93,19 @@ async function run(program, args, options = {}) {
       });
     }
     if (input != null && child.stdin) child.stdin.end(input);
-    child.once('error', reject);
-    child.once('exit', (code) => {
+    let closed;
+    const closure = new Promise((resolveClose) => {
+      closed = resolveClose;
+    });
+    activeGateCommands.add(closure);
+    let childError;
+    child.once('error', (error) => {
+      childError = error;
+    });
+    child.once('close', (code) => {
+      closed();
+      activeGateCommands.delete(closure);
+      if (childError) return reject(childError);
       const exitCode = code ?? 1;
       if (exitCode === 0 || allowFailure) return resolve({ exitCode, stdout, stderr });
       reject(
@@ -91,7 +117,7 @@ async function run(program, args, options = {}) {
   });
 }
 
-function renderSecrets(namespace, secrets) {
+export function renderSecrets(namespace, secrets) {
   const metadata = `  namespace: ${namespace}\n  labels:\n    ${ownershipLabel}: "true"\n`;
   const quote = (value) => JSON.stringify(value);
   return `apiVersion: v1
@@ -225,7 +251,7 @@ spec:
             - { name: RIVET_BUILD_VERSION, value: ${JSON.stringify(imageReference(image))} }
 `;
 }
-function renderDependencies(namespace) {
+export function renderDependencies(namespace) {
   return `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -374,6 +400,7 @@ export async function createReleaseGateWebAppOAuthSession(baseUrl, slug, email) 
   }
 
   const dummyUrl = new URL(dummyLocation, baseUrl);
+  assert.equal(dummyUrl.origin, new URL(baseUrl).origin, 'Dummy OAuth redirected outside the owned fixture origin');
   const state = dummyUrl.searchParams.get('state');
   if (!state) throw new Error('Dummy OAuth login redirect had no state.');
   const signIn = await fetch(`${baseUrl}${dummyUrl.pathname}`, {
@@ -391,7 +418,9 @@ export async function createReleaseGateWebAppOAuthSession(baseUrl, slug, email) 
     throw new Error(`Dummy OAuth sign-in did not produce its expected redirect: ${signIn.status}`);
   }
 
-  const callback = await fetch(new URL(callbackLocation, baseUrl), {
+  const callbackUrl = new URL(callbackLocation, baseUrl);
+  assert.equal(callbackUrl.origin, new URL(baseUrl).origin, 'Dummy OAuth callback escaped the owned fixture origin');
+  const callback = await fetch(callbackUrl, {
     headers: { cookie: stateCookie },
     redirect: 'manual',
     signal: AbortSignal.timeout(10_000),
@@ -446,10 +475,11 @@ async function requestJson(baseUrl, route, options = {}) {
   return body;
 }
 
-async function readPublicationPreconditions(baseUrl, relativePath) {
+async function readPublicationPreconditions(baseUrl, relativePath, headers) {
   const snapshot = await requestJson(
     baseUrl,
     `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
+    { headers },
   );
   const { projectId, draftRevisionId, publicationVersion, project } = snapshot ?? {};
   if (
@@ -628,8 +658,8 @@ function openWebSocketAction(
   };
 }
 
-async function runWebSocketAction(baseUrl, revisionKey) {
-  const action = openWebSocketAction(baseUrl, { revisionKey });
+async function runWebSocketAction(baseUrl, revisionKey, headers) {
+  const action = openWebSocketAction(baseUrl, { revisionKey, headers });
   try {
     await waitForPromise('web-app WebSocket acceptance', action.accepted, 30_000);
     const terminal = await waitForPromise('web-app WebSocket action', action.terminal, 45_000);
@@ -659,6 +689,7 @@ export class ManagedReleaseGate {
     this.kubectlBin = kubectlBin;
     this.helmBin = helmBin;
     this.portForward = null;
+    this.portForwardClosed = null;
     this.secrets = null;
   }
 
@@ -774,7 +805,15 @@ export class ManagedReleaseGate {
     }
     const manifest = await run(
       this.helmBin,
-      ['get', 'manifest', this.config.release, '--namespace', this.config.namespace],
+      [
+        '--kube-context',
+        this.config.context,
+        'get',
+        'manifest',
+        this.config.release,
+        '--namespace',
+        this.config.namespace,
+      ],
       { capture: true, allowFailure: true },
     );
     await this.artifact(`${stage}/helm-manifest.yaml`, `${manifest.stdout}\n${manifest.stderr}`);
@@ -782,7 +821,10 @@ export class ManagedReleaseGate {
       ['helm-status.log', ['status', this.config.release, '--namespace', this.config.namespace]],
       ['helm-hooks.yaml', ['get', 'hooks', this.config.release, '--namespace', this.config.namespace]],
     ]) {
-      const result = await run(this.helmBin, args, { capture: true, allowFailure: true });
+      const result = await run(this.helmBin, ['--kube-context', this.config.context, ...args], {
+        capture: true,
+        allowFailure: true,
+      });
       await this.artifact(`${stage}/${name}`, `${result.stdout}\n${result.stderr}`);
     }
   }
@@ -945,16 +987,243 @@ export class ManagedReleaseGate {
         2,
       )}\n`,
     );
+    if (previousApiImage.schemaVersion !== this.config.managedWorkflowSchema.version)
+      return this.verifyMixedSchemaRepositories();
+  }
+
+  async verifyMixedSchemaRepositories({
+    previousApiImage = this.config.previousApiImage,
+    candidateApi = this.config.images.api,
+    to = this.config.managedWorkflowSchema.version,
+  } = {}) {
+    delete this.schemaCompatibility;
+    const from = previousApiImage.schemaVersion;
+    assertProbedSchemaTransition(from, to);
+    const runId = randomUUID().replaceAll('-', '');
+    const configName = `schema-probe-${runId}`;
+    const sourceRoot = process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? rootDir;
+    assert.ok(path.isAbsolute(sourceRoot), 'Schema fixture source root must be absolute');
+    const data = {};
+    for (const [key, file] of [
+      ['worker.mjs', 'fixtures/schema-compatibility-worker.mjs'],
+      ['schema-compatibility-probe.mjs', 'lib/schema-compatibility-probe.mjs'],
+    ])
+      data[key] = await fs.readFile(path.join(sourceRoot, 'deploy/studio-server/scripts', file), 'utf8');
+    const objects = [
+      {
+        apiVersion: 'v1',
+        kind: 'ConfigMap',
+        immutable: true,
+        metadata: { name: configName, namespace: this.config.namespace, labels: { [ownershipLabel]: 'true' } },
+        data,
+      },
+    ];
+    const jobs = ['previous', 'candidate'].map((role) => {
+      const image = role === 'previous' ? previousApiImage : candidateApi;
+      return {
+        apiVersion: 'batch/v1',
+        kind: 'Job',
+        metadata: {
+          name: `${configName}-${role}`,
+          namespace: this.config.namespace,
+          labels: { [ownershipLabel]: 'true' },
+        },
+        spec: {
+          backoffLimit: 0,
+          activeDeadlineSeconds: 90,
+          template: {
+            spec: {
+              restartPolicy: 'Never',
+              automountServiceAccountToken: false,
+              imagePullSecrets: [{ name: this.config.registry.secretName }],
+              containers: [
+                {
+                  name: 'probe',
+                  image: imageReference(image),
+                  imagePullPolicy: 'Always',
+                  command: ['node', '/probe/worker.mjs'],
+                  env: [
+                    { name: 'RIVET_SCHEMA_COMPATIBILITY_FIXTURE', value: 'isolated' },
+                    { name: 'RIVET_SCHEMA_PROBE_ID', value: runId },
+                    { name: 'RIVET_SCHEMA_PROBE_ROLE', value: role },
+                    { name: 'RIVET_SCHEMA_PROBE_VERSION', value: String(role === 'previous' ? from : to) },
+                    { name: 'RIVET_SCHEMA_PROBE_TARGET', value: String(to) },
+                    {
+                      name: 'RIVET_SCHEMA_PROBE_DB_PASSWORD',
+                      valueFrom: { secretKeyRef: { name: 'rivet-release-gate-postgres', key: 'password' } },
+                    },
+                  ],
+                  volumeMounts: [{ name: 'probe', mountPath: '/probe', readOnly: true }],
+                },
+              ],
+              volumes: [{ name: 'probe', configMap: { name: configName } }],
+            },
+          },
+        },
+      };
+    });
+    // New UUID-bound objects only. Failure leaves diagnostics in the exact gate
+    // namespace for its existing inventory cleanup; never retry accepted writes.
+    await this.kubectl(['create', '-f', '-'], {
+      input: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [...objects, ...jobs] }),
+    });
+    const read = async (kind, name) =>
+      JSON.parse(
+        (await this.kubectl(['get', kind, name, '-n', this.config.namespace, '-o', 'json'], { capture: true })).stdout,
+      );
+    const code = await read('configmap', configName);
+    assert.ok(
+      code.metadata?.uid && !code.metadata.deletionTimestamp && code.immutable === true,
+      'Schema probe code identity is unconfirmed',
+    );
+    assert.deepEqual(code.data, data, 'Schema probe code changed at admission');
+    const results = await Promise.allSettled(
+      jobs.map(async (job, index) => {
+        const original = await read('job', job.metadata.name);
+        assert.ok(original.metadata?.uid && !original.metadata.deletionTimestamp, 'Schema Job identity is unavailable');
+        await this.kubectl([
+          'wait',
+          '--for=condition=complete',
+          `job/${job.metadata.name}`,
+          '-n',
+          this.config.namespace,
+          '--timeout=100s',
+        ]);
+        const completed = await read('job', job.metadata.name);
+        assert.equal(completed.metadata.uid, original.metadata.uid, 'Schema Job was replaced');
+        assert.ok(!completed.metadata.deletionTimestamp, 'Schema Job is deleting');
+        const pods = JSON.parse(
+          (
+            await this.kubectl(
+              ['get', 'pods', '-l', `job-name=${job.metadata.name}`, '-n', this.config.namespace, '-o', 'json'],
+              { capture: true },
+            )
+          ).stdout,
+        );
+        assert.ok(
+          Array.isArray(pods.items) && pods.items.length === 1 && !pods.metadata?.continue,
+          'Schema Pod inventory is incomplete',
+        );
+        const pod = pods.items[0];
+        assert.ok(
+          pod.metadata?.uid &&
+            pod.metadata.name &&
+            !pod.metadata.deletionTimestamp &&
+            pod.status?.phase === 'Succeeded' &&
+            pod.metadata.ownerReferences?.some(
+              (owner) => owner.controller && owner.kind === 'Job' && owner.uid === original.metadata.uid,
+            ),
+          'Schema Pod completion/ownership is unconfirmed',
+        );
+        assert.equal(pod.spec?.containers?.length, 1, 'Unreviewed schema Pod sidecar');
+        assert.equal(
+          pod.spec.containers[0].image,
+          job.spec.template.spec.containers[0].image,
+          'Schema Pod image changed at admission',
+        );
+        const actual = pod.spec.containers[0],
+          desired = job.spec.template.spec.containers[0];
+        assert.deepEqual(actual.command, desired.command, 'Schema probe command changed at admission');
+        assert.deepEqual(actual.args ?? [], desired.args ?? [], 'Schema probe arguments changed at admission');
+        assert.deepEqual(actual.env, desired.env, 'Schema probe environment changed at admission');
+        assert.equal(
+          pod.spec.volumes?.find((v) => v.name === 'probe')?.configMap?.name,
+          configName,
+          'Schema probe code volume changed',
+        );
+        const mount = actual.volumeMounts?.find((v) => v.name === 'probe');
+        assert.ok(mount?.mountPath === '/probe' && mount.readOnly === true, 'Schema probe code mount changed');
+        const logs = await this.kubectl(['logs', '-n', this.config.namespace, `pod/${pod.metadata.name}`], {
+          capture: true,
+        });
+        assert.equal(
+          (await read('pod', pod.metadata.name)).metadata?.uid,
+          pod.metadata.uid,
+          'Schema Pod changed during log capture',
+        );
+        assert.equal(
+          (await read('job', job.metadata.name)).metadata?.uid,
+          original.metadata.uid,
+          'Schema Job changed during log capture',
+        );
+        await this.artifact(`${job.metadata.name}.log`, logs.stdout);
+        return readSchemaRepositoryReceipt(logs.stdout, {
+          role: index === 0 ? 'previous' : 'candidate',
+          version: index === 0 ? from : to,
+          runId,
+        });
+      }),
+    );
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length)
+      throw new AggregateError(
+        failures.map((result) => result.reason),
+        'Schema workers did not both verify; accepted observations have settled',
+      );
+    assert.equal(
+      (await read('configmap', configName)).metadata?.uid,
+      code.metadata.uid,
+      'Schema code was replaced during qualification',
+    );
+    const repositories = results.map((result) => result.value);
+    const candidate = repositories.find((r) => r.role === 'candidate');
+    assert.equal(candidate.lockContention, true);
+    const evidence = {
+      protocol: 1,
+      from,
+      to,
+      runId,
+      predecessorApi: { repository: previousApiImage.repository, digest: previousApiImage.digest },
+      candidateApi,
+      lockContention: true,
+      repositories: repositories.map(({ lockContention: _lock, ...row }) => row),
+    };
+    this.schemaCompatibility = assertSchemaCompatibilityEvidence(
+      evidence,
+      {
+        database: { managedWorkflowSchema: { version: to } },
+        images: { api: candidateApi },
+        lineage: { predecessor: { images: { api: evidence.predecessorApi } } },
+      },
+      from,
+    );
+    await this.artifact('mixed-schema-repositories.json', JSON.stringify(this.schemaCompatibility, null, 2));
+    return this.schemaCompatibility;
+  }
+
+  async stopPortForward({ timeoutMs = 10_000 } = {}) {
+    const child = this.portForward;
+    if (!child) return;
+    if (!this.portForwardClosed) throw new Error('Port-forward shutdown identity is unavailable.');
+    if (child.exitCode == null && child.signalCode == null && !child.killed) child.kill();
+    let timer;
+    try {
+      await Promise.race([
+        this.portForwardClosed,
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error('Port-forward did not close; use a native kubectl executable and inspect the owned process.'),
+              ),
+            timeoutMs,
+          );
+        }),
+      ]);
+      if (this.portForward === child) {
+        this.portForward = null;
+        this.portForwardClosed = null;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async openProxy(target = `service/${this.config.release}-proxy`) {
-    if (this.portForward && !this.portForward.killed) {
-      this.portForward.kill();
-      this.portForward = null;
-    }
+    await this.stopPortForward();
     const port = await findFreePort();
     const child = spawn(
-      this.kubectlBin,
+      resolveKubectlForwardBin(this.kubectlBin),
       ['--context', this.config.context, '-n', this.config.namespace, 'port-forward', target, `${port}:80`],
       {
         cwd: rootDir,
@@ -963,6 +1232,11 @@ export class ManagedReleaseGate {
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
+    let spawnError;
+    child.on('error', (error) => {
+      spawnError = error;
+    });
+    this.portForwardClosed = new Promise((resolve) => child.once('close', resolve));
     let output = '';
     child.stdout.on('data', (chunk) => {
       output += String(chunk);
@@ -975,7 +1249,8 @@ export class ManagedReleaseGate {
     await waitFor(
       'proxy readiness',
       async () => {
-        if (child.exitCode != null) throw new Error(output);
+        if (spawnError) throw spawnError;
+        if (child.exitCode != null || child.signalCode != null) throw new Error(output || 'Port-forward exited.');
         const response = await fetch(`${baseUrl}/readyz`, {
           signal: AbortSignal.timeout(3_000),
         });
@@ -991,7 +1266,7 @@ export class ManagedReleaseGate {
       path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'fixtures', 'managed-release-gate.rivet-project'),
       'utf8',
     );
-    const upload = await requestJson(baseUrl, '/api/workflows/projects/upload', {
+    const upload = await this.requestWorkflow(baseUrl, '/api/workflows/projects/upload', {
       method: 'POST',
       headers: { 'X-Rivet-Namespace-Intent': '1' },
       body: JSON.stringify({
@@ -1003,8 +1278,8 @@ export class ManagedReleaseGate {
     });
     const relativePath = upload.project?.relativePath;
     if (typeof relativePath !== 'string') throw new Error('Project upload did not return relativePath');
-    const initialPreconditions = await readPublicationPreconditions(baseUrl, relativePath);
-    await requestJson(baseUrl, '/api/workflows/projects/publish', {
+    const initialPreconditions = await readPublicationPreconditions(baseUrl, relativePath, this.probeHeaders);
+    await this.requestWorkflow(baseUrl, '/api/workflows/projects/publish', {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
@@ -1013,11 +1288,11 @@ export class ManagedReleaseGate {
       }),
     });
     const historyRoute = `/api/workflows/projects/published-versions?relativePath=${encodeURIComponent(relativePath)}`;
-    const historyBeforeConflict = await requestJson(baseUrl, historyRoute);
-    const currentPreconditions = await readPublicationPreconditions(baseUrl, relativePath);
+    const historyBeforeConflict = await this.requestWorkflow(baseUrl, historyRoute);
+    const currentPreconditions = await readPublicationPreconditions(baseUrl, relativePath, this.probeHeaders);
     const stalePublish = await fetch(`${baseUrl}/api/workflows/projects/publish`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { ...this.probeHeaders, 'content-type': 'application/json' },
       signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({
         relativePath,
@@ -1028,16 +1303,16 @@ export class ManagedReleaseGate {
     assert.equal(stalePublish.status, 409, 'Deployed API must reject a stale publication revision');
     assert.match((await stalePublish.json()).error, /Publishing failed because the project changed/);
     assert.deepEqual(
-      await requestJson(baseUrl, historyRoute),
+      await this.requestWorkflow(baseUrl, historyRoute),
       historyBeforeConflict,
       'Rejected publication must leave the current version and publication history unchanged',
     );
 
-    await requestJson(baseUrl, '/api/workflows/projects/web-apps/publish', {
+    await this.requestWorkflow(baseUrl, '/api/workflows/projects/web-apps/publish', {
       method: 'POST',
       body: JSON.stringify({
         relativePath,
-        preconditions: await readPublicationPreconditions(baseUrl, relativePath),
+        preconditions: await readPublicationPreconditions(baseUrl, relativePath, this.probeHeaders),
         publications: [{ uiGraphId: 'release-gate-web-app', slug: 'release-gate-web-app' }],
       }),
     });
@@ -1053,11 +1328,13 @@ export class ManagedReleaseGate {
     const publishedHtml = await (
       await fetch(`${baseUrl}/apps/release-gate-web-app`, {
         signal: AbortSignal.timeout(30_000),
+        headers: this.probeHeaders,
       })
     ).text();
     const latestHtml = await (
       await fetch(`${baseUrl}/apps-latest/release-gate-web-app`, {
         signal: AbortSignal.timeout(30_000),
+        headers: this.probeHeaders,
       })
     ).text();
     if (!publishedHtml.includes('Managed release gate app') || !latestHtml.includes('Managed release gate app')) {
@@ -1069,7 +1346,7 @@ export class ManagedReleaseGate {
       ['/apps/release-gate-web-app/actions/run', publishedRevision, 'published-app'],
       ['/apps-latest/release-gate-web-app/actions/run', latestRevision, 'latest-app'],
     ]) {
-      await requestJson(baseUrl, route, {
+      await this.requestWorkflow(baseUrl, route, {
         method: 'POST',
         timeoutMs: 45_000,
         body: JSON.stringify({
@@ -1079,7 +1356,7 @@ export class ManagedReleaseGate {
         }),
       });
     }
-    const socketMessages = await runWebSocketAction(baseUrl, publishedRevision);
+    const socketMessages = await runWebSocketAction(baseUrl, publishedRevision, this.probeHeaders);
     if (
       !socketMessages.some((message) => message.type === 'action.accepted') ||
       !socketMessages.some((message) => message.type === 'action.completed')
@@ -1087,7 +1364,7 @@ export class ManagedReleaseGate {
       throw new Error('WebSocket action did not emit accepted and completed messages');
     }
 
-    const settings = await requestJson(baseUrl, '/api/app-settings/environment-variables', {
+    const settings = await this.requestWorkflow(baseUrl, '/api/app-settings/environment-variables', {
       method: 'PATCH',
       body: JSON.stringify({
         variables: [
@@ -1101,7 +1378,7 @@ export class ManagedReleaseGate {
     });
     const environmentVariableId = settings.variables?.[0]?.id;
     if (typeof environmentVariableId !== 'string') throw new Error('App Settings update did not return variable id');
-    const savedValue = await requestJson(
+    const savedValue = await this.requestWorkflow(
       baseUrl,
       `/api/app-settings/environment-variables/${encodeURIComponent(environmentVariableId)}/value`,
     );
@@ -1128,10 +1405,10 @@ export class ManagedReleaseGate {
     await waitFor(
       'recordings and statistics',
       async () => {
-        const catalog = await requestJson(baseUrl, '/api/workflows/recordings/workflows');
+        const catalog = await this.requestWorkflow(baseUrl, '/api/workflows/recordings/workflows');
         const workflow = catalog.workflows?.find((entry) => entry.project?.relativePath === relativePath);
         if (!workflow || workflow.totalRuns < 6) throw new Error('recordings have not converged');
-        const page = await requestJson(
+        const page = await this.requestWorkflow(
           baseUrl,
           `/api/workflows/recordings/workflows/${encodeURIComponent(workflow.workflowId)}/runs?page=1&pageSize=50&status=all`,
         );
@@ -1141,7 +1418,7 @@ export class ManagedReleaseGate {
           throw new Error('recording detail did not include a replayable run');
         const replay = await fetch(
           `${baseUrl}/api/workflows/recordings/${encodeURIComponent(candidateReplayRecordingId)}/replay-project`,
-          { signal: AbortSignal.timeout(30_000) },
+          { signal: AbortSignal.timeout(30_000), headers: this.probeHeaders },
         );
         if (!replay.ok) {
           await replay.body?.cancel();
@@ -1151,7 +1428,7 @@ export class ManagedReleaseGate {
         if (!replayContents) throw new Error('recording replay returned an empty project');
         replayRecordingId = candidateReplayRecordingId;
         replayProjectDigest = createHash('sha256').update(replayContents).digest('hex');
-        const targets = await requestJson(baseUrl, '/api/workflows/run-statistics/targets?surface=web_app');
+        const targets = await this.requestWorkflow(baseUrl, '/api/workflows/run-statistics/targets?surface=web_app');
         if (!targets.targets?.some((entry) => entry.target?.workflowId === workflow.workflowId))
           throw new Error('statistics catalog did not contain the web-app action');
       },
@@ -1892,7 +2169,7 @@ export class ManagedReleaseGate {
   }
 
   async close() {
-    if (this.portForward && !this.portForward.killed) this.portForward.kill();
+    await this.stopPortForward();
     if (!this.config.keepNamespace) await this.deleteOwnedNamespace();
   }
 }

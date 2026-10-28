@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { createConnection } from 'node:net';
 import test from 'node:test';
 import {
   assertMaintenancePlan,
@@ -753,13 +754,23 @@ test('a hung local adapter is stopped at its timeout and cannot produce success'
 });
 
 test('a timed-out adapter cannot leave a capture child writing while recovery begins', async (t) => {
-  const script = `import fs from 'node:fs';
-import path from 'node:path';
+  const childProgram = `const fs = require('node:fs');
+const net = require('node:net');
+const [marker, started, recovery] = process.argv.slice(1);
+process.on('SIGTERM', () => {});
+net.createServer(socket => socket.destroy()).listen(0, '127.0.0.1', function () {
+  setInterval(() => { if (fs.existsSync(recovery)) fs.writeFileSync(marker, 'late'); }, 10);
+  fs.writeFileSync(started, String(this.address().port));
+});
+setTimeout(() => process.exit(0), 10000);
+`;
+  const script = `import path from 'node:path';
 import { spawn } from 'node:child_process';
 const request = process.argv[process.argv.indexOf('--request') + 1];
 const marker = path.join(path.dirname(request), 'late-child-write');
 const started = path.join(path.dirname(request), 'child-started');
-spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(process.argv[2],String(Date.now()));setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),2500)", marker, started], { stdio: 'inherit', windowsHide: true });
+const recovery = path.join(path.dirname(request), 'recovery-started');
+spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}, marker, started, recovery], { stdio: 'inherit', windowsHide: true });
 process.on('SIGTERM', () => {});
 setInterval(() => {}, 1000);
 `;
@@ -769,15 +780,36 @@ setInterval(() => {}, 1000);
     /did not complete successfully/,
   );
   const [directory] = await fs.readdir(state.artifactsDir);
-  const childStartedAt = Number(await fs.readFile(path.join(state.artifactsDir, directory, 'child-started'), 'utf8'));
-  assert.ok(Number.isFinite(childStartedAt) && childStartedAt > 0, 'The child must actually start before termination.');
-  await new Promise((resolve) => setTimeout(resolve, Math.max(0, childStartedAt + 2_800 - Date.now())));
+  const port = Number(await fs.readFile(path.join(state.artifactsDir, directory, 'child-started'), 'utf8'));
+  assert.ok(Number.isInteger(port) && port > 0 && port <= 65535, 'The child must actually listen before termination.');
+  // Recovery is allowed only after confirmed shutdown, not at a fixed time after spawn.
+  // Even a paused surviving child retains its listener: a timeout is not proof of exit.
+  await assert.rejects(
+    new Promise((resolve, reject) => {
+      const socket = createConnection({ host: '127.0.0.1', port });
+      const settle = (error) => {
+        socket.destroy();
+        if (error) reject(error);
+        else resolve();
+      };
+      socket.once('connect', () => settle());
+      socket.once('error', settle);
+      socket.setTimeout(1_000, () => settle(new Error('Child shutdown remains unconfirmed')));
+    }),
+    { code: 'ECONNREFUSED' },
+  );
+  await fs.writeFile(path.join(state.artifactsDir, directory, 'recovery-started'), 'recovery');
+  await new Promise((resolve) => setTimeout(resolve, 100));
   await assert.rejects(fs.stat(path.join(state.artifactsDir, directory, 'late-child-write')), { code: 'ENOENT' });
   await assert.rejects(fs.stat(path.join(state.artifactsDir, directory, 'verified.json')), { code: 'ENOENT' });
 });
 
 function simulatedChild(pid) {
   const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stdout.destroy = () => {
+    child.stdout.destroyed = true;
+  };
   child.pid = pid;
   child.kills = [];
   child.unrefed = false;
@@ -790,6 +822,92 @@ function simulatedChild(pid) {
   };
   return child;
 }
+
+test('POSIX signal acknowledgement and parent close cannot release recovery while a child remains live', async (t) => {
+  const state = await fixture(t);
+  const adapter = simulatedChild(12345);
+  const signals = [];
+  const probes = [];
+  const notifications = new EventEmitter();
+  let settled = false;
+  const running = executeMaintenanceBackupAdapter('fixture.mjs', 'request', 'receipt', {
+    directory: state.artifactsDir,
+    timeoutMs: 10,
+    shutdownTimeoutMs: 5_000,
+    platform: 'linux',
+    signalProcess: (...args) => {
+      signals.push(args);
+      adapter.emit('close', null);
+    },
+    spawnProcess(command, args) {
+      if (command !== 'ps') return adapter;
+      assert.deepEqual(args, ['-axo', 'pgid=,stat=']);
+      const probe = simulatedChild(12346 + probes.length);
+      probes.push(probe);
+      setImmediate(() => notifications.emit('probe', probe));
+      return probe;
+    },
+  }).finally(() => {
+    settled = true;
+  });
+  const rejection = assert.rejects(running, /did not complete successfully/);
+  const nextProbe = () => new Promise((resolve) => notifications.once('probe', resolve));
+  const first = await nextProbe();
+  assert.deepEqual(signals, [[-12345, 'SIGKILL']]);
+  const secondReady = nextProbe();
+  // A stopped/suspended child still owns its listener and is NOT terminal.
+  first.stdout.emit('data', Buffer.from('12345 T\n99999 S\n'));
+  first.emit('close', 0);
+  const second = await secondReady;
+  assert.equal(settled, false);
+  // Ignore other groups. Our zombies cannot write, even if PID 1 has not reaped them.
+  second.stdout.emit('data', Buffer.from('12345 Z\n99999 S\n'));
+  second.emit('close', 0);
+  await rejection;
+  assert.equal(probes.length, 2);
+});
+
+test('POSIX shutdown fails closed and remains bounded when group inspection fails or hangs', async (t) => {
+  for (const scenario of ['failed-probe', 'invalid-probe', 'empty-probe', 'hung-probe', 'live-group']) {
+    const state = await fixture(t);
+    const adapter = simulatedChild(12345);
+    const probes = [];
+    await assert.rejects(
+      executeMaintenanceBackupAdapter('fixture.mjs', 'request', 'receipt', {
+        directory: state.artifactsDir,
+        timeoutMs: 10,
+        shutdownTimeoutMs: 100,
+        platform: 'linux',
+        signalProcess: () => adapter.emit('close', null),
+        spawnProcess(command) {
+          if (command !== 'ps') return adapter;
+          const probe = simulatedChild(12346 + probes.length);
+          probes.push(probe);
+          if (scenario !== 'hung-probe')
+            setImmediate(() => {
+              probe.stdout.emit(
+                'data',
+                scenario === 'invalid-probe'
+                  ? 'unrecognized process state'
+                  : scenario === 'empty-probe'
+                    ? ''
+                    : '12345 S\n',
+              );
+              probe.emit('close', scenario === 'failed-probe' ? 1 : 0);
+            });
+          return probe;
+        },
+      }),
+      /process-tree shutdown is unconfirmed/,
+    );
+    assert.ok(probes.length >= 1, scenario);
+    if (scenario === 'hung-probe') {
+      assert.deepEqual(probes[0].kills, ['SIGKILL']);
+      assert.equal(probes[0].unrefed, true);
+      assert.equal(probes[0].stdout.destroyed, true);
+    }
+  }
+});
 
 test('overflowing backup or shutdown deadlines fail before spawning or creating checkpoint files', async (t) => {
   for (const durations of [{ timeoutMs: 2_147_483_648 }, { timeoutMs: 10, shutdownTimeoutMs: 2_147_483_648 }]) {

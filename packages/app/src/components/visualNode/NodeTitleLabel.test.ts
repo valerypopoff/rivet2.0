@@ -63,6 +63,7 @@ test('NodeTitleLabel gives Debug nodes a bug icon before the title', () => {
   for (const [type, title] of [
     ['graphCallPath', 'Graph Call Path'],
     ['projectName', 'Project Name'],
+    ['aiCost', 'AI Cost'],
   ] as const) {
     const html = renderNodeTitle(type, title);
     assert.match(html, /^<span class="title-text-label"><svg[^>]*class="debug-node-title-icon"/);

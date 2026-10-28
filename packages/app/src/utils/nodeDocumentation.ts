@@ -5,6 +5,7 @@ export const INTERNAL_BUILT_IN_NODE_TYPES_WITHOUT_NODE_REFERENCE = new Set<Built
 
 export const BUILT_IN_NODE_DOCUMENTATION_SLUGS: Partial<Record<BuiltInNodeType, string>> = {
   abortGraph: 'abort-graph',
+  aiCost: 'ai-cost',
   appendToDataset: 'append-to-dataset',
   array: 'array',
   assembleMessage: 'assemble-message',

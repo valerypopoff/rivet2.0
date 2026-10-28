@@ -1,4 +1,5 @@
 {{- if .Values.workflowSchema.migrationJob.enabled }}
+{{- $rolling := and .Release.IsUpgrade (not .Values.workflowSchema.maintenanceValidation) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -11,7 +12,7 @@ metadata:
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
-  backoffLimit: {{ .Values.workflowSchema.migrationJob.backoffLimit }}
+  backoffLimit: {{ ternary 0 (int .Values.workflowSchema.migrationJob.backoffLimit) $rolling }}
   activeDeadlineSeconds: {{ .Values.workflowSchema.migrationJob.activeDeadlineSeconds }}
   template:
     metadata:
@@ -36,8 +37,12 @@ spec:
             - /bin/sh
             - -ec
           args:
-            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv_preserving_deployment_storage /vault/dotenv; RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION={{ .Values.workflowSchema.compatibility.maximumVersion | quote }} RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION={{ .Values.workflowSchema.compatibility.maximumVersion | quote }} node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema.js migrate; RIVET_DEPLOYMENT_STORAGE_SEED_MISSING=1 node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/import-managed-app-settings.js; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/project-managed-app-settings.js
+            - . /opt/rivet/lib/load-env.sh; load_optional_dotenv_preserving_deployment_storage /vault/dotenv; RIVET_MANAGED_SCHEMA_MIGRATION_POLICY={{ ternary "rolling" "maintenance" $rolling | quote }} RIVET_MANAGED_WORKFLOW_SCHEMA_MIN_VERSION={{ .Values.workflowSchema.compatibility.maximumVersion | quote }} RIVET_MANAGED_WORKFLOW_SCHEMA_MAX_VERSION={{ .Values.workflowSchema.compatibility.maximumVersion | quote }} node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/migrate-managed-workflow-schema.js migrate; RIVET_DEPLOYMENT_STORAGE_SEED_MISSING=1 node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/import-managed-app-settings.js; node /app/packages/studio-server-api/dist/studio-server-api/src/scripts/project-managed-app-settings.js
           env:
+            # Ordinary upgrades use reviewed expand-only migrations and short
+            # lock/statement budgets. Install and fenced maintenance stay separate.
+            - name: RIVET_MANAGED_SCHEMA_MIGRATION_POLICY
+              value: {{ ternary "rolling" "maintenance" $rolling | quote }}
             - name: RIVET_SCHEMA_MIGRATION_RELEASE
               value: {{ .Release.Name | quote }}
 {{ include "rivet.env.deploymentStorageBootstrap" (dict "root" . "appDataRoot" "/var/tmp/rivet-migration-app-data") | nindent 12 }}

@@ -6,6 +6,133 @@ operator must explicitly select the context, release and namespace and confirm
 the release name. The clean tracked checkout, exact promoted manifest source,
 chart fingerprint, immutable images and schema controls remain mandatory.
 
+## Ordinary seven-pod qualification and headroom
+
+See [automated qualification](automated-runtime-qualification.md) for the separate
+Built, Qualified and Production-preflight statuses. Qualification does not start
+a deployment or waive live backup/identity checks. The maintained reusable fixture
+and independent expiry janitor are implemented locally; their infrastructure,
+runner/IAM installation and first approved provider run remain activation gates.
+Local command tests are not GKE evidence and cannot activate cloud access.
+
+The default local runtime qualification is an installed-to-candidate upgrade of
+the compact singleton seven-pod baseline, not a replay of historical topology
+adoptions. See [runtime qualification](runtime-ha-qualification.md) for its
+separate ordinary/adoption evidence contracts and exact local command.
+Execution/proxy capacity already grown by the approved autoscalers is preserved
+within the same policy bounds; it must not be manually reduced merely to satisfy
+a seven-pod qualification. The test itself starts/ends at a naturally settled
+baseline and records temporary growth separately from topology changes.
+
+After proxy replacement, Pod Ready may precede the next metrics-server CPU
+sample. A new execution owner can similarly have no CPU sample yet; absence must
+not be parsed as an invalid quantity or converted to zero. The rollout waits
+read-only for a typed missing execution sample or missing/stale proxy sample,
+bounded by the existing operation timeout, then repeats both execution
+and proxy headroom checks. No owner is withdrawn on missing data. A persistent
+metrics outage still blocks, and ownership/configuration changes or insufficient
+measured capacity are not retryable observations. Execution snapshot ownership is
+bound to the expected StatefulSet UID before sampling. This is not a retry of Helm,
+scale, retirement, graph execution or any other modifying request.
+
+`ha-rollout-headroom.test.mjs` covers delayed scrape recovery, permanent absence,
+identity change and real overload; the ordinary qualification tests additionally
+cover HPA-grown capacity, exact-image readiness, HTTP502, interrupted windows,
+recording durability and storage identity. Unit/HTTP/Helm checks are distinct from
+the actual local cluster result, and neither is provider qualification.
+
+## Rolling database compatibility contract
+
+Local commit-preparation checkpoint (2026-10-28): the broad tooling matrix passed
+692 tests with three optional checks skipped; the Linux process-identity check
+then ran separately in a cached, network-disabled container and passed without a
+skip. The focused API/schema/Helm contracts passed 107 tests, and both the Debug
+node and qualification-browser fixtures passed headlessly. Earlier same-checkout
+PostgreSQL checks verified the real 17 → 18 migration and mixed repository
+read/write probes using source overlays. These are local results, not exact
+release-image or GKE certificates, and this checkpoint neither enables overlap
+nor authorizes cloud resources or production changes.
+
+Ordinary Helm upgrades select `RIVET_MANAGED_SCHEMA_MIGRATION_POLICY=rolling`
+on the migration command **after** Vault loading. New installations and the
+fenced `maintenanceValidation` phase select `maintenance`. A dotenv value cannot
+override this choice. Serving pods remain verify-only; this is not permission
+to run migrations from multiple application replicas.
+
+Rolling migrations require explicit `rollingSafe: true` on **every pending**
+migration. Only migration 18 currently has that review. Missing metadata fails
+closed; a compatible reader floor or additive-looking SQL is not sufficient.
+Historical SQL/checksums remain unchanged. Rolling transactions use 1000ms
+`lock_timeout` and 5000ms `statement_timeout`, with no internal lock retry and
+zero Job backoff. Fenced maintenance retains 30s/5min and its existing bounded
+retry behavior. These are statement/lock bounds, **not a zero-latency promise**:
+even queued expand DDL can briefly block queries. Contention fails the upgrade
+before application replacement; do not loosen limits automatically to make it pass.
+
+Schema-changing rolling release certificates require `ha.schemaCompatibility`
+bound to the exact predecessor/candidate API images and schema versions. The gate
+does more than launch the old schema verifier: two digest-pinned image workers
+use their **own** recording insertion/listing repositories against the expanded
+database. Two synchronized write/cross-read rounds verify that old writes remain
+readable, new nonzero costs survive, and old code reads new rows. A candidate-only
+private-schema probe demonstrates a queued ACCESS EXCLUSIVE DDL lock timing out,
+queued reads recovering, and the same migration preserving rows after contention
+ends. A 10,001-row fixture also verifies that the expand retains the table's
+physical file identity rather than rewriting retained rows. UUID-specific fixture objects are created once, never retried after an
+uncertain acknowledgement, and belong to the existing isolated namespace cleanup.
+No production contents or model calls are involved.
+The gate binds each observed Job UID across completion, then checks a complete
+single-Pod inventory, exact Job ownership, terminal success and the Pod's actual
+digest-pinned image after admission. A changed Job/image cannot be certified
+merely because its log contains the expected schema version. Probe code ConfigMaps
+are immutable. Both accepted worker observations settle before a failed attempt
+returns, and a new attempt clears prior in-memory success evidence. This does
+not authorize deletion of a still-active or uncertain worker: normal isolated
+inventory/settlement rules remain mandatory. The lock probe returns every leased
+connection even if acquiring a later lease fails; failed rollback connections
+are discarded rather than returned as healthy.
+Receipt logs are fetched from the validated Pod, not reselected through its Job
+name. Pod/Job UIDs are checked again after log capture, and the immutable code
+ConfigMap UID is checked across the complete window. Probe command, arguments,
+environment and code-volume/mount identity must also match the requested worker;
+an unchanged image alone does not prove the intended test ran. Local and Kubernetes
+runners use one per-worker receipt validator for role, schema, run ID, completed
+rounds and the candidate's lock proof. During lock contention, both DDL and reader
+rejections are observed immediately, even if the reader connection fails first;
+leases are released only after the accepted queries settle.
+
+The reviewed behavioral matrix currently covers **17 → 18**, because that change
+touches recording metadata. It does not certify arbitrary changes to projects,
+publication, schedules or third-party SQL. Future expands must extend the matrix
+with their affected repositories and data, then receive their own exact-image
+qualification. New certificate creation and rolling admission reject missing,
+partial or image-mismatched proof; historical manifests stay readable for lineage
+and maintenance recovery. Unchanged-schema releases do not need another DB probe.
+
+For future changes: first add backward-readable structures, retain the old write
+representation while mixed versions serve, switch usage in a later compatible
+release, and remove obsolete structures only after no supported reader/writer
+needs them. A destructive rewrite or unproven representation change requires
+maintenance, not `rollingSafe: true` merely to bypass that route.
+
+Local verification: build the API, run `managed-workflow-schema-migrations.test.ts`,
+then `yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs`.
+The existing managed CI lane runs the real PostgreSQL migration/lock tests; no
+new CI job or cloud rehearsal is added. To exercise the same workers locally,
+set `RIVET_SCHEMA_PREDECESSOR_IMAGE` and `RIVET_SCHEMA_CANDIDATE_IMAGE` to cached
+immutable image IDs (17 and 18). The schema gate creates its own loopback-only DB
+and internal network, runs both participants, and removes only those resources.
+Optional `RIVET_SCHEMA_PREDECESSOR_MODULES`/`RIVET_SCHEMA_CANDIDATE_MODULES` mount
+compiled diagnostic source trees; such a run is explicitly **not exact-release
+image qualification**. The local review used historical source `f6dcd0ce9` and the
+current compiled candidate this way, separately from the actual PostgreSQL gate.
+
+Customer execution continuity and developer editing remain separate contracts.
+These DB checks neither enable `singleton-overlap` nor qualify its placement,
+exclusive housekeeping or editor-session behavior on GKE. See
+[developer backend overlap](developer-backend-overlap.md) for the still-required
+provider qualification, resource budget and approved bridge/adoption procedure.
+
 ## Schema 18 recording cost metadata
 
 Schema 18 adds nullable `workflow_recordings.cost_json` for root-run AI estimates.
@@ -190,6 +317,116 @@ repair and a passing local test suite are not a GKE certificate or a new staging
 waiver. This procedure does not enable backend overlap or change DB capacity.
 
 ## Rolling versus maintenance
+
+### Prepare before replacement
+
+`lib/ha-rollout-preparation.mjs` is the rolling runner's bounded preparation
+stage. It executes under the existing shared release lease, after baseline and
+backup acceptance but **before candidate Helm templates**, routing withdrawal or
+admission fencing. It does not introduce another deployment controller or enable
+a different control-plane mode.
+
+For each application workload it creates a short-lived, immutable-image Job.
+At most three independent Jobs run concurrently; retirement remains serial.
+The first preparation failure closes the queue to new Jobs. Already accepted
+children still settle, and cleanup continues across every recorded intent.
+The invocation deadline also closes new admission, including a final check after
+the intent checkpoint and namespace read, immediately before CREATE. Expiry does
+not authorize replay of an already recorded intent or abandon accepted children.
+Each Job uses the candidate's node selectors, tolerations, scheduler, required
+affinity and topology policy, with a non-serving `prepare-ROLE` component label.
+The topology selector includes that probe label alongside real peers so the
+scheduler counts its additional slot. Any rendered Service/controller selector
+that would select a probe is rejected before creation. Execution discovery, HPA
+and public routing do not treat these Jobs as serving capacity.
+
+Non-serial probes request a conservative declared candidate footprint, including
+init-container peaks, restartable init sidecars and pod overhead. The native
+scheduler checks CPU, memory, ephemeral storage and pod slots while healthy old
+pods continue serving; normal cluster autoscaling may provision capacity within
+its existing limits. This does not change quota, node-pool policy, replica ceilings
+or database connection budgets. During preparation, budget up to **three temporary
+candidate-sized reservations**, not three executing application replicas. These
+reservations disappear after preparation and are not a permanent pod-count change.
+
+Serial singleton/maintenance owners instead warm images on their existing node
+with only the positive increase in replacement requests (minimum 10m CPU/16Mi
+memory/16Mi ephemeral storage): they cannot pretend to test a second storage owner.
+This optimization does not make singleton backend
+replacement uninterrupted. That requires the separately approved bridge/adoption
+procedure in [developer backend overlap](developer-backend-overlap.md), including
+its claim, ownership and connection-budget checks. The deployment command must
+not silently switch modes or overlap an ownership-unaware backend.
+The serial source is ordinal zero of the exact captured controller UID/kind,
+not the first Pod whose owner's mutable name happens to match.
+
+The Jobs run only `/bin/sh -ec 'exit 0'` in the release's digest-pinned images,
+including sidecar/init images. They copy registry pull-secret **references**, not
+credentials or application settings. They mount no saved-data volumes and copy
+no application env, Vault injection annotations or ServiceAccount token. Custom
+runtime classes, host networking/ports, extended resources and unknown topology
+selectors require an explicit reviewed policy rather than an optimistic guess.
+
+Success requires the exact Job UID, a successful owned Pod with the requested
+configuration, and an identified Ready node. CPU/memory quantities compare by
+meaning, not their API spelling (`1000m` and `1` are equal). Image warming is a
+cache optimization and the scheduling check is **not a future reservation**:
+node loss, eviction, later competing demand, or a replacement scheduled elsewhere
+can still cause cold startup. Actual candidate readiness and fresh headroom remain
+mandatory before old-owner withdrawal. Long accepted work still delays retirement;
+no timeout aborts it to satisfy a deployment-speed target.
+
+Preparation is journaled in `preparation:{protocol:1,digest,namespaceUid,state,jobs}`.
+Every CREATE/DELETE intent precedes its command. Cleanup uses Job UID plus
+resourceVersion and foreground garbage collection, then separately verifies
+recorded Pod UIDs/Job-owned children absent; known identities remain in
+the journal. Job retry is disabled, execution is bounded at five minutes and a
+ten-minute post-finish TTL is an independent orphan backstop, not cleanup evidence.
+No templates are applied until acknowledged preparation and verified cleanup.
+Recovery validates the complete required Job set and completion facts, not just
+a `complete` state or digest. A completed receipt is rechecked against actual Job
+absence as well as child absence, without deleting an unexpected surviving Job.
+Prepared-node identity/readiness is checked after cleanup, including on recovery,
+before preparation may report success; pre-cleanup readiness alone is insufficient.
+Child checks always use the latest journal row:
+when an uncertain CREATE is inspected and its UID recovered, that UID immediately
+becomes part of orphan detection. A lost response plus an orphaned Pod therefore
+cannot be mistaken for completed cleanup.
+
+Before and after each preparation CREATE/DELETE, the runner rereads the namespace
+and requires the original UID and non-terminating lifetime. Kubernetes does not
+provide an atomic namespace-UID precondition for child CREATE; replacement during
+the request is detected afterwards and blocks continuation/cleanup in the changed
+namespace. This is detection, not permission to adopt or delete foreign resources.
+
+On a lost response, exact-token recovery observes that Job and its recorded
+ownership/configuration. It never resends an uncertain CREATE or DELETE, retargets
+a same-name replacement, or infers image readiness from a Job name. An unfinished
+cleanup retains the operation for inspected recovery; neither the new controller
+nor the runner may auto-close such a preflight. A cleaned failed preparation can
+close as aborted-before-templates, leaving the installed version serving. Older
+installed controllers may release an expired preflight without understanding this
+field; bounded Jobs/TTL and private retained journal artifacts remain backstops,
+not permission for the expired runner to keep writing.
+The new controller also accepts monotonic growth against the journal's exact
+installed-predecessor image/manifest while preparation is in `preflight`, retaining
+the same workload UID, policy digest and approved cap. It never claims or erases
+the deployment journal. Older installed controllers do not gain this behavior from
+a tooling update; retain that limitation in the exact-predecessor qualification.
+
+Operators need namespace-scoped batch Job create/get/delete, Pod get/list and Node
+get permissions in addition to existing rollout capabilities. Inspect exact Job
+names/UIDs from the private `ha-rollout.json`, then their scheduler/image-pull
+conditions and owned Pod/node. Preserve unknown writes and resume using the exact
+deployment token; do not delete by prefix or restart the upgrade under a new token
+while preparation ownership remains unresolved.
+
+Local checks: `ha-rollout-preparation.test.mjs`, `ha-rolling-upgrade.test.mjs`,
+`execution-autoscaler.test.mjs`, and the real rolling deployment-command regression
+cover parallelism, image/capacity failures, response loss, replacement identities,
+cleanup and preservation of routing/drain behavior. HTTP/Helm stand-ins are not
+native scheduling or GKE throughput evidence; provider qualification must exercise
+the exact candidate's new preparation path before a production rolling release.
 
 Ordinary rolling upgrades retain exact installed-predecessor qualification.
 `release-manifest:production` is a publication pointer, **not a record of what a
@@ -710,14 +947,14 @@ retry, image rollback, backup restore or skipped failed check is introduced.
 
 Implementation ownership stays within `deploy/studio-server/scripts/`:
 
-| Owner | Responsibility |
-| --- | --- |
-| `deploy-kubernetes-release.mjs` | Select the complete route and coordinate the shared final-configuration checks. |
-| `lib/managed-release-cutover.mjs` | Own maintenance phases, final-apply intent/acknowledgement and exact-token recovery. |
-| `lib/maintenance-deployment-plan.mjs` | Validate explicit approvals, frozen metadata/artifacts and restored-copy migration proof. |
-| `lib/deployment-readiness.mjs` | Compare approved manifests, live execution settings and retained identities. |
-| `lib/kubernetes-release-settlement.mjs` | Own replica bounds, stable health observation and its final freshness/identity check. |
-| `lib/ha-scenario-evidence.mjs` | Assemble independent exact-run qualification observations; never turn a maintenance waiver into a certificate. |
+| Owner                                   | Responsibility                                                                                                 |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `deploy-kubernetes-release.mjs`         | Select the complete route and coordinate the shared final-configuration checks.                                |
+| `lib/managed-release-cutover.mjs`       | Own maintenance phases, final-apply intent/acknowledgement and exact-token recovery.                           |
+| `lib/maintenance-deployment-plan.mjs`   | Validate explicit approvals, frozen metadata/artifacts and restored-copy migration proof.                      |
+| `lib/deployment-readiness.mjs`          | Compare approved manifests, live execution settings and retained identities.                                   |
+| `lib/kubernetes-release-settlement.mjs` | Own replica bounds, stable health observation and its final freshness/identity check.                          |
+| `lib/ha-scenario-evidence.mjs`          | Assemble independent exact-run qualification observations; never turn a maintenance waiver into a certificate. |
 
 New deployment modes should reuse these owners. Do not add another environment
 normalizer, capacity parser, write-retry loop or operation-specific safety bypass.
@@ -912,6 +1149,38 @@ a new checkpoint, including writes accepted during a partially completed resume.
 `--dry-run` performs offline source/chart/render checks. It does not read the live
 release, prove ownership/capacity, create a backup, or authorize a later run.
 
+## Fresh maintenance ownership claim
+
+The maintenance strategy rereads journal admission **after** workload inventory,
+immediately before its first ownership write. Inventory can overlap an idle
+autoscaler sampling tick; using the earlier resourceVersion would incorrectly
+reject a valid deployment before downtime. Both a completed cutover journal and
+a completed foreign-kind autoscaler journal use this fresh observation. The
+existing Kubernetes adapter retains the raw journal's CAS version even when the
+strategy sees no pending cutover.
+
+Across preparation and the final read, retain the original journal UID, release,
+namespace, manifest, policy and protocol bindings. A disappeared/replaced journal,
+changed binding or different non-sampling owner blocks admission. Completed
+autoscaler sampling may advance its token, runner and version, but an unfinished
+intent or active operation cannot be taken over. The existing bounded GET-only
+wait for an idle sampling lease remains supported. Check approval expiry again
+after the read/wait; an expired fresh attempt cannot acquire ownership.
+
+The claim is still one CAS, not a retry loop. A sampling tick after the final
+read can legitimately win that CAS. A conflict or lost response stops before
+workload changes and retains the proposed token for explicit inspection; never
+assume a failed reply means the journal was not written. Exact-token recovery,
+backup, schema and baseline checks remain unchanged. No operation-specific
+loader, release hash or cluster identity is required by the permanent fix.
+
+Local regressions exercise inventory-time sampling through the actual CLI with
+strict Helm/Kubernetes stand-ins, then inject a last-moment CAS conflict and a
+lost accepted-claim acknowledgement. They require one write and no workload
+mutation on either failure. Focused tests cover same-kind refresh, identity and
+policy drift, unfinished work, failed reads and approval expiry during refresh.
+These are local tooling checks, not production deployment or GKE qualification.
+
 ## Frozen recovery adapter
 
 After the journal is owned, release autoscalers and admission stop, and all old
@@ -986,6 +1255,30 @@ confirmation. Unconfirmed shutdown blocks installation and requires the operator
 to settle those children before recovery. The reviewed adapter must still settle
 any detached daemons or remote jobs itself; OS process-tree termination is not
 proof about such work.
+On POSIX, successful `kill(-pgid, SIGKILL)` acknowledges signal delivery, not
+completed shutdown. After signalling the exact freshly owned group, the tool
+uses bounded `ps -axo pgid=,stat=` snapshots until no live member remains and
+the adapter has closed. Suspended (`T`) members still block; terminal zombies
+may await their parent's reaper but cannot continue backup writes. Other groups
+are ignored and never killed. Missing/failed/malformed process inspection or a
+hung inspector produces **unconfirmed shutdown**, not permission to recover;
+the same five-second deadline bounds and stops the current inspector. The host
+must provide a compatible `ps`. Windows retains exact-PID `taskkill /T /F` and
+requires its acknowledged result plus adapter closure.
+The regression suite covers delayed child death after parent closure, terminal
+versus suspended members, unrelated groups and failed/hung inspections, alongside
+the real listener/late-write regression. No backup or migration write is retried.
+Local verification (2026-10-28): the combined maintenance/operation/cutover/CI
+set passes 121 tests on offline Linux Node 24.21.0, and the real child-listener
+case passes ten consecutive runs. Windows passes the 31 maintenance and 14 CI
+tests. Retained local logs are `artifacts/ci-maintenance-support-linux.log`,
+`artifacts/ci-maintenance-windows-final.log` and `artifacts/ci-history-windows-final.log`.
+The real-process shutdown regression gates child writes on an explicit recovery
+signal sent only after confirmed shutdown. It also requires the child's verified
+loopback listener to refuse connections; a connection timeout cannot prove exit.
+Do not assert that a child must stop before an arbitrary wall-clock write timer:
+on loaded Windows hosts, tree termination may legitimately take longer while
+recovery remains blocked.
 
 ## Validation and honest completion
 
@@ -1073,6 +1366,17 @@ a unique workspace; a fresh checkout must not depend on earlier local diagnostic
 previous CI step. The missing-parent/concurrent-allocation regression starts
 with an empty temporary checkout. Cleanup removes only the exact fixture child,
 never the shared artifacts parent or another operation's diagnostics.
+Independent CLI journeys run in a suite capped at three concurrent cases. They
+never share a fixture checkout, state lock, simulated clock or child process;
+commands and interruption/recovery assertions within each case remain sequential.
+This bounds CI wall time without weakening deadlines, skipping safety scenarios
+or changing the production deployment runner.
+The repository-contract lane separately prepares only pinned migration Git
+evidence after a shallow checkout, using `scripts/ci/prepare-migration-history.mjs`.
+It retains the complete source/import/consolidation ledger validation without
+downloading every historical branch and tag. The helper fails closed on missing
+trees or identity mismatch and never changes the checked-out release. See
+[Build and CI](../BUILD-AND-CI.md) for deadlines and local regression coverage.
 Git admission, immutable manifest validation, argument parsing,
 private backup/acceptance adapter subprocesses and real Helm lint/render run
 normally. A test-only Node preload maps exactly the selected Helm/kubectl

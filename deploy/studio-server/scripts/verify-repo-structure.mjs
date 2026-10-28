@@ -297,7 +297,7 @@ for (const markdownPath of [
 const verifyWorkflow = readText('.github/workflows/studio-server-verify.yml');
 assert.match(verifyWorkflow, /pull_request:\r?\n\s+branches:\r?\n\s+- develop/);
 assert.doesNotMatch(verifyWorkflow, /codex\/import-studio-server/);
-assert.match(verifyWorkflow, /Check Out Repository[\s\S]*fetch-depth: 0/);
+assert.match(verifyWorkflow, /Prepare migration Git evidence[\s\S]*node scripts\/ci\/prepare-migration-history\.mjs/);
 assert.match(verifyWorkflow, /workflow_call:/);
 assert.match(verifyWorkflow, /run-api-tests\.mjs --shard-index/);
 

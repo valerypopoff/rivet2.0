@@ -4,8 +4,13 @@ import {
   assertStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
 } from './studio-server-release-manifest.mjs';
-import { assertRuntimeControlEvidence, assertRuntimeAutoscalingEvidence } from './ha-release-evidence.mjs';
+import {
+  assertRuntimeControlEvidence,
+  assertRuntimeAutoscalingEvidence,
+  assertCooperativeAutoscalingEvidence,
+} from './ha-release-evidence.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
+import { assertSchemaCompatibilityEvidence } from './schema-compatibility-probe.mjs';
 
 /** Publication consumes an existing successful main build; it never rebuilds
  * images, runs GCP tests, or turns a local functional report into a certificate.
@@ -74,11 +79,9 @@ function declaration(value, kind) {
   return value;
 }
 
-export function prepareRuntimeQualification({
+export function assertRuntimeQualificationArtifacts({
   candidate: input,
   promoted: built,
-  control,
-  autoscaling,
   repository,
   sourceSha,
   build,
@@ -98,24 +101,45 @@ export function prepareRuntimeQualification({
   assert.equal(promoted.evidence.promotion.runId, build.runId);
   assert.equal(promoted.evidence.promotion.runAttempt, build.runAttempt);
   assert.ok(promoted.evidence.ha, 'Ordinary HA qualification must already have passed');
+  const from = candidate.lineage?.predecessor?.managedWorkflowSchemaVersion;
+  if (from !== candidate.database.managedWorkflowSchema.version)
+    assertSchemaCompatibilityEvidence(promoted.evidence.ha.schemaCompatibility, candidate, from);
   assert.ok(
     !promoted.evidence.runtimeControl && !promoted.evidence.runtimeAutoscaling,
     'This build is already qualified; inspect the existing publication instead of replacing it',
   );
   assert.match(candidate.lineage?.predecessor?.manifestDigest ?? '', /^sha256:[a-f0-9]{64}$/);
+  return { candidate, promoted };
+}
+
+export function prepareRuntimeQualification(input) {
+  const { candidate, promoted } = assertRuntimeQualificationArtifacts(input);
+  const { control, autoscaling } = input;
   const c = declaration(control, 'control'),
     a = declaration(autoscaling, 'autoscaling');
   for (const key of ['operationId', 'projectId', 'projectNumber'])
     assert.equal(c[key], a[key], 'Provider operations differ');
   const runtimeControl = assertRuntimeControlEvidence(c.evidence, candidate, 'compact');
-  assert.ok(runtimeControl.edgeProfiles.includes('regional'), 'Forward/reverse regional transfer is required');
+  if (runtimeControl.protocol === 1)
+    assert.ok(
+      runtimeControl.edgeProfiles.includes('regional'),
+      'Forward/reverse regional transfer is required for adoption',
+    );
   assert.deepEqual(
     Object.keys(a.policy).sort(),
     Object.keys(autoscalerPolicy({})).sort(),
     'Declare the complete scaling policy',
   );
   const policy = autoscalerPolicy(a.policy);
-  const runtimeAutoscaling = assertRuntimeAutoscalingEvidence(a.evidence, candidate, autoscalerPolicyDigest(policy));
+  const runtimeAutoscaling = (
+    runtimeControl.protocol === 2 ? assertCooperativeAutoscalingEvidence : assertRuntimeAutoscalingEvidence
+  )(a.evidence, candidate, autoscalerPolicyDigest(policy));
+  if (runtimeControl.protocol === 2)
+    assert.equal(
+      runtimeControl.autoscalerPolicyDigest,
+      runtimeAutoscaling.policyDigest,
+      'Ordinary upgrade policy differs from autoscaling qualification',
+    );
   return {
     candidate: assertStudioServerReleaseManifest({
       ...candidate,

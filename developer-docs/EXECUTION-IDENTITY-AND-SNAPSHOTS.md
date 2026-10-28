@@ -64,6 +64,16 @@ events establish routing; identified root terminals finish display, and late chi
 events cannot resurrect it. Browser fences remain until actual processor settlement;
 Node completed display metadata is bounded separately. Active roots are not evicted.
 
+Canvas history is scoped to the newest displayed local root, not all historical
+calls to that project. Its router-owned, runtime-only display identity combines
+root admission order with source/receiver binding tokens and survives processor
+settlement. A new source run clears its previous receivers, including a dependency
+it now skips; first participation resets other eligible old canvas evidence once.
+Repeated calls within that same root remain selectable. Superseded roots cannot
+repaint or displace a newer display, even if their first child arrives late.
+The canonical snapshot owns the reset data; no additional saved identity field
+is added. Bounded Run Activity history remains separate from this canvas policy.
+
 The frozen baseline's LOC-01–08 describe the preserved behavior. Its GAP-01–05
 record pre-refactor differences, not the current implementation backlog.
 [Execution coordination](./EXECUTION-COORDINATION.md) describes the implemented

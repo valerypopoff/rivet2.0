@@ -32,6 +32,8 @@ import { createBlankProjectWithDefaultGraph } from '../utils/blankProject.js';
 import { captureProjectExecutionSnapshot } from './projectExecutionSnapshotBindings.js';
 import { useBundleExecutionRouting } from './useBundleExecutionRouting.js';
 import { projectBindingRegistryState } from '../state/projectBindings.js';
+import { getGraphRunsForView } from '../state/selectors/executionSelectors.js';
+import { createRootGraphViewContext } from '../domain/graphEditing/navigationActions.js';
 
 // Mount only the real routing hook. Workspace IO/activation integration remains
 // in useLoadProject.test.tsx and the real hosted/desktop Playwright scenarios.
@@ -94,6 +96,7 @@ async function mountRouting(t: TestContext, ingressCount = 1) {
   });
   let route!: ReturnType<typeof useBundleExecutionRouting>;
   const refs = new Map<string, DataValue>();
+  let onRefDelete: ((key: string) => void) | undefined;
   const providers = {
     dataRefs: {
       get: (key: string) => refs.get(key),
@@ -102,6 +105,7 @@ async function mountRouting(t: TestContext, ingressCount = 1) {
       },
       delete: (key: string) => {
         refs.delete(key);
+        onRefDelete?.(key);
       },
     },
   };
@@ -185,6 +189,10 @@ async function mountRouting(t: TestContext, ingressCount = 1) {
     opened,
     graph,
     node,
+    refs,
+    onRefDelete(callback: (key: string) => void) {
+      onRefDelete = callback;
+    },
     rootExecution,
     child,
     begin,
@@ -209,6 +217,77 @@ async function mountRouting(t: TestContext, ingressCount = 1) {
   };
 }
 
+for (const active of [false, true])
+  for (const kind of ['browser', 'desktop-node', 'hosted-node'] as const)
+    test(`${kind}: ${active ? 'active' : 'inactive'} dependency history belongs only to the newest root`, async (t) => {
+      const f = await mountRouting(t);
+      if (active) f.activate(f.b.metadata.id);
+      let source = {};
+      const begin = (root: string) =>
+        f.route(
+          f.a.metadata.id,
+          'start',
+          {
+            execution: f.rootExecution(root),
+            project: f.a,
+            startGraph: f.graph(f.a.metadata.id),
+            inputs: {},
+            contextValues: {},
+          },
+          source,
+          kind,
+        );
+      const paint = (root: string, call: string) => {
+        const execution = f.child(root, f.b.metadata.id, call);
+        f.route(
+          f.a.metadata.id,
+          'graphStart',
+          { execution, graph: f.graph(f.b.metadata.id), inputs: {} },
+          source,
+          kind,
+        );
+        f.route(
+          f.a.metadata.id,
+          'nodeFinish',
+          {
+            execution,
+            node: f.node,
+            processId: call as ProcessId,
+            outputs: { ['output' as PortId]: { type: 'string', value: root } },
+          },
+          source,
+          kind,
+        );
+      };
+      const runs = () =>
+        getGraphRunsForView({
+          currentGraphView: createRootGraphViewContext(f.b.metadata.mainGraphId!),
+          graphRunHistoryByView: f.snapshot()!.graphRunHistoryByView,
+        });
+      begin('first');
+      paint('first', 'one');
+      paint('first', 'two');
+      assert.equal(runs().length, 2, 'multiple calls within a root remain selectable');
+      const first = f.snapshot();
+      begin('first');
+      assert.equal(f.snapshot(), first, 'duplicate root starts never clear the current run');
+      f.route.settle(source);
+      source = {};
+      begin('second');
+      assert.equal(runs().length, 0, 'new admission clears previously owned dependencies even before they run');
+      paint('second', 'three');
+      assert.deepEqual(
+        runs().map((r) => r.rootRunId),
+        ['second'],
+      );
+      assert.equal(f.history()![f.node.id]!.length, 1);
+      f.route.settle(source);
+      source = {};
+      begin('skipped');
+      assert.equal(runs().length, 0, 'a skipped dependency cannot show executions from a past root');
+      assert.deepEqual(f.history(), {});
+    });
+
 test('settled bundle roots release their terminal confirmations without consuming another root', async (t) => {
   const f = await mountRouting(t);
   const pendingSibling = 'pending-sibling' as RootRunId;
@@ -230,6 +309,256 @@ test('settled bundle roots release their terminal confirmations without consumin
     assert.deepEqual(f.snapshot()!.completedRootRunIds, [pendingSibling], 'settlement consumes only its exact root');
     f.assertOutput(f.b.metadata.id, run, 'retained output survives metadata cleanup');
   }
+});
+
+test('overlapping roots fence stale starts and outputs but settle their retained activity without changing the current canvas', async (t) => {
+  const f = await mountRouting(t);
+  f.begin('old');
+  f.paint(f.child('old'), 'old value');
+  f.begin('current');
+  f.paint(f.child('current'), 'current value');
+  const current = f.snapshot()!;
+  f.paint(f.child('old', f.b.metadata.id, 'late'), 'stale value');
+  assert.equal(f.snapshot(), current, 'superseded frames cannot even create activity rows');
+  f.end('old');
+  assert.equal(f.snapshot()!.lastRunDataByNode, current.lastRunDataByNode);
+  assert.equal(f.snapshot()!.graphRunHistoryByView, current.graphRunHistoryByView);
+  assert.equal(f.snapshot()!.runActivityJournal.rootsById['old' as RootRunId]!.status, 'completed');
+  f.assertOutput(f.b.metadata.id, 'current value', 'new root remains displayed after old settlement');
+});
+
+test('superseded roots still remember abort notices when settling their retained activity', async (t) => {
+  const f = await mountRouting(t);
+  for (const notice of ['abort', 'graphAbort'] as const) {
+    const old = `${notice}:old`;
+    const current = `${notice}:current`;
+    f.begin(old);
+    f.paint(f.child(old), 'old value');
+    f.begin(current);
+    f.paint(f.child(current), 'current value');
+    const before = f.snapshot()!;
+    const execution = f.rootExecution(old);
+    if (notice === 'graphAbort')
+      f.route(f.a.metadata.id, notice, { execution, graph: f.graph(f.a.metadata.id), successful: false });
+    else f.route(f.a.metadata.id, notice, { execution, successful: false });
+    assert.equal(f.snapshot(), before, 'an abort notice does not repaint or prematurely settle the old root');
+    f.route(f.a.metadata.id, 'error', { execution, error: 'cancelled' });
+    assert.equal(f.snapshot()!.runActivityJournal.rootsById[old as RootRunId]!.status, 'aborted');
+    assert.equal(f.snapshot()!.lastRunDataByNode, before.lastRunDataByNode);
+    assert.equal(f.snapshot()!.graphRunHistoryByView, before.graphRunHistoryByView);
+    f.end(current);
+  }
+});
+
+test('root termination fences reentrant child events before notifying settlement subscribers', async (t) => {
+  const f = await mountRouting(t);
+  for (const terminal of ['graphFinish', 'graphError', 'source settlement'] as const) {
+    const source = {};
+    const root = terminal;
+    const execution = f.rootExecution(root);
+    f.route(
+      f.a.metadata.id,
+      'start',
+      {
+        execution,
+        project: f.a,
+        startGraph: f.graph(f.a.metadata.id),
+        inputs: {},
+        contextValues: {},
+      },
+      source,
+    );
+    f.route(
+      f.a.metadata.id,
+      'graphStart',
+      {
+        execution: f.child(root),
+        graph: f.graph(f.b.metadata.id),
+        inputs: {},
+      },
+      source,
+    );
+    const before = f.snapshot(f.c.metadata.id);
+    let entered = false;
+    const stop = f.store.sub(projectExecutionSnapshotsState, () => {
+      if (entered || f.snapshot()!.runActivityJournal.rootsById[root as RootRunId]?.status === 'running') return;
+      entered = true;
+      f.route(
+        f.a.metadata.id,
+        'graphStart',
+        {
+          execution: f.child(root, f.c.metadata.id),
+          graph: f.graph(f.c.metadata.id),
+          inputs: {},
+        },
+        source,
+      );
+    });
+    try {
+      if (terminal === 'source settlement') f.route.settle(source);
+      else if (terminal === 'graphFinish')
+        f.route(f.a.metadata.id, terminal, { execution, graph: f.graph(f.a.metadata.id), outputs: {} }, source);
+      else f.route(f.a.metadata.id, terminal, { execution, graph: f.graph(f.a.metadata.id), error: 'failed' }, source);
+      assert.equal(entered, true, `${terminal}: settlement must exercise the subscriber`);
+      assert.equal(f.snapshot(f.c.metadata.id), before, `${terminal}: terminal callbacks cannot enroll another child`);
+    } finally {
+      stop();
+      f.route.settle(source);
+    }
+  }
+});
+
+test('a delayed first dependency event cannot displace a newer root, even after its receiver conflict ends', async (t) => {
+  const f = await mountRouting(t);
+  f.begin('delayed');
+  f.begin('newer');
+  f.paint(f.child('newer'), 'newer value');
+  const untouched = f.snapshot(f.c.metadata.id);
+  f.paint(f.child('delayed', f.c.metadata.id), 'late first visit');
+  assert.equal(f.snapshot(f.c.metadata.id), untouched, 'a superseded source cannot enroll an untouched receiver');
+  f.paint(f.child('delayed'), 'must not display');
+  f.store.set(projectExecutionSnapshotsState, (state) => ({
+    ...state,
+    [f.b.metadata.id]: { ...state[f.b.metadata.id]!, graphRunning: true },
+  }));
+  f.store.set(projectExecutionSnapshotsState, (state) => ({
+    ...state,
+    [f.b.metadata.id]: { ...state[f.b.metadata.id]!, graphRunning: false },
+  }));
+  const before = f.snapshot();
+  f.paint(f.child('delayed', f.b.metadata.id, 'after-conflict'), 'must stay rejected');
+  assert.equal(f.snapshot(), before);
+});
+
+test('new admission clears only its own prior participants, not another source or independently run project', async (t) => {
+  const f = await mountRouting(t);
+  f.begin('a-old');
+  f.paint(f.child('a-old'), 'from A');
+  const other = { ...f.rootExecution('c-root'), projectId: f.c.metadata.id, graphId: f.c.metadata.mainGraphId! };
+  f.route(f.c.metadata.id, 'start', {
+    execution: other,
+    project: f.c,
+    startGraph: f.graph(f.c.metadata.id),
+    inputs: {},
+    contextValues: {},
+  });
+  const target = { ...f.child('c-root'), parentGraphRunId: other.graphRunId };
+  f.route(f.c.metadata.id, 'graphStart', { execution: target, graph: f.graph(f.b.metadata.id), inputs: {} });
+  const fromC = f.snapshot();
+  f.begin('a-new');
+  assert.equal(f.snapshot(), fromC, 'another source keeps its current display until actually superseded');
+  f.store.set(projectExecutionSnapshotsState, (state) => ({
+    ...state,
+    [f.b.metadata.id]: { ...state[f.b.metadata.id]!, graphRunning: true },
+  }));
+  f.store.set(projectExecutionSnapshotsState, (state) => ({
+    ...state,
+    [f.b.metadata.id]: { ...state[f.b.metadata.id]!, graphRunning: false },
+  }));
+  const independent = f.snapshot();
+  f.begin('a-later');
+  assert.equal(f.snapshot(), independent, 'completed independent ownership is not mistaken for an A participant');
+});
+
+test('a newer admission during reset wins before the older child can paint', async (t) => {
+  const f = await mountRouting(t);
+  f.begin('first');
+  f.paint(f.child('first'), 'first');
+  let entered = false;
+  const stop = f.store.sub(projectExecutionSnapshotsState, () => {
+    if (!entered && Object.keys(f.history() ?? {}).length === 0) {
+      entered = true;
+      f.begin('newest');
+      f.paint(f.child('newest'), 'newest');
+    }
+  });
+  t.after(stop);
+  f.begin('middle');
+  f.paint(f.child('middle'), 'obsolete');
+  assert.equal(entered, true);
+  f.assertOutput(f.b.metadata.id, 'newest', 'reset subscribers cannot return ownership to the older root');
+});
+
+test('reset reference cleanup cannot overwrite a receiver closed and rebound during the callback', async (t) => {
+  const f = await mountRouting(t);
+  f.begin('initial');
+  f.paint(f.child('initial'), 'old');
+  f.refs.set('old-reference', { type: 'string', value: 'old' });
+  f.store.set(projectExecutionSnapshotsState, (snapshots) => ({
+    ...snapshots,
+    [f.b.metadata.id]: {
+      ...snapshots[f.b.metadata.id]!,
+      lastRunDataByNode: {
+        [f.node.id]: [
+          {
+            processId: 'old' as ProcessId,
+            data: {
+              outputData: {
+                ['output' as PortId]: {
+                  type: 'string',
+                  storage: 'ref',
+                  refId: 'old-reference',
+                  preview: { kind: 'summary', label: 'old' },
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+  }));
+  const replacement = { ...createEmptyProjectExecutionSnapshot(), lastRecording: 'replacement-recording' };
+  let cleanupCalled = false;
+  f.onRefDelete(() => {
+    cleanupCalled = true;
+    f.store.set(projectsState, (state) => {
+      const openedProjects = { ...state.openedProjects };
+      delete openedProjects[f.b.metadata.id];
+      return { ...state, openedProjects };
+    });
+    f.store.set(projectsState, (state) => ({
+      ...state,
+      openedProjects: { ...state.openedProjects, [f.b.metadata.id]: f.opened[f.b.metadata.id]! },
+    }));
+    f.store.set(projectExecutionSnapshotsState, (state) => ({ ...state, [f.b.metadata.id]: replacement }));
+  });
+  f.begin('during-rebind');
+  f.paint(f.child('during-rebind'), 'obsolete');
+  assert.equal(cleanupCalled, true, 'the reference cleanup must actually exercise the replacement callback');
+  assert.equal(f.snapshot(), replacement);
+});
+
+test('legacy root graphStart admission resets dependencies once while return calls preserve source controls', async (t) => {
+  const f = await mountRouting(t);
+  for (const root of ['one', 'two']) {
+    f.route(f.a.metadata.id, 'graphStart', {
+      graph: f.graph(f.a.metadata.id),
+      inputs: {},
+      execution: f.rootExecution(root),
+    });
+    f.paint(f.child(root), root);
+    f.route(f.a.metadata.id, 'graphStart', {
+      graph: f.graph(f.a.metadata.id),
+      inputs: {},
+      execution: f.rootExecution(root),
+    });
+    assert.equal(Object.values(f.snapshot()!.graphRunHistoryByView).flat().length, 1);
+    f.end(root);
+  }
+  f.begin('return');
+  f.store.set(projectExecutionSnapshotsState, (state) => ({
+    ...state,
+    [f.a.metadata.id]: {
+      ...createEmptyProjectExecutionSnapshot(),
+      graphRunning: true,
+      lastRecording: 'source-recording',
+    },
+  }));
+  f.paint(f.child('return'), 'B value');
+  f.paint(f.child('return', f.a.metadata.id, 'back-to-a'), 'return value');
+  f.assertOutput(f.a.metadata.id, 'return value', 'return call still paints the source');
+  assert.equal(f.snapshot(f.a.metadata.id)!.graphRunning, true);
+  assert.equal(f.snapshot(f.a.metadata.id)!.lastRecording, 'source-recording');
 });
 
 test('workspace disposal invalidates every captured binding while preserving retained output values', async (t) => {
@@ -467,7 +796,7 @@ test('passive local canvas rebases ancestry while Run Activity keeps the real cr
 });
 
 for (const complete of [true, false])
-  test(`${complete ? 'completed' : 'concurrent'} root pressure retains both blocked and eligible receivers`, async (t) => {
+  test(`${complete ? 'completed' : 'concurrent'} root pressure retains conflict fences without reviving superseded displays`, async (t) => {
     const f = await mountRouting(t);
 
     f.begin('held');
@@ -489,11 +818,14 @@ for (const complete of [true, false])
     f.paint(f.child('held', f.b.metadata.id, 'later'), 'blocked late');
     assert.deepEqual(f.snapshot(), before, 'the conflict fence must survive pressure');
     f.paint(f.child('held', f.c.metadata.id, 'later'), 'eligible late');
-    f.assertOutput(
-      f.c.metadata.id,
-      'eligible late',
-      'retained state must continue routing actual values, not merely create a new snapshot',
+    assert.deepEqual(
+      f.history(f.c.metadata.id),
+      {},
+      'an older root cannot repopulate a display cleared by a newer admission',
     );
+    f.begin('fresh-control');
+    f.paint(f.child('fresh-control', f.c.metadata.id), 'fresh value');
+    f.assertOutput(f.c.metadata.id, 'fresh value', 'current roots still route actual values under pressure');
   });
 
 test('every identified root terminal fences late child starts and completions without blocking future roots', async (t) => {

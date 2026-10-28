@@ -242,3 +242,84 @@ test('journal admission waits only on completed sampling and refuses busy, chang
   );
   await assert.rejects(readAvailableReleaseJournal({ ...options, timeoutMs: 0 }), /bounded positive timeout/);
 });
+
+test('claim refresh accepts only the original journal and bindings; completed sampling may advance its CAS version', async () => {
+  const previous = {
+    metadata: { name: 'journal', namespace: 'ns', uid: 'original', resourceVersion: '1' },
+    data: {
+      record: JSON.stringify({
+        autoscalingProtocol: 1,
+        release: 'rivet',
+        namespace: 'ns',
+        manifestDigest: 'installed',
+        policyDigest: 'policy',
+        phase: 'complete',
+        token: 'sample-1',
+        runner: 'sampler-1',
+        leaseExpiresAt: 99,
+      }),
+    },
+  };
+  const current = structuredClone(previous);
+  current.metadata.resourceVersion = '2';
+  current.data.record = JSON.stringify({
+    ...JSON.parse(previous.data.record),
+    token: 'sample-2',
+    runner: 'sampler-2',
+    lastSampleAt: 100,
+  });
+  const options = {
+    name: 'journal',
+    kind: 'cutover',
+    release: 'rivet',
+    namespace: 'ns',
+    timeoutMs: 100,
+    previousResource: previous,
+    now: () => 100,
+    kube: async () => ({ stdout: JSON.stringify(current) }),
+  };
+  assert.equal((await readAvailableReleaseJournal(options)).resource.metadata.resourceVersion, '2');
+  for (const edit of [
+    (r) => (r.metadata.uid = 'replacement'),
+    ...['manifestDigest', 'policyDigest', 'autoscalingProtocol', 'release', 'namespace'].map((field) => (r) => {
+      r.data.record = JSON.stringify({ ...JSON.parse(r.data.record), [field]: 'changed' });
+    }),
+    ...['scale', 'target', 'fence', 'fenceRepair', 'removal'].map((field) => (r) => {
+      r.data.record = JSON.stringify({ ...JSON.parse(r.data.record), [field]: { pending: true } });
+    }),
+    (r) => (r.data.record = JSON.stringify({ ...JSON.parse(r.data.record), phase: 'fencing' })),
+  ]) {
+    const changed = structuredClone(current);
+    edit(changed);
+    await assert.rejects(
+      readAvailableReleaseJournal({ ...options, kube: async () => ({ stdout: JSON.stringify(changed) }) }),
+    );
+  }
+  await assert.rejects(readAvailableReleaseJournal({ ...options, kube: async () => ({ stdout: '' }) }), /disappeared/);
+  await assert.rejects(
+    readAvailableReleaseJournal({ ...options, previousResource: null }),
+    /immutable identity changed/,
+  );
+  const absent = await readAvailableReleaseJournal({
+    ...options,
+    previousResource: null,
+    kube: async () => ({ stdout: '' }),
+  });
+  assert.equal(absent.resource, null);
+  assert.equal(previous.metadata.resourceVersion, '1', 'Refreshing cannot rewrite the previous observation');
+  const completed = { ...JSON.parse(previous.data.record), autoscalingProtocol: undefined, formatVersion: 1 };
+  const cutover = structuredClone(previous);
+  cutover.data.record = JSON.stringify(completed);
+  for (const field of ['token', 'runner']) {
+    const changed = structuredClone(cutover);
+    changed.data.record = JSON.stringify({ ...completed, [field]: 'different-owner' });
+    await assert.rejects(
+      readAvailableReleaseJournal({
+        ...options,
+        previousResource: cutover,
+        kube: async () => ({ stdout: JSON.stringify(changed) }),
+      }),
+      /owner changed/,
+    );
+  }
+});

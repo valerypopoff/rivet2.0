@@ -818,7 +818,8 @@ test('CI and production launchers publish and run the Studio Server image set fr
   assert.match(verificationWorkflow, /pull_request:\r?\n\s+branches:\r?\n\s+- develop/);
   assert.doesNotMatch(verificationWorkflow, /codex\/import-studio-server/);
   assert.match(verificationWorkflow, /node \.yarn\/releases\/yarn-4\.17\.1\.cjs install --immutable --immutable-cache/);
-  assert.match(verificationWorkflow, /Check Out Repository[\s\S]*fetch-depth: 0/);
+  // check-ci-workflows.mjs owns checkout depth and ordered migration-evidence
+  // preparation; this image contract must not prescribe a second history policy.
   assert.match(verificationWorkflow, /api-tests:[\s\S]*--shard-index \$\{\{ matrix\.shard \}\} --shard-count 4/);
   assert.match(verificationWorkflow, /host-compatibility:[\s\S]*studio-server:verify:host-compatibility/);
   assert.match(verificationWorkflow, /repository-contracts:[\s\S]*studio-server:verify:production-cutover/);

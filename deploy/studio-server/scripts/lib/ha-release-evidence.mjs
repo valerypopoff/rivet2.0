@@ -1,3 +1,6 @@
+import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
+import { assertSchemaCompatibilityEvidence } from './schema-compatibility-probe.mjs';
+
 export const HA_REQUIRED_CHECKS = [
   'two-ready-backends',
   'continuous-public-traffic',
@@ -37,6 +40,21 @@ export const HA_COMPACT_EDGE_CHECKS = [
   'compact-proxy-rolling-upgrade',
   'compact-proxy-eviction',
   'edge-profile-transition',
+];
+// Routine execution continuity is not a regional/control-topology adoption.
+// Keep v1 adoption receipts readable; v2 cannot authorize a topology change.
+export const HA_ORDINARY_RUNTIME_CHECKS = [
+  'compact-seven-baseline',
+  'continuous-public-traffic',
+  'published-web-app-traffic',
+  'two-ready-execution-owners',
+  'mixed-version-runtime-upgrade',
+  'accepted-run-recording-drain',
+  'retained-maintenance-data',
+  'published-runtime-without-developers',
+  'published-browser-oauth-actions',
+  'published-schedule-claims',
+  'autoscaler-active-through-upgrade',
 ];
 export const HA_AUTOSCALING_CHECKS = [
   'slot-and-cpu-scale-up',
@@ -122,9 +140,25 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     (expectedEdgeProfile !== undefined && !profiles.includes(expectedEdgeProfile))
   )
     throw new Error('Runtime HA evidence does not qualify the requested GKE edge profile.');
-  const required = [...HA_RUNTIME_CONTROL_CHECKS, ...(profiles.includes('compact') ? HA_COMPACT_EDGE_CHECKS : [])];
+  const ordinary = value?.protocol === 2;
   if (
-    value?.protocol !== 1 ||
+    ordinary &&
+    (value.purpose !== 'ordinary-upgrade' ||
+      !equal(profiles, ['compact']) ||
+      requireDeveloperOverlap ||
+      overlap ||
+      value.controlPlaneMode !== 'singleton' ||
+      !/^[a-f0-9]{64}$/.test(value.autoscalerPolicyDigest ?? '') ||
+      value.predecessorManifestDigest !== release.lineage?.predecessor?.manifestDigest)
+  )
+    throw Error(
+      'Ordinary runtime evidence is limited to the exact compact singleton predecessor and autoscaler policy.',
+    );
+  const required = ordinary
+    ? HA_ORDINARY_RUNTIME_CHECKS
+    : [...HA_RUNTIME_CONTROL_CHECKS, ...(profiles.includes('compact') ? HA_COMPACT_EDGE_CHECKS : [])];
+  if (
+    ![1, 2].includes(value?.protocol) ||
     value.candidateSourceSha !== release.source.sha ||
     !equal(value.candidateImages, release.images) ||
     value.chartDigest !== release.chart.contentDigest ||
@@ -144,7 +178,15 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
       'Singleton runtime HA requires its own exact mixed-image qualification; full-HA evidence does not suffice.',
     );
   return {
-    protocol: 1,
+    protocol: value.protocol,
+    ...(ordinary
+      ? {
+          purpose: 'ordinary-upgrade',
+          controlPlaneMode: 'singleton',
+          autoscalerPolicyDigest: value.autoscalerPolicyDigest,
+          predecessorManifestDigest: value.predecessorManifestDigest,
+        }
+      : {}),
     candidateSourceSha: value.candidateSourceSha,
     candidateImages: release.images,
     chartDigest: value.chartDigest,
@@ -229,6 +271,15 @@ const hasNotificationProof = (receipt) =>
 /** Build a certificate only from completed workload receipts and actual pod
  * replacement observations. Calling this with a checklist is not sufficient. */
 export function createHaReleaseEvidence(report, release, mode) {
+  if (
+    mode === 'mixed' &&
+    release.lineage?.predecessor?.managedWorkflowSchemaVersion !== release.database?.managedWorkflowSchema?.version
+  )
+    assertSchemaCompatibilityEvidence(
+      report.schemaCompatibility,
+      release,
+      release.lineage?.predecessor?.managedWorkflowSchemaVersion,
+    );
   const fail = () => {
     throw Error('HA behavioral report is incomplete; no certificate was created.');
   };
@@ -372,6 +423,7 @@ export function createHaReleaseEvidence(report, release, mode) {
       requestSamples: report.samples,
       failedRequests: 0,
       checks: [...HA_REQUIRED_CHECKS],
+      ...(report.schemaCompatibility ? { schemaCompatibility: report.schemaCompatibility } : {}),
       ...(mode === 'mixed'
         ? {
             predecessorSourceSha: release.lineage?.predecessor?.sourceSha,
@@ -407,6 +459,9 @@ export function assertHaReleaseEvidence(value, release) {
     throw new Error('HA compatibility evidence is incomplete or belongs to another candidate.');
   const previous = release.lineage?.predecessor;
   const browserContract = value.protocol === 3 ? assertBrowserContract(value.browserContract) : undefined;
+  const schemaCompatibility = value.schemaCompatibility
+    ? assertSchemaCompatibilityEvidence(value.schemaCompatibility, release, previous?.managedWorkflowSchemaVersion)
+    : undefined;
   if (
     value.mode === 'mixed' &&
     (!previous ||
@@ -425,6 +480,7 @@ export function assertHaReleaseEvidence(value, release) {
     failedRequests: 0,
     requestSamples: value.requestSamples,
     checks: [...required],
+    ...(schemaCompatibility ? { schemaCompatibility } : {}),
     ...(value.mode === 'mixed' ? { predecessorSourceSha: previous.sourceSha, predecessorImages: previous.images } : {}),
   };
 }
@@ -436,6 +492,13 @@ export function assertHaUpgradeEvidence(manifest, installed) {
       'Browser-continuous HA requires a v3 release certificate. Use a maintenance cutover for legacy HA.',
     );
   if (!installed) return;
+  assertOrdinaryRuntimeLayout(manifest.evidence?.runtimeControl, installed);
+  if (manifest.evidence?.runtimeControl?.protocol === 2)
+    assertCooperativeAutoscalingEvidence(
+      manifest.evidence.runtimeAutoscaling,
+      manifest,
+      manifest.evidence.runtimeControl.autoscalerPolicyDigest,
+    );
   // A larger destination does not qualify the smaller source while its owners
   // are still serving during the roll. Check this before the same-image shortcut.
   if (installed.availability?.gkeGatewayProfile === 'compact')
@@ -443,6 +506,9 @@ export function assertHaUpgradeEvidence(manifest, installed) {
   if (!installed.ha?.enabled) throw new Error('First HA conversion requires an explicit maintenance cutover.');
   if (!equal(evidence.browserContract, installed.release?.production?.browserContract))
     throw Error('Changing the supported browser contract or baseline requires maintenance, not rolling HA.');
+  const installedSchema = installed.release?.production?.database?.managedWorkflowSchemaVersion;
+  if (installedSchema !== manifest.database.managedWorkflowSchema.version)
+    assertSchemaCompatibilityEvidence(evidence.schemaCompatibility, manifest, installedSchema);
   const sameSource = installed.release?.production?.sourceSha === manifest.source.sha;
   const installedMatches = (images) =>
     Object.entries(images).every(
@@ -467,4 +533,115 @@ export function assertHaUpgradeEvidence(manifest, installed) {
           : 'Installed images differ from the mixed-version certificate.',
       );
   }
+}
+
+/** A routine certificate never grants first adoption or a different tier layout. */
+export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
+  if (proof?.protocol !== 2) return;
+  if (
+    !values?.ha?.enabled ||
+    values.ha.controlPlane?.mode !== 'singleton' ||
+    values.availability?.gkeGatewayProfile !== 'compact' ||
+    values.replicaCount?.backend !== 1 ||
+    values.replicaCount?.web !== 1 ||
+    !Number.isSafeInteger(values.replicaCount?.proxy) ||
+    values.replicaCount.proxy < 2 ||
+    values.replicaCount.proxy > 4 ||
+    !Number.isSafeInteger(values.replicaCount?.execution) ||
+    values.replicaCount.execution < 2 ||
+    values.replicaCount.execution > (values.autoscaling?.execution?.maxReplicas ?? 10) ||
+    values.autoscaling?.executionController?.enabled !== true ||
+    values.autoscaling.executionController.suspended === true ||
+    values.autoscaling.execution?.enabled !== false ||
+    values.autoscaling?.execution?.minReplicas !== 2 ||
+    values.autoscaling.proxy?.enabled !== true ||
+    values.autoscaling.proxy.minReplicas !== 2 ||
+    values.autoscaling.proxy.maxReplicas !== 4 ||
+    (values.autoscaling.proxy.targetCPUUtilizationPercentage ?? 75) !== 75 ||
+    (policyDigest && proof.autoscalerPolicyDigest !== policyDigest)
+  )
+    throw Error('Ordinary runtime evidence cannot authorize adoption, topology or autoscaler-policy changes.');
+  const execution = values.autoscaling.execution;
+  const controller = values.autoscaling.executionController;
+  const policy = Object.fromEntries(
+    Object.entries({
+      minReplicas: execution.minReplicas,
+      maxReplicas: execution.maxReplicas,
+      targetCpuPercent: execution.targetCPUUtilizationPercentage,
+      ...Object.fromEntries(
+        [
+          'targetSlotsPercent',
+          'stabilizationSeconds',
+          'cooldownSeconds',
+          'withdrawalSeconds',
+          'pollSeconds',
+          'metricsMaxAgeSeconds',
+        ].map((k) => [k, controller[k]]),
+      ),
+    }).filter(([, v]) => v !== undefined),
+  );
+  if (autoscalerPolicyDigest(policy) !== proof.autoscalerPolicyDigest)
+    throw Error('Ordinary runtime evidence autoscaler policy differs from the installed configuration.');
+}
+
+export function assertOrdinaryRuntimeResources(proof, resources) {
+  if (proof?.protocol !== 2) return;
+  const workloads = resources.filter((r) => ['StatefulSet', 'Deployment'].includes(r.kind));
+  const counts = { backend: 1, web: 1, proxy: 2, execution: 2, autoscaler: 1 };
+  if (
+    workloads.length !== 5 ||
+    Object.entries(counts).some(([role, count]) => {
+      const found = workloads.filter((r) => r.metadata.labels?.['app.kubernetes.io/component'] === role);
+      if (found.length !== 1) return true;
+      const replicas = found[0].spec.replicas;
+      return ['proxy', 'execution'].includes(role)
+        ? !Number.isSafeInteger(replicas) || replicas < count
+        : replicas !== count;
+    })
+  )
+    throw Error('Ordinary runtime qualification requires the unchanged seven-pod baseline.');
+  const backend = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'backend');
+  const modes =
+    backend.spec.template.spec.containers
+      .find((c) => c.name === 'backend')
+      ?.env?.filter((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE') ?? [];
+  if (modes.length !== 1 || modes[0].valueFrom || modes[0].value !== 'singleton')
+    throw Error('Ordinary runtime qualification cannot authorize a control topology change.');
+  const controller = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'autoscaler');
+  const configs =
+    controller.spec.template.spec.containers
+      .find((c) => c.name === 'autoscaler')
+      ?.env?.filter((e) => e.name === 'RIVET_AUTOSCALER_CONFIG') ?? [];
+  if (configs.length !== 1 || configs[0].valueFrom)
+    throw Error('Ordinary runtime qualification autoscaler policy changed.');
+  const policy = autoscalerPolicy(JSON.parse(configs[0].value).policy);
+  const execution = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'execution');
+  if (
+    policy.minReplicas !== 2 ||
+    policy.maxReplicas < 3 ||
+    execution.spec.replicas > policy.maxReplicas ||
+    autoscalerPolicyDigest(policy) !== proof.autoscalerPolicyDigest
+  )
+    throw Error('Ordinary runtime qualification autoscaler policy changed.');
+  const hpas = resources.filter((r) => r.kind === 'HorizontalPodAutoscaler');
+  const proxy = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'proxy');
+  if (
+    hpas.length !== 1 ||
+    hpas[0].spec.scaleTargetRef?.kind !== 'Deployment' ||
+    hpas[0].spec.scaleTargetRef?.apiVersion !== 'apps/v1' ||
+    hpas[0].spec.scaleTargetRef?.name !== proxy.metadata.name ||
+    hpas[0].spec.minReplicas !== 2 ||
+    hpas[0].spec.maxReplicas !== 4 ||
+    proxy.spec.replicas > 4 ||
+    !equal(hpas[0].spec.metrics, [
+      {
+        type: 'Resource',
+        resource: {
+          name: 'cpu',
+          target: { type: 'Utilization', averageUtilization: 75 },
+        },
+      },
+    ])
+  )
+    throw Error('Ordinary runtime qualification requires the unchanged proxy HPA policy.');
 }

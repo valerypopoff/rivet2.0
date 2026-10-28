@@ -1,0 +1,687 @@
+import assert from 'node:assert/strict';
+// test-style: fixture-read: Execute the local driver fixture and inspect only generated receipts/call logs, never production implementation text.
+import test from 'node:test';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import {
+  createStudioServerReleaseManifest,
+  promoteStudioServerReleaseManifest,
+  getStudioServerReleaseManifestDigest,
+} from './lib/studio-server-release-manifest.mjs';
+import {
+  qualificationOperation,
+  executeRuntimeQualification,
+  qualificationHash,
+  assertQualificationPreflight,
+} from './lib/runtime-qualification-execution.mjs';
+import {
+  verifyQualificationDriver,
+  qualificationDriverEnvironment,
+  providerPhaseProcess,
+} from './lib/runtime-qualification-driver.mjs';
+import {
+  inspectQualificationInstallation,
+  assertQualificationInstallationMatches,
+} from './lib/runtime-qualification-installation.mjs';
+import { prepareRuntimeQualification } from './lib/runtime-qualification-publication.mjs';
+import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import { HA_REQUIRED_CHECKS } from './lib/ha-release-evidence.mjs';
+const root = fileURLToPath(new URL('../../../', import.meta.url));
+const sha = 'a'.repeat(40),
+  repository = 'example/rivet';
+const evidence = { workflow: 'Build Images', runId: '123', runAttempt: 1 };
+function fixture() {
+  const imageSet = (prefix) =>
+    Object.fromEntries(
+      ['api', 'executor', 'proxy', 'web'].map((k, i) => [
+        k,
+        { repository: `registry.test/${prefix}/${k}`, digest: `sha256:${String(i + 1).repeat(64)}` },
+      ]),
+    );
+  const create = (source, images, predecessorRelease) =>
+    createStudioServerReleaseManifest({
+      rootDir: root,
+      source: { repository, ref: 'refs/heads/main', sha: source },
+      images,
+      candidateEvidence: evidence,
+      predecessorRelease,
+    });
+  const previous = promoteStudioServerReleaseManifest(create('b'.repeat(40), imageSet('old')), {
+    promotionEvidence: evidence,
+  });
+  const candidate = create(sha, imageSet('new'), previous);
+  const ha = {
+    protocol: 3,
+    mode: 'bootstrap',
+    candidateSourceSha: sha,
+    candidateImages: candidate.images,
+    chartDigest: candidate.chart.contentDigest,
+    failedRequests: 0,
+    requestSamples: 100,
+    checks: [...HA_REQUIRED_CHECKS],
+    browserContract: { protocol: 2, baseline: { sourceSha: sha, image: candidate.images.web } },
+  };
+  const promoted = promoteStudioServerReleaseManifest(
+    { ...candidate, evidence: { ...candidate.evidence, ha } },
+    { promotionEvidence: evidence },
+  );
+  const t = Date.now() - 120_000,
+    iso = (n) => new Date(t + n).toISOString();
+  const policy = {
+    minReplicas: 2,
+    maxReplicas: 4,
+    targetSlotsPercent: 60,
+    targetCpuPercent: 75,
+    stabilizationSeconds: 300,
+    cooldownSeconds: 60,
+    withdrawalSeconds: 60,
+    pollSeconds: 15,
+    metricsMaxAgeSeconds: 90,
+  };
+  const installed = {
+    scope: 'production-read-only',
+    observedAt: iso(0),
+    manifestDigest: getStudioServerReleaseManifestDigest(previous, { requirePromoted: true }),
+    images: previous.images,
+    schemaVersion: previous.database.managedWorkflowSchema.version,
+    namespaceUid: 'production-ns',
+    clusterUid: 'production-cluster',
+    valuesDigest: 'sha256:' + 'c'.repeat(64),
+    settingsDigest: 'sha256:' + 'd'.repeat(64),
+    controlPlaneMode: 'singleton',
+    edgeProfile: 'compact',
+    policyDigest: autoscalerPolicyDigest(policy),
+    policy,
+    baseline: { backend: 1, web: 1, execution: 2, proxy: 2, autoscaler: 1 },
+  };
+  const input = {
+    candidate,
+    previous,
+    installed,
+    policy,
+    operationId: 'rivet-q-456-1',
+    now: t,
+    approval: {
+      enabled: true,
+      projectId: 'isolated-project',
+      projectNumber: '123456789',
+      maxUsd: 50,
+      maxSeconds: 7200,
+      driverBundleSha256: 'e'.repeat(64),
+      staging: {
+        mode: 'reusable-cluster',
+        clusterUid: 'isolated-cluster',
+        clusterServer: 'https://isolated.gke.goog',
+        gatewayUid: 'shared-staging-gateway',
+      },
+    },
+  };
+  const operation = qualificationOperation(input);
+  const bound = {
+    protocol: 1,
+    operationId: operation.operationId,
+    inputHash: operation.inputHash,
+    projectId: operation.projectId,
+    projectNumber: operation.projectNumber,
+  };
+  const owned = [
+    {
+      id: 'exact-new-cloud-id',
+      kind: 'namespace',
+      operationId: operation.operationId,
+      projectNumber: operation.projectNumber,
+      newlyCreated: true,
+      billable: true,
+    },
+  ];
+  const window = { ...bound, startedAt: iso(1000), finishedAt: iso(2000), outcome: 'passed' };
+  const autoscale = { policyDigest: operation.policyDigest, sampleAt: t + 1500 };
+  const facts = {
+    armExpiry: {
+      ...bound,
+      stagingClusterUid: 'isolated-cluster',
+      expiresAt: operation.expiresAt,
+      maxUsd: operation.maxUsd,
+      billableActivation: false,
+      identity: 'exact-independent-watchdog',
+      armed: true,
+      independent: true,
+    },
+    prepare: {
+      ...bound,
+      stagingClusterUid: 'isolated-cluster',
+      inventoryComplete: true,
+      expiryIdentity: 'exact-independent-watchdog',
+      inventory: owned,
+    },
+    upgrade: {
+      ...window,
+      qualification: 'isolated-provider',
+      purpose: 'ordinary-upgrade',
+      predecessorManifestDigest: operation.predecessorManifestDigest,
+      candidateSourceSha: sha,
+      candidateImages: candidate.images,
+      chartDigest: candidate.chart.contentDigest,
+      policyDigest: operation.policyDigest,
+      initialApplicationPods: 7,
+      finalApplicationPods: 7,
+      workflow: { samples: 200, failures: [] },
+      web: { samples: 100, failures: [] },
+      readiness: { samples: 100, minimumReady: { execution: 2, proxy: 2 } },
+      storageIdentityPreserved: true,
+      outcomes: {
+        acceptedWork: [0, 1].map((i) => ({
+          uid: `pod-${i}`,
+          recordingId: `recording-${i}`,
+          workflowId: 'owned-background-workflow',
+          recordingLookup: {
+            workflowId: 'owned-background-workflow',
+            totalRuns: i + 1,
+            hasMore: false,
+            matches: [{ id: `recording-${i}`, status: 'succeeded' }],
+          },
+        })),
+        initialAutoscaler: autoscale,
+        autoscaler: autoscale,
+        finalAutoscaler: autoscale,
+        maintenanceArchivePreserved: true,
+        independence: { coldProxyReplacement: true, browserOAuthAction: true, publishedScheduleRecording: true },
+      },
+    },
+    autoscaling: {
+      ...window,
+      startedAt: iso(2000),
+      finishedAt: iso(3000),
+      workflow: { samples: 800, failures: [] },
+      web: { samples: 200, failures: [] },
+      source: sha,
+      policy,
+      policyDigest: operation.policyDigest,
+      finalApplicationPods: 7,
+      cooperative: {
+        active: { from: 2, to: 3, token: 'same', ownerUid: 'owner' },
+        paused: {
+          from: 3,
+          to: 4,
+          token: 'same',
+          ownerUid: 'owner',
+          scaleDownSuppressedMs: 360000,
+          acceptedWorkRecorded: true,
+        },
+        resumedSameToken: true,
+        finalExecutionReplicas: 2,
+        developerReplicasUnchanged: true,
+      },
+      capacity: {
+        peak: { replicas: 4 },
+        actualProviderHosts: [0, 1, 2, 3].map((i) => ({
+          node: `node-${i}`,
+          podUid: `uid-${i}`,
+          providerId: `gce://isolated-project/zone/node-${i}`,
+        })),
+        automaticallyReturnedToTwo: true,
+      },
+      cpu: { separateCpuGrowth: true, developerReplicasUnchanged: true, from: 2, to: 3 },
+      drain: {
+        higherUidPreserved: 'uid',
+        longCorrelation: 'correlation',
+        retirementOperationId: 'retire',
+        incarnation: 'process',
+        busyEvictionRejected: true,
+        sameOperationRecovered: true,
+        concurrentDeploymentRejected: true,
+        acceptedWorkRecorded: true,
+      },
+      metrics: ['metrics-missing', 'metrics-stale'].map((mode) => ({
+        mode,
+        observations: 2,
+        capacityUnchangedForMs: 300000,
+        lowDemandWindowReset: true,
+      })),
+      lostAck: { sameTransitionDispatches: 1, acceptedScale: { state: 'accepted-response-suppressed' } },
+      proxyHpa: { manuallyChangedReplicas: false, developerReplicasUnchanged: true, readyUids: ['a', 'b', 'c', 'd'] },
+      accepted: [{ count: 1, responses: [{ status: 200, correlationId: 'r' }], recordings: { r: 'recording' } }],
+    },
+    settle: { ...bound, writersStopped: true, acceptedWorkSettled: true, inventoryComplete: true, inventory: owned },
+    cleanup: bound,
+    verifyCleanup: {
+      ...bound,
+      inventoryComplete: true,
+      inventoryHash: qualificationHash(owned),
+      resources: [{ id: owned[0].id, state: 'absent' }],
+      uncertainWrites: 0,
+    },
+  };
+  return { input, operation, facts, promoted, now: () => t + 3000 };
+}
+function driver(f, fail) {
+  const calls = [];
+  return {
+    calls,
+    api: Object.fromEntries(
+      Object.keys(f.facts).map((phase) => [
+        phase,
+        async () => {
+          calls.push(phase);
+          if (phase === fail) throw Error('PRIVATE-TEST-CREDENTIAL');
+          return structuredClone(f.facts[phase]);
+        },
+      ]),
+    ),
+  };
+}
+
+test('operation freezes exact inputs and cannot qualify another installation, budget, bundle or expired snapshot', () => {
+  const f = fixture();
+  assert.ok(Object.isFrozen(f.operation.candidate.images));
+  f.input.policy.maxReplicas = 5;
+  assert.equal(f.operation.policy.maxReplicas, 4);
+  for (const change of [
+    (x) => {
+      x.approval.enabled = false;
+    },
+    (x) => {
+      x.approval.projectId = 'wartime-storyteller';
+    },
+    (x) => {
+      x.installed.manifestDigest = 'sha256:' + '1'.repeat(64);
+    },
+    (x) => {
+      x.installed.observedAt = '2020-01-01T00:00:00Z';
+    },
+    (x) => {
+      x.approval.maxUsd = NaN;
+    },
+    (x) => {
+      x.approval.driverBundleSha256 = '';
+    },
+    (x) => {
+      x.approval.staging.clusterUid = 'production-cluster';
+    },
+  ]) {
+    const input = structuredClone(fixture().input);
+    change(input);
+    assert.throws(() => qualificationOperation(input));
+  }
+});
+
+test('actual phase sequencing compiles existing publication evidence only after exact cleanup verification', async () => {
+  const f = fixture(),
+    d = driver(f),
+    states = [];
+  const result = await executeRuntimeQualification(f.operation, d.api, async (s) => states.push(s), { now: f.now });
+  assert.deepEqual(d.calls, ['armExpiry', 'prepare', 'upgrade', 'autoscaling', 'settle', 'cleanup', 'verifyCleanup']);
+  assert.deepEqual(
+    states.map((s) => s.phase),
+    [...d.calls, 'terminal'],
+  );
+  assert.equal(states.at(-1).cleanupVerified, true);
+  const packet = prepareRuntimeQualification({
+    candidate: f.operation.candidate,
+    promoted: f.promoted,
+    control: result.control,
+    autoscaling: result.autoscaling,
+    repository,
+    sourceSha: sha,
+    build: { runId: '123', runAttempt: 1 },
+  });
+  assert.equal(packet.candidate.evidence.runtimeControl.protocol, 2);
+  assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 2);
+  assert.equal(packet.candidate.evidence.runtimeAutoscaling.requestSamples, 1000);
+  assert.equal(packet.candidate.evidence.runtimeControl.requestSamples, 300);
+  assert.ok(!JSON.stringify(result).includes('exact-new-cloud-id'));
+});
+
+test('failures, unknown writes, expiry and dishonest/missing facts cannot become qualification or trigger replay', async () => {
+  const mutations = [
+    (f) => {
+      f.facts.autoscaling.web.failures.push({ status: 502 });
+    },
+    (f) => {
+      delete f.facts.autoscaling.workflow;
+    },
+    (f) => {
+      f.facts.autoscaling.startedAt = f.facts.upgrade.startedAt;
+    },
+    (f) => {
+      f.facts.upgrade.workflow.failures.push({ status: 502 });
+    },
+    (f) => {
+      f.facts.upgrade.outcomes.acceptedWork[0].recordingLookup.totalRuns = 3;
+    },
+    (f) => {
+      f.facts.upgrade.qualification = 'local-functional-only';
+    },
+    (f) => {
+      f.facts.upgrade.inputHash = 'wrong';
+    },
+    (f) => {
+      f.facts.upgrade.readiness.minimumReady.proxy = 1;
+    },
+    (f) => {
+      f.facts.autoscaling.cooperative.paused.acceptedWorkRecorded = false;
+    },
+    (f) => {
+      f.facts.autoscaling.metrics[0].capacityUnchangedForMs = 1;
+    },
+    (f) => {
+      f.facts.verifyCleanup.resources[0].state = 'still-present';
+    },
+    (f) => {
+      f.facts.verifyCleanup.uncertainWrites = 1;
+    },
+    (f) => {
+      f.facts.settle.inventory = structuredClone(f.facts.settle.inventory);
+      f.facts.settle.inventory[0].billable = false;
+      f.facts.verifyCleanup.resources[0].state = 'non-billable-hold';
+      f.facts.verifyCleanup.inventoryHash = qualificationHash(f.facts.settle.inventory);
+    },
+    (f) => {
+      f.facts.armExpiry.independent = false;
+    },
+    (f) => {
+      f.facts.prepare.inventory[0].kind = 'Cluster';
+    },
+  ];
+  for (const mutation of mutations) {
+    const f = fixture();
+    mutation(f);
+    const d = driver(f),
+      states = [];
+    await assert.rejects(
+      executeRuntimeQualification(f.operation, d.api, async (s) => states.push(s), { now: f.now }),
+      /No release was qualified/,
+    );
+    assert.equal(states.at(-1).outcome, 'failed');
+    for (const phase of d.calls) assert.equal(d.calls.filter((p) => p === phase).length, 1);
+  }
+  for (const failedPhase of ['prepare', 'upgrade', 'autoscaling', 'settle', 'cleanup', 'verifyCleanup']) {
+    const f = fixture(),
+      d = driver(f, failedPhase);
+    await assert.rejects(executeRuntimeQualification(f.operation, d.api, async () => {}, { now: f.now }));
+    if (failedPhase === 'settle') assert.ok(!d.calls.includes('cleanup'));
+    assert.equal(d.calls.filter((p) => p === failedPhase).length, 1);
+  }
+  const f = fixture(),
+    d = driver(f);
+  await assert.rejects(
+    executeRuntimeQualification(f.operation, d.api, async () => {}, { now: () => Date.parse(f.operation.expiresAt) }),
+  );
+  assert.deepEqual(d.calls, ['settle', 'cleanup', 'verifyCleanup']);
+});
+
+test('late cancellation, expiry and driver-owned mutations cannot revise accepted evidence', async () => {
+  for (const mode of ['cancel', 'expire']) {
+    const f = fixture(),
+      d = driver(f),
+      stop = new AbortController();
+    let now = f.now();
+    const original = d.api.autoscaling;
+    d.api.autoscaling = async (operation) => {
+      const result = await original(operation);
+      if (mode === 'cancel') stop.abort(Error('cancelled'));
+      else now = Date.parse(operation.expiresAt);
+      return result;
+    };
+    const states = [];
+    await assert.rejects(
+      executeRuntimeQualification(f.operation, d.api, async (state) => states.push(state), {
+        now: () => now,
+        signal: stop.signal,
+      }),
+    );
+    assert.equal(states.at(-1).outcome, 'failed');
+    assert.deepEqual(d.calls.slice(-3), ['settle', 'cleanup', 'verifyCleanup']);
+  }
+  const f = fixture(),
+    d = driver(f);
+  const returned = structuredClone(f.facts.upgrade);
+  d.api.upgrade = async () => returned;
+  const original = d.api.autoscaling;
+  d.api.autoscaling = async (operation) => {
+    returned.workflow.samples = 999999;
+    returned.outcomes.acceptedWork.length = 0;
+    return original(operation);
+  };
+  const result = await executeRuntimeQualification(f.operation, d.api, async () => {}, { now: f.now });
+  assert.equal(result.control.evidence.requestSamples, 300);
+});
+
+test('driver credential boundary is case-insensitive and process startup failure waits for close', async () => {
+  const child = qualificationDriverEnvironment({
+    Path: 'tools',
+    Github_Token: 'secret',
+    Gh_Enterprise_Token: 'secret',
+    Actions_Runtime_Token: 'secret',
+    Rivet_Qualification_Production_Context: 'production',
+    Kubeconfig: 'production-credentials',
+    RIVET_QUALIFICATION_STAGING_KUBECONFIG: 'staging-credentials',
+  });
+  assert.deepEqual(child, {
+    Path: 'tools',
+    RIVET_QUALIFICATION_STAGING_KUBECONFIG: 'staging-credentials',
+    KUBECONFIG: 'staging-credentials',
+  });
+  assert.throws(() => qualificationDriverEnvironment({ KUBECONFIG: 'production-credentials' }), /explicit staging/);
+  await assert.rejects(
+    providerPhaseProcess(
+      'unused.mjs',
+      'prepare',
+      {},
+      { cwd: path.join(os.tmpdir(), `absent-rivet-${process.pid}-${Date.now()}`) },
+    ),
+    /process failed/,
+  );
+});
+
+test('installation observation reads exact context and never returns raw credentials; preflight freshness is separate from qualification', async () => {
+  const f = fixture();
+  const values = {
+    ha: { enabled: true, controlPlane: { mode: 'singleton' } },
+    availability: { gkeGatewayProfile: 'compact' },
+    replicaCount: { backend: 1, web: 1, execution: 3, proxy: 3 },
+    autoscaling: {
+      execution: { enabled: false, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
+      executionController: { enabled: true, ...f.operation.policy },
+      proxy: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
+    },
+    release: {
+      production: {
+        manifestDigest: f.operation.predecessorManifestDigest,
+        database: { managedWorkflowSchemaVersion: f.operation.installed.schemaVersion },
+      },
+    },
+    images: f.operation.previous.images,
+    secret: 'PRIVATE-TEST-CREDENTIAL',
+  };
+  const calls = [];
+  const observe = (run) =>
+    inspectQualificationInstallation({
+      context: 'read-only',
+      namespace: 'prod',
+      release: 'rivet',
+      expectedNamespaceUid: 'production-ns',
+      valuesText: 'operator-values',
+      run,
+    });
+  const snapshot = await observe(async (bin, args) => {
+    calls.push(args);
+    return {
+      stdout: JSON.stringify(
+        bin === 'kubectl'
+          ? { metadata: { uid: args.includes('kube-system') ? 'production-cluster' : 'production-ns' } }
+          : values,
+      ),
+    };
+  });
+  assert.ok(calls.every((args) => args.includes('read-only') && args.includes('get')));
+  assert.ok(!JSON.stringify(snapshot).includes(values.secret));
+  assertQualificationInstallationMatches(snapshot, snapshot);
+  for (const key of ['manifestDigest', 'namespaceUid', 'clusterUid', 'settingsDigest', 'valuesDigest'])
+    assert.throws(() => assertQualificationInstallationMatches({ ...snapshot, [key]: 'changed' }, snapshot));
+  for (const changed of ['prod', 'kube-system']) {
+    const reads = new Map();
+    await assert.rejects(
+      observe(async (bin, args) => {
+        if (bin !== 'kubectl') return { stdout: JSON.stringify(values) };
+        const name = args[args.indexOf('namespace') + 1];
+        reads.set(name, (reads.get(name) ?? 0) + 1);
+        return {
+          stdout: JSON.stringify({
+            metadata: {
+              uid:
+                name === changed && reads.get(name) > 1
+                  ? 'replacement'
+                  : name === 'kube-system'
+                    ? 'production-cluster'
+                    : 'production-ns',
+            },
+          }),
+        };
+      }),
+      /namespace changed/,
+    );
+  }
+  const receipt = {
+    formatVersion: 1,
+    passed: true,
+    scope: 'installed-state-and-local-readiness',
+    workloadMutations: false,
+    applicationJourneysRun: false,
+    observedAt: new Date().toISOString(),
+    installedManifestDigest: f.operation.predecessorManifestDigest,
+    candidateManifestDigest: 'sha256:' + 'f'.repeat(64),
+    namespaceUid: 'production-ns',
+    valuesDigest: f.operation.installed.valuesDigest,
+  };
+  assert.equal(
+    assertQualificationPreflight(receipt, f.operation, receipt.candidateManifestDigest).deploymentAuthorized,
+    false,
+  );
+  for (const patch of [
+    { workloadMutations: true },
+    { installedManifestDigest: 'changed' },
+    { observedAt: '2020-01-01T00:00:00Z' },
+  ])
+    assert.throws(() =>
+      assertQualificationPreflight({ ...receipt, ...patch }, f.operation, receipt.candidateManifestDigest),
+    );
+});
+
+test('real CLI runs a fully hash-pinned local driver once, strips credential environment and blocks publication on failure', async (t) => {
+  const directory = await fs.mkdtemp(path.join(root, 'artifacts/qualification-command-'));
+  const privateStore = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-private-'));
+  const bundle = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-driver-'));
+  t.after(async () => {
+    await Promise.all([directory, privateStore, bundle].map((p) => fs.rm(p, { recursive: true, force: true })));
+  });
+  const f = fixture();
+  const entrypoint = await fs.readFile(
+    path.join(root, 'deploy/studio-server/scripts/fixtures/qualification-phase-driver.mjs'),
+  );
+  await fs.writeFile(path.join(bundle, 'entry.mjs'), entrypoint);
+  const files = { 'entry.mjs': createHash('sha256').update(entrypoint).digest('hex') };
+  const createBundle = async (facts) => {
+    const data = Buffer.from(JSON.stringify(facts));
+    await fs.writeFile(path.join(bundle, 'facts.json'), data);
+    files['facts.json'] = createHash('sha256').update(data).digest('hex');
+    const manifest = {
+      protocol: 1,
+      provider: 'gke',
+      scope: 'isolated-provider',
+      suite: 'compact-seven-v1',
+      entrypoint: 'entry.mjs',
+      files,
+    };
+    await fs.writeFile(path.join(bundle, 'driver.json'), JSON.stringify(manifest));
+    return qualificationHash(manifest);
+  };
+  for (const [attempt, failure] of [
+    [1, undefined],
+    [2, 'upgrade'],
+  ]) {
+    const target = path.join(directory, String(attempt));
+    await fs.mkdir(path.join(target, 'candidate'), { recursive: true });
+    await fs.mkdir(path.join(target, 'original'));
+    const put = (file, value) => fs.writeFile(path.join(target, file), JSON.stringify(value));
+    await put('candidate/candidate-release-manifest.json', f.operation.candidate);
+    await put('original/promoted-release-manifest.json', f.promoted);
+    await put('predecessor.json', f.operation.previous);
+    await put('installed.json', { ...f.operation.installed, observedAt: new Date().toISOString() });
+    await put('build-identity.json', { runId: '123', runAttempt: 1 });
+    const start = Date.now() + 100; // Child creates its operation after this timestamp; reports must follow it.
+    const facts = structuredClone(f.facts);
+    facts.fail = failure;
+    // The fixture emits actual observation timestamps at execution, not forged old windows.
+    facts.fixtureTime = start;
+    const driverDigest = await createBundle(facts);
+    const env = {
+      ...process.env,
+      GITHUB_REF: 'refs/heads/main',
+      GITHUB_RUN_ID: '456',
+      GITHUB_RUN_ATTEMPT: String(attempt),
+      GITHUB_SHA: sha,
+      GITHUB_REPOSITORY: repository,
+      GITHUB_TOKEN: 'PRIVATE-TEST-CREDENTIAL',
+      RIVET_QUALIFICATION_PRODUCTION_CONTEXT: 'must-not-leak',
+      RIVET_QUALIFICATION_PACKET: target,
+      RIVET_AUTOMATED_QUALIFICATION_ENABLED: 'true',
+      RIVET_QUALIFICATION_PROJECT_ID: 'isolated-project',
+      RIVET_QUALIFICATION_PROJECT_NUMBER: '123456789',
+      RIVET_QUALIFICATION_MAX_USD: '50',
+      RIVET_QUALIFICATION_MAX_SECONDS: '7200',
+      RIVET_QUALIFICATION_DRIVER_DIRECTORY: bundle,
+      RIVET_QUALIFICATION_DRIVER_SHA256: driverDigest,
+      RIVET_QUALIFICATION_PRIVATE_STORE: privateStore,
+      RIVET_QUALIFICATION_STAGING_KUBECONFIG: 'local-fixture',
+      RIVET_QUALIFICATION_CLUSTER_UID: 'isolated-cluster',
+      RIVET_QUALIFICATION_CLUSTER_SERVER: 'https://isolated.gke.goog',
+      RIVET_QUALIFICATION_GATEWAY_UID: 'shared-staging-gateway',
+      GITHUB_OUTPUT: path.join(target, 'outputs'),
+    };
+    const result = spawnSync(
+      process.execPath,
+      [
+        '.yarn/releases/yarn-4.17.1.cjs',
+        'node',
+        'deploy/studio-server/scripts/execute-runtime-qualification.mjs',
+        'execute',
+      ],
+      { cwd: root, env, encoding: 'utf8', timeout: 30000 },
+    );
+    assert.equal(
+      result.status,
+      failure ? 1 : 0,
+      `${result.stderr}\nPrivate filenames: ${JSON.stringify(await fs.readdir(privateStore))}\nPhase calls: ${await fs.readFile(path.join(privateStore, `rivet-q-456-${attempt}`, 'calls.jsonl'), 'utf8').catch(() => 'not started')}`,
+    );
+    assert.ok(!(result.stdout + result.stderr).includes('PRIVATE-TEST-CREDENTIAL'));
+    const privateDirectory = path.join(privateStore, `rivet-q-456-${attempt}`);
+    const calls = (await fs.readFile(path.join(privateDirectory, 'calls.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(JSON.parse);
+    assert.equal(calls.filter((v) => v === 'upgrade').length, 1);
+    assert.equal(calls.at(-1), 'verifyCleanup');
+    assert.equal(
+      await fs.stat(path.join(target, 'qualification-result.json')).then(
+        () => true,
+        () => false,
+      ),
+      !failure,
+    );
+    assert.equal(
+      await fs.stat(path.join(privateStore, 'active.lock')).then(
+        () => true,
+        () => false,
+      ),
+      Boolean(failure),
+    );
+    await fs.writeFile(path.join(bundle, 'unexpected.txt'), 'unrecorded');
+    await assert.rejects(verifyQualificationDriver(bundle, driverDigest), /unrecorded/);
+    await fs.unlink(path.join(bundle, 'unexpected.txt'));
+  }
+});

@@ -44,7 +44,7 @@ function findActionStep(job, uses, label) {
 
 const build = parseWorkflow('.github/workflows/build.yml');
 const runtimeQualification = parseWorkflow('.github/workflows/studio-server-runtime-qualification.yml').workflow;
-assert.deepEqual(Object.keys(runtimeQualification.on), ['workflow_dispatch']);
+assert.deepEqual(Object.keys(runtimeQualification.on).sort(), ['workflow_call', 'workflow_dispatch']);
 assert.deepEqual(runtimeQualification.permissions, { actions: 'read', contents: 'read', packages: 'write' });
 assert.equal(runtimeQualification.concurrency.group, 'build-images-${{ github.ref }}');
 assert.equal(runtimeQualification.concurrency['cancel-in-progress'], false);
@@ -57,6 +57,52 @@ assert.ok(
   qualificationCommands.indexOf('verify-pointer') < qualificationCommands.indexOf('release-manifest-oci.mjs push'),
 );
 assert.ok(qualificationCommands.includes('verify-published'));
+assert.equal(
+  runtimeQualification.on.workflow_call.outputs.manifest_digest.value,
+  '${{ jobs.publish.outputs.manifest_digest }}',
+);
+const automaticQualification = parseWorkflow('.github/workflows/studio-server-qualify-release.yml').workflow;
+assert.deepEqual(Object.keys(automaticQualification.on), ['workflow_dispatch']);
+assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), ['build_run_id']);
+assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);
+assert.equal(automaticQualification.jobs.built.if, undefined);
+assert.equal(automaticQualification.jobs.built.steps[0].run, 'test "$GITHUB_REF" = refs/heads/main');
+assert.equal(automaticQualification.jobs.qualified.environment, 'rivet-managed-staging');
+assert.deepEqual(automaticQualification.jobs.qualified['runs-on'], [
+  'self-hosted',
+  'linux',
+  'x64',
+  'rivet-qualification',
+]);
+assert.equal(automaticQualification.jobs.qualified.needs, 'built');
+assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
+assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');
+assert.equal(
+  automaticQualification.jobs.publish.with.runtime_control_declaration,
+  '${{ needs.qualified.outputs.control }}',
+);
+assert.deepEqual(automaticQualification.jobs.preflight.needs, ['qualified', 'publish']);
+assert.equal(automaticQualification.jobs.preflight.environment, 'rivet-production-readiness');
+assert.equal(
+  automaticQualification.jobs.preflight.env.QUALIFIED_MANIFEST_DIGEST,
+  '${{ needs.publish.outputs.manifest_digest }}',
+);
+for (const job of Object.values(automaticQualification.jobs)) {
+  for (const step of job.steps ?? []) {
+    assert.ok(!step.uses || /@[a-f0-9]{40}$/.test(step.uses), 'Qualification actions must be immutable');
+    assert.ok(!String(step.run ?? '').includes('${{ inputs.'), 'Dispatch inputs must not become shell source');
+  }
+}
+assert.ok(
+  automaticQualification.jobs.qualified.steps.some((step) =>
+    step.run?.endsWith('execute-runtime-qualification.mjs execute'),
+  ),
+);
+assert.ok(
+  automaticQualification.jobs.preflight.steps.some((step) =>
+    step.run?.includes('execute-runtime-qualification.mjs preflight'),
+  ),
+);
 assert.equal(
   findStep(
     runtimeQualification.jobs.publish,
@@ -424,6 +470,26 @@ assert.ok(
 );
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
+const repositoryContracts = studioJobs['repository-contracts'];
+const repositoryCheckout = findStep(repositoryContracts, 'Check Out Repository', 'Repository contracts');
+assert.equal(repositoryCheckout.with['fetch-depth'], 1);
+assert.equal(repositoryCheckout.with['fetch-tags'], false);
+assert.equal(repositoryCheckout['timeout-minutes'], 3);
+assert.deepEqual(repositoryCheckout.env, {
+  GIT_HTTP_LOW_SPEED_LIMIT: '1024',
+  GIT_HTTP_LOW_SPEED_TIME: '30',
+});
+const migrationHistory = findStep(repositoryContracts, 'Prepare migration Git evidence', 'Repository contracts');
+assert.equal(migrationHistory.run, 'node scripts/ci/prepare-migration-history.mjs');
+assert.equal(migrationHistory['timeout-minutes'], 4);
+assert.ok(
+  repositoryContracts.steps.indexOf(migrationHistory) <
+    repositoryContracts.steps.indexOf(findStep(repositoryContracts, 'Verify migration ledger', 'Repository contracts')),
+);
+assert.equal(
+  findStep(repositoryContracts, 'Report timing', 'Repository contracts').if,
+  "${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}",
+);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
 const deploymentContracts = studioJobs['deployment-contracts'];
 assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'deployment', 'gateway']);

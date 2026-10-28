@@ -16,7 +16,10 @@ import type { DataRefStore } from '../providers/ProvidersContext.js';
 import { createRunActivityNodeKey, settleObservedRunActivityRoot } from '../features/runActivity/runActivityJournal.js';
 import { createEmptyProjectExecutionSnapshot, type ProjectExecutionSnapshot } from '../state/dataFlow.js';
 import { MISSING_DEBUGGER_TERMINAL_EVENT_WARNING } from './graphExecutionEventHelpers.js';
-import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import {
+  applyProcessEventToProjectExecutionSnapshot,
+  resetPassiveProjectExecutionDisplay,
+} from './projectExecutionSnapshotEvents.js';
 
 function createDataRefStore(): DataRefStore {
   const values = new Map<string, DataValue>();
@@ -31,6 +34,76 @@ function createDataRefStore(): DataRefStore {
     },
   };
 }
+
+test('passive run reset clears every canvas view and selection, releases exact refs once and preserves non-canvas owners', () => {
+  const snapshot = createEmptyProjectExecutionSnapshot();
+  const nodeId = 'node' as NodeId;
+  const oldRoot = 'old' as RootRunId;
+  const otherRoot = 'other' as RootRunId;
+  const refs = createDataRefStore();
+  refs.set('old-ref', { type: 'string', value: 'large data' });
+  refs.set('neighbor-ref', { type: 'string', value: 'keep' });
+  const removed: string[] = [];
+  const refStore = {
+    ...refs,
+    delete(id: string) {
+      removed.push(id);
+      refs.delete(id);
+    },
+  };
+  snapshot.lastRecording = 'keep-recording';
+  snapshot.completedRootRunIds = [oldRoot, otherRoot];
+  snapshot.lastRunDataByNode[nodeId] = [
+    {
+      processId: 'process' as ProcessId,
+      rootRunId: oldRoot,
+      data: {
+        outputData: Object.fromEntries(
+          ['first', 'second'].map((key) => [
+            key,
+            {
+              type: 'string',
+              storage: 'ref',
+              refId: 'old-ref',
+              preview: { kind: 'summary', label: 'large data' },
+            },
+          ]),
+        ) as never,
+      },
+    },
+  ];
+  for (const key of ['root:one', 'root:two']) {
+    snapshot.graphRunHistoryByView[key as never] = [
+      {
+        graphId: key as GraphId,
+        graphRunId: key as GraphRunId,
+        rootRunId: oldRoot,
+        status: 'ok',
+      },
+    ];
+    snapshot.selectedGraphRunByView[key as never] = key as GraphRunId;
+  }
+  snapshot.selectedProcessPageNodes[nodeId] = 3;
+  snapshot.selectedLLMChatOutputPageByInvocation = { old: 'old-page' };
+  const before = structuredClone(snapshot);
+  const next = resetPassiveProjectExecutionDisplay(snapshot, refStore);
+  for (const field of [
+    'lastRunDataByNode',
+    'graphRunHistoryByView',
+    'selectedGraphRunByView',
+    'selectedProcessPageNodes',
+    'selectedLLMChatOutputPageByInvocation',
+  ] as const)
+    assert.deepEqual(next[field], {});
+  assert.deepEqual(next.completedRootRunIds, [otherRoot]);
+  assert.deepEqual(removed, ['old-ref']);
+  assert.ok(refs.get('neighbor-ref'));
+  assert.equal(next.lastRecording, snapshot.lastRecording);
+  assert.equal(next.frozenNodeOutputs, snapshot.frozenNodeOutputs);
+  assert.equal(next.runActivityJournal, snapshot.runActivityJournal);
+  assert.equal(next.graphRunning, false);
+  assert.deepEqual(snapshot, before, 'reset does not mutate the old snapshot');
+});
 
 test('identified inactive completion reconciles only its own root, matching active-source behavior', () => {
   const snapshot = createEmptyProjectExecutionSnapshot();

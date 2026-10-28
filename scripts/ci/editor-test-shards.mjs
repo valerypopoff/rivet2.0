@@ -6,6 +6,7 @@ const weightedSpecs = [
   ['scheduled-runs.spec.ts', 101],
   ['fullscreen-output-search-paging.spec.ts', 16],
   ['hosted-modal-focus.spec.ts', 117],
+  ['hosted-editor-search-shortcuts.spec.ts', 22],
   ['hosted-dashboard-contracts.spec.ts', 27],
   ['hosted-executor-origin.spec.ts', 50],
   ['project-bundle.spec.ts', 55],
@@ -16,6 +17,7 @@ const weightedSpecs = [
   ['port-connection-warnings.spec.ts', 20],
   ['cross-project-subgraph-loading.spec.ts', 122],
   ['subgraph-bundle-scope.spec.ts', 15],
+  ['bundle-local-execution-history.spec.ts', 15],
   ['hosted-subgraph-auth.spec.ts', 198],
   ['remote-bundle-observation.spec.ts', 220],
   ['ha-latest-replay.spec.ts', 16],
@@ -34,6 +36,8 @@ const weightedSpecs = [
   ['wire-viewport-culling.spec.ts', 25],
   ['tunnel-cache-retention.spec.ts', 1],
   ['run-statistics-modal.spec.ts', 15],
+  // Debug node discovery, output labels, icons and documentation links.
+  ['graph-call-path-node.spec.ts', 15],
   // Real local PostgreSQL/MinIO + provider HTTP, including cancellation settlement.
   ['run-cost-statistics.spec.ts', 60],
 ];

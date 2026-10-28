@@ -207,6 +207,14 @@ CREATE INDEX IF NOT EXISTS web_app_action_runs_terminal_retention_idx
   WHERE status <> 'running';
 `;
 const MIGRATION_STATEMENT_TIMEOUT = '5min';
+// Rolling DDL must fail quickly rather than queue customer queries behind it.
+export const ROLLING_SCHEMA_LOCK_TIMEOUT_MS = 1000;
+export const ROLLING_SCHEMA_STATEMENT_TIMEOUT_MS = 5000;
+export function getManagedSchemaMigrationPolicy(env: NodeJS.ProcessEnv = process.env): 'rolling' | 'maintenance' {
+  const value = env.RIVET_MANAGED_SCHEMA_MIGRATION_POLICY ?? 'maintenance';
+  if (value !== 'rolling' && value !== 'maintenance') throw new Error('Invalid managed schema migration policy.');
+  return value;
+}
 const VERIFY_STATEMENT_TIMEOUT = '30s';
 const TRANSIENT_SCHEMA_ERROR_CODES = new Set(['40001', '40P01', '55P03']);
 const TRANSIENT_SCHEMA_RETRY_ATTEMPTS = 3;
@@ -223,6 +231,7 @@ type ManagedWorkflowSchemaMigration = {
   name: string;
   sql: string;
   checksum: string;
+  rollingSafe?: true;
 };
 
 type AppliedMigrationRow = QueryResultRow & {
@@ -436,6 +445,7 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
   },
   {
     version: 18,
+    rollingSafe: true,
     name: 'workflow-recording-cost',
     sql: MANAGED_RECORDING_COST_SQL,
     checksum: 'b216f9e7df3fc2dd54f2c42f36999600a0aba3542eea2bb1b0406d428325cc9b',
@@ -1525,6 +1535,7 @@ type RunSchemaOptions = {
   applicationVersion?: string | null;
   compatibilityWindow?: ManagedWorkflowSchemaCompatibilityWindow;
   logger?: Pick<Console, 'log' | 'warn'>;
+  migrationPolicy?: 'rolling' | 'maintenance';
 };
 
 function safelyLog(run: () => void): void {
@@ -1553,6 +1564,7 @@ async function runManagedWorkflowSchema(
   options: RunSchemaOptions = {},
 ): Promise<ManagedWorkflowSchemaResult> {
   const logger = options.logger ?? console;
+  const rolling = mode === 'migrate' && (options.migrationPolicy ?? getManagedSchemaMigrationPolicy()) === 'rolling';
   const compatibilityWindow = options.compatibilityWindow ?? getManagedWorkflowSchemaCompatibilityWindow();
   if (
     mode === 'migrate' &&
@@ -1572,9 +1584,11 @@ async function runManagedWorkflowSchema(
 
   try {
     await client.query('BEGIN');
-    await client.query(`SET LOCAL lock_timeout = '${MIGRATION_LOCK_TIMEOUT}'`);
     await client.query(
-      `SET LOCAL statement_timeout = '${mode === 'migrate' ? MIGRATION_STATEMENT_TIMEOUT : VERIFY_STATEMENT_TIMEOUT}'`,
+      `SET LOCAL lock_timeout = '${rolling ? `${ROLLING_SCHEMA_LOCK_TIMEOUT_MS}ms` : MIGRATION_LOCK_TIMEOUT}'`,
+    );
+    await client.query(
+      `SET LOCAL statement_timeout = '${rolling ? `${ROLLING_SCHEMA_STATEMENT_TIMEOUT_MS}ms` : mode === 'migrate' ? MIGRATION_STATEMENT_TIMEOUT : VERIFY_STATEMENT_TIMEOUT}'`,
     );
     const lockStartedAt = Date.now();
     await client.query(
@@ -1608,6 +1622,16 @@ async function runManagedWorkflowSchema(
     }
 
     if (mode === 'migrate') {
+      if (
+        rolling &&
+        MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.some(
+          (migration) => migration.version > currentVersion && !migration.rollingSafe,
+        )
+      ) {
+        throw new ManagedWorkflowSchemaCompatibilityError(
+          'Unreviewed or incompatible migration requires maintenance; rolling migration was not started.',
+        );
+      }
       for (const migration of MANAGED_WORKFLOW_SCHEMA_MIGRATIONS) {
         if (migration.version <= currentVersion) {
           continue;
@@ -1690,9 +1714,12 @@ export function migrateManagedWorkflowSchema(
   pool: Pick<Pool, 'connect'>,
   options: RunSchemaOptions = {},
 ): Promise<ManagedWorkflowSchemaResult> {
-  return runManagedWorkflowSchemaWithRetry(pool, 'migrate', {
+  const migrationPolicy = options.migrationPolicy ?? getManagedSchemaMigrationPolicy();
+  const run = migrationPolicy === 'rolling' ? runManagedWorkflowSchema : runManagedWorkflowSchemaWithRetry;
+  return run(pool, 'migrate', {
     applicationVersion: options.applicationVersion ?? getApplicationVersion(),
     logger: options.logger,
+    migrationPolicy,
   });
 }
 

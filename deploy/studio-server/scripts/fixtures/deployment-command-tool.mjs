@@ -286,6 +286,25 @@ function kubectl() {
     const type = args[1],
       name = args[2]?.startsWith('-') ? null : args[2];
     if (
+      state.fault === 'inventoryAutoscalerAdvance' &&
+      state.claimAdmissionRead &&
+      type.startsWith('deployment,statefulset,hpa,pvc') &&
+      !state.inventoryAutoscalerAdvanced
+    ) {
+      const record = JSON.parse(state.journal.data.record);
+      if (record.autoscalingProtocol !== 1 || record.phase !== 'complete')
+        fail('Expected idle autoscaler before claim');
+      state.inventoryAutoscalerAdvanced = true;
+      state.journal.data.record = JSON.stringify({
+        ...record,
+        token: randomUUID(),
+        runner: randomUUID(),
+        lastSampleAt: Date.now(),
+      });
+      touch(state.journal);
+      state.inventorySampleVersion = state.journal.metadata.resourceVersion;
+    }
+    if (
       state.finalReady &&
       state.fault === 'lostFinalInventory' &&
       type.startsWith('deployment,statefulset,hpa,pvc') &&
@@ -306,6 +325,8 @@ function kubectl() {
       return { metadata: { name: state.namespace, uid: state.namespaceUid } };
     }
     if (type === 'configmap') {
+      if (state.fault === 'inventoryAutoscalerAdvance' && state.autoscalerAdvancedDuringBaseline)
+        state.claimAdmissionRead = true;
       if (state.fault === 'controllerRecreation' && state.finalReady && state.journal) {
         const record = JSON.parse(state.journal.data.record);
         if (record.phase === 'complete' && record.autoscalingProtocol !== 1) {
@@ -341,16 +362,29 @@ function kubectl() {
       return state.journal ?? '';
     }
     if (type === 'pod') return state.pods.find((p) => p.metadata.name === name) ?? '';
+    if (type === 'job') return find('Job', name) ?? '';
     if (type === 'node')
       return {
-        metadata: { name },
+        metadata: { name, uid: 'fixture-node-uid' },
         spec: {},
         status: {
           conditions: [{ type: 'Ready', status: 'True' }],
           allocatable: { cpu: '1000', memory: '1Ti', pods: '1000' },
         },
       };
-    if (type === 'pods') return { items: state.pods };
+    if (type === 'pods') {
+      const selector = args.includes('-l') ? args[args.indexOf('-l') + 1] : null;
+      return {
+        items: state.pods.filter(
+          (p) =>
+            !selector ||
+            selector.split(',').every((entry) => {
+              const [key, value] = entry.split('=');
+              return p.metadata.labels?.[key] === value;
+            }),
+        ),
+      };
+    }
     if (type === 'pv') return state.volume;
     if (['endpointslice', 'volumeattachments'].includes(type)) return { items: [] };
     const types = type.split(',').map((t) => kinds[t]);
@@ -361,13 +395,46 @@ function kubectl() {
   }
   if (['create', 'replace'].includes(args[0])) {
     const value = readInput();
+    if (value.kind === 'Job' && args[0] === 'create') {
+      if (find('Job', value.metadata.name)) fail('Preparation Job already exists');
+      const plan = JSON.parse(state.journal.data.record).preparation;
+      if (!plan?.jobs.some((j) => j.name === value.metadata.name && j.createIssued)) fail('Preparation intent missing');
+      value.metadata.uid = randomUUID();
+      touch(value);
+      value.status = { conditions: [{ type: 'Complete', status: 'True' }] };
+      state.resources.push(value);
+      state.pods.push({
+        kind: 'Pod',
+        metadata: {
+          name: value.metadata.name + '-pod',
+          namespace: state.namespace,
+          uid: randomUUID(),
+          labels: { ...value.spec.template.metadata.labels, 'job-name': value.metadata.name },
+          ownerReferences: [reference(value)],
+        },
+        spec: { ...clone(value.spec.template.spec), nodeName: 'fixture-node' },
+        status: { phase: 'Succeeded' },
+      });
+      return value;
+    }
     if (value.kind !== 'ConfigMap') fail('Fixture only accepts owned journal writes.');
+    const initialClaim =
+      state.journal &&
+      JSON.parse(state.journal.data.record).autoscalingProtocol === 1 &&
+      JSON.parse(value.data.record).formatVersion === 1;
+    if (initialClaim && state.fault === 'claimConflict') {
+      touch(state.journal); // A sampling tick after the fresh read still wins CAS.
+      fail('Conflict: fixture journal advanced immediately before claim');
+    }
     if (value.metadata.resourceVersion !== state.journal?.metadata.resourceVersion)
       fail('Conflict: fixture journal resourceVersion');
     if (value.metadata.uid && value.metadata.uid !== state.journal?.metadata.uid) fail('Conflict: fixture journal UID');
+    if (state.inventoryAutoscalerAdvanced && JSON.parse(state.journal.data.record).autoscalingProtocol === 1)
+      state.claimVersion = value.metadata.resourceVersion;
     value.metadata.uid = state.journal?.metadata.uid ?? randomUUID();
     touch(value);
     state.journal = value;
+    if (initialClaim && state.fault === 'lostClaimAcknowledgement') fail('Fixture lost accepted claim acknowledgement');
     return value;
   }
   if (args[0] === 'exec') {
@@ -439,6 +506,19 @@ function kubectl() {
     }
     const name = args[2].split('/').at(-1),
       deletion = readInput();
+    if (args[2].includes('/jobs/')) {
+      const job = find('Job', name);
+      if (
+        !job ||
+        deletion.propagationPolicy !== 'Foreground' ||
+        job.metadata.uid !== deletion.preconditions.uid ||
+        job.metadata.resourceVersion !== deletion.preconditions.resourceVersion
+      )
+        fail('Unsafe preparation Job deletion');
+      state.resources = state.resources.filter((r) => r !== job);
+      state.pods = state.pods.filter((p) => !p.metadata.ownerReferences?.some((o) => o.uid === job.metadata.uid));
+      return { kind: 'Status' };
+    }
     if (args[2].includes('/horizontalpodautoscalers/')) {
       const hpa = find('HorizontalPodAutoscaler', name);
       if (

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
-import { parseAllDocuments } from 'yaml';
+import { isDeepStrictEqual } from 'node:util';
+import { parse, parseAllDocuments } from 'yaml';
 import { HaReleaseGate } from './kubernetes-ha-release-gate.mjs';
 import {
   runManagedGateCommand as run,
@@ -16,9 +18,23 @@ import { createDeploymentSafety } from './lib/deployment-safety.mjs';
 import { assertHaRetirement } from './lib/ha-rolling-upgrade.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './lib/ha-workflow-traffic.mjs';
+import {
+  runtimeQualificationPurpose,
+  runOrdinaryRuntimeUpgrade,
+  assertRuntimeUpgradePair,
+  waitForOrdinaryRuntime,
+} from './lib/runtime-upgrade-qualification.mjs';
+import { HaReleaseProbes } from './lib/ha-release-probes.mjs';
+import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
+import {
+  assertStudioServerReleaseManifest,
+  assertReleaseManifestMatchesCurrentChart,
+} from './lib/studio-server-release-manifest.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const chart = path.join(root, 'deploy/studio-server/helm');
+const normalResources = parse(readFileSync(path.join(chart, 'values.yaml'), 'utf8')).resources;
 const role = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
 const ready = (p) =>
   !p.metadata.deletionTimestamp && p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
@@ -43,10 +59,24 @@ export const hasRuntimeControlPublicEndpoint = (slices, services, uid) => {
       s.endpoints?.some((e) => e.targetRef?.uid === uid && e.conditions?.ready !== false),
   );
 };
-export const waitForRuntimeControlColdProxies = (readPods, oldUids) =>
-  until('all old proxy processes exited', async () =>
-    (await readPods()).every((p) => !oldUids.includes(p.metadata.uid)),
+export const waitForRuntimeControlColdProxies = (readPods, oldUids, timeout) =>
+  until(
+    'all old proxy processes exited',
+    async () => (await readPods()).every((p) => !oldUids.includes(p.metadata.uid)),
+    timeout,
   );
+export function publishedScheduleCompletedWithoutDevelopers(runs, absentAt) {
+  if (!runs.length) return false;
+  assert.equal(runs.length, 1, 'The independence schedule must execute exactly once');
+  const [run] = runs;
+  if (['failed', 'interrupted'].includes(run.status)) throw Error('Published schedule failed without developer');
+  if (run.startedAt !== undefined || run.status === 'succeeded')
+    assert.ok(
+      Number.isFinite(run.startedAt) && run.startedAt >= absentAt,
+      'Schedule ran before developer processes were absent',
+    );
+  return run.status === 'succeeded' && run.recordingStatus === 'saved';
+}
 const until = async (name, check, timeout = 180_000) => {
   const deadline = Date.now() + timeout;
   while (!(await check())) {
@@ -58,10 +88,22 @@ const until = async (name, check, timeout = 180_000) => {
 /** Local functional proof only, never a promoted manifest/provider certificate.
  * Reuses the real managed fixture and release/retirement adapters. */
 export class RuntimeControlLocalGate extends HaReleaseGate {
+  get purpose() {
+    return this.config.runtimeQualificationPurpose ?? 'adoption';
+  }
   deploymentSafety(mode, manifestDigest) {
-    return createDeploymentSafety({ mode, scope: 'local', checkBaseline: () => this.assertLocalContext(),
-      localIdentity: { release: this.config.release, namespace: this.config.namespace,
-        context: this.config.context, namespaceUid: this.namespaceUid, candidateManifestDigest: manifestDigest } });
+    return createDeploymentSafety({
+      mode,
+      scope: 'local',
+      checkBaseline: () => this.assertLocalContext(),
+      localIdentity: {
+        release: this.config.release,
+        namespace: this.config.namespace,
+        context: this.config.context,
+        namespaceUid: this.namespaceUid,
+        candidateManifestDigest: manifestDigest,
+      },
+    });
   }
   get edgeProfile() {
     const profile = this.config.runtimeEdgeProfile ?? 'regional';
@@ -97,17 +139,94 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       capture: true,
     });
     assert.equal(before.stdout.trim(), '', 'proof requires a fresh namespace; never removes an earlier fixture');
-    await super.createNamespace();
-    this.namespaceUid = JSON.parse(
-      (await this.kubectl(['get', 'namespace', this.config.namespace, '-o', 'json'], { capture: true })).stdout,
-    ).metadata.uid;
+    // Do not delegate to the resettable fixture's delete-before-create path:
+    // another namespace could appear after the preliminary GET. CREATE labels
+    // atomically and returns the actual new UID; a conflict/lost reply stops.
+    const created = JSON.parse(
+      (
+        await this.kubectl(['create', '-f', '-', '-o', 'json'], {
+          capture: true,
+          input: JSON.stringify({
+            apiVersion: 'v1',
+            kind: 'Namespace',
+            metadata: {
+              name: this.config.namespace,
+              labels: { 'rivet.release-gate/owned': 'true' },
+            },
+          }),
+        })
+      ).stdout,
+    );
+    assert.equal(created.metadata.name, this.config.namespace);
+    assert.equal(created.metadata.labels['rivet.release-gate/owned'], 'true');
+    assert.ok(created.metadata.uid);
+    this.namespaceUid = created.metadata.uid;
+    await this.artifact(
+      'namespace-identity.json',
+      JSON.stringify(
+        {
+          protocol: 1,
+          context: this.config.context,
+          namespace: this.config.namespace,
+          release: this.config.release,
+          namespaceUid: this.namespaceUid,
+        },
+        null,
+        2,
+      ),
+    );
   }
   values(images = this.config.images, singleton = false) {
-    const base = super.values(images);
+    const ordinary = this.purpose === 'ordinary-upgrade';
+    if (ordinary) singleton = true;
+    const manifest = ordinary
+      ? [this.config.previousManifest, this.config.candidateManifest].find((m) => isDeepStrictEqual(m?.images, images))
+      : null;
+    if (ordinary) assert.ok(manifest, 'Images must belong to the exact ordinary predecessor/candidate pair');
+    const base = super.values(images, manifest?.database.managedWorkflowSchema ?? this.config.managedWorkflowSchema);
+    const policy = autoscalerPolicy(this.config.runtimeAutoscalerPolicy ?? {});
+    if (ordinary) {
+      assert.equal(policy.minReplicas, 2, 'Ordinary qualification requires the two-execution baseline');
+      assert.ok(policy.maxReplicas >= 3, 'Ordinary qualification needs room for the execution surge');
+    }
     return {
       ...base,
       ha: { ...base.ha, controlPlane: { mode: singleton ? 'singleton' : 'replicated' } },
       replicaCount: { proxy: this.proxyCount, web: singleton ? 1 : 2, backend: singleton ? 1 : 2, execution: 2 },
+      ...(ordinary
+        ? {
+            // The old adoption fixture's 100m requests distort CPU-based
+            // scaling during startup. Routine proofs use the chart's normal
+            // developer/execution envelopes, not an under-reserved variant.
+            resources: {
+              ...base.resources,
+              ...structuredClone({ backend: normalResources.backend, execution: normalResources.execution }),
+            },
+            release: { production: { manifestDigest: images.api.digest } },
+            metrics: { enabled: true },
+            autoscaling: {
+              execution: {
+                enabled: false,
+                minReplicas: 2,
+                maxReplicas: policy.maxReplicas,
+                targetCPUUtilizationPercentage: policy.targetCpuPercent,
+              },
+              executionController: {
+                enabled: true,
+                suspended: false,
+                targetSlotsPercent: policy.targetSlotsPercent,
+                stabilizationSeconds: policy.stabilizationSeconds,
+                cooldownSeconds: policy.cooldownSeconds,
+                withdrawalSeconds: policy.withdrawalSeconds,
+                pollSeconds: policy.pollSeconds,
+                metricsMaxAgeSeconds: policy.metricsMaxAgeSeconds,
+              },
+              proxy: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
+              web: { enabled: false },
+              backend: { enabled: false },
+            },
+          }
+        : {}),
       availability: {
         gkeGateway: true,
         gkeGatewayProfile: this.edgeProfile,
@@ -182,7 +301,7 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       applyTemplates: (guards) => this.apply(mergeRuntimeControlGuards(values, guards), `transfer-${singleton}.json`),
     });
   }
-  async roll(images, singleton) {
+  async roll(images, singleton, probes = {}) {
     const values = this.values(images, singleton),
       resources = await this.resources(values, `roll-${singleton}`);
     return runHaKubernetesRollout({
@@ -191,7 +310,11 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       release: this.config.release,
       namespace: this.config.namespace,
       manifestDigest: images.api.digest,
+      ...(this.purpose === 'ordinary-upgrade'
+        ? { previousManifestDigest: this.config.previousManifest.images.api.digest }
+        : {}),
       resources,
+      ...probes,
       timeoutMs: 180_000,
       artifact: (...args) => this.artifact(...args),
       applyTemplates: (_work, guards) => this.apply(mergeRuntimeControlGuards(values, guards), 'roll-template.json'),
@@ -204,6 +327,38 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
           'roll-final.json',
         ),
     });
+  }
+  async assertAutoscalerActive(after) {
+    const expectedPolicy = autoscalerPolicyDigest(autoscalerPolicy(this.config.runtimeAutoscalerPolicy ?? {}));
+    let observed;
+    await until(
+      'fresh completed autoscaler sampling',
+      async () => {
+        const raw = await this.kube([
+          'get',
+          'configmap',
+          releaseOperationJournalName(this.config.release),
+          '-o',
+          'json',
+        ]);
+        const record = JSON.parse(JSON.parse(raw.stdout).data.record);
+        if (
+          record.autoscalingProtocol !== 1 ||
+          record.phase !== 'complete' ||
+          !Number.isFinite(record.leaseExpiresAt) ||
+          record.leaseExpiresAt > Date.now() ||
+          !Number.isFinite(record.lastSampleAt) ||
+          record.lastSampleAt < after
+        )
+          return false;
+        assert.equal(record.policyDigest, expectedPolicy);
+        assert.equal(record.manifestDigest, this.config.images.api.digest);
+        observed = { policyDigest: record.policyDigest, sampleAt: record.lastSampleAt };
+        return true;
+      },
+      this.config.deploymentTimeoutSeconds * 1000,
+    );
+    return observed;
   }
   async pods() {
     return JSON.parse(
@@ -225,7 +380,9 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       `/tmp/hostpath-provisioner/${this.config.namespace}/${claim.metadata.name}`,
       'only the fresh fixture hostPath may be initialized',
     );
-    const owner = (await this.pods()).find((p) => p.spec.volumes?.some((v) => v.persistentVolumeClaim?.claimName === claim.metadata.name));
+    const owner = (await this.pods()).find((p) =>
+      p.spec.volumes?.some((v) => v.persistentVolumeClaim?.claimName === claim.metadata.name),
+    );
     assert.ok(owner?.spec.nodeName?.startsWith(this.config.context));
     assert.equal(volume.spec.nodeAffinity, undefined);
     await this.kube([
@@ -290,16 +447,16 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       },
     });
   }
-  async enableOAuth(base, relativePath) {
+  async enableOAuth(base, relativePath, { allowNonLocalhost = false, sessionTtlSeconds = 3600 } = {}) {
     await this.requestWorkflow(base, '/api/app-settings/web-app-auth', {
       method: 'PUT',
       body: JSON.stringify({
         mode: 'oauth',
         provider: 'dummy',
-        dummyAllowNonLocalhost: false,
+        dummyAllowNonLocalhost: allowNonLocalhost,
         dummyEmail: 'runtime-control@example.test',
         sessionSecret: randomUUID() + randomUUID(),
-        sessionTtlSeconds: 3600,
+        sessionTtlSeconds,
       }),
     });
     const snapshot = await this.requestWorkflow(
@@ -482,7 +639,10 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
           version: 'published',
           enabled: true,
           timeZone: 'UTC',
-          schedule: { kind: 'once', localTime: new Date(Date.now() + 120_000).toISOString().slice(0, 16) },
+          schedule: {
+            kind: 'once',
+            localTime: new Date(Date.now() + (this.independenceScheduleDelayMs ?? 120_000)).toISOString().slice(0, 16),
+          },
           input: { input: 'scheduled-runtime-independence' },
           record: true,
           timeoutMinutes: 1,
@@ -522,26 +682,87 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
     );
     await invoke(operation, status.incarnation, '--begin-only');
     await until('developer accepted work', async () => (await invoke()).state === 'drained');
-    await this.kube(['scale', `statefulset/${this.config.release}-ha-backend`, '--replicas=0', '--current-replicas=1']);
-    await this.kube(['scale', `deployment/${this.config.release}-web`, '--replicas=0', '--current-replicas=1']);
+    if (this.scaleExact) {
+      await this.scaleExact('statefulset', `${this.config.release}-ha-backend`, 1, 0);
+      await this.scaleExact('deployment', `${this.config.release}-web`, 1, 0);
+    } else {
+      await this.kube([
+        'scale',
+        `statefulset/${this.config.release}-ha-backend`,
+        '--replicas=0',
+        '--current-replicas=1',
+      ]);
+      await this.kube(['scale', `deployment/${this.config.release}-web`, '--replicas=0', '--current-replicas=1']);
+    }
     await until(
       'no developer processes',
       async () => !(await this.pods()).some((p) => ['backend', 'web'].includes(role(p))),
     );
+    const developersAbsentAt = Date.now();
     const before = (await this.pods()).filter((p) => role(p) === 'proxy').map((p) => p.metadata.uid);
     this.coldProxyMarker = randomUUID();
+    const proxy = JSON.parse(
+      (await this.kube(['get', 'deployment', `${this.config.release}-proxy`, '-o', 'json'])).stdout,
+    );
     await this.kube([
       'patch',
       'deployment',
       `${this.config.release}-proxy`,
-      '--type=merge',
+      '--type=json',
       '-p',
-      JSON.stringify({
-        spec: { template: { metadata: { annotations: { 'rivet.dev/runtime-control-cold': this.coldProxyMarker } } } },
-      }),
+      JSON.stringify([
+        { op: 'test', path: '/metadata/uid', value: proxy.metadata.uid },
+        { op: 'test', path: '/metadata/resourceVersion', value: proxy.metadata.resourceVersion },
+        {
+          op: 'add',
+          path: '/spec/template/metadata/annotations',
+          value: {
+            ...proxy.spec.template.metadata.annotations,
+            'rivet.dev/runtime-control-cold': this.coldProxyMarker,
+          },
+        },
+      ]),
     ]);
-    await this.kube(['rollout', 'status', `deployment/${this.config.release}-proxy`, '--timeout=180s']);
-    await waitForRuntimeControlColdProxies(() => this.pods(), before);
+    await this.kube([
+      'rollout',
+      'status',
+      `deployment/${this.config.release}-proxy`,
+      `--timeout=${(this.independenceTimeoutMs ?? 180000) / 1000}s`,
+    ]);
+    await waitForRuntimeControlColdProxies(() => this.pods(), before, this.independenceTimeoutMs);
+    await this.verifyPublishedBrowser(base);
+    await until(
+      'published schedule with control absent',
+      async () => {
+        const result = await this.kube([
+          'exec',
+          'deployment/release-gate-postgres',
+          '--',
+          'psql',
+          '-U',
+          'rivet',
+          '-d',
+          'rivet',
+          '-At',
+          '-c',
+          `SELECT COALESCE(json_agg(json::json), '[]') FROM rivet_schedule_runs WHERE schedule_id='${scheduled.id}'`,
+        ]);
+        const runs = JSON.parse(result.stdout.trim());
+        return publishedScheduleCompletedWithoutDevelopers(runs, developersAbsentAt);
+      },
+      this.independenceTimeoutMs,
+    );
+    if (this.purpose === 'adoption') await this.replaceIsolatedExecution();
+    await this.apply(this.values(this.config.images, true), 'developer-recovered.json');
+    await this.waitForDeveloperRoute(base);
+    return {
+      coldProxyReplacement: true,
+      coldExecutionReplacement: this.purpose === 'adoption',
+      browserOAuthAction: true,
+      publishedScheduleRecording: true,
+    };
+  }
+  async verifyPublishedBrowser(base) {
     const proof = await run(
       process.execPath,
       [
@@ -560,40 +781,13 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       },
     );
     assert.equal(proof.exitCode, 0);
-    await until('published schedule with control absent', async () => {
-      const result = await this.kube([
-        'exec',
-        'deployment/release-gate-postgres',
-        '--',
-        'psql',
-        '-U',
-        'rivet',
-        '-d',
-        'rivet',
-        '-At',
-        '-c',
-        `SELECT COALESCE(json_agg(json::json), '[]') FROM rivet_schedule_runs WHERE schedule_id='${scheduled.id}'`,
-      ]);
-      const runs = JSON.parse(result.stdout.trim());
-      if (runs.some((r) => ['failed', 'interrupted'].includes(r.status)))
-        throw Error('Published schedule failed without developer');
-      return runs.length === 1 && runs[0].status === 'succeeded' && runs[0].recordingStatus === 'saved';
-    });
-    await this.replaceIsolatedExecution();
-    await this.apply(this.values(this.config.images, true), 'developer-recovered.json');
-    await this.waitForDeveloperRoute(base);
-    return {
-      coldProxyReplacement: true,
-      coldExecutionReplacement: true,
-      browserOAuthAction: true,
-      publishedScheduleRecording: true,
-    };
   }
 }
 
-async function main() {
+async function adoptionMain() {
   const config = buildManagedReleaseGateConfig({ rootDir: root, mode: 'smoke' });
   config.runtimeEdgeProfile = process.env.RIVET_RUNTIME_EDGE_PROFILE ?? 'regional';
+  config.runtimeQualificationPurpose = 'adoption';
   config.keepNamespace = true;
   const baseline = JSON.parse(await fs.readFile(process.env.RIVET_RUNTIME_CONTROL_BASELINE_IMAGES, 'utf8'));
   const next = process.env.RIVET_RUNTIME_CONTROL_NEXT_IMAGES
@@ -775,5 +969,74 @@ async function main() {
   console.log(
     `Local mixed-image bridge, ${singletonCount}-pod transfer, embedded export, serial replacement and reverse transfer passed.`,
   );
+}
+
+async function ordinaryMain() {
+  const config = buildManagedReleaseGateConfig({ rootDir: root, mode: 'smoke' });
+  config.runtimeQualificationPurpose = 'ordinary-upgrade';
+  config.runtimeEdgeProfile = process.env.RIVET_RUNTIME_EDGE_PROFILE ?? 'compact';
+  assert.equal(
+    config.runtimeEdgeProfile,
+    'compact',
+    'Ordinary seven-pod proof is compact only; select adoption explicitly for conversions',
+  );
+  config.previousManifest = assertStudioServerReleaseManifest(
+    JSON.parse(await fs.readFile(process.env.RIVET_RUNTIME_CONTROL_BASELINE_MANIFEST, 'utf8')),
+    { requirePromoted: true },
+  );
+  config.candidateManifest = assertStudioServerReleaseManifest(
+    JSON.parse(await fs.readFile(process.env.RIVET_RUNTIME_CONTROL_CANDIDATE_MANIFEST, 'utf8')),
+  );
+  assertRuntimeUpgradePair(config.previousManifest, config.candidateManifest);
+  assertReleaseManifestMatchesCurrentChart(config.candidateManifest, root, { requirePromoted: false });
+  assert.deepEqual(config.images, config.candidateManifest.images);
+  config.runtimeAutoscalerPolicy = process.env.RIVET_RUNTIME_AUTOSCALER_POLICY
+    ? JSON.parse(await fs.readFile(process.env.RIVET_RUNTIME_AUTOSCALER_POLICY, 'utf8'))
+    : undefined;
+  // Failed accepted work is retained for explicit settlement, never forced away.
+  config.keepNamespace = true;
+  const gate = new RuntimeControlLocalGate(
+    config,
+    process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl',
+    resolveHelmBinOrThrow(root),
+  );
+  try {
+    await gate.assertLocalContext();
+    await fs.mkdir(config.artifactsDir, { recursive: true });
+    await gate.createNamespace();
+    await gate.createRegistrySecret();
+    await gate.installDependencies();
+    await gate.apply(gate.values(config.previousManifest.images, true), 'ordinary-predecessor.json');
+    await waitForOrdinaryRuntime(gate, config.previousManifest.images, (name, check) =>
+      until(name, check, config.deploymentTimeoutSeconds * 1000),
+    );
+    const baseUrl = await gate.openProxy();
+    await gate.waitForDeveloperRoute(baseUrl);
+    const state = await gate.exercisePersistence(baseUrl);
+    await gate.artifact('ha-persisted-state.json', JSON.stringify(state));
+    await gate.enableOAuth(baseUrl, state.relativePath);
+    await gate.prepareLocalRestoreVolume();
+    const probes = new HaReleaseProbes(gate, baseUrl, root);
+    await runOrdinaryRuntimeUpgrade({
+      gate,
+      previous: config.previousManifest,
+      candidate: config.candidateManifest,
+      probes,
+      baseUrl,
+      until: (name, check) => until(name, check, config.deploymentTimeoutSeconds * 1000),
+    });
+  } catch (error) {
+    // Do not inspect a pre-existing/foreign namespace if the fresh-namespace
+    // guard failed. Bootstrap failures are still useful private diagnostics.
+    if (gate.namespaceUid) await gate.capture('ordinary-command-failure').catch(() => {});
+    throw error;
+  } finally {
+    await gate.close();
+  }
+}
+
+async function main() {
+  const purpose = runtimeQualificationPurpose(process.env.RIVET_RUNTIME_QUALIFICATION_PURPOSE);
+  await (purpose === 'adoption' ? adoptionMain() : ordinaryMain());
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

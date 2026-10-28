@@ -404,6 +404,9 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
           },
           'ha-rollout-values.json',
         );
+        // Old owners remain live here. Prove image-owned metadata reads/writes,
+        // not just that the predecessor's startup verifier tolerates the DDL.
+        await gate.verifyPreviousApiSchemaCompatibility();
       },
       restoreAutoscalers: async (_workloads, guardedValues) =>
         gate.apply(
@@ -449,7 +452,16 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
       )
     ).stdout,
   ).items;
-  const report = { ...traffic.report, readiness, workloads: workloadReport, rollout, before, after, browserContract };
+  const report = {
+    ...traffic.report,
+    readiness,
+    workloads: workloadReport,
+    rollout,
+    before,
+    after,
+    browserContract,
+    ...(gate.schemaCompatibility ? { schemaCompatibility: gate.schemaCompatibility } : {}),
+  };
   await gate.artifact('ha-report.json', JSON.stringify(report, null, 2));
   return report;
 }

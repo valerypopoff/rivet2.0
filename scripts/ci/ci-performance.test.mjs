@@ -8,7 +8,7 @@ import { desktopWebArtifact, verifyDesktopWebArtifact } from './desktop-web-arti
 import { nodeTestPrerequisites } from '../../packages/node/scripts/prepare-tests.mjs';
 import { assertImageDependencyLayout } from '../../deploy/studio-server/scripts/lib/image-dependency-layout.mjs';
 import { installDependencies } from './install-dependencies.mjs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { editorCiSpecs, editorCiShards, selectEditorCiSpecs } from './editor-test-shards.mjs';
 import { desktopReleasePlan } from './desktop-release-plan.mjs';
 import { desktopBuildEvidence } from './desktop-build-evidence.mjs';
@@ -16,11 +16,196 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { browserCiEndpoint, verifyBrowserEnvironment } from './verify-browser-environment.mjs';
 import { createRequire } from 'node:module';
+import { prepareMigrationHistory } from './prepare-migration-history.mjs';
+import { migrationCommitParents } from '../../deploy/studio-server/migration/evidence.mjs';
 
 const { createPagesHandler } = createRequire(import.meta.url)('../../postman/mocks/rivet-pages/contract.cjs');
 const { createGitHubActionsHandler } = createRequire(import.meta.url)(
   '../../postman/mocks/github-actions/contract.cjs',
 );
+
+test('Git checkout fails a stalled HTTP read using its low-speed deadline, not the outer job timeout', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-git-stall-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet'], { cwd: root, stdio: 'pipe' });
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    response.writeHead(200, { 'Content-Type': 'application/x-git-upload-pack-advertisement' });
+    response.flushHeaders(); // Deliberately never send the advertised Git body.
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const result = await new Promise((resolve) =>
+    execFile(
+      'git',
+      [
+        '-c',
+        'http.proxy=',
+        'fetch',
+        '--depth=1',
+        '--no-tags',
+        `http://127.0.0.1:${server.address().port}/fixture.git`,
+        'a'.repeat(40),
+      ],
+      {
+        cwd: root,
+        timeout: 8_000,
+        env: {
+          ...process.env,
+          NO_PROXY: '127.0.0.1',
+          LC_ALL: 'C',
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_HTTP_LOW_SPEED_LIMIT: '1024',
+          GIT_HTTP_LOW_SPEED_TIME: '1',
+        },
+      },
+      (error, _stdout, stderr) => resolve({ error, stderr }),
+    ),
+  );
+  assert.ok(requests > 0);
+  assert.equal(result.error?.code, 128, result.stderr);
+  assert.match(result.stderr, /Operation too slow|Timeout was reached/);
+  assert.notEqual(result.error?.killed, true, 'Git itself must stop the stalled transfer.');
+});
+
+test('migration history prepares exact evidence from a shallow checkout without changing HEAD or fetching other refs', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-migration-history-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const remote = path.join(root, 'remote');
+  const checkout = path.join(root, 'checkout');
+  await fs.mkdir(remote);
+  const git = (cwd, args, options = {}) =>
+    execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe', ...options }).trim();
+  git(remote, ['init', '--quiet']);
+  git(remote, ['config', 'user.name', 'CI fixture']);
+  git(remote, ['config', 'user.email', 'fixture@example.invalid']);
+  await fs.writeFile(path.join(remote, 'source.txt'), 'fixture');
+  git(remote, ['add', '.']);
+  git(remote, ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'source']);
+  const sourceCommit = git(remote, ['rev-parse', 'HEAD']);
+  const sourceTree = git(remote, ['rev-parse', 'HEAD^{tree}']);
+  const sourceBlob = git(remote, ['rev-parse', 'HEAD:source.txt']);
+  const commit = (tree, ...parents) =>
+    git(remote, ['-c', 'commit.gpgsign=false', 'commit-tree', tree, ...parents.flatMap((sha) => ['-p', sha])], {
+      input: 'fixture\n',
+    });
+  const base = commit(sourceTree);
+  const subtree = git(remote, ['mktree'], { input: `040000 tree ${sourceTree}\tstudio-server\n` });
+  const importTree = git(remote, ['mktree'], { input: `040000 tree ${subtree}\t_import\n` });
+  const importCommit = commit(importTree, base, sourceCommit);
+  const currentBlob = git(remote, ['hash-object', '-w', '--stdin'], { input: 'current content' });
+  const currentTree = git(remote, ['mktree'], { input: `100644 blob ${currentBlob}\tsource.txt\n` });
+  const migrationCommit = commit(currentTree, importCommit);
+  let latest = migrationCommit;
+  for (let index = 0; index < 5; index++) latest = commit(currentTree, latest);
+  git(remote, ['update-ref', 'refs/heads/main', latest]);
+  git(remote, ['update-ref', 'refs/heads/unrelated', base]);
+  git(remote, ['update-ref', 'refs/tags/unrelated', base]);
+  git(remote, ['config', 'uploadpack.allowFilter', 'true']);
+  git(root, [
+    'clone',
+    '--quiet',
+    '--filter=blob:none',
+    '--depth=1',
+    '--no-tags',
+    '--branch',
+    'main',
+    pathToFileURL(remote).href,
+    checkout,
+  ]);
+  assert.equal(git(checkout, ['rev-parse', '--is-shallow-repository']), 'true');
+  assert.throws(() =>
+    git(checkout, ['cat-file', '-e', migrationCommit], {
+      env: { ...process.env, GIT_ALLOW_PROTOCOL: '' },
+    }),
+  );
+  const evidence = { sourceCommit, sourceTree, importCommit, importPrefix: '_import/studio-server', migrationCommit };
+  assert.deepEqual(prepareMigrationHistory({ cwd: checkout, evidence }), { fetched: true });
+  assert.deepEqual(prepareMigrationHistory({ cwd: checkout, evidence }), { fetched: false });
+  assert.equal(git(checkout, ['rev-parse', 'HEAD']), latest);
+  assert.equal(git(checkout, ['status', '--porcelain']), '');
+  assert.equal(git(checkout, ['tag', '--list']), '');
+  assert.equal(git(checkout, ['branch', '-r']), 'origin/main');
+  assert.deepEqual(migrationCommitParents(git(checkout, ['cat-file', 'commit', importCommit])), [base, sourceCommit]);
+  assert.equal(git(checkout, ['rev-parse', `${importCommit}:_import/studio-server`]), sourceTree);
+  assert.throws(
+    () =>
+      git(checkout, ['cat-file', '-e', sourceBlob], {
+        env: { ...process.env, GIT_ALLOW_PROTOCOL: '' },
+      }),
+    'Historical content is unnecessary; neither inspection nor the bounded fetch may download it.',
+  );
+  assert.throws(
+    () => prepareMigrationHistory({ cwd: checkout, evidence: { ...evidence, sourceTree: importTree } }),
+    /strictly equal/,
+  );
+});
+
+test('migration history bounds fetches and fails closed on missing evidence, failed transfer or invalid identities', () => {
+  const evidence = {
+    sourceCommit: 'a'.repeat(40),
+    sourceTree: 'b'.repeat(40),
+    importCommit: 'c'.repeat(40),
+    migrationCommit: 'd'.repeat(40),
+    importPrefix: '_import/studio-server',
+  };
+  assert.deepEqual(
+    migrationCommitParents(
+      `tree ${evidence.sourceTree}\nparent ${evidence.sourceCommit}\n\nparent ${evidence.importCommit}\n`,
+    ),
+    [evidence.sourceCommit],
+  );
+  for (const transferFails of [false, true]) {
+    let fetches = 0;
+    assert.throws(
+      () =>
+        prepareMigrationHistory({
+          evidence,
+          execute(args, options) {
+            if (args.includes('fetch')) {
+              fetches++;
+              assert.deepEqual(args, [
+                '-c',
+                'protocol.version=2',
+                'fetch',
+                '--no-tags',
+                '--no-recurse-submodules',
+                '--filter=blob:none',
+                '--depth=3',
+                'origin',
+                evidence.migrationCommit,
+              ]);
+              assert.equal(options.timeout, 180_000);
+              assert.equal(options.killSignal, 'SIGKILL');
+              if (transferFails) throw Error('transfer failed');
+              return '';
+            }
+            assert.equal(options.timeout, 15_000);
+            assert.equal(options.env.GIT_NO_LAZY_FETCH, '1');
+            assert.equal(options.env.GIT_ALLOW_PROTOCOL, '');
+            throw Error('missing evidence');
+          },
+        }),
+      transferFails ? /transfer failed/ : /missing evidence/,
+    );
+    assert.equal(fetches, 1, 'A read failure never becomes an unbounded fetch/retry or a passed ledger.');
+  }
+  for (const key of ['sourceCommit', 'sourceTree', 'importCommit', 'migrationCommit']) {
+    assert.throws(
+      () =>
+        prepareMigrationHistory({
+          evidence: { ...evidence, [key]: 'HEAD' },
+          execute: () => assert.fail('Invalid evidence must not run Git.'),
+        }),
+      /exact/,
+    );
+  }
+});
 
 test('desktop Build evidence uses exact owned runs, bounded GETs and fail-closed publication', async (t) => {
   const requests = [];
@@ -223,7 +408,10 @@ test('browser prerequisites reject version drift before launch and close Chromiu
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 31);
+  assert.equal(editorCiSpecs.length, 34);
+  assert.ok(editorCiSpecs.includes('hosted-editor-search-shortcuts.spec.ts'));
+  assert.ok(editorCiSpecs.includes('bundle-local-execution-history.spec.ts'));
+  assert.ok(editorCiSpecs.includes('graph-call-path-node.spec.ts'));
   assert.ok(editorCiSpecs.includes('evaluation-trial-orchestration.spec.ts'));
   assert.ok(editorCiSpecs.includes('partial-run-preload.spec.ts'));
   assert.ok(editorCiSpecs.includes('wire-viewport-culling.spec.ts'));

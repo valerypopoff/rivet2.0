@@ -5,6 +5,7 @@ const INLINE_PREVIEW_MAX_DEPTH = 2;
 const INLINE_PREVIEW_MAX_ITEMS = 8;
 
 export function previewStoredDataValue(value: StoredDataValue): string {
+  if (value.type === 'control-flow-excluded') return 'Not ran';
   if (value.storage === 'ref') return previewStoredRef(value.preview);
   return truncatePreview(previewInlineValue(value.value));
 }
