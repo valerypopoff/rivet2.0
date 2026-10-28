@@ -1460,7 +1460,7 @@ passes 46 tests (`artifacts/deployment-command-concurrency-support.log`).
 The subsequent GitHub deployment lane passed in 11m33s. A separate repository
 contract failure happened before any checks: its full-history checkout stalled
 for the entire 15-minute job. That job now checks out only the current commit
-(three-minute checkout limit), then runs `scripts/ci/prepare-migration-history.mjs`
+(five-minute checkout limit), then runs `scripts/ci/prepare-migration-history.mjs`
 before the unchanged migration-ledger verifier. Preparation fetches only the
 reviewed migration commit at depth three, without tags, other branches or
 historical blobs, and has a three-minute Git deadline/four-minute step limit.
@@ -1477,11 +1477,41 @@ Ancestry is read from raw commit headers: `git show --no-patch` can still
 prefetch historical diff blobs in a partial clone. The ledger itself also runs
 with transports disabled, so verification never downloads additional history.
 
-The repository checkout also sets `GIT_HTTP_LOW_SPEED_LIMIT=1024` and
-`GIT_HTTP_LOW_SPEED_TIME=30` for that step only. A stalled HTTP fetch must fail
-inside Git early enough for checkout's existing bounded read retries, instead
-of hanging until the three-minute step deadline and losing all retry attempts.
-The 15-minute job deadline and shallow/exact-evidence policy remain unchanged.
+The repository-contract checkout uses `filter: blob:none` plus non-cone sparse
+patterns `/*` and five exact negative paths under `packages/app/sidecars/pnpm/`.
+Only the five native pnpm binaries are excluded; no wildcard hides future files.
+Their README/checksum metadata, all authored source, tests and the complete
+immutable Yarn cache remain present. Git's tracked-file
+inventory still includes the binaries. Desktop packaging and other lanes retain
+their ordinary full checkouts. Do not broaden the exclusion to source or tests.
+
+The shallow snapshot measured on 2026-10-28 contains about 706 MiB of file data:
+265 MiB of desktop sidecars, 366 MiB of compressed offline dependencies and
+74 MiB of other files. Depth one alone does not remove that current-version
+payload. A three-minute deadline proved too tight for cold hosted checkouts;
+the reduced payload now has a bounded five-minute allowance, within the unchanged
+15-minute job deadline. This is not a claim about wire size or a measured hosted
+speedup. The real filtered-clone regression proves the excluded blob is not
+downloaded, while HEAD, tracked inventory, source and cache remain intact.
+
+Local checkout verification runs all repository-contract commands in a fresh,
+cloud-isolated Linux clone with the exact exclusions and no preinstalled workspace
+dependencies: offline immutable install, pinned migration evidence, the 517-file
+ledger, production-cutover regressions, test style and repository structure.
+The first full run completed in 61.2 seconds; that is local evidence, not a hosted
+performance prediction. Production-cutover reported 247 passing tests and one
+pre-existing opt-in image-rehearsal skip (no `RIVET_REHEARSAL_API_IMAGE` supplied),
+plus three passing source-executor tests. The dedicated CI-performance suite now
+has 15 passing regressions, including a similarly named sidecar source file that
+must not be excluded. Local evidence is retained in
+`artifacts/ci-cold-repository-contracts.log` and `artifacts/ci-sparse-checkout-*.log`.
+
+The checkout also sets `GIT_HTTP_LOW_SPEED_LIMIT=1024` and
+`GIT_HTTP_LOW_SPEED_TIME=30` for that step only. This protects low-throughput HTTP
+transfers, not every fetch phase or the total duration of a healthy transfer.
+The later three-minute cancellation log contains no low-speed abort and cannot
+by itself identify an idle network connection; the earlier diagnosis overstated
+what that evidence established. The overall action/job deadlines remain mandatory.
 The CI-performance regression uses a real loopback Git HTTP request whose body
 never arrives, and proves that Git's low-speed timeout—not the test's outer
 deadline—terminates the fetch. It uses a one-second threshold only in the fixture.

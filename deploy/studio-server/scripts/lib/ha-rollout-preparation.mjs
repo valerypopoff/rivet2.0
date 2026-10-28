@@ -8,6 +8,8 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 const roles = new Set(['proxy', 'web', 'backend', 'execution', 'evaluation', 'maintenance']);
 const roleOf = (r) => r.metadata.labels?.['app.kubernetes.io/component'];
 const base = (ns) => `/apis/batch/v1/namespaces/${encodeURIComponent(ns)}/jobs`;
+// Kubernetes omitempty drops empty lists (not nonempty lists or null).
+// Keep submitted Jobs/digests unchanged; normalize only comparison.
 const requestedFieldsMatch = (actual, requested, key) =>
   key === 'resources'
     ? ['requests', 'limits'].every((kind) =>
@@ -17,9 +19,10 @@ const requestedFieldsMatch = (actual, requested, key) =>
         ),
       )
     : Array.isArray(requested)
-      ? Array.isArray(actual) &&
-        actual.length === requested.length &&
-        requested.every((v, i) => requestedFieldsMatch(actual[i], v))
+      ? (requested.length === 0 && actual === undefined) ||
+        (Array.isArray(actual) &&
+          actual.length === requested.length &&
+          requested.every((v, i) => requestedFieldsMatch(actual[i], v)))
       : requested && typeof requested === 'object'
         ? actual && Object.entries(requested).every(([k, v]) => requestedFieldsMatch(actual[k], v, k))
         : isDeepStrictEqual(actual, requested);

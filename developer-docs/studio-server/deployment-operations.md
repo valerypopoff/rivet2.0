@@ -369,8 +369,14 @@ selectors require an explicit reviewed policy rather than an optimistic guess.
 
 Success requires the exact Job UID, a successful owned Pod with the requested
 configuration, and an identified Ready node. CPU/memory quantities compare by
-meaning, not their API spelling (`1000m` and `1` are equal). Image warming is a
-cache optimization and the scheduling check is **not a future reservation**:
+meaning, not their API spelling (`1000m` and `1` are equal). Kubernetes also omits
+empty lists when serializing Jobs and Pods: a requested `initContainers: []`
+may be absent in the response. Comparison accepts only that empty-list/absent
+equivalence, not `null`, a missing nonempty list, an extra member, changed images,
+commands or resource amounts. Job ownership, namespace lifetime, exact UIDs and
+resourceVersion-bound cleanup remain mandatory. The submitted Job representation,
+preparation protocol and journal digest do not change, including during recovery.
+Image warming is a cache optimization and the scheduling check is **not a future reservation**:
 node loss, eviction, later competing demand, or a replacement scheduled elsewhere
 can still cause cold startup. Actual candidate readiness and fresh headroom remain
 mandatory before old-owner withdrawal. Long accepted work still delays retirement;
@@ -408,6 +414,22 @@ close as aborted-before-templates, leaving the installed version serving. Older
 installed controllers may release an expired preflight without understanding this
 field; bounded Jobs/TTL and private retained journal artifacts remain backstops,
 not permission for the expired runner to keep writing.
+
+The 2026-10-28 main-branch upgrade and lost-acknowledgement gates exposed this
+empty-list mismatch in both preparation and inspected cleanup. The original HTTP
+fixture echoed empty lists, unlike the real API. It now models their omission in
+every Job/Pod response, and covers mixed empty/nonempty init lists, lost CREATE
+cleanup without replay and rejection/retention of changed configurations. The
+captured upgrade diagnostics contain three preparation Pods without an
+`initContainers` property; this is real API evidence, not a claim of a fresh
+provider qualification. Branch unit checks do not replace the real Kubernetes
+release gates that run during image publication.
+Local verification: the preparation, headroom, rolling-upgrade and deployment
+operation set passes 125 tests on Windows and offline Linux Node 24.21.0, with
+no skips (`artifacts/ha-preparation-support-windows.log` and
+`artifacts/ha-preparation-support-linux.log`). The pre-fix reproduction is retained
+locally in `artifacts/ha-preparation-before-fix.log`; no cloud resources or
+production rollout are involved in this check.
 The new controller also accepts monotonic growth against the journal's exact
 installed-predecessor image/manifest while preparation is in `preflight`, retaining
 the same workload UID, policy digest and approved cap. It never claims or erases

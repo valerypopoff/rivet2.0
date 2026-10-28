@@ -140,9 +140,23 @@ async function fixture(t, fault, selectedResources = resources) {
       activeCreates++;
       maximumCreates = Math.max(activeCreates, maximumCreates);
       const job = structuredClone(body);
+      // batch/v1 omits an empty initContainers list when encoding a stored Job.
+      // Model the API round trip, not an echo of our submitted JSON.
+      if (job.spec.template.spec.initContainers.length === 0) delete job.spec.template.spec.initContainers;
+      const podSpec = job.spec.template.spec;
+      if (faults.has('changed-image')) podSpec.containers[0].image = `registry/foreign@sha256:${'b'.repeat(64)}`;
+      if (faults.has('changed-command')) podSpec.containers[0].command = ['/bin/sh', '-ec', 'sleep 999'];
+      if (faults.has('changed-resources')) podSpec.containers[0].resources.requests.cpu = '900m';
+      if (faults.has('missing-containers')) delete podSpec.containers;
+      if (faults.has('missing-init')) delete podSpec.initContainers;
+      if (faults.has('null-init')) podSpec.initContainers = null;
+      if (faults.has('nonempty-init')) podSpec.initContainers = [structuredClone(podSpec.containers[0])];
       // Real Kubernetes canonicalizes 1000m to 1; configuration comparisons
       // must preserve its meaning rather than reject an equivalent API value.
-      for (const container of [...job.spec.template.spec.containers, ...(job.spec.template.spec.initContainers ?? [])])
+      for (const container of [
+        ...(job.spec.template.spec.containers ?? []),
+        ...(job.spec.template.spec.initContainers ?? []),
+      ])
         for (const kind of ['requests', 'limits']) {
           if (container.resources[kind].cpu === '1000m') container.resources[kind].cpu = '1';
           if (container.resources[kind].cpu === '500m') container.resources[kind].cpu = '0.5';
@@ -342,6 +356,60 @@ test('serial preparation checks only additional replacement resources without ov
     [{ key: 'metadata.name', operator: 'In', values: ['old-node'] }],
   );
   assert.equal(job.spec.template.spec.volumes, undefined);
+});
+
+test('API omission of empty lists preserves nonempty init containers and remains safe during lost CREATE recovery', async (t) => {
+  const selected = structuredClone(resources);
+  selected[0].spec.template.spec.initContainers = [
+    {
+      name: 'other-image',
+      image: `registry/helper@sha256:${'b'.repeat(64)}`,
+    },
+  ];
+  for (const fault of [undefined, 'lost-create']) {
+    const f = await fixture(t, fault, selected);
+    if (fault) await assert.rejects(f.run());
+    else await f.run();
+    assert.ok(f.operation.record.preparation.jobs.every((j) => j.uid && j.absent));
+    assert.equal(f.jobs.size + f.pods.size, 0);
+    const submitted = f.calls.filter((c) => c.method === 'POST');
+    assert.ok(submitted.some((c) => c.body.spec.template.spec.initContainers.length === 1));
+    assert.ok(submitted.some((c) => c.body.spec.template.spec.initContainers.length === 0));
+    if (fault) {
+      const writes = f.calls.filter((c) => c.method !== 'GET').length;
+      await assert.rejects(f.run());
+      assert.equal(f.calls.filter((c) => c.method !== 'GET').length, writes);
+    }
+  }
+});
+
+test('API normalization never authorizes changed images, commands, requests or nonempty lists', async (t) => {
+  for (const fault of [
+    'changed-image',
+    'changed-command',
+    'changed-resources',
+    'missing-containers',
+    'missing-init',
+    'null-init',
+    'nonempty-init',
+  ]) {
+    const selected = structuredClone(resources);
+    if (fault === 'missing-init')
+      selected[0].spec.template.spec.initContainers = [
+        {
+          name: 'required-image',
+          image: `registry/helper@sha256:${'b'.repeat(64)}`,
+        },
+      ];
+    const f = await fixture(t, fault, fault === 'missing-init' ? [selected[0]] : selected);
+    await assert.rejects(f.run());
+    assert.notEqual(f.operation.record.preparation.state, 'complete', fault);
+    assert.ok(f.jobs.size > 0, 'Changed configuration must be retained for inspected recovery.');
+    assert.equal(f.calls.filter((c) => c.method === 'DELETE').length, 0, fault);
+    const writes = f.calls.filter((c) => c.method !== 'GET').length;
+    await assert.rejects(f.run());
+    assert.equal(f.calls.filter((c) => c.method !== 'GET').length, writes, fault);
+  }
 });
 
 test('lost CREATE recovery retains the recovered Job UID when checking orphaned children', async (t) => {
