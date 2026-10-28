@@ -1,7 +1,12 @@
 import type { ProjectBinding } from './projectBindingRegistry.js';
 import type { ExecutionSourceKind } from './executionEventNormalization.js';
 
-export type DisplayRejection = 'closed-or-rebound' | 'ownership-conflict' | 'not-captured' | 'source-rebound';
+export type DisplayRejection =
+  | 'closed-or-rebound'
+  | 'ownership-conflict'
+  | 'not-captured'
+  | 'source-rebound'
+  | 'superseded-local-run';
 export type DisplayAdmission = {
   sourceKind?: ExecutionSourceKind;
   sourceProjectId: string;

@@ -242,6 +242,34 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   await expect(page.locator('.projects-container .project.active .project-name')).toHaveText(
     `${fixture.child.project.metadata.title} [child.rivet-project]`,
   );
+  for (let repeatedRun = 0; repeatedRun < 2; repeatedRun++) {
+    const value = `child-result-repeat-${repeatedRun}`;
+    const child = structuredClone(fixture.child.project);
+    (
+      child.graphs[child.metadata.mainGraphId!]!.nodes.find((node) => node.type === 'text')!.data as { text: string }
+    ).text = value;
+    await page.evaluate((contents) => {
+      (window as any).bundleFixture.files.find(
+        (file: { path: string }) => file.path === 'projects/child.rivet-project',
+      ).contents = contents;
+    }, serializeProject(child));
+    expect(
+      await page.evaluate((id) => (window as any).bundleHost.activateProject(id), fixture.root.project.metadata.id),
+    ).toBe(true);
+    await run.click();
+    await expect(page.locator(`.node[data-nodeid="${output.id}"]`)).toContainText(value);
+    await expect(run).not.toContainText('Abort');
+    expect(
+      await page.evaluate((id) => (window as any).bundleHost.activateProject(id), fixture.child.project.metadata.id),
+    ).toBe(true);
+    await expect(page.locator(`.node[data-nodeid="${childOutput.id}"]`)).toContainText(value);
+    await expect(page.getByText(/^Execution: \d+\/\d+$/)).toHaveCount(0);
+  }
+  await page.evaluate((contents) => {
+    (window as any).bundleFixture.files.find(
+      (file: { path: string }) => file.path === 'projects/child.rivet-project',
+    ).contents = contents;
+  }, native.files[1]!.contents);
   expect(
     await page.evaluate((id) => (window as any).bundleHost.activateProject(id), fixture.root.project.metadata.id),
   ).toBe(true);
@@ -261,7 +289,9 @@ test('desktop bundle IO opens a real project path, runs dependencies, preserves 
   await page.waitForFunction(() => (window as any).bundleReadBlocked === true);
   // Snapshot refresh clears the previous reference definitions. Pending
   // discovery keeps the tab title without inventing a resolved graph name.
-  await expect(targetLabel).toHaveText(`${fixture.child.project.metadata.title} / ${(subgraph as SubGraphNode).data.graphId}`);
+  await expect(targetLabel).toHaveText(
+    `${fixture.child.project.metadata.title} / ${(subgraph as SubGraphNode).data.graphId}`,
+  );
   await page.evaluate(() => (window as any).releaseBundleRead());
   await expect(targetLabel).toHaveText(`${fixture.child.project.metadata.title} / ${childGraph.metadata!.name}`);
   await expect(page.locator(`.node[data-nodeid="${suffix.id}"]`)).toBeVisible();

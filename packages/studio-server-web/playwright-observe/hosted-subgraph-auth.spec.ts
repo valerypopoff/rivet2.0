@@ -278,6 +278,7 @@ for (const topology of ['single-host', 'replicated'] as const) {
         await page.locator('.project-row', { hasText: 'Hosted target' }).dblclick();
         await expect(childOutput).toHaveClass(/success/);
         await expect(childOutput).toContainText('child-result');
+        await expect(frame.getByText(/^Execution: \d+\/\d+$/)).toHaveCount(0);
         expect(freshEvents(since).some((event) => event.message === 'done')).toBe(false);
         await expect(frame.locator('.run-button button').first()).not.toContainText('Abort');
         await page.locator('.project-row', { hasText: 'Hosted caller' }).dblclick();

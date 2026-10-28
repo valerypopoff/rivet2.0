@@ -149,8 +149,77 @@ the ring still holds at most 64 metadata-only entries.
 
 The local adapter is pure `localExecutionObservation.ts`; its hook is only store,
 reference and subscription integration. Browser and internal Node ingress share
-one local adapter per workspace, not independent hook-local maps. The final hook
-release and explicit source disconnect/settlement retire its metadata.
+one local adapter per workspace, not independent hook-local maps. Source settlement
+retires its live admissions; final hook release also removes retained display owners.
+
+### Latest-root local dependency display
+
+Local Browser, desktop Node and hosted Node dependency canvases retain only the
+currently displayed root's graph invocations. Three separate A → B runs must not
+become B's `Execution: 3/3`; three calls to B inside one root remain selectable.
+The existing local router assigns monotonic admission order and keeps one small,
+payload-free display descriptor per open project binding. It holds source identity,
+source/receiver tokens and root admission order, never processors, outputs or authored
+documents. This index survives processor settlement so the next A root can clear
+its previously displayed dependencies even if that run skips them. An unrelated
+open member or another source's display is not cleared merely by A starting.
+The first admitted event for a newly participating dependency claims its display
+and resets old canvas evidence once. Duplicate starts and further calls within
+that root do not reset it again. A source's own return calls are not passive resets.
+
+`resetPassiveProjectExecutionDisplay` resets graph/node histories, selections,
+running graph slots and removed roots' terminal bookkeeping through the canonical
+snapshot writer. It deletes exact discarded refs once, but preserves authored
+state, frozen configuration, stored recording, run controls and the separately
+bounded Run Activity journal. It never fabricates a source `start` for the child
+or sets the child `graphRunning` flag. No snapshot/project wire-format field or
+second execution-payload store is introduced.
+
+A newer display owner permanently fences older-root frames using
+`superseded-local-run`; admission order, not a late child's arrival or a timestamp,
+decides precedence. Exact old-root settlement may still finish retained Run Activity
+without modifying the new canvas. Reset/projection callbacks check current authority
+before and after reference effects; synchronous subscribers cannot return ownership
+to an older root. Conflict, binding renewal and closure release the descriptor;
+existing sticky root exclusions still prevent mid-run rejoining. Remote Debugger's
+intentional multi-root retention and playback reset policies are unchanged.
+Abort notices update lifecycle bookkeeping before the superseded-display fence:
+an old root may no longer paint, but its eventual failure terminal must still
+settle retained activity as aborted rather than misclassify cancellation as error.
+The mounted regression covers both root `abort` and `graphAbort` notices and
+asserts that neither the notice nor settlement replaces the current canvas.
+Root terminals close admission before settlement writes notify subscribers.
+Physical source settlement detaches the exact retiring source map and coordinator
+admissions before running callbacks. Late child events cannot join that cleanup;
+a fresh admission created during a callback is not part of the old settlement
+and must retain its own routing and coordinator records. Tests exercise success,
+failure and source disposal with synchronous child injection, plus fresh source
+admission during cleanup. Execution commands and accepted work remain unchanged.
+
+Regression owners are `useBundleExecutionRouting.test.tsx`,
+`projectExecutionSnapshotEvents.test.ts`, `executionCoordination.test.ts`, and
+`bundle-local-execution-history.spec.ts`/`desktop-project-bundle.spec.ts` for real
+Browser execution through hosted and portable-bundle editor paths. Node routing
+uses the same adapter and has explicit active/inactive root matrices.
+`hosted-subgraph-auth.spec.ts` also asserts latest-root history through the real
+Node executor in single-host and replicated routing modes.
+
+The portable-bundle UI regression changes the child result on every repeated run,
+so an already-visible previous output cannot satisfy the next run's assertions.
+
+Local verification (2026-10-28): 221 execution/workspace tests pass without skips
+(`artifacts/bundle-history-adjacent-unit.log`). Six headless checks cover
+hosted/desktop runs, root playback and Remote Debugger completion/failure/abort
+(`artifacts/bundle-history-adjacent-ui.log`). Earlier, overlapping browser checks
+also cover partial-run preload and all five playback fixtures
+(`artifacts/bundle-history-final-ui.log`); four PostgreSQL/MinIO-backed UI checks
+include real Node execution in both routing modes (`artifacts/bundle-history-ui-node.log`).
+The pre-fix cancellation and subscriber failures remain in
+`artifacts/bundle-history-review-abort-red.log` and
+`artifacts/bundle-history-adjacent-terminal-red.log`.
+App typecheck, focused lint, CI shard registration, architecture/style and
+documentation checks pass. Saved project/bundle/recording formats are unchanged;
+these are local source checks, not native-desktop binary or production qualification.
 
 Remote Debugger retains its intentional differences: external caller roots may
 continue feeding open bundle dependencies after their source tab closes; source

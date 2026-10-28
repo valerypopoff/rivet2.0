@@ -1207,6 +1207,22 @@ for desktop tabs. Explicit hosted detachment never falls back to a desktop hint.
 Both internal executor targets participate; this does not connect Remote Debugger
 or execute another root run. A dependency tab's own active run or loaded recording
 keeps its display instead of being overwritten by passive child events.
+For ordinary editor runs, each dependency canvas shows only the newest displayed
+root's executions. Starting A again clears B's previous A-run evidence even when
+the new run skips B. Multiple B invocations within one A run remain selectable;
+separate A runs do not accumulate in B's **Execution n/N** selector. The same
+rule applies with B active or inactive, using hosted or desktop bundle bindings.
+Other sources' displays and independent run/playback/debugger owners retain their
+existing protection. Superseded late events cannot restore cleared history.
+This is display-only: recording retention, source execution, cost accounting and
+the bounded historical Run Activity journal remain independent. An older run's
+cancellation still settles its retained activity as aborted without replacing the
+latest run's canvas. See
+[execution coordination](../EXECUTION-COORDINATION.md#latest-root-local-dependency-display)
+for ownership, cleanup and regression contracts.
+Root completion and source disposal retire admission before notifying display
+subscribers. A synchronous late child cannot acquire a dependency display during
+settlement, and cleanup cannot erase a fresh admission created by a callback.
 A conflicting receiver (own run, recording or Remote Debugger observation) stays
 excluded for that entire root run, even if its own execution ends, its recording
 is unloaded or its observer disconnects midway. The next independent run can

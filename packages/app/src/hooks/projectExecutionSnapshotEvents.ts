@@ -417,6 +417,42 @@ function applyLLMChatOutputSnapshot(
   return nextSnapshot;
 }
 
+/** Reset passive canvas evidence without acquiring execution/recording ownership.
+ * Run Activity has its own bounded history and retains original root ancestry. */
+export function resetPassiveProjectExecutionDisplay(
+  snapshot: ProjectExecutionSnapshot,
+  refStore: DataRefStore,
+): ProjectExecutionSnapshot {
+  const removedRoots = new Set([
+    ...Object.values(snapshot.graphRunHistoryByView)
+      .flat()
+      .map((run) => run.rootRunId),
+    ...Object.values(snapshot.lastRunDataByNode)
+      .flat()
+      .map((run) => run.rootRunId),
+  ]);
+  deleteStoredRefIds(
+    refStore,
+    new Set(
+      Object.values(snapshot.lastRunDataByNode).flatMap((processes) =>
+        processes.flatMap((process) => collectStoredRefIds(process.data)),
+      ),
+    ),
+  );
+  return {
+    ...snapshot,
+    lastRunDataByNode: {},
+    graphRunHistoryByView: {},
+    selectedGraphRunByView: {},
+    selectedProcessPageNodes: {},
+    selectedLLMChatOutputPageByInvocation: {},
+    completedRootRunIds: (snapshot.completedRootRunIds ?? []).filter((root) => !removedRoots.has(root)),
+    runningGraphs: [],
+    graphStartTime: undefined,
+    rootGraph: undefined,
+  };
+}
+
 function applyStart(
   snapshot: ProjectExecutionSnapshot,
   data: ProcessEvents['start'],

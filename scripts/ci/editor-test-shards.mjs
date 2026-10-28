@@ -16,6 +16,7 @@ const weightedSpecs = [
   ['port-connection-warnings.spec.ts', 20],
   ['cross-project-subgraph-loading.spec.ts', 122],
   ['subgraph-bundle-scope.spec.ts', 15],
+  ['bundle-local-execution-history.spec.ts', 15],
   ['hosted-subgraph-auth.spec.ts', 198],
   ['remote-bundle-observation.spec.ts', 220],
   ['ha-latest-replay.spec.ts', 16],
