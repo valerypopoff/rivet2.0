@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -506,159 +506,190 @@ async function fixture(t, mode, fault, schemaChange = false) {
 }
 const clone = structuredClone;
 
-test(
-  'schema-changing waiver is rejected before downtime without its explicit migration-validation approval',
-  { timeout: 330000 },
-  async (t) => {
-    const f = await fixture(t, 'maintenance', null, true);
-    const planFile = path.join(f.directory, 'artifacts/maintenance-plan.json');
-    const plan = JSON.parse(await fs.readFile(planFile, 'utf8'));
-    delete plan.schemaMigration;
-    await fs.writeFile(planFile, JSON.stringify(plan));
-    const result = await f.invoke(['--preflight-only']);
-    assert.equal(result.code, 1, result.stdout + result.stderr);
-    assert.match(result.stderr, /explicit schemaMigration approval/);
-    assert.equal((await f.state()).journal, undefined);
-    assert.equal(
-      (await f.calls()).filter((c) => ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]))
-        .length,
-      0,
-    );
-  },
-);
-
-test(
-  'migration adapter prerequisites are checked before maintenance ownership and workload changes',
-  { timeout: 330000 },
-  async (t) => {
-    const f = await fixture(t, 'maintenance', 'migrationPreflightFail', true);
-    const result = await f.invoke(['--preflight-only']);
-    assert.equal(result.code, 1, result.stdout + result.stderr);
-    assert.equal((await f.state()).journal, undefined);
-    assert.equal(
-      (await f.calls()).filter((c) => ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]))
-        .length,
-      0,
-    );
-  },
-);
-
-test(
-  'permanent schema-changing maintenance accepts intentional autoscaler-controller recreation and fresh activation',
-  { timeout: 330000 },
-  async (t) => {
-    const f = await fixture(t, 'maintenance', 'controllerRecreation', true);
-    const controller = (state) =>
-      state.resources.find((r) => r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler');
-    const oldUid = controller(await f.state()).metadata.uid;
-    const result = await f.invoke();
-    assert.equal(result.code, 0, result.stdout + result.stderr);
-    const state = await f.state();
-    assert.notEqual(controller(state).metadata.uid, oldUid);
-    const activation = JSON.parse(
-      await fs.readFile(path.join(f.directory, 'artifacts/result/execution-autoscaler-activation.json'), 'utf8'),
-    );
-    assert.equal(activation.activated, true);
-    assert.equal(state.completedCutover.phase, 'complete');
-  },
-);
-
-for (const fault of ['lostFinalInventory', 'lostFinalApply'])
+// Each scenario owns its directory, stand-in state, clock and child processes.
+// Bound overlap rather than serialize all real CLI recovery journeys into one
+// CI timeout. Operations inside an individual journey remain strictly ordered.
+describe('isolated deployment command journeys', { concurrency: 3 }, () => {
   test(
-    `schema-changing maintenance ${fault} recovers by observation, never reapplying Helm`,
-    { timeout: 660000 },
+    'schema-changing waiver is rejected before downtime without its explicit migration-validation approval',
+    { timeout: 330000 },
     async (t) => {
-      const f = await fixture(t, 'maintenance', fault, true);
-      const originalHpa = (await f.state()).resources.find((r) => r.kind === 'HorizontalPodAutoscaler').metadata.uid;
-      const deployment = await f.invoke();
-      assert.equal(deployment.code, 1, deployment.stdout + deployment.stderr);
-      assert.match(deployment.stderr, /--verify-only/);
-      const state = await f.state(),
-        record = JSON.parse(state.journal.data.record);
-      assert.equal(record.phase, 'resuming');
-      assert.equal(record.finalApply.acknowledged, fault !== 'lostFinalApply');
-      assert.equal(record.finalApply.inventory, undefined);
-      assert.notEqual(
-        state.resources.find((r) => r.kind === 'HorizontalPodAutoscaler').metadata.uid,
-        originalHpa,
-        'the final HPA is intentionally recreated after fenced validation',
-      );
-      assert.deepEqual(
-        (await f.stages()).map((s) => s.stage),
-        ['preflight', 'migration-preflight', 'before', 'backup', 'migration-validation'],
-      );
-      const count = (await f.calls()).filter(
-        (c) =>
-          (c.kind === 'helm' && c.args[0] === 'upgrade') ||
-          (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
-      ).length;
-      const verified = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
-      assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+      const f = await fixture(t, 'maintenance', null, true);
+      const planFile = path.join(f.directory, 'artifacts/maintenance-plan.json');
+      const plan = JSON.parse(await fs.readFile(planFile, 'utf8'));
+      delete plan.schemaMigration;
+      await fs.writeFile(planFile, JSON.stringify(plan));
+      const result = await f.invoke(['--preflight-only']);
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /explicit schemaMigration approval/);
+      assert.equal((await f.state()).journal, undefined);
       assert.equal(
-        (await f.calls()).filter(
+        (await f.calls()).filter((c) =>
+          ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]),
+        ).length,
+        0,
+      );
+    },
+  );
+
+  test(
+    'migration adapter prerequisites are checked before maintenance ownership and workload changes',
+    { timeout: 330000 },
+    async (t) => {
+      const f = await fixture(t, 'maintenance', 'migrationPreflightFail', true);
+      const result = await f.invoke(['--preflight-only']);
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.equal((await f.state()).journal, undefined);
+      assert.equal(
+        (await f.calls()).filter((c) =>
+          ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]),
+        ).length,
+        0,
+      );
+    },
+  );
+
+  test(
+    'permanent schema-changing maintenance accepts intentional autoscaler-controller recreation and fresh activation',
+    { timeout: 330000 },
+    async (t) => {
+      const f = await fixture(t, 'maintenance', 'controllerRecreation', true);
+      const controller = (state) =>
+        state.resources.find((r) => r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler');
+      const oldUid = controller(await f.state()).metadata.uid;
+      const result = await f.invoke();
+      assert.equal(result.code, 0, result.stdout + result.stderr);
+      const state = await f.state();
+      assert.notEqual(controller(state).metadata.uid, oldUid);
+      const activation = JSON.parse(
+        await fs.readFile(path.join(f.directory, 'artifacts/result/execution-autoscaler-activation.json'), 'utf8'),
+      );
+      assert.equal(activation.activated, true);
+      assert.equal(state.completedCutover.phase, 'complete');
+    },
+  );
+
+  for (const fault of ['lostFinalInventory', 'lostFinalApply'])
+    test(
+      `schema-changing maintenance ${fault} recovers by observation, never reapplying Helm`,
+      { timeout: 660000 },
+      async (t) => {
+        const f = await fixture(t, 'maintenance', fault, true);
+        const originalHpa = (await f.state()).resources.find((r) => r.kind === 'HorizontalPodAutoscaler').metadata.uid;
+        const deployment = await f.invoke();
+        assert.equal(deployment.code, 1, deployment.stdout + deployment.stderr);
+        assert.match(deployment.stderr, /--verify-only/);
+        const state = await f.state(),
+          record = JSON.parse(state.journal.data.record);
+        assert.equal(record.phase, 'resuming');
+        assert.equal(record.finalApply.acknowledged, fault !== 'lostFinalApply');
+        assert.equal(record.finalApply.inventory, undefined);
+        assert.notEqual(
+          state.resources.find((r) => r.kind === 'HorizontalPodAutoscaler').metadata.uid,
+          originalHpa,
+          'the final HPA is intentionally recreated after fenced validation',
+        );
+        assert.deepEqual(
+          (await f.stages()).map((s) => s.stage),
+          ['preflight', 'migration-preflight', 'before', 'backup', 'migration-validation'],
+        );
+        const count = (await f.calls()).filter(
           (c) =>
             (c.kind === 'helm' && c.args[0] === 'upgrade') ||
             (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
-        ).length,
-        count,
-      );
-      const completed = JSON.parse((await f.state()).journal.data.record);
-      assert.equal(completed.phase, 'complete');
-      assert.equal(
-        completed.finalApply.acknowledged,
-        fault !== 'lostFinalApply',
-        'observation cannot invent a Helm reply',
-      );
-      assert.equal(completed.finalApply.verifiedByObservation, true);
-      assert.equal((await f.stages()).filter((s) => s.stage === 'migration-validation').length, 1);
-      const acceptance = await f.invoke(['--acceptance-only']);
-      assert.equal(acceptance.code, 0, acceptance.stdout + acceptance.stderr);
-      assert.equal(
-        (await f.calls()).filter(
-          (c) =>
-            (c.kind === 'helm' && c.args[0] === 'upgrade') ||
-            (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
-        ).length,
-        count,
-        'acceptance of the exact installed waived release cannot reapply workloads',
-      );
-      if (fault === 'lostFinalInventory') {
-        const settled = await f.state(),
-          stages = (await f.stages()).length;
-        const stateFile = path.join(f.directory, 'state.json');
-        for (const drift of [
-          'helm-status',
-          'helm-settings',
-          'live-settings',
-          'startup-fence',
-          'afterSettlementNotReady',
-          'afterSettlementPodReplaced',
-        ]) {
-          const changed = structuredClone(settled);
-          if (drift === 'helm-status') changed.releaseStatus = 'failed';
-          else if (drift === 'helm-settings') {
-            const resources = parseAllDocuments(changed.manifest)
-              .map((doc) => doc.toJSON())
-              .filter(Boolean);
-            resources
-              .find((r) => r.kind === 'StatefulSet')
-              .spec.template.spec.containers[0].env.push({ name: 'UNAPPROVED', value: 'changed' });
-            changed.manifest = resources.map((r) => JSON.stringify(r)).join('\n---\n');
-          } else if (drift.startsWith('afterSettlement')) changed.fault = drift;
-          else {
-            const owner = changed.resources.find((r) => r.kind === 'StatefulSet');
-            if (drift === 'live-settings')
-              owner.spec.template.spec.containers[0].env.push({ name: 'UNAPPROVED', value: 'changed' });
+        ).length;
+        const verified = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
+        assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+        assert.equal(
+          (await f.calls()).filter(
+            (c) =>
+              (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+              (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+          ).length,
+          count,
+        );
+        const completed = JSON.parse((await f.state()).journal.data.record);
+        assert.equal(completed.phase, 'complete');
+        assert.equal(
+          completed.finalApply.acknowledged,
+          fault !== 'lostFinalApply',
+          'observation cannot invent a Helm reply',
+        );
+        assert.equal(completed.finalApply.verifiedByObservation, true);
+        assert.equal((await f.stages()).filter((s) => s.stage === 'migration-validation').length, 1);
+        const acceptance = await f.invoke(['--acceptance-only']);
+        assert.equal(acceptance.code, 0, acceptance.stdout + acceptance.stderr);
+        assert.equal(
+          (await f.calls()).filter(
+            (c) =>
+              (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+              (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+          ).length,
+          count,
+          'acceptance of the exact installed waived release cannot reapply workloads',
+        );
+        if (fault === 'lostFinalInventory') {
+          const settled = await f.state(),
+            stages = (await f.stages()).length;
+          const stateFile = path.join(f.directory, 'state.json');
+          for (const drift of [
+            'helm-status',
+            'helm-settings',
+            'live-settings',
+            'startup-fence',
+            'afterSettlementNotReady',
+            'afterSettlementPodReplaced',
+          ]) {
+            const changed = structuredClone(settled);
+            if (drift === 'helm-status') changed.releaseStatus = 'failed';
+            else if (drift === 'helm-settings') {
+              const resources = parseAllDocuments(changed.manifest)
+                .map((doc) => doc.toJSON())
+                .filter(Boolean);
+              resources
+                .find((r) => r.kind === 'StatefulSet')
+                .spec.template.spec.containers[0].env.push({ name: 'UNAPPROVED', value: 'changed' });
+              changed.manifest = resources.map((r) => JSON.stringify(r)).join('\n---\n');
+            } else if (drift.startsWith('afterSettlement')) changed.fault = drift;
             else {
-              owner.spec.template.metadata.annotations ??= {};
-              owner.spec.template.metadata.annotations['rivet.dev/execution-retirement-fence'] = 'stale';
+              const owner = changed.resources.find((r) => r.kind === 'StatefulSet');
+              if (drift === 'live-settings')
+                owner.spec.template.spec.containers[0].env.push({ name: 'UNAPPROVED', value: 'changed' });
+              else {
+                owner.spec.template.metadata.annotations ??= {};
+                owner.spec.template.metadata.annotations['rivet.dev/execution-retirement-fence'] = 'stale';
+              }
             }
+            await fs.writeFile(stateFile, JSON.stringify(changed));
+            const refused = await f.invoke(['--acceptance-only']);
+            assert.equal(refused.code, 1, `${drift}: ${refused.stdout}${refused.stderr}`);
+            assert.match(refused.stderr, /verification failed; no release changes were made/);
+            assert.equal((await f.stages()).length, stages, `${drift} cannot run application acceptance`);
+            assert.equal(
+              (await f.calls()).filter(
+                (c) =>
+                  (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+                  (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
+              ).length,
+              count,
+            );
           }
-          await fs.writeFile(stateFile, JSON.stringify(changed));
-          const refused = await f.invoke(['--acceptance-only']);
-          assert.equal(refused.code, 1, `${drift}: ${refused.stdout}${refused.stderr}`);
-          assert.match(refused.stderr, /verification failed; no release changes were made/);
-          assert.equal((await f.stages()).length, stages, `${drift} cannot run application acceptance`);
+          const historicalCapacity = structuredClone(settled);
+          const saved = parseAllDocuments(historicalCapacity.manifest)
+            .map((doc) => doc.toJSON())
+            .filter(Boolean);
+          saved.find(
+            (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'proxy',
+          ).spec.replicas = 7;
+          historicalCapacity.manifest = saved.map((r) => JSON.stringify(r)).join('\n---\n');
+          await fs.writeFile(stateFile, JSON.stringify(historicalCapacity));
+          const grown = await f.invoke(['--acceptance-only']);
+          assert.equal(grown.code, 0, grown.stdout + grown.stderr);
+          assert.equal(
+            (await f.stages()).length,
+            stages + 1,
+            'valid historical autoscaled capacity still permits acceptance',
+          );
           assert.equal(
             (await f.calls()).filter(
               (c) =>
@@ -668,401 +699,376 @@ for (const fault of ['lostFinalInventory', 'lostFinalApply'])
             count,
           );
         }
-        const historicalCapacity = structuredClone(settled);
-        const saved = parseAllDocuments(historicalCapacity.manifest)
-          .map((doc) => doc.toJSON())
-          .filter(Boolean);
-        saved.find(
-          (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'proxy',
-        ).spec.replicas = 7;
-        historicalCapacity.manifest = saved.map((r) => JSON.stringify(r)).join('\n---\n');
-        await fs.writeFile(stateFile, JSON.stringify(historicalCapacity));
-        const grown = await f.invoke(['--acceptance-only']);
-        assert.equal(grown.code, 0, grown.stdout + grown.stderr);
-        assert.equal(
-          (await f.stages()).length,
-          stages + 1,
-          'valid historical autoscaled capacity still permits acceptance',
-        );
-        assert.equal(
-          (await f.calls()).filter(
-            (c) =>
-              (c.kind === 'helm' && c.args[0] === 'upgrade') ||
-              (c.kind === 'kubectl' && ['patch', 'delete', 'scale', 'exec'].includes(c.args[0])),
-          ).length,
-          count,
-        );
+      },
+    );
+  test(
+    'failed restored-copy migration or altered checkpoint blocks live candidate templates and keeps the exact operation recoverable',
+    { timeout: 330000 },
+    async (t) => {
+      for (const fault of ['migrationValidationFail', 'checkpointMetadataChanged']) {
+        const f = await fixture(t, 'maintenance', fault, true);
+        const result = await f.invoke();
+        assert.equal(result.code, 1, result.stdout + result.stderr);
+        const record = JSON.parse((await f.state()).journal.data.record);
+        assert.equal(record.phase, 'quiesced', fault);
+        assert.equal((await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length, 0, fault);
+        assert.equal((await f.state()).pods.length, 0, fault);
       }
     },
   );
 
-test(
-  'failed restored-copy migration or altered checkpoint blocks live candidate templates and keeps the exact operation recoverable',
-  { timeout: 330000 },
-  async (t) => {
-    for (const fault of ['migrationValidationFail', 'checkpointMetadataChanged']) {
-      const f = await fixture(t, 'maintenance', fault, true);
-      const result = await f.invoke();
-      assert.equal(result.code, 1, result.stdout + result.stderr);
-      const record = JSON.parse((await f.state()).journal.data.record);
-      assert.equal(record.phase, 'quiesced', fault);
-      assert.equal((await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length, 0, fault);
-      assert.equal((await f.state()).pods.length, 0, fault);
-    }
-  },
-);
-
-test(
-  'real readiness preflight rejects a pending Helm release or unavailable local prerequisites without maintenance',
-  { timeout: 660000 },
-  async (t) => {
-    for (const fault of ['pendingRelease', 'preflightFail']) {
-      const f = await fixture(t, 'maintenance', fault);
-      const result = await f.invoke(['--preflight-only']);
-      assert.equal(result.code, 1, result.stdout + result.stderr);
-      assert.match(result.stderr, fault === 'pendingRelease' ? /not deployed/ : /adapter did not complete/);
-      assert.equal(
-        (await f.calls()).some(
-          (c) =>
-            (c.kind === 'helm' && c.args[0] === 'upgrade') ||
-            (c.kind === 'kubectl' && ['create', 'replace', 'scale', 'patch', 'delete', 'exec'].includes(c.args[0])),
-        ),
-        false,
-      );
-      assert.equal((await f.state()).journal, undefined);
-    }
-  },
-);
-
-test(
-  'real GKE-shaped HPA preflight and final-apply connection recovery never replay workloads or backup',
-  { timeout: 660000 },
-  async (t) => {
-    const f = await fixture(t, 'maintenance', 'gkeHpa');
-    const preflight = await f.invoke(['--preflight-only']);
-    assert.equal(preflight.code, 0, preflight.stdout + preflight.stderr);
-    assert.deepEqual(
-      (await f.stages()).map((s) => s.stage),
-      ['preflight'],
-    );
-    assert.equal((await f.state()).journal, undefined);
-    const stateFile = path.join(f.directory, 'state.json');
-    await fs.writeFile(stateFile, JSON.stringify({ ...(await f.state()), fault: 'settlementDisconnect' }));
-    const deployment = await f.invoke();
-    assert.equal(deployment.code, 1, deployment.stdout + deployment.stderr);
-    assert.match(deployment.stderr, /--verify-only/);
-    const record = JSON.parse((await f.state()).journal.data.record);
-    assert.equal(record.phase, 'resuming');
-    assert.equal(record.finalApply.protocol, 2);
-    assert.ok((await f.state()).pods.length > 0);
-    const mutations = (calls) =>
-      calls.filter(
-        (c) =>
-          (c.kind === 'helm' && c.args[0] === 'upgrade') ||
-          (c.kind === 'kubectl' && ['scale', 'patch', 'delete', 'exec'].includes(c.args[0])),
-      ).length;
-    const before = mutations(await f.calls());
-    const stages = (await f.stages()).length;
-    const checkpoint = record.recoveryCheckpoint.directory;
-    const receipt = JSON.parse(await fs.readFile(path.join(checkpoint, 'receipt.json'), 'utf8'));
-    const artifact = path.join(checkpoint, receipt.artifacts[0].path);
-    const bytes = await fs.readFile(artifact);
-    await fs.writeFile(artifact, 'corrupted retained backup');
-    const rejected = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
-    assert.equal(rejected.code, 1, rejected.stdout + rejected.stderr);
-    assert.match(rejected.stderr, /checksum has changed/);
-    assert.equal(mutations(await f.calls()), before);
-    assert.equal((await f.stages()).length, stages);
-    assert.equal(JSON.parse((await f.state()).journal.data.record).phase, 'resuming');
-    await fs.writeFile(artifact, bytes);
-    const verified = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
-    assert.equal(verified.code, 0, verified.stdout + verified.stderr);
-    assert.equal(mutations(await f.calls()), before);
-    assert.deepEqual(
-      (await f.stages()).slice(stages).map((s) => s.stage),
-      ['after'],
-    );
-    const completed = JSON.parse((await f.state()).journal.data.record);
-    assert.equal(completed.phase, 'complete');
-    assert.equal(completed.verificationOnlyRecovery, true);
-    const report = JSON.parse(
-      await fs.readFile(path.join(f.directory, 'artifacts/result/deployment-result.json'), 'utf8'),
-    );
-    assert.equal(report.outcome.infrastructure, 'existing-verified');
-    assert.equal(report.outcome.application, 'passed');
-  },
-);
-
-for (const fault of [
-  'completedAutoscalerAdvance',
-  'samplingAutoscalerAdvance',
-  'busyAutoscalerAdvance',
-  'inventoryAutoscalerAdvance',
-])
   test(
-    `real maintenance command handles ${fault} autoscaler journal after baseline`,
+    'real readiness preflight rejects a pending Helm release or unavailable local prerequisites without maintenance',
     { timeout: 660000 },
     async (t) => {
-      const busy = fault === 'busyAutoscalerAdvance';
-      const f = await fixture(t, 'maintenance', fault);
-      const result = await f.invoke();
-      assert.equal((await f.state()).autoscalerAdvancedDuringBaseline, true);
-      assert.equal(result.code, busy ? 1 : 0, result.stdout + result.stderr);
-      if (busy) {
-        assert.match(result.stderr, /autoscaling operation owns this release/);
+      for (const fault of ['pendingRelease', 'preflightFail']) {
+        const f = await fixture(t, 'maintenance', fault);
+        const result = await f.invoke(['--preflight-only']);
+        assert.equal(result.code, 1, result.stdout + result.stderr);
+        assert.match(result.stderr, fault === 'pendingRelease' ? /not deployed/ : /adapter did not complete/);
         assert.equal(
           (await f.calls()).some(
-            (r) =>
-              (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
-              (r.kind === 'helm' && r.args[0] === 'upgrade'),
+            (c) =>
+              (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+              (c.kind === 'kubectl' && ['create', 'replace', 'scale', 'patch', 'delete', 'exec'].includes(c.args[0])),
           ),
           false,
         );
-        assert.equal(JSON.parse((await f.state()).journal.data.record).autoscalingProtocol, 1);
-      } else {
-        const record = JSON.parse((await f.state()).journal.data.record);
-        if (fault === 'inventoryAutoscalerAdvance') {
-          const state = await f.state();
-          assert.equal(state.inventoryAutoscalerAdvanced, true);
-          assert.equal(state.claimVersion, state.inventorySampleVersion);
-        }
-        if (fault === 'samplingAutoscalerAdvance')
-          assert.ok(
-            (await f.state()).samplingLeaseReads > 0,
-            'The command must observe the held sampling lease before waiting',
-          );
-        assert.equal(record.formatVersion, 1);
-        assert.equal(record.phase, 'complete');
-        assert.equal((await f.state()).installed.release.production.manifestDigest, f.digest);
+        assert.equal((await f.state()).journal, undefined);
       }
     },
   );
 
-test(
-  'real maintenance claim is never retried after a CAS conflict or lost acknowledgement',
-  { timeout: 660000 },
-  async (t) => {
-    for (const fault of ['claimConflict', 'lostClaimAcknowledgement']) {
-      const f = await fixture(t, 'maintenance', fault);
+  test(
+    'real GKE-shaped HPA preflight and final-apply connection recovery never replay workloads or backup',
+    { timeout: 660000 },
+    async (t) => {
+      const f = await fixture(t, 'maintenance', 'gkeHpa');
+      const preflight = await f.invoke(['--preflight-only']);
+      assert.equal(preflight.code, 0, preflight.stdout + preflight.stderr);
+      assert.deepEqual(
+        (await f.stages()).map((s) => s.stage),
+        ['preflight'],
+      );
+      assert.equal((await f.state()).journal, undefined);
+      const stateFile = path.join(f.directory, 'state.json');
+      await fs.writeFile(stateFile, JSON.stringify({ ...(await f.state()), fault: 'settlementDisconnect' }));
+      const deployment = await f.invoke();
+      assert.equal(deployment.code, 1, deployment.stdout + deployment.stderr);
+      assert.match(deployment.stderr, /--verify-only/);
+      const record = JSON.parse((await f.state()).journal.data.record);
+      assert.equal(record.phase, 'resuming');
+      assert.equal(record.finalApply.protocol, 2);
+      assert.ok((await f.state()).pods.length > 0);
+      const mutations = (calls) =>
+        calls.filter(
+          (c) =>
+            (c.kind === 'helm' && c.args[0] === 'upgrade') ||
+            (c.kind === 'kubectl' && ['scale', 'patch', 'delete', 'exec'].includes(c.args[0])),
+        ).length;
+      const before = mutations(await f.calls());
+      const stages = (await f.stages()).length;
+      const checkpoint = record.recoveryCheckpoint.directory;
+      const receipt = JSON.parse(await fs.readFile(path.join(checkpoint, 'receipt.json'), 'utf8'));
+      const artifact = path.join(checkpoint, receipt.artifacts[0].path);
+      const bytes = await fs.readFile(artifact);
+      await fs.writeFile(artifact, 'corrupted retained backup');
+      const rejected = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
+      assert.equal(rejected.code, 1, rejected.stdout + rejected.stderr);
+      assert.match(rejected.stderr, /checksum has changed/);
+      assert.equal(mutations(await f.calls()), before);
+      assert.equal((await f.stages()).length, stages);
+      assert.equal(JSON.parse((await f.state()).journal.data.record).phase, 'resuming');
+      await fs.writeFile(artifact, bytes);
+      const verified = await f.invoke(['--resume-cutover', record.token, '--verify-only']);
+      assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+      assert.equal(mutations(await f.calls()), before);
+      assert.deepEqual(
+        (await f.stages()).slice(stages).map((s) => s.stage),
+        ['after'],
+      );
+      const completed = JSON.parse((await f.state()).journal.data.record);
+      assert.equal(completed.phase, 'complete');
+      assert.equal(completed.verificationOnlyRecovery, true);
+      const report = JSON.parse(
+        await fs.readFile(path.join(f.directory, 'artifacts/result/deployment-result.json'), 'utf8'),
+      );
+      assert.equal(report.outcome.infrastructure, 'existing-verified');
+      assert.equal(report.outcome.application, 'passed');
+    },
+  );
+
+  for (const fault of [
+    'completedAutoscalerAdvance',
+    'samplingAutoscalerAdvance',
+    'busyAutoscalerAdvance',
+    'inventoryAutoscalerAdvance',
+  ])
+    test(
+      `real maintenance command handles ${fault} autoscaler journal after baseline`,
+      { timeout: 660000 },
+      async (t) => {
+        const busy = fault === 'busyAutoscalerAdvance';
+        const f = await fixture(t, 'maintenance', fault);
+        const result = await f.invoke();
+        assert.equal((await f.state()).autoscalerAdvancedDuringBaseline, true);
+        assert.equal(result.code, busy ? 1 : 0, result.stdout + result.stderr);
+        if (busy) {
+          assert.match(result.stderr, /autoscaling operation owns this release/);
+          assert.equal(
+            (await f.calls()).some(
+              (r) =>
+                (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
+                (r.kind === 'helm' && r.args[0] === 'upgrade'),
+            ),
+            false,
+          );
+          assert.equal(JSON.parse((await f.state()).journal.data.record).autoscalingProtocol, 1);
+        } else {
+          const record = JSON.parse((await f.state()).journal.data.record);
+          if (fault === 'inventoryAutoscalerAdvance') {
+            const state = await f.state();
+            assert.equal(state.inventoryAutoscalerAdvanced, true);
+            assert.equal(state.claimVersion, state.inventorySampleVersion);
+          }
+          if (fault === 'samplingAutoscalerAdvance')
+            assert.ok(
+              (await f.state()).samplingLeaseReads > 0,
+              'The command must observe the held sampling lease before waiting',
+            );
+          assert.equal(record.formatVersion, 1);
+          assert.equal(record.phase, 'complete');
+          assert.equal((await f.state()).installed.release.production.manifestDigest, f.digest);
+        }
+      },
+    );
+
+  test(
+    'real maintenance claim is never retried after a CAS conflict or lost acknowledgement',
+    { timeout: 660000 },
+    async (t) => {
+      for (const fault of ['claimConflict', 'lostClaimAcknowledgement']) {
+        const f = await fixture(t, 'maintenance', fault);
+        const result = await f.invoke();
+        assert.equal(result.code, 1, result.stdout + result.stderr);
+        assert.match(result.stderr, /ownership write is unconfirmed/);
+        const writes = (await f.calls()).filter(
+          (r) =>
+            (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
+            (r.kind === 'helm' && r.args[0] === 'upgrade'),
+        );
+        assert.equal(writes.length, 1, 'Only the initial journal CAS may be dispatched');
+        assert.equal(writes[0].args[0], 'replace');
+        const record = JSON.parse((await f.state()).journal.data.record);
+        if (fault === 'lostClaimAcknowledgement') {
+          assert.equal(record.phase, 'quiescing');
+          assert.ok(result.stderr.includes(record.token), 'An uncertain accepted claim retains its recovery token');
+        } else assert.equal(record.autoscalingProtocol, 1);
+      }
+    },
+  );
+
+  test(
+    'real deployment command blocks mutations when backup fails after successful prerequisites',
+    { timeout: 660000 },
+    async (t) => {
+      const f = await fixture(t, 'rolling', 'backupFail');
       const result = await f.invoke();
       assert.equal(result.code, 1, result.stdout + result.stderr);
-      assert.match(result.stderr, /ownership write is unconfirmed/);
-      const writes = (await f.calls()).filter(
-        (r) =>
-          (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
-          (r.kind === 'helm' && r.args[0] === 'upgrade'),
+      assert.match(result.stderr, /adapter did not complete/);
+      assert.deepEqual(
+        (await f.stages()).map((r) => r.stage),
+        ['preflight', 'before', 'backup'],
       );
-      assert.equal(writes.length, 1, 'Only the initial journal CAS may be dispatched');
-      assert.equal(writes[0].args[0], 'replace');
-      const record = JSON.parse((await f.state()).journal.data.record);
-      if (fault === 'lostClaimAcknowledgement') {
-        assert.equal(record.phase, 'quiescing');
-        assert.ok(result.stderr.includes(record.token), 'An uncertain accepted claim retains its recovery token');
-      } else assert.equal(record.autoscalingProtocol, 1);
-    }
-  },
-);
-
-test(
-  'real deployment command blocks mutations when backup fails after successful prerequisites',
-  { timeout: 660000 },
-  async (t) => {
-    const f = await fixture(t, 'rolling', 'backupFail');
-    const result = await f.invoke();
-    assert.equal(result.code, 1, result.stdout + result.stderr);
-    assert.match(result.stderr, /adapter did not complete/);
-    assert.deepEqual(
-      (await f.stages()).map((r) => r.stage),
-      ['preflight', 'before', 'backup'],
-    );
-    assert.equal(
-      (await f.calls()).some(
-        (r) =>
-          (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
-          (r.kind === 'helm' && r.args[0] === 'upgrade'),
-      ),
-      false,
-    );
-  },
-);
-
-test(
-  'real deployment command rejects application evidence for another release before backup or mutation',
-  { timeout: 660000 },
-  async (t) => {
-    const f = await fixture(t, 'rolling', 'wrongInstallation');
-    const result = await f.invoke();
-    assert.equal(result.code, 1, result.stdout + result.stderr);
-    assert.match(result.stderr, /receipt belongs to another attempt or installation/);
-    assert.deepEqual(
-      (await f.stages()).map((r) => r.stage),
-      ['preflight'],
-    );
-    assert.equal(
-      (await f.calls()).some(
-        (r) =>
-          (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
-          (r.kind === 'helm' && r.args[0] === 'upgrade'),
-      ),
-      false,
-    );
-  },
-);
-
-test(
-  'real non-HA deployment uses the shared Helm command without automatic schema rollback',
-  { timeout: 660000 },
-  async (t) => {
-    const f = await fixture(t, 'direct', null);
-    const result = await f.invoke();
-    assert.equal(result.code, 0, result.stdout + result.stderr);
-    const upgrades = (await f.calls()).filter((r) => r.kind === 'helm' && r.args[0] === 'upgrade');
-    assert.equal(upgrades.length, 1);
-    assert.equal(upgrades[0].args.includes('--atomic'), false);
-    assert.ok(upgrades[0].args.includes('--wait-for-jobs'));
-    assert.equal((await f.state()).installed.release.production.manifestDigest, f.digest);
-    assert.deepEqual(
-      (await f.stages()).map((s) => s.stage),
-      ['preflight', 'before', 'backup', 'after'],
-    );
-  },
-);
-
-test(
-  'real deployment failure preserves its journal receipt when Helm diagnostic export also fails',
-  { timeout: 660000 },
-  async (t) => {
-    const f = await fixture(t, 'maintenance', 'lostTemplateDiagnostics');
-    const result = await f.invoke();
-    assert.equal(result.code, 1, result.stdout + result.stderr);
-    assert.match(result.stderr, /--resume-cutover/);
-    assert.match(result.stderr, /diagnostics disk unavailable/);
-    const state = await f.state(),
-      journal = JSON.parse(state.journal.data.record);
-    const report = JSON.parse(
-      await fs.readFile(path.join(f.directory, 'artifacts/result/deployment-result.json'), 'utf8'),
-    );
-    assert.equal(report.state, 'deployment-incomplete');
-    assert.equal(report.operation.token, journal.token);
-    assert.equal(report.operation.phase, 'validating');
-    assert.equal(report.operation.aborted, false);
-    assert.equal(report.outcome.infrastructure, 'unconfirmed');
-  },
-);
-
-for (const action of ['release', 'acquire'])
-  test(
-    `real overlap command observes a lost housekeeping ${action} acknowledgement without replay`,
-    { timeout: 660000 },
-    async (t) => {
-      const f = await fixture(t, 'overlap', `lostHousekeeping-${action}`);
-      const first = await f.invoke();
-      assert.equal(first.code, 1, first.stdout + first.stderr);
-      assert.match(first.stderr, /lost housekeeping acknowledgement/);
-      const journal = JSON.parse((await f.state()).journal.data.record);
-      await f.expireLease();
-      const recovered = await f.invoke(['--resume-ha', journal.token]);
-      assert.equal(recovered.code, 0, recovered.stdout + recovered.stderr);
-      const state = await f.state();
-      const backends = state.pods.filter((p) => p.metadata.labels['app.kubernetes.io/component'] === 'backend');
-      assert.equal(backends.length, 1);
-      assert.equal(state.retirements[backends[0].metadata.name].housekeeping.state, 'owner');
-      const commands = (await f.calls()).filter((r) => r.args.includes(`--housekeeping-${action}`));
-      assert.equal(commands.length, 2, 'one command per direction, never replay the uncertain first handover');
-      assert.ok((await f.stages()).some((stage) => stage.stage === 'backend'));
+      assert.equal(
+        (await f.calls()).some(
+          (r) =>
+            (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
+            (r.kind === 'helm' && r.args[0] === 'upgrade'),
+        ),
+        false,
+      );
     },
   );
 
-for (const mode of ['rolling', 'maintenance', 'topology'])
   test(
-    `real ${mode} command recovers its exact interrupted operation without dropping safety or replaying an unknown begin`,
+    'real deployment command rejects application evidence for another release before backup or mutation',
     { timeout: 660000 },
     async (t) => {
-      const f = await fixture(t, mode, mode === 'maintenance' ? 'lostTemplate' : 'lostBegin');
-      const first = await f.invoke();
-      assert.equal(first.code, 1, first.stdout + first.stderr);
-      assert.match(first.stderr, /lost .*acknowledgement/);
-      const interrupted = await f.state(),
-        journal = JSON.parse(interrupted.journal.data.record);
-      assert.equal(journal.deploymentSafety.scope, 'production');
-      assert.equal(
-        journal.deploymentSafety.mode,
-        mode === 'rolling' ? 'rolling' : mode === 'maintenance' ? 'maintenance' : 'topology',
+      const f = await fixture(t, 'rolling', 'wrongInstallation');
+      const result = await f.invoke();
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /receipt belongs to another attempt or installation/);
+      assert.deepEqual(
+        (await f.stages()).map((r) => r.stage),
+        ['preflight'],
       );
-      assert.ok(journal.workflowIdentity.beforeVerified);
-      if (mode === 'rolling') {
-        assert.equal(journal.preparation.state, 'complete');
-        assert.ok(
-          journal.preparation.jobs.length && journal.preparation.jobs.every((j) => j.warmed && j.absent && j.nodeUid),
-        );
-        const calls = await f.calls();
-        const firstHelm = calls.findIndex((c) => c.kind === 'helm' && c.args[0] === 'upgrade');
-        const cleanup = calls
-          .map((c, i) => (c.args[0] === 'delete' && c.args[2]?.includes('/jobs/') ? i : -1))
-          .filter((i) => i >= 0);
-        assert.equal(cleanup.length, journal.preparation.jobs.length);
-        assert.ok(
-          cleanup.every((i) => i < firstHelm),
-          'Preparation must finish before templates can retire any frontend',
-        );
-      }
-      const begins = (await f.calls()).filter((r) => r.args.includes('--begin-only')).length;
-      const token = await f.expireLease();
-      const recovered = await f.invoke([mode === 'maintenance' ? '--resume-cutover' : '--resume-ha', token]);
-      assert.equal(recovered.code, 0, recovered.stdout + recovered.stderr);
-      const completed = await f.state(),
-        final = JSON.parse(completed.journal.data.record);
-      assert.equal(final.phase, 'complete');
-      assert.deepEqual(final.deploymentSafety, journal.deploymentSafety);
-      const resultFile = path.join(f.directory, 'artifacts/result/deployment-result.json');
-      const outcome = JSON.parse(await fs.readFile(resultFile, 'utf8'));
-      assert.equal(outcome.state, 'complete');
-      assert.deepEqual(outcome.operation, { token: final.token, phase: 'complete' });
-      assert.deepEqual(outcome.outcome, {
-        infrastructure: 'applied',
-        autoscaling: 'not-configured',
-        application: 'passed',
-      });
-      assert.equal(completed.installed.release.production.manifestDigest, f.digest);
-      const stages = await f.stages();
-      assert.equal(stages.filter((s) => s.stage === 'before').length, 1);
-      assert.equal(stages.filter((s) => s.stage === 'backup').length, 2);
-      assert.equal(stages.at(-1).stage, 'after');
-      assert.equal(new Set(stages.map((s) => s.operationId)).size, 1);
-      if (mode !== 'maintenance') {
-        const originalOwner = journal.owner.name;
+      assert.equal(
+        (await f.calls()).some(
+          (r) =>
+            (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
+            (r.kind === 'helm' && r.args[0] === 'upgrade'),
+        ),
+        false,
+      );
+    },
+  );
+
+  test(
+    'real non-HA deployment uses the shared Helm command without automatic schema rollback',
+    { timeout: 660000 },
+    async (t) => {
+      const f = await fixture(t, 'direct', null);
+      const result = await f.invoke();
+      assert.equal(result.code, 0, result.stdout + result.stderr);
+      const upgrades = (await f.calls()).filter((r) => r.kind === 'helm' && r.args[0] === 'upgrade');
+      assert.equal(upgrades.length, 1);
+      assert.equal(upgrades[0].args.includes('--atomic'), false);
+      assert.ok(upgrades[0].args.includes('--wait-for-jobs'));
+      assert.equal((await f.state()).installed.release.production.manifestDigest, f.digest);
+      assert.deepEqual(
+        (await f.stages()).map((s) => s.stage),
+        ['preflight', 'before', 'backup', 'after'],
+      );
+    },
+  );
+
+  test(
+    'real deployment failure preserves its journal receipt when Helm diagnostic export also fails',
+    { timeout: 660000 },
+    async (t) => {
+      const f = await fixture(t, 'maintenance', 'lostTemplateDiagnostics');
+      const result = await f.invoke();
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /--resume-cutover/);
+      assert.match(result.stderr, /diagnostics disk unavailable/);
+      const state = await f.state(),
+        journal = JSON.parse(state.journal.data.record);
+      const report = JSON.parse(
+        await fs.readFile(path.join(f.directory, 'artifacts/result/deployment-result.json'), 'utf8'),
+      );
+      assert.equal(report.state, 'deployment-incomplete');
+      assert.equal(report.operation.token, journal.token);
+      assert.equal(report.operation.phase, 'validating');
+      assert.equal(report.operation.aborted, false);
+      assert.equal(report.outcome.infrastructure, 'unconfirmed');
+    },
+  );
+
+  for (const action of ['release', 'acquire'])
+    test(
+      `real overlap command observes a lost housekeeping ${action} acknowledgement without replay`,
+      { timeout: 660000 },
+      async (t) => {
+        const f = await fixture(t, 'overlap', `lostHousekeeping-${action}`);
+        const first = await f.invoke();
+        assert.equal(first.code, 1, first.stdout + first.stderr);
+        assert.match(first.stderr, /lost housekeeping acknowledgement/);
+        const journal = JSON.parse((await f.state()).journal.data.record);
+        await f.expireLease();
+        const recovered = await f.invoke(['--resume-ha', journal.token]);
+        assert.equal(recovered.code, 0, recovered.stdout + recovered.stderr);
+        const state = await f.state();
+        const backends = state.pods.filter((p) => p.metadata.labels['app.kubernetes.io/component'] === 'backend');
+        assert.equal(backends.length, 1);
+        assert.equal(state.retirements[backends[0].metadata.name].housekeeping.state, 'owner');
+        const commands = (await f.calls()).filter((r) => r.args.includes(`--housekeeping-${action}`));
+        assert.equal(commands.length, 2, 'one command per direction, never replay the uncertain first handover');
+        assert.ok((await f.stages()).some((stage) => stage.stage === 'backend'));
+      },
+    );
+
+  for (const mode of ['rolling', 'maintenance', 'topology'])
+    test(
+      `real ${mode} command recovers its exact interrupted operation without dropping safety or replaying an unknown begin`,
+      { timeout: 660000 },
+      async (t) => {
+        const f = await fixture(t, mode, mode === 'maintenance' ? 'lostTemplate' : 'lostBegin');
+        const first = await f.invoke();
+        assert.equal(first.code, 1, first.stdout + first.stderr);
+        assert.match(first.stderr, /lost .*acknowledgement/);
+        const interrupted = await f.state(),
+          journal = JSON.parse(interrupted.journal.data.record);
+        assert.equal(journal.deploymentSafety.scope, 'production');
         assert.equal(
-          (await f.calls()).filter(
-            (r) => r.args[0] === 'exec' && r.args[1] === originalOwner && r.args.includes('--begin-only'),
-          ).length,
-          1,
+          journal.deploymentSafety.mode,
+          mode === 'rolling' ? 'rolling' : mode === 'maintenance' ? 'maintenance' : 'topology',
         );
-        assert.ok((await f.calls()).filter((r) => r.args.includes('--begin-only')).length >= begins);
-      }
-      if (mode === 'topology') {
-        const upgrades = (await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length;
-        const priorStages = (await f.stages()).length;
-        const stateFile = path.join(f.directory, 'state.json');
-        await fs.writeFile(stateFile, JSON.stringify({ ...(await f.state()), fault: 'unavailableInventory' }));
-        const failedVerification = await f.invoke(['--acceptance-only']);
-        assert.equal(failedVerification.code, 1, failedVerification.stdout + failedVerification.stderr);
-        assert.match(failedVerification.stderr, /verification failed; no release changes were made/);
-        assert.equal(
-          JSON.parse(await fs.readFile(path.join(f.directory, 'artifacts/result/deployment-result.json'), 'utf8'))
-            .state,
-          'verification-incomplete',
-        );
-        assert.equal((await f.stages()).length, priorStages);
-        assert.equal((await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length, upgrades);
-        await fs.writeFile(stateFile, JSON.stringify({ ...(await f.state()), fault: null }));
-        const verified = await f.invoke(['--acceptance-only']);
-        assert.equal(verified.code, 0, verified.stdout + verified.stderr);
-        assert.deepEqual(JSON.parse(await fs.readFile(resultFile, 'utf8')).outcome, {
-          infrastructure: 'existing-verified',
+        assert.ok(journal.workflowIdentity.beforeVerified);
+        if (mode === 'rolling') {
+          assert.equal(journal.preparation.state, 'complete');
+          assert.ok(
+            journal.preparation.jobs.length && journal.preparation.jobs.every((j) => j.warmed && j.absent && j.nodeUid),
+          );
+          const calls = await f.calls();
+          const firstHelm = calls.findIndex((c) => c.kind === 'helm' && c.args[0] === 'upgrade');
+          const cleanup = calls
+            .map((c, i) => (c.args[0] === 'delete' && c.args[2]?.includes('/jobs/') ? i : -1))
+            .filter((i) => i >= 0);
+          assert.equal(cleanup.length, journal.preparation.jobs.length);
+          assert.ok(
+            cleanup.every((i) => i < firstHelm),
+            'Preparation must finish before templates can retire any frontend',
+          );
+        }
+        const begins = (await f.calls()).filter((r) => r.args.includes('--begin-only')).length;
+        const token = await f.expireLease();
+        const recovered = await f.invoke([mode === 'maintenance' ? '--resume-cutover' : '--resume-ha', token]);
+        assert.equal(recovered.code, 0, recovered.stdout + recovered.stderr);
+        const completed = await f.state(),
+          final = JSON.parse(completed.journal.data.record);
+        assert.equal(final.phase, 'complete');
+        assert.deepEqual(final.deploymentSafety, journal.deploymentSafety);
+        const resultFile = path.join(f.directory, 'artifacts/result/deployment-result.json');
+        const outcome = JSON.parse(await fs.readFile(resultFile, 'utf8'));
+        assert.equal(outcome.state, 'complete');
+        assert.deepEqual(outcome.operation, { token: final.token, phase: 'complete' });
+        assert.deepEqual(outcome.outcome, {
+          infrastructure: 'applied',
           autoscaling: 'not-configured',
           application: 'passed',
         });
-        assert.equal((await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length, upgrades);
-      }
-    },
-  );
+        assert.equal(completed.installed.release.production.manifestDigest, f.digest);
+        const stages = await f.stages();
+        assert.equal(stages.filter((s) => s.stage === 'before').length, 1);
+        assert.equal(stages.filter((s) => s.stage === 'backup').length, 2);
+        assert.equal(stages.at(-1).stage, 'after');
+        assert.equal(new Set(stages.map((s) => s.operationId)).size, 1);
+        if (mode !== 'maintenance') {
+          const originalOwner = journal.owner.name;
+          assert.equal(
+            (await f.calls()).filter(
+              (r) => r.args[0] === 'exec' && r.args[1] === originalOwner && r.args.includes('--begin-only'),
+            ).length,
+            1,
+          );
+          assert.ok((await f.calls()).filter((r) => r.args.includes('--begin-only')).length >= begins);
+        }
+        if (mode === 'topology') {
+          const upgrades = (await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length;
+          const priorStages = (await f.stages()).length;
+          const stateFile = path.join(f.directory, 'state.json');
+          await fs.writeFile(stateFile, JSON.stringify({ ...(await f.state()), fault: 'unavailableInventory' }));
+          const failedVerification = await f.invoke(['--acceptance-only']);
+          assert.equal(failedVerification.code, 1, failedVerification.stdout + failedVerification.stderr);
+          assert.match(failedVerification.stderr, /verification failed; no release changes were made/);
+          assert.equal(
+            JSON.parse(await fs.readFile(path.join(f.directory, 'artifacts/result/deployment-result.json'), 'utf8'))
+              .state,
+            'verification-incomplete',
+          );
+          assert.equal((await f.stages()).length, priorStages);
+          assert.equal((await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length, upgrades);
+          await fs.writeFile(stateFile, JSON.stringify({ ...(await f.state()), fault: null }));
+          const verified = await f.invoke(['--acceptance-only']);
+          assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+          assert.deepEqual(JSON.parse(await fs.readFile(resultFile, 'utf8')).outcome, {
+            infrastructure: 'existing-verified',
+            autoscaling: 'not-configured',
+            application: 'passed',
+          });
+          assert.equal((await f.calls()).filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length, upgrades);
+        }
+      },
+    );
+});

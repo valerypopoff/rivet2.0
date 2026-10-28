@@ -1438,11 +1438,33 @@ ancestor, so restoring at the root would move `packages/core/dist` to
 `core/dist` and make consumers fail module resolution even though the build job
 succeeded. `check-ci-workflows.mjs` guards both fan-outs.
 
-Studio Server deployment contracts fan out into two isolated lanes after that
-build: managed storage/schema checks and gateway/proxy checks. The final `verify`
-job still requires the complete matrix to succeed. Fixtures stay ordered within
-each lane, including the proxy's real DNS-cache expiry and outage/recovery waits;
-the optimization removes serialization between independent hosts, not coverage.
+Studio Server deployment contracts fan out into three isolated lanes after that
+build: managed storage/schema checks, deployment/Helm contracts and gateway/proxy
+checks. The final `verify` job requires the complete matrix to succeed.
+The real CLI journeys in `deployment-command.test.mjs` run in a Node test suite
+with concurrency bounded to three. Each journey owns a unique checkout, stand-in
+state/lock, simulated clock, receipts and child processes; its individual commands,
+interruption/recovery steps and assertions remain ordered. Do not share that
+mutable fixture between concurrent journeys or increase every deployment test's
+concurrency globally. The 20-minute CI deadline, per-command timeout, backup,
+lost-acknowledgement and no-write-replay assertions are unchanged.
+Other checks keep their existing ordering, including the proxy's real DNS-cache
+expiry and outage/recovery waits. No check is removed or converted to a warning.
+
+Local Node 24.21.0 Linux verification (2026-10-28) passes all 24 real CLI cases
+with no skips in 10m21s (`artifacts/deployment-command-concurrent-linux.log`).
+The test container has networking disabled; no Kubernetes cluster or cloud
+qualification is involved. The fixture-lock, operation-safety and CI support set
+passes 46 tests (`artifacts/deployment-command-concurrency-support.log`). Hosted
+runner timing must still be checked on the subsequent GitHub run.
+
+A macOS job with no assigned runner and no steps/logs is distinct from a build
+failure. GitHub may annotate it with hosted-runner acquisition/internal-server
+errors and Apple Silicon capacity notices. Retry only the affected job/dependents
+after inspecting those annotations; do not alter compilation, signing or test
+policy to conceal unavailable infrastructure. A deployment-contract job cancelled
+at its deadline instead requires investigating test duration, not treating it as
+the same runner-allocation problem.
 
 ## `release.yml`
 

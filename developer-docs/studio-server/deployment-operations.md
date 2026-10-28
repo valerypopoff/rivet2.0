@@ -1348,6 +1348,11 @@ a unique workspace; a fresh checkout must not depend on earlier local diagnostic
 previous CI step. The missing-parent/concurrent-allocation regression starts
 with an empty temporary checkout. Cleanup removes only the exact fixture child,
 never the shared artifacts parent or another operation's diagnostics.
+Independent CLI journeys run in a suite capped at three concurrent cases. They
+never share a fixture checkout, state lock, simulated clock or child process;
+commands and interruption/recovery assertions within each case remain sequential.
+This bounds CI wall time without weakening deadlines, skipping safety scenarios
+or changing the production deployment runner.
 Git admission, immutable manifest validation, argument parsing,
 private backup/acceptance adapter subprocesses and real Helm lint/render run
 normally. A test-only Node preload maps exactly the selected Helm/kubectl
