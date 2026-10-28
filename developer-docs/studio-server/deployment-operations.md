@@ -1255,6 +1255,24 @@ confirmation. Unconfirmed shutdown blocks installation and requires the operator
 to settle those children before recovery. The reviewed adapter must still settle
 any detached daemons or remote jobs itself; OS process-tree termination is not
 proof about such work.
+On POSIX, successful `kill(-pgid, SIGKILL)` acknowledges signal delivery, not
+completed shutdown. After signalling the exact freshly owned group, the tool
+uses bounded `ps -axo pgid=,stat=` snapshots until no live member remains and
+the adapter has closed. Suspended (`T`) members still block; terminal zombies
+may await their parent's reaper but cannot continue backup writes. Other groups
+are ignored and never killed. Missing/failed/malformed process inspection or a
+hung inspector produces **unconfirmed shutdown**, not permission to recover;
+the same five-second deadline bounds and stops the current inspector. The host
+must provide a compatible `ps`. Windows retains exact-PID `taskkill /T /F` and
+requires its acknowledged result plus adapter closure.
+The regression suite covers delayed child death after parent closure, terminal
+versus suspended members, unrelated groups and failed/hung inspections, alongside
+the real listener/late-write regression. No backup or migration write is retried.
+Local verification (2026-10-28): the combined maintenance/operation/cutover/CI
+set passes 121 tests on offline Linux Node 24.21.0, and the real child-listener
+case passes ten consecutive runs. Windows passes the 31 maintenance and 14 CI
+tests. Retained local logs are `artifacts/ci-maintenance-support-linux.log`,
+`artifacts/ci-maintenance-windows-final.log` and `artifacts/ci-history-windows-final.log`.
 The real-process shutdown regression gates child writes on an explicit recovery
 signal sent only after confirmed shutdown. It also requires the child's verified
 loopback listener to refuse connections; a connection timeout cannot prove exit.

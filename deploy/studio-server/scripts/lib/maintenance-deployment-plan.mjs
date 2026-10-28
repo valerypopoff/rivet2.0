@@ -491,7 +491,14 @@ export async function executeMaintenanceBackupAdapter(
   script,
   request,
   receipt,
-  { directory, timeoutMs, shutdownTimeoutMs = 5_000, spawnProcess = spawn, platform = process.platform },
+  {
+    directory,
+    timeoutMs,
+    shutdownTimeoutMs = 5_000,
+    spawnProcess = spawn,
+    platform = process.platform,
+    signalProcess = process.kill,
+  },
 ) {
   if (![timeoutMs, shutdownTimeoutMs].every((value) => Number.isFinite(value) && value > 0 && value <= maxTimerMs))
     throw new Error('Frozen backup adapter timeouts must be positive and within the supported timer range.');
@@ -533,6 +540,8 @@ export async function executeMaintenanceBackupAdapter(
         // Its partial files are preserved; no verified checkpoint or retry follows.
         if (helper && !helperClosed) {
           tryKill(helper);
+          // unref() alone does not release a POSIX inspector's piped stdout.
+          helper.stdout?.destroy?.();
           helper.unref();
         }
         if (!childClosed) child.unref();
@@ -548,8 +557,11 @@ export async function executeMaintenanceBackupAdapter(
         stopAdapterTree(child, {
           spawnProcess,
           platform,
+          signalProcess,
+          isSettled: () => settled,
           onHelper: (value) => {
             helper = value;
+            helperClosed = false;
             helper.once('close', () => {
               helperClosed = true;
             });
@@ -586,15 +598,24 @@ function tryKill(child) {
   }
 }
 
-async function stopAdapterTree(child, { spawnProcess, platform, onHelper }) {
+async function stopAdapterTree(child, { spawnProcess, platform, onHelper, signalProcess, isSettled }) {
   if (!Number.isInteger(child.pid) || child.pid <= 0) return false;
   if (platform !== 'win32') {
     try {
-      process.kill(-child.pid, 'SIGKILL');
-      return true;
+      signalProcess(-child.pid, 'SIGKILL');
     } catch (error) {
-      return error.code === 'ESRCH';
+      if (error.code !== 'ESRCH') return false;
     }
+    // Delivery is asynchronous. Parent closure does not prove that every child
+    // has left the kernel (a paused child can even retain a listening socket).
+    // Poll only this freshly owned process group, under the caller's existing
+    // shutdown deadline. Zombies are terminal and may await reaping by PID 1.
+    while (!isSettled()) {
+      const stopped = await inspectAdapterGroup(child.pid, { spawnProcess, onHelper });
+      if (stopped !== false) return stopped === true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
   }
   // This PID is the still-owned child object, not a discovered process name.
   // /T includes its pg_dump/local-restore children; /F cannot be ignored by an
@@ -613,6 +634,36 @@ async function stopAdapterTree(child, { spawnProcess, platform, onHelper }) {
     taskkill.once('close', (code) => {
       if (code !== 0) tryKill(child);
       resolve(code === 0);
+    });
+  });
+}
+
+function inspectAdapterGroup(group, { spawnProcess, onHelper }) {
+  return new Promise((resolve) => {
+    const probe = spawnProcess('ps', ['-axo', 'pgid=,stat='], {
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    onHelper(probe); // The outer shutdown deadline kills/unrefs a hung probe.
+    let output = '';
+    let invalid = false;
+    probe.stdout.on('data', (chunk) => {
+      if (output.length + chunk.length > 1024 * 1024) {
+        invalid = true;
+        tryKill(probe);
+      } else output += chunk;
+    });
+    probe.once('error', () => resolve(null));
+    probe.once('close', (code) => {
+      if (code !== 0 || invalid || !output.trim()) return resolve(null);
+      let live = false;
+      for (const line of output.split(/\r?\n/).filter((value) => value.trim())) {
+        const entry = /^\s*(\d+)\s+([A-Zt][<NLSsl+EIXV]*)\s*$/.exec(line);
+        if (!entry) return resolve(null);
+        if (Number(entry[1]) === group && !/^[ZX]/.test(entry[2])) live = true;
+      }
+      resolve(!live);
     });
   });
 }

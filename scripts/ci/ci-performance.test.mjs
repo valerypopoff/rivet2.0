@@ -24,6 +24,55 @@ const { createGitHubActionsHandler } = createRequire(import.meta.url)(
   '../../postman/mocks/github-actions/contract.cjs',
 );
 
+test('Git checkout fails a stalled HTTP read using its low-speed deadline, not the outer job timeout', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-git-stall-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet'], { cwd: root, stdio: 'pipe' });
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    response.writeHead(200, { 'Content-Type': 'application/x-git-upload-pack-advertisement' });
+    response.flushHeaders(); // Deliberately never send the advertised Git body.
+  });
+  t.after(async () => {
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const result = await new Promise((resolve) =>
+    execFile(
+      'git',
+      [
+        '-c',
+        'http.proxy=',
+        'fetch',
+        '--depth=1',
+        '--no-tags',
+        `http://127.0.0.1:${server.address().port}/fixture.git`,
+        'a'.repeat(40),
+      ],
+      {
+        cwd: root,
+        timeout: 8_000,
+        env: {
+          ...process.env,
+          NO_PROXY: '127.0.0.1',
+          LC_ALL: 'C',
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_HTTP_LOW_SPEED_LIMIT: '1024',
+          GIT_HTTP_LOW_SPEED_TIME: '1',
+        },
+      },
+      (error, _stdout, stderr) => resolve({ error, stderr }),
+    ),
+  );
+  assert.ok(requests > 0);
+  assert.equal(result.error?.code, 128, result.stderr);
+  assert.match(result.stderr, /Operation too slow|Timeout was reached/);
+  assert.notEqual(result.error?.killed, true, 'Git itself must stop the stalled transfer.');
+});
+
 test('migration history prepares exact evidence from a shallow checkout without changing HEAD or fetching other refs', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-migration-history-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

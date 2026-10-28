@@ -475,6 +475,10 @@ const repositoryCheckout = findStep(repositoryContracts, 'Check Out Repository',
 assert.equal(repositoryCheckout.with['fetch-depth'], 1);
 assert.equal(repositoryCheckout.with['fetch-tags'], false);
 assert.equal(repositoryCheckout['timeout-minutes'], 3);
+assert.deepEqual(repositoryCheckout.env, {
+  GIT_HTTP_LOW_SPEED_LIMIT: '1024',
+  GIT_HTTP_LOW_SPEED_TIME: '30',
+});
 const migrationHistory = findStep(repositoryContracts, 'Prepare migration Git evidence', 'Repository contracts');
 assert.equal(migrationHistory.run, 'node scripts/ci/prepare-migration-history.mjs');
 assert.equal(migrationHistory['timeout-minutes'], 4);

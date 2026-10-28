@@ -1477,6 +1477,15 @@ Ancestry is read from raw commit headers: `git show --no-patch` can still
 prefetch historical diff blobs in a partial clone. The ledger itself also runs
 with transports disabled, so verification never downloads additional history.
 
+The repository checkout also sets `GIT_HTTP_LOW_SPEED_LIMIT=1024` and
+`GIT_HTTP_LOW_SPEED_TIME=30` for that step only. A stalled HTTP fetch must fail
+inside Git early enough for checkout's existing bounded read retries, instead
+of hanging until the three-minute step deadline and losing all retry attempts.
+The 15-minute job deadline and shallow/exact-evidence policy remain unchanged.
+The CI-performance regression uses a real loopback Git HTTP request whose body
+never arrives, and proves that Git's low-speed timeout—not the test's outer
+deadline—terminates the fetch. It uses a one-second threshold only in the fixture.
+
 Repository timing reports only run after timing started and outside cancellation,
 so checkout failures do not generate a misleading missing-script cleanup error.
 Local verification on 2026-10-28 passes all 13 CI-performance regressions on

@@ -311,6 +311,10 @@ jobs:
       - name: Check Out Repository
         timeout-minutes: 3
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        env:
+          # Fail a stalled read early enough for checkout's bounded fetch retries.
+          GIT_HTTP_LOW_SPEED_LIMIT: '1024'
+          GIT_HTTP_LOW_SPEED_TIME: '30'
         with:
           fetch-depth: 1
           fetch-tags: false
