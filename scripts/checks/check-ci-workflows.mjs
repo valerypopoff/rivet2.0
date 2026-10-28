@@ -474,7 +474,18 @@ const repositoryContracts = studioJobs['repository-contracts'];
 const repositoryCheckout = findStep(repositoryContracts, 'Check Out Repository', 'Repository contracts');
 assert.equal(repositoryCheckout.with['fetch-depth'], 1);
 assert.equal(repositoryCheckout.with['fetch-tags'], false);
-assert.equal(repositoryCheckout['timeout-minutes'], 3);
+assert.equal(repositoryCheckout['timeout-minutes'], 5);
+assert.equal(repositoryContracts['timeout-minutes'], 15);
+assert.equal(repositoryCheckout.with.filter, 'blob:none');
+assert.equal(repositoryCheckout.with['sparse-checkout-cone-mode'], false);
+assert.deepEqual(repositoryCheckout.with['sparse-checkout'].trim().split(/\r?\n/), [
+  '/*',
+  '!/packages/app/sidecars/pnpm/pnpm-aarch64-apple-darwin',
+  '!/packages/app/sidecars/pnpm/pnpm-aarch64-unknown-linux-gnu',
+  '!/packages/app/sidecars/pnpm/pnpm-x86_64-apple-darwin',
+  '!/packages/app/sidecars/pnpm/pnpm-x86_64-pc-windows-msvc.exe',
+  '!/packages/app/sidecars/pnpm/pnpm-x86_64-unknown-linux-gnu',
+]);
 assert.deepEqual(repositoryCheckout.env, {
   GIT_HTTP_LOW_SPEED_LIMIT: '1024',
   GIT_HTTP_LOW_SPEED_TIME: '30',

@@ -5,6 +5,19 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+The repository-contract lane uses a filtered, shallow checkout that excludes only
+five exact native desktop pnpm executable paths under `packages/app/sidecars/pnpm/`.
+No wildcard excludes future source or metadata with a similar name.
+All source, tests, sidecar provenance and the complete offline Yarn cache remain
+available, and `git ls-files` retains the full tracked inventory for structural
+and migration checks. This lane does not package a desktop application; native
+packaging jobs keep full checkouts. A five-minute cold-checkout budget fits inside
+the unchanged 15-minute job limit. The measured current snapshot was about
+706 MiB before filtering, including 265 MiB of unused executables; shallow history
+alone did not remove them. Low-speed HTTP guards are supplemental, not an
+explanation for every checkout timeout. See [Build and CI](../BUILD-AND-CI.md)
+for the regression and verification contract.
+
 ## Keep release fixtures aligned without weakening checks
 
 Schema 18's current version differs from its rollback floor (17). Helm defaults

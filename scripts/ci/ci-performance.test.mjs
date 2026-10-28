@@ -24,6 +24,87 @@ const { createGitHubActionsHandler } = createRequire(import.meta.url)(
   '../../postman/mocks/github-actions/contract.cjs',
 );
 
+test('repository checkout keeps source, tracked inventory and offline cache without fetching desktop binaries', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-repository-checkout-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const remote = path.join(root, 'remote');
+  const checkout = path.join(root, 'checkout');
+  await fs.mkdir(remote);
+  const git = (cwd, args, options = {}) =>
+    execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      ...options,
+    }).trim();
+  git(remote, ['init', '--quiet']);
+  git(remote, ['config', 'user.name', 'CI fixture']);
+  git(remote, ['config', 'user.email', 'fixture@example.invalid']);
+  git(remote, ['config', 'core.autocrlf', 'false']);
+  git(remote, ['config', 'uploadpack.allowFilter', 'true']);
+  const files = {
+    'package.json': '{"fixture":true}',
+    '.yarn/cache/dependency.zip': 'fixture cache archive',
+    'packages/app/src/component.ts': 'fixture editor source',
+    'packages/app/src-tauri/config.json': 'fixture desktop source configuration',
+    'packages/studio-server-api/src/server.ts': 'fixture server source',
+    'deploy/studio-server/scripts/test.mjs': 'fixture repository check',
+    'developer-docs/guide.md': 'fixture documentation',
+    'packages/app/sidecars/pnpm/README.md': 'fixture sidecar documentation',
+    'packages/app/sidecars/pnpm/SHA256SUMS': 'fixture sidecar provenance',
+    'packages/app/sidecars/pnpm/pnpm-helper.mjs': 'fixture source must not be hidden by a broad wildcard',
+    'packages/app/sidecars/pnpm/pnpm-x86_64-pc-windows-msvc.exe': 'unneeded native binary',
+  };
+  for (const [file, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(remote, file)), { recursive: true });
+    await fs.writeFile(path.join(remote, file), content);
+  }
+  git(remote, ['add', '.']);
+  git(remote, ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture']);
+  const head = git(remote, ['rev-parse', 'HEAD']);
+  const binary = git(remote, ['rev-parse', 'HEAD:packages/app/sidecars/pnpm/pnpm-x86_64-pc-windows-msvc.exe']);
+  git(root, [
+    'clone',
+    '--quiet',
+    '--filter=blob:none',
+    '--depth=1',
+    '--no-tags',
+    '--no-checkout',
+    pathToFileURL(remote).href,
+    checkout,
+  ]);
+  git(checkout, ['sparse-checkout', 'set', '--no-cone', '--stdin'], {
+    input:
+      '/*\n' +
+      [
+        'pnpm-aarch64-apple-darwin',
+        'pnpm-aarch64-unknown-linux-gnu',
+        'pnpm-x86_64-apple-darwin',
+        'pnpm-x86_64-pc-windows-msvc.exe',
+        'pnpm-x86_64-unknown-linux-gnu',
+      ]
+        .map((name) => `!/packages/app/sidecars/pnpm/${name}\n`)
+        .join(''),
+  });
+  git(checkout, ['checkout', '--detach', head]);
+  assert.equal(git(checkout, ['rev-parse', 'HEAD']), head);
+  assert.equal(git(checkout, ['rev-parse', '--is-shallow-repository']), 'true');
+  assert.equal(git(checkout, ['status', '--porcelain']), '');
+  assert.deepEqual(git(checkout, ['ls-files']).split('\n'), Object.keys(files).sort());
+  for (const [file, content] of Object.entries(files)) {
+    if (file === 'packages/app/sidecars/pnpm/pnpm-x86_64-pc-windows-msvc.exe')
+      await assert.rejects(fs.stat(path.join(checkout, file)), { code: 'ENOENT' });
+    else assert.equal(await fs.readFile(path.join(checkout, file), 'utf8'), content);
+  }
+  assert.throws(
+    () =>
+      git(checkout, ['cat-file', '-e', binary], {
+        env: { ...process.env, GIT_ALLOW_PROTOCOL: '' },
+      }),
+    'Excluding a file must avoid fetching its blob, not just remove it after download.',
+  );
+});
+
 test('Git checkout fails a stalled HTTP read using its low-speed deadline, not the outer job timeout', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-git-stall-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

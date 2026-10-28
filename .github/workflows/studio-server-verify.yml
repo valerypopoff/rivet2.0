@@ -309,7 +309,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check Out Repository
-        timeout-minutes: 3
+        timeout-minutes: 5
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         env:
           # Fail a stalled read early enough for checkout's bounded fetch retries.
@@ -318,6 +318,17 @@ jobs:
         with:
           fetch-depth: 1
           fetch-tags: false
+          # Retain all authored files and the offline Yarn cache. This lane never
+          # packages desktop binaries; do not download 265 MiB of unused sidecars.
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/packages/app/sidecars/pnpm/pnpm-aarch64-apple-darwin
+            !/packages/app/sidecars/pnpm/pnpm-aarch64-unknown-linux-gnu
+            !/packages/app/sidecars/pnpm/pnpm-x86_64-apple-darwin
+            !/packages/app/sidecars/pnpm/pnpm-x86_64-pc-windows-msvc.exe
+            !/packages/app/sidecars/pnpm/pnpm-x86_64-unknown-linux-gnu
       - uses: ./.github/actions/setup-yarn
         with:
           node-version: 24
