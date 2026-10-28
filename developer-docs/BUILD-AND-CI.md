@@ -1484,6 +1484,13 @@ Windows and offline Linux Node 24.21.0. A separate fresh filtered, shallow check
 passes the real 517-file ledger with the explicit bounded fetch, unchanged HEAD
 and about 2.6 MB of Git objects (including the selected ledger destination files).
 
+`scripts/checks/check-ci-workflows.mjs` owns the checkout-depth, fetch deadlines
+and evidence-before-ledger ordering contract. The API proxy/image contract does
+not duplicate that policy: its old `fetch-depth: 0` assertion contradicted the
+bounded preparation and caused API shard 1 to fail after the repository job had
+passed. Verify changes here with the complete `proxy-image-contract.test.ts`
+suite as well as the CI-performance regressions and workflow-policy checker.
+
 A macOS job with no assigned runner and no steps/logs is distinct from a build
 failure. GitHub may annotate it with hosted-runner acquisition/internal-server
 errors and Apple Silicon capacity notices. Retry only the affected job/dependents
