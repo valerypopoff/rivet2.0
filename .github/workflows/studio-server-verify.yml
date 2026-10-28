@@ -309,14 +309,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check Out Repository
+        timeout-minutes: 3
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
       - uses: ./.github/actions/setup-yarn
         with:
           node-version: 24
       - name: Start timing
         run: node scripts/ci/job-timing.mjs start "Studio Server repository contracts"
+      - name: Prepare migration Git evidence
+        timeout-minutes: 4
+        run: node scripts/ci/prepare-migration-history.mjs
       - name: Install dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
       - name: Verify migration ledger
@@ -328,7 +333,7 @@ jobs:
       - name: Verify repository structure
         run: yarn studio-server:verify:repo-structure
       - name: Report timing
-        if: always()
+        if: ${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}
         run: node scripts/ci/job-timing.mjs finish "Studio Server repository contracts"
 
   deployment-contracts:

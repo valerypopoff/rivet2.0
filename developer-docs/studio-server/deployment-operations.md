@@ -1353,6 +1353,12 @@ never share a fixture checkout, state lock, simulated clock or child process;
 commands and interruption/recovery assertions within each case remain sequential.
 This bounds CI wall time without weakening deadlines, skipping safety scenarios
 or changing the production deployment runner.
+The repository-contract lane separately prepares only pinned migration Git
+evidence after a shallow checkout, using `scripts/ci/prepare-migration-history.mjs`.
+It retains the complete source/import/consolidation ledger validation without
+downloading every historical branch and tag. The helper fails closed on missing
+trees or identity mismatch and never changes the checked-out release. See
+[Build and CI](../BUILD-AND-CI.md) for deadlines and local regression coverage.
 Git admission, immutable manifest validation, argument parsing,
 private backup/acceptance adapter subprocesses and real Helm lint/render run
 normally. A test-only Node preload maps exactly the selected Helm/kubectl

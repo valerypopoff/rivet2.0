@@ -470,6 +470,22 @@ assert.ok(
 );
 assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
 assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
+const repositoryContracts = studioJobs['repository-contracts'];
+const repositoryCheckout = findStep(repositoryContracts, 'Check Out Repository', 'Repository contracts');
+assert.equal(repositoryCheckout.with['fetch-depth'], 1);
+assert.equal(repositoryCheckout.with['fetch-tags'], false);
+assert.equal(repositoryCheckout['timeout-minutes'], 3);
+const migrationHistory = findStep(repositoryContracts, 'Prepare migration Git evidence', 'Repository contracts');
+assert.equal(migrationHistory.run, 'node scripts/ci/prepare-migration-history.mjs');
+assert.equal(migrationHistory['timeout-minutes'], 4);
+assert.ok(
+  repositoryContracts.steps.indexOf(migrationHistory) <
+    repositoryContracts.steps.indexOf(findStep(repositoryContracts, 'Verify migration ledger', 'Repository contracts')),
+);
+assert.equal(
+  findStep(repositoryContracts, 'Report timing', 'Repository contracts').if,
+  "${{ !cancelled() && env.RIVET_CI_JOB_STARTED_AT != '' }}",
+);
 assert.deepEqual(asArray(studioJobs['deployment-contracts'].needs), ['changes', 'build-studio-server']);
 const deploymentContracts = studioJobs['deployment-contracts'];
 assert.deepEqual(deploymentContracts.strategy.matrix.lane, ['managed', 'deployment', 'gateway']);

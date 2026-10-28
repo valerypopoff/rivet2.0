@@ -1455,8 +1455,34 @@ Local Node 24.21.0 Linux verification (2026-10-28) passes all 24 real CLI cases
 with no skips in 10m21s (`artifacts/deployment-command-concurrent-linux.log`).
 The test container has networking disabled; no Kubernetes cluster or cloud
 qualification is involved. The fixture-lock, operation-safety and CI support set
-passes 46 tests (`artifacts/deployment-command-concurrency-support.log`). Hosted
-runner timing must still be checked on the subsequent GitHub run.
+passes 46 tests (`artifacts/deployment-command-concurrency-support.log`).
+
+The subsequent GitHub deployment lane passed in 11m33s. A separate repository
+contract failure happened before any checks: its full-history checkout stalled
+for the entire 15-minute job. That job now checks out only the current commit
+(three-minute checkout limit), then runs `scripts/ci/prepare-migration-history.mjs`
+before the unchanged migration-ledger verifier. Preparation fetches only the
+reviewed migration commit at depth three, without tags, other branches or
+historical blobs, and has a three-minute Git deadline/four-minute step limit.
+The shared pins in `deploy/studio-server/migration/evidence.mjs` identify the
+source, subtree import and consolidation commits. Preparation verifies parent
+links, source-tree identity and recursive tree availability; missing evidence
+fails the job, never skips the ledger or falls back to fetching all history.
+The real shallow-clone regression checks that HEAD, the working tree and remote
+refs stay unchanged. A server without partial-clone support may send blobs too;
+the exact-commit/depth and time bounds still apply.
+Inspection disables lazy fetching and all transport protocols, including on
+older Git versions, so a cache probe cannot secretly fetch unbounded history.
+Ancestry is read from raw commit headers: `git show --no-patch` can still
+prefetch historical diff blobs in a partial clone. The ledger itself also runs
+with transports disabled, so verification never downloads additional history.
+
+Repository timing reports only run after timing started and outside cancellation,
+so checkout failures do not generate a misleading missing-script cleanup error.
+Local verification on 2026-10-28 passes all 13 CI-performance regressions on
+Windows and offline Linux Node 24.21.0. A separate fresh filtered, shallow checkout
+passes the real 517-file ledger with the explicit bounded fetch, unchanged HEAD
+and about 2.6 MB of Git objects (including the selected ledger destination files).
 
 A macOS job with no assigned runner and no steps/logs is distinct from a build
 failure. GitHub may annotate it with hosted-runner acquisition/internal-server
