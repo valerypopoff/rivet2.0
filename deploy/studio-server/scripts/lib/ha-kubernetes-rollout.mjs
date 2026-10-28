@@ -5,9 +5,14 @@ import { releaseOperationJournalName, journalForReleaseOperation } from './relea
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { hasHaPublicEndpoint, waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
-import { createHaExecutionHeadroomGuard, createHaProxyHeadroomGuard } from './ha-rollout-headroom.mjs';
+import {
+  createHaExecutionHeadroomGuard,
+  createHaProxyHeadroomGuard,
+  waitForHaHeadroom,
+} from './ha-rollout-headroom.mjs';
 import { autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
+import { prepareHaReplacements } from './ha-rollout-preparation.mjs';
 
 export const haFrozenAutoscalingValues = {
   autoscaling: {
@@ -208,6 +213,7 @@ export async function runHaKubernetesRollout({
   safety,
   previousManifestDigest,
   verifyDeveloperReady,
+  prepareReplacements = prepareHaReplacements,
 }) {
   requireDeploymentSafety(safety, 'rolling', { release, namespace, manifestDigest });
   settle = safety.requireSettlement(settle);
@@ -258,14 +264,37 @@ export async function runHaKubernetesRollout({
       'Control-plane mode changed: use the separate journaled topology transition, not an ordinary upgrade.',
     );
   const services = JSON.parse((await kube(['get', 'service', '-l', selector, '-o', 'json'])).stdout).items;
-  const desiredClaim = overlapBackend && resources.find((r) => r.kind === 'PersistentVolumeClaim' &&
-    r.metadata.name === backend.spec.template.spec.volumes.find((v) => v.name === 'legacy-restore')?.persistentVolumeClaim?.claimName);
+  const desiredClaim =
+    overlapBackend &&
+    resources.find(
+      (r) =>
+        r.kind === 'PersistentVolumeClaim' &&
+        r.metadata.name ===
+          backend.spec.template.spec.volumes.find((v) => v.name === 'legacy-restore')?.persistentVolumeClaim?.claimName,
+    );
   if (overlapBackend && !desiredClaim) throw Error('Candidate maintenance claim is missing.');
-  const housekeepingDisk = overlapBackend ? await inspectBackendOverlap({ kube, backend, installed: oldBackend, namespace, desiredClaim,
-    expectedDisk: initialJournal?.phase !== 'complete' ? initialJournal?.housekeepingDisk : undefined,
-    capacity: !initialJournal || initialJournal.phase === 'complete' }) : undefined;
-  const checkHousekeepingDisk = () => overlapBackend ? inspectBackendOverlap({ kube, backend, installed: oldBackend,
-    namespace, expectedDisk: housekeepingDisk, desiredClaim }) : Promise.resolve();
+  const housekeepingDisk = overlapBackend
+    ? await inspectBackendOverlap({
+        kube,
+        backend,
+        installed: oldBackend,
+        namespace,
+        desiredClaim,
+        expectedDisk: initialJournal?.phase !== 'complete' ? initialJournal?.housekeepingDisk : undefined,
+        capacity: !initialJournal || initialJournal.phase === 'complete',
+      })
+    : undefined;
+  const checkHousekeepingDisk = () =>
+    overlapBackend
+      ? inspectBackendOverlap({
+          kube,
+          backend,
+          installed: oldBackend,
+          namespace,
+          expectedDisk: housekeepingDisk,
+          desiredClaim,
+        })
+      : Promise.resolve();
   for (const current of services) {
     const candidate = resources.find((r) => r.kind === 'Service' && r.metadata.name === current.metadata.name);
     if (!candidate || !hasSameHaServiceRouting(current, candidate))
@@ -427,7 +456,8 @@ export async function runHaKubernetesRollout({
     saveJournal: async (record, resourceVersion) => {
       if (!record.resourceVersion) {
         const latest = await readJournal();
-        if (latest && latest.phase !== 'complete') throw Error('Another release operation acquired the journal during preflight.');
+        if (latest && latest.phase !== 'complete')
+          throw Error('Another release operation acquired the journal during preflight.');
         resourceVersion = observedJournalVersion;
       }
       const { resourceVersion: _, ...data } = record;
@@ -480,9 +510,16 @@ export async function runHaKubernetesRollout({
     },
     prepareRetirement: beforeRetirement,
     checkHeadroom: async ({ stage, departing, workload }) => {
-      await checkExecutionHeadroom({ stage, departing: workload?.role === 'execution' ? departing : undefined });
-      await checkProxyHeadroom({ stage });
+      await waitForHaHeadroom(
+        async () => {
+          await checkExecutionHeadroom({ stage, departing: workload?.role === 'execution' ? departing : undefined });
+          await checkProxyHeadroom({ stage });
+        },
+        { timeoutMs },
+      );
     },
+    prepareReplacements: (operation) =>
+      prepareReplacements({ operation, kube, resources, namespace, release, timeoutMs }),
     withdraw: (pod, op, inc) => exec(pod, [op, inc, '--withdraw-only']),
     begin: (pod, op, inc) => exec(pod, [op, inc, '--begin-only']),
     waitForRoutingWithdrawal,

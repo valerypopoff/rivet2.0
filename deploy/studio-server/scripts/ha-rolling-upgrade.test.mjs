@@ -30,10 +30,33 @@ import {
 } from './lib/ha-kubernetes-rollout.mjs';
 const runHaKubernetesRollout = (options) =>
   runKubernetesRollingStrategy({
+    // This suite isolates retirement plumbing. Real preparation runs in its
+    // HTTP suite and in the actual deployment-command stand-in tests.
+    prepareReplacements: async () => {},
     ...options,
     safety:
       options.safety ?? fixtureDeploymentSafety('rolling', options, { baseline: options.assertInstalledBaseline }),
   });
+
+test('preparation finishes before templates or any old owner retirement, and unresolved cleanup keeps recovery ownership', async () => {
+  for (const fault of [false, true]) {
+    const f = fixture();
+    f.options.prepareReplacements = async (operation) => {
+      f.operations.push('prepare');
+      await operation.checkpoint({ preparation: { state: fault ? 'preparing' : 'complete' } });
+      if (fault) throw Error('preparation cleanup unknown');
+    };
+    if (fault) {
+      await assert.rejects(runHaRollingUpgrade(f.options), /preparation cleanup unknown/);
+      assert.equal(f.journal.phase, 'preflight');
+      assert.ok(!f.operations.includes('templates'));
+      assert.ok(!f.operations.some((v) => v.startsWith('withdraw-command:')));
+    } else {
+      await runHaRollingUpgrade(f.options);
+      assert.ok(f.operations.indexOf('prepare') < f.operations.indexOf('templates'));
+    }
+  }
+});
 
 test('HA template updates preserve HPA-grown frontend capacity with UID and resourceVersion fencing', async () => {
   const live = {

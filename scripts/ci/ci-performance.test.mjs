@@ -223,7 +223,8 @@ test('browser prerequisites reject version drift before launch and close Chromiu
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 31);
+  assert.equal(editorCiSpecs.length, 32);
+  assert.ok(editorCiSpecs.includes('graph-call-path-node.spec.ts'));
   assert.ok(editorCiSpecs.includes('evaluation-trial-orchestration.spec.ts'));
   assert.ok(editorCiSpecs.includes('partial-run-preload.spec.ts'));
   assert.ok(editorCiSpecs.includes('wire-viewport-culling.spec.ts'));

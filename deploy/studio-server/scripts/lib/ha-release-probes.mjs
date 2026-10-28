@@ -151,8 +151,13 @@ export class HaReleaseProbes {
       assert.ok(
         owner.spec.containers
           .find((c) => c.name === 'backend')
-          .env.some((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE' && e.value === 'singleton-overlap'),
+          .env.some(
+            (e) =>
+              e.name === 'RIVET_HA_CONTROL_PLANE_MODE' &&
+              e.value === (embeddedMaintenance === 'singleton' ? 'singleton' : 'singleton-overlap'),
+          ),
       );
+      if (embeddedMaintenance === 'singleton') return;
       const observed = JSON.parse(
         (await this.kube(['exec', owner.metadata.name, '-c', 'backend', '--', 'node', '/opt/rivet/retire-backend.mjs']))
           .stdout,

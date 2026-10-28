@@ -11,6 +11,8 @@ import {
   HA_RUNTIME_CONTROL_CHECKS,
   HA_COMPACT_EDGE_CHECKS,
   HA_AUTOSCALING_CHECKS,
+  HA_ORDINARY_RUNTIME_CHECKS,
+  HA_COOPERATIVE_AUTOSCALING_CHECKS,
 } from './lib/ha-release-evidence.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import {
@@ -110,6 +112,29 @@ function fixture() {
   };
 }
 
+test('ordinary compact publication does not invent adoption checks and still requires cooperative autoscaling', () => {
+  const f = fixture();
+  f.control.evidence = {
+    ...f.control.evidence,
+    protocol: 2,
+    purpose: 'ordinary-upgrade',
+    controlPlaneMode: 'singleton',
+    edgeProfiles: ['compact'],
+    predecessorManifestDigest: f.candidate.lineage.predecessor.manifestDigest,
+    autoscalerPolicyDigest: autoscalerPolicyDigest(f.autoscaling.policy),
+    checks: [...HA_ORDINARY_RUNTIME_CHECKS],
+  };
+  assert.throws(() => prepareRuntimeQualification(f), /v2 autoscaling/);
+  f.autoscaling.evidence.protocol = 2;
+  f.autoscaling.evidence.checks = [...HA_COOPERATIVE_AUTOSCALING_CHECKS];
+  const result = prepareRuntimeQualification(f);
+  assert.equal(result.candidate.evidence.runtimeControl.protocol, 2);
+  assert.deepEqual(result.candidate.evidence.runtimeControl.edgeProfiles, ['compact']);
+  assert.ok(!result.candidate.evidence.runtimeControl.checks.includes('reverse-control-transfer'));
+  f.control.evidence.autoscalerPolicyDigest = 'f'.repeat(64);
+  assert.throws(() => prepareRuntimeQualification(f), /policy differs/);
+});
+
 test('qualification publication requires the exact successful main image-build run, never a fork or PR', () => {
   const run = {
     id: 123,
@@ -150,6 +175,28 @@ test('qualification preserves candidate lineage/images/schema and binds both pro
   assertRuntimeQualificationPointer(f.promoted, result.expectedProductionDigest);
   assert.throws(() => assertRuntimeQualificationPointer(f.promoted, 'sha256:' + 'f'.repeat(64)));
   assert.equal(f.candidate.evidence.runtimeControl, undefined, 'input artifacts must not be modified');
+});
+
+test('provider publication cannot turn a legacy startup-only schema check into rolling qualification', () => {
+  const f = fixture();
+  f.candidate.lineage.predecessor.managedWorkflowSchemaVersion = 17;
+  f.promoted.lineage.predecessor.managedWorkflowSchemaVersion = 17;
+  assert.throws(() => prepareRuntimeQualification(f), /schema compatibility evidence/);
+  const runId = 'd'.repeat(32);
+  f.promoted.evidence.ha.schemaCompatibility = {
+    protocol: 1,
+    from: 17,
+    to: 18,
+    runId,
+    predecessorApi: f.candidate.lineage.predecessor.images.api,
+    candidateApi: f.candidate.images.api,
+    lockContention: true,
+    repositories: [
+      ['previous', 17],
+      ['candidate', 18],
+    ].map(([role, version]) => ({ role, version, runId, rounds: 2, peerRowsRead: 2 })),
+  };
+  assert.equal(prepareRuntimeQualification(f).candidate.evidence.ha.schemaCompatibility.runId, runId);
 });
 
 test('local/failed/uncleaned or incomplete declarations cannot become provider evidence', () => {

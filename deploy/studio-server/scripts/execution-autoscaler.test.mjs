@@ -9,8 +9,12 @@ import {
   reconcileExecutionAutoscaling,
 } from './lib/execution-autoscaler.mjs';
 import { journalForReleaseOperation } from './lib/release-operation-journal.mjs';
-import { assertRuntimeAutoscalingEvidence, assertCooperativeAutoscalingEvidence, HA_AUTOSCALING_CHECKS,
-  HA_COOPERATIVE_AUTOSCALING_CHECKS } from './lib/ha-release-evidence.mjs';
+import {
+  assertRuntimeAutoscalingEvidence,
+  assertCooperativeAutoscalingEvidence,
+  HA_AUTOSCALING_CHECKS,
+  HA_COOPERATIVE_AUTOSCALING_CHECKS,
+} from './lib/ha-release-evidence.mjs';
 
 function fixture(replicas = 3, policyOverrides = {}) {
   let clock = 1000000,
@@ -163,11 +167,26 @@ test('policy rejects unsafe, fractional and incompatible bounds', () => {
 test('an active or paused HA upgrade permits only bounded scale-up without replacing its journal', async () => {
   for (const leaseExpiresAt of [0, 2_000_000]) {
     const f = fixture(3);
-    const record = { protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
-      token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt,
+    const record = {
+      protocol: 1,
+      release: 'rivet',
+      namespace: 'rivet',
+      manifestDigest: 'digest',
+      runner: 'deployer',
+      token: 'upgrade',
+      resourceVersion: '7',
+      phase: 'owners',
+      leaseExpiresAt,
       workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
-      cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate',
-        maxReplicas: f.policy.maxReplicas, policyDigest: autoscalerPolicyDigest(f.policy) } };
+      cooperativeScaling: {
+        protocol: 1,
+        workload: 'exec',
+        uid: 'sts',
+        image: 'candidate',
+        maxReplicas: f.policy.maxReplicas,
+        policyDigest: autoscalerPolicyDigest(f.policy),
+      },
+    };
     f.setJournal(structuredClone(record));
     for (const pod of f.snapshot.pods) pod.active = 9;
     const options = { workload: 'exec', image: 'candidate' };
@@ -184,12 +203,27 @@ test('an active or paused HA upgrade permits only bounded scale-up without repla
 
 test('HA scale-up fences policy/owner changes and reserves capacity for the retiring execution owner', async () => {
   const f = fixture(3, { maxReplicas: 7 });
-  f.setJournal({ protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
-    token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt: 0,
+  f.setJournal({
+    protocol: 1,
+    release: 'rivet',
+    namespace: 'rivet',
+    manifestDigest: 'digest',
+    runner: 'deployer',
+    token: 'upgrade',
+    resourceVersion: '7',
+    phase: 'owners',
+    leaseExpiresAt: 0,
     workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
     owner: { name: 'exec-0', operationId: 'retirement' },
-    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate', maxReplicas: 7,
-      policyDigest: autoscalerPolicyDigest(f.policy) } });
+    cooperativeScaling: {
+      protocol: 1,
+      workload: 'exec',
+      uid: 'sts',
+      image: 'candidate',
+      maxReplicas: 7,
+      policyDigest: autoscalerPolicyDigest(f.policy),
+    },
+  });
   for (const pod of f.snapshot.pods) pod.active = 6;
   assert.equal((await f.tick({ workload: 'exec', image: 'candidate' })).replicas, 4);
   await assert.rejects(f.tick({ workload: 'other', image: 'candidate' }), /exact rollout/);
@@ -199,15 +233,33 @@ test('HA scale-up fences policy/owner changes and reserves capacity for the reti
 
 test('a lost HA scale-up reply is observed without replaying the increase or rewriting the deployment journal', async () => {
   const f = fixture(3);
-  const record = { protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
-    token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt: 0,
+  const record = {
+    protocol: 1,
+    release: 'rivet',
+    namespace: 'rivet',
+    manifestDigest: 'digest',
+    runner: 'deployer',
+    token: 'upgrade',
+    resourceVersion: '7',
+    phase: 'owners',
+    leaseExpiresAt: 0,
     workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
-    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate', maxReplicas: f.policy.maxReplicas,
-      policyDigest: autoscalerPolicyDigest(f.policy) } };
+    cooperativeScaling: {
+      protocol: 1,
+      workload: 'exec',
+      uid: 'sts',
+      image: 'candidate',
+      maxReplicas: f.policy.maxReplicas,
+      policyDigest: autoscalerPolicyDigest(f.policy),
+    },
+  };
   f.setJournal(record);
   for (const p of f.snapshot.pods) p.active = 9;
   const scale = f.io.scale;
-  f.io.scale = async (...args) => { await scale(...args); throw Error('lost scale reply'); };
+  f.io.scale = async (...args) => {
+    await scale(...args);
+    throw Error('lost scale reply');
+  };
   await assert.rejects(f.tick({ workload: 'exec', image: 'candidate' }), /lost scale reply/);
   assert.equal((await f.tick({ workload: 'exec', image: 'candidate' })).state, 'rollout-observing');
   assert.deepEqual(f.calls, [['scale', 3, 5]]);
@@ -216,31 +268,106 @@ test('a lost HA scale-up reply is observed without replaying the increase or rew
 
 test('a cutover taking ownership during an HA demand read prevents the following scale request', async () => {
   const f = fixture(3);
-  f.setJournal({ protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'digest', runner: 'deployer',
-    token: 'upgrade', resourceVersion: '7', phase: 'owners', leaseExpiresAt: 0,
+  f.setJournal({
+    protocol: 1,
+    release: 'rivet',
+    namespace: 'rivet',
+    manifestDigest: 'digest',
+    runner: 'deployer',
+    token: 'upgrade',
+    resourceVersion: '7',
+    phase: 'owners',
+    leaseExpiresAt: 0,
     workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
-    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'candidate', maxReplicas: f.policy.maxReplicas,
-      policyDigest: autoscalerPolicyDigest(f.policy) } });
+    cooperativeScaling: {
+      protocol: 1,
+      workload: 'exec',
+      uid: 'sts',
+      image: 'candidate',
+      maxReplicas: f.policy.maxReplicas,
+      policyDigest: autoscalerPolicyDigest(f.policy),
+    },
+  });
   for (const p of f.snapshot.pods) p.active = 9;
   const snapshot = f.io.snapshot;
-  f.io.snapshot = async () => { const result = await snapshot(); f.setJournal({ ...f.journal(), protocol: undefined,
-    formatVersion: 1, resourceVersion: '8', phase: 'quiescing', token: 'cutover' }); return result; };
+  f.io.snapshot = async () => {
+    const result = await snapshot();
+    f.setJournal({
+      ...f.journal(),
+      protocol: undefined,
+      formatVersion: 1,
+      resourceVersion: '8',
+      phase: 'quiescing',
+      token: 'cutover',
+    });
+    return result;
+  };
   await assert.rejects(f.tick({ workload: 'exec', image: 'candidate' }), /ownership changed/);
   assert.equal(f.calls.length, 0);
 });
 
 test('the installed controller can close only an expired untouched preflight before resuming normal scaling', async () => {
   const f = fixture(3);
-  f.setJournal({ protocol: 1, release: 'rivet', namespace: 'rivet', manifestDigest: 'next-digest', previousManifestDigest: 'digest',
-    runner: 'stopped-deployer', token: 'upgrade', resourceVersion: '7', phase: 'preflight', leaseExpiresAt: 0, completed: [], owner: null,
+  f.setJournal({
+    protocol: 1,
+    release: 'rivet',
+    namespace: 'rivet',
+    manifestDigest: 'next-digest',
+    previousManifestDigest: 'digest',
+    runner: 'stopped-deployer',
+    token: 'upgrade',
+    resourceVersion: '7',
+    phase: 'preflight',
+    leaseExpiresAt: 0,
+    completed: [],
+    owner: null,
     workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
-    cooperativeScaling: { protocol: 1, workload: 'exec', uid: 'sts', image: 'next-image', previousImage: 'installed-image',
-      maxReplicas: f.policy.maxReplicas, policyDigest: autoscalerPolicyDigest(f.policy) } });
+    cooperativeScaling: {
+      protocol: 1,
+      workload: 'exec',
+      uid: 'sts',
+      image: 'next-image',
+      previousImage: 'installed-image',
+      maxReplicas: f.policy.maxReplicas,
+      policyDigest: autoscalerPolicyDigest(f.policy),
+    },
+  });
   assert.equal((await f.tick({ workload: 'exec', image: 'installed-image' })).state, 'rollout-preflight-released');
   assert.equal(f.journal().abortedBeforeTemplates, true);
   assert.equal(f.journal().phase, 'complete');
   assert.equal(f.calls.length, 0);
   assert.equal((await f.tick()).state, 'observing');
+  const completed = f.journal();
+  for (const preparation of [
+    { protocol: 1, state: 'preparing', jobs: [{ createIssued: true, uid: 'job' }] },
+    { protocol: 1, state: 'complete', jobs: [{ createIssued: true, absent: false }] },
+  ]) {
+    f.setJournal({
+      ...completed,
+      protocol: 1,
+      autoscalingProtocol: undefined,
+      phase: 'preflight',
+      leaseExpiresAt: 0,
+      manifestDigest: 'next-digest',
+      previousManifestDigest: 'digest',
+      preparation,
+      workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
+      completed: [],
+      owner: null,
+      cooperativeScaling: {
+        protocol: 1,
+        workload: 'exec',
+        uid: 'sts',
+        image: 'next-image',
+        previousImage: 'installed-image',
+        maxReplicas: f.policy.maxReplicas,
+        policyDigest: autoscalerPolicyDigest(f.policy),
+      },
+    });
+    const before = structuredClone(f.journal());
+    assert.equal((await f.tick({ workload: 'exec', image: 'installed-image' })).state, 'rollout-observing');
+    assert.deepEqual(f.journal(), before, 'Pending preparation cannot be erased by abandoned-preflight recovery');
+  }
 });
 
 test('waiting LLM slots scale up even with zero CPU; CPU scales independently; caps apply', async () => {
@@ -403,7 +530,16 @@ test('a returning endpoint resets the full withdrawal propagation window', async
 });
 
 test('failed, missing, restarted and legacy routing observations cannot reuse an earlier absence window', async () => {
-  for (const fault of ['snapshot-error', 'route-error', 'journal-read-error', 'journal-write-error', 'observation-gap', 'clock-regression', 'restart', 'legacy']) {
+  for (const fault of [
+    'snapshot-error',
+    'route-error',
+    'journal-read-error',
+    'journal-write-error',
+    'observation-gap',
+    'clock-regression',
+    'restart',
+    'legacy',
+  ]) {
     const f = fixture(3, { withdrawalSeconds: 60 });
     await f.withdraw();
     for (let i = 0; i < 3; i++) {
@@ -412,9 +548,16 @@ test('failed, missing, restarted and legacy routing observations cannot reuse an
     }
     let runner = 'controller';
     if (fault.endsWith('-error')) {
-      const method = { 'snapshot-error': 'snapshot', 'route-error': 'routed', 'journal-read-error': 'readJournal', 'journal-write-error': 'writeJournal' }[fault];
+      const method = {
+        'snapshot-error': 'snapshot',
+        'route-error': 'routed',
+        'journal-read-error': 'readJournal',
+        'journal-write-error': 'writeJournal',
+      }[fault];
       const previous = f.io[method];
-      f.io[method] = async () => { throw new Error('observation unavailable'); };
+      f.io[method] = async () => {
+        throw new Error('observation unavailable');
+      };
       await assert.rejects(f.tick(), /observation unavailable/);
       if (!fault.startsWith('journal-')) assert.equal(f.journal().target.routingAbsence, null);
       f.io[method] = previous;
@@ -441,11 +584,15 @@ test('failed, missing, restarted and legacy routing observations cannot reuse an
 test('rising demand still adds capacity during endpoint withdrawal and restarts its observation window', async () => {
   const f = fixture(3, { withdrawalSeconds: 60 });
   await f.withdraw();
-  f.snapshot.pods.forEach((p) => { p.active = 10; });
+  f.snapshot.pods.forEach((p) => {
+    p.active = 10;
+  });
   assert.equal((await f.tick()).state, 'scaled-up');
   assert.equal(f.snapshot.replicas, 6);
   assert.equal(f.journal().target.routingAbsence, null);
-  f.snapshot.pods.forEach((p) => { p.active = 0; });
+  f.snapshot.pods.forEach((p) => {
+    p.active = 0;
+  });
   assert.equal((await f.tick()).state, 'waiting-for-routing');
   for (let i = 0; i < 5; i++) {
     f.advance();
@@ -601,8 +748,7 @@ test('lost retirement acknowledgement is observed; an unsent/uncertain intent is
       assert.equal((await f.tick()).state, 'waiting-for-routing');
       f.advance();
       assert.equal((await f.tick()).state, 'draining');
-    }
-    else await assert.rejects(f.tick(), /intent is unconfirmed/);
+    } else await assert.rejects(f.tick(), /intent is unconfirmed/);
     assert.equal(f.calls.filter((c) => c[0] === 'withdraw').length, sent ? 1 : 0);
   }
 });
@@ -685,7 +831,10 @@ test('runtime autoscaling evidence is bound to exact source, images, chart and p
   assert.throws(() => assertCooperativeAutoscalingEvidence(evidence, release, evidence.policyDigest), /v2/);
   const cooperative = { ...evidence, protocol: 2, checks: [...HA_COOPERATIVE_AUTOSCALING_CHECKS] };
   assert.equal(assertCooperativeAutoscalingEvidence(cooperative, release, evidence.policyDigest).protocol, 2);
-  assert.throws(() => assertCooperativeAutoscalingEvidence({ ...cooperative, checks: [...HA_AUTOSCALING_CHECKS] }, release), /qualification/);
+  assert.throws(
+    () => assertCooperativeAutoscalingEvidence({ ...cooperative, checks: [...HA_AUTOSCALING_CHECKS] }, release),
+    /qualification/,
+  );
   for (const patch of [
     { candidateSourceSha: 'old' },
     { candidateImages: {} },

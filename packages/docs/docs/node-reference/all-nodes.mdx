@@ -38,11 +38,11 @@ The following is all of the nodes built-in to the core of Rivet.
 
 ## Decision AI
 
-| Node | Description |
-| --- | --- |
-| [Decision AI Question](./classifier-question.mdx) | Builds a Choice, Score, or Noul question definition without calling a provider. |
+| Node                                              | Description                                                                                                        |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [Decision AI Question](./classifier-question.mdx) | Builds a Choice, Score, or Noul question definition without calling a provider.                                    |
 | [Decision AI Profile](./classifier-profile.mdx)   | Defines reusable provider, model, credentials and suspension settings for ordered Decision AI run fallback chains. |
-| [Decision AI run](./classifier-evaluate.mdx) | Batches typed questions against shared state through a selected Decision AI provider, starting with Jev. |
+| [Decision AI run](./classifier-evaluate.mdx)      | Batches typed questions against shared state through a selected Decision AI provider, starting with Jev.           |
 
 ## Knowledge
 
@@ -110,7 +110,7 @@ The following is all of the nodes built-in to the core of Rivet.
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [Abort Graph](./abort-graph.mdx)               | Immediately stops the execution of the entire graph, either successfully (early-exit) or with an error. Allows for the control of graph execution under specific conditions or for error handling.                                                                                               |
 | [Coalesce](./coalesce-new.mdx)                 | Returns the first input that is not `Not Ran`, with optional settings to also skip `null` and `undefined`. Particularly useful for handling a set of branches where one branch runs and the others are excluded by control flow.                                                                 |
-| [Coalesce (legacy)](./coalesce.mdx)            | The previous Coalesce node, retained for graphs that use its dedicated `Conditional` input port.                                                                                                                                                |
+| [Coalesce (legacy)](./coalesce.mdx)            | The previous Coalesce node, retained for graphs that use its dedicated `Conditional` input port.                                                                                                                                                                                                 |
 | [Compare](./compare.mdx)                       | Performs comparison operations between two input values, supporting functions such as equality, inequality, logical operations, and more. Can handle various data types and attempts to coerce the second input to match the first if they are not of the same type.                             |
 | [Delay](./delay.mdx)                           | Introduces a pause in the execution of the graph, passing input values to outputs after a specified delay. Useful for timing control in your graph's execution.                                                                                                                                  |
 | [Did Run](./did-run.mdx)                       | Outputs `true` when all connected inputs have run, even when those values are falsy. Useful for converting "this branch ran at all" into a boolean for another node's `If` port.                                                                                                                 |
@@ -119,20 +119,20 @@ The following is all of the nodes built-in to the core of Rivet.
 | [If/Else](./if-else.mdx)                       | Allows for decision-making in the control flow by choosing between two different values based on a condition. Particularly useful for ensuring that a graph always returns a value, or that a later node always receives a value even if intermediate nodes do not run.                          |
 | [Loop Controller](./loop-controller.mdx)       | Creates loops within your graph, controlling the flow of values and maintaining the state of the loop through paired loop input and output ports.                                                                                                                                                |
 | [Loop Until](./loop-until.mdx)                 | Executes a target graph repeatedly until its configured stop condition is met, optionally feeding graph outputs into the next iteration.                                                                                                                                                         |
-| [Match case](./match-case.mdx)                 | Routes a string through switch/case-style outputs. Plain-text cases compare the complete string exactly by default; regular-expression matching is available when needed.                                                                                                                                    |
-| [Regex Match (legacy)](./regex-match.mdx)      | The original regex-only routing node, retained so existing graphs keep their regular-expression behavior.                                                                                                                                                                                    |
+| [Match case](./match-case.mdx)                 | Routes a string through switch/case-style outputs. Plain-text cases compare the complete string exactly by default; regular-expression matching is available when needed.                                                                                                                        |
+| [Regex Match (legacy)](./regex-match.mdx)      | The original regex-only routing node, retained so existing graphs keep their regular-expression behavior.                                                                                                                                                                                        |
 | [Passthrough](./passthrough.mdx)               | Transfers the input value directly to the output without modification. Useful for grouping values from different branches of your graph or controlling wire flow without altering the value.                                                                                                     |
 | [Race Inputs](./race-inputs.mdx)               | Manages multiple inputs, outputting the value of the first input to complete while cancelling the remaining inputs. Especially useful when dealing with multiple operations that could satisfy the same requirement, allowing for the use of the result from the operation that concludes first. |
 | [Start Async Branch](./start-async-branch.mdx) | Starts a root-owned side-effect branch without making the foreground path wait for it. Web apps can return ready graph outputs while the async work continues.                                                                                                                                   |
 
 ## Streaming
 
-| Node | Description |
-| ---- | ----------- |
-| [Stream value](./stream-value.mdx) | Publishes one ordinary value as a streaming update and passes it through normally. |
-| [Catch streaming chunks](./catch-streaming-chunks.mdx) | Returns the first configured number of stream snapshots as one ordinary value, only once. |
-| [Watch streaming](./watch-streaming-output.mdx) | Runs a bounded branch for streaming updates; optionally selects one result to rejoin normal execution. |
-| [Stop watching streaming](./stop-watching-streaming-output.mdx) | Ends a streaming watch and releases a selected value into ordinary graph scheduling. |
+| Node                                                            | Description                                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| [Stream value](./stream-value.mdx)                              | Publishes one ordinary value as a streaming update and passes it through normally.                     |
+| [Catch streaming chunks](./catch-streaming-chunks.mdx)          | Returns the first configured number of stream snapshots as one ordinary value, only once.              |
+| [Watch streaming](./watch-streaming-output.mdx)                 | Runs a bounded branch for streaming updates; optionally selects one result to rejoin normal execution. |
+| [Stop watching streaming](./stop-watching-streaming-output.mdx) | Ends a streaming watch and releases a selected value into ordinary graph scheduling.                   |
 
 ## Input/Output
 
@@ -189,7 +189,8 @@ The following is all of the nodes built-in to the core of Rivet.
 
 ## Debug
 
-| Node | Description |
-| --- | --- |
-| [Graph Call Path](./graph-call-path.mdx) | Returns the current graph name and the path of graph calls from the executed entry graph to this node. |
-| [Project Name](./project-name.mdx) | Returns the name of the project that owns the graph currently being executed. |
+| Node                                     | Description                                                                                                                |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| [Graph Call Path](./graph-call-path.mdx) | Returns the current graph name and the path of graph calls from the executed entry graph to this node.                     |
+| [Project Name](./project-name.mdx)       | Returns the name of the project that owns the graph currently being executed.                                              |
+| [AI Cost](./ai-cost.mdx)                 | Reads observed LLM, Decision AI and total USD estimates for the current project invocation and its called-project subtree. |

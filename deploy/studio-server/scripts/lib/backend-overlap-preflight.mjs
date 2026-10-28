@@ -1,26 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { cpuQuantity } from './execution-autoscaler-kubernetes.mjs';
-
-const bytes = (value) => {
-  const match = /^(\d+(?:\.\d+)?)([KMGTPE]i?|[kMGTPE]|m)?$/.exec(String(value));
-  if (!match) throw Error('Backend overlap storage/memory quantity is unconfirmed.');
-  const suffix = match[2] ?? '';
-  const power = 'KMGTPE'.indexOf(suffix[0]?.toUpperCase()) + 1;
-  return Number(match[1]) * (suffix === 'm' ? 0.001 : suffix ? (suffix.endsWith('i') ? 1024 : 1000) ** power : 1);
-};
-const request = (spec, resource, parse) => {
-  const amount = (c) => parse(c.resources?.requests?.[resource] ?? c.resources?.limits?.[resource] ?? '0');
-  let sidecars = 0,
-    initPeak = 0;
-  for (const container of spec.initContainers ?? []) {
-    if (container.restartPolicy === 'Always') sidecars += amount(container);
-    initPeak = Math.max(initPeak, sidecars + (container.restartPolicy === 'Always' ? 0 : amount(container)));
-  }
-  return (
-    Math.max(initPeak, sidecars + spec.containers.reduce((sum, c) => sum + amount(c), 0)) +
-    parse(spec.overhead?.[resource] ?? '0')
-  );
-};
+import { resourceQuantity, podResourceRequest as request } from './pod-resource-requests.mjs';
 
 /** Read-only preflight and invariant checks. Kubernetes remains the final scheduler. */
 export async function inspectBackendOverlap({
@@ -95,13 +74,11 @@ export async function inspectBackendOverlap({
       ])
     ).stdout,
   ).items.filter((p) => p.spec.nodeName === pod.spec.nodeName && !['Succeeded', 'Failed'].includes(p.status?.phase));
-  for (const [resource, parse] of [
-    ['cpu', cpuQuantity],
-    ['memory', bytes],
-  ]) {
+  for (const resource of ['cpu', 'memory']) {
+    const parse = (value) => resourceQuantity(value, resource);
     const available =
-      parse(node.status.allocatable[resource]) - pods.reduce((sum, p) => sum + request(p.spec, resource, parse), 0);
-    if (available < request(backend.spec.template.spec, resource, parse))
+      parse(node.status.allocatable[resource]) - pods.reduce((sum, p) => sum + request(p.spec, resource), 0);
+    if (available < request(backend.spec.template.spec, resource))
       throw Error(`Insufficient ${resource} on the existing backend node for temporary overlap; old backend retained.`);
   }
   if (pods.length >= Number(node.status.allocatable.pods)) throw Error('No pod slot remains on the backend node.');

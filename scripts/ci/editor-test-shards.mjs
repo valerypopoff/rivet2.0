@@ -34,6 +34,8 @@ const weightedSpecs = [
   ['wire-viewport-culling.spec.ts', 25],
   ['tunnel-cache-retention.spec.ts', 1],
   ['run-statistics-modal.spec.ts', 15],
+  // Debug node discovery, output labels, icons and documentation links.
+  ['graph-call-path-node.spec.ts', 15],
   // Real local PostgreSQL/MinIO + provider HTTP, including cancellation settlement.
   ['run-cost-statistics.spec.ts', 60],
 ];

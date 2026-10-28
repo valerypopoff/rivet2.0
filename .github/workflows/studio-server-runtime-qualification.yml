@@ -1,6 +1,21 @@
 name: Publish qualified runtime HA
 
 on:
+  workflow_call:
+    inputs:
+      build_run_id:
+        required: true
+        type: string
+      runtime_control_declaration:
+        required: true
+        type: string
+      runtime_autoscaling_declaration:
+        required: true
+        type: string
+    outputs:
+      manifest_digest:
+        description: Exact verified published qualified manifest; not permission to deploy.
+        value: ${{ jobs.publish.outputs.manifest_digest }}
   workflow_dispatch:
     inputs:
       build_run_id:
@@ -8,7 +23,7 @@ on:
         required: true
         type: string
       runtime_control_declaration:
-        description: Sanitized provider declaration JSON for regional/compact control ownership; never credentials or project contents.
+        description: Sanitized provider declaration JSON for ordinary seven-pod upgrade (v2) or topology adoption (v1); never credentials or project contents.
         required: true
         type: string
       runtime_autoscaling_declaration:
@@ -33,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: rivet-managed-staging
+    outputs:
+      manifest_digest: ${{ steps.publication.outputs.manifest_digest }}
     env:
       BUILD_RUN_ID: ${{ inputs.build_run_id }}
       PACKET: artifacts/runtime-qualification-publication
@@ -92,6 +109,7 @@ jobs:
             --output "$PACKET/promoted-release-manifest.json" \
             --workflow "$GITHUB_WORKFLOW" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Publish qualified immutable manifest and advance the checked pointer
+        id: publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,6 +125,7 @@ jobs:
           node deploy/studio-server/scripts/release-manifest-oci.mjs retag --source "$reference" --destination "$RELEASE_MANIFEST_REPOSITORY:production"
           node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$RELEASE_MANIFEST_REPOSITORY:production" --output "$PACKET/published-production.json"
           node deploy/studio-server/scripts/prepare-runtime-qualification.mjs verify-published
+          echo "manifest_digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Retain the qualified manifest and sanitized declarations
         # Retain recovery evidence even if a registry write/readback fails.
         # Only prepare's validated, normalized packet is eligible for upload.

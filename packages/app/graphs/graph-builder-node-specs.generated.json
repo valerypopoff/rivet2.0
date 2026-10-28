@@ -1,12 +1,27 @@
 {
   "formatVersion": 1,
-  "catalogFingerprint": "fnv1a64:8582e5e3ba02d153",
+  "catalogFingerprint": "fnv1a64:20680dd6822b4c28",
   "entries": [
     {
       "authoringChoiceId": "registered:abortGraph",
       "nodeType": "abortGraph",
       "displayName": "Abort Graph",
       "description": "The Abort Graph Node is used to stop the execution of the entire graph immediately. It can either \"successfully\" abort the graph (early exit), or \"error\" abort the graph. This can be useful for stopping the graph under certain conditions, or for handling errors.",
+      "aliases": [],
+      "capabilities": {
+        "createWithDefaults": true,
+        "inspectSafeProjection": false,
+        "resolvePorts": true,
+        "configureSettings": false,
+        "editLinkedPrefabInstance": false
+      },
+      "settings": []
+    },
+    {
+      "authoringChoiceId": "registered:aiCost",
+      "nodeType": "aiCost",
+      "displayName": "AI Cost",
+      "description": "AI Cost is a Debug node that reads observed AI cost estimates in USD for the current project invocation and the projects it calls. Caller and sibling project spending is excluded. It uses the same call accounting as Run statistics, including retries and background work observed before the node executes. It does not calculate prices separately or sum graph outputs. For example, if A calls B and B calls C, a node in B includes B + C, while a node in C includes C only. Two calls to B have separate subtotals, even if they run in parallel. Ordinary graph calls within B share B's project invocation subtotal. An explicit project call back into B starts a fresh subtree, even if the project ID matches. A node in the top level project includes the entire run, matching the root recording's subtotal at that moment. Run statistics still aggregate the full root run totals.",
       "aliases": [],
       "capabilities": {
         "createWithDefaults": true,

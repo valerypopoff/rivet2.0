@@ -47,7 +47,7 @@ const request=process.argv[process.argv.indexOf('--request')+1], receipt=process
 const r=JSON.parse(await fs.readFile(request,'utf8')), directory=path.dirname(receipt), fixture=process.env.RIVET_COMMAND_FIXTURE;
 await fs.appendFile(path.join(fixture,'adapters.ndjson'),JSON.stringify({stage:r.stage,requestId:r.requestId,operationId:r.operationId})+'\\n');
 const state=JSON.parse(await fs.readFile(path.join(fixture,'state.json'),'utf8'));
-if(r.stage==='before'&&['completedAutoscalerAdvance','samplingAutoscalerAdvance','busyAutoscalerAdvance'].includes(state.fault)){
+if(r.stage==='before'&&['completedAutoscalerAdvance','samplingAutoscalerAdvance','busyAutoscalerAdvance','inventoryAutoscalerAdvance'].includes(state.fault)){
  const record=JSON.parse(state.journal.data.record);
  if(state.fault==='busyAutoscalerAdvance'){record.phase='scaling';record.leaseExpiresAt=Date.now()+120000;}
  if(state.fault==='samplingAutoscalerAdvance')record.leaseExpiresAt=Date.now()+15000;
@@ -357,7 +357,16 @@ async function fixture(t, mode, fault, schemaChange = false) {
   );
   const seeded = JSON.parse(await fs.readFile(path.join(directory, 'state.json'), 'utf8'));
   seeded.fault = fault;
-  if (['completedAutoscalerAdvance', 'samplingAutoscalerAdvance', 'busyAutoscalerAdvance'].includes(fault)) {
+  if (
+    [
+      'completedAutoscalerAdvance',
+      'samplingAutoscalerAdvance',
+      'busyAutoscalerAdvance',
+      'inventoryAutoscalerAdvance',
+      'claimConflict',
+      'lostClaimAcknowledgement',
+    ].includes(fault)
+  ) {
     seeded.journal = {
       apiVersion: 'v1',
       kind: 'ConfigMap',
@@ -784,7 +793,12 @@ test(
   },
 );
 
-for (const fault of ['completedAutoscalerAdvance', 'samplingAutoscalerAdvance', 'busyAutoscalerAdvance'])
+for (const fault of [
+  'completedAutoscalerAdvance',
+  'samplingAutoscalerAdvance',
+  'busyAutoscalerAdvance',
+  'inventoryAutoscalerAdvance',
+])
   test(
     `real maintenance command handles ${fault} autoscaler journal after baseline`,
     { timeout: 660000 },
@@ -807,6 +821,11 @@ for (const fault of ['completedAutoscalerAdvance', 'samplingAutoscalerAdvance', 
         assert.equal(JSON.parse((await f.state()).journal.data.record).autoscalingProtocol, 1);
       } else {
         const record = JSON.parse((await f.state()).journal.data.record);
+        if (fault === 'inventoryAutoscalerAdvance') {
+          const state = await f.state();
+          assert.equal(state.inventoryAutoscalerAdvanced, true);
+          assert.equal(state.claimVersion, state.inventorySampleVersion);
+        }
         if (fault === 'samplingAutoscalerAdvance')
           assert.ok(
             (await f.state()).samplingLeaseReads > 0,
@@ -818,6 +837,31 @@ for (const fault of ['completedAutoscalerAdvance', 'samplingAutoscalerAdvance', 
       }
     },
   );
+
+test(
+  'real maintenance claim is never retried after a CAS conflict or lost acknowledgement',
+  { timeout: 660000 },
+  async (t) => {
+    for (const fault of ['claimConflict', 'lostClaimAcknowledgement']) {
+      const f = await fixture(t, 'maintenance', fault);
+      const result = await f.invoke();
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /ownership write is unconfirmed/);
+      const writes = (await f.calls()).filter(
+        (r) =>
+          (r.kind === 'kubectl' && ['create', 'replace', 'patch', 'scale', 'delete'].includes(r.args[0])) ||
+          (r.kind === 'helm' && r.args[0] === 'upgrade'),
+      );
+      assert.equal(writes.length, 1, 'Only the initial journal CAS may be dispatched');
+      assert.equal(writes[0].args[0], 'replace');
+      const record = JSON.parse((await f.state()).journal.data.record);
+      if (fault === 'lostClaimAcknowledgement') {
+        assert.equal(record.phase, 'quiescing');
+        assert.ok(result.stderr.includes(record.token), 'An uncertain accepted claim retains its recovery token');
+      } else assert.equal(record.autoscalingProtocol, 1);
+    }
+  },
+);
 
 test(
   'real deployment command blocks mutations when backup fails after successful prerequisites',
@@ -946,6 +990,22 @@ for (const mode of ['rolling', 'maintenance', 'topology'])
         mode === 'rolling' ? 'rolling' : mode === 'maintenance' ? 'maintenance' : 'topology',
       );
       assert.ok(journal.workflowIdentity.beforeVerified);
+      if (mode === 'rolling') {
+        assert.equal(journal.preparation.state, 'complete');
+        assert.ok(
+          journal.preparation.jobs.length && journal.preparation.jobs.every((j) => j.warmed && j.absent && j.nodeUid),
+        );
+        const calls = await f.calls();
+        const firstHelm = calls.findIndex((c) => c.kind === 'helm' && c.args[0] === 'upgrade');
+        const cleanup = calls
+          .map((c, i) => (c.args[0] === 'delete' && c.args[2]?.includes('/jobs/') ? i : -1))
+          .filter((i) => i >= 0);
+        assert.equal(cleanup.length, journal.preparation.jobs.length);
+        assert.ok(
+          cleanup.every((i) => i < firstHelm),
+          'Preparation must finish before templates can retire any frontend',
+        );
+      }
       const begins = (await f.calls()).filter((r) => r.args.includes('--begin-only')).length;
       const token = await f.expireLease();
       const recovered = await f.invoke([mode === 'maintenance' ? '--resume-cutover' : '--resume-ha', token]);

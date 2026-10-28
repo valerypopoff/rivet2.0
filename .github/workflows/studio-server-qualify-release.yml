@@ -1,0 +1,201 @@
+name: Qualify Rivet release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful exact-source main Build Images run. Does not deploy production.
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+# One approved provider operation at a time; never cancel its cleanup for a push.
+concurrency:
+  group: rivet-provider-qualification-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  built:
+    name: Built — validate immutable inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    env:
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      RIVET_AUTOMATED_QUALIFICATION_ENABLED: ${{ vars.RIVET_AUTOMATED_QUALIFICATION_ENABLED }}
+      PACKET: artifacts/automated-runtime-qualification
+    steps:
+      - name: Require main without a successful skipped qualification
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install pinned workspace dependencies
+        run: corepack yarn install --immutable
+      - name: Refuse disabled automation or invalid run identifiers
+        run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-run-id
+      - name: Verify exact successful main image build
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > "$PACKET/build-run.json"
+          corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-build
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ inputs.build_run_id }}-${{ steps.build.outputs.run_attempt }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/automated-runtime-qualification/candidate
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-release-manifest-${{ inputs.build_run_id }}-${{ steps.build.outputs.run_attempt }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/automated-runtime-qualification/original
+      - name: Validate original artifacts before any provider access
+        id: candidate
+        run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-candidate
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull exact immutable predecessor, not the publication pointer
+        env:
+          PREDECESSOR_REFERENCE: ${{ steps.candidate.outputs.predecessor_reference }}
+        run: corepack yarn node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$PREDECESSOR_REFERENCE" --output "$PACKET/predecessor.json"
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: qualification-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/automated-runtime-qualification
+          if-no-files-found: error
+
+  qualified:
+    name: Qualified — execute provider probes and verify cleanup
+    needs: built
+    runs-on: [self-hosted, linux, x64, rivet-qualification]
+    environment: rivet-managed-staging
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    outputs:
+      control: ${{ steps.execute.outputs.control }}
+      autoscaling: ${{ steps.execute.outputs.autoscaling }}
+    env:
+      RIVET_AUTOMATED_QUALIFICATION_ENABLED: ${{ vars.RIVET_AUTOMATED_QUALIFICATION_ENABLED }}
+      RIVET_QUALIFICATION_PROJECT_ID: ${{ vars.RIVET_QUALIFICATION_PROJECT_ID }}
+      RIVET_QUALIFICATION_PROJECT_NUMBER: ${{ vars.RIVET_QUALIFICATION_PROJECT_NUMBER }}
+      RIVET_QUALIFICATION_MAX_USD: ${{ vars.RIVET_QUALIFICATION_MAX_USD }}
+      RIVET_QUALIFICATION_MAX_SECONDS: ${{ vars.RIVET_QUALIFICATION_MAX_SECONDS }}
+      RIVET_QUALIFICATION_DRIVER_DIRECTORY: ${{ vars.RIVET_QUALIFICATION_DRIVER_DIRECTORY }}
+      RIVET_QUALIFICATION_DRIVER_SHA256: ${{ vars.RIVET_QUALIFICATION_DRIVER_SHA256 }}
+      RIVET_QUALIFICATION_PRIVATE_STORE: ${{ vars.RIVET_QUALIFICATION_PRIVATE_STORE }}
+      RIVET_QUALIFICATION_STAGING_KUBECONFIG: ${{ vars.RIVET_QUALIFICATION_STAGING_KUBECONFIG }}
+      RIVET_QUALIFICATION_CLUSTER_UID: ${{ vars.RIVET_QUALIFICATION_CLUSTER_UID }}
+      RIVET_QUALIFICATION_CLUSTER_SERVER: ${{ vars.RIVET_QUALIFICATION_CLUSTER_SERVER }}
+      RIVET_QUALIFICATION_GATEWAY_UID: ${{ vars.RIVET_QUALIFICATION_GATEWAY_UID }}
+      RIVET_QUALIFICATION_PRODUCTION_CONTEXT: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_CONTEXT }}
+      RIVET_QUALIFICATION_PRODUCTION_NAMESPACE: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE }}
+      RIVET_QUALIFICATION_PRODUCTION_RELEASE: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_RELEASE }}
+      RIVET_QUALIFICATION_PRODUCTION_NAMESPACE_UID: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE_UID }}
+      RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: corepack yarn install --immutable
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/automated-runtime-qualification
+      - name: Observe installed predecessor with read-only credentials
+        env:
+          KUBECONFIG: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_KUBECONFIG }}
+        run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs inspect
+      - name: Run approved provider operation and compile evidence after cleanup
+        id: execute
+        run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs execute
+      - name: Retain only sanitized successful qualification packet
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: qualification-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/automated-runtime-qualification/qualification-result.json
+            artifacts/automated-runtime-qualification/operation-public.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish qualified exact release
+    needs: qualified
+    uses: ./.github/workflows/studio-server-runtime-qualification.yml
+    with:
+      build_run_id: ${{ inputs.build_run_id }}
+      runtime_control_declaration: ${{ needs.qualified.outputs.control }}
+      runtime_autoscaling_declaration: ${{ needs.qualified.outputs.autoscaling }}
+
+  preflight:
+    name: Production preflight passed — no deployment
+    needs: [qualified, publish]
+    runs-on: [self-hosted, linux, x64, rivet-production-readonly]
+    environment: rivet-production-readiness
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    env:
+      QUALIFIED_MANIFEST_DIGEST: ${{ needs.publish.outputs.manifest_digest }}
+      KUBECONFIG: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_KUBECONFIG }}
+      RIVET_QUALIFICATION_PRODUCTION_CONTEXT: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_CONTEXT }}
+      RIVET_QUALIFICATION_PRODUCTION_NAMESPACE: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE }}
+      RIVET_QUALIFICATION_PRODUCTION_RELEASE: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_RELEASE }}
+      RIVET_QUALIFICATION_PRODUCTION_NAMESPACE_UID: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE_UID }}
+      RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE }}
+      RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: corepack yarn install --immutable
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/automated-runtime-qualification
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull verified qualified manifest and recheck actual installation
+        env:
+          RELEASE_MANIFEST_REPOSITORY: ghcr.io/${{ github.repository }}-studio-server/release-manifest
+        run: |
+          set -euo pipefail
+          reference="$RELEASE_MANIFEST_REPOSITORY:manifest-${QUALIFIED_MANIFEST_DIGEST#sha256:}"
+          corepack yarn node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$reference" --output artifacts/automated-runtime-qualification/qualified-manifest.json
+          corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs preflight
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: qualification-readiness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/automated-runtime-qualification/deployment-readiness.json
+          if-no-files-found: error

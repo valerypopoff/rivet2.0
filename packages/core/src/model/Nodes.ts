@@ -100,6 +100,8 @@ export * from './nodes/GraphCallPathNode.js';
 
 import { projectNameNode } from './nodes/ProjectNameNode.js';
 export * from './nodes/ProjectNameNode.js';
+import { aiCostNode } from './nodes/AICostNode.js';
+export * from './nodes/AICostNode.js';
 
 import { coalesceNode } from './nodes/CoalesceNode.js';
 export * from './nodes/CoalesceNode.js';
@@ -382,6 +384,7 @@ export const registerBuiltInNodes = (registry: NodeRegistration) => {
     .register(contextNode)
     .register(graphCallPathNode)
     .register(projectNameNode)
+    .register(aiCostNode)
     .register(coalesceNode)
     .register(coalesceNewNode)
     .register(didRunNode)

@@ -158,7 +158,7 @@ export async function runManagedReleaseCutover({
   if (admissionExpiresAt !== undefined && (!Number.isFinite(admissionExpiresAt) || admissionExpiresAt <= 0))
     throw new Error('Cutover admission deadline must be a positive timestamp.');
   const runner = uuid();
-  const journal = await readJournal();
+  let journal = await readJournal();
   let initial;
   assertCutoverJournal(journal, { release, namespace });
   const recovering = Boolean(journal && journal.phase !== 'complete');
@@ -187,6 +187,11 @@ export async function runManagedReleaseCutover({
     if (verificationOnly) throw Error('Verification-only recovery requires an unfinished cutover.');
     if (resumeToken) throw new Error('No unfinished cutover matches the recovery token.');
     const resources = checkedInventory(await inventory());
+    // Inventory may outlast a completed autoscaler sampling tick. Refresh the
+    // admission and its transport-held CAS version before the first claim.
+    // A new active/unfinished owner blocks admission; no write is retried.
+    journal = await readJournal();
+    assertOrdinaryReleaseAllowed(journal, { release, namespace }, now);
     // Offline rendering and live inventory may outlast the approval window.
     // Check at ownership acquisition, not just at the earlier plan preflight.
     // An exact unfinished operation above remains recoverable after expiry.

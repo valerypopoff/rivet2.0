@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { createConnection } from 'node:net';
 import test from 'node:test';
 import {
   assertMaintenancePlan,
@@ -753,13 +754,23 @@ test('a hung local adapter is stopped at its timeout and cannot produce success'
 });
 
 test('a timed-out adapter cannot leave a capture child writing while recovery begins', async (t) => {
-  const script = `import fs from 'node:fs';
-import path from 'node:path';
+  const childProgram = `const fs = require('node:fs');
+const net = require('node:net');
+const [marker, started, recovery] = process.argv.slice(1);
+process.on('SIGTERM', () => {});
+net.createServer(socket => socket.destroy()).listen(0, '127.0.0.1', function () {
+  setInterval(() => { if (fs.existsSync(recovery)) fs.writeFileSync(marker, 'late'); }, 10);
+  fs.writeFileSync(started, String(this.address().port));
+});
+setTimeout(() => process.exit(0), 10000);
+`;
+  const script = `import path from 'node:path';
 import { spawn } from 'node:child_process';
 const request = process.argv[process.argv.indexOf('--request') + 1];
 const marker = path.join(path.dirname(request), 'late-child-write');
 const started = path.join(path.dirname(request), 'child-started');
-spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(process.argv[2],String(Date.now()));setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),2500)", marker, started], { stdio: 'inherit', windowsHide: true });
+const recovery = path.join(path.dirname(request), 'recovery-started');
+spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}, marker, started, recovery], { stdio: 'inherit', windowsHide: true });
 process.on('SIGTERM', () => {});
 setInterval(() => {}, 1000);
 `;
@@ -769,9 +780,26 @@ setInterval(() => {}, 1000);
     /did not complete successfully/,
   );
   const [directory] = await fs.readdir(state.artifactsDir);
-  const childStartedAt = Number(await fs.readFile(path.join(state.artifactsDir, directory, 'child-started'), 'utf8'));
-  assert.ok(Number.isFinite(childStartedAt) && childStartedAt > 0, 'The child must actually start before termination.');
-  await new Promise((resolve) => setTimeout(resolve, Math.max(0, childStartedAt + 2_800 - Date.now())));
+  const port = Number(await fs.readFile(path.join(state.artifactsDir, directory, 'child-started'), 'utf8'));
+  assert.ok(Number.isInteger(port) && port > 0 && port <= 65535, 'The child must actually listen before termination.');
+  // Recovery is allowed only after confirmed shutdown, not at a fixed time after spawn.
+  // Even a paused surviving child retains its listener: a timeout is not proof of exit.
+  await assert.rejects(
+    new Promise((resolve, reject) => {
+      const socket = createConnection({ host: '127.0.0.1', port });
+      const settle = (error) => {
+        socket.destroy();
+        if (error) reject(error);
+        else resolve();
+      };
+      socket.once('connect', () => settle());
+      socket.once('error', settle);
+      socket.setTimeout(1_000, () => settle(new Error('Child shutdown remains unconfirmed')));
+    }),
+    { code: 'ECONNREFUSED' },
+  );
+  await fs.writeFile(path.join(state.artifactsDir, directory, 'recovery-started'), 'recovery');
+  await new Promise((resolve) => setTimeout(resolve, 100));
   await assert.rejects(fs.stat(path.join(state.artifactsDir, directory, 'late-child-write')), { code: 'ENOENT' });
   await assert.rejects(fs.stat(path.join(state.artifactsDir, directory, 'verified.json')), { code: 'ENOENT' });
 });

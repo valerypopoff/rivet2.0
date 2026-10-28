@@ -20,6 +20,8 @@ export const executionSampleCommand = (port) => [
   '-e',
   `const r=await fetch('http://127.0.0.1:${port}/metrics',{signal:AbortSignal.timeout(5000)});if(!r.ok)process.exit(1);process.stdout.write(await r.text());`,
 ];
+export class PendingExecutionCpuSample extends Error {}
+
 export function cpuQuantity(value) {
   const match = /^(\d+(?:\.\d+)?)(n|u|m)?$/.exec(String(value));
   if (!match) throw new Error('Unrecognized execution CPU quantity.');
@@ -109,12 +111,13 @@ export function createKubernetesTransport({
         request.end(payload);
       });
     },
-    exec(path, command) {
+    exec(path, command, { container = 'api' } = {}) {
+      if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(container)) throw new Error('Kubernetes exec container is invalid.');
       return new Promise((resolve, reject) => {
         const url = new URL(path, base);
         url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
         for (const item of command) url.searchParams.append('command', item);
-        url.searchParams.set('container', 'api');
+        url.searchParams.set('container', container);
         url.searchParams.set('stdout', 'true');
         url.searchParams.set('stderr', 'true');
         const WebSocket = WebSocketClass ?? createRequire(import.meta.url)('ws');
@@ -169,6 +172,7 @@ export function createExecutionAutoscalerIO({
   workload,
   service,
   image,
+  expectedUid,
   policy,
   port = 8080,
   now = Date.now,
@@ -401,6 +405,7 @@ export function createExecutionAutoscalerIO({
       const owner = await api.json('GET', sts);
       if (
         !owner ||
+        (expectedUid && owner.metadata.uid !== expectedUid) ||
         owner.metadata.labels?.['app.kubernetes.io/instance'] !== release ||
         owner.spec.updateStrategy?.type !== 'OnDelete' ||
         owner.spec.template.spec.containers.find((c) => c.name === 'api')?.image !== image
@@ -459,6 +464,7 @@ export function createExecutionAutoscalerIO({
         }
         const text = await api.exec(`${ns}/pods/${enc(entry.name)}/exec`, executionSampleCommand(port));
         const sample = metrics.items.find((m) => m.metadata.name === entry.name);
+        if (!sample) throw new PendingExecutionCpuSample('Execution CPU sample is not available yet.');
         const cpu = sample?.containers?.find((c) => c.name === 'api')?.usage?.cpu;
         const request = pod.spec.containers.find((c) => c.name === 'api')?.resources?.requests?.cpu;
         const requestCpu = cpuQuantity(request);

@@ -4,15 +4,36 @@ The compact singleton layout and drain-aware autoscaler need separate exact-imag
 provider evidence in addition to ordinary replicated-HA qualification. Local
 functional tests are not a GKE certificate.
 
+For a schema-changing pair, HA release creation and rolling admission additionally
+require the [rolling database contract](deployment-operations.md#rolling-database-compatibility-contract).
+Startup/schema verification alone cannot produce that receipt. The image gate
+runs old/new repository workers; the ordinary runtime gate repeats that pair
+alongside its protected traffic window. Unchanged-schema releases skip the DB
+workers. A future schema transition without a reviewed behavioral matrix fails
+closed, even if its declared rollback floor would otherwise permit rolling.
+
+The dispatch-only [automated orchestration](automated-runtime-qualification.md)
+executes a reviewed hash-pinned provider driver and compiles publication input
+only after successful probes and verified cleanup. It remains disabled until the
+maintained reusable driver, independent janitor, runners and access are
+reviewed/installed under separate infrastructure approval. The concrete code and
+render-only package command are documented in the linked guide; local verification
+does not activate them. Publication is reusable by that workflow and retains the
+manual path for separately reviewed adoption declarations.
+
 ## Release order
 
 1. Freeze a reviewed main candidate and let its normal **Build Images** run finish
    successfully. Retain its candidate/promoted manifests, exact predecessor and
    image digests. Do not install this unqualified candidate in production yet.
 2. Complete local and separately approved isolated GKE verification against those
-   exact images/chart/policy: regional/compact transfer and reversal, mixed-image
-   compact upgrade, cold runtime independence, browser OAuth/actions, maintenance
-   peaks/recovery, real metrics/RBAC, accepted-work drain, restart and node headroom.
+   exact images/chart/policy. For an **ordinary upgrade of the existing seven-pod
+   installation**, test the exact installed predecessor directly to the candidate
+   in compact/singleton mode, with the execution controller and proxy HPA active.
+   Do not traverse historical regional/control-topology conversions. Keep the
+   separate autoscaling, browser, recovery and capacity qualification requirements.
+   A **first adoption or topology change** instead needs the explicit adoption
+   cases, including regional/compact transfer and reversal and maintenance sizing.
 3. Settle every observer/worker, retain truthful terminal diagnostics and clean
    up the exact recorded test resources. Do not combine failed/partial windows
    into a passing certificate or derive maintenance sizing from tiny exports.
@@ -24,9 +45,10 @@ functional tests are not a GKE certificate.
    predecessor, adds the exact runtime evidence, and records this publication's
    actual workflow run as promotion provenance. It advances the artifact pointer
    only while main and the original ordinary-HA production pointer still match.
-6. Pin that qualified manifest. Install it at the existing replicated layout
-   through normal HA first. Then perform regional13->10 ownership transfer,
-   compact10->6 rollout, and separate autoscaler6->7 enablement, accepting each.
+6. Pin that qualified manifest. For an already-adopted compact/singleton seven-pod
+   installation, use the normal HA installed-to-candidate rollout directly.
+   Only first adoption follows the separate replicated installation,
+   regional13->10 transfer, compact10->6 and autoscaler6->7 transitions.
 
 Evidence changes the manifest digest. Never edit an installed manifest in place
 or bypass predecessor validation to bolt on a certificate. If the unqualified
@@ -51,9 +73,157 @@ Each JSON input is at most 16,384 characters with exactly these fields:
 - Autoscaling additionally needs `policy`: all normalized `autoscalerPolicy`
   fields. Its canonical digest must match the evidence.
 
-Control must cover both regional and compact profiles. Failed, local, incomplete,
+Control protocol1 is the historical adoption contract and must cover both regional
+and compact profiles. Control protocol2 is the ordinary-upgrade contract: compact
+only, `purpose:"ordinary-upgrade"`, `controlPlaneMode:"singleton"`, the exact
+`predecessorManifestDigest` and `autoscalerPolicyDigest`, and the complete
+`HA_ORDINARY_RUNTIME_CHECKS` list. It cannot authorize first adoption, a topology
+change, developer overlap or a different scaling policy. Publication also requires
+cooperative autoscaling protocol2 with the same policy digest. Both installed
+values and rendered destination resources are checked: backend1, web1, proxy2,
+execution2, autoscaler1; execution floor2 with a live controller and proxy HPA
+floor2/ceiling4/CPU75%. Seven is a baseline, not a ban on safe temporary growth.
+Rendered mode/policy checks inspect the named backend and autoscaler containers;
+an unrelated sidecar cannot satisfy missing configuration on the actual owner.
+
+Failed, local, incomplete,
 uncleaned, mismatched source/images/chart/policy or different-operation inputs
 are rejected. No copied unit-test checklist can establish provider qualification.
+
+## Ordinary local qualification command
+
+`kubernetes-runtime-control-local.mjs` defaults to
+`RIVET_RUNTIME_QUALIFICATION_PURPOSE=ordinary-upgrade` and compact mode. Supply
+`RIVET_RUNTIME_CONTROL_BASELINE_MANIFEST` (the exact promoted installed manifest)
+and `RIVET_RUNTIME_CONTROL_CANDIDATE_MANIFEST` (candidate or promoted target), plus
+the existing managed-release-gate context, registry, image and artifact settings.
+The candidate images must match those settings and its chart must match the
+checkout. An optional `RIVET_RUNTIME_AUTOSCALER_POLICY` file pins the execution
+policy; omission uses the documented default, never infers production settings.
+Run with `yarn node deploy/studio-server/scripts/kubernetes-runtime-control-local.mjs`.
+
+Use a fresh explicitly allowed `rivet-runtime-ha10-*` local context and
+`rivet-runtime-control-*` namespace, loopback Kubernetes API, distinct proxy hosts
+and a surge host, two topology domains, and functioning metrics-server. The
+historical context prefix is retained for safety/compatibility, not a ten-pod
+test requirement. Set the per-operation kubeconfig explicitly; do not change the
+developer's active context. Dependencies and the test edge are fixture pods and
+are not counted as application pods.
+Retain `namespace-identity.json` immediately after fresh namespace creation; do
+not wait for the rollout journal to preserve the UID needed after a bootstrap
+failure. A missing receipt is not proof that creation did not happen.
+Namespace creation uses create-only admission with its ownership label and saves
+the UID returned by that CREATE. It must never delegate to delete-before-create
+fixture reset logic: an item appearing after the preliminary GET is a conflict,
+not permission to remove it. Lost creation acknowledgements require inspection.
+
+The runner starts with seven predecessor application pods, retains the existing
+non-retrying workflow/web traffic observers, and uses the shared actual rollout
+coordinator. Each original execution owner accepts an early-output/background
+run, then must durably save exactly one matching recording before removal.
+Service/PVC identities and a downloaded immutable export are checked after the
+upgrade. Fresh controller samples, return to seven candidate pods and published
+OAuth actions/schedule recordings while developer pods are absent are required.
+Cold proxy replacement is included. Do not race the adoption fixture's manual
+execution scaling with the live controller: cold execution/node-loss/eviction
+cases remain separate autoscaling/provider tests. Singleton developer/web
+availability is not promised by this production-execution continuity test.
+Before any fixture upload it waits for all seven exact-image owners and probes
+the developer GET route through every proxy. Helm's completion is not sufficient
+for an `OnDelete` StatefulSet, particularly while a fresh node pulls its API image.
+A failed preparation is retained and inspected; do not blindly replay its upload.
+Fixture preparation can also briefly scale execution above two: wait for natural
+controller stabilization before opening the seven-pod observation window. Never
+manually shrink it for the test. A settled baseline excludes terminating owners.
+The ordinary fixture takes backend/execution CPU and memory requests from the
+chart defaults. Do not inherit the historical adoption fixture's 100m requests:
+they inflate CPU utilization and can request unschedulable extra ordinals on a
+three-node local cluster. Local node exhaustion blocks the proof; it does not
+authorize a manual shrink, disabled autoscaler or relaxed metrics. Provider
+qualification still requires the actual deployment's sizing and node headroom.
+
+Pod Ready is not CPU-metric readiness. The shared rollout coordinator waits
+read-only, under its existing bounded timeout, for a typed missing execution
+sample or missing/stale proxy sample. A missing execution sample is not zero and
+must not be sent through the CPU quantity parser. Execution snapshots bind their
+expected workload UID before those reads. The waiter reruns the complete
+execution/proxy headroom checks before permitting
+withdrawal. Identity changes, unknown ownership, invalid requests/policy and
+confirmed insufficient capacity remain terminal. A persistent metrics outage
+still blocks; no freshness limit, replica floor or mutation guard is relaxed.
+Failed reports retain partial accepted-work identities for exact settlement.
+
+Local transport shutdown is part of settlement, not just a `kill()` request.
+The managed gate waits for the port-forward child's actual `close` event before
+replacing its transport or deleting its namespace. An unconfirmed close blocks
+cleanup. On Windows, a recognized Chocolatey kubectl shim is resolved to its
+existing native target for port-forward only; shims with fixed extra arguments
+are rejected rather than silently dropping those arguments. Ordinary short-lived
+kubectl commands keep their existing behavior. Diagnostic Helm reads are also
+bound to the operation's explicit context, never the machine's default context.
+
+The local `20261028-f` ordinary window passed with exact predecessor `81a46463`
+and candidate `06d315785`: 2,938 workflow requests, 949 web-app requests, zero
+failed requests, and a durable recording for each of the two accepted background
+drain probes. Across 1,288 readiness observations, execution and proxy capacity
+never fell below two ready owners. The window returned naturally to seven pods;
+service/PVC identity, the saved export and fresh autoscaler samples passed.
+The actual headless browser OAuth/action scenario passed while developer
+services were absent. Its separate autoscaler-only browser scenario was not
+enabled; it is not an additional passing scenario. This is local functional
+evidence, not GKE qualification or uninterrupted singleton developer/web access.
+The retained report is
+`artifacts/runtime-ordinary-20261028/proof-f/runtime-ordinary-upgrade-report.json`.
+Earlier failed local windows remain failed, with their diagnostics retained.
+The per-deployment timeout bounds individual waits; it is not an aggregate
+timer that can invalidate an otherwise completed multi-phase qualification.
+An explicit caller expiry signal still fences new phase admission.
+
+To run historical conversions, explicitly set
+`RIVET_RUNTIME_QUALIFICATION_PURPOSE=adoption`; its existing baseline/next-image
+inputs and required reversal/ownership checks remain unchanged. Ordinary results
+never stand in for those checks.
+
+Reports are `local-functional-only`, not provider attestations or permission to
+deploy. Failed windows stay failed; no write is retried and no observation windows
+are joined. Capture the first failure's diagnostics while traffic is still
+observable, then settle observers and retain terminal diagnostics. Context-bound
+Helm inspection must not fall back to the machine's active context. Namespace
+retention is intentional: settle accepted work and verify exact ownership before
+explicit cleanup; killing a local runner is not proof of settlement.
+The managed gate's deployment timeout bounds each readiness/settlement phase,
+not the sum of a multi-phase qualification. In particular, do not reuse its
+default ten minutes as a whole-proof timer: normal drain, stabilization,
+withdrawal and schedule checks together can legitimately exceed that. Traffic
+sample accumulation uses the same bounded waiter, not an unbounded polling loop.
+Provider operators retain their independent approved expiry signal/budget; the
+shared runner honors a supplied signal and never extends or resets that clock.
+
+Local regressions: `runtime-upgrade-qualification.test.mjs` (real HTTP, Helm
+rendering and deterministic rollout adapters), `runtime-control-local.test.mjs`,
+`ha-release-evidence.test.mjs`, `installed-upgrade-plan.test.mjs` and
+`runtime-qualification-publication.test.mjs`. Adapter tests are not a real cluster
+upgrade; record the separate cluster command's result before claiming continuity.
+
+## Recorded 502: evidence and limits
+
+The retained failed window for operation `rivet-runtime-ha-20261028-06d3157`
+contains a single NGINX HTTP502 on request
+`8e95134d-e2c5-41c5-b730-f0e1e9b2e682`, starting
+`2026-10-28T03:27:46.170Z` and ending `.269Z`, during
+`predecessor-regional-13-to-10`. It also records 1732 successful workflow samples
+and 671 successful web samples. This was **not** the ordinary seven-to-seven path.
+The available summary has a response fingerprint, not correlated proxy/upstream
+error logs; it cannot distinguish a stale upstream, routing propagation, reset or
+an application error. Changing paths or fixing the claim race does not establish
+this 502's root cause or prove it resolved.
+
+New failed windows retain request IDs/timestamps/status/response fingerprints and
+immediately capture fixture logs, endpoints, events and pod identities before
+they can be truncated by a long rollout. The test edge's probe-only access log
+contains upstream address/status/connect/header/response timing. Raw logs remain
+private; publish only sanitized diagnostics. Any HTTP502 fails the window rather
+than being retried, softened or hidden by an aggregate success percentage.
 
 These are trusted-operator attestations backed by reviewed retained reports.
 The workflow checks release/policy binding, structure, main build provenance and
@@ -392,3 +562,316 @@ replica ceiling. Automatic scaling does not promise instantaneous acceptance of
 arbitrary bursts. Keep full policy timers in provider qualification, and do not
 change resource limits or claim full node-ephemeral coverage from only cgroup
 memory and mounted-volume measurements.
+
+### Rebinding an older provider runner to a new release
+
+An old successful local runner packet is reference material, not a reusable
+provider admission. Prepare a fresh operation without copying approval clocks,
+inventories, private settings or historical completion receipts. Freeze the
+actual predecessor/candidate manifests, source tree, chart, immutable images
+and a metadata-only projection of the installation's current controller policy
+and resource requests. Preserve the original operation files unchanged.
+
+Check the adapter contracts as well as the release IDs:
+
+- Current rollout/topology entry points require `createDeploymentSafety` with
+  explicit `rehearsal` scope and a live exact-namespace/cluster baseline check.
+  Never remove the permanent safety requirement to keep an older runner working.
+- Bootstrap the predecessor using its own declared schema version. The candidate
+  phase must exercise the real forward migration; creating the candidate schema
+  first cannot prove the predecessor-to-candidate migration boundary.
+- Fixture uploads, folder creation/conversion and bundle imports must supply
+  the current guarded structural admission and exact namespace/destination
+  identities, with the existing explicit-intent headers. Do not weaken routes
+  or silently retry a fixture write when updating the test client.
+- Cooperative autoscaling requires protocol-2 evidence, including real capacity
+  growth under both an active updater lease and a deliberately paused updater.
+  A safe pause is before issuing retirement: retain the exact owner/token, let
+  the actual updater lease expire, demonstrate growth without shrink, settle
+  accepted finite work and recover through that same token. Never fake lease
+  timestamps, substitute another journal or declare these checks from unit tests.
+
+Test the new helper dependency closure and exact source in Linux before cloud
+activation. A code-only source packet should contain one shallow commit, no
+remotes, credentials or unrelated Git history. Build locally, then verify the
+frozen runtime/helper packet without network access on the pinned operator
+image. A browser-launch smoke is preparation, not full application acceptance.
+Keep failed local attempts separate from corrected results.
+
+The current local preparation is recorded in
+`artifacts/gcp-runtime-ha-20261028-06d3157/`. Budget/temporary-certificate,
+code-only-upload and replacement expiry-monitor approvals are recorded there;
+they do not authorize production writes or constitute provider qualification.
+The candidate checkout remains frozen; this developer note is maintained in the
+primary develop checkout. Consult the new operation's preflight, not old status
+paragraphs above, for actual admission and first billable activation. A missing
+cleanup monitor must not be treated as a valid old safeguard: obtain approval
+for a replacement and verify its exact operation binding before activation.
+
+Before admitting that new provider operation, verify the actual final helper
+packet—not just a draft—with network-disabled Linux restore/import/browser
+checks. Keep a separate real PostgreSQL/object-storage predecessor-to-candidate
+migration probe and a real local Kubernetes watch/UID/namespace-closure probe.
+Remove only their recorded local container/cluster/network identities, preserving
+all pre-existing local applications. A failed setup remains failed evidence;
+record a corrected attempt separately instead of rewriting the old result.
+
+Capture a fresh protected staging baseline, existing account/key metadata and
+regional quota/version/range observations. Range proposals must be checked
+against all subnet secondary ranges and private-service reservations, not just
+the previous operation's chosen CIDRs. Freeze cloud provisioning, admission,
+terminal export and exact cleanup helpers before opening creation gates. Leave
+the paid clock null until the first new billable dispatch. Local checks and a
+successful main build never substitute for the actual provider cases.
+
+Terminal cleanup must also confirm any operation-owned temporary certificate
+container is stopped or absent with matching identity/removal receipts. A
+terminal application operator alone does not prove that local certificate work
+settled. Keep host-only cleanup corrections revisioned separately from an
+unchanged, already verified runtime packet; never silently replace frozen hashes.
+
+Before protected admission, a runner-only correction may resume the same paid
+environment only with explicit approval, exact process shutdown and actual
+application-writer settlement. Preserve the previous boot, journal, receipts and
+failed preparation result. Use a distinct journal and create-only receipt prefix
+for the replacement; transfer only verified resource identities, not active
+retirement or completion markers. Bind host terminal export to the current
+operator/journal incarnation so prior settlement cannot authorize later cleanup.
+Keep the original budget clock, source, images and certificate identity. Test
+every scheduled case label through the real object-key validator: report labels
+such as `proxyHpa` need a canonical lowercase transport key, not a weaker path
+validator. A stopped preparation attempt is not provider qualification.
+
+Cold-start Gateway setup must finish before seed or protected observation:
+GKE can report `LoadBalancerNegWithoutHealthCheck` as a true readiness gate
+before the NEG is attached to a health-checked backend. Pod Ready is therefore
+not the strict frontend admission used by this qualification. Keep the existing
+positive `LoadBalancerNegReady`, placement and identity validator unchanged.
+The operation-local host preparation may refresh a stale pre-test proxy only
+when its exact Deployment/ReplicaSet ancestry is recorded, all six proxies are
+stable and an independently positively healthy peer remains in the affected
+zone. Use one UID/resourceVersion-bound policy/v1 eviction at a time, honor the
+PDB and normal termination grace, and wait for a stable positive replacement.
+Never patch readiness status or admit HTTPS/seed/protected traffic early. An
+unknown acknowledgement or PDB refusal stops writes; no eviction is replayed.
+Retain pre-test repair diagnostics separately from protected availability
+evidence. Terminal export must also verify the exact host preparation process
+has actually exited, rather than trust a finished file alone.
+Launch the independent observer with its explicit frozen source-root path as
+well as PATH/SystemRoot, while excluding SDK/Kubernetes credentials. Test the
+actual sanitized child-process import, not only an import in the parent's
+already configured environment. Bind its precise process identity to the
+reviewed script SHA as well as the PID, start time and script path.
+When the peer's Pod condition is itself stale, peer health must instead come
+from fresh Compute `getHealth` data tied to the exact recorded Gateway backend
+ID, current Service UID/NEG annotation, zone, Pod IP and serving port. A name,
+Ready bit or old health observation is insufficient. This is pre-test refresh
+eligibility only: the unchanged final validator still requires positive NEG
+health on every current proxy before seed or protected observation starts.
+Transient management-connection failures may retry bounded read-only GETs;
+never retry an eviction. After the exact original host process has exited, an
+acknowledged eviction can resume by independently verifying the old UID is gone
+and current, positively healthy replacements belong to the exact recorded
+Deployment/ReplicaSet and immutable proxy image. If GKE simultaneously
+consolidates a node, retain the full observed replacement-UID set rather than
+invent one-to-one attribution. Never retarget a replacement; an original target
+already absent may be skipped only with durable UID deletion history. Preserve
+the checkpoint and original preparation
+deadline; an ambiguous or unacknowledged write blocks this recovery. Include
+every host-preparation incarnation in terminal process-settlement verification.
+A local preparation-admission timeout stops further evictions, not physical
+settlement of evictions already acknowledged. Preserve that failed result.
+Verification-only recovery may observe their completion and record fresh strict
+readiness without replaying any write, resetting a deadline, reusing an observer
+window or claiming that the earlier preparation passed. It must confirm all
+original targeted UIDs absent, pinned predecessor images, every application Pod
+Ready and the unchanged strict regional frontend validator before admission.
+
+The public staging dummy-OAuth fixture also requires the deployment-owned
+development-auth capability and a narrowly verified client-network policy.
+Saving `provider: dummy` or `dummyAllowNonLocalhost: true` does not grant that
+capability. The current operation's third preparation reached its successful
+seed and access-policy writes, then received 403 on the login GET because its
+own values explicitly disabled development auth. This is a fixture admission
+failure, not evidence of broken external-provider OAuth. Preserve the accepted
+seed; do not repeat upload, publication or the smoke workflow to recover it.
+Enabling dummy impersonation requires explicit staging-only approval, verified
+test-client allowlists and local checks before another hash-bound operator may
+start. Never enable it in production, open it to all networks, weaken the
+application guard or merge failed preparation into a protected test window.
+
+The approved scoped auth repair now uses two verified public `/32` test-client
+addresses, not a wildcard or private-subnet allowance. It reuses the accepted
+OAuth settings and access update. Recovery checks the original project ID,
+draft/publication revisions, endpoint, app slug/access policy and exact catalog
+artifact key through reads before creating a fresh login session; it never
+repeats project upload, publication or the seed workflow. The independent host
+also checks its server-verified client address before starting observation.
+If either egress address changes, admission fails rather than widening access.
+Keep the old failed result, exact seed object-generation metadata and all prior
+operator identities. A naturally absent terminal Pod can be recorded absent
+after verifying the prior terminal/settlement receipts and current namespace;
+never issue a name-only delete to recreate it. A new operator must pass fresh
+strict regional readiness; old positive frontend evidence cannot be reused.
+
+Local evidence for this repair is recorded separately: 74 operation regressions,
+the final network-disabled Linux packet's eight focused tests and 20 real
+application OAuth tests, and real HTTP recovery simulation with zero modifying
+requests. SQL in that simulation is a stand-in; actual provider catalog reads,
+public TLS/cookies and browser acceptance remain separate live gates. No such
+local result is GKE qualification, permission to replay writes, or a production
+deployment approval.
+
+Regional Gateway client provenance has a separate deployment boundary:
+`RIVET_TRUST_INCOMING_FORWARDED_HEADERS` controls forwarded host/protocol; it
+does not trust client-IP forwarding. Configure `RIVET_TRUSTED_FORWARDING_PROXIES`
+with the verified operation-owned proxy-only subnet and exact forwarding-rule
+IP, while keeping `RIVET_DEVELOPMENT_AUTH_CLIENTS` restricted to the actual
+public test clients. Google appends both client and frontend IPs to
+[`X-Forwarded-For`](https://docs.cloud.google.com/load-balancing/docs/https#x-forwarded-for_header).
+Omitting the frontend hop can resolve the wrong address even after trusting
+the transport peer. Never solve a failed provenance check by allowing the
+proxy subnet to impersonate users. The frozen real-NGINX regression verifies
+nearest-untrusted-hop selection, spoof rejection, full proxy templates,
+executor WebSockets and revocation; the provider still checks its actual
+resolved public client before admitting OAuth or observation.
+
+For raw Cloud Quotas REST calls, explicitly send the staging project in
+`x-goog-user-project`; a native SDK environment variable does not route a
+separate HTTP client's quota. Keep explicit rejections distinct from uncertain
+acknowledgements. The approved global CPU32-to64 preference was subsequently
+verified through its exact identity and effective Compute limit, without
+inventing the failed creation acknowledgement. Preserve that non-billable
+preference on cleanup, along with the historical network/SSD preferences;
+never increase test replicas or reset the budget clock to use new headroom.
+
+Keep accepted Helm-intent finalization on the metadata-only transport after a
+cooperative stop. Stopping test admission must reject a new Helm batch without
+blocking inspection of a batch already dispatched. If that inspection did not
+finish, verify actual process/writer shutdown, retain the original uncertain
+archive, and reconcile only its exact intent IDs against immutable identities
+and Helm ownership. CAS only the operation journal; never rerun Helm to learn
+whether it succeeded or replace that journal with an empty one. A separate
+reconciled receipt must preserve the original record hash. The final auth-repair
+packet includes this teardown regression on real Linux (11 focused tests),
+20 application OAuth guard tests and 75 operation regressions. These remain
+local preparation evidence, not a completed protected provider window.
+
+Pre-test proxy refresh should request Compute backend health only when an
+affected zone lacks a positively NEG-ready peer. A stale Service NEG-zone
+annotation must not block the already-supported positive-peer path. Keep the
+authoritative-health fallback's identity checks and the final strict regional
+validator unchanged. Preserve a failed read-only preparation receipt, verify
+its precise process has stopped, and retain its original admission deadline
+when correcting that read dependency; do not replay an eviction or reset time.
+
+After host admission, the isolated runner must use the existing bounded
+`waitForGkeFrontendAvailability` before seed recovery. A prior successful
+snapshot does not guarantee that GKE will not begin node consolidation between
+the host and operator reads. The waiter only repeats observations, retains all
+positive-NEG/placement checks and operation-identity guards, and remains bounded
+by the deployment timeout and original operation expiry. A timeout still fails
+preparation and settles accepted work; it never starts or repeats a protected
+window. Keep pre-test readiness failures separate from OAuth or application
+failures. The fifth preparation stopped at this boundary before recovering the
+seed, authenticating OAuth or starting the observer; its actual drained-owner
+and supervisor receipts must remain in history.
+
+A separately approved readiness-repair resume uses a new hash-bound operator
+incarnation and its own journal/receipt prefix. Extend the closed identity
+allowlists for that exact incarnation, including failure settlement and expiry
+cleanup, before dispatch. Prove the prior operator's containers and all API
+writers stopped, preserve its complete journal, and carry forward resource
+identities only—not old processes, completion markers or test admission. Restore
+the new packet without networking on the unchanged pinned Linux image, including
+the actual strict-wait regression, application OAuth guards and headless browser.
+The existing synthetic seed is recovered by identity/revision checks and reads;
+never repeat its upload, publication, settings or access writes. The allowance
+and first-activation deadline remain the original operation's values.
+
+For the approved pre-test refresh, a Service's NEG `zones` annotation may lag
+actual backend membership after node consolidation. When positive Pod peers
+are unavailable, bind the existing backend groups to the Gateway inventory's
+exact NEG self-links, immutable IDs and Service UID, then read those identities
+again and verify the operation network/subnet before using backend `getHealth`.
+Do not adopt a new/recreated group or treat the annotation alone as ownership.
+The local real-HTTP regression rejects changed IDs and unavailable metadata;
+normal UID/resourceVersion/PDB eviction and final positive Pod NEG health remain
+mandatory. This host-only preparation correction does not change the running
+operator packet or qualify a protected observation window.
+
+The independent public observer needs distinct credentials for distinct public
+surfaces: UI/OAuth cookies do not replace the workflow endpoint's Bearer API key.
+Keep any key in memory/private stdin only, never environment, arguments, receipts
+or diagnostic logs. A failed warm-up remains a failed observer window even when
+protected cases were not admitted. Preserve it, verify the exact observer process
+exited, and cooperatively stop only the waiting producer before normal accepted
+work drains. Do not restart that observer or combine windows to obtain a pass.
+
+The sixth staging preparation demonstrated seed recovery and dummy OAuth, but
+its first observer workflow request lacked the separate Bearer header and was
+rejected401; its web-app request succeeded. This is a runner authentication
+failure, not completed availability qualification. The local transport repair
+is kept separate from the failed observer's original bytes: synthetic real-HTTP
+checks reproduce401 and verify credential-scoped success and continued rejection.
+No real key is transferred and no replacement provider window is admitted by
+those local tests. A subsequent provider window requires an explicit reviewed
+decision; keep the original failed window immutable and never merge samples.
+
+If all application pods stopped but the producer could not commit its final
+settlement receipt, retain that failed report. Use the reviewed host-side failed
+settlement recovery only after verifying the exact producer/observer processes
+exited and the original namespace/cluster/journal identities. Keep the recovered
+receipt separate and link it to that original operator UID; it can establish
+failed-run cleanup eligibility, never a passing qualification. Close test
+admission while awaiting a new explicit decision, preserving its earlier receipt
+and the failed window's original source bytes.
+
+After explicit human approval of the observer-auth repair and a fresh window,
+use a separate operator/journal/object prefix and `host-observe-r7` receipts.
+Pass the existing staging workflow Bearer key only through private stdin; it
+must not enter process arguments, environment, receipts or logs. Scope that
+header to `/workflows/`; web-app traffic retains only its UI/OAuth cookies.
+The observer uses the locally verified transport without a simulation override.
+Retain the failed sixth window's archived source/hash/process evidence, reject
+reuse of its window ID, and never add its samples to the new report. While
+waiting for admission, an already-terminal observer must fail the producer
+promptly rather than leave it waiting for an admission that cannot arrive.
+This approval changes neither production nor the first activation/deadline.
+
+If the completed operator Pod has subsequently disappeared, its absence is not
+a terminal exit receipt and cannot qualify a release. A failed-only exporter may
+combine a fresh exact-namespace Pod observation with the current incarnation's
+complete UID-bound durable settlement, matching immutable producer/supervisor
+reports, stopped observer/helper processes and zero application controllers.
+Retain the distinction: report the Pod as absent and its actual phase/container
+exit fields as unavailable, not fabricated `Failed`/exit1 Kubernetes status.
+Any replacement, mismatched journal, partial settlement or remaining writer
+blocks cleanup. Preserve the original failed availability window unchanged.
+
+Final cleanup verification includes recorded billable operator Pods, not only
+cloud resources. Once the exact original cluster is freshly absent and its
+recorded deletion operation is `DONE` without error, verify each Pod's recorded
+UID, operation/project owner and original namespace lifetime against the removed
+namespace UID. Parent deletion proves containment is gone; a cleanup timestamp
+alone does not. This is not evidence of an individual Pod's exit status and must
+not rewrite its billable classification or qualify a failed test window.
+
+Verify the preserved billing association with an authenticated read-only
+`projects/{project}/billingInfo` GET. Do not enable an API, link/unlink billing or
+add a consumer-project override merely to complete cleanup verification. Keep
+provider-blocked private peering/range/VPC holds explicit and non-billable; an
+absence receipt must distinguish them from verified removed paid resources.
+
+The `20261028-06d3157` staging operation ended with failed availability
+qualification, followed by verified zero-billable cleanup. Its non-billable
+private-network/range holds remain provider-blocked and must not be forcefully
+removed. The subsequent production schema17-to18 upgrade used the explicitly
+approved supported maintenance waiver, not that failed window as HA evidence.
+Native deployment, autoscaler activation, actual headless application acceptance
+and independent saved-catalog/storage/secret/neighbour checks passed. The
+initial-claim CAS repair used for that deployment was operation-specific, not a
+published permanent fix. The subsequent local permanent correction is described
+in [fresh maintenance ownership claim](deployment-operations.md#fresh-maintenance-ownership-claim).
+Its local regressions do not qualify a release or change the running deployment;
+retain the original rejected-CAS and scoped-repair evidence as historical facts.

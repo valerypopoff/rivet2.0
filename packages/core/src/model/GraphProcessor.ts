@@ -1,5 +1,5 @@
 import { GraphInvocationState, GraphSharedExecutionState } from './GraphExecutionState.js';
-import type { RunCostSnapshot } from './RunCostLedger.js';
+import type { RunCostLedger, RunCostSnapshot } from './RunCostLedger.js';
 import { resolveChildInvocationOwnership } from './ChildInvocationOwnership.js';
 import {
   planStreamingWatchTopology,
@@ -648,6 +648,8 @@ export class GraphProcessor {
   slowMode = false;
   #parent: GraphProcessor | undefined;
   #recordingProjectScope: string | undefined;
+  /** Captures the caller invocation, independently of lifecycle-parent rewiring. */
+  #projectCostScope: { parentLedger: RunCostLedger; startsProject: boolean } | undefined;
   #abortOwnerOverride: GraphProcessor | undefined;
   #sameGraphRunOwnerOverride: GraphProcessor | undefined;
   #suppressGraphPartialOutputs = false;
@@ -1303,6 +1305,11 @@ export class GraphProcessor {
       loadedProjects:
         this.#cacheLoadedProjects && this.#runtimeCache?.loadedProjects ? { ...this.#runtimeCache.loadedProjects } : {},
       sharedOverride: this.#sharedRunStateOverride,
+      costLedger: this.#projectCostScope
+        ? this.#projectCostScope.startsProject
+          ? this.#projectCostScope.parentLedger.createProjectScope()
+          : this.#projectCostScope.parentLedger
+        : undefined,
     });
     this.#shared.executionCache ??= new Map();
     this.#connectedToolContinuationHost.reset();
@@ -1578,9 +1585,12 @@ export class GraphProcessor {
     const hostLLMChatOutputSnapshotObserver = this.getRootProcessor().#run.context.onLLMChatOutputSnapshot;
     const hostLLMProfileAttemptObserver = this.getRootProcessor().#run.context.onLLMProfileAttempt;
     // Capture the invocation's ledger, not a later run that reuses this processor.
-    const costLedger = this.getRootProcessor().#run.costLedger;
+    const costLedger = this.#run.costLedger;
+    const { rootRunId, graphRunId } = this.#run;
+    const isCurrentInvocation = () => this.#run.rootRunId === rootRunId && this.#run.graphRunId === graphRunId;
     this.#run.nodeProcessContextBase = {
       ...this.#run.context,
+      getRunCostBreakdown: () => costLedger.breakdown(),
       abortGraph: (error) => {
         void (this.#abortOwnerOverride ?? this).abort(error === undefined, error);
       },
@@ -1602,7 +1612,7 @@ export class GraphProcessor {
         try {
           costLedger.observeChat(event);
         } catch {
-          costLedger.markUnobserved();
+          costLedger.markUnobserved('llm');
         }
         try {
           const observerResult = hostChatV2Observer?.(event);
@@ -1612,6 +1622,7 @@ export class GraphProcessor {
         } catch {
           // Host observers must never change graph execution.
         }
+        if (!isCurrentInvocation()) return;
         // Runtime traces carry only the normalized, provider-neutral usage
         // contract. The host observer above retains its existing raw accounting
         // callback, but provider-shaped usage never enters recordings or remote
@@ -1628,13 +1639,13 @@ export class GraphProcessor {
         } catch {
           // Snapshot observers are display-only and must never affect execution.
         }
-        emitDetached(this.#emitter, 'llmChatOutputSnapshot', this.#withExecution(event));
+        if (isCurrentInvocation()) emitDetached(this.#emitter, 'llmChatOutputSnapshot', this.#withExecution(event));
       },
       onLLMProfileAttempt: (event) => {
         try {
           costLedger.observeClassifier(event);
         } catch {
-          costLedger.markUnobserved();
+          costLedger.markUnobserved('decisionAI');
         }
         try {
           const observerResult = hostLLMProfileAttemptObserver?.(event);
@@ -1644,10 +1655,10 @@ export class GraphProcessor {
         } catch {
           // Host observers must never change graph execution.
         }
-        emitDetached(this.#emitter, 'llmProfileAttempt', this.#withExecution(event));
+        if (isCurrentInvocation()) emitDetached(this.#emitter, 'llmProfileAttempt', this.#withExecution(event));
       },
       onToolCallFinished: (event) => {
-        emitDetached(this.#emitter, 'toolCallFinished', this.#withExecution(event));
+        if (isCurrentInvocation()) emitDetached(this.#emitter, 'toolCallFinished', this.#withExecution(event));
       },
       project: this.#project,
       raiseEvent: (event, data) => {
@@ -3285,7 +3296,7 @@ export class GraphProcessor {
       nodeAbortController.abort(getAbortSignalReason(this.#run.abortController.signal));
     }
     let continuationFinalized = false;
-    const costLedger = this.getRootProcessor().#run.costLedger;
+    const costLedger = this.#run.costLedger;
     const accountingKey = `${this.#run.graphRunId}:${processId}:${index}`;
     let accountingEntered = false;
     let observedPhysicalCall = false;
@@ -3359,14 +3370,16 @@ export class GraphProcessor {
     } finally {
       if (accountingEntered && !cacheHit) {
         try {
-          if (['chat', 'chatLoop', 'chatGoogle', 'chatAnthropic', 'chatHuggingFace', 'getEmbedding'].includes(node.type)) {
+          if (
+            ['chat', 'chatLoop', 'chatGoogle', 'chatAnthropic', 'chatHuggingFace', 'getEmbedding'].includes(node.type)
+          ) {
             const cost = accountingOutputs?.['cost' as PortId];
             costLedger.observeLegacy(accountingKey, cost?.type === 'number' ? cost.value : undefined);
           } else if ((node.type === 'llmChatV2' || node.type === 'classifierEvaluate') && !observedPhysicalCall) {
-            costLedger.markUnobserved();
+            costLedger.markUnobserved(node.type === 'classifierEvaluate' ? 'decisionAI' : 'llm');
           }
         } catch {
-          costLedger.markUnobserved();
+          costLedger.markUnobserved(node.type === 'classifierEvaluate' ? 'decisionAI' : 'llm');
         }
       }
       if (!continuationFinalized) {
@@ -4940,7 +4953,13 @@ export class GraphProcessor {
    * scheduling and terminal commits remain with their respective branch owner. */
   #constructChildInvocation(
     invocation:
-      | { kind: 'subgraph'; project: Project; graphId: GraphId | undefined; initialExecutionPlan?: GraphExecutionPlan }
+      | {
+          kind: 'subgraph';
+          project: Project;
+          graphId: GraphId | undefined;
+          initialExecutionPlan?: GraphExecutionPlan;
+          startsProject: boolean;
+        }
       | { kind: 'continuation'; graph: NodeGraph; graphOutputs: GraphOutputs }
       | { kind: 'watch'; graph: NodeGraph; watchNodeId: NodeId; graphRunId: GraphRunId }
       | {
@@ -4990,6 +5009,10 @@ export class GraphProcessor {
     processor.#externalFunctions = this.#externalFunctions;
     processor.#contextValues = this.#contextValues;
     processor.#parent = this;
+    processor.#projectCostScope = {
+      parentLedger: this.#run.costLedger,
+      startsProject: ordinary && invocation.startsProject,
+    };
     processor.#recordingProjectScope = this.#recordingProjectScope;
     processor.#graphCallPath = this.#graphCallPath;
     processor.#frozenNodeOutputResolver = this.#frozenNodeOutputResolver;
@@ -5097,6 +5120,9 @@ export class GraphProcessor {
         project: subprocessorProject,
         graphId: subGraphId,
         initialExecutionPlan,
+        startsProject:
+          subprocessorProject !== this.#project ||
+          (node.type === 'subGraph' && Boolean((node as SubGraphNode).data.targetProjectId)),
       });
     } finally {
       this.#finishRuntimeProfile('createSubProcessor', createProfileStart);

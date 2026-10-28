@@ -65,6 +65,7 @@ export class GraphInvocationState {
     createAbortController: () => AbortController;
     loadedProjects: Record<ProjectId, Project>;
     sharedOverride?: Pick<GraphInvocationState, 'graphOutputs' | 'attachedNodeData' | 'graphInputNodeValues'>;
+    costLedger?: RunCostLedger;
   }): void {
     this.nodeResults = new Map(options.preloadedNodeResults);
     this.visitedNodes = new Set(options.preloadedNodeResults.keys());
@@ -89,7 +90,7 @@ export class GraphInvocationState {
     this.successfulAbortTerminalProcessIds = new Set();
     this.totalCost = 0;
     this.costBreakdown = undefined;
-    this.costLedger = new RunCostLedger();
+    this.costLedger = options.costLedger ?? new RunCostLedger();
     this.nodeAbortControllers = new Map();
     this.loadedProjects = options.loadedProjects;
     this.graphInputNodeValues = options.sharedOverride?.graphInputNodeValues ?? {};

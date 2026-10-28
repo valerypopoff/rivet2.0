@@ -290,6 +290,94 @@ test('definition resolver keeps exact output identity, unsaved definitions and f
   assert.equal(reopened(context, data).navigable, false);
 });
 
+test('AI Cost activity previews the sum, not the first LLM output, without adding another model charge', () => {
+  const registry = createBuiltInRegistry();
+  const node = registry.create('aiCost');
+  const graphId = 'cost-graph' as GraphId;
+  const graph = { metadata: { id: graphId }, nodes: [node], connections: [] };
+  const project: Project = {
+    metadata: { id: 'cost-project' as ProjectId, title: '', description: '' },
+    graphs: { [graphId]: graph },
+  };
+  const selected = root(newerActiveRootId, 1, 'completed');
+  const item = invocation({
+    key: 'cost',
+    sequence: 1,
+    graphId,
+    graphRunId: 'cost-run',
+    nodeId: node.id,
+    processId: 'cost-process',
+  });
+  item.outputPortIds = ['llmCost', 'decisionAICost', 'totalCost'] as PortId[];
+  selected.nodeInvocationsByKey[item.key] = item;
+  selected.nodeInvocationOrder = [item.key];
+  const journal = createRunActivityJournal();
+  journal.rootsById[selected.rootRunId] = selected;
+  journal.latestCompletedRootRunId = selected.rootRunId;
+  const data: RunDataByNodeId = {
+    [node.id]: [
+      {
+        rootRunId: item.rootRunId,
+        graphRunId: item.graphRunId,
+        graphId,
+        processId: item.processId,
+        data: {
+          status: { type: 'ok' },
+          outputData: {
+            ['llmCost' as PortId]: { type: 'number', storage: 'inline', value: 0 },
+            ['decisionAICost' as PortId]: { type: 'number', storage: 'inline', value: 0.5 },
+            ['totalCost' as PortId]: { type: 'number', storage: 'inline', value: 0.5 },
+          },
+        },
+      },
+    ],
+  };
+  const resolve = createRunActivityInvocationResolver(project, graph, registry);
+  const model = buildRunActivityViewModel(journal, (context) => resolve(context, data));
+  assert.equal(model.items[0]?.preview, '0.5');
+  assert.equal(model.items[0]?.category, 'generic');
+  assert.equal(model.accounting, undefined, 'Reading costs must not be counted as another AI call');
+  const process = data[node.id]![0]!;
+  const unknown: RunDataByNodeId = {
+    [node.id]: [
+      {
+        ...process,
+        data: {
+          ...process.data,
+          outputData: {
+            ['llmCost' as PortId]: { type: 'number', storage: 'inline', value: 0 },
+            ['decisionAICost' as PortId]: { type: 'control-flow-excluded', storage: 'inline', value: undefined },
+            ['totalCost' as PortId]: { type: 'control-flow-excluded', storage: 'inline', value: undefined },
+          },
+        },
+      },
+    ],
+  };
+  assert.equal(
+    buildRunActivityViewModel(journal, (context) => resolve(context, unknown)).items[0]?.preview,
+    'Not ran',
+    'Unknown totals must not display JavaScript undefined or fall back to zero LLM cost',
+  );
+});
+
+test('stored previews distinguish excluded ports from zero and literal undefined text without reading references', () => {
+  assert.equal(
+    previewStoredDataValue({ type: 'control-flow-excluded', storage: 'inline', value: undefined }),
+    'Not ran',
+  );
+  assert.equal(
+    previewStoredDataValue({
+      type: 'control-flow-excluded',
+      storage: 'ref',
+      refId: 'never-read',
+      preview: { kind: 'summary', label: 'undefined', totalBytes: 0 },
+    }),
+    'Not ran',
+  );
+  assert.equal(previewStoredDataValue({ type: 'number', storage: 'inline', value: 0 }), '0');
+  assert.equal(previewStoredDataValue({ type: 'string', storage: 'inline', value: 'undefined' }), 'undefined');
+});
+
 test('selects the newest active root before the latest completed root', () => {
   const journal = createRunActivityJournal();
   journal.rootsById[completedRootId] = root(completedRootId, 1, 'completed');

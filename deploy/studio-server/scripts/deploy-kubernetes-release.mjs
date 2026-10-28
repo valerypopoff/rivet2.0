@@ -9,6 +9,7 @@ import {
   assertHaUpgradeEvidence,
   assertRuntimeControlEvidence,
   assertCooperativeAutoscalingEvidence,
+  assertOrdinaryRuntimeResources,
 } from './lib/ha-release-evidence.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import {
@@ -637,6 +638,7 @@ async function main() {
     const autoscalerResource = renderedResources.find(
       (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler',
     );
+    if (!maintenance) assertOrdinaryRuntimeResources(manifest.evidence.runtimeControl, renderedResources);
     let deploymentAutoscalingPolicyDigest;
     if (autoscalerResource) {
       if (options.has('--ha-control-plane-transition'))
@@ -1303,8 +1305,7 @@ async function main() {
             };
             // A completed foreign-kind journal is returned as null by the
             // strategy, but its freshly observed CAS version must be retained.
-            // The autoscaler may update it during application baseline checks.
-            let observedJournalVersion;
+            // The autoscaler may update it during baseline checks or inventory.
             let observedJournalResource;
             const readJournal = async () => {
               const { resource, record } = await readAvailableReleaseJournal({
@@ -1314,12 +1315,9 @@ async function main() {
                 release,
                 namespace,
                 timeoutMs,
+                previousResource: observedJournalResource ?? preparedJournalResource,
               });
-              const expectedUid = observedJournalResource?.metadata.uid ?? preparedJournalResource?.metadata.uid;
-              if (expectedUid && resource?.metadata.uid !== expectedUid)
-                throw Error('Cutover journal immutable identity changed; no further writes are allowed.');
               observedJournalResource = resource;
-              observedJournalVersion = resource?.metadata.resourceVersion;
               return record;
             };
             const saveJournal = async (record, resourceVersion) => {
@@ -1390,7 +1388,7 @@ async function main() {
               resumeToken: options.get('--resume-cutover'),
               inventory,
               readJournal,
-              createJournal: (record) => saveJournal(record, observedJournalVersion),
+              createJournal: (record) => saveJournal(record, observedJournalResource?.metadata.resourceVersion),
               replaceJournal: saveJournal,
               scale: async (item, replicas) => {
                 const live = JSON.parse((await kube(['get', item.kind, item.name, '-o', 'json'])).stdout);

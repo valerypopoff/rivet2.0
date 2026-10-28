@@ -6,6 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { containerServerConfig, createManagedCompose } from './lib/container-server-config.mjs';
 import { verifyFolderParentMigration } from './lib/verify-folder-parent-migration.mjs';
 import { verifyNamespaceMutations } from './lib/verify-namespace-mutations.mjs';
+import { probeSchemaLockContention } from './lib/schema-compatibility-probe.mjs';
+import { verifySchemaImagePair } from './lib/verify-schema-image-pair.mjs';
 
 // Use the API's compiled migration owner and dependency scope, just like the
 // migration image. No caller-provided database is accepted by this destructive test.
@@ -136,6 +138,89 @@ try {
     await verifyNamespaceMutations(repairPool);
   } finally {
     await repairPool.end();
+  }
+
+  await pool.query('CREATE DATABASE rivet_rolling_schema_check');
+  const rollingPool = new Pool({ ...pool.options, database: 'rivet_rolling_schema_check', max: 5 });
+  try {
+    await rollingPool.query(`CREATE TABLE managed_workflow_schema_migrations (
+      version INTEGER PRIMARY KEY CHECK(version>0), name TEXT NOT NULL,
+      checksum TEXT NOT NULL CHECK(char_length(checksum)=64), application_version TEXT,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+    for (const migration of MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.filter((m) => m.version <= 17)) {
+      await rollingPool.query(migration.sql);
+      await rollingPool.query(
+        'INSERT INTO managed_workflow_schema_migrations(version,name,checksum) VALUES($1,$2,$3)',
+        [migration.version, migration.name, migration.checksum],
+      );
+    }
+    await rollingPool.query(`INSERT INTO workflow_recordings(recording_id,workflow_id,source_project_name,source_project_relative_path,
+      run_kind,status,duration_ms,endpoint_name_at_execution,recording_blob_key,replay_project_blob_key)
+      VALUES('before-expand','historical','Keep','Keep.rivet-project','published','failed',123,'keep','preserved/recording','preserved/project')`);
+    const beforeExpand = (
+      await rollingPool.query(
+        "SELECT to_jsonb(r) AS value FROM workflow_recordings r WHERE recording_id='before-expand'",
+      )
+    ).rows[0].value;
+    const blocker = await rollingPool.connect();
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT * FROM workflow_recordings');
+      const started = Date.now();
+      await assert.rejects(
+        migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'rolling', logger: { log() {}, warn() {} } }),
+        { code: '55P03' },
+      );
+      assert.ok(
+        Date.now() - started < 4000,
+        'Rolling migration must not retry or wait for the maintenance lock budget',
+      );
+      assert.equal(
+        (await rollingPool.query('SELECT max(version) AS version FROM managed_workflow_schema_migrations')).rows[0]
+          .version,
+        17,
+      );
+      assert.equal(
+        (
+          await rollingPool.query(
+            "SELECT count(*)::int AS n FROM information_schema.columns WHERE table_name='workflow_recordings' AND column_name='cost_json'",
+          )
+        ).rows[0].n,
+        0,
+      );
+    } finally {
+      await blocker.query('ROLLBACK');
+      blocker.release();
+    }
+    const forward = await migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'rolling' });
+    assert.deepEqual(forward.appliedVersions, [18]);
+    await verifyManagedWorkflowSchema(rollingPool);
+    assert.deepEqual(
+      (
+        await rollingPool.query(
+          "SELECT to_jsonb(r) AS value FROM workflow_recordings r WHERE recording_id='before-expand'",
+        )
+      ).rows[0].value,
+      { ...beforeExpand, cost_json: null },
+      'Expand must preserve historical failed recordings and artifact pointers',
+    );
+    await verifySchemaImagePair(docker, containerId);
+    const schema = `rivet_schema_probe_${randomUUID().replaceAll('-', '')}`;
+    await rollingPool.query(`CREATE SCHEMA ${schema}`);
+    try {
+      await probeSchemaLockContention(
+        rollingPool,
+        schema,
+        MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === 18),
+      );
+    } finally {
+      await rollingPool.query(`DROP SCHEMA ${schema} CASCADE`);
+    }
+    console.log(
+      'Rolling schema: real 17 -> 18, lock-timeout rollback/no retry, queued-reader recovery and preserved rows passed.',
+    );
+  } finally {
+    await rollingPool.end();
   }
 
   // Preserve strict validation: accepting real catalog formatting must not

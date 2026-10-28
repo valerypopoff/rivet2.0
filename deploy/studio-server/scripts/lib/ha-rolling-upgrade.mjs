@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { runDeploymentOperation } from './deployment-operation.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
+import { haPreparationSettled } from './release-operation-journal.mjs';
 
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const ownerRoles = new Set(['backend', 'execution', 'evaluation', 'maintenance']);
@@ -86,6 +87,7 @@ export async function runHaRollingUpgrade({
   isCurrentPod = (pod, workload) => pod.image === workload.image,
   prepareRetirement = async () => {},
   checkHeadroom = async () => {},
+  prepareReplacements = async () => {},
   settle,
   handoverHousekeeping,
 }) {
@@ -139,8 +141,13 @@ export async function runHaRollingUpgrade({
         const before = assertHaRetirement(await status(pod));
         if (before.state !== 'serving' || before.operationId)
           throw new Error('An original HA owner is already retiring.');
-        if (w.role === 'backend' && controlPlaneMode === 'singleton-overlap' &&
-            (before.housekeeping?.protocol !== 1 || before.housekeeping.state !== 'owner' || before.housekeeping.podUid !== pod.uid))
+        if (
+          w.role === 'backend' &&
+          controlPlaneMode === 'singleton-overlap' &&
+          (before.housekeeping?.protocol !== 1 ||
+            before.housekeeping.state !== 'owner' ||
+            before.housekeeping.podUid !== pod.uid)
+        )
           throw Error('The original backend has no confirmed housekeeping ownership capability.');
       }
     initial = {
@@ -167,7 +174,7 @@ export async function runHaRollingUpgrade({
     clearHeartbeat,
     onFailure: async (_error, operation) => {
       // Preflight has not issued a template command. Never abandon later phases.
-      if (operation.record.phase === 'preflight' && !operation.failure) {
+      if (operation.record.phase === 'preflight' && !operation.failure && haPreparationSettled(operation.record)) {
         operation.assertLease();
         await operation.complete({ abortedBeforeTemplates: true });
       }
@@ -238,6 +245,8 @@ export async function runHaRollingUpgrade({
       };
 
       if (operation.record.phase === 'preflight') {
+        await safety.checkOwnedBaseline(operation.record, runner, now);
+        await prepareReplacements(operation);
         await safety.checkOwnedBaseline(operation.record, runner, now);
         await checkHeadroom({ stage: 'preflight' });
         await checkpoint({ phase: 'templates' });
@@ -379,8 +388,13 @@ export async function runHaRollingUpgrade({
             const current = assertHaRetirement(await status(pod));
             if (current.state !== 'serving' || current.operationId)
               throw new Error('HA completed owner is retiring; completion is blocked.');
-            if (w.role === 'backend' && controlPlaneMode === 'singleton-overlap' &&
-                (current.housekeeping?.protocol !== 1 || current.housekeeping.state !== 'owner' || current.housekeeping.podUid !== pod.uid))
+            if (
+              w.role === 'backend' &&
+              controlPlaneMode === 'singleton-overlap' &&
+              (current.housekeeping?.protocol !== 1 ||
+                current.housekeeping.state !== 'owner' ||
+                current.housekeeping.podUid !== pod.uid)
+            )
               throw Error('Final backend housekeeping ownership is unconfirmed.');
             const confirmed = await observePod(pod.name);
             if (confirmed?.uid !== pod.uid || !confirmed.ready || !(await isCurrentPod(confirmed, w)))

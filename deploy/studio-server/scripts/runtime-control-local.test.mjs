@@ -1,12 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import {
   RuntimeControlLocalGate,
   mergeRuntimeControlGuards,
   hasRuntimeControlPublicEndpoint,
   waitForRuntimeControlColdProxies,
   runtimeControlOwnerContainer,
+  publishedScheduleCompletedWithoutDevelopers,
 } from './kubernetes-runtime-control-local.mjs';
+
+test('schedule independence requires one recorded execution started after developer shutdown', () => {
+  const complete = { status: 'succeeded', recordingStatus: 'saved', startedAt: 1100 };
+  assert.equal(publishedScheduleCompletedWithoutDevelopers([], 1000), false);
+  assert.equal(publishedScheduleCompletedWithoutDevelopers([{ status: 'pending' }], 1000), false);
+  assert.equal(publishedScheduleCompletedWithoutDevelopers([complete], 1000), true);
+  for (const runs of [
+    [{ ...complete, startedAt: 999 }],
+    [{ ...complete, startedAt: undefined }],
+    [complete, complete],
+    [{ ...complete, status: 'failed' }],
+  ])
+    assert.throws(() => publishedScheduleCompletedWithoutDevelopers(runs, 1000));
+});
 
 test('local runtime proof rejects production and ambiguous contexts before issuing commands', async () => {
   for (const [context, allowedContext, namespace] of [
@@ -27,6 +43,45 @@ test('local runtime proof rejects production and ambiguous contexts before issui
     await assert.rejects(gate.assertLocalContext());
     assert.equal(commands, 0);
   }
+});
+
+test('fresh namespace UID is retained before bootstrap writes; an existing namespace is never adopted', async () => {
+  const gate = Object.create(RuntimeControlLocalGate.prototype),
+    artifacts = new Map();
+  gate.config = { context: 'rivet-runtime-ha10-test', namespace: 'rivet-runtime-control-test', release: 'rivet' };
+  let existing = false,
+    writes = 0;
+  let creationRace = false;
+  gate.deleteOwnedNamespace = async () => assert.fail('A fresh fixture must never delete another namespace');
+  gate.kubectl = async (args) => {
+    if (args.includes('--ignore-not-found')) return { stdout: existing ? 'namespace/existing' : '' };
+    assert.deepEqual(args, ['create', '-f', '-', '-o', 'json']);
+    writes++;
+    if (creationRace) throw Error('Namespace already exists');
+    return {
+      stdout: JSON.stringify({
+        metadata: { name: gate.config.namespace, uid: 'new-exact-uid', labels: { 'rivet.release-gate/owned': 'true' } },
+      }),
+    };
+  };
+  gate.artifact = async (name, text) => artifacts.set(name, JSON.parse(text));
+  await gate.createNamespace();
+  assert.deepEqual(artifacts.get('namespace-identity.json'), {
+    protocol: 1,
+    ...gate.config,
+    namespaceUid: 'new-exact-uid',
+  });
+  assert.equal(writes, 1);
+  existing = true;
+  artifacts.clear();
+  await assert.rejects(gate.createNamespace(), /fresh namespace/);
+  assert.equal(writes, 1);
+  assert.equal(artifacts.size, 0);
+  existing = false;
+  creationRace = true;
+  await assert.rejects(gate.createNamespace(), /already exists/);
+  assert.equal(writes, 2);
+  assert.equal(artifacts.size, 0);
 });
 
 test('retirement targets the actual execution API or combined backend container, never a guessed name', () => {
@@ -139,4 +194,27 @@ test('runtime isolation ignores discovery endpoints but requires explicit public
   assert.equal(hasRuntimeControlPublicEndpoint([slice('public', { ready: false })], services, 'owner'), false);
   assert.equal(hasRuntimeControlPublicEndpoint([slice('public', {})], services, 'owner'), true);
   assert.equal(hasRuntimeControlPublicEndpoint([slice('public', { ready: true })], services, 'other'), false);
+});
+
+test('active-controller evidence requires fresh numeric samples and the exact policy and image', async () => {
+  const gate = Object.create(RuntimeControlLocalGate.prototype);
+  gate.config = { release: 'fixture', deploymentTimeoutSeconds: 3, images: { api: { digest: 'exact-image' } } };
+  let reads = 0;
+  const record = {
+    autoscalingProtocol: 1,
+    phase: 'complete',
+    leaseExpiresAt: 0,
+    lastSampleAt: 123,
+    policyDigest: autoscalerPolicyDigest({}),
+    manifestDigest: 'exact-image',
+  };
+  gate.kube = async () => ({
+    stdout: JSON.stringify({
+      data: { record: JSON.stringify({ ...record, lastSampleAt: ++reads === 1 ? null : record.lastSampleAt }) },
+    }),
+  });
+  assert.equal((await gate.assertAutoscalerActive(123)).sampleAt, 123);
+  assert.equal(reads, 2, 'an omitted/null sample must not be considered fresh');
+  record.policyDigest = 'wrong-policy';
+  await assert.rejects(gate.assertAutoscalerActive(123));
 });

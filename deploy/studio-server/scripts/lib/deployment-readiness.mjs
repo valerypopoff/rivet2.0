@@ -7,7 +7,8 @@ import { verifyRecoveryReceipt, verifyRetainedMaintenanceMigration } from './mai
 import { releaseReplicaBounds } from './kubernetes-release-settlement.mjs';
 
 /** Only GETs may wait for an idle controller's sampling lease. A newly busy
- * operation or a CAS race still fails closed; no write is retried here. */
+ * operation or a CAS race still fails closed; no write is retried here.
+ * previousResource pins a prior admission; explicit null pins its absence. */
 export async function readAvailableReleaseJournal({
   kube,
   name,
@@ -15,6 +16,7 @@ export async function readAvailableReleaseJournal({
   release,
   namespace,
   timeoutMs,
+  previousResource,
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
@@ -25,7 +27,7 @@ export async function readAvailableReleaseJournal({
   while (true) {
     const result = await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json']);
     if (!result.stdout.trim()) {
-      if (observedUid) throw Error('Release operation journal disappeared during admission.');
+      if (observedUid || previousResource) throw Error('Release operation journal disappeared during admission.');
       return { resource: null, record: null };
     }
     const resource = JSON.parse(result.stdout);
@@ -40,6 +42,34 @@ export async function readAvailableReleaseJournal({
       throw Error('Release operation journal immutable identity changed during admission.');
     observedUid = resource.metadata.uid;
     const observed = { ...JSON.parse(resource.data.record), resourceVersion: resource.metadata.resourceVersion };
+    if (previousResource !== undefined) {
+      if (!previousResource || previousResource.metadata.uid !== resource.metadata.uid)
+        throw Error('Release operation journal immutable identity changed during admission.');
+      const previous = JSON.parse(previousResource.data.record);
+      for (const field of [
+        'release',
+        'namespace',
+        'manifestDigest',
+        'policyDigest',
+        'autoscalingProtocol',
+        'protocol',
+        'formatVersion',
+      ])
+        if (!isDeepStrictEqual(previous[field], observed[field]))
+          throw Error('Release operation journal binding changed during admission.');
+      // Only completed sampling may change its operation identity between reads.
+      if (
+        observed.autoscalingProtocol !== 1 &&
+        (previous.token !== observed.token || previous.runner !== observed.runner)
+      )
+        throw Error('Release operation journal owner changed during admission.');
+    }
+    if (
+      observed.autoscalingProtocol === 1 &&
+      observed.phase === 'complete' &&
+      ['scale', 'target', 'fence', 'fenceRepair', 'removal'].some((field) => observed[field] != null)
+    )
+      throw Error('Completed autoscaler journal retains unfinished work; no ownership write was attempted.');
     if (observed.autoscalingProtocol === 1 && kind !== 'autoscaling') {
       const controller = journalForReleaseOperation(observed, 'autoscaling', { release, namespace }, now);
       if (controller.phase === 'complete' && controller.leaseExpiresAt > now()) {
