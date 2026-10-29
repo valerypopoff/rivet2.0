@@ -54,9 +54,6 @@ export function RemoteDebuggerInfo({ connected, showRunControls }: { connected: 
                   overflow-wrap: anywhere;
                 `}
               >
-                {!sources.length && connected && (
-                  <div>Remote Debugger is active. Execution details will appear here when available.</div>
-                )}
                 {sources.length > 0 && (
                   <div>
                     {blocked ? 'Remote observation unavailable' : 'Observing Remote Debugger'} through{' '}

@@ -22,10 +22,10 @@ export type LatestRun = {
   outcome?: 'completed' | 'error';
   incomplete: boolean;
   eligible: boolean;
-  history: boolean;
 };
 const keyOf = (scope: LatestDebuggerScope) => JSON.stringify([scope.owner, scope.incarnation, scope.rootRunId]);
-const compareAdmissions = (a: LatestRun, b: LatestRun) => a.startedAt - b.startedAt || a.order - b.order;
+type Admission = Pick<LatestRun, 'startedAt' | 'order'>;
+const compareAdmissions = (a: Admission, b: Admission) => a.startedAt - b.startedAt || a.order - b.order;
 const isPromptIdentity = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 200;
 
@@ -49,7 +49,7 @@ export function getLatestRunControlPolicy(run: LatestRun) {
 export class LatestDebuggerRuns {
   readonly runs = new Map<string, LatestRun>();
   selected?: string;
-  following = true;
+  private newestAdmission?: Admission;
   private order = 0;
   private bytes = 0;
   private frames: { key: string; raw: string; bytes: number }[] = [];
@@ -58,10 +58,10 @@ export class LatestDebuggerRuns {
   private prompts = new Map<string, { run: string; graphRunId: string; processId: string }>();
   constructor(
     private readonly eligible: (projectId: string) => boolean,
-    private readonly limits = { runs: 32, events: 8192, bytes: 32 * 1024 * 1024 },
+    private readonly limits = { runs: 8, events: 8192, bytes: 32 * 1024 * 1024 },
   ) {}
 
-  receive(frame: LatestFrame, raw: string, history = false): LatestRun | undefined {
+  receive(frame: LatestFrame, raw: string): LatestRun | undefined {
     if (!isLatestDebuggerScope(frame.rivetScope)) return;
     const key = keyOf(frame.rivetScope);
     let run = this.runs.get(key);
@@ -102,7 +102,6 @@ export class LatestDebuggerRuns {
         },
         incomplete: false,
         eligible: this.eligible(frame.rivetScope.projectId),
-        history,
       };
       this.runs.set(key, run);
     }
@@ -184,9 +183,12 @@ export class LatestDebuggerRuns {
       const affected = this.runs.get(removed.key);
       if (affected) affected.incomplete = true;
     }
-    const selected = this.runs.get(this.selected ?? '');
-    if (this.following && !run.history && run.eligible && (!selected || compareAdmissions(run, selected) > 0))
+    // History selection lasts until a genuinely newer relevant admission, not
+    // until the next output/terminal/replayed start from an existing run.
+    if (run.eligible && (!this.newestAdmission || compareAdmissions(run, this.newestAdmission) > 0)) {
+      this.newestAdmission = { startedAt: run.startedAt, order: run.order };
       this.selected = key;
+    }
     while (this.runs.size > this.limits.runs) {
       const oldest = [...this.runs.values()].sort(compareAdmissions).find((run) => run.key !== this.selected)?.key;
       if (!oldest) break;
@@ -202,7 +204,6 @@ export class LatestDebuggerRuns {
   }
   select(key: string) {
     if (!this.runs.get(key)?.eligible) return false;
-    this.following = false;
     this.selected = key;
     return true;
   }
@@ -211,10 +212,6 @@ export class LatestDebuggerRuns {
     // A stream gap may contain a closure; old pending proof is no longer valid.
     if (key === undefined) this.prompts.clear();
     else for (const [id, prompt] of this.prompts) if (prompt.run === key) this.prompts.delete(id);
-  }
-  follow() {
-    this.following = true;
-    this.selected = this.orderedRuns().at(-1)?.key;
   }
   replay(): LatestDebuggerExecutionMessage[] {
     return this.frames
@@ -246,7 +243,6 @@ export class LatestDebuggerRuns {
   }
   state() {
     return {
-      following: this.following,
       selected: this.selected,
       runs: this.orderedRuns().map((run) => ({ ...run })),
     };

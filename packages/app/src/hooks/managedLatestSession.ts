@@ -80,13 +80,16 @@ export class ManagedLatestSession {
     const previous = this.runs.selected;
     const position = readLatestDebuggerEventPosition(eventId);
     const beforeSubscription = position && position.sequence <= (this.historyThrough.get(position.origin) ?? 0);
-    // An unseen root from a recovering peer cannot prove newness against the
-    // original subscription. Existing live roots retain their admission/pin.
-    const run = this.runs.receive(
-      frame,
-      raw,
-      !!beforeSubscription || history === 'peer' || (this.initialHistory && history === true),
-    );
+    const key = JSON.stringify([scope.owner, scope.incarnation, scope.rootRunId]);
+    // Fresh pages/connections must not repopulate their list from shared server
+    // history. Keep recovery of already-observed roots and genuinely missed new
+    // runs on replacement transports, without inventing fresh admission for old roots.
+    if (
+      !this.runs.runs.has(key) &&
+      (beforeSubscription || history === 'peer' || (this.initialHistory && history === true))
+    )
+      return;
+    const run = this.runs.receive(frame, raw);
     if (!run) return;
     if (previous !== this.runs.selected) {
       this.dispatch(frame, false);
@@ -109,10 +112,8 @@ export class ManagedLatestSession {
     )
       this.options.notify();
   }
-  select(key?: string) {
-    if (!this.runs) return;
-    if (key === undefined) this.runs.follow();
-    else if (!this.runs.select(key)) return;
+  select(key: string) {
+    if (!this.runs?.select(key)) return;
     this.rebuild();
   }
   suspend() {
@@ -129,12 +130,7 @@ export class ManagedLatestSession {
     const policy = getLatestRunControlPolicy(run);
     if (!(action === 'pause' ? policy.canPause : action === 'resume' ? policy.canResume : policy.canAbort))
       return false;
-    const generation = this.generation;
-    if (action === 'pause') {
-      this.runs!.select(run.key);
-      this.options.notify();
-    }
-    return generation === this.generation && this.sendControl(action, run.scope);
+    return this.sendControl(action, run.scope);
   }
   rebuild() {
     const revision = ++this.projectionRevision;

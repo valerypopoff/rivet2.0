@@ -141,7 +141,7 @@ export type { PendingGraphExecution } from './executorSessionPendingExecutions.j
 
 export type ExecutorSessionRuntime = {
   getLatestDebuggerState(): ReturnType<LatestDebuggerRuns['state']> | undefined;
-  selectLatestDebuggerRun(key?: string): void;
+  selectLatestDebuggerRun(key: string): void;
   sendLatestPrompt(target: LatestDebuggerScope, promptId: string, answers: unknown): boolean;
   buildSessionState(legacyDebuggerConfig?: unknown, legacyConnectionState?: unknown): ExecutorSessionState;
   connect(url?: string): Promise<void>;
