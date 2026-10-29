@@ -33,6 +33,8 @@ export async function createLatestDebuggerFixture(options: {
     observerOwner = options.ha ? 1 : 0;
   const observers = new Set<InstanceType<typeof WebSocket>>();
   const commands: string[] = [];
+  const peerLinks = new Set<InstanceType<typeof WebSocket>>();
+  let peersPaused = false;
   const incarnations = listeners.map(() => randomUUID());
   const policies = listeners.map((_, index) => new LatestDebuggerPolicy(`backend-${index}`, incarnations[index]!));
   const managed = (index: number) => options.managed && !(options.legacyOwner && index === 0);
@@ -55,7 +57,12 @@ export async function createLatestDebuggerFixture(options: {
               options.ha ? 2 : 0,
               (url, connectOptions) => {
                 const owner = Number(/backend-(\d)/.exec(url)![1]);
-                const socket = new WebSocket(`ws://127.0.0.1:${ports[owner]}/internal/ha/latest`, connectOptions);
+                const socket = new WebSocket(
+                  `ws://127.0.0.1:${peersPaused ? 1 : ports[owner]}/internal/ha/latest`,
+                  connectOptions,
+                );
+                peerLinks.add(socket);
+                socket.once('close', () => peerLinks.delete(socket));
                 if (index === 1)
                   socket.on('message', (raw) => {
                     const sequence = /^\{"rivetEventId":"[^" ]+:(\d+)",/.exec(raw.toString())?.[1];
@@ -132,6 +139,22 @@ export async function createLatestDebuggerFixture(options: {
     },
     disconnectObservers() {
       for (const client of observers) client.terminate();
+    },
+    async pausePeers() {
+      peersPaused = true;
+      await Promise.all(
+        [...peerLinks].map(
+          (socket) =>
+            new Promise<void>((resolve) => {
+              if (socket.readyState === WebSocket.CLOSED) return resolve();
+              socket.once('close', () => resolve());
+              socket.terminate();
+            }),
+        ),
+      );
+    },
+    resumePeers() {
+      peersPaused = false;
     },
     announceUnsupportedProtocol() {
       for (const client of observers) client.send(JSON.stringify({ message: 'latest-session', data: { protocol: 3 } }));

@@ -41,6 +41,7 @@ type RetainedEvent = {
   payload: string;
   bytes: number;
   channel?: LatestDebuggerChannel;
+  peerHistory: boolean;
 };
 
 /** Keep a terminal's identity/outcome when its values cannot fit the diagnostic
@@ -125,6 +126,7 @@ function compactOversizedTerminal(payload: string, eventId: string): string | un
 }
 type Writer = {
   cursor: number;
+  historyThrough: number;
   history: boolean;
   peer: boolean;
   after: number;
@@ -204,7 +206,13 @@ export class LatestDebuggerRelay {
       return false;
     return timingSafeEqual(Buffer.from(token), Buffer.from(this.#token(pod, incarnation)));
   }
-  #remember(origin: string, sequence: number, payload: string, decoded?: { rivetScope?: unknown }): string | undefined {
+  #remember(
+    origin: string,
+    sequence: number,
+    payload: string,
+    decoded?: { rivetScope?: unknown },
+    peerHistory = false,
+  ): string | undefined {
     let bytes = Buffer.byteLength(payload);
     if (bytes > HISTORY_BYTES) {
       this.#truncated = true;
@@ -224,7 +232,7 @@ export class LatestDebuggerRelay {
         return undefined;
       }
     }
-    this.#events.push({ index: ++this.#index, origin, sequence, payload, bytes, channel });
+    this.#events.push({ index: ++this.#index, origin, sequence, payload, bytes, channel, peerHistory });
     this.#bytes += bytes;
     while (this.#bytes > HISTORY_BYTES || this.#events.length > HISTORY_EVENTS) {
       const removed = this.#events.shift()!;
@@ -238,6 +246,7 @@ export class LatestDebuggerRelay {
     if (existing) return existing;
     const writer: Writer = {
       cursor: (this.#events[0]?.index ?? this.#index + 1) - 1,
+      historyThrough: this.#index,
       history,
       peer,
       after,
@@ -329,7 +338,12 @@ export class LatestDebuggerRelay {
           writer.cursor = event.index;
           continue;
         }
-        payload = event.payload;
+        // Keep the shared ring/peer wire untouched. A browser's initial replay
+        // is bounded at subscription, even while newer events arrive during catch-up.
+        payload =
+          !writer.peer && this.managedControl && (event.peerHistory || event.index <= writer.historyThrough)
+            ? encodeLatestDebuggerEnvelope(event.payload, undefined, undefined, event.peerHistory ? 'peer' : true)
+            : event.payload;
         nextIndex = event.index;
         break;
       }
@@ -387,11 +401,21 @@ export class LatestDebuggerRelay {
     if (!peer) {
       if (this.managedControl)
         writer.channel = parseLatestDebuggerPath(new URL(request.url ?? '/', 'http://localhost').pathname);
+      // Freeze positions as well as the local ring index. A browser can then
+      // finish its original catch-up after a lost socket, without mistaking an
+      // unseen old root for work admitted during that disconnection.
+      const historyThrough = new Map<string, number>();
+      if (this.managedControl)
+        for (const event of this.#events)
+          if (event.channel === writer.channel) historyThrough.set(event.origin, event.sequence);
       this.#send(
         client,
         JSON.stringify(
           this.managedControl
-            ? createLatestDebuggerSession(writer.channel!)
+            ? createLatestDebuggerSession(
+                writer.channel!,
+                [...historyThrough].map(([origin, sequence]) => `${origin}:${sequence}`),
+              )
             : { message: 'latest-session', data: { protocol: 1 } },
         ),
       );
@@ -402,7 +426,12 @@ export class LatestDebuggerRelay {
         client,
         JSON.stringify({
           message: 'latest-peer',
-          data: { protocol: 2, owner: this.config.pod, incarnation: this.config.incarnation },
+          data: {
+            protocol: 2,
+            owner: this.config.pod,
+            incarnation: this.config.incarnation,
+            historyThrough: this.#sequence,
+          },
         }),
       );
     this.#pump(client, writer);
@@ -526,6 +555,7 @@ export class LatestDebuggerRelay {
       });
       let streamIncarnation: string | undefined;
       let peerIncarnation: string | undefined;
+      let peerHistoryThrough = 0;
       let legacyStream = false;
       socket.on('message', (data) => {
         if (this.#closed || this.#outbound.get(pod) !== socket) return;
@@ -545,13 +575,18 @@ export class LatestDebuggerRelay {
               legacyStream ||
               control.data.owner !== pod ||
               typeof control.data.incarnation !== 'string' ||
+              (control.data.historyThrough !== undefined &&
+                (!Number.isSafeInteger(control.data.historyThrough) || (control.data.historyThrough as number) < 0)) ||
               !/^[a-f0-9-]{36}$/.test(control.data.incarnation) ||
               (peerIncarnation && peerIncarnation !== control.data.incarnation)
             ) {
               socket.terminate();
               return;
             }
+            // Repeated peer hellos cannot expand this stream's replay boundary.
+            if (peerIncarnation !== undefined) return;
             peerIncarnation = control.data.incarnation;
+            peerHistoryThrough = (control.data.historyThrough as number | undefined) ?? 0;
             this.#protocolPeers.add(pod);
             return;
           }
@@ -642,7 +677,7 @@ export class LatestDebuggerRelay {
           decoded = { ...decoded, rivetScope: scope };
           payload = encodeLatestDebuggerEnvelope(JSON.stringify(envelope), scope, id);
         }
-        this.#remember(`${pod}:${incarnation}`, sequence, payload, decoded);
+        this.#remember(`${pod}:${incarnation}`, sequence, payload, decoded, sequence <= peerHistoryThrough);
         for (const observer of this.server.clients)
           if (!this.#inbound.has(observer)) this.sendBroadcast(observer, payload);
       });

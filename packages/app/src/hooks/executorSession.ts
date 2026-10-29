@@ -729,7 +729,7 @@ export function createExecutorSessionRuntime(options: {
 
       if (incoming.kind === 'managed-event') {
         const frame = incoming.incoming;
-        latest.receive(frame.message, frame.data, frame.rivetScope, String(event.data));
+        latest.receive(frame.message, frame.data, frame.rivetScope, String(event.data), frame.history, frame.eventId);
         return;
       }
 

@@ -82,6 +82,158 @@ const frame = (root: string, message = 'start', projectId = 'project'): LatestFr
   },
 });
 
+test('explicit latest connections catalogue history passively, while automatic reconnect recovers missed runs', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const original = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  const firstSocketIndex = FakeWebSocket.instances.length;
+  const runtime = createExecutorSessionRuntime({ projectId: 'project' as never, onStateChange() {} });
+  const painted: string[] = [];
+  runtime.subscribeMessages((_message, _data, _requestId, admission) => {
+    if (admission?.managedLatest?.selected) painted.push(admission.managedLatest.scope.rootRunId);
+  });
+  const handshake = {
+    message: 'latest-session',
+    data: {
+      protocol: 2,
+      channel: '00123',
+      channelIsolation: true,
+      runScopedControls: true,
+      historyThrough: ['owner:process:3'],
+    },
+  };
+  const attach = async () => {
+    await runtime.connectExternalDebugger('ws://test/ws/latest-debugger@00123');
+    const socket = FakeWebSocket.instances.at(-1)!;
+    socket.open();
+    socket.emitMessage(handshake);
+    return socket;
+  };
+  let sequence = 0;
+  const emit = (socket: FakeWebSocket, root: string, message: string, history: boolean | 'peer' = false) =>
+    socket.emitMessage({
+      ...frame(root, message),
+      rivetEventId: `owner:process:${++sequence}`,
+      ...(history ? { rivetHistory: history } : {}),
+    });
+  try {
+    let socket = await attach();
+    socket.emitMessage(handshake);
+    // Lose the first transport before seeing ANY old root. Its original
+    // boundary must survive, even though the next socket has a newer boundary.
+    socket.emitClose();
+    t.mock.timers.tick(200);
+    socket = FakeWebSocket.instances.at(-1)!;
+    socket.open();
+    socket.emitMessage({ ...handshake, data: { ...handshake.data, historyThrough: ['owner:process:20'] } });
+    for (const message of ['start', 'done', 'latest-settled']) emit(socket, 'old', message, message !== 'start');
+    assert.equal(runtime.getLatestDebuggerState()!.selected, undefined);
+    assert.deepEqual(painted, [], 'initial replay must not repaint or animate a completed run');
+    const history = runtime.getLatestDebuggerState()!.runs[0]!;
+    assert.equal(history.history, true);
+    assert.equal(history.status, 'completed');
+    runtime.selectLatestDebuggerRun(history.key);
+    assert.ok(painted.length > 0, 'history is still available through deliberate selection');
+    emit(socket, 'live', 'start');
+    assert.equal(runtime.getLatestDebuggerState()!.selected, history.key, 'history selection remains pinned');
+    runtime.selectLatestDebuggerRun();
+    assert.equal(
+      runtime.getLatestDebuggerState()!.runs.find((run) => run.key === runtime.getLatestDebuggerState()!.selected)!
+        .scope.rootRunId,
+      'live',
+    );
+
+    socket.emitClose();
+    t.mock.timers.tick(200);
+    socket = FakeWebSocket.instances.at(-1)!;
+    socket.open();
+    socket.emitMessage(handshake);
+    emit(socket, 'missed', 'start', true);
+    emit(socket, 'missed', 'trace', true);
+    const recovered = runtime
+      .getLatestDebuggerState()!
+      .runs.find((run) => run.key === runtime.getLatestDebuggerState()!.selected)!;
+    assert.equal(recovered.scope.rootRunId, 'missed');
+    assert.equal(recovered.history, false, 'accidental recovery is not a fresh user subscription');
+    assert.equal(painted.at(-1), 'missed');
+    emit(socket, 'old-peer', 'start', 'peer');
+    assert.equal(
+      runtime.getLatestDebuggerState()!.selected,
+      recovered.key,
+      'an unseen root from peer recovery cannot steal selection',
+    );
+    assert.equal(
+      runtime.getLatestDebuggerState()!.runs.find((run) => run.scope.rootRunId === 'old-peer')!.history,
+      true,
+    );
+    emit(socket, 'missed', 'trace', 'peer');
+    assert.equal(painted.at(-1), 'missed', 'known live roots still receive recovered peer events');
+    assert.equal(runtime.getLatestDebuggerState()!.runs.find((run) => run.key === recovered.key)!.history, false);
+
+    runtime.disconnect();
+    painted.length = 0;
+    handshake.data.historyThrough = [`owner:process:${sequence + 2}`];
+    socket = await attach();
+    emit(socket, 'missed', 'start', true);
+    emit(socket, 'missed', 'trace');
+    assert.equal(
+      runtime.getLatestDebuggerState()!.selected,
+      undefined,
+      'live tail cannot promote a pre-connection root',
+    );
+    assert.deepEqual(painted, []);
+    emit(socket, 'new-request', 'start');
+    assert.equal(painted.at(-1), 'new-request');
+    assert.ok(
+      FakeWebSocket.instances.slice(firstSocketIndex).every((connection) => connection.sent.length === 0),
+      'observation and selection never execute, abort, or resend work',
+    );
+  } finally {
+    runtime.disconnect();
+    globalThis.WebSocket = original;
+  }
+});
+
+test('duplicate legacy v2 hello cannot promote initial history or notify logical readiness twice', () => {
+  let ready = 0;
+  const adapter = new ManagedLatestSession({
+    eligible: () => true,
+    deliver() {},
+    notify() {},
+    warn() {},
+    canSend: () => false,
+    send: () => false,
+  });
+  adapter.requestedChannel = '00123';
+  const hello = {
+    message: 'latest-session',
+    data: { protocol: 2, channel: '00123', channelIsolation: true, runScopedControls: true },
+  };
+  const context = {
+    external: true,
+    named: true,
+    fail() {
+      assert.fail('valid hello was rejected');
+    },
+    onReady() {
+      ready++;
+    },
+  };
+  adapter.acceptEnvelope(hello, hello, context);
+  adapter.acceptEnvelope(hello, hello, context);
+  const old = frame('old');
+  adapter.receive(old.message, old.data, old.rivetScope, JSON.stringify(old), true);
+  assert.equal(adapter.runs!.selected, undefined);
+  assert.equal(ready, 1);
+  adapter.suspend();
+  adapter.acceptEnvelope(hello, hello, context);
+  const missed = frame('missed');
+  adapter.receive(missed.message, missed.data, missed.rivetScope, JSON.stringify(missed), true);
+  assert.equal(adapter.runs!.runs.get(adapter.runs!.selected!)!.scope.rootRunId, 'missed');
+  assert.equal(ready, 2, 'a replacement transport is still verified normally');
+  adapter.reset();
+});
+
 test('session retirement fences replay and diagnostics without suppressing replacement notices', () => {
   for (const action of ['replay', 'history-gap', 'owner-unavailable']) {
     let deliveries = 0,
@@ -571,6 +723,19 @@ test('a managed v2 logical session rejects downgrade or unsupported handshakes o
         { label: 'protocol 3', data: { protocol: 3 } },
         { label: 'string isolation flag', data: { protocol: 2, channelIsolation: 'true', runScopedControls: true } },
         { label: 'numeric controls flag', data: { protocol: 2, channelIsolation: true, runScopedControls: 1 } },
+        {
+          label: 'malformed history boundary',
+          data: { protocol: 2, channelIsolation: true, runScopedControls: true, historyThrough: ['owner:NaN'] },
+        },
+        {
+          label: 'oversized history boundary',
+          data: {
+            protocol: 2,
+            channelIsolation: true,
+            runScopedControls: true,
+            historyThrough: Array(8193).fill('owner:1'),
+          },
+        },
       ])
         await t.test(`${channel ?? 'default'} rejects ${invalid.label}`, async () => {
           const runtime = createExecutorSessionRuntime({ projectId: 'project' as never, onStateChange() {} });

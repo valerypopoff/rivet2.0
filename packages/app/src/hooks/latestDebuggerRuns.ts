@@ -22,6 +22,7 @@ export type LatestRun = {
   outcome?: 'completed' | 'error';
   incomplete: boolean;
   eligible: boolean;
+  history: boolean;
 };
 const keyOf = (scope: LatestDebuggerScope) => JSON.stringify([scope.owner, scope.incarnation, scope.rootRunId]);
 const compareAdmissions = (a: LatestRun, b: LatestRun) => a.startedAt - b.startedAt || a.order - b.order;
@@ -60,7 +61,7 @@ export class LatestDebuggerRuns {
     private readonly limits = { runs: 32, events: 8192, bytes: 32 * 1024 * 1024 },
   ) {}
 
-  receive(frame: LatestFrame, raw: string): LatestRun | undefined {
+  receive(frame: LatestFrame, raw: string, history = false): LatestRun | undefined {
     if (!isLatestDebuggerScope(frame.rivetScope)) return;
     const key = keyOf(frame.rivetScope);
     let run = this.runs.get(key);
@@ -101,6 +102,7 @@ export class LatestDebuggerRuns {
         },
         incomplete: false,
         eligible: this.eligible(frame.rivetScope.projectId),
+        history,
       };
       this.runs.set(key, run);
     }
@@ -183,7 +185,8 @@ export class LatestDebuggerRuns {
       if (affected) affected.incomplete = true;
     }
     const selected = this.runs.get(this.selected ?? '');
-    if (this.following && run.eligible && (!selected || compareAdmissions(run, selected) > 0)) this.selected = key;
+    if (this.following && !run.history && run.eligible && (!selected || compareAdmissions(run, selected) > 0))
+      this.selected = key;
     while (this.runs.size > this.limits.runs) {
       const oldest = [...this.runs.values()].sort(compareAdmissions).find((run) => run.key !== this.selected)?.key;
       if (!oldest) break;

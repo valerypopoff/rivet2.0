@@ -36,8 +36,9 @@ actions retain their usual URLs and use the default channel.
 
 #### Choosing a run
 
-The action bar shows the channel and a run picker with start time, short ID and
-status. It follows the newest relevant run by default:
+Open **?** in the action bar to see the channel and a run picker with start time,
+short ID and status in **Remote Debugger details**. It follows the newest relevant
+run by default:
 
 - Choose a run to pin it. **Follow newest** returns to automatic selection.
 - Pausing pins the selected run, so a later request cannot hide it.
@@ -52,6 +53,12 @@ wins, even if two admins see it. A rejected control or lost acknowledgement is
 never automatically retried. Inspect the observed run state before acting again.
 
 #### History, reconnects and stopping
+
+When you explicitly connect to an updated Rivet Server debugger, it waits for a
+new run instead of playing earlier activity as though it were live. Open **?**
+to select an earlier run labelled **History**. Earlier runs can still be running;
+selecting one observes it without restarting it. New relevant runs are followed
+automatically unless you pin a run.
 
 Rivet retains at most 32 selectable runs and a bounded event history. **Retained
 history is incomplete** means details were evicted, unsupported or unavailable;
@@ -75,6 +82,16 @@ observation without stopping execution.
 **Stop Remote Debugger** disconnects observation only. Accepted work, recordings
 and AI cost accounting continue, independently of the number of viewers.
 Outputs-ready does not mean background work has physically stopped.
+Connecting again after Stop waits for new runs; existing displayed results may
+remain as a static view. An accidental network disconnection is different: Rivet
+automatically recovers your observation and selection, including missed events,
+without restarting work. Older servers without history markers retain their
+previous connection behavior.
+
+If a server backend recovers an unavailable peer link, previously unseen runs
+from that recovery stay in **History** until you select them. Rivet cannot prove
+those runs are new to your observation. Runs you were already observing continue
+recovering automatically; the workflows themselves are never restarted.
 
 Older editors can observe the default channel but must be upgraded for scoped
 controls; named channels require the managed protocol. Generic third-party

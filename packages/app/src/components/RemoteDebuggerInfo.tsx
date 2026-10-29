@@ -4,13 +4,14 @@ import { useState } from 'react';
 import Button from '@atlaskit/button';
 import Modal, { ModalBody, ModalFooter, ModalTransition } from '@atlaskit/modal-dialog';
 import { AppModalHeader } from './AppModalHeader.js';
+import { ManagedLatestRunControls } from './ManagedLatestRunControls.js';
 import { currentRemoteObservationsState, remoteObservationNoticesState } from '../state/remoteObservation.js';
 import { projectState, projectsState } from '../state/savedGraphs.js';
 import { useExecutorSessionRegistry } from '../providers/ExecutorSessionContext.js';
 import { executorSessionRevisionState } from '../state/execution.js';
 import { useLoadProject } from '../hooks/useLoadProject.js';
 
-export function RemoteDebuggerInfo({ connected }: { connected: boolean }) {
+export function RemoteDebuggerInfo({ connected, showRunControls }: { connected: boolean; showRunControls: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
   const observations = useAtomValue(currentRemoteObservationsState);
   const projectId = useAtomValue(projectState).metadata.id;
@@ -41,6 +42,7 @@ export function RemoteDebuggerInfo({ connected }: { connected: boolean }) {
           <Modal onClose={() => setIsOpen(false)}>
             <AppModalHeader title="Remote Debugger details" onClose={() => setIsOpen(false)} />
             <ModalBody>
+              {showRunControls && <ManagedLatestRunControls />}
               <div
                 data-testid="remote-debugger-details"
                 role="status"
