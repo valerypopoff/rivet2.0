@@ -43,7 +43,12 @@ function images(prefix = 'example.test/rivet') {
   };
 }
 
-function candidate({ predecessorRelease = null, sourceSha = 'a'.repeat(40), imagePrefix } = {}) {
+function candidate({
+  predecessorRelease = null,
+  publicationHeadRelease,
+  sourceSha = 'a'.repeat(40),
+  imagePrefix,
+} = {}) {
   return createStudioServerReleaseManifest({
     rootDir,
     source: {
@@ -54,9 +59,32 @@ function candidate({ predecessorRelease = null, sourceSha = 'a'.repeat(40), imag
     images: images(imagePrefix),
     candidateEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
     predecessorRelease,
+    publicationHeadRelease,
     createdAt: '2026-08-29T12:00:00.000Z',
   });
 }
+
+test('explicit installed lineage preserves the separate publication head and its freshness fence', () => {
+  const installed = promoted();
+  const published = promoted({}, { predecessorRelease: installed, sourceSha: 'b'.repeat(40) });
+  const next = candidate({
+    predecessorRelease: installed,
+    publicationHeadRelease: published,
+    sourceSha: 'c'.repeat(40),
+  });
+  assert.equal(next.lineage.predecessor.manifestDigest, getStudioServerReleaseManifestDigest(installed));
+  assert.equal(next.lineage.publicationHead.manifestDigest, getStudioServerReleaseManifestDigest(published));
+  assert.doesNotThrow(() => assertStudioServerReleasePredecessor(next, published));
+  assert.throws(() => assertStudioServerReleasePredecessor(next, installed), /exact predecessor manifest/);
+  const advanced = promoted({}, { predecessorRelease: published, sourceSha: 'd'.repeat(40) });
+  assert.throws(() => assertStudioServerReleasePredecessor(next, advanced), /exact predecessor manifest/);
+  assert.throws(() => assertStudioServerReleasePredecessor(next, null), /pointer is missing/);
+  const roundTrip = assertStudioServerReleaseManifest(JSON.parse(JSON.stringify(next)));
+  assert.deepEqual(roundTrip.lineage, next.lineage);
+  const other = candidate({ predecessorRelease: installed, sourceSha: 'c'.repeat(40) });
+  assert.notEqual(getStudioServerReleaseManifestDigest(other), getStudioServerReleaseManifestDigest(next));
+  assert.throws(() => candidate({ publicationHeadRelease: published }), /requires an installed predecessor/);
+});
 
 function promoted(overrides = {}, options = {}) {
   return promoteStudioServerReleaseManifest(
@@ -521,7 +549,7 @@ test('production deployment verifies a clean manifest source checkout before ren
   );
   assert.match(
     deployer,
-    /await verifyCheckout\(manifest\);\s+await verifyClean\(\);\s+assertReleaseManifestMatchesCurrentChart\(manifest, rootDir\);/,
+    /await verifyCheckout\(adoptionCertificate \?\? manifest\);\s+await verifyClean\(\);\s+assertReleaseManifestMatchesCurrentChart\(manifest, rootDir\);/,
   );
   const selectionOffset = deployer.search(/await resolveDeploymentRelease\s*\(\s*options,\s*artifactsDir,?\s*\)/u);
   assert.ok(selectionOffset >= 0, 'The deployment entry point must resolve its release before mutation');

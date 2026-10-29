@@ -59,11 +59,27 @@ function declaration(value, kind) {
     'finishedAt',
     'cleanupVerified',
     'evidence',
+    ...(value?.protocol === 2 ? ['temporaryEnvironment'] : []),
     ...(kind === 'autoscaling' ? ['policy'] : []),
   ];
   assert.ok(value && typeof value === 'object' && !Array.isArray(value));
   assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), 'Provider declaration has missing or unknown fields');
-  assert.equal(value.protocol, 1);
+  assert.ok([1, 2].includes(value.protocol));
+  if (value.protocol === 2) {
+    const cleanup = value.temporaryEnvironment;
+    assert.deepEqual(
+      Object.keys(cleanup).sort(),
+      ['protocol', 'operationId', 'inputHash', 'cleanupVerified', 'verifiedAt', 'inventoryHash'].sort(),
+      'Unknown temporary cleanup declaration fields',
+    );
+    assert.equal(cleanup.protocol, 1);
+    assert.equal(cleanup.operationId, value.operationId);
+    assert.match(cleanup.inputHash, /^[a-f0-9]{64}$/);
+    assert.match(cleanup.inventoryHash, /^[a-f0-9]{64}$/);
+    assert.equal(cleanup.cleanupVerified, true);
+    assert.ok(observationTimestamp(cleanup.verifiedAt) >= observationTimestamp(value.finishedAt));
+    assert.ok(observationTimestamp(cleanup.verifiedAt) <= Date.now());
+  }
   assert.equal(value.provider, 'gke');
   assert.equal(value.scope, 'isolated-provider');
   assert.equal(value.outcome, 'passed');
@@ -119,6 +135,8 @@ export function prepareRuntimeQualification(input) {
     a = declaration(autoscaling, 'autoscaling');
   for (const key of ['operationId', 'projectId', 'projectNumber'])
     assert.equal(c[key], a[key], 'Provider operations differ');
+  assert.equal(c.protocol, a.protocol);
+  if (c.protocol === 2) assert.deepEqual(c.temporaryEnvironment, a.temporaryEnvironment);
   const runtimeControl = assertRuntimeControlEvidence(c.evidence, candidate, 'compact');
   if (runtimeControl.protocol === 1)
     assert.ok(
@@ -132,9 +150,9 @@ export function prepareRuntimeQualification(input) {
   );
   const policy = autoscalerPolicy(a.policy);
   const runtimeAutoscaling = (
-    runtimeControl.protocol === 2 ? assertCooperativeAutoscalingEvidence : assertRuntimeAutoscalingEvidence
+    [2, 3].includes(runtimeControl.protocol) ? assertCooperativeAutoscalingEvidence : assertRuntimeAutoscalingEvidence
   )(a.evidence, candidate, autoscalerPolicyDigest(policy));
-  if (runtimeControl.protocol === 2)
+  if ([2, 3].includes(runtimeControl.protocol))
     assert.equal(
       runtimeControl.autoscalerPolicyDigest,
       runtimeAutoscaling.policyDigest,
@@ -152,6 +170,7 @@ export function prepareRuntimeQualification(input) {
     }),
     expectedProductionDigest: getStudioServerReleaseManifestDigest(promoted, { requirePromoted: true }),
     predecessorDigest: candidate.lineage.predecessor.manifestDigest,
+    publicationBaselineDigest: (candidate.lineage.publicationHead ?? candidate.lineage.predecessor).manifestDigest,
     declarations: {
       control: { ...c, evidence: runtimeControl },
       autoscaling: { ...a, evidence: runtimeAutoscaling, policy },

@@ -30,6 +30,11 @@ on:
     - cron: '17 3 * * 2'
   workflow_dispatch:
     inputs:
+      installed_predecessor_digest:
+        description: Optional exact installed manifest digest for main qualification. Publication freshness remains bound to the current registry head.
+        required: false
+        default: ''
+        type: string
       run_managed_kubernetes_disruption:
         description: Run the slower managed Kubernetes disruption scenarios after the smoke gate.
         required: false
@@ -210,6 +215,7 @@ jobs:
       CURRENT_PRODUCTION_MANIFEST: artifacts/studio-server-release-manifest/current-production-release-manifest.json
       RELEASE_MANIFEST_REPOSITORY: ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest
       ALLOW_RELEASE_LINEAGE_BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_release_lineage_bootstrap == true }}
+      INSTALLED_PREDECESSOR_DIGEST: ${{ github.event_name == 'workflow_dispatch' && inputs.installed_predecessor_digest || '' }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -403,6 +409,22 @@ jobs:
           predecessor_args=()
           if [[ -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
             predecessor_args=(--predecessor "$CURRENT_PRODUCTION_MANIFEST")
+          fi
+          if [[ -n "$INSTALLED_PREDECESSOR_DIGEST" ]]; then
+            if [[ "$GITHUB_REF" != 'refs/heads/main' || ! "$INSTALLED_PREDECESSOR_DIGEST" =~ ^sha256:[a-f0-9]{64}$ || ! -s "$CURRENT_PRODUCTION_MANIFEST" ]]; then
+              echo "::error::Explicit installed lineage requires main, an exact SHA256 manifest digest and a known publication head."
+              exit 1
+            fi
+            installed_predecessor="$(dirname "$RELEASE_MANIFEST")/installed-predecessor.json"
+            node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
+              --reference "${RELEASE_MANIFEST_REPOSITORY}:manifest-${INSTALLED_PREDECESSOR_DIGEST#sha256:}" \
+              --output "$installed_predecessor"
+            actual_digest="$(node deploy/studio-server/scripts/create-release-manifest.mjs digest --input "$installed_predecessor")"
+            if [[ "$actual_digest" != "$INSTALLED_PREDECESSOR_DIGEST" ]]; then
+              echo "::error::Installed predecessor artifact does not match the reviewed digest."
+              exit 1
+            fi
+            predecessor_args=(--predecessor "$installed_predecessor" --publication-head "$CURRENT_PRODUCTION_MANIFEST")
           fi
           node deploy/studio-server/scripts/create-release-manifest.mjs create \
             --output "$RELEASE_MANIFEST" \

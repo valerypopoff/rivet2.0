@@ -30,11 +30,12 @@ import {
 import { prepareRuntimeQualification } from './lib/runtime-qualification-publication.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { HA_REQUIRED_CHECKS } from './lib/ha-release-evidence.mjs';
+import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sha = 'a'.repeat(40),
   repository = 'example/rivet';
 const evidence = { workflow: 'Build Images', runId: '123', runAttempt: 1 };
-function fixture() {
+function fixture(overlap = false) {
   const imageSet = (prefix) =>
     Object.fromEntries(
       ['api', 'executor', 'proxy', 'web'].map((k, i) => [
@@ -93,6 +94,7 @@ function fixture() {
     valuesDigest: 'sha256:' + 'c'.repeat(64),
     settingsDigest: 'sha256:' + 'd'.repeat(64),
     controlPlaneMode: 'singleton',
+    ...(overlap ? { qualificationValues: { postgres: { poolMaxPerApiPod: 10 } } } : {}),
     edgeProfile: 'compact',
     policyDigest: autoscalerPolicyDigest(policy),
     policy,
@@ -106,6 +108,20 @@ function fixture() {
     operationId: 'rivet-q-456-1',
     now: t,
     approval: {
+      ...(overlap
+        ? {
+            developerOverlapProfile: {
+              protocol: 1,
+              poolMaxPerApiPod: 9,
+              maxConnections: 200,
+              reservedConnections: 30,
+              backendResources: {
+                requests: { cpu: '750m', memory: '1536Mi', 'ephemeral-storage': '256Mi' },
+                limits: { memory: '3Gi', 'ephemeral-storage': '2Gi' },
+              },
+            },
+          }
+        : {}),
       enabled: true,
       projectId: 'isolated-project',
       projectNumber: '123456789',
@@ -256,8 +272,185 @@ function fixture() {
       uncertainWrites: 0,
     },
   };
+  if (overlap) {
+    facts.upgrade.outcomes.overlapPreparation = { sourceMode: 'singleton', sourcePool: 10, preparationComplete: true };
+    facts.upgrade.outcomes.developerOverlap = {
+      profileDigest: overlapProfileDigest(operation.developerOverlapProfile),
+      adoptionOrAlreadyEnabled: true,
+      interruptedSameOperationRecovered: true,
+      sameNodeSamples: 2,
+      readinessSamples: 10,
+      minimumReady: 1,
+      maximumHousekeepingOwners: 1,
+      handoverCount: 2,
+      claimIdentityPreserved: true,
+      maintenanceClaim: {
+        before: { name: 'restore', uid: 'claim', volume: 'pv', volumeUid: 'pv-uid', size: '8Gi' },
+        after: { name: 'restore', uid: 'claim', volume: 'pv', volumeUid: 'pv-uid', size: '8Gi' },
+      },
+      finalBackendCount: 1,
+      finalOwnerCount: 1,
+      editorRuns: [0, 1].map((i) => ({
+        uid: `editor-${i}`,
+        receipt: {
+          phase: 'passed',
+          editorResumed: true,
+          latestMesh: true,
+          starts: 1,
+          completions: 1,
+          bundleProjectIds: ['root', 'child'],
+          bundleSharedExecution: true,
+        },
+      })),
+      browser: {
+        passed: true,
+        unsavedEdit: true,
+        savedByCandidate: true,
+        newRun: true,
+        outputs: true,
+        recordingOpened: true,
+        reloads: 0,
+        iframeReloads: 0,
+      },
+      developerTraffic: { samples: 100, failures: [] },
+    };
+  }
   return { input, operation, facts, promoted, now: () => t + 3000 };
 }
+
+test('temporary foundation consumes the original allowance instead of restarting it for fixture tests', () => {
+  const { input } = fixture();
+  const parent = {
+    inputHash: '1'.repeat(64),
+    startedAt: new Date(input.now - 3600000).toISOString(),
+    expiresAt: new Date(input.now + 3600000).toISOString(),
+  };
+  const operation = qualificationOperation({ ...input, approval: { ...input.approval, temporaryEnvironment: parent } });
+  assert.equal(operation.startedAt, parent.startedAt);
+  assert.equal(operation.expiresAt, parent.expiresAt);
+  assert.throws(() =>
+    qualificationOperation({
+      ...input,
+      approval: {
+        ...input.approval,
+        temporaryEnvironment: { ...parent, expiresAt: new Date(input.now + 7200000).toISOString() },
+      },
+    }),
+  );
+});
+
+test('initial overlap readiness is an adoption preflight, never permission for a direct image upgrade', () => {
+  const { operation } = fixture(true);
+  const qualified = 'sha256:' + 'e'.repeat(64),
+    values = 'sha256:' + 'f'.repeat(64);
+  const receipt = {
+    formatVersion: 1,
+    passed: true,
+    scope: 'installed-state-and-local-readiness',
+    workloadMutations: false,
+    applicationJourneysRun: false,
+    installedManifestDigest: operation.predecessorManifestDigest,
+    candidateManifestDigest: operation.predecessorManifestDigest,
+    authorizationManifestDigest: qualified,
+    adoptionStage: 'sizing',
+    namespaceUid: operation.installed.namespaceUid,
+    valuesDigest: values,
+    observedAt: new Date().toISOString(),
+  };
+  const options = { adoptionStage: 'sizing', valuesDigest: values };
+  const result = assertQualificationPreflight(receipt, operation, qualified, options);
+  assert.equal(result.status, 'adoption-preflight-passed');
+  assert.equal(result.pendingSteps.length, 3);
+  assert.equal(result.deploymentAuthorized, false);
+  for (const patch of [
+    { authorizationManifestDigest: values },
+    { candidateManifestDigest: qualified },
+    { adoptionStage: 'ownership' },
+    { valuesDigest: qualified },
+  ])
+    assert.throws(() => assertQualificationPreflight({ ...receipt, ...patch }, operation, qualified, options));
+  assert.throws(() => assertQualificationPreflight(receipt, operation, qualified));
+});
+
+test('overlap facts compile a distinct exact-profile certificate, and missing continuity fails after cleanup', async () => {
+  const f = fixture(true),
+    d = driver(f);
+  const result = await executeRuntimeQualification(f.operation, d.api, async () => {}, { now: f.now });
+  assert.equal(result.control.evidence.protocol, 3);
+  assert.equal(result.control.evidence.controlPlaneMode, 'singleton-overlap');
+  assert.equal(
+    result.control.evidence.developerOverlap.profileDigest,
+    overlapProfileDigest(f.operation.developerOverlapProfile),
+  );
+  assert.doesNotThrow(() =>
+    prepareRuntimeQualification({
+      candidate: f.operation.candidate,
+      promoted: f.promoted,
+      repository,
+      sourceSha: sha,
+      build: { runId: '123', runAttempt: 1 },
+      ...result,
+    }),
+  );
+  for (const corrupt of [
+    (x) => {
+      x.control.evidence.protocol = 2;
+    },
+    (x) => {
+      x.control.evidence.developerOverlap.profile.poolMaxPerApiPod = 10;
+    },
+    (x) => {
+      x.control.evidence.developerOverlap.profileDigest = 'f'.repeat(64);
+    },
+    (x) => {
+      x.control.evidence.controlPlaneMode = 'singleton';
+    },
+  ]) {
+    const changed = structuredClone(result);
+    corrupt(changed);
+    assert.throws(() =>
+      prepareRuntimeQualification({
+        candidate: f.operation.candidate,
+        promoted: f.promoted,
+        repository,
+        sourceSha: sha,
+        build: { runId: '123', runAttempt: 1 },
+        ...changed,
+      }),
+    );
+  }
+  for (const corrupt of [
+    (x) => {
+      delete x.upgrade.outcomes.developerOverlap;
+    },
+    (x) => {
+      x.upgrade.outcomes.developerOverlap.maximumHousekeepingOwners = 2;
+    },
+    (x) => {
+      x.upgrade.outcomes.developerOverlap.interruptedSameOperationRecovered = false;
+    },
+    (x) => {
+      x.upgrade.outcomes.developerOverlap.editorRuns[1].receipt.completions = 2;
+    },
+    (x) => {
+      x.upgrade.outcomes.developerOverlap.editorRuns[1].receipt.bundleSharedExecution = false;
+    },
+    (x) => {
+      x.upgrade.outcomes.developerOverlap.browser.iframeReloads = 1;
+    },
+    (x) => {
+      x.upgrade.outcomes.developerOverlap.developerTraffic.failures.push('request failed');
+    },
+  ]) {
+    const broken = fixture(true);
+    corrupt(broken.facts);
+    const failed = driver(broken);
+    await assert.rejects(
+      executeRuntimeQualification(broken.operation, failed.api, async () => {}, { now: broken.now }),
+    );
+    assert.deepEqual(failed.calls.slice(-3), ['settle', 'cleanup', 'verifyCleanup']);
+  }
+});
 function driver(f, fail) {
   const calls = [];
   return {

@@ -7,7 +7,9 @@ import {
   HA_REQUIRED_CHECKS,
   HA_ORDINARY_RUNTIME_CHECKS,
   HA_COOPERATIVE_AUTOSCALING_CHECKS,
+  HA_PROVIDER_OVERLAP_CHECKS,
 } from './lib/ha-release-evidence.mjs';
+import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
@@ -196,6 +198,32 @@ test('ordinary installed-to-candidate planning cannot require or authorize histo
     },
   ])
     assert.equal((await planInstalledUpgrade({ candidate: b, installed: altered })).status, 'qualification-required');
+  const profile = {
+    protocol: 1,
+    maxConnections: 200,
+    reservedConnections: 30,
+    poolMaxPerApiPod: 9,
+    backendResources: {
+      requests: { cpu: '750m', memory: '1536Mi', 'ephemeral-storage': '256Mi' },
+      limits: { memory: '3Gi', 'ephemeral-storage': '2Gi' },
+    },
+  };
+  b.evidence.runtimeControl = {
+    ...b.evidence.runtimeControl,
+    protocol: 3,
+    controlPlaneMode: 'singleton-overlap',
+    developerOverlap: {
+      protocol: 2,
+      sourceMode: 'singleton',
+      sourcePool: 10,
+      profile,
+      profileDigest: overlapProfileDigest(profile),
+      checks: [...HA_PROVIDER_OVERLAP_CHECKS],
+    },
+  };
+  assert.equal((await planInstalledUpgrade({ candidate: b, installed })).status, 'adoption-required');
+  const already = { ...installed, ...createProductionHelmValues(b) };
+  assert.equal((await planInstalledUpgrade({ candidate: b, installed: already })).status, 'adoption-required');
   delete b.evidence.runtimeAutoscaling;
   assert.equal((await planInstalledUpgrade({ candidate: b, installed })).status, 'qualification-required');
 });

@@ -2,6 +2,15 @@
 
 Implemented as an opt-in protocol; local integrated qualification passed (2026-10-23).
 Not provider-qualified or enabled in production.
+First activation now has explicit same-image `sizing` and `ownership` stages in
+the existing production command, delegated by the exact candidate certificate.
+Pool preparation is separate from ownership transfer and uses the original
+singleton procedure; it is not a developer-continuity claim. Certificate and
+stage are bound into backup, admission and recovery. No old manifest is rewritten.
+See the first-activation procedure in the qualification guide below.
+The maintained provider runner now has an opt-in overlap suite; see
+[automated qualification](automated-runtime-qualification.md). Local runner/Helm
+regressions do not replace the outstanding exact-image GKE qualification.
 This is planned-upgrade continuity, not node-failure HA or whole-UI availability.
 Schema-changing overlap qualifications must also satisfy the
 [rolling database contract](deployment-operations.md#rolling-database-compatibility-contract).
@@ -42,6 +51,14 @@ seven-owner maximum needs 201, so a 200-connection Rivet allowance correctly
 rejects it. A six-owner overlap ceiling budgets 184, but reducing capacity is an
 operator decision, not an automatic migration. Do not raise the recorded
 allowance or lower production capacity just to enable this optional mode.
+
+An alternative locally rendered staging profile keeps ceiling seven, the existing
+200-connection allowance and reserve30, but uses nine pooled connections per API
+process. It retains the 750m/1536Mi backend request and explicit 3Gi memory/2Gi
+ephemeral-storage limits. Both overlap backends reserve this envelope during
+replacement. The provider profile is explicit/hash-bound, never a change to Helm
+defaults or an automatic production adjustment. Real capacity/throughput and
+same-node scheduling still need provider verification and operator approval.
 
 The worker starts only after kernel `flock` on a persistent, non-symlink lock
 file. The inode is never replaced/deleted. Descriptor 3 is inherited by worker
@@ -226,6 +243,32 @@ Helm tests reject unowned replicas, shared caches, absent namespace identity and
 insufficient connection budgets. Local limits/requests are fixture envelopes and
 are not provider capacity measurements. See `artifacts/overlap-*.log` and the exact
 `artifacts/developer-overlap-*/` receipts; failed attempts remain failed evidence.
+
+### Provider-path local verification (2026-10-29)
+
+The opt-in provider driver and publication contract have local coverage for the
+explicit sizing profile, same-node/UID/incarnation observations, both handovers,
+original-token acknowledgement-loss recovery, retained browser/editor work,
+bundle-project execution identity, unchanged PVC/PV and rejected incomplete facts.
+The combined focused matrix passes 100 tests with no failures or skips; the real
+Linux ownership suite passes 12 checks. Four additional rollout/recovery checks
+include both actual-command lost-housekeeping-acknowledgement journeys. Four
+headless browser checks (fixture auth plus bundle HA replay, failure and
+shared stop) also pass.
+
+The new `verify-housekeeping-managed.mjs --provider-fixture` option runs the exact
+bundle-preparation helper through real guarded HTTP routes against the published
+`4d19782ea` API image and disposable schema-18 PostgreSQL/MinIO. It verifies saved
+two-project export, preserved bundle bytes and accepted restore-journal recovery
+through housekeeping transfer, using the proposed nine-connection pool and a
+200-connection local database. Temporary containers/network are removed; existing
+developer containers remain. The intentionally invalid restore upload is an
+admission/fencing test, not a successful restore or a production-data operation.
+
+These are local implementation checks. They do **not** certify GKE scheduling,
+provider handover/traffic, production throughput, first adoption, or whole-UI
+zero downtime. The provider suite must still run against reviewed immutable
+release/driver inputs after normal publication and separate staging approval.
 
 ### Verified local checks (2026-10-23)
 

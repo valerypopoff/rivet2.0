@@ -1,0 +1,10 @@
+version: 1
+name: Anonymous OCI image admission
+slug: anonymous-registry
+protocol: http
+port: 4943
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

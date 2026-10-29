@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { parse } from 'yaml';
+import { overlapAdoptionValues } from './lib/overlap-adoption.mjs';
+import { pullReleaseManifestArtifact, PRODUCTION_RELEASE_MANIFEST_REFERENCE } from './release-manifest-oci.mjs';
 import {
   qualificationOperation,
   executeRuntimeQualification,
@@ -43,7 +47,14 @@ const inspect = async () =>
     valuesText: await fs.readFile(process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE, 'utf8'),
     helm: resolveHelmBinOrThrow(root),
     kubectl: process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl',
-    run,
+    run: (bin, args, options) =>
+      run(bin, args, {
+        ...options,
+        env: {
+          ...process.env,
+          KUBECONFIG: process.env.RIVET_QUALIFICATION_PRODUCTION_KUBECONFIG ?? process.env.KUBECONFIG,
+        },
+      }),
   });
 
 async function main(mode) {
@@ -101,13 +112,49 @@ async function main(mode) {
     assert.equal(qualified.chart.contentDigest, operation.candidate.chartDigest);
     assert.equal(qualified.lineage.predecessor.manifestDigest, operation.predecessorManifestDigest);
     const artifacts = path.join(packet, 'private-preflight');
+    const adoptionStage =
+      qualified.evidence.runtimeControl?.protocol === 3 && operation.installed.controlPlaneMode === 'singleton'
+        ? operation.installed.qualificationValues.postgres.poolMaxPerApiPod ===
+          qualified.evidence.runtimeControl.developerOverlap.profile.poolMaxPerApiPod
+          ? 'ownership'
+          : 'sizing'
+        : undefined;
+    let preflightValues = process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE;
+    let preflightValuesDigest = operation.installed.valuesDigest;
+    const adoptionArgs = [];
+    if (adoptionStage) {
+      const predecessor = await pullReleaseManifestArtifact(
+        PRODUCTION_RELEASE_MANIFEST_REFERENCE.replace(
+          /:production$/,
+          `:manifest-${operation.predecessorManifestDigest.slice(7)}`,
+        ),
+        path.join(packet, 'predecessor.json'),
+      );
+      assert.equal(
+        getStudioServerReleaseManifestDigest(predecessor.manifest, { requirePromoted: true }),
+        operation.predecessorManifestDigest,
+      );
+      await fs.mkdir(artifacts, { recursive: true, mode: 0o700 });
+      const values = overlapAdoptionValues(
+        parse(await fs.readFile(preflightValues, 'utf8')),
+        qualified.evidence.runtimeControl.developerOverlap.profile,
+        adoptionStage,
+      );
+      preflightValues = path.join(artifacts, 'adoption-sizing-values.json');
+      const bytes = JSON.stringify(values, null, 2) + '\n';
+      await fs.writeFile(preflightValues, bytes, { flag: 'wx', mode: 0o600 });
+      preflightValuesDigest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+      adoptionArgs.push('--overlap-adoption-certificate', file, '--overlap-adoption-stage', adoptionStage);
+      if (adoptionStage === 'ownership') adoptionArgs.push('--ha-control-plane-transition');
+    }
     await run(
       process.execPath,
       [
         path.join(root, 'deploy/studio-server/scripts/deploy-kubernetes-release.mjs'),
         '--preflight-only',
         '--manifest',
-        file,
+        adoptionStage ? path.join(packet, 'predecessor.json') : file,
+        ...adoptionArgs,
         '--context',
         process.env.RIVET_QUALIFICATION_PRODUCTION_CONTEXT,
         '--namespace',
@@ -117,7 +164,7 @@ async function main(mode) {
         '--confirm',
         process.env.RIVET_QUALIFICATION_PRODUCTION_RELEASE,
         '--values',
-        process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE,
+        preflightValues,
         '--deployment-policy',
         process.env.RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE,
         '--artifacts',
@@ -130,6 +177,7 @@ async function main(mode) {
       await read(path.join(artifacts, 'deployment-preflight.json')),
       operation,
       digest,
+      { adoptionStage, valuesDigest: preflightValuesDigest },
     );
     await write(path.join(packet, 'deployment-readiness.json'), result);
     return;
@@ -141,6 +189,27 @@ async function main(mode) {
   assert.equal(candidate.source.repository, process.env.GITHUB_REPOSITORY);
   assertReleaseManifestMatchesCurrentChart(candidate, root, { requirePromoted: false });
   const installed = await read(path.join(packet, 'installed.json'));
+  assert.ok(
+    ['', 'reusable-cluster', 'temporary'].includes(process.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE ?? ''),
+    'Unknown staging environment mode',
+  );
+  if (process.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE === 'temporary') {
+    const { executeTemporaryQualification } = await import('./temporary-staging.mjs');
+    await executeTemporaryQualification({
+      packet,
+      inputs: {
+        candidate,
+        previous,
+        installed,
+        policy: installed.policy,
+        ...(process.env.RIVET_QUALIFICATION_OVERLAP_PROFILE
+          ? { developerOverlapProfile: await read(process.env.RIVET_QUALIFICATION_OVERLAP_PROFILE) }
+          : {}),
+      },
+      refreshInstalled: inspect,
+    });
+    return;
+  }
   const bundle = process.env.RIVET_QUALIFICATION_DRIVER_DIRECTORY;
   const bundleDigest = process.env.RIVET_QUALIFICATION_DRIVER_SHA256;
   assert.ok(
@@ -149,6 +218,9 @@ async function main(mode) {
   );
   assert.ok(process.env.RIVET_QUALIFICATION_STAGING_KUBECONFIG, 'An isolated staging credential context is required');
   await verifyQualificationDriver(bundle, bundleDigest); // Before provisioning or creating an operation.
+  const driverManifest = await read(path.join(bundle, 'driver.json'));
+  const settings =
+    driverManifest.suite === 'compact-seven-overlap-v1' ? await read(path.join(bundle, 'settings.json')) : {};
   const operation = qualificationOperation({
     candidate,
     previous,
@@ -156,6 +228,7 @@ async function main(mode) {
     policy: installed.policy,
     operationId: `rivet-q-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`,
     approval: {
+      developerOverlapProfile: settings.developerOverlapProfile,
       enabled: process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED === 'true',
       projectId: process.env.RIVET_QUALIFICATION_PROJECT_ID,
       projectNumber: process.env.RIVET_QUALIFICATION_PROJECT_NUMBER,

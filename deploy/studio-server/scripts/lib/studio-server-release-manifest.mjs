@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { assertHaReleaseEvidence, assertRuntimeControlEvidence, assertRuntimeAutoscalingEvidence } from './ha-release-evidence.mjs';
+import {
+  assertHaReleaseEvidence,
+  assertRuntimeControlEvidence,
+  assertRuntimeAutoscalingEvidence,
+} from './ha-release-evidence.mjs';
 
 export const STUDIO_SERVER_RELEASE_MANIFEST_VERSION = 2;
 export const STUDIO_SERVER_LEGACY_RELEASE_MANIFEST_VERSION = 1;
@@ -74,6 +78,8 @@ function assertLineage(lineage) {
     throw new Error('[studio-server-release-manifest] lineage is required');
   }
   if (lineage.predecessor === null) {
+    if (lineage.publicationHead !== undefined)
+      throw Error('An explicit publication head requires an installed predecessor.');
     return { predecessor: null };
   }
 
@@ -95,6 +101,9 @@ function assertLineage(lineage) {
       ),
       images: assertImages(predecessor.images),
     },
+    ...(lineage.publicationHead !== undefined
+      ? { publicationHead: assertLineage({ predecessor: lineage.publicationHead }).predecessor }
+      : {}),
   };
 }
 
@@ -263,8 +272,10 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
     },
   };
   if (evidence.ha) normalized.evidence.ha = assertHaReleaseEvidence(evidence.ha, normalized);
-  if (evidence.runtimeControl) normalized.evidence.runtimeControl = assertRuntimeControlEvidence(evidence.runtimeControl, normalized);
-  if (evidence.runtimeAutoscaling) normalized.evidence.runtimeAutoscaling = assertRuntimeAutoscalingEvidence(evidence.runtimeAutoscaling, normalized);
+  if (evidence.runtimeControl)
+    normalized.evidence.runtimeControl = assertRuntimeControlEvidence(evidence.runtimeControl, normalized);
+  if (evidence.runtimeAutoscaling)
+    normalized.evidence.runtimeAutoscaling = assertRuntimeAutoscalingEvidence(evidence.runtimeAutoscaling, normalized);
   return normalized;
 }
 
@@ -325,7 +336,13 @@ export function assertStudioServerReleasePredecessor(candidateManifest, currentP
       '[studio-server-release-manifest] Candidate requires a production predecessor, but the production release-manifest pointer is missing. Restore the immutable predecessor evidence before promotion.',
     );
   }
-  assertPredecessorReferenceMatchesRelease(predecessor, currentProductionManifest, 'Current production release');
+  // Publication and installation advance independently. An explicitly selected
+  // installed predecessor does not waive the publication-head freshness fence.
+  assertPredecessorReferenceMatchesRelease(
+    candidate.lineage.publicationHead ?? predecessor,
+    currentProductionManifest,
+    'Current publication head',
+  );
   return candidate;
 }
 
@@ -371,6 +388,7 @@ export function createStudioServerReleaseManifest({
   candidateEvidence,
   haEvidence,
   predecessorRelease = null,
+  publicationHeadRelease,
   createdAt = new Date().toISOString(),
 }) {
   const schema = readManagedWorkflowSchemaReleaseContract(rootDir);
@@ -385,6 +403,9 @@ export function createStudioServerReleaseManifest({
     images,
     lineage: {
       predecessor: predecessorRelease === null ? null : predecessorReferenceFor(predecessorRelease),
+      ...(publicationHeadRelease !== undefined
+        ? { publicationHead: predecessorReferenceFor(publicationHeadRelease) }
+        : {}),
     },
     evidence: { candidate: candidateEvidence, ...(haEvidence ? { ha: haEvidence } : {}) },
   });

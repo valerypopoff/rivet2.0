@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { overlapQualificationProfile, overlapProfileDigest } from './qualification-overlap-profile.mjs';
 import { createHash } from 'node:crypto';
 import { assertRuntimeUpgradePair } from './runtime-upgrade-qualification.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
-import { HA_ORDINARY_RUNTIME_CHECKS, HA_COOPERATIVE_AUTOSCALING_CHECKS } from './ha-release-evidence.mjs';
+import {
+  HA_ORDINARY_RUNTIME_CHECKS,
+  HA_COOPERATIVE_AUTOSCALING_CHECKS,
+  HA_PROVIDER_OVERLAP_CHECKS,
+} from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
 
 export const qualificationHash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -62,6 +67,16 @@ export function qualificationOperation({
   assert.equal(server.protocol, 'https:');
   assert.ok(!server.username && !server.password && server.pathname === '/' && !server.search && !server.hash);
   assert.notEqual(staging.clusterUid, nonempty(installed.clusterUid), 'Staging cannot share the production cluster');
+  const parent = approval.temporaryEnvironment;
+  if (parent) {
+    assert.match(parent.inputHash, /^[a-f0-9]{64}$/);
+    assert.ok(time(parent.startedAt) <= now && time(parent.expiresAt) > now);
+    assert.equal(
+      time(parent.expiresAt) - time(parent.startedAt),
+      approval.maxSeconds * 1000,
+      'Temporary allowance clock changed',
+    );
+  }
   const normalized = autoscalerPolicy(policy);
   assert.equal(normalized.minReplicas, 2);
   assert.ok(normalized.maxReplicas >= 4, 'Active and paused growth tests need two surge steps');
@@ -81,8 +96,19 @@ export function qualificationOperation({
   digest(installed.valuesDigest);
   digest(installed.settingsDigest);
   nonempty(installed.namespaceUid);
-  assert.equal(installed.controlPlaneMode, 'singleton');
+  assert.ok(
+    (approval.developerOverlapProfile ? ['singleton', 'singleton-overlap'] : ['singleton']).includes(
+      installed.controlPlaneMode,
+    ),
+  );
   assert.equal(installed.edgeProfile, 'compact');
+  if (approval.developerOverlapProfile) {
+    const sourcePool = installed.qualificationValues?.postgres?.poolMaxPerApiPod;
+    assert.ok(
+      Number.isSafeInteger(sourcePool) && sourcePool >= approval.developerOverlapProfile.poolMaxPerApiPod,
+      'Overlap adoption must record its original pool and cannot increase it',
+    );
+  }
   assert.equal(installed.policyDigest, autoscalerPolicyDigest(normalized));
   assert.deepEqual(installed.baseline, { backend: 1, web: 1, execution: 2, proxy: 2, autoscaler: 1 });
   const input = {
@@ -92,15 +118,19 @@ export function qualificationOperation({
     provider: 'gke',
     projectId: approval.projectId,
     projectNumber: approval.projectNumber,
-    startedAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + approval.maxSeconds * 1000).toISOString(),
+    startedAt: parent?.startedAt ?? new Date(now).toISOString(),
+    expiresAt: parent?.expiresAt ?? new Date(now + approval.maxSeconds * 1000).toISOString(),
     maxUsd: approval.maxUsd,
     staging,
+    ...(parent ? { temporaryEnvironment: structuredClone(parent) } : {}),
     driverBundleSha256: approval.driverBundleSha256,
     candidate,
     previous,
     installed,
     policy: normalized,
+    ...(approval.developerOverlapProfile
+      ? { developerOverlapProfile: overlapQualificationProfile(approval.developerOverlapProfile) }
+      : {}),
     candidateManifestDigest: getStudioServerReleaseManifestDigest(candidate),
     predecessorManifestDigest,
     policyDigest: autoscalerPolicyDigest(normalized),
@@ -126,6 +156,11 @@ export function assertQualificationGuard(guard, operation) {
   assert.equal(guard.expiresAt, operation.expiresAt);
   assert.equal(guard.maxUsd, operation.maxUsd);
   assert.equal(guard.billableActivation, false, 'Arm the existing janitor before creating paid test resources');
+  if (operation.temporaryEnvironment) {
+    assert.equal(guard.activationScope, 'fixture-only');
+    assert.equal(guard.foundationBillableActivation, true);
+    assert.equal(guard.foundationInputHash, operation.temporaryEnvironment.inputHash);
+  }
   assert.equal(guard.stagingClusterUid, operation.staging.clusterUid);
   nonempty(guard.identity);
   assert.equal(guard.independent, true, 'Expiry cleanup must survive the workflow/runner');
@@ -206,6 +241,46 @@ export function assertOrdinaryProviderReport(report, operation) {
     );
   }
   assert.equal(report.outcomes.maintenanceArchivePreserved, true);
+  if (operation.developerOverlapProfile) {
+    assert.deepEqual(report.outcomes.overlapPreparation, {
+      sourceMode: operation.installed.controlPlaneMode,
+      sourcePool: operation.installed.qualificationValues.postgres.poolMaxPerApiPod,
+      preparationComplete: true,
+    });
+    const observed = report.outcomes.developerOverlap;
+    assert.equal(observed.profileDigest, overlapProfileDigest(operation.developerOverlapProfile));
+    assert.equal(observed.adoptionOrAlreadyEnabled, true);
+    assert.equal(observed.interruptedSameOperationRecovered, true);
+    assert.ok(observed.sameNodeSamples > 0);
+    assert.ok(observed.readinessSamples > 0);
+    assert.equal(observed.minimumReady, 1);
+    assert.equal(observed.maximumHousekeepingOwners, 1);
+    assert.equal(observed.handoverCount, 2);
+    assert.equal(observed.claimIdentityPreserved, true);
+    for (const key of ['name', 'uid', 'volume', 'volumeUid', 'size']) nonempty(observed.maintenanceClaim.before[key]);
+    assert.deepEqual(observed.maintenanceClaim.after, observed.maintenanceClaim.before);
+    assert.equal(observed.finalBackendCount, 1);
+    assert.equal(observed.finalOwnerCount, 1);
+    assert.equal(observed.editorRuns.length, 2);
+    assert.equal(new Set(observed.editorRuns.map((r) => r.uid)).size, 2);
+    for (const run of observed.editorRuns) {
+      nonempty(run.uid);
+      assert.equal(run.receipt.phase, 'passed');
+      assert.equal(run.receipt.editorResumed, true);
+      assert.equal(run.receipt.latestMesh, true);
+      assert.equal(run.receipt.bundleSharedExecution, true);
+      assert.equal(run.receipt.bundleProjectIds.length, 2);
+      assert.equal(new Set(run.receipt.bundleProjectIds).size, 2);
+      assert.equal(run.receipt.starts, 1);
+      assert.equal(run.receipt.completions, 1);
+    }
+    for (const field of ['passed', 'unsavedEdit', 'savedByCandidate', 'newRun', 'outputs', 'recordingOpened'])
+      assert.equal(observed.browser[field], true);
+    assert.equal(observed.browser.reloads, 0);
+    assert.equal(observed.browser.iframeReloads, 0);
+    assert.ok(observed.developerTraffic.samples >= 100);
+    assert.deepEqual(observed.developerTraffic.failures, []);
+  }
   assert.equal(report.storageIdentityPreserved, true);
   for (const field of ['coldProxyReplacement', 'browserOAuthAction', 'publishedScheduleRecording'])
     assert.equal(report.outcomes.independence[field], true);
@@ -410,9 +485,21 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
     inputHash: operation.inputHash,
     control: declaration(facts.upgrade, {
       ...common,
-      protocol: 2,
+      protocol: operation.developerOverlapProfile ? 3 : 2,
       purpose: 'ordinary-upgrade',
-      controlPlaneMode: 'singleton',
+      controlPlaneMode: operation.developerOverlapProfile ? 'singleton-overlap' : 'singleton',
+      ...(operation.developerOverlapProfile
+        ? {
+            developerOverlap: {
+              protocol: 2,
+              sourceMode: operation.installed.controlPlaneMode,
+              sourcePool: operation.installed.qualificationValues.postgres.poolMaxPerApiPod,
+              profile: operation.developerOverlapProfile,
+              profileDigest: overlapProfileDigest(operation.developerOverlapProfile),
+              checks: [...HA_PROVIDER_OVERLAP_CHECKS],
+            },
+          }
+        : {}),
       edgeProfiles: ['compact'],
       predecessorManifestDigest: operation.predecessorManifestDigest,
       predecessorSourceSha: operation.previous.source.sha,
@@ -435,19 +522,43 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
   };
 }
 
-export function assertQualificationPreflight(receipt, operation, qualifiedManifestDigest, { now = Date.now() } = {}) {
+export function assertQualificationPreflight(
+  receipt,
+  operation,
+  qualifiedManifestDigest,
+  { now = Date.now(), adoptionStage, valuesDigest = operation.installed.valuesDigest } = {},
+) {
   assert.equal(receipt.formatVersion, 1);
   assert.equal(receipt.passed, true);
   assert.equal(receipt.scope, 'installed-state-and-local-readiness');
   assert.equal(receipt.workloadMutations, false);
   assert.equal(receipt.applicationJourneysRun, false);
   assert.equal(receipt.installedManifestDigest, operation.predecessorManifestDigest);
-  assert.equal(receipt.candidateManifestDigest, digest(qualifiedManifestDigest));
+  if (adoptionStage) {
+    assert.ok(['sizing', 'ownership'].includes(adoptionStage));
+    assert.equal(operation.installed.controlPlaneMode, 'singleton');
+    assert.equal(receipt.candidateManifestDigest, operation.predecessorManifestDigest);
+    assert.equal(receipt.authorizationManifestDigest, digest(qualifiedManifestDigest));
+    assert.equal(receipt.adoptionStage, adoptionStage);
+  } else {
+    assert.equal(receipt.candidateManifestDigest, digest(qualifiedManifestDigest));
+    assert.equal(receipt.authorizationManifestDigest, undefined);
+    assert.equal(receipt.adoptionStage, undefined);
+  }
   assert.equal(receipt.namespaceUid, operation.installed.namespaceUid);
-  assert.equal(receipt.valuesDigest, operation.installed.valuesDigest);
+  assert.equal(receipt.valuesDigest, valuesDigest);
   assert.ok(now - time(receipt.observedAt) >= 0 && now - time(receipt.observedAt) <= 300_000);
   return {
-    status: 'deployment-preflight-passed',
+    status: adoptionStage ? 'adoption-preflight-passed' : 'deployment-preflight-passed',
+    ...(adoptionStage
+      ? {
+          pendingSteps: [
+            ...(adoptionStage === 'sizing' ? ['same-image-pool-preparation'] : []),
+            'same-image-ownership-transfer',
+            'ordinary-qualified-upgrade',
+          ],
+        }
+      : {}),
     observedAt: receipt.observedAt,
     candidateManifestDigest: qualifiedManifestDigest,
     productionUnchanged: true,

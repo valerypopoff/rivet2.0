@@ -56,7 +56,7 @@ test.after(async () => {
   assert.ok(path.basename(certificates).startsWith('rivet-private-tls-fixture-'));
   await fs.rm(certificates, { recursive: true });
 });
-async function fixture(fn) {
+async function fixture(fn, { execOutput, execStderr, execStatus = 'Success' } = {}) {
   let writes = 0,
     reads = 0,
     current = { mode: 'pass', rv: 1 };
@@ -109,8 +109,12 @@ async function fixture(fn) {
   upstream.on('upgrade', (req, socket, head) =>
     ws.handleUpgrade(req, socket, head, (client) => {
       assert.equal(req.headers.authorization, 'Bearer local-test-only');
-      client.send(Buffer.concat([Buffer.from([1]), Buffer.from('{"state":"serving"}')]));
-      client.send(Buffer.concat([Buffer.from([3]), Buffer.from('{"status":"Success"}')]));
+      const output = Buffer.from(execOutput ?? '{"state":"serving"}'),
+        cut = output.indexOf(Buffer.from('é')) + 1;
+      if (execStderr) client.send(Buffer.concat([Buffer.from([2]), Buffer.from(execStderr)]));
+      if (cut > 0) client.send(Buffer.concat([Buffer.from([1]), output.subarray(0, cut)]));
+      client.send(Buffer.concat([Buffer.from([1]), cut > 0 ? output.subarray(cut) : output]));
+      client.send(Buffer.concat([Buffer.from([3]), Buffer.from(JSON.stringify({ status: execStatus }))]));
       client.close();
     }),
   );
@@ -158,6 +162,25 @@ async function fixture(fn) {
     await new Promise((resolve) => upstream.close(resolve));
   }
 }
+test('phase diagnostics remain private while explicit exit status and split UTF-8 output stay authoritative', async () => {
+  const route = `/api/v1/namespaces/${namespace}/pods/${release}-ha-execution-0/exec`,
+    options = { execOutput: '{"label":"étape"}', execStderr: 'private progress' };
+  await fixture(async (f) => {
+    const chunks = [];
+    assert.deepEqual(JSON.parse(await f.client.exec(route, ['node', 'fixture'], { onStderr: (c) => chunks.push(c) })), {
+      label: 'étape',
+    });
+    assert.equal(Buffer.concat(chunks).toString(), 'private progress');
+    await assert.rejects(f.client.exec(route, ['node', 'fixture']), /successful exit/);
+  }, options);
+  await fixture(
+    async (f) => {
+      await assert.rejects(f.client.exec(route, ['node', 'fixture'], { onStderr: () => {} }), /successful exit/);
+    },
+    { ...options, execStatus: 'Failure' },
+  );
+});
+
 test('fixture uses source-owned journal identity and rejects foreign namespaces, encoded paths and arbitrary writes', () => {
   assert.equal(journalName, releaseOperationJournalName(release));
   assert.equal(

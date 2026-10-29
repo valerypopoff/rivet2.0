@@ -285,6 +285,38 @@ function kubectl() {
   if (args[0] === 'get') {
     const type = args[1],
       name = args[2]?.startsWith('-') ? null : args[2];
+    if (type === '--raw') {
+      const url = new URL(args[2], 'https://fixture.invalid');
+      const select = (object) =>
+        !url.searchParams.get('labelSelector') ||
+        url.searchParams
+          .get('labelSelector')
+          .split(',')
+          .every((entry) => {
+            const [key, value] = entry.split('=');
+            return object.metadata.labels?.[key] === value;
+          });
+      if (url.pathname.startsWith(`/apis/metrics.k8s.io/v1beta1/namespaces/${state.namespace}/pods`))
+        return {
+          items: state.pods.filter(select).map((p) => ({
+            metadata: { name: p.metadata.name },
+            timestamp: new Date().toISOString(),
+            containers: p.spec.containers.map((c) => ({ name: c.name, usage: { cpu: '1m' } })),
+          })),
+        };
+      if (url.pathname === `/api/v1/namespaces/${state.namespace}/pods`) return { items: state.pods.filter(select) };
+      if (url.pathname.startsWith(`/api/v1/namespaces/${state.namespace}/pods/`))
+        return state.pods.find((p) => p.metadata.name === url.pathname.split('/').at(-1));
+      if (url.pathname.startsWith(`/apis/apps/v1/namespaces/${state.namespace}/statefulsets/`))
+        return find('StatefulSet', url.pathname.split('/').at(-1));
+      if (url.pathname.startsWith(`/apis/apps/v1/namespaces/${state.namespace}/deployments/`))
+        return find('Deployment', url.pathname.split('/').at(-1));
+      if (url.pathname === `/apis/apps/v1/namespaces/${state.namespace}/replicasets`)
+        return { items: state.resources.filter((r) => r.kind === 'ReplicaSet' && select(r)) };
+      if (url.pathname === `/apis/autoscaling/v2/namespaces/${state.namespace}/horizontalpodautoscalers`)
+        return { items: state.resources.filter((r) => r.kind === 'HorizontalPodAutoscaler') };
+      fail(`Unsupported fixture raw GET: ${url.pathname}`);
+    }
     if (
       state.fault === 'inventoryAutoscalerAdvance' &&
       state.claimAdmissionRead &&
@@ -327,7 +359,7 @@ function kubectl() {
     if (type === 'configmap') {
       if (state.fault === 'inventoryAutoscalerAdvance' && state.autoscalerAdvancedDuringBaseline)
         state.claimAdmissionRead = true;
-      if (state.fault === 'controllerRecreation' && state.finalReady && state.journal) {
+      if ((state.fault === 'controllerRecreation' || state.simulateAutoscaler) && state.finalReady && state.journal) {
         const record = JSON.parse(state.journal.data.record);
         if (record.phase === 'complete' && record.autoscalingProtocol !== 1) {
           // Simulate the recreated controller's normal first tick only after
@@ -441,10 +473,13 @@ function kubectl() {
     const pod = state.pods.find((p) => p.metadata.name === args[1]);
     if (!pod) fail('Unknown fixture pod');
     if (args.includes('wget')) return { ok: true, profile: 'execution' };
+    if (args.includes('-e') && args.some((a) => a.includes('/metrics')))
+      return 'rivet_published_execution_active_runs 0\nrivet_published_execution_admission_limit{mode="enforce"} 4\n';
     if (args.includes('--input-type=module'))
       return {
         protocol: 1,
         housekeepingOverlapProtocol: 1,
+        maintenanceIdle: true,
         executionOwnedProxySettings: component(pod) === 'execution',
         scheduledRunScope:
           component(pod) === 'execution' ? 'published' : component(pod) === 'backend' ? 'latest' : null,

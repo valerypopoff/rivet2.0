@@ -1,0 +1,7 @@
+simulation: rivet-temporary-staging
+routing: path
+mocks:
+  - routeKey: gcp
+    path: ../mocks/temporary-gcp/config.yaml
+  - routeKey: registry
+    path: ../mocks/anonymous-registry/config.yaml

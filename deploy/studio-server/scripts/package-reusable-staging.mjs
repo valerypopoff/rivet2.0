@@ -97,6 +97,9 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
           },
           spec: {
             serviceAccountName: name,
+            ...(settings.janitorRegistrySecret
+              ? { imagePullSecrets: [{ name: settings.janitorRegistrySecret.name }] }
+              : {}),
             terminationGracePeriodSeconds: 240,
             securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001 },
             containers: [
@@ -182,7 +185,7 @@ export async function packageReusableStaging({ settings, output, janitorImage, g
       .digest('hex');
   const manifest = {
     protocol: 1,
-    suite: 'compact-seven-v1',
+    suite: settings.developerOverlapProfile ? 'compact-seven-overlap-v1' : 'compact-seven-v1',
     provider: 'gke',
     scope: 'isolated-provider',
     entrypoint: 'provider.mjs',

@@ -56,10 +56,11 @@ async function main() {
     await write('publication-plan.json', {
       expectedProductionDigest: result.expectedProductionDigest,
       predecessorDigest: result.predecessorDigest,
+      publicationBaselineDigest: result.publicationBaselineDigest,
     });
     await output(
-      'predecessor_reference',
-      `ghcr.io/${process.env.GITHUB_REPOSITORY.toLowerCase()}-studio-server/release-manifest:manifest-${result.predecessorDigest.slice(7)}`,
+      'promotion_base_reference',
+      `ghcr.io/${process.env.GITHUB_REPOSITORY.toLowerCase()}-studio-server/release-manifest:manifest-${result.publicationBaselineDigest.slice(7)}`,
     );
   } else if (mode === 'verify-pointer') {
     assertRuntimeQualificationPointer(

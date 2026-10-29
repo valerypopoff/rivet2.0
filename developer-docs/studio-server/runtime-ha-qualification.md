@@ -90,6 +90,21 @@ Failed, local, incomplete,
 uncleaned, mismatched source/images/chart/policy or different-operation inputs
 are rejected. No copied unit-test checklist can establish provider qualification.
 
+Control protocol3 is the compact ordinary mixed-image upgrade plus developer
+overlap contract. It retains the exact predecessor/policy fields from protocol2,
+uses `controlPlaneMode:"singleton-overlap"`, and includes `developerOverlap` with
+protocol2, the normalized explicit sizing `profile`, its SHA256 `profileDigest`
+and all `HA_PROVIDER_OVERLAP_CHECKS`. It does not require historical regional
+topology conversions. The same-image bridge is preparation, not a promise of
+uninterrupted developer editing; customer observers remain active through it.
+The resulting certificate is compiled only from
+actual provider observations and verified cleanup; local test facts cannot
+qualify an image. It uses cooperative autoscaling protocol2 and preserves the
+same seven-pod floor. Rendered target pool/resource settings must match the
+qualified profile; a protocol2 singleton receipt cannot enable overlap.
+See [automated qualification](automated-runtime-qualification.md) for profile
+selection, the accepted-acknowledgement interruption and budget validation.
+
 ## Ordinary local qualification command
 
 `kubernetes-runtime-control-local.mjs` defaults to

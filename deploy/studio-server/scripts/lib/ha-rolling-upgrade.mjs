@@ -90,6 +90,7 @@ export async function runHaRollingUpgrade({
   prepareReplacements = async () => {},
   settle,
   handoverHousekeeping,
+  verifyPoolPreparationTemplates,
 }) {
   requireDeploymentSafety(safety, 'rolling', identity);
   settle = safety.requireSettlement(settle);
@@ -126,6 +127,10 @@ export async function runHaRollingUpgrade({
       );
     if (JSON.stringify(record.housekeepingDisk) !== JSON.stringify(identity.housekeepingDisk))
       throw Error('HA recovery maintenance claim identity changed.');
+    if (JSON.stringify(record.ownerPoolTransition) !== JSON.stringify(identity.ownerPoolTransition))
+      throw Error('HA recovery pool preparation authority changed.');
+    if (JSON.stringify(record.poolPreparationControllers) !== JSON.stringify(identity.poolPreparationControllers))
+      throw Error('HA recovery pool preparation controllers changed.');
     safety.assertRecovery(record);
     if (JSON.stringify(record.workloads) !== JSON.stringify(workloads))
       throw new Error('HA recovery inventory changed.');
@@ -256,7 +261,12 @@ export async function runHaRollingUpgrade({
       } else if (operation.record.phase === 'templates') {
         // Helm may have committed without its acknowledgement. Template install is
         // declarative, but migrations are not replayed by recovery.
-        throw new Error('HA template acknowledgement is unknown. Verify Helm/schema state before recovery.');
+        if (
+          !identity.ownerPoolTransition ||
+          typeof verifyPoolPreparationTemplates !== 'function' ||
+          !(await verifyPoolPreparationTemplates())
+        )
+          throw new Error('HA template acknowledgement is unknown. Verify Helm/schema state before recovery.');
       }
       await checkpoint({ phase: 'owners' });
       for (const workload of workloads) {

@@ -5,6 +5,7 @@ import {
   requireDeploymentSafety,
   deploymentPreparationBinding,
   retainedTopologyExecution,
+  deploymentRecoveryIdentity,
 } from './lib/deployment-safety.mjs';
 import { runHaRollingUpgrade } from './lib/ha-rolling-upgrade.mjs';
 import { runManagedReleaseCutover } from './lib/managed-release-cutover.mjs';
@@ -37,6 +38,36 @@ const identity = {
   namespace: context.namespace,
   manifestDigest: context.candidateManifestDigest,
 };
+
+test('adoption preparation and recovery bind the exact candidate certificate and stage', () => {
+  const ctx = { ...context, authorizationManifestDigest: digest('e'), adoptionStage: 'sizing' };
+  const base = {
+    ...options('rolling'),
+    context: ctx,
+    before: { verified: true, binding: deploymentPreparationBinding(ctx, digest('d'), 'before') },
+    backup: { verified: true, binding: deploymentPreparationBinding(ctx, digest('d'), 'backup') },
+  };
+  const safety = createDeploymentSafety(base);
+  const record = { ...safety.bind(identity), token: 'exact-token', phase: 'paused' };
+  const recovery = {
+    resumeToken: 'exact-token',
+    policyDigest: digest('d'),
+    valuesDigest: ctx.valuesDigest,
+    authorizationManifestDigest: ctx.authorizationManifestDigest,
+    adoptionStage: 'sizing',
+  };
+  assert.equal(deploymentRecoveryIdentity(record, recovery).adoptionStage, 'sizing');
+  for (const patch of [
+    { authorizationManifestDigest: undefined },
+    { authorizationManifestDigest: digest('f') },
+    { adoptionStage: 'ownership' },
+  ])
+    assert.throws(() => deploymentRecoveryIdentity(record, { ...recovery, ...patch }), /original deployment policy/);
+  assert.throws(
+    () => createDeploymentSafety({ ...base, context: { ...ctx, adoptionStage: undefined } }),
+    /Adoption safety/,
+  );
+});
 
 test('every rollout strategy and Kubernetes adapter rejects a missing contract before reading or mutating', async () => {
   for (const run of [

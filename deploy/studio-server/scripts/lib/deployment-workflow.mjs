@@ -143,6 +143,8 @@ export async function runDeploymentStage(
     receipt.namespaceUid !== context.namespaceUid ||
     receipt.candidateManifestDigest !== context.candidateManifestDigest ||
     receipt.installedManifestDigest !== context.installedManifestDigest ||
+    receipt.authorizationManifestDigest !== context.authorizationManifestDigest ||
+    receipt.adoptionStage !== context.adoptionStage ||
     receipt.operationPlanDigest !== approval.digest
   )
     throw Error('Deployment adapter receipt belongs to another attempt or installation.');

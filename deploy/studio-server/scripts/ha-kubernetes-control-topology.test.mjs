@@ -563,6 +563,13 @@ test('template acknowledgement preserves repeated volume mounts and ordered comm
   assert.equal(matchesTopologyTemplate(['node', 'main.js'], ['main.js', 'node']), false);
   assert.equal(
     matchesTopologyTemplate(
+      [{ name: 'TOKEN', valueFrom: { secretKeyRef: { name: 'different', key: 'token' } } }],
+      [{ name: 'TOKEN', value: '' }],
+    ),
+    false,
+  );
+  assert.equal(
+    matchesTopologyTemplate(
       { valueFrom: { secretKeyRef: { name: 'foreign', key: 'key' } } },
       { valueFrom: { secretKeyRef: { name: 'expected', key: 'key' } } },
     ),

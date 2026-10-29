@@ -2,6 +2,7 @@ import https from 'node:https';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { StringDecoder } from 'node:string_decoder';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { classifyStartupFence, assertFenceIntent } from './execution-autoscaler-fence.mjs';
 
@@ -111,8 +112,14 @@ export function createKubernetesTransport({
         request.end(payload);
       });
     },
-    exec(path, command, { container = 'api' } = {}) {
+    exec(path, command, { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr } = {}) {
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(container)) throw new Error('Kubernetes exec container is invalid.');
+      if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 32 * 1024 * 1024)
+        throw new Error('Kubernetes exec output bound is invalid.');
+      if (stdin !== undefined && (!Buffer.isBuffer(stdin) || stdin.length > 32 * 1024 * 1024))
+        throw new Error('Kubernetes exec input is invalid.');
+      if (onStderr !== undefined && typeof onStderr !== 'function')
+        throw new Error('Kubernetes diagnostic sink is invalid.');
       return new Promise((resolve, reject) => {
         const url = new URL(path, base);
         url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -120,16 +127,22 @@ export function createKubernetesTransport({
         url.searchParams.set('container', container);
         url.searchParams.set('stdout', 'true');
         url.searchParams.set('stderr', 'true');
+        if (stdin !== undefined) url.searchParams.set('stdin', 'true');
         const WebSocket = WebSocketClass ?? createRequire(import.meta.url)('ws');
-        const socket = new WebSocket(url, ['v5.channel.k8s.io', 'v4.channel.k8s.io'], {
-          ...credentials(),
-          handshakeTimeout: timeoutMs,
-          maxPayload: 1024 * 1024,
-        });
+        const socket = new WebSocket(
+          url,
+          stdin === undefined ? ['v5.channel.k8s.io', 'v4.channel.k8s.io'] : ['v5.channel.k8s.io'],
+          {
+            ...credentials(),
+            handshakeTimeout: timeoutMs,
+            maxPayload: 1024 * 1024,
+          },
+        );
         let output = '',
           bytes = 0,
           status,
           stderr = false;
+        const decoder = new StringDecoder('utf8');
         const finish = (error, result) => {
           clearTimeout(timer);
           socket.removeAllListeners();
@@ -141,11 +154,26 @@ export function createKubernetesTransport({
           () => finish(new Error('Kubernetes exec deadline exceeded; command outcome is unknown.')),
           timeoutMs,
         );
+        socket.once('open', () => {
+          if (stdin === undefined) return;
+          // v5 supports explicit stdin EOF without closing stdout/status. A
+          // connection loss remains uncertain and is never retried here.
+          for (let offset = 0; offset < stdin.length; offset += 65536)
+            socket.send(Buffer.concat([Buffer.from([0]), stdin.subarray(offset, offset + 65536)]));
+          socket.send(Buffer.from([255, 0]));
+        });
         socket.on('message', (data) => {
           bytes += data.length;
-          if (bytes > 1024 * 1024) return finish(new Error('Kubernetes exec output exceeded its limit.'));
-          if (data[0] === 1) output += data.subarray(1).toString('utf8');
-          if (data[0] === 2 && data.length > 1) stderr = true;
+          if (bytes > maxOutputBytes) return finish(new Error('Kubernetes exec output exceeded its limit.'));
+          if (data[0] === 1) output += decoder.write(data.subarray(1));
+          if (data[0] === 2 && data.length > 1) {
+            stderr = true;
+            try {
+              onStderr?.(data.subarray(1));
+            } catch (error) {
+              return finish(error);
+            }
+          }
           if (data[0] === 3) {
             try {
               status = JSON.parse(data.subarray(1).toString('utf8'));
@@ -156,8 +184,8 @@ export function createKubernetesTransport({
         });
         socket.once('error', () => finish(new Error('Kubernetes exec connection failed; command outcome is unknown.')));
         socket.once('close', () =>
-          status?.status === 'Success' && !stderr
-            ? finish(null, output)
+          status?.status === 'Success' && (!stderr || onStderr)
+            ? finish(null, output + decoder.end())
             : finish(new Error('Kubernetes exec did not confirm a successful exit.')),
         );
       });

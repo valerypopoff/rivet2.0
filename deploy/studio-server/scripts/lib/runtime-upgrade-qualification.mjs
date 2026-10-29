@@ -84,6 +84,8 @@ export async function runOrdinaryRuntimeUpgrade({
   until,
   signal,
   sampleIntervalMs = 500,
+  startDeveloperOverlap,
+  prepareDeveloperOverlap,
 }) {
   signal?.throwIfAborted();
   assertRuntimeUpgradePair(previous, candidate);
@@ -123,6 +125,7 @@ export async function runOrdinaryRuntimeUpgrade({
   const workflow = startHaWorkflowTraffic(gate, baseUrl, () => phase);
   const web = startHaWebAppTraffic(gate, baseUrl, () => phase);
   let observing = true,
+    developer,
     observationFailure,
     failure,
     firstFailureDiagnostics;
@@ -168,16 +171,30 @@ export async function runOrdinaryRuntimeUpgrade({
     gate.config.images = previous.images;
     report.outcomes.initialAutoscaler = await gate.assertAutoscalerActive(Date.now());
     checkpoint();
-    await probes.prepare({ embeddedMaintenance: 'singleton' });
+    // Keep customer observers and two-owner floors active through the optional
+    // bridge too. Developer continuity starts only after that explicit adoption.
+    if (prepareDeveloperOverlap) {
+      report.outcomes.overlapPreparation = await prepareDeveloperOverlap();
+      checkpoint();
+    }
+    await probes.prepare({ embeddedMaintenance: startDeveloperOverlap ? true : 'singleton' });
+    if (startDeveloperOverlap) developer = await startDeveloperOverlap(probes);
     checkpoint();
     phase = 'ordinary-seven-to-seven-upgrade';
-    await gate.roll(candidate.images, true, {
+    const callbacks = {
       beforeRetirement: (pod) => {
         checkpoint();
         return /-ha-execution-[01]$/.test(pod.name) ? probes.beforeRetirement(pod) : undefined;
       },
       afterWithdrawal: (pod) => (/-ha-execution-[01]$/.test(pod.name) ? probes.afterWithdrawal(pod) : undefined),
-    });
+    };
+    if (developer) await developer.roll(callbacks);
+    else await gate.roll(candidate.images, true, callbacks);
+    if (developer) {
+      report.outcomes.developerOverlap = await developer.finish();
+      await developer.close();
+      developer = undefined;
+    }
     report.phases.push('exact-seven-to-seven-mixed-image-upgrade');
     if (previous.database.managedWorkflowSchema.version !== candidate.database.managedWorkflowSchema.version) {
       report.schemaCompatibility = await gate.verifyMixedSchemaRepositories({
@@ -224,6 +241,13 @@ export async function runOrdinaryRuntimeUpgrade({
   } catch (error) {
     failure = error;
   } finally {
+    if (developer) {
+      try {
+        await developer.close();
+      } catch (e) {
+        failure ??= e;
+      }
+    }
     observing = false;
     await Promise.all([observe, workflow.stop(), web.stop()]);
     failure ??= observationFailure;

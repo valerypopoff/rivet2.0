@@ -27,9 +27,20 @@ function parseArgs(argv) {
           '--run-attempt',
           '--image',
           '--predecessor',
+          '--publication-head',
         ])
       : command === 'promote'
-        ? new Set(['--input', '--output', '--workflow', '--run-id', '--run-attempt', '--current', '--ha-evidence', '--runtime-control-evidence', '--runtime-autoscaling-evidence'])
+        ? new Set([
+            '--input',
+            '--output',
+            '--workflow',
+            '--run-id',
+            '--run-attempt',
+            '--current',
+            '--ha-evidence',
+            '--runtime-control-evidence',
+            '--runtime-autoscaling-evidence',
+          ])
         : command === 'digest'
           ? new Set(['--input'])
           : null;
@@ -163,6 +174,13 @@ function main() {
       images: parseImages(options),
       candidateEvidence: evidenceFrom(options),
       predecessorRelease: predecessorPath ? readManifest(predecessorPath, { requirePromoted: true }) : null,
+      ...(options.has('--publication-head')
+        ? {
+            publicationHeadRelease: readManifest(repositoryPath(options, '--publication-head'), {
+              requirePromoted: true,
+            }),
+          }
+        : {}),
     });
     writeJson(outputPath, manifest);
     console.log(`Wrote candidate Studio Server release manifest to ${path.relative(rootDir, outputPath)}.`);
@@ -174,14 +192,29 @@ function main() {
     const currentPath = optionalRepositoryPath(options, '--current');
     let candidate = readManifest(inputPath);
     const haEvidencePath = optionalRepositoryPath(options, '--ha-evidence');
-    if (haEvidencePath) candidate = assertStudioServerReleaseManifest({ ...candidate,
-      evidence: { ...candidate.evidence, ha: JSON.parse(fs.readFileSync(haEvidencePath, 'utf8')) } });
+    if (haEvidencePath)
+      candidate = assertStudioServerReleaseManifest({
+        ...candidate,
+        evidence: { ...candidate.evidence, ha: JSON.parse(fs.readFileSync(haEvidencePath, 'utf8')) },
+      });
     const runtimeControlEvidencePath = optionalRepositoryPath(options, '--runtime-control-evidence');
-    if (runtimeControlEvidencePath) candidate = assertStudioServerReleaseManifest({ ...candidate,
-      evidence: { ...candidate.evidence, runtimeControl: JSON.parse(fs.readFileSync(runtimeControlEvidencePath, 'utf8')) } });
+    if (runtimeControlEvidencePath)
+      candidate = assertStudioServerReleaseManifest({
+        ...candidate,
+        evidence: {
+          ...candidate.evidence,
+          runtimeControl: JSON.parse(fs.readFileSync(runtimeControlEvidencePath, 'utf8')),
+        },
+      });
     const runtimeAutoscalingEvidencePath = optionalRepositoryPath(options, '--runtime-autoscaling-evidence');
-    if (runtimeAutoscalingEvidencePath) candidate = assertStudioServerReleaseManifest({ ...candidate,
-      evidence: { ...candidate.evidence, runtimeAutoscaling: JSON.parse(fs.readFileSync(runtimeAutoscalingEvidencePath, 'utf8')) } });
+    if (runtimeAutoscalingEvidencePath)
+      candidate = assertStudioServerReleaseManifest({
+        ...candidate,
+        evidence: {
+          ...candidate.evidence,
+          runtimeAutoscaling: JSON.parse(fs.readFileSync(runtimeAutoscalingEvidencePath, 'utf8')),
+        },
+      });
     assertStudioServerReleasePredecessor(
       candidate,
       currentPath ? readManifest(currentPath, { requirePromoted: true }) : null,

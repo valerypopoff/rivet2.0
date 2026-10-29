@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { qualificationHash } from './runtime-qualification-execution.mjs';
+import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
 
 export const stagingOwner = 'rivet.dev/qualification-operation';
 export const stagingRegistry = 'rivet.dev/qualification-registry';
@@ -11,6 +12,7 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  if (value.developerOverlapProfile) overlapQualificationProfile(value.developerOverlapProfile);
   assert.equal(value.protocol, 1);
   assert.equal(value.mode, 'reusable-cluster');
   assert.match(value.projectId, /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/);
@@ -24,13 +26,20 @@ export function reusableStagingSettings(value) {
   const origin = new URL(value.clusterServer);
   assert.equal(origin.protocol, 'https:');
   assert.equal(origin.origin + '/', origin.href);
+  if (value.inClusterServer) {
+    const internal = new URL(value.inClusterServer);
+    assert.equal(internal.protocol, 'https:');
+    assert.equal(isIP(internal.hostname), 4);
+    assert.equal(internal.href, internal.origin + '/');
+    assert.ok(value.kubernetesServiceUid);
+  }
   assert.match(value.domain, /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/);
   assert.ok(!value.domain.includes('litnet.com'), 'Production DNS is excluded');
   for (const image of [value.postgresImage, value.objectStorageImage])
     assert.match(image, /^[^\s@]+@sha256:[a-f0-9]{64}$/);
-  if (value.registrySecret) {
-    dns(value.registrySecret.name);
-    assert.ok(typeof value.registrySecret.uid === 'string' && value.registrySecret.uid);
+  for (const secret of [value.registrySecret, value.janitorRegistrySecret].filter(Boolean)) {
+    dns(secret.name);
+    assert.ok(typeof secret.uid === 'string' && secret.uid);
   }
   assert.ok(Array.isArray(value.trustedClients) && value.trustedClients.length);
   for (const client of value.trustedClients) {
@@ -80,6 +89,11 @@ export class ReusableStagingState {
     assert.equal(this.operation.staging.clusterServer, this.settings.clusterServer);
     const system = await this.api.json('GET', namespacePath('kube-system'));
     assert.equal(system?.metadata.uid, this.settings.clusterUid, 'Staging cluster identity changed');
+    if (this.settings.inClusterServer) {
+      const service = await this.api.json('GET', '/api/v1/namespaces/default/services/kubernetes');
+      assert.equal(service?.metadata.uid, this.settings.kubernetesServiceUid);
+      assert.equal(new URL(this.settings.inClusterServer).hostname, service.spec.clusterIP);
+    }
     const gateway = await this.api.json(
       'GET',
       `/apis/gateway.networking.k8s.io/v1/namespaces/${this.settings.gatewayNamespace}/gateways/${this.settings.gatewayName}`,
@@ -180,6 +194,13 @@ export class ReusableStagingState {
       armed: true,
       independent: true,
       billableActivation: false,
+      ...(this.operation.temporaryEnvironment
+        ? {
+            activationScope: 'fixture-only',
+            foundationInputHash: this.operation.temporaryEnvironment.inputHash,
+            foundationBillableActivation: true,
+          }
+        : {}),
     };
   }
   async namespace({ create = false } = {}) {

@@ -794,6 +794,26 @@ test('concrete provider Helm render retains installed production timing, real ma
     ['Service', 'HTTPRoute', 'HealthCheckPolicy'],
   );
   assert.equal(edgeWrites[0].metadata.annotations['meta.helm.sh/release-namespace'], gate.config.namespace);
+  gate.operation.installed.qualificationValues.postgres.maxConnections = 200;
+  gate.operation.policy.maxReplicas = 7;
+  gate.operation.policyDigest = autoscalerPolicyDigest(gate.operation.policy);
+  gate.operation.developerOverlapProfile = {
+    protocol: 1,
+    maxConnections: 200,
+    reservedConnections: 30,
+    poolMaxPerApiPod: 9,
+    backendResources: {
+      requests: { cpu: '750m', memory: '1536Mi', 'ephemeral-storage': '256Mi' },
+      limits: { memory: '3Gi', 'ephemeral-storage': '2Gi' },
+    },
+  };
+  gate.kube = gate.kubectl = async () => {
+    throw Error('Render-only capacity preflight attempted a cluster command');
+  };
+  await gate.verifyOverlapCapacity();
+  assert.equal(gate.overlap, false, 'Render-only validation must not adopt a live topology');
+  gate.operation.developerOverlapProfile.poolMaxPerApiPod = 10;
+  await assert.rejects(gate.verifyOverlapCapacity(), /201 connections/);
 });
 test('real HTTP lost CREATE acknowledgement reconciles exact nonce once; replaced namespace and uncertain absence fail closed', async (t) => {
   const f = await fixture(t);
@@ -1124,4 +1144,38 @@ test('actual package has a closed hash manifest, import-safe CLI boundaries and 
   assert.equal(deployment.spec.strategy.type, 'Recreate');
   assert.ok(!objects.some((o) => ['Gateway', 'Namespace', 'PersistentVolumeClaim'].includes(o.kind)));
   await assert.rejects(packageReusableStaging({ settings: settings(), output }));
+  const overlapSettings = {
+    ...settings(),
+    developerOverlapProfile: {
+      protocol: 1,
+      poolMaxPerApiPod: 9,
+      maxConnections: 200,
+      reservedConnections: 30,
+      backendResources: {
+        requests: { cpu: '750m', memory: '1536Mi', 'ephemeral-storage': '256Mi' },
+        limits: { memory: '3Gi', 'ephemeral-storage': '2Gi' },
+      },
+    },
+  };
+  const overlapOutput = path.join(folder, 'overlap-package');
+  const overlap = await packageReusableStaging({
+    settings: overlapSettings,
+    output: overlapOutput,
+    janitorImage: `registry.test/api@sha256:${digest}`,
+    googleServiceAccount: `janitor@${settings().projectId}.iam.gserviceaccount.com`,
+  });
+  assert.equal(
+    typeof (
+      await import(
+        pathToFileURL(await verifyQualificationDriver(path.join(overlapOutput, 'driver'), overlap.driverDigest))
+      )
+    ).executeProviderPhase,
+    'function',
+  );
+  const packaged = JSON.parse(await fs.readFile(path.join(overlapOutput, 'driver/driver.json'), 'utf8'));
+  assert.equal(packaged.suite, 'compact-seven-overlap-v1');
+  assert.deepEqual(
+    JSON.parse(await fs.readFile(path.join(overlapOutput, 'driver/settings.json'), 'utf8')).developerOverlapProfile,
+    overlapSettings.developerOverlapProfile,
+  );
 });

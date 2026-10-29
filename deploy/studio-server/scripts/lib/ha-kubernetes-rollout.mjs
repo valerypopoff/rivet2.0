@@ -13,6 +13,7 @@ import {
 import { autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
 import { prepareHaReplacements } from './ha-rollout-preparation.mjs';
+import { matchesKubernetesTemplate } from './kubernetes-template-match.mjs';
 
 export const haFrozenAutoscalingValues = {
   autoscaling: {
@@ -82,7 +83,32 @@ export function getHaConfigurationDigest(resources) {
   return `sha256:${createHash('sha256').update(JSON.stringify(ordered)).digest('hex')}`;
 }
 
-export function hasSameHaOwnerIdentity(current, candidate) {
+export function hasSameHaOwnerIdentity(current, candidate, poolTransition) {
+  if (poolTransition) {
+    const { from, to } = poolTransition;
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || to < 1 || from < to)
+      throw Error('A same-image pool preparation may only retain or decrease a positive pool size.');
+    const pool = (template) =>
+      template?.spec?.containers
+        ?.find((c) => ['backend', 'api'].includes(c.name))
+        ?.env?.filter((e) => e.name === 'RIVET_DEPLOYMENT_DATABASE_POOL_MAX');
+    const a = pool(current),
+      b = pool(candidate);
+    if (
+      a?.length !== 1 ||
+      b?.length !== 1 ||
+      a[0].valueFrom ||
+      b[0].valueFrom ||
+      ![String(from), String(to)].includes(a[0].value) ||
+      b[0].value !== String(to)
+    )
+      return false;
+    if (
+      current.spec.containers.find((c) => ['backend', 'api'].includes(c.name)).image !==
+      candidate.spec.containers.find((c) => ['backend', 'api'].includes(c.name)).image
+    )
+      return false;
+  }
   const identity = (template) => {
     const container = template?.spec?.containers?.find((c) => ['backend', 'api'].includes(c.name));
     if (!container) return null;
@@ -93,6 +119,7 @@ export function hasSameHaOwnerIdentity(current, candidate) {
         .filter(
           (e) =>
             e.name !== 'RIVET_HA_CONTROL_PLANE_MODE' &&
+            !(poolTransition && e.name === 'RIVET_DEPLOYMENT_DATABASE_POOL_MAX') &&
             (ownerEnvNames.has(e.name) || ownerEnvPrefixes.some((prefix) => e.name.startsWith(prefix))),
         )
         // The API omits empty literal values; an absent EnvVar or valueFrom
@@ -212,6 +239,7 @@ export async function runHaKubernetesRollout({
   settle,
   safety,
   previousManifestDigest,
+  ownerPoolTransition,
   verifyDeveloperReady,
   prepareReplacements = prepareHaReplacements,
 }) {
@@ -250,6 +278,11 @@ export async function runHaKubernetesRollout({
     resources.filter((r) => r.kind === 'Service' && !r.spec.publishNotReadyAddresses).map((r) => r.metadata.name),
   );
   const inventory = JSON.parse((await kube(['get', 'statefulset', '-l', selector, '-o', 'json'])).stdout).items;
+  const poolPreparationControllers = ownerPoolTransition
+    ? JSON.parse((await kube(['get', 'deployment', '-l', selector, '-o', 'json'])).stdout)
+        .items.map((r) => ({ name: r.metadata.name, uid: r.metadata.uid }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    : undefined;
   const controlMode = (template) =>
     template?.spec?.containers
       ?.find((c) => c.name === 'backend')
@@ -308,7 +341,7 @@ export async function runHaKubernetesRollout({
       if (!existing || existing.spec.updateStrategy.type !== 'OnDelete')
         throw new Error('First HA conversion requires an explicit maintenance cutover.');
       if (!existing.metadata.uid) throw new Error('HA StatefulSet identity is unavailable.');
-      if (!hasSameHaOwnerIdentity(existing.spec.template, candidate.spec.template))
+      if (!hasSameHaOwnerIdentity(existing.spec.template, candidate.spec.template, ownerPoolTransition))
         throw new Error(
           'HA storage/authentication/owner configuration changed. Use a separate maintenance operation; no templates were applied.',
         );
@@ -447,6 +480,8 @@ export async function runHaKubernetesRollout({
       ...(cooperativeScaling ? { cooperativeScaling } : {}),
       ...(previousManifestDigest ? { previousManifestDigest } : {}),
       ...(housekeepingDisk ? { housekeepingDisk } : {}),
+      ...(ownerPoolTransition ? { ownerPoolTransition } : {}),
+      ...(poolPreparationControllers ? { poolPreparationControllers } : {}),
     },
     workloads,
     safety,
@@ -558,6 +593,34 @@ export async function runHaKubernetesRollout({
         return !pod;
       }, `surge removal for ${owner.name}`),
     applyTemplates: async () => applyTemplates(workloads, await guardedTemplateValues()),
+    ...(ownerPoolTransition
+      ? {
+          verifyPoolPreparationTemplates: async () => {
+            if (resources.some((r) => r.kind === 'Job')) return false;
+            for (const desired of resources.filter((r) => ['StatefulSet', 'Deployment'].includes(r.kind))) {
+              const live = JSON.parse(
+                (await kube(['get', desired.kind.toLowerCase(), desired.metadata.name, '-o', 'json'])).stdout,
+              );
+              const expected = desired.kind === 'StatefulSet' ? workloads : poolPreparationControllers;
+              if (
+                live.metadata.uid !== expected.find((w) => w.name === desired.metadata.name)?.uid ||
+                live.metadata.deletionTimestamp ||
+                !matchesKubernetesTemplate(live.spec.template, desired.spec.template)
+              )
+                return false;
+            }
+            for (const desired of resources.filter((r) => r.kind === 'HorizontalPodAutoscaler')) {
+              const live = JSON.parse((await kube(['get', 'hpa', desired.metadata.name, '-o', 'json'])).stdout);
+              if (
+                live.spec.scaleTargetRef.name !== desired.spec.scaleTargetRef.name ||
+                live.spec.behavior?.scaleDown?.selectPolicy !== 'Disabled'
+              )
+                return false;
+            }
+            return true;
+          },
+        }
+      : {}),
     restoreAutoscalers: async () => restoreAutoscalers(workloads, await guardedTemplateValues()),
     settle: async () => {
       const { replicaCount } = await guardedTemplateValues();

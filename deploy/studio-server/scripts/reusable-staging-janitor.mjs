@@ -88,7 +88,7 @@ async function main() {
   const owner = { namespace: settings.controlNamespace, name: process.env.POD_NAME, uid: process.env.POD_UID };
   assert.ok(owner.name && owner.uid);
   const WebSocketClass = createRequire('/app/packages/studio-server-api/package.json')('ws');
-  const api = createKubernetesTransport({ origin: settings.clusterServer, WebSocketClass });
+  const api = createKubernetesTransport({ origin: settings.inClusterServer ?? settings.clusterServer, WebSocketClass });
   const cloud = stagingCloudReader(settings);
   let stopping = false;
   for (const signal of ['SIGTERM', 'SIGINT'])

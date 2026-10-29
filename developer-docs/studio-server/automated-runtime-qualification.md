@@ -8,20 +8,128 @@ GCP access, enables automation, installs credentials or deploys production. The
 main-only, dispatch-only workflow fails when
 `RIVET_AUTOMATED_QUALIFICATION_ENABLED` is not exactly `true`.
 
-The chosen strategy is a **dedicated reusable staging cluster**, not a fresh
-cluster per release. Each operation creates only its temporary namespace and
+The maintained inner fixture uses a **dedicated staging cluster**. The latest
+operator decision is temporary infrastructure, removed after qualification;
+the earlier always-on reusable-cluster proposal is not current spending approval.
+Each inner operation creates only its temporary namespace and
 synthetic resources. Keep the shared cluster, network, Gateway, certificate and
 administrative identities out of its cleanup inventory. This removes repeated
-cluster startup, but leaves explicitly approved idle cost. Creating/configuring
-that infrastructure is a separate approved setup action; no historical
+cluster startup when infrastructure is retained, but leaves idle cost. Creating/configuring
+temporary infrastructure and removing its foundation is a separate approved setup action; no historical
 environment is silently repurposed.
 
-The automated `compact-seven-v1` path currently qualifies **singleton** developer
-backends and compact customer execution. It does not run the separate
-`singleton-overlap` adoption/handover suite or certify uninterrupted developer
-editing. Do not reuse an ordinary singleton certificate as developer-overlap
-evidence. That mode needs its own exact-image provider qualification and approved
-[bridge/adoption procedure](developer-backend-overlap.md#contract).
+The inner fixture's namespace cleanup is **not** full temporary-environment
+cleanup: its cluster, Gateway, certificate, addresses and network remain excluded.
+The maintained outer provision/expiry/teardown route is
+`scripts/temporary-staging.mjs`, selected explicitly by the qualification CLI.
+It coordinates from a durable external Linux host, creates the new foundation,
+uses a UID-bound actor for the existing inner tests and requires full provider
+cleanup before exposing publication outputs. See [Temporary staging](temporary-staging.md)
+for exact boundaries, host/image/configuration prerequisites, allowance clock,
+failure recovery and local verification. It is not activated by these repo changes.
+
+The existing `compact-seven-v1` suite qualifies **singleton** developer backends
+and customer execution only. The opt-in `compact-seven-overlap-v1` suite adds the
+maintained provider-handover path. Its implementation and local regressions are
+not GKE evidence: an actual approved provider run must still pass before release
+publication. A singleton certificate cannot certify developer continuity.
+
+The overlap suite performs the same-image predecessor bridge **before** starting
+its developer-continuity observation window. Customer workflow/web observers and
+two-ready execution/proxy floors remain active through that bridge too. Initial adoption may interrupt
+developer activity and still requires separate production approval. It then runs
+the real deployment coordinator with same-node placement, exclusive housekeeping
+transfer in both directions, per-candidate authenticated API/editor acceptance,
+accepted paused editor runs, cross-project bundle debugger events, retained
+browser editing/saving/replay and continuous authenticated developer GETs. It
+deliberately suppresses exactly one successful acquire acknowledgement, waits
+for the previous runner lease to expire and resumes that same journal token.
+Unrelated errors are never retried. The ordinary workflow/autoscaling probes,
+storage checks and exact-inventory cleanup remain mandatory.
+
+To opt in, put a reviewed `developerOverlapProfile` in the private settings passed
+to `package-reusable-staging.mjs`. Packaging pins it in the driver dependency
+closure and selects the distinct suite. The CLI freezes it in the operation; each
+phase rejects a mismatch. No dispatch field selects arbitrary values or scripts.
+For the observed seven-worker ceiling / 200-connection allowance, this is a
+**locally validated proposal**, not approval to change production:
+
+```json
+{
+  "protocol": 1,
+  "maxConnections": 200,
+  "reservedConnections": 30,
+  "poolMaxPerApiPod": 9,
+  "backendResources": {
+    "requests": { "cpu": "750m", "memory": "1536Mi", "ephemeral-storage": "256Mi" },
+    "limits": { "memory": "3Gi", "ephemeral-storage": "2Gi" }
+  }
+}
+```
+
+The profile cannot increase the observed connection allowance or reduce its
+reserve. It does not change the execution ceiling. The full Helm validation runs
+locally before janitor arming or fixture writes, including budgeting the active
+maintenance worker, temporary backend, scheduler and restore connections. Ten
+pooled connections require 201 at ceiling seven and fail; nine fit the existing
+200 allowance. This proves configuration feasibility, not DB throughput or GKE
+node headroom. The existing exact-node overlap preflight remains mandatory.
+
+### First activation and installed lineage
+
+The source pool is observed and frozen in the provider certificate, not silently
+replaced before installing the predecessor fixture. For a singleton source, the
+provider first runs a same-image singleton preparation reducing the pool, then
+the same-image ownership transfer. Customer observers span both; developer
+continuity is asserted only after adoption. The ordinary candidate rollout then
+exercises the overlap path. The concrete provider adapter persists each journal
+once before invoking its handover observer; observer errors are terminal.
+
+`Build Images` has a main-only dispatch input `installed_predecessor_digest`.
+Use the freshly observed immutable installed manifest digest when the registry
+publication head has advanced without deployment. The candidate keeps that
+installed predecessor for compatibility/rollback and additionally freezes
+`lineage.publicationHead`. Promotion still rejects any change to that exact
+publication head. This is not a pointer rewind, qualification waiver or authority
+to deploy an unobserved predecessor. Omitted input preserves historical lineage
+and digest semantics. The actual installed snapshot must still match before any
+provider test can start.
+
+First production activation uses the existing deployment command in three
+separately journaled steps, with normal policy, backup, ownership and acceptance
+checks. Obtain approval for the initial developer interruption first.
+
+1. Pin `--manifest` to the exact installed predecessor; use the qualified candidate
+   as `--overlap-adoption-certificate`, and `--overlap-adoption-stage sizing`.
+   Values keep singleton mode and use the certified pool. Only the pool-size
+   literal can change across the same-image owner-identity check; no credentials,
+   endpoint, image, schema or other owner settings are exempted.
+2. Keep that predecessor manifest and certificate; use
+   `--overlap-adoption-stage ownership --ha-control-plane-transition` and values
+   enabling the certified overlap profile. The unchanged autoscaler may stay
+   active: the topology adapter pins its template and exact runtime owners.
+   An unsized source is rejected rather than changing pools during transfer.
+3. Deploy the qualified candidate normally, after the first two steps pass.
+
+Run `--preflight-only` before each step. Certificate, stage, values and original
+installation are included in safety and recovery bindings. Resume only the exact
+unfinished token; a lost template acknowledgement is inspected, not replayed.
+The source and candidate chart must be identical and schema unchanged for this
+bounded delegation. Other adoption combinations remain rejected.
+The sizing phase disables the migration Job. Its lost template acknowledgement
+can be resolved only by read-only checks of the recorded controllers, exact
+desired templates and paused proxy scale-down. It never reruns Helm. Ordinary
+image/schema rollouts do not inherit that narrow exception. Template comparison
+is shared with topology recovery and rejects a Secret-derived value in place of
+an empty literal.
+
+Actions readiness on an initial singleton reports `adoption-preflight-passed`
+and these pending steps, not `deployment-preflight-passed`. It derives private
+sizing values, pulls the predecessor by digest and runs the real read-only
+command. It does not approve or perform the adoption. An already-overlap
+installation continues through the ordinary readiness path.
+If the source pool already matches the profile, readiness starts at ownership
+and the provider skips an unnecessary singleton pool-preparation replacement.
 
 The maintained concrete adapter lives in `scripts/qualification/`; package it
 with `scripts/package-reusable-staging.mjs`. The resulting administrator-reviewed,
@@ -115,7 +223,8 @@ Missing prerequisites fail, rather than create a successful skipped job.
 
 ## Provider driver contract
 
-`driver.json`: `protocol:1`, `suite:"compact-seven-v1"`, `provider:"gke"`,
+`driver.json`: `protocol:1`, `suite:"compact-seven-v1"` or the explicitly opted-in
+`"compact-seven-overlap-v1"`, `provider:"gke"`,
 `scope:"isolated-provider"`, a relative `.mjs` `entrypoint`, and `files` mapping
 **every** other file to its byte SHA256. The configured manifest digest is
 SHA256 of `JSON.stringify` of the parsed manifest. Extra/missing files, symlinks,
@@ -365,6 +474,7 @@ approval boundaries after the relevant provider evidence passes.
 ```text
 yarn node --test deploy/studio-server/scripts/runtime-qualification-execution.test.mjs deploy/studio-server/scripts/runtime-qualification-publication.test.mjs
 yarn node --test deploy/studio-server/scripts/reusable-staging.test.mjs
+yarn node --test deploy/studio-server/scripts/provider-overlap.test.mjs
 yarn node --test deploy/studio-server/scripts/reusable-staging-transport.test.mjs
 
 # Headless, intercepted local fixture; no staging domain or cloud access needed:
@@ -372,6 +482,21 @@ yarn node --test deploy/studio-server/scripts/reusable-staging-transport.test.mj
 yarn studio-server:ui:observe runtime-control-fixture-contract.spec.ts
 yarn node scripts/checks/check-ci-workflows.mjs
 ```
+
+Before paid overlap preparation, also run the synthetic bundle fixture against
+an explicitly selected current API image (digest or full local image ID):
+
+```text
+RIVET_HOUSEKEEPING_TEST_IMAGE=API_IMAGE_AT_DIGEST yarn node deploy/studio-server/scripts/verify-housekeeping-managed.mjs --provider-fixture
+```
+
+This uses disposable local PostgreSQL/MinIO and the real HTTP upload/conversion,
+publication and bundle-export routes, then checks housekeeping handover and restore
+journal preservation. The helper is bundled from this checkout and sent through
+local Docker stdin; no code is uploaded to GCP. The option rejects mutable image
+tags and never pulls an image implicitly. The historical default-image smoke
+without this option remains available, but cannot validate current release/schema
+behavior.
 
 The process-stop regression executes real `/proc` checks on Linux. On Windows,
 set `RIVET_STAGING_PROCESS_TEST_IMAGE` to a reviewed cached Alpine-compatible image

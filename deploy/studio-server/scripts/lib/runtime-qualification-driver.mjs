@@ -34,7 +34,7 @@ export async function verifyQualificationDriver(directory, expectedDigest) {
   const manifest = JSON.parse(await fs.readFile(path.join(directory, 'driver.json'), 'utf8'));
   assert.equal(qualificationHash(manifest), expectedDigest, 'Provider driver manifest changed');
   assert.equal(manifest.protocol, 1);
-  assert.equal(manifest.suite, 'compact-seven-v1');
+  assert.ok(['compact-seven-v1', 'compact-seven-overlap-v1'].includes(manifest.suite));
   assert.equal(manifest.scope, 'isolated-provider');
   assert.equal(manifest.provider, 'gke');
   assert.match(manifest.entrypoint, /^[a-zA-Z0-9_./-]+\.mjs$/);
@@ -147,6 +147,11 @@ export function qualificationDriver(directory, digest, { cwd, privateDirectory, 
       phase,
       async (operation) => {
         const entrypoint = await verifyQualificationDriver(directory, digest);
+        const manifest = JSON.parse(await fs.readFile(path.join(directory, 'driver.json'), 'utf8'));
+        assert.equal(
+          manifest.suite,
+          operation.developerOverlapProfile ? 'compact-seven-overlap-v1' : 'compact-seven-v1',
+        );
         if (['armExpiry', 'prepare', 'upgrade', 'autoscaling'].includes(phase))
           assert.ok(
             Date.now() < Date.parse(operation.expiresAt),
