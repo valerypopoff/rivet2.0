@@ -342,9 +342,16 @@ retaining the exact committed `.pnp.cjs` and `.pnp.loader.mjs` bytes. Yarn remov
 those tracked loaders when changing linkers; leaving them deleted would fail
 the actor's own clean-source admission. This is not a dirty-source exception:
 the helper rejects a dirty/wrong-SHA input, restores only missing captured
-loaders, refuses unexpected replacement types/contents, and requires the entire
+loaders with their original permission bits, refuses unexpected replacement
+types/contents/permissions, and requires the entire
 checkout to remain clean afterward. Authored source, lockfiles and unrelated
 edits are never reset or ignored. Runtime commands still use `node-modules`.
+Linux Git tracks the executable bit; byte-identical restoration with a fixed
+`0644` mode is not necessarily source-identical. Restoration uses an exclusive
+file handle and reapplies the captured mode independent of the current umask.
+The real linker regression checks bytes, permissions and clean Git state after
+both initial and repeated installs. Run it on Linux as well as Windows: Windows
+Git normally does not detect executable-bit changes.
 Offline admission invokes Docker with `--interactive` so its private JSON packet
 actually reaches stdin. It accepts only a successful, physically closed process
 with the exact source SHA and a passing fixture receipt. Input-pipe errors,

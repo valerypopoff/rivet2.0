@@ -321,7 +321,18 @@ test('actor dependency installation preserves tracked source when switching Yarn
   const originals = await Promise.all(
     ['.pnp.cjs', '.pnp.loader.mjs'].map((name) => fs.readFile(path.join(temp, name))),
   );
-  await installActorDependencies(temp, sourceSha, { env });
+  const loaderModes = () =>
+    Promise.all(
+      ['.pnp.cjs', '.pnp.loader.mjs'].map(async (name) => (await fs.stat(path.join(temp, name))).mode & 0o777),
+    );
+  const originalModes = await loaderModes();
+  const previousMask = process.umask(0o077);
+  try {
+    await installActorDependencies(temp, sourceSha, { env });
+  } finally {
+    process.umask(previousMask);
+  }
+  assert.deepEqual(await loaderModes(), originalModes, 'Restoring bytes must also preserve executable permissions');
   assert.equal(
     git('status', '--porcelain', '--untracked-files=no'),
     '',
@@ -339,6 +350,7 @@ test('actor dependency installation preserves tracked source when switching Yarn
     { cwd: temp, env, stdio: 'pipe' },
   );
   assert.equal(git('status', '--porcelain'), '');
+  assert.deepEqual(await loaderModes(), originalModes);
   await assert.rejects(installActorDependencies(temp, 'b'.repeat(40), { env }));
   await fs.writeFile(path.join(temp, 'package.json'), 'private pending edit');
   await assert.rejects(installActorDependencies(temp, sourceSha, { env }), /exact clean source/);

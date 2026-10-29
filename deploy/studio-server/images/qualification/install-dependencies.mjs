@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 /** Only for the actor's private clean build checkout. Yarn's node-modules
- * linker removes tracked PnP loaders; retain their exact committed bytes so
+ * linker removes tracked PnP loaders; retain their exact bytes and permissions so
  * the runtime can still verify the complete source, without a dirty-file waiver. */
 export async function installActorDependencies(source, sourceSha, { env = process.env } = {}) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
@@ -16,8 +16,9 @@ export async function installActorDependencies(source, sourceSha, { env = proces
   for (const name of ['.pnp.cjs', '.pnp.loader.mjs']) {
     git('ls-files', '--error-unmatch', '--', name);
     const file = path.join(source, name);
-    assert.ok((await fs.lstat(file)).isFile());
-    loaders.push({ file, bytes: await fs.readFile(file) });
+    const stat = await fs.lstat(file);
+    assert.ok(stat.isFile());
+    loaders.push({ file, bytes: await fs.readFile(file), mode: stat.mode & 0o777 });
   }
   execFileSync(process.execPath, [path.join(source, '.yarn/releases/yarn-4.17.1.cjs'), 'install', '--immutable'], {
     cwd: source,
@@ -26,15 +27,23 @@ export async function installActorDependencies(source, sourceSha, { env = proces
     timeout: 600000,
     maxBuffer: 8 * 1024 * 1024,
   });
-  for (const { file, bytes } of loaders) {
+  for (const { file, bytes, mode } of loaders) {
     const stat = await fs.lstat(file).catch((error) => {
       if (error.code === 'ENOENT') return null;
       throw error;
     });
-    if (!stat) await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o644 });
-    else {
+    if (!stat) {
+      const handle = await fs.open(file, 'wx', mode);
+      try {
+        await handle.writeFile(bytes);
+        await handle.chmod(mode); // Preserve executable bits even under a restrictive umask.
+      } finally {
+        await handle.close();
+      }
+    } else {
       assert.ok(stat.isFile(), 'Actor install replaced a loader with an unexpected file type');
       assert.deepEqual(await fs.readFile(file), bytes, 'Actor install unexpectedly rewrote a tracked loader');
+      assert.equal(stat.mode & 0o777, mode, 'Actor install unexpectedly changed tracked loader permissions');
     }
   }
   assert.equal(git('rev-parse', 'HEAD'), sourceSha, 'Actor dependency installation changed source identity');
