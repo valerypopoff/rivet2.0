@@ -267,19 +267,25 @@ test('real bundle costs survive recording, failed background work and a statisti
       const streams = await observations;
       const start = streams[0]!.find((frame) => frame.message === 'start');
       expect(start).toMatchObject({ rivetScope: { channel: 'cost_01', projectId: priced.workflowId } });
-      expect(streams[1]!.find((frame) => frame.message === 'start')).toEqual(start);
       await expect.poll(async () => (await latestStatistics()).cost.runCount).toBe(1);
       const latestCost = (await latestStatistics()).cost;
       expect(latestCost).toMatchObject({ completeCount: 1, partialCount: 0, unknownCount: 0 });
       expect(latestCost.knownCostUsd).toBeCloseTo(0.009068, 12);
       const callsAfter = await (await page.request.get(`${providerUrl}/__requests`)).json();
       const newCalls = callsAfter.slice(callsBefore.length);
-      expect(newCalls).toHaveLength(4); // One LLM and one Decision AI call in each of A, B and C.
+      expect(newCalls).toHaveLength(4); // One root LLM call plus Decision AI in A, B and C.
       expect(newCalls.filter((call: { kind?: string }) => call.kind === 'llm')).toHaveLength(1);
       const replay = await waitForWebSocketMessages(observe(), ['start', 'done', 'latest-settled'], {
         parser: parseDebuggerFrame,
       });
-      expect(replay.find((frame) => frame.message === 'start')).toEqual(start);
+      for (const message of ['start', 'done', 'latest-settled']) {
+        const live = streams[0]!.find((frame) => frame.message === message);
+        expect(live).toBeDefined();
+        expect(live).not.toHaveProperty('rivetHistory');
+        expect(streams[1]!.find((frame) => frame.message === message)).toEqual(live);
+        // Delivery provenance changes on replay, not execution identity or payload.
+        expect(replay.find((frame) => frame.message === message)).toEqual({ ...live, rivetHistory: true });
+      }
       expect((await latestStatistics()).cost).toEqual(latestCost);
       expect(await (await page.request.get(`${providerUrl}/__requests`)).json()).toEqual(callsAfter);
       expect((await statistics(pricedTarget)).cost, 'latest channels do not alter published totals').toEqual(
