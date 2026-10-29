@@ -41,6 +41,30 @@ cover HPA-grown capacity, exact-image readiness, HTTP502, interrupted windows,
 recording durability and storage identity. Unit/HTTP/Helm checks are distinct from
 the actual local cluster result, and neither is provider qualification.
 
+## Latest-debugger qualification compatibility
+
+The editor-retirement fixture negotiates the observed latest-debugger handshake
+before dispatching controls. Protocol 2 uses an immutable root/project/channel/
+owner/incarnation target and waits for the exact command acknowledgement; a
+rejected, unknown or missing acknowledgement never authorizes a retry or a legacy
+fallback. Only an explicitly advertised protocol-1 predecessor uses legacy
+pause/resume. Ordinary editor executor request IDs remain separate.
+
+`fixtures/ha-latest-controls.mjs` is self-contained: `HaReleaseProbes.startEditor`
+passes its exact bytes as a data-module argument alongside the stdin probe, so
+both predecessor and candidate images run the reviewed client without depending
+on new package exports. Scoped events from a concurrent root cannot satisfy its
+pause/completion proof.
+
+This client compatibility does **not** establish mixed-version server peer
+compatibility. The first isolated-channel release rejects protocol-1 incoming
+peers and their unscoped histories/controls. A replicated v1-to-v2 predecessor
+transition may consequently block replacement readiness; fixing the probe is not
+permission to waive that failure or publish rolling qualification. Preserve the
+old serving owners and use a separately reviewed compatible transition or an
+explicitly approved maintenance procedure. Never remove channel checks merely to
+make a qualification window pass.
+
 ## Rolling database compatibility contract
 
 Local commit-preparation checkpoint (2026-10-28): the broad tooling matrix passed

@@ -143,6 +143,27 @@ unused fixed-path NGINX variable, consolidated this guide's repeated review logs
 and cleaned duplicate/type-only imports and explicit Node test registrations in
 touched API files. Assertions and lint rules are unchanged.
 
+### HA retirement probe controls
+
+`ha-release-gate.test.mjs` checks the retirement probe's v1/v2 negotiation,
+immutable scoped targets, concurrent-root rejection, negative/lost command
+acknowledgements without replay, and the actual helper bytes packaged into the
+stdin actor. `latest-workflow-remote-debugger.test.ts` runs that same helper
+against a real local WebSocket server and processor: legacy blanket pause is
+rejected, while exact pause/resume commands receive accepted acknowledgements
+and matching runtime events. These tests remain in their existing CI suites.
+
+Run the two focused suites with:
+
+```powershell
+yarn node --test deploy/studio-server/scripts/ha-release-gate.test.mjs
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/latest-workflow-remote-debugger.test.ts
+```
+
+These are local protocol/packaging checks, not a completed Kubernetes or provider
+qualification. See [deployment operation contracts](deployment-operations.md#latest-debugger-qualification-compatibility)
+for the separate mixed-server-version adoption limitation.
+
 ### Explicit bundle changes
 
 See [project bundles](project-bundles.md) for the managed container/duplication

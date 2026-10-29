@@ -8,6 +8,7 @@ import {
   withHaProofGeneration,
 } from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs, haRetirementProbeDelayMs } from './lib/ha-release-probes.mjs';
+import { assertHaLatestSession, createHaLatestRunControls } from './fixtures/ha-latest-controls.mjs';
 import { HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
 import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
@@ -48,6 +49,123 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('retirement controls negotiate scoped targets without confusing concurrent roots or downgrading', async () => {
+  const scope = { channel: null, rootRunId: 'root', projectId: 'project', owner: 'backend-0', incarnation: 'process' };
+  const started = {
+    rivetEventId: 'backend-0:process:10',
+    rivetScope: { ...scope },
+    data: { execution: { rootRunId: 'root' }, project: { metadata: { id: 'project' } } },
+  };
+  const session = {
+    message: 'latest-session',
+    data: { protocol: 2, channel: null, channelIsolation: true, runScopedControls: true },
+  };
+  for (const protocol of [1, 2]) {
+    const observations = [],
+      commands = [];
+    const controls = createHaLatestRunControls({
+      session: protocol === 1 ? { message: 'latest-session', data: { protocol: 1 } } : session,
+      started,
+      owner: 'backend-0',
+      observations,
+      socket: {
+        send: (raw) => {
+          const command = JSON.parse(raw);
+          commands.push(command);
+          observations.push({
+            message: 'latest-control-result',
+            data: { commandId: command.data?.commandId, status: 'accepted' },
+          });
+        },
+      },
+      waitFor: async (_description, condition) => {
+        const result = condition();
+        assert.ok(result);
+        return result;
+      },
+    });
+    await controls.send('pause');
+    // The captured target must not drift with a mutable source frame.
+    started.rivetScope.rootRunId = 'mutated-after-admission';
+    await controls.send('resume');
+    started.rivetScope.rootRunId = scope.rootRunId;
+    assert.equal(commands.length, 2);
+    if (protocol === 1) assert.deepEqual(commands, [{ type: 'pause' }, { type: 'resume' }]);
+    else {
+      assert.deepEqual(
+        commands.map((command) => command.data.target),
+        [scope, scope],
+      );
+      assert.deepEqual(
+        commands.map((command) => command.data.action),
+        ['pause', 'resume'],
+      );
+      assert.ok(commands.every((command) => command.type === 'latest-control'));
+      assert.notEqual(commands[0].data.commandId, commands[1].data.commandId);
+      for (const field of Object.keys(scope))
+        assert.equal(controls.matches({ rivetScope: { ...scope, [field]: 'foreign' } }), false, field);
+      assert.equal(controls.matches({ rivetScope: scope }), true);
+    }
+  }
+  for (const data of [
+    { protocol: 3 },
+    { ...session.data, channel: 'other' },
+    { ...session.data, runScopedControls: false },
+  ])
+    assert.throws(() => assertHaLatestSession({ message: 'latest-session', data }));
+  for (const status of ['rejected', 'outcome-unknown', 'lost']) {
+    const commands = [],
+      observations = [];
+    const controls = createHaLatestRunControls({
+      session,
+      started,
+      owner: 'backend-0',
+      observations,
+      socket: {
+        send: (raw) => {
+          const command = JSON.parse(raw);
+          commands.push(command);
+          if (status !== 'lost')
+            observations.push({
+              message: 'latest-control-result',
+              data: { commandId: command.data.commandId, status },
+            });
+        },
+      },
+      waitFor: async (_description, condition) => {
+        const result = condition();
+        if (!result) throw Error('lost acknowledgement');
+        return result;
+      },
+    });
+    await assert.rejects(controls.send('pause'), /not acknowledged|lost acknowledgement/);
+    assert.equal(commands.length, 1, 'An uncertain control must never be retried or downgraded');
+    assert.equal(commands[0].type, 'latest-control');
+  }
+});
+
+test('editor retirement probe carries its self-contained control module into the exact stdin actor', async () => {
+  let invocation;
+  const gate = {
+    kubectl: async (args, options) => {
+      if (args.includes('-i')) {
+        invocation = { args, options };
+        return { stdout: '{"phase":"passed"}' };
+      }
+      return { stdout: '{"phase":"paused"}' };
+    },
+    config: { namespace: 'fixture' },
+  };
+  const probes = new HaReleaseProbes(gate, 'http://unused.invalid', rootDir);
+  await probes.startEditor({ name: 'backend-0', uid: 'owner', container: 'backend' }, 'backend-1');
+  await probes.editors[0].completed;
+  assert.equal(invocation.args.at(-2), '', 'No bundle must retain the helper argument position');
+  const module = await import(invocation.args.at(-1));
+  module.assertHaLatestSession({ message: 'latest-session', data: { protocol: 1 } });
+  assert.equal(typeof module.createHaLatestRunControls, 'function');
+  assert.equal(probes.editors[0].receipt.phase, 'passed');
+});
 
 test('predecessor schema verification respects the rollback floor without concealing compatible failures', async () => {
   const artifacts = new Map();

@@ -4,7 +4,13 @@ import http from 'node:http';
 import { PassThrough } from 'node:stream';
 import { once } from 'node:events';
 import { createHmac, randomUUID } from 'node:crypto';
-import type { GraphProcessor, Project, ProjectId, GraphId } from '@valerypopoff/rivet2-core';
+import {
+  UserInputNodeImpl,
+  type GraphProcessor,
+  type Project,
+  type ProjectId,
+  type GraphId,
+} from '@valerypopoff/rivet2-core';
 import test from 'node:test';
 import {
   createReviewedBackendPublicationFixtures,
@@ -404,6 +410,80 @@ void test('latest debugger receives events for latest endpoint execution', async
   } finally {
     closeDebuggerSocket(socket);
     await server.close();
+  }
+});
+
+void test('the retirement probe controls a real latest owner with scoped acknowledgements', async () => {
+  const { createHaLatestRunControls } = await import(
+    new URL('../../../../deploy/studio-server/scripts/fixtures/ha-latest-controls.mjs', import.meta.url).href
+  );
+  const server = http.createServer();
+  const debuggerServer = initializeLatestWorkflowRemoteDebugger(server)!;
+  const listener = await listenTestServer(server);
+  const socket = new WebSocket(toWebSocketUrl(listener.baseUrl), { headers: trustedProxyHeaders() });
+  const frames: Array<{ message: string; rivetScope?: { rootRunId: string }; data?: { status?: string } }> = [];
+  socket.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+  const waitFor = async (_description: string, condition: () => unknown) => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const value = condition();
+      if (value) return value;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw Error('retirement control acknowledgement timed out');
+  };
+  const graphId = 'main' as GraphId;
+  const runner = rivetNode.createProcessor(
+    {
+      metadata: { id: 'retirement-controls' as ProjectId, title: 'Probe', description: '', mainGraphId: graphId },
+      graphs: {
+        [graphId]: { metadata: { id: graphId, name: 'Main' }, nodes: [UserInputNodeImpl.create()], connections: [] },
+      },
+      plugins: [],
+    },
+    { remoteDebugger: debuggerServer },
+  );
+  let completion: Promise<unknown> | undefined;
+  try {
+    await once(socket, 'open');
+    const session = await waitFor('session', () => frames.find((frame) => frame.message === 'latest-session'));
+    completion = runner.run();
+    void completion.catch(() => {});
+    const started = await waitFor('start', () => frames.find((frame) => frame.message === 'start'));
+    await waitFor('input', () => frames.find((frame) => frame.message === 'userInput'));
+    // Reproduce the old fixture's mistake against the real server: no blanket
+    // pause occurs, and the production guard remains unchanged.
+    socket.send(JSON.stringify({ type: 'pause' }));
+    await waitFor('unscoped rejection', () =>
+      frames.find((frame) => frame.message === 'latest-control-result' && frame.data?.status === 'rejected'),
+    );
+    assert.equal(
+      frames.some((frame) => frame.message === 'pause'),
+      false,
+    );
+    const controls = createHaLatestRunControls({
+      session,
+      started,
+      owner: 'local',
+      socket,
+      observations: frames,
+      waitFor,
+    });
+    await controls.send('pause');
+    await waitFor('pause', () => frames.some((frame) => frame.message === 'pause' && controls.matches(frame)));
+    await controls.send('resume');
+    await waitFor('resume', () => frames.some((frame) => frame.message === 'resume' && controls.matches(frame)));
+    assert.equal(
+      frames.filter((frame) => frame.message === 'latest-control-result' && frame.data?.status === 'accepted').length,
+      2,
+    );
+  } finally {
+    await runner.processor.abort();
+    await completion?.catch(() => {});
+    runner.dispose();
+    closeWebSocket(socket);
+    await resetLatestWorkflowRemoteDebuggerForTests();
+    await listener.close();
   }
 });
 
