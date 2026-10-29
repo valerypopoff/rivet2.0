@@ -5,6 +5,14 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+A desktop job cancelled with an empty runner name/ID, no executed steps and no
+available job log is not evidence of a compiler or signing failure. Inspect those
+facts before changing packaging code. A failed-job-only workflow retry preserves
+successful platform artifacts and can recover runner allocation; do not change
+architecture labels, bypass notarization or publish missing-platform downloads
+to mask a runner-start failure. Confirm the retried job actually starts and
+finishes before reporting recovery as successful.
+
 The repository-contract lane uses a filtered, shallow checkout that excludes only
 five exact native desktop pnpm executable paths under `packages/app/sidecars/pnpm/`.
 No wildcard excludes future source or metadata with a similar name.

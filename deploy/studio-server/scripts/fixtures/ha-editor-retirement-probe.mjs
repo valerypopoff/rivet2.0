@@ -7,7 +7,8 @@ import WebSocket from 'ws';
 import { UserInputNodeImpl, GraphOutputNodeImpl } from '@valerypopoff/rivet2-core';
 import { requestBackendRetirement } from '/opt/rivet/retire-backend.mjs';
 
-const [marker, neighbor, hold = '25000', bundleText] = process.argv.slice(2);
+const [marker, neighbor, hold = '25000', bundleText, controlsModule] = process.argv.slice(2);
+const { assertHaLatestSession, createHaLatestRunControls } = await import(controlsModule);
 const bundle = bundleText ? JSON.parse(bundleText) : undefined;
 if (bundle) {
   assert.match(bundle.endpoint, /^handover-[a-f0-9-]{36}$/);
@@ -52,7 +53,18 @@ try {
   const peer = `${neighbor}.${process.env.RIVET_HA_HEADLESS_SERVICE}:${process.env.PORT}`;
   const observations = [];
   const latest = await connect(`ws://${peer}/ws/latest-debugger`, observations);
-  await waitFor('mesh observer greeting', () => observations.find((e) => e.message === 'latest-session'));
+  const session = await waitFor('mesh observer greeting', () =>
+    observations.find((e) => e.message === 'latest-session'),
+  );
+  assertHaLatestSession(session);
+  // Cross-version peers intentionally provide read-only default observation.
+  // Controls go directly to the actual source, using its own verified protocol.
+  const localObservations = [];
+  const localLatest = await connect(`ws://127.0.0.1:${process.env.PORT}/ws/latest-debugger`, localObservations);
+  const localSession = await waitFor('owner observer greeting', () =>
+    localObservations.find((e) => e.message === 'latest-session'),
+  );
+  assertHaLatestSession(localSession);
   const initial = observations.length;
   const inputMarker = `ha-latest-${marker.split('/').at(-1)}`;
   const latestCall = fetch(`${base}/workflows-latest/${bundle?.endpoint ?? 'managed-release-workflow'}`, {
@@ -61,6 +73,7 @@ try {
     body: JSON.stringify({ input: inputMarker }),
     signal: AbortSignal.timeout(30_000),
   });
+  void latestCall.catch(() => {}); // Observe rejection even if a control fails before the HTTP await.
   const started = await waitFor('remote latest start', () =>
     observations
       .slice(initial)
@@ -71,18 +84,30 @@ try {
           JSON.stringify(e.data?.inputs).includes(inputMarker),
       ),
   );
-  const startSequence = Number(started.rivetEventId.split(':').at(-1));
-  // Replay can arrive after the greeting. Count this run's owner sequence,
-  // never an earlier completed run merely because it arrived on this socket.
-  const peerEvents = () =>
-    observations.filter(
-      (e) =>
-        e.rivetEventId?.startsWith(`${process.env.RIVET_POD_NAME}:`) &&
-        Number(e.rivetEventId.split(':').at(-1)) >= startSequence,
-    );
-  send(latest, 'pause');
+  const latestControls = createHaLatestRunControls({
+    session,
+    started,
+    owner: process.env.RIVET_POD_NAME,
+    socket: latest,
+    observations,
+    waitFor,
+  });
+  // Replayed or concurrent roots cannot satisfy this run's pause/done proof.
+  const peerEvents = () => observations.filter((event) => latestControls.matches(event));
+  const localStarted = await waitFor('owner latest start', () =>
+    localObservations.find((e) => e.message === 'start' && e.rivetEventId === started.rivetEventId),
+  );
+  const ownerControls = createHaLatestRunControls({
+    session: localSession,
+    started: localStarted,
+    owner: process.env.RIVET_POD_NAME,
+    socket: localLatest,
+    observations: localObservations,
+    waitFor,
+  });
+  await ownerControls.send('pause');
   await waitFor('remote latest pause', () => peerEvents().find((e) => e.message === 'pause'));
-  send(latest, 'resume');
+  await ownerControls.send('resume');
   const latestResponse = await latestCall;
   assert.equal(latestResponse.status, 200, await latestResponse.text());
   await waitFor('remote latest completion', () => peerEvents().find((e) => e.message === 'done'));
@@ -101,6 +126,7 @@ try {
   assert.equal(peerEvents().filter((e) => e.message === 'pause').length, 1);
   assert.equal(peerEvents().filter((e) => e.message === 'done').length, 1);
   latest.close();
+  localLatest.close();
 
   const configResponse = await fetch(`${base}/api/config`, { headers });
   assert.equal(configResponse.status, 200);
@@ -109,7 +135,9 @@ try {
   ownerUrl.host = peer; // Preserve the signed original owner path across another API.
   const messages = [];
   let socket = await connect(ownerUrl.href, messages, ['rivet-session-v1']);
-  const session = await waitFor('logical editor session', () => messages.find((e) => e.message === 'executor-session'));
+  const editorSession = await waitFor('logical editor session', () =>
+    messages.find((e) => e.message === 'executor-session'),
+  );
   const input = UserInputNodeImpl.create(),
     output = GraphOutputNodeImpl.create();
   output.data.id = 'result';
@@ -154,7 +182,7 @@ try {
   const resumeFrom = messages.length;
   socket = await connect(ownerUrl.href, messages, [
     'rivet-session-v1',
-    `rivet-cap.${session.data.capability}`,
+    `rivet-cap.${editorSession.data.capability}`,
     `rivet-seq.${cursor}`,
   ]);
   await waitFor('resumed original owner', () =>

@@ -717,10 +717,19 @@ or outcome-unknown status. Commands are never automatically replayed. Remote
 commands require a v2-capable exact owner; this is not an arbitrary failover path.
 Replay remains globally bounded to 32 MiB/8,192 events, not that amount per channel.
 
-Managed HA connections require authenticated `x-rivet-latest-protocol: 2` peers.
-An old peer must not receive named-channel history and forward it to unfiltered
-browsers. The v2 peer hello and event envelope must agree on owner/incarnation.
-An unsupported/changed owner cannot receive commands through a broadcast fallback.
+Full managed HA transport requires authenticated `x-rivet-latest-protocol: 2`
+peers. An authenticated predecessor omitting that header is admitted only through
+the default-observation compatibility path; unknown header values are rejected.
+Server-side live/replay filtering prevents named-channel history from reaching old
+peers and their unfiltered browsers. Legacy root starts establish bounded root
+provenance; missing/contradictory provenance produces a history diagnostic, never
+another run's scope. Such imported frames carry `rivetLegacyOwner: true` and do
+not promise private prompts or physical-settlement proof. The v2 peer hello and
+event envelope must still agree on owner/incarnation, and a stream cannot switch
+protocols in place. Legacy peer commands never execute on managed owners; a v2
+command targeting an unsupported/changed owner is rejected, not broadcast or
+resent. This permits mixed-version replacement readiness without relaxing named
+channel isolation or claiming that legacy owners support managed controls.
 
 The editor session owns at most 32 run entries and one bounded serialized wire
 history (32 MiB/8,192 events). A bundle shares follow-newest/pinned selection;

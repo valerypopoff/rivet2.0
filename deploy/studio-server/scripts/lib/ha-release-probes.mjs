@@ -224,6 +224,9 @@ export class HaReleaseProbes {
       path.join(this.rootDir, 'deploy/studio-server/scripts/fixtures/ha-editor-retirement-probe.mjs'),
       'utf8',
     );
+    const controls = await fs.readFile(
+      path.join(this.rootDir, 'deploy/studio-server/scripts/fixtures/ha-latest-controls.mjs'),
+    );
     const probe = { pod: pod.name, uid: pod.uid, receipt: null, error: null };
     this.editors.push(probe);
     probe.completed = this.kube(
@@ -240,7 +243,8 @@ export class HaReleaseProbes {
         marker,
         neighbor,
         String(holdMs),
-        ...(this.overlapBundle ? [JSON.stringify(this.overlapBundle)] : []),
+        this.overlapBundle ? JSON.stringify(this.overlapBundle) : '',
+        `data:text/javascript;base64,${controls.toString('base64')}`,
       ],
       { input: source },
     ).then(

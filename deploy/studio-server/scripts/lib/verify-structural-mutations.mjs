@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { createStructuralSqlLeaseGuard } from './structural-sql-lease-guard.mjs';
 import { createManagedProject } from '../../../../packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/project-creation.js';
 import { createManagedWorkflowCatalogService } from '../../../../packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/catalog.js';
 import { createManagedWorkflowRevisionFactory } from '../../../../packages/studio-server-api/dist/studio-server-api/src/routes/workflows/managed/revision-factory.js';
@@ -35,23 +36,15 @@ export async function verifyStructuralMutations(base) {
   } = await import(pathToFileURL(require.resolve('@valerypopoff/rivet2-node')).href);
   const objects = new Map(),
     cleanup = [];
-  let transactions = 0,
-    onUpload;
+  let onUpload;
+  const leaseGuard = createStructuralSqlLeaseGuard(base.withTransaction);
   const context = {
     ...base,
-    withTransaction: (run) =>
-      base.withTransaction(async (client, hooks) => {
-        transactions++;
-        try {
-          return await run(client, hooks);
-        } finally {
-          transactions--;
-        }
-      }),
+    withTransaction: leaseGuard.withTransaction,
   };
   context.blobStore = {
     putText: async (key, value) => {
-      assert.equal(transactions, 0, 'Artifact preparation must not hold SQL leases.');
+      leaseGuard.assertOutsideTransaction();
       objects.set(key, value);
       const callback = onUpload;
       onUpload = undefined;

@@ -672,6 +672,19 @@ leaving partial folder chains. These are local checks, not provider qualificatio
 
 ### Persistence composition and operation ownership
 
+The compiled PostgreSQL structural-mutation gate observes SQL ownership per async
+call chain, not with a process-wide active-transaction counter. One request may
+prepare immutable artifacts while an independent request owns the topology lease.
+`structural-sql-lease-guard.mjs` still rejects preparation by the lease holder or
+its inherited continuations, including while COMMIT is pending. The existing
+after-release settlement hook clears that exact lease marker; callback return
+alone is not release proof. Nested scopes retain ancestor lease markers.
+`managed-transactions.test.ts` deterministically overlaps an independent upload
+with a held transaction and checks the holder, pending-COMMIT continuation and
+after-release continuation. The previous global counter fails this regression.
+This is test instrumentation only: production lock ordering, receipt atomicity,
+preparation admission and uncertain-write rules are unchanged.
+
 `managed/catalog-mutations.ts` is the SQL-only move/rename/delete implementation.
 Its explicit `CatalogTransaction` carries the leased client and commit/rollback
 hooks. The public catalog facade starts a topology-owned transaction for trusted

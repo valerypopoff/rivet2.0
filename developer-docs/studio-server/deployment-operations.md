@@ -41,6 +41,43 @@ cover HPA-grown capacity, exact-image readiness, HTTP502, interrupted windows,
 recording durability and storage identity. Unit/HTTP/Helm checks are distinct from
 the actual local cluster result, and neither is provider qualification.
 
+## Latest-debugger qualification compatibility
+
+The editor-retirement fixture negotiates the observed latest-debugger handshake
+before dispatching controls. Protocol 2 uses an immutable root/project/channel/
+owner/incarnation target and waits for the exact command acknowledgement; a
+rejected, unknown or missing acknowledgement never authorizes a retry or a legacy
+fallback. Only an explicitly advertised protocol-1 predecessor uses legacy
+pause/resume. Ordinary editor executor request IDs remain separate.
+
+`fixtures/ha-latest-controls.mjs` is self-contained: `HaReleaseProbes.startEditor`
+passes its exact bytes as a data-module argument alongside the stdin probe, so
+both predecessor and candidate images run the reviewed client without depending
+on new package exports. Scoped events from a concurrent root cannot satisfy its
+pause/completion proof.
+
+Mixed v1/v2 replicas retain authenticated, **default-only observation**. The v2
+writer filters both live and replayed history before sending it to an old peer;
+named-channel data never reaches that peer. A legacy stream's root start supplies
+its root project identity, while the authenticated peer/event identity supplies
+owner/incarnation. Unattributed or contradictory legacy events are omitted with a
+history diagnostic, not assigned to the previous root. This provenance cache is
+bounded across the relay and disposed with it.
+
+Legacy owners are never advertised as scoped-control capable. Legacy incoming
+peer commands are consumed without execution/forwarding; v2 commands targeting
+legacy owners are rejected without downgrade or retry. Named observations and
+cross-owner controls still require v2. Legacy observations do not invent private
+prompt handles or physical-settlement notifications.
+
+The retirement probe therefore controls a run through a second, direct owner
+socket using that owner's verified protocol, while the neighbor must observe the
+same event ID, pause, completion and bundle ancestry. This preserves the mesh
+proof, exactly-one pause/completion, accepted editor drain and no-abort checks
+without requiring an unsafe cross-version control broadcast. Local mixed-peer
+and browser regressions are not a completed release-image or GKE qualification;
+the exact predecessor/candidate image gate must still pass before promotion.
+
 ## Rolling database compatibility contract
 
 Local commit-preparation checkpoint (2026-10-28): the broad tooling matrix passed
