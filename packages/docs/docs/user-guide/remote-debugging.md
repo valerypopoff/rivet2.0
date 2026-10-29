@@ -36,11 +36,15 @@ actions retain their usual URLs and use the default channel.
 
 #### Choosing a run
 
-The action bar shows the channel and a run picker with start time, short ID and
-status. It follows the newest relevant run by default:
+Open **?** in the action bar to see the channel and a run picker with start time,
+short ID and status in **Remote Debugger details**. It follows the newest relevant
+run automatically:
 
-- Choose a run to pin it. **Follow newest** returns to automatic selection.
-- Pausing pins the selected run, so a later request cannot hide it.
+- Choose a historical run to inspect it. The next new relevant run automatically
+  becomes selected, even after you select history or pause another run.
+- Existing runs' late outputs, completion events and replay do not interrupt
+  history inspection. There is no follow/pin mode or **Follow newest** button.
+- Switching the view does not resume, abort or rerun the previously selected run.
 - Open bundle members share the selected root. The graph's **Execution n/N**
   selector still chooses invocations within that root.
 - Unrelated projects do not steal selection. Called-project tabs are
@@ -53,8 +57,18 @@ never automatically retried. Inspect the observed run state before acting again.
 
 #### History, reconnects and stopping
 
-Rivet retains at most 32 selectable runs and a bounded event history. **Retained
-history is incomplete** means details were evicted, unsupported or unavailable;
+When you explicitly connect to an updated Rivet Server debugger, it waits for a
+new run and does not import older server runs. Open **?** to select a run observed
+in this browser session; completed runs are labelled **History**. Selecting a run
+does not restart it. The next new relevant run automatically replaces that view.
+
+Rivet retains at most **eight selectable runs**, with the selected run protected
+when older entries are removed. This history is kept only in memory: refreshing
+the page clears it, and older server runs do not refill it. Stopping or changing
+the connection also starts a fresh list. Saved **Run recordings** are unaffected.
+
+The event history is bounded too. **Retained history is incomplete** means details
+were evicted, unsupported or unavailable;
 Rivet does not rerun workflows or borrow another run's output to fill gaps.
 Incomplete canvas history does not prevent a live source run retaining its
 appropriate controls.
@@ -75,6 +89,16 @@ observation without stopping execution.
 **Stop Remote Debugger** disconnects observation only. Accepted work, recordings
 and AI cost accounting continue, independently of the number of viewers.
 Outputs-ready does not mean background work has physically stopped.
+Connecting again after Stop waits for new runs; existing displayed results may
+remain as a static view. An accidental network disconnection is different: Rivet
+automatically recovers your observation and selection, including missed events,
+without restarting work. Older servers without history markers retain their
+previous connection behavior.
+
+If a server backend recovers an unavailable peer link, previously unseen runs
+from that recovery are not imported. Rivet cannot prove those runs belong to
+your current observation. Runs you were already observing continue
+recovering automatically; the workflows themselves are never restarted.
 
 Older editors can observe the default channel but must be upgraded for scoped
 controls; named channels require the managed protocol. Generic third-party

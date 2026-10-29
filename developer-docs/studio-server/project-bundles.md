@@ -388,9 +388,24 @@ Remote Debugger grouping uses server-qualified explicit bundle identity only.
 The action bar shows one square **?** button immediately before **Stop Remote
 Debugger**, sharing the overflow button's dimensions but using the Stop button's
 text font and size (not the overflow icon's larger font). Observation statuses,
-runtime-version information, warnings and **Go to debugger source** actions live
+runtime-version information, channel, retained-run selector,
+incomplete-history notices and **Go to debugger source** actions live
 in the standard **Remote Debugger details** modal instead of inline banners.
 Details update while open; dismissing the modal never disconnects the session.
+Run selection is not rendered over the canvas. It retains
+the same runtime/selection owner inside the modal and remains hidden for loaded
+recordings and non-managed debugger connections.
+The channel label sits above a full-width shared Atlaskit run dropdown.
+The dropdown menu uses a fixed-position top-level portal above the modal, so the
+modal body's scroll/overflow containment cannot clip options. Keep the menu's
+bounded scroll height; do not make the entire modal overflow-visible to fix it.
+The browser regression selects the first and last of eight retained runs and
+checks portal removal on dismissal. No follow/pin mode or follow button is exposed.
+Do not substitute unstyled native controls. The modal omits generic
+"Remote Debugger is active" placeholder text; only actual observation details
+and notices are announced.
+Escape handled by the run dropdown closes its menu without dismissing the modal;
+Escape outside an open menu retains normal modal dismissal.
 The details retain their live `status` role for screen-reader announcements.
 Source navigation closes the modal, and switching projects resets its open state.
 Detached-session notices remain accessible through **?** even without a Stop button.
@@ -447,6 +462,102 @@ Transport replay warnings are consumed before project-event routing, so a
 history gap cannot masquerade as a terminal graph error in any bundle member.
 Per-owner event deduplication and the logical session survive physical reconnects;
 bundle membership and tab-lifetime fences are not reset by reconnecting.
+Managed latest connections distinguish **explicit subscription** from transport
+recovery. The relay freezes each browser writer's retained-history boundary at
+subscription and adds `rivetHistory: true` only to those retained browser frames.
+The handshake also freezes channel-filtered `historyThrough` positions per
+owner/incarnation (at most 8,192 entries, using the existing retained-event bound).
+The editor retains its **first logical subscription** positions until explicit
+Stop/replacement, rather than replacing them with a later socket's snapshot.
+Thus a socket lost before receiving an old start cannot turn it into a new run
+on recovery, while a root admitted during the disconnection remains eligible.
+Identical repeated handshakes on one verified socket are idempotent; malformed
+or contradictory handshakes still fail closed. One shared Core position parser
+validates both the snapshot and deduplication cursors; no wall-clock comparison,
+new service or per-channel history buffer is involved.
+Managed peer hellos also freeze the source's own sequence frontier for that peer
+stream. Replayed source events carry a private ring provenance bit; browser
+delivery uses `rivetHistory: "peer"` even if they arrived after the browser's local
+snapshot. A previously unseen recovered root cannot prove that it started after
+the original observation, so it is not imported into a fresh page/session's list.
+This includes previously unseen runs accepted while the peer link
+was unavailable. Already-admitted live roots retain their selection, controls and
+recovery; ordinary missed runs on an intact peer link still recover automatically.
+No provider call, execution command or recording is replayed. Peer provenance is
+kept within the same globally bounded ring, never a second replay store.
+Older peers without the optional frontier retain their compatibility behavior.
+Stored event payloads, event IDs, recordings and execution ownership are unchanged;
+only the authenticated peer hello gains the optional frontier. Events beyond the
+local catch-up boundary are live unless explicitly identified as recovered peer
+history; channel filtering and the existing replay/queue bounds still apply.
+
+Each browser debugger session retains at most **eight observed roots**, protecting
+the selected entry when evicting older entries. The catalogue and its
+serialized event buffer are memory-only, never persisted to browser storage.
+A full page refresh destroys them. A fresh connection also ignores roots from
+before its subscription, rather than repopulating from shared server history.
+The picker in **?** initially says **Waiting for a new run**. Completed roots
+observed on this page are labelled **History** from their existing lifecycle
+state, not from a second history flag. Selection reconstructs retained events
+through the existing reducers without execution or write commands. Selecting
+history changes only the current view. A strictly newer relevant admission
+automatically selects the new root, even after pausing the previous one. A
+metadata-only admission watermark (independent of selection) prevents outputs,
+terminals, duplicate starts and late older roots from interrupting history
+inspection. A caller becoming relevant through an open member follows the same
+admission ordering. Switching views never resumes/aborts another execution.
+Manual selection requires an explicit retained-run key at the runtime/session
+boundary. Unknown, evicted or missing keys are no-ops, not implicit requests to
+select another run. Newest-run selection belongs only to admission ordering;
+there is no separate follow-mode API.
+
+An unexpected socket loss suspends readiness but retains the logical session,
+selection and event cursors. After a verified handshake, missed history recovers
+the selected run or a newly admitted relevant run normally, without replaying
+commands. **Stop Remote Debugger**, target replacement and channel replacement
+retire that authority; a subsequent explicit connection waits again. Previously
+displayed results may remain static after stopping; reconnect does not repaint
+them as a new run. Older managed servers without browser-history markers retain
+their existing attach behavior; generic debugger adapters are unchanged. The
+server's shared 8,192-event/32-MiB replay buffer is not wiped by a browser refresh:
+other admins and accidental reconnects still need it. Saved Run recordings are
+independent and are not deleted or changed by refreshing the editor.
+
+Regression owners: `latestDebuggerRuns.test.ts` covers excluded initial history,
+temporary history selection, admission ordering, live tails, explicit reset and
+automatic missed-run recovery;
+`latest-debugger-channels-ha.test.ts` checks browser history markers and unchanged
+live/peer identities, and that later foreign-channel traffic does not enter the
+subscription snapshot. `managed-debugger-channels.spec.ts` executes real local
+processors through standalone default and HA named-channel sockets, selects
+locally observed completed history, explicitly stops/reconnects, then drops a live
+socket and verifies continuity and exact physical invocation counts without sent commands.
+It also duplicates the initial handshake and interrupts initial replay before
+any old root arrives, verifying recovery still waits instead of animating it.
+The HA journey additionally disconnects the peer links before creating the old
+run, subscribes through the backend with empty history, then restores the links.
+API and App regressions prove unseen peer history is marked/excluded while known
+live roots continue receiving recovered events and scoped controls remain exact.
+The browser journeys additionally overflow the eight-run limit and refresh the
+page while server replay history still exists: the list stays empty until new
+work is observed. The default-limit unit regression also covers temporary history
+selection and subsequent automatic selection without increasing the eight-run cap.
+The fault fixture retains only open/connecting peer links and releases closed
+socket references, including failed retries while peer traffic is paused.
+
+For local verification, run the focused App session/catalogue/transport suites
+and API channel/peer-replay suites, then use the required headless browser runner
+against an isolated frontend (leave the existing local installation untouched):
+
+```powershell
+$env:PLAYWRIGHT_HEADLESS = '1'
+$env:PLAYWRIGHT_SLOW_MO = '0'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:<isolated-port>'
+yarn studio-server:ui:observe managed-debugger-channels.spec.ts --workers=1
+```
+
+This is local regression evidence, not GKE qualification or deployment approval.
+
 Only executed members have new flow data. Closed tabs are not opened automatically,
 and a newly opened member does not retroactively acquire an already-admitted run.
 `managed-bundles.test.ts` covers source changes during artifact preparation and

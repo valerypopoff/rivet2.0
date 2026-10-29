@@ -245,6 +245,7 @@ for (const outcome of [
       const editor = page.frameLocator('iframe.dashboard-editor-frame');
       const infoButton = editor.getByRole('button', { name: 'Remote Debugger details', exact: true });
       const details = editor.getByTestId('remote-debugger-details');
+      const detailsModal = editor.getByRole('dialog', { name: 'Remote Debugger details', exact: true });
       const showDetails = async (text: string) => {
         await infoButton.click();
         await expect(details).toHaveAttribute('role', 'status');
@@ -299,14 +300,21 @@ for (const outcome of [
       }
       expect(infoBox.x + infoBox.width).toBeLessThan(stopBox.x);
       expect(stopBox.x + stopBox.width).toBeLessThan(moreBox.x);
-      await showDetails('Remote Debugger is active. Execution details will appear here when available.');
+      await infoButton.click();
+      await expect(detailsModal).toBeVisible();
+      await expect(details).not.toContainText(
+        'Remote Debugger is active. Execution details will appear here when available.',
+      );
+      await editor.getByRole('button', { name: 'Done', exact: true }).click();
+      await expect(details).toHaveCount(0);
+      await expect(infoButton).toBeFocused();
       await infoButton.click();
       await editor.getByRole('button', { name: 'Done', exact: true }).press('Escape');
       await expect(details).toHaveCount(0);
       await expect(editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
       if (outcome === 'completion') {
         await infoButton.click();
-        await expect(details).toBeVisible();
+        await expect(detailsModal).toBeVisible();
         // The outer dashboard remains a project-navigation surface while an
         // editor-iframe modal is open. Its state must not leak into another tab.
         await page.locator('.project-row').filter({ hasText: 'Project D' }).dblclick();

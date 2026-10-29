@@ -6,6 +6,7 @@ import {
   isLatestDebuggerSession,
   readLatestDebuggerControl,
   isLatestDebuggerControlResult,
+  readLatestDebuggerEventPosition,
 } from '@valerypopoff/rivet2-core';
 import { LatestDebuggerRuns, getLatestRunControlPolicy } from './latestDebuggerRuns.js';
 import { readLatestDebuggerDiagnostic } from './latestDebuggerDiagnostic.js';
@@ -17,6 +18,10 @@ export class ManagedLatestSession {
   requestedChannel?: string | null;
   ready = false;
   observation = false;
+  // Explicit Stop/target replacement resets the catalogue. A dropped socket
+  // does not: replay on that replacement transport must recover observation.
+  private initialHistory = false;
+  private readonly historyThrough = new Map<string, number>();
   private generation = 0;
   private projectionRevision = 0;
   private readonly cursors = new Map<string, number>();
@@ -45,7 +50,14 @@ export class ManagedLatestSession {
     if (!this.runs) return;
     this.options.deliver(frame, selected, reset, replay, [...this.runs.runs.keys()]);
   }
-  receive(message: string, data: unknown, scope: unknown, raw: string) {
+  receive(
+    message: string,
+    data: unknown,
+    scope: unknown,
+    raw: string,
+    history: boolean | 'peer' = false,
+    eventId?: string,
+  ) {
     if (!this.runs || !this.ready || !isLatestDebuggerScope(scope) || scope.channel !== this.channel) return;
     const frame = readLatestDebuggerExecution({ message, data, rivetScope: scope });
     if (!frame) {
@@ -66,6 +78,17 @@ export class ManagedLatestSession {
     }
     const revision = this.projectionRevision;
     const previous = this.runs.selected;
+    const position = readLatestDebuggerEventPosition(eventId);
+    const beforeSubscription = position && position.sequence <= (this.historyThrough.get(position.origin) ?? 0);
+    const key = JSON.stringify([scope.owner, scope.incarnation, scope.rootRunId]);
+    // Fresh pages/connections must not repopulate their list from shared server
+    // history. Keep recovery of already-observed roots and genuinely missed new
+    // runs on replacement transports, without inventing fresh admission for old roots.
+    if (
+      !this.runs.runs.has(key) &&
+      (beforeSubscription || history === 'peer' || (this.initialHistory && history === true))
+    )
+      return;
     const run = this.runs.receive(frame, raw);
     if (!run) return;
     if (previous !== this.runs.selected) {
@@ -89,10 +112,8 @@ export class ManagedLatestSession {
     )
       this.options.notify();
   }
-  select(key?: string) {
-    if (!this.runs) return;
-    if (key === undefined) this.runs.follow();
-    else if (!this.runs.select(key)) return;
+  select(key: string) {
+    if (!this.runs?.select(key)) return;
     this.rebuild();
   }
   suspend() {
@@ -109,12 +130,7 @@ export class ManagedLatestSession {
     const policy = getLatestRunControlPolicy(run);
     if (!(action === 'pause' ? policy.canPause : action === 'resume' ? policy.canResume : policy.canAbort))
       return false;
-    const generation = this.generation;
-    if (action === 'pause') {
-      this.runs!.select(run.key);
-      this.options.notify();
-    }
-    return generation === this.generation && this.sendControl(action, run.scope);
+    return this.sendControl(action, run.scope);
   }
   rebuild() {
     const revision = ++this.projectionRevision;
@@ -194,7 +210,18 @@ export class ManagedLatestSession {
         context.fail();
         return false;
       }
+      // A repeated hello on the same transport is idempotent, not recovery.
+      if (this.ready) return false;
       this.channel = expected;
+      this.initialHistory = this.runs === undefined;
+      if (this.initialHistory)
+        for (const id of value.data.historyThrough ?? []) {
+          const position = readLatestDebuggerEventPosition(id)!;
+          this.historyThrough.set(
+            position.origin,
+            Math.max(position.sequence, this.historyThrough.get(position.origin) ?? 0),
+          );
+        }
       this.runs ??= new LatestDebuggerRuns(this.options.eligible);
       this.observation = true;
       this.ready = true;
@@ -226,17 +253,9 @@ export class ManagedLatestSession {
       return false;
     }
     if (this.observation && typeof envelope.rivetEventId === 'string') {
-      const split = envelope.rivetEventId.lastIndexOf(':');
-      const origin = envelope.rivetEventId.slice(0, split),
-        sequence = Number(envelope.rivetEventId.slice(split + 1));
-      if (
-        envelope.rivetEventId.length > 200 ||
-        split < 1 ||
-        !Number.isSafeInteger(sequence) ||
-        sequence < 1 ||
-        sequence <= (this.cursors.get(origin) ?? 0)
-      )
-        return false;
+      const position = readLatestDebuggerEventPosition(envelope.rivetEventId);
+      if (!position || position.sequence <= (this.cursors.get(position.origin) ?? 0)) return false;
+      const { origin, sequence } = position;
       this.cursors.set(origin, sequence);
       if (this.cursors.size > 256) this.cursors.delete(this.cursors.keys().next().value!);
     }
@@ -264,9 +283,11 @@ export class ManagedLatestSession {
     this.channel = undefined;
     this.ready = false;
     this.observation = false;
+    this.initialHistory = false;
     for (const timer of this.pending.values()) clearTimeout(timer);
     this.pending.clear();
     this.cursors.clear();
+    this.historyThrough.clear();
     this.diagnostics.clear();
   }
   private warnOnce(code: string, message: string) {

@@ -86,6 +86,14 @@ The migration/restore fixtures carry nonzero partial cost evidence from filesyst
 
 The real `run-cost-statistics.spec.ts` scenario starts its own exact-owned PostgreSQL/MinIO containers and local HTTP provider fixture, runs a mixed LLM Chat + Decision AI bundle A -> background B -> C, checks complete/partial and failed-run evidence via the statistics API, then checks the real UI and reload. The fixture verifies that LLM calls actually use streamed provider responses. The ordinary workflow HTTP endpoint returns JSON; it has no separate SSE response mode to qualify. The same scenario checks nonzero published HTTP/WebSocket web-app actions and cancellation while a child provider request is held after paid root calls have finished. It requires Docker and a local hosted web preview; it never accepts a deployment storage address. Four smaller modal scenarios cover available, partial-only, unknown and missing-server capability without Docker; a fifth checks independent grouping, target switching and shared-filter alignment. The UI retains one run-count/period summary rather than repeating API coverage counts. Both spec files are required by the balanced browser CI selection, with an inclusion regression. Neither lane makes paid provider requests or certifies provider invoices/GKE behavior.
 
+The same real-cost scenario checks two live latest-debugger observers and a later
+replay connection. Live `start`, `done` and `latest-settled` frames must be identical
+across observers and omit `rivetHistory`; replay must preserve their complete
+event identity, scope and payload while adding `rivetHistory: true`. Keep the
+provider-request and persisted-cost equality checks after replay: transport
+history metadata must not become another AI call, recording or accounting charge.
+Do not strip that metadata or weaken the payload comparison to partial matching.
+
 Core accounting coverage is concentrated in existing suites rather than a second harness:
 
 - `RunCostLedger.test.ts`: duplicate observations, known/unknown evidence, honest zero and overflow.

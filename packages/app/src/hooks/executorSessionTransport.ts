@@ -14,7 +14,7 @@ export type ExecutorSessionIncomingTransportMessage =
   | {
       // Verified managed transport, with content still awaiting Core admission.
       kind: 'managed-event';
-      incoming: { message: string; data: unknown; rivetScope: unknown };
+      incoming: { message: string; data: unknown; rivetScope: unknown; history: boolean | 'peer'; eventId?: string };
     }
   | {
       kind: 'upload-allowed';
@@ -70,7 +70,13 @@ export function parseExecutorSessionIncomingMessage(options: {
     if (typeof frame.message !== 'string') return;
     return {
       kind: 'managed-event',
-      incoming: { message: frame.message, data: frame.data, rivetScope: frame.rivetScope },
+      incoming: {
+        message: frame.message,
+        data: frame.data,
+        rivetScope: frame.rivetScope,
+        history: frame.rivetHistory === 'peer' ? 'peer' : frame.rivetHistory === true,
+        eventId: typeof frame.rivetEventId === 'string' ? frame.rivetEventId : undefined,
+      },
     };
   }
 

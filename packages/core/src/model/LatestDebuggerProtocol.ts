@@ -23,7 +23,14 @@ export type LatestDebuggerPromptClosedMessage = {
 export type LatestDebuggerPrompt = { target: LatestDebuggerScope; promptId: string };
 export type LatestDebuggerSessionMessage = {
   message: 'latest-session';
-  data: { protocol: 2; channel: LatestDebuggerChannel; channelIsolation: true; runScopedControls: true };
+  data: {
+    protocol: 2;
+    channel: LatestDebuggerChannel;
+    channelIsolation: true;
+    runScopedControls: true;
+    /** Per-origin event positions, bounded by the shared retained-event limit. */
+    historyThrough?: string[];
+  };
 };
 export type LatestDebuggerControlMessage = {
   type: 'latest-control';
@@ -54,6 +61,8 @@ export type LatestDebuggerProcessMessage = {
 }[keyof ProcessEventMessageMap];
 export type LatestDebuggerExecutionMessage = (LatestDebuggerProcessMessage | LatestDebuggerLifecycleMessage) & {
   rivetEventId?: string;
+  /** Browser delivery only: local subscription history, or recovered peer history of unproven newness. */
+  rivetHistory?: true | 'peer';
 };
 const diagnosticCodes = ['history-truncated', 'history-gap', 'event-too-large', 'owner-unavailable'] as const;
 export type LatestDebuggerDiagnosticCode = (typeof diagnosticCodes)[number];
@@ -110,17 +119,31 @@ export function encodeLatestDebuggerEnvelope(
   serialized: string,
   scope?: LatestDebuggerScope,
   eventId?: string,
+  history: boolean | 'peer' = false,
 ): string {
-  if (!scope && !eventId) return serialized;
+  if (!scope && !eventId && !history) return serialized;
   const metadata = JSON.stringify({
     ...(eventId ? { rivetEventId: eventId } : {}),
     ...(scope ? { rivetScope: scope } : {}),
+    ...(history ? { rivetHistory: history } : {}),
   });
   return `${metadata.slice(0, -1)},${serialized.slice(1)}`;
 }
 
-export function createLatestDebuggerSession(channel: LatestDebuggerChannel): LatestDebuggerSessionMessage {
-  return { message: 'latest-session', data: { protocol: 2, channel, channelIsolation: true, runScopedControls: true } };
+export function createLatestDebuggerSession(
+  channel: LatestDebuggerChannel,
+  historyThrough?: string[],
+): LatestDebuggerSessionMessage {
+  return {
+    message: 'latest-session',
+    data: {
+      protocol: 2,
+      channel,
+      channelIsolation: true,
+      runScopedControls: true,
+      ...(historyThrough ? { historyThrough } : {}),
+    },
+  };
 }
 
 export function isLatestDebuggerSession(value: unknown): value is LatestDebuggerSessionMessage {
@@ -131,7 +154,11 @@ export function isLatestDebuggerSession(value: unknown): value is LatestDebugger
     (frame.data.channel === null ||
       (typeof frame.data.channel === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(frame.data.channel))) &&
     frame.data.channelIsolation === true &&
-    frame.data.runScopedControls === true
+    frame.data.runScopedControls === true &&
+    (frame.data.historyThrough === undefined ||
+      (Array.isArray(frame.data.historyThrough) &&
+        frame.data.historyThrough.length <= 8192 &&
+        frame.data.historyThrough.every((id) => readLatestDebuggerEventPosition(id) !== undefined)))
   );
 }
 
@@ -200,6 +227,14 @@ export function readLatestDebuggerEventId(value: unknown): string | undefined {
   if (!value || typeof value !== 'object') return;
   const id = (value as { rivetEventId?: unknown }).rivetEventId;
   return typeof id === 'string' && /^[a-z0-9:-]{1,200}$/.test(id) ? id : undefined;
+}
+
+export function readLatestDebuggerEventPosition(value: unknown): { origin: string; sequence: number } | undefined {
+  if (typeof value !== 'string' || value.length > 200 || !/^[a-z0-9:-]+:[1-9]\d{0,15}$/.test(value)) return;
+  const split = value.lastIndexOf(':');
+  const sequence = Number(value.slice(split + 1));
+  if (!Number.isSafeInteger(sequence)) return;
+  return { origin: value.slice(0, split), sequence };
 }
 
 export function isLatestDebuggerControlResult(value: unknown): value is LatestDebuggerControlResultMessage {

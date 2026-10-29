@@ -311,8 +311,10 @@ void test('managed HA replay filters channels and forwards controls only to the 
     const received: Array<
       Array<{
         message: string;
+        rivetHistory?: true | 'peer';
+        rivetEventId?: string;
         rivetScope?: LatestDebuggerScope;
-        data?: { status?: string; commandId?: string; code?: string; promptId?: string };
+        data?: { status?: string; commandId?: string; code?: string; promptId?: string; historyThrough?: string[] };
       }>
     > = [[], []];
     for (const [i, channel] of ['A', 'B'].entries()) {
@@ -346,6 +348,10 @@ void test('managed HA replay filters channels and forwards controls only to the 
       return processor;
     });
     await until(() => received.every((messages) => messages.some((message) => message.message === 'start')));
+    assert.ok(
+      received.every((messages) => messages.filter((event) => event.rivetScope).every((event) => !event.rivetHistory)),
+      'post-subscription events stay live',
+    );
     const target = received[0]!.find((message) => message.message === 'start')!.rivetScope;
     clients[0]!.send(JSON.stringify({ type: 'latest-control', data: { commandId: 'valid', target, action: 'pause' } }));
     await until(() => received[0]!.some((message) => message.message === 'latest-control-result'));
@@ -423,8 +429,24 @@ void test('managed HA replay filters channels and forwards controls only to the 
     assert.ok(reports.every((reason) => ['ownership', 'history', 'unavailable'].includes(reason)));
     const previousConnections = inboundPeers.length;
     for (const peer of inboundPeers) peer.terminate();
+    const lateEvents = new EventEmitter();
+    const lateProcessor = {
+      id: 'late-root',
+      on(event: string, handler: (...args: unknown[]) => void) {
+        lateEvents.on(event, handler);
+        return () => lateEvents.off(event, handler);
+      },
+    } as unknown as GraphProcessor;
+    processors.push(lateProcessor);
+    debuggers[0]!.policy.forChannel(debuggers[0]!.debuggerServer, 'A').attach(lateProcessor);
+    lateEvents.emit('start', {
+      project: { metadata: { id: 'same-project' } },
+      execution: { rootRunId: 'late-root', projectId: 'same-project', graphRunId: 'late-root' },
+    });
     await until(() => inboundPeers.length >= previousConnections + 2 && relays.every((relay) => relay.ready));
     await new Promise<void>((resolve) => setImmediate(resolve));
+    await until(() => received[0]!.some((event) => event.rivetScope?.rootRunId === 'late-root'));
+    assert.equal(received[0]!.find((event) => event.rivetScope?.rootRunId === 'late-root')!.rivetHistory, 'peer');
     assert.deepEqual(
       calls,
       ['A', 'A:resume', 'A', 'A:resume', 'A'],
@@ -466,16 +488,30 @@ void test('managed HA replay filters channels and forwards controls only to the 
     const terminal = received[0]!.find((event) => event.message === 'done')!;
     assert.deepEqual(terminal.rivetScope, target);
     assert.ok(Buffer.byteLength(JSON.stringify(terminal)) < 4096);
+    debuggers[0]!.debuggerServer.broadcast(processors[1]!, 'trace', { log: 'other channel after settlement' });
+    await until(() => received[1]!.some((event) => event.message === 'trace'));
     const late = new WebSocket(`ws://127.0.0.1:${ports[1]}/ws/latest-debugger@A`);
     const replay: (typeof received)[number] = [];
     clients.push(late);
     late.on('message', (raw) => replay.push(JSON.parse(raw.toString())));
     await once(late, 'open');
     await until(() => replay.some((event) => event.message === 'latest-settled'));
+    const boundary = replay.find((event) => event.message === 'latest-session')!.data!.historyThrough!;
+    assert.deepEqual(
+      boundary,
+      [received[0]!.find((event) => event.message === 'latest-settled')!.rivetEventId],
+      'the snapshot excludes later traffic in other channels',
+    );
     assert.deepEqual(replay.find((event) => event.message === 'done')!.rivetScope, target);
     assert.deepEqual(
       replay.find((event) => event.message === 'latest-prompt-closed'),
-      closure,
+      { ...closure, rivetHistory: true },
+    );
+    assert.ok(
+      replay
+        .filter((event) => event.rivetScope)
+        .every((event) => event.rivetHistory === true || event.rivetHistory === 'peer'),
+      'retained browser events are marked without changing their identities',
     );
     assert.ok(replay.every((event) => !event.rivetScope || event.rivetScope.channel === 'A'));
     received.forEach((messages, i) =>

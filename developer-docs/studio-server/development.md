@@ -55,7 +55,7 @@ their exact admitted root, not another root's prompt proof.
 
 Original receiver authority is captured at root admission. Broader reconciliation
 runs on ownership changes, not payload updates. The mounted ingress regression
-uses 32 retained roots and two open members: 100 payload-only snapshot writes
+uses eight retained roots and two open members: 100 payload-only snapshot writes
 cause zero full admission checks, while 100 real source partial outputs still
 perform exactly 100 targeted checks. Recording/local-run conflicts, tab renewal,
 verified renames, membership retirement/rejoin and outside-group callers retain

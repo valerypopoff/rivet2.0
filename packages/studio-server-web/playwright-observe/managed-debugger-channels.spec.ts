@@ -79,13 +79,18 @@ async function openDebugger(
   encoded = false,
 ) {
   let outputReadyFrames = 0;
-  const observedEvents: Array<{ message: string; rivetScope?: unknown }> = [];
+  const observedEvents: Array<{ message: string; rivetScope?: unknown; rivetHistory?: true | 'peer' }> = [];
   page.on('websocket', (socket) =>
     socket.on('framereceived', ({ payload }) => {
       try {
         const frame = JSON.parse(String(payload));
         if (frame.message === 'graphOutputsReady') outputReadyFrames++;
-        if (frame.message) observedEvents.push({ message: frame.message, rivetScope: frame.rivetScope });
+        if (frame.message)
+          observedEvents.push({
+            message: frame.message,
+            rivetScope: frame.rivetScope,
+            rivetHistory: frame.rivetHistory,
+          });
       } catch {
         /* Vite's websocket is not the debugger transport. */
       }
@@ -135,20 +140,209 @@ async function openDebugger(
     await page.locator('.project-row').filter({ hasText: project.metadata.title }).dblclick();
     await expect(editor.locator('.node[data-nodeid="shared-node"]')).toBeVisible();
   }
-  await editor.locator('button.more-menu').click();
-  await editor.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
-  await editor
-    .getByPlaceholder('(Default)')
-    .fill(`ws://127.0.0.1:${port}/ws/latest-debugger${channel === null ? '' : `${encoded ? '%40' : '@'}${channel}`}`);
-  await editor.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(editor.getByRole('combobox', { name: 'Debugger run', exact: true })).toBeVisible();
+  const picker = editor.getByRole('combobox', { name: 'Debugger run', exact: true });
+  const pickerControl = editor.locator('.run-picker');
+  const runOptions = editor.locator('[id^="react-select-managed-debugger-run-option-"]');
+  const info = editor.getByRole('button', { name: 'Remote Debugger details', exact: true });
+  const details = editor.getByRole('dialog').filter({ has: editor.getByTestId('remote-debugger-details') });
+  const closeDetails = async () => {
+    await details.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(details).toHaveCount(0);
+    await expect(picker).toHaveCount(0);
+    await expect(runOptions).toHaveCount(0);
+  };
+  const connect = async () => {
+    await editor.locator('button.more-menu').click();
+    await editor.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
+    await editor
+      .getByPlaceholder('(Default)')
+      .fill(`ws://127.0.0.1:${port}/ws/latest-debugger${channel === null ? '' : `${encoded ? '%40' : '@'}${channel}`}`);
+    await editor.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(info).toBeVisible();
+    await expect(picker).toHaveCount(0);
+    await info.click();
+    await expect(details).toContainText(`Channel: ${channel ?? 'default'}`);
+    await expect(picker).toBeVisible();
+    await expect(details).not.toContainText(
+      'Remote Debugger is active. Execution details will appear here when available.',
+    );
+    await expect(details.getByRole('button', { name: /Follow(?:ing)? newest/ })).toHaveCount(0);
+    const pickerBox = (await pickerControl.boundingBox())!;
+    expect(pickerBox.height).toBeGreaterThanOrEqual(30);
+    await closeDetails();
+  };
+  await connect();
   return {
+    connect,
     outputReadyFrames: () => outputReadyFrames,
     observedEvents,
     editor,
     output: editor.locator('.node[data-nodeid="shared-node"] .node-output'),
-    picker: editor.getByRole('combobox', { name: 'Debugger run', exact: true }),
+    selectRun: async (option: { index: number }) => {
+      await info.click();
+      await pickerControl.click();
+      // Options must escape the modal scroll region, not just exist in the DOM.
+      await expect(runOptions.nth(option.index)).toBeVisible();
+      expect(
+        await runOptions.nth(option.index).evaluate((element) => element.closest('[role="dialog"]') === null),
+      ).toBe(true);
+      await runOptions.nth(option.index).click();
+      await closeDetails();
+    },
+    expectIncomplete: async () => {
+      await info.click();
+      await expect(details.getByText('Retained history is incomplete.', { exact: true })).toBeVisible();
+      await closeDetails();
+    },
+    expectRunStatus: async (status: string) => {
+      await info.click();
+      await expect(pickerControl).toContainText(status);
+      await closeDetails();
+    },
+    expectWaiting: async (historyCount: number) => {
+      await info.click();
+      await expect(pickerControl).toContainText('Waiting for a new run');
+      await pickerControl.click();
+      await expect(picker).toHaveAttribute('aria-expanded', 'true');
+      await expect(runOptions.filter({ hasText: 'History' })).toHaveCount(historyCount);
+      await picker.press('Escape');
+      await closeDetails();
+    },
+    runLabels: async () => {
+      await info.click();
+      await pickerControl.click();
+      const labels = await runOptions.allTextContents();
+      await picker.press('Escape');
+      await closeDetails();
+      return labels;
+    },
+    reload: async () => {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await waitForDashboardReady(page);
+      for (const project of [...items.values()].reverse())
+        await page.locator('.project-row').filter({ hasText: project.metadata.title }).dblclick();
+      await connect();
+    },
   };
+}
+
+for (const ha of [false, true]) {
+  test(`${ha ? 'HA named' : 'standalone default'} debugger waits after explicit connect and recovers after a dropped socket`, async ({
+    page,
+  }) => {
+    const fixture = await createLatestDebuggerFixture({ ha, managed: true, throttlePartialOutputs: 0 });
+    const items = projects(false);
+    const defaults = createBuiltInRegistry();
+    const Base = defaults.getNodeConstructors().find((ctor) => ctor.create().type === 'text')!;
+    let calls = 0;
+    let hold = false;
+    let release = () => {};
+    class CountingText extends Base {
+      async process(_inputs: Inputs, context: InternalProcessContext) {
+        const value = `Invocation ${++calls}`;
+        if (hold) {
+          context.onPartialOutputs?.({ output: { type: 'string', value: `${value} streaming` } });
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }
+        return { output: { type: 'string' as const, value: `${value} done` } };
+      }
+    }
+    const registry = new NodeRegistration<string, ChartNode>();
+    for (const ctor of defaults.getNodeConstructors())
+      registry.register({ impl: ctor.create().type === 'text' ? CountingText : ctor, displayName: 'Fixture' });
+    const runner = createProcessor(items.get('a')!, {
+      registry,
+      remoteDebugger: fixture.forChannel(ha ? '00123' : null),
+    });
+    let active: Promise<unknown> | undefined;
+    try {
+      await expect.poll(fixture.ready).toBe(true);
+      if (ha) await fixture.pausePeers();
+      await runner.run();
+      let firstTransport = true;
+      await page.routeWebSocket(/\/ws\/latest-debugger/, (socket) => {
+        const server = socket.connectToServer();
+        if (!firstTransport) return;
+        firstTransport = false;
+        let closed = false;
+        server.onMessage((raw) => {
+          if (closed) return;
+          const frame = JSON.parse(String(raw));
+          if (frame.rivetScope) {
+            // Interrupt initial catch-up before admitting the old start.
+            closed = true;
+            server.close();
+            socket.close({ code: 1012, reason: 'initial history interrupted' });
+          } else {
+            socket.send(raw);
+            if (frame.message === 'latest-session') socket.send(raw);
+          }
+        });
+      });
+      const view = await openDebugger(page, items, fixture.port, ha ? '00123' : null);
+      if (ha) fixture.resumePeers();
+      await expect.poll(fixture.connectionCount).toBe(2);
+      await view.expectWaiting(0);
+      await expect(view.output).toHaveCount(0);
+      expect(calls).toBe(1);
+      await runner.run();
+      await view.expectRunStatus('completed · History');
+      await view.selectRun({ index: 0 });
+      await expect(view.output).toContainText('Invocation 2 done');
+      await expect(view.editor.getByRole('status', { name: 'Node running', exact: true })).toHaveCount(0);
+
+      await view.editor.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();
+      await view.connect();
+      await expect.poll(fixture.connectionCount).toBe(3);
+      await view.expectWaiting(0);
+      await expect(view.output).toContainText('Invocation 2 done');
+      await expect(view.editor.getByRole('status', { name: 'Node running', exact: true })).toHaveCount(0);
+      expect(calls).toBe(2, 'manual reconnect did not execute the workflow again');
+
+      hold = true;
+      active = runner.run();
+      await expect(view.output).toContainText('Invocation 3 streaming');
+      await expect(view.editor.getByRole('status', { name: 'Node running', exact: true })).toBeVisible();
+      if (ha) fixture.routeToOwner(0);
+      fixture.disconnectObservers();
+      await expect.poll(fixture.connectionCount).toBe(4);
+      await expect(view.output).toContainText('Invocation 3 streaming');
+      await expect(view.editor.getByRole('button', { name: /Pause/ }).first()).toBeEnabled();
+      release();
+      await active;
+      await expect(view.output).toContainText('Invocation 3 done');
+      await expect(view.editor.getByRole('status', { name: 'Node running', exact: true })).toHaveCount(0);
+      expect(calls).toBe(3, 'automatic recovery preserves the original physical execution');
+      const firstObservedLabel = (await view.runLabels())[0]!;
+      hold = false;
+      for (let index = 0; index < 9; index++) await runner.run();
+      await expect(view.output).toContainText('Invocation 12 done');
+      await expect.poll(async () => (await view.runLabels()).length).toBe(8);
+      expect(await view.runLabels()).not.toContain(firstObservedLabel);
+      // Exercise both ends of a full menu, including the scrollable final option.
+      await view.selectRun({ index: 0 });
+      await expect(view.output).toContainText('Invocation 5 done');
+      await view.selectRun({ index: 7 });
+      await expect(view.output).toContainText('Invocation 12 done');
+      await view.selectRun({ index: 0 });
+      await expect(view.output).toContainText('Invocation 5 done');
+      await runner.run();
+      await expect(view.output).toContainText('Invocation 13 done');
+      await view.reload();
+      await expect.poll(fixture.connectionCount).toBe(5);
+      await view.expectWaiting(0);
+      await expect(view.output).toHaveCount(0);
+      expect(calls).toBe(13, 'refresh clears browser history without re-executing any workflow');
+      expect(fixture.commands).toEqual([], 'history and reconnection send no execution, abort or control commands');
+    } finally {
+      release();
+      await active?.catch(() => {});
+      runner.dispose();
+      await fixture.close();
+    }
+  });
 }
 
 test('mixed predecessor default history reaches the managed browser without entering a named channel', async ({
@@ -332,16 +526,16 @@ for (const scenario of [
         const receivedOutputs = first.outputReadyFrames();
         old.outputsReady();
         await expect.poll(first.outputReadyFrames).toBeGreaterThan(receivedOutputs);
-        await first.picker.selectOption({ index: 0 });
+        await first.selectRun({ index: 0 });
         await expect(first.editor.getByRole('button', { name: /Resume/ }).first()).toBeEnabled();
-        await expect(first.editor.getByText('Retained history is incomplete.', { exact: true })).toBeVisible();
+        await first.expectIncomplete();
         await expect(first.editor.getByRole('button', { name: /Abort/ }).first()).toBeEnabled();
         await first.editor
           .getByRole('button', { name: /Resume/ })
           .first()
           .click();
         await expect.poll(old.paused).toBe(false);
-        await second.picker.selectOption({ index: 0 });
+        await second.selectRun({ index: 0 });
         await second.editor.getByRole('button', { name: /Pause/ }).first().click();
         await expect.poll(old.paused).toBe(true);
         for (const view of [first, second]) {
@@ -352,7 +546,7 @@ for (const scenario of [
           await expect(view.editor.getByRole('button', { name: /Pause|Resume|Abort/ })).toHaveCount(0);
         }
         const before = fixture.commands.length;
-        await first.picker.selectOption({ index: 0 });
+        await first.selectRun({ index: 0 });
         expect(fixture.commands.length).toBe(before, 'passive selection never replays a command');
         old.runner.processor.resume();
         old.release();
@@ -363,7 +557,7 @@ for (const scenario of [
             .filter({ hasText: 'Project A' })
             .click();
           await expect(view.editor.getByRole('button', { name: /Pause|Resume|Abort/ })).toHaveCount(0);
-          await expect(view.picker).toContainText('completed');
+          await view.expectRunStatus('completed');
         }
         expect(fixture.commands.filter((raw) => JSON.parse(raw).type === 'latest-control')).toHaveLength(2);
       } else if (scenario === 'prompt replies') {
@@ -387,16 +581,16 @@ for (const scenario of [
         reportHistoryGap();
         await expect(first.editor.getByRole('dialog')).toHaveCount(0);
         await expect(first.editor.getByRole('button', { name: /Abort/ }).first()).toBeVisible();
-        await expect(first.editor.getByText('Retained history is incomplete.', { exact: true })).toBeVisible();
+        await first.expectIncomplete();
         expect(fixture.commands.length).toBe(commandsBeforeGap, 'diagnostic recovery never resends a command');
-        await first.picker.selectOption({ index: 0 });
+        await first.selectRun({ index: 0 });
         await expect(first.editor.getByRole('dialog')).toHaveCount(0);
         await expect(first.editor.getByRole('button', { name: 'User Input Needed', exact: true })).toHaveCount(0);
         await expect(second.editor.getByRole('dialog')).toContainText('Question for newer-prompt');
         old.release();
         await old.run;
         await expect(first.output).toContainText('first-a alpha done');
-        await first.editor.getByRole('button', { name: 'Follow newest', exact: true }).click();
+        await first.selectRun({ index: 1 });
         await answer(1, 'gamma', 'newer-prompt');
         newer.release();
         await newer.run;
@@ -450,7 +644,7 @@ for (const scenario of [
         const newer = make('00123', 'newer');
         await expect(first.output).toContainText('newer-a streaming');
         await expect(second.output).toContainText('newer-a streaming');
-        await first.picker.selectOption({ index: 0 });
+        await first.selectRun({ index: 0 });
         await expect(first.output).toContainText('first-a streaming');
         await expect(second.output).toContainText('newer-a streaming');
         old.release();
@@ -465,10 +659,16 @@ for (const scenario of [
         await expect(first.output).toContainText('first-a done');
         await expect(second.output).toContainText('newer-a streaming');
         expect(fixture.commands.length).toBe(commands, 'reconnect must not replay controls or execution');
-        await first.editor.getByRole('button', { name: 'Follow newest', exact: true }).click();
+        await first.selectRun({ index: 1 });
         await expect(first.output).toContainText('newer-a streaming');
         await second.editor.getByRole('button', { name: /Pause/ }).first().click();
         await expect.poll(newer.paused).toBe(true);
+        const beforeNewAdmission = fixture.commands.length;
+        make('00123', 'newest');
+        for (const view of [first, second]) await expect(view.output).toContainText('newest-a streaming');
+        expect(newer.paused()).toBe(true, 'auto-selection does not resume the previously paused execution');
+        expect(fixture.commands.length).toBe(beforeNewAdmission, 'new-run selection never sends a control');
+        for (const view of [first, second]) await view.selectRun({ index: 1 });
         await first.editor
           .getByRole('button', { name: /Resume/ })
           .first()
@@ -477,7 +677,7 @@ for (const scenario of [
         const beforeUnsupportedEvent = fixture.commands.length;
         fixture.debuggerServer.broadcast(newer.runner.processor, 'future-event', {});
         for (const view of [first, second]) {
-          await expect(view.editor.getByText('Retained history is incomplete.', { exact: true })).toBeVisible();
+          await view.expectIncomplete();
           await expect(view.output).toContainText('newer-a streaming');
           await expect(view.editor.getByRole('button', { name: /Abort/ }).first()).toBeEnabled();
         }

@@ -141,7 +141,7 @@ export type { PendingGraphExecution } from './executorSessionPendingExecutions.j
 
 export type ExecutorSessionRuntime = {
   getLatestDebuggerState(): ReturnType<LatestDebuggerRuns['state']> | undefined;
-  selectLatestDebuggerRun(key?: string): void;
+  selectLatestDebuggerRun(key: string): void;
   sendLatestPrompt(target: LatestDebuggerScope, promptId: string, answers: unknown): boolean;
   buildSessionState(legacyDebuggerConfig?: unknown, legacyConnectionState?: unknown): ExecutorSessionState;
   connect(url?: string): Promise<void>;
@@ -729,7 +729,7 @@ export function createExecutorSessionRuntime(options: {
 
       if (incoming.kind === 'managed-event') {
         const frame = incoming.incoming;
-        latest.receive(frame.message, frame.data, frame.rivetScope, String(event.data));
+        latest.receive(frame.message, frame.data, frame.rivetScope, String(event.data), frame.history, frame.eventId);
         return;
       }
 

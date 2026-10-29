@@ -119,12 +119,14 @@ test('executor transport decodes debugger sentinels in process event messages', 
 test('verified managed transport keeps lifecycle/unknown events out of executor classification and decodes once', () => {
   const target = createExternalDebuggerTarget('ws://debugger.example/ws/latest-debugger@A');
   for (const message of ['latest-settled', 'latest-prompt-closed', 'future-event']) {
+    const history = message === 'future-event' ? 'peer' : true;
     const parsed = parseExecutorSessionIncomingMessage({
       target,
       socketUrl: target.url,
       managedLatest: true,
       rawMessage: JSON.stringify({
         message,
+        rivetHistory: history,
         rivetScope: { channel: 'A' },
         data: { authored: createDebuggerTransportUndefinedSentinel() },
       }),
@@ -132,6 +134,7 @@ test('verified managed transport keeps lifecycle/unknown events out of executor 
     assert.equal(parsed?.kind, 'managed-event');
     if (parsed?.kind !== 'managed-event') assert.fail('Expected managed admission, not a fake graph event');
     assert.equal(parsed.incoming.message, message);
+    assert.equal(parsed.incoming.history, history);
     assert.deepEqual(parsed.incoming.data, { authored: undefined });
   }
 });

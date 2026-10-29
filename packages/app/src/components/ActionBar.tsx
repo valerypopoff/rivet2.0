@@ -17,7 +17,6 @@ import PlayIcon from 'majesticons/line/play-circle-line.svg?react';
 import MoreMenuVerticalIcon from 'majesticons/line/more-menu-vertical-line.svg?react';
 import Popup from '@atlaskit/popup';
 import { useRemoteDebugger } from '../hooks/useRemoteDebugger';
-import { ManagedLatestRunControls } from './ManagedLatestRunControls.js';
 import { useManagedLatestControlState } from '../hooks/useExecutorSession.js';
 import { ActionBarMoreMenu } from './ActionBarMoreMenu';
 import { AddRunInputsToEvaluationModal } from './CopyAsTestCaseModal';
@@ -351,8 +350,8 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
       aria-label={activeRecording ? 'Loaded recording' : undefined}
     >
       <div className="action-bar-controls">
-        {!activeRecording && <ManagedLatestRunControls />}
         <RemoteDebuggerInfo
+          showRunControls={!activeRecording}
           key={`${projectMetadata.id}:${!!actionBarExecutionState.remoteDebuggerBanner}`}
           connected={!!actionBarExecutionState.remoteDebuggerBanner}
         />

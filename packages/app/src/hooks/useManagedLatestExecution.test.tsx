@@ -27,7 +27,7 @@ import { useManagedLatestExecution } from './useManagedLatestExecution.js';
 import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
 import { executionObservationCoordinatorState } from '../state/executionObservation.js';
 
-test('real managed ingress projects only selected roots, reconstructs a pinned view, and fences a reopened tab', async (t) => {
+test('real managed ingress projects only selected roots, reconstructs a retained view, and fences a reopened tab', async (t) => {
   const dom = new JSDOM('<div id="root"></div>', { url: 'https://rivet.test' });
   const values = {
     React,
@@ -212,7 +212,7 @@ test('real managed ingress projects only selected roots, reconstructs a pinned v
   assert.equal(snapshot().lastRunDataByNode[node.id]![0]!.rootRunId, 'old');
   for (let i = 0; i < 3; i++) {
     assert.ok(refs.size > 0, 'retained selection materializes large values through the existing ref store');
-    await act(async () => runtime.selectLatestDebuggerRun());
+    await act(async () => runtime.selectLatestDebuggerRun(runtime.getLatestDebuggerState()!.runs.at(-1)!.key));
     assert.equal(refs.size, 0, 'leaving a retained view releases its payload references');
     await act(async () => runtime.selectLatestDebuggerRun(old.key));
   }
@@ -223,7 +223,6 @@ test('real managed ingress projects only selected roots, reconstructs a pinned v
   await act(async () => runtime.selectLatestDebuggerRun(old.key));
   assert.equal(snapshot(), before, 'historical selection cannot adopt a reopened lifetime');
   assert.equal(controls().readOnly, true, 'a reopened source cannot acquire retained run controls');
-  await act(async () => runtime.selectLatestDebuggerRun());
   await begin('missing-terminal');
   await emit(
     'missing-terminal',
@@ -285,7 +284,7 @@ test('real managed ingress projects only selected roots, reconstructs a pinned v
   assert.equal(snapshot().graphRunning, false, 'physical settlement closes an incomplete source view');
   assert.deepEqual(snapshot().userInputQuestions, {}, 'a settled owner cannot retain interactive prompts');
   assert.equal(snapshot().lastRunDataByNode[node.id]![0]!.data.status?.type, 'interrupted');
-  await act(async () => runtime.selectLatestDebuggerRun());
+  await act(async () => runtime.selectLatestDebuggerRun(runtime.getLatestDebuggerState()!.runs.at(-1)!.key));
   const outside = createBlankProjectWithDefaultGraph();
   const outsideScope = {
     channel: 'A',
@@ -377,7 +376,7 @@ test('real managed ingress projects only selected roots, reconstructs a pinned v
   await act(async () => runtime.selectLatestDebuggerRun(removedKey));
   await emit('removed-member', 'nodeStart', { execution: removed, node: memberNode, processId: 'late', inputs: {} });
   assert.equal(memberSnapshot().lastRunDataByNode[memberNode.id]!.length, 1, 'rejoining cannot revive old admission');
-  await act(async () => runtime.selectLatestDebuggerRun());
+  await act(async () => runtime.selectLatestDebuggerRun(runtime.getLatestDebuggerState()!.runs.at(-1)!.key));
   await beginMember('disconnected');
   assert.equal(memberSnapshot().lastRunDataByNode[memberNode.id]![0]!.data.status?.type, 'running');
   // Exercise the production buffer bounds against the actual runtime and store.
@@ -422,10 +421,10 @@ test('real managed ingress projects only selected roots, reconstructs a pinned v
     await emit(retainedRoot, 'latest-settled');
     assert.equal(controls().graphRunning, false, 'failed/cancelled roots settle even with missing starts');
     assert.equal(controls().canSendAbort, false);
-    await act(async () => runtime.selectLatestDebuggerRun());
+    await act(async () => runtime.selectLatestDebuggerRun(runtime.getLatestDebuggerState()!.runs.at(-1)!.key));
   }
-  await act(async () => runtime.selectLatestDebuggerRun());
-  for (let index = 0; index < 34; index++) {
+  await act(async () => runtime.selectLatestDebuggerRun(runtime.getLatestDebuggerState()!.runs.at(-1)!.key));
+  for (let index = 0; index < 10; index++) {
     await begin(`catalogue-${index}`);
     assert.equal(
       snapshot().runActivityJournal?.rootOrder.at(-1),
@@ -456,7 +455,7 @@ test('real managed ingress projects only selected roots, reconstructs a pinned v
       processId: 'recording-conflict',
       outputs: { output: { type: 'string', value: `stream-${index}` } },
     });
-  assert.equal(checks, 100, 'streaming retains one targeted check per source event, not scans of 32 retained roots');
+  assert.equal(checks, 100, 'streaming retains one targeted check per source event, not scans of eight retained roots');
   coordinator.check = check;
   await act(async () =>
     store.set(loadedRecordingState, {
@@ -472,7 +471,7 @@ test('real managed ingress projects only selected roots, reconstructs a pinned v
   assert.equal(controls().readOnly, true);
   await act(async () => store.set(loadedRecordingState, null));
   assert.equal(controls().readOnly, true, 'unloading recording cannot renew an old admission');
-  await act(async () => runtime.selectLatestDebuggerRun());
+  await act(async () => runtime.selectLatestDebuggerRun(runtime.getLatestDebuggerState()!.runs.at(-1)!.key));
   await beginMember('after-eviction');
   assert.equal(
     memberSnapshot().lastRunDataByNode[memberNode.id]?.[0]?.data.status?.type,

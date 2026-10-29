@@ -731,13 +731,16 @@ command targeting an unsupported/changed owner is rejected, not broadcast or
 resent. This permits mixed-version replacement readiness without relaxing named
 channel isolation or claiming that legacy owners support managed controls.
 
-The editor session owns at most 32 run entries and one bounded serialized wire
-history (32 MiB/8,192 events). A bundle shares follow-newest/pinned selection;
+The editor session owns at most eight run entries and one bounded serialized wire
+history (32 MiB/8,192 events). A bundle shares selected-root state;
 unrelated project groups do not. Immutable owner admission time, with local order
 as a tie-breaker, chooses the newest relevant root even when another owner's older
-start is replayed later. Pausing pins that root. Selection reconstructs a view
-through canonical snapshot reducers; it never dispatches execution, records/uploads
-a run or substitutes another root's outputs. Eviction/gap notices make retained
+start is replayed later. History selection is temporary: a strictly newer
+relevant admission replaces it, even when the selected run is paused. Existing
+outputs, terminal events and duplicate starts cannot steal selection. Switching
+views sends no runtime controls and never resumes the old run. Selection
+reconstructs a view through canonical snapshot reducers; it never dispatches
+execution, records/uploads a run or substitutes another root's outputs. Eviction/gap notices make retained
 views explicitly incomplete. Root `done`/`error` and physical `latest-settled`
 remain separate; control ownership is removed only at physical settlement.
 
