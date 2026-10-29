@@ -1,10 +1,122 @@
 # Execution coordination
 
+## Managed debugger presentation ownership
+
+Managed process frames and lifecycle frames share one subscription lifetime but
+different typed callbacks. The optional second callback to `subscribeMessages`
+and `subscribeMessagesForAllProjects` carries Core's lifecycle union to the same
+canonical adapter; ordinary executor handlers receive only executor events. Do
+not synthesize graph events for prompt closure/settlement or add a second snapshot
+owner. Verified managed ingress preserves unknown authored fields and decodes
+sentinels once before Core routing admission.
+
+`ManagedLatestSession` isolates handshake, replay cursors, pending acknowledgements
+and selection delivery from ordinary Node execution policy. The parent retains
+socket generation/reconnect ownership; adapter reset never sends work or renews
+admission. Full reconciliation reacts to canonical root/running, project-binding
+and recording changes, not payload-only snapshot writes. Targeted delivery checks
+still validate original receiver tokens and current conflicts.
+
+Adapter delivery effects may synchronously retire a session or select another root.
+A projection revision fences the remaining replay frames and obsolete completion
+notifications; it is not another selected-root or snapshot owner. Command timers
+exist before the send effect and are removed on acknowledgement, failed send or
+reset. A retired session's timeout cannot warn a replacement logical session.
+History/availability notices have the same generation fence: a synchronous reset
+during reconstruction or subscriber notification must not populate the replacement
+session's warning-deduplication state or suppress its first genuine notice.
+Unknown execution messages from a verified, already admitted root invalidate only
+that root's history/prompt proof; they cannot settle execution or invalidate a
+different selected root's verified prompt. Reconstruction remains observation-only.
+
+Three existing owners answer different questions:
+
+| Question                                          | Owner                                       |
+| ------------------------------------------------- | ------------------------------------------- |
+| Verified connection role, protocol and channel    | `executorSession`'s `connection` descriptor |
+| Selected root lifecycle and bounded run catalogue | `LatestDebuggerRuns`                        |
+| Available node detail and Run Activity            | Canonical per-project execution snapshots   |
+
+For a named connection awaiting handshake, descriptor protocol `0` means pending
+and the channel is only the requested label, not verified authority. Protocols
+`1` and `2` are negotiated facts. Transport readiness independently gates commands;
+v1 managed observation never gains run-scoped controls.
+
+`managedLatestControlState` derives UI and command authority from that descriptor,
+the selected root and its original coordinator admission. A source must still own
+its captured receiver token, belong to this debugger and have no recording or
+replacement local run. Passive members never acquire controls, even when history
+reconstruction clears display provenance. Buttons and modifying dispatch use the
+same policy; prompt replies check their captured root rather than the current
+selection. Reconnect disables commands until the transport is verified ready.
+
+History eviction may leave an empty/incomplete canvas while the root remains
+running or paused. Do not synthesize a start or copy lifecycle flags into canvas
+snapshots to restore controls. Reconstruction projects only the retained tail
+through the original admission and performs no execution/persistence commands.
+The coordinator's read-only `get` does not create or renew an admission.
+
+The run catalogue keeps execution phase and observed pause state independently;
+the display status is derived, not another mutable lifecycle owner. In-flight
+root outputs cannot hide Resume, resume cannot forget outputs-ready/finishing,
+and late pause/resume cannot reopen an abort-requested run. Session capabilities
+and editor presentation reuse `getLatestRunControlPolicy`. Root output readiness
+notifies session subscribers even when no further node event follows it.
+Captured-target checks use that root's policy plus fresh v2 transport readiness,
+not the picker's current root capabilities; switching selection cannot change an
+already captured prompt's authority.
+
+Prompt replay uses the execution owner's optional `promptLifecycle: 1` scope
+capability, not the connected relay's version. That owner emits
+`latest-prompt-closed` in the same scoped, ordered stream before consuming the
+one-shot callback. Selection rebuilds restore only prompts still proved pending;
+answered prompts remain activity history, never interactive questions. The
+catalogue retains bounded invocation/handle metadata (at most the global event
+limit), not answers, callbacks or another snapshot tree. Terminals, receiver
+retirement and existing canonical reducers retain their respective ownership.
+A stream gap clears pending proof. Historical prompts from older owners without
+the capability are activity-only and mark the view incomplete; live compatibility
+and exact server-side rejection remain intact.
+History-gap/truncation/oversize notices also rebuild the currently selected view
+immediately, so an already open form cannot outlive invalidated pending proof.
+This uses the same bounded replay path, not a second prompt-state owner or a
+runtime command. A control-owner-unavailable notice alone does not imply a gap.
+
+`remoteExecutionProjection` owns shared graph/node compatibility and safe snapshot
+projection. Managed and legacy adapters retain their routing, ancestry and
+interactive/passive policies. Missing graph/node identities reject display;
+dirty or differing saved definitions warn and continue without replacing authored
+content. Definition comparison runs on graph start, not each partial output.
+Legacy source views use the same compatibility guard as dependency views.
+Add new projection safeguards here rather than duplicating them in adapters.
+
 Implemented locally on 2026-10-24. This is an editor-only refactor: no graph
 scheduler, project/bundle/recording format, database, deployment or provider changes.
 Compare behavior with the frozen [baseline](./EXECUTION-ROUTING-BEHAVIOR-BASELINE.md).
 
 ## Ownership and writer inventory
+
+Managed Studio Server latest debugging adds a transport-specific adapter, not a
+second execution store. `LatestDebuggerRuns` retains at most 32 root descriptors
+and one bounded serialized wire history. `ManagedLatestSession` coordinates its
+follow/pin selection and exact commands under the `executorSession` transport.
+`useManagedLatestExecution` captures receiver tokens
+at original admission and projects only the selected root through the canonical
+snapshot reducer. An older root's terminal cannot settle the selected newer one.
+Ordering uses the owner's immutable admission timestamp, with local admission order
+only as a tie-breaker; delayed cross-owner replay cannot promote an older root.
+Physical settlement and explicit disconnection settle only the displayed root's
+captured, still-current receivers. They clear prompts and running indicators without
+aborting the processor or overwriting a replacement local run/recording. Removing
+one bundle member retires only its projection, not the remaining shared session;
+all retained admissions fence that member, even after it rejoins.
+Selection/reconnect never reruns work; history eviction does not cancel execution.
+Generic Node debugger and ordinary Node request IDs retain their prior adapters.
+Managed ingress is handshake-gated before executor side effects: named channels
+cannot dispatch legacy frames while waiting, verified v2 sessions cannot downgrade
+on reconnect, and observation never services the viewer's dataset provider.
+See [channel contracts](studio-server/access-and-routing.md#latest-debugger-model)
+and [local verification](studio-server/development.md#isolated-latest-debugger-verification).
 
 | Ingress / writer                                                                                             | Authority                                                                                                  | Display/state boundary                                                                                                                       |
 | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |

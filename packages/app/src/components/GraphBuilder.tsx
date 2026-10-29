@@ -197,7 +197,8 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
 
   const handleSubmitUserInputModal = (answers: ArrayDataValue<StringDataValue>) => {
     setUserInputModalOpen(false);
-    submitUserInputAnswers(firstNodeQuestions![0], answers);
+    const pending = firstNodeQuestions?.[1]?.at(-1);
+    if (pending) submitUserInputAnswers(pending.nodeId, answers, pending.latestPrompt);
   };
 
   useEffect(() => {
@@ -291,6 +292,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
         <GraphExecutionSelectorBar />
         <HistoricalGraphNotice />
         <UserInputModal
+          key={firstNodeQuestions?.[1]?.at(-1)?.latestPrompt?.promptId ?? 'ordinary-input'}
           open={isUserInputModalOpen && questions.length > 0}
           questions={lastQuestions}
           questionsNodeId={questionsNodeId}

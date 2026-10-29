@@ -5,7 +5,7 @@ import { selectedExecutorState } from '../state/settings';
 import { canRunGraphFromEditor, shouldUseRemoteExecutor } from '../state/selectors/executionSelectors.js';
 import { useLocalExecutor } from './useLocalExecutor';
 import { useRemoteExecutor } from './useRemoteExecutor';
-import { useExecutorSessionState } from './useExecutorSession';
+import { useExecutorSessionState, useManagedLatestControlState } from './useExecutorSession';
 import { useStableCallback } from './useStableCallback';
 import { clearUserInputSubmitHandler, setUserInputSubmitHandler } from '../state/actions/userInputActions.js';
 import type { EditorGraphRunOptions } from './editorGraphRunOptions.js';
@@ -18,7 +18,9 @@ export function useGraphExecutor() {
   const remoteExecutor = useRemoteExecutor();
   const session = useExecutorSessionState();
   const hasLoadedRecording = !!loadedRecording;
-  const observingRemote = useAtomValue(remoteObservationReadOnlyState) && !hasLoadedRecording;
+  const managedControls = useManagedLatestControlState();
+  const observingRemote =
+    (useAtomValue(remoteObservationReadOnlyState) || managedControls?.readOnly) && !hasLoadedRecording;
   const ignoreEditorRun = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
     if (options.throwOnError) {
       throw new Error('The current executor mode cannot run graphs from the editor.');
@@ -48,14 +50,19 @@ export function useGraphExecutor() {
     : localExecutor;
 
   const graphControlExecutor = hasLoadedRecording ? localExecutor : liveExecutor;
+  const submitLiveUserInput = liveExecutor.submitUserInput;
+  const submitManagedUserInput = remoteExecutor.submitUserInput;
 
   useEffect(() => {
-    setUserInputSubmitHandler(liveExecutor.submitUserInput);
+    setUserInputSubmitHandler((node, answers, prompt) => {
+      if (prompt) submitManagedUserInput(node, answers, prompt);
+      else submitLiveUserInput(node, answers);
+    });
 
     return () => {
       clearUserInputSubmitHandler();
     };
-  }, [liveExecutor.submitUserInput]);
+  }, [submitLiveUserInput, submitManagedUserInput]);
 
   const tryRunGraph = useStableCallback(async (options: EditorGraphRunOptions = {}) => {
     if (options.requireLiveRun && hasLoadedRecording) {

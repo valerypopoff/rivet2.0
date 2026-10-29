@@ -12,6 +12,11 @@ import type { ExecutorSessionTarget } from './executorSessionTarget.js';
 
 export type ExecutorSessionIncomingTransportMessage =
   | {
+      // Verified managed transport, with content still awaiting Core admission.
+      kind: 'managed-event';
+      incoming: { message: string; data: unknown; rivetScope: unknown };
+    }
+  | {
       kind: 'upload-allowed';
     }
   | {
@@ -37,6 +42,7 @@ export function parseExecutorSessionIncomingMessage(options: {
   target: ExecutorSessionTarget;
   /** Session control/cursor admission happens before decoding large event payloads. */
   acceptEnvelope?: (envelope: unknown) => boolean;
+  managedLatest?: boolean;
 }): ExecutorSessionIncomingTransportMessage | undefined {
   const { rawMessage, socketUrl, target } = options;
 
@@ -57,6 +63,16 @@ export function parseExecutorSessionIncomingMessage(options: {
 
   if (options.acceptEnvelope && !options.acceptEnvelope(parsed)) return undefined;
   const decodedParsed = decodeDebuggerTransportSentinels(parsed);
+
+  if (options.managedLatest) {
+    if (!decodedParsed || typeof decodedParsed !== 'object') return;
+    const frame = decodedParsed as Record<string, unknown>;
+    if (typeof frame.message !== 'string') return;
+    return {
+      kind: 'managed-event',
+      incoming: { message: frame.message, data: frame.data, rivetScope: frame.rivetScope },
+    };
+  }
 
   if (!isExecutorIncomingMessage(decodedParsed)) {
     handleError(new Error('Malformed executor message envelope.'), 'Failed to parse executor message', {

@@ -12,7 +12,6 @@ import {
   renderWebAppAccessDeniedHtml,
   renderWebAppOriginDeniedHtml,
 } from './web-app-auth-presentation.js';
-import { resolveWebAppExecutionDefinition } from './web-app-execution.js';
 import { performance } from 'node:perf_hooks';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
@@ -51,6 +50,7 @@ import {
 } from '../../runtime-libraries/managed-code-runner.js';
 import { isTrustedProxyRequest, isTrustedClientRequest } from '../../auth.js';
 import { getRequestCorrelationId } from '../../request-correlation.js';
+import { parseLatestEndpointSegment } from '@valerypopoff/rivet2-core';
 import { isServerUiAuthRequestAllowed } from '../../server-ui-auth.js';
 import {
   createWebAppOAuthAuthorizationRedirect,
@@ -68,16 +68,17 @@ import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-serv
 import { createHostedProcessor } from './hosted-processor.js';
 import { ExecutionSession } from './execution-session.js';
 import {
-  WorkflowExecutionContext,
-  WorkflowExecutionProject,
+  type WorkflowExecutionContext,
+  type WorkflowExecutionProject,
+  resolveWebAppExecutionDefinition,
   isJsonObjectRecord,
   getWorkflowRequestHeaders,
   getWorkflowErrorMessage,
-  WebAppRouteKind,
+  type WebAppRouteKind,
   getWebAppBasePath,
   getLatestRemoteDebuggerForExecution,
   resolveWebAppUiGraph,
-  WorkflowExecutionRecordingSnapshot,
+  type WorkflowExecutionRecordingSnapshot,
   awaitWebAppActionPreflight,
   createWebAppProcessorOptions,
   enqueueExecutionRecording,
@@ -327,7 +328,7 @@ function authorizePublishedWorkflowBeforeBody(req: Request, res: Response, next:
 
 function authorizeLatestWorkflowBeforeBody(req: Request, res: Response, next: NextFunction): void {
   try {
-    const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
+    const { endpointName } = getLatestRequestBinding(req);
     if (!endpointName) {
       throw badRequest('Endpoint name is required');
     }
@@ -925,6 +926,7 @@ async function executeWorkflowEndpoint(
     enableRemoteDebugger?: boolean;
     endpointName: string;
     runKind: 'published' | 'latest';
+    debuggerChannel?: string | null;
   },
 ): Promise<void> {
   const { project, datasetProvider, projectVirtualPath } = executionProject;
@@ -1038,7 +1040,7 @@ async function handleLatestWorkflowRequest(req: Request, res: Response, internal
   const requestStartedAt = performance.now();
 
   try {
-    const endpointName = normalizeStoredEndpointName(String(req.params.endpointName ?? ''));
+    const { endpointName, channel } = getLatestRequestBinding(req);
     if (!endpointName) {
       throw badRequest('Endpoint name is required');
     }
@@ -1054,6 +1056,7 @@ async function handleLatestWorkflowRequest(req: Request, res: Response, internal
       await executeWorkflowEndpoint(executionProject, requestStartedAt, req, res, {
         abortSignal: activeExecution.signal,
         enableRemoteDebugger: true,
+        debuggerChannel: channel,
         endpointName,
         runKind: 'latest',
       });
@@ -1062,6 +1065,19 @@ async function handleLatestWorkflowRequest(req: Request, res: Response, internal
     }
   } catch (error) {
     sendWorkflowErrorWithDuration(res, error, requestStartedAt);
+  }
+}
+
+const latestRequestBindings = new WeakMap<Request, ReturnType<typeof parseLatestEndpointSegment>>();
+function getLatestRequestBinding(req: Request) {
+  const existing = latestRequestBindings.get(req);
+  if (existing) return existing;
+  try {
+    const binding = Object.freeze(parseLatestEndpointSegment(String(req.params.endpointName ?? '')));
+    latestRequestBindings.set(req, binding);
+    return binding;
+  } catch {
+    throw badRequest('Invalid latest endpoint or debugger channel');
   }
 }
 

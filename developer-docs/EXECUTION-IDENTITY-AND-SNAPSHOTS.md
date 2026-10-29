@@ -1,5 +1,14 @@
 # Execution Identity And Snapshots
 
+Managed latest debugging keeps protocol lifetime in `ManagedLatestSession`, root
+history in `LatestDebuggerRuns`, and display authority in original coordinator
+admissions. Each independent history loss invalidates pending proof. Ownership
+comparisons skip payload changes, never root/running, recording or binding changes.
+
+Managed lifecycle messages now use Core's scoped union and the typed lifecycle
+callback on the existing subscription, not a cast to ordinary graph-event types.
+The same original admission and canonical snapshots still own their effects.
+
 Canonical guide for execution lineage, event snapshots, and app-side run history.
 
 For bundle editor/debugger/playback behavior before the coordination refactor,
@@ -15,6 +24,21 @@ partial-run preservation and selection are explicit presentation policy. Legacy
 terminal confirmations are runtime snapshot metadata, not a hook-local queue.
 
 ## Core Identity
+
+Managed debugger control identity is independent of retained snapshot detail.
+`LatestDebuggerRuns` retains selected-root lifecycle after start/history eviction;
+the original coordinator receiver token still fences source controls. Incomplete
+history cannot grant a passive/reopened tab authority or imply that a run stopped.
+The session's negotiated `connection` descriptor supplies protocol/channel facts;
+UI selectors must not infer them again from raw URL spelling.
+
+Managed latest-debugger envelopes additionally bind channel, root project/run,
+execution owner and process incarnation. These routing/control identities are
+separate from ordinary Node dispatch request IDs and graph-invocation selection.
+One selected root is shared within each debugger bundle; retained run selection
+cannot acquire new receiver tokens after a tab closes/rebinds. The original
+Run Activity ancestry is retained even where canvas events are rebased for a
+member project. See [coordination](EXECUTION-COORDINATION.md).
 
 Every graph event carries `GraphExecutionMetadata`: `rootRunId` identifies one root
 invocation, `graphRunId` identifies one graph/subgraph invocation,

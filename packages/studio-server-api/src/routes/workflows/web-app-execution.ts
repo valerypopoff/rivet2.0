@@ -1,9 +1,9 @@
 import type { IncomingMessage } from 'node:http';
-import {
+import type {
   ExecutionRecorder,
-  type RivetWebAppProcessorOptions,
-  type UiGraphActionComponent,
-  type UiGraph,
+  RivetWebAppProcessorOptions,
+  UiGraphActionComponent,
+  UiGraph,
 } from '@valerypopoff/rivet2-node';
 
 import {
@@ -30,13 +30,16 @@ import {
   getLLMProfileHealthStore,
   persistWorkflowExecutionRecordingWithBackend,
   resolveLatestWebAppExecutionProject as resolveLatestWebAppExecutionProjectWithBackend,
-  resolvePublishedExecutionProject,
+  type resolvePublishedExecutionProject,
   resolvePublishedWebAppExecutionProject as resolvePublishedWebAppExecutionProjectWithBackend,
   resolveWebAppAccessPolicy,
   type WebAppAccessPolicy,
 } from './storage-backend.js';
 import { isWorkflowRecordingEnabled, shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
-import type { WorkflowRecordingExecutionIdentity, WorkflowRunCost } from '../../../../studio-server-shared/workflow-recording-types.js';
+import type {
+  WorkflowRecordingExecutionIdentity,
+  WorkflowRunCost,
+} from '../../../../studio-server-shared/workflow-recording-types.js';
 import { createServingRuntimeOptions } from './hosted-processor.js';
 import { getExecutionErrorMessage, getExecutionOutputStatus } from './execution-session.js';
 // Shared execution preparation and policy; importing this module registers no HTTP routes.
@@ -189,9 +192,12 @@ export function getWebAppBasePath(routeKind: WebAppRouteKind, slug: string): str
   return `${basePath}/${encodeUrlPathSegment(slug)}`;
 }
 
-export function getLatestRemoteDebuggerForExecution(options?: { enableRemoteDebugger?: boolean }) {
+export function getLatestRemoteDebuggerForExecution(options?: {
+  enableRemoteDebugger?: boolean;
+  debuggerChannel?: string | null;
+}) {
   return options?.enableRemoteDebugger && isLatestWorkflowRemoteDebuggerEnabled()
-    ? maybeGetLatestWorkflowRemoteDebugger()
+    ? maybeGetLatestWorkflowRemoteDebugger(options.debuggerChannel ?? null)
     : undefined;
 }
 
@@ -504,7 +510,11 @@ export function enqueueWebAppActionRecording(
     cost?: WorkflowRunCost;
   },
 ): void {
-  enqueueExecutionRecording(executionProject, { recorder, durationMs, status, errorMessage, cost: options.cost }, options);
+  enqueueExecutionRecording(
+    executionProject,
+    { recorder, durationMs, status, errorMessage, cost: options.cost },
+    options,
+  );
 }
 
 export function getGraphNameAtExecution(

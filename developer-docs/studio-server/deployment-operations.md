@@ -1205,6 +1205,22 @@ These are local tooling checks, not production deployment or GKE qualification.
 
 ## Frozen recovery adapter
 
+### Refresh installation-specific recovery packets
+
+An adapter packet from an earlier deployment is not automatically reusable.
+Before downtime, rebind its exact installation/source/schema, table ownership,
+dependency hashes, client configuration and acceptance fixtures to the new
+operation. A schema-17 restore verifier is not evidence for an installed schema-18
+database, even when the next release does not change the schema. Exercise native
+imports, local restore and headless-browser prerequisites before quiescence.
+
+Online preparation may warm a private object cache. Reuse bytes only after a
+fresh snapshot-reference inventory and exact generation/size/checksum checks;
+it never substitutes for the final frozen SQL capture, object coverage and key
+recovery. Keep settings and recovery files out of Git/uploads and restrict their
+directory ACLs on Windows as well as POSIX modes. Preserve prior packets and
+diagnostics rather than overwriting them to make a new operation appear verified.
+
 After the journal is owned, release autoscalers and admission stop, and all old
 writers disappear, the command invokes the reviewed, hash-pinned `.mjs` adapter:
 
@@ -1296,8 +1312,18 @@ case passes ten consecutive runs. Windows passes the 31 maintenance and 14 CI
 tests. Retained local logs are `artifacts/ci-maintenance-support-linux.log`,
 `artifacts/ci-maintenance-windows-final.log` and `artifacts/ci-history-windows-final.log`.
 The real-process shutdown regression gates child writes on an explicit recovery
-signal sent only after confirmed shutdown. It also requires the child's verified
-loopback listener to refuse connections; a connection timeout cannot prove exit.
+signal sent only after confirmed shutdown. It also requires successful exclusive
+rebinding of the child's exact verified loopback port, held through the recovery
+write check. A negative control proves a live, connection-resetting listener
+prevents that bind. TCP `ECONNRESET`/`ECONNREFUSED` differences during connection
+establishment are not shutdown authority; neither a reset nor a timeout proves
+exit. This avoids the Linux CI errno race without accepting a surviving child or
+changing production process-group/taskkill confirmation.
+Verification (2026-10-29): all 32 maintenance-plan tests passed without skips on
+Windows and offline Linux Node 24.21.0. The live-listener negative control and
+real child-shutdown case also passed ten consecutive Linux runs. Formatting,
+lint, test-style and documentation-link checks passed. This is local regression
+evidence, not a deployment or qualification run.
 Do not assert that a child must stop before an arbitrary wall-clock write timer:
 on loaded Windows hosts, tree termination may legitimately take longer while
 recovery remains blocked.

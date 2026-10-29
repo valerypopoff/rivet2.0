@@ -1,5 +1,15 @@
 # Access And Routing
 
+Managed latest peer envelopes are read as JSON independent of property order;
+writers retain the historical event-ID-first form for mixed-version peers.
+Every independent history loss produces an invalidation, even after a prior
+warning. Channels, ownership checks and authentication are unchanged.
+Managed lifecycle/diagnostic/control-result construction and admission use the
+shared Core contract. Rejected controls, malformed replies, unavailable owners
+and lost acknowledgements feed finite, sanitized existing logs/optional metrics;
+no routing labels, execution IDs or contents are logged. Reporting cannot change
+control outcomes or readiness.
+
 This document describes the current external route families, the nginx gate, and the trust boundary between `proxy`, the control-plane API, the execution-plane API, and `executor`.
 
 On a single VM, the optional Compose TLS listener terminates public HTTPS and
@@ -649,12 +659,113 @@ Important limitation:
 
 ## Latest Debugger Model
 
+### Channel isolation implementation status
+
+The server and editor implement managed latest-debugger protocol v2. This is a
+local implementation contract, not evidence of a production rollout. Older
+clients can observe default-channel events, but their unscoped modifying commands
+are rejected. Generic Node debuggers retain their legacy adapter and do not gain
+an isolation guarantee merely by using the same project.
+A managed handshake, not just an unsuffixed URL path, selects the managed adapter;
+generic no-handshake servers retain their existing behavior. Named channels
+always require a matching v2 handshake and never downgrade.
+Named connections discard every pre-handshake frame, including legacy executor
+messages. A logical session that verified v2 must keep v2 after reconnect, including
+the default channel; unsupported versions or non-boolean capability claims close
+observation rather than inheriting readiness. The two capability flags must both
+be literal `true`.
+Managed latest observation (including legacy default-channel observation) never
+enables project upload or services dataset requests through the viewer's local
+provider. A managed handshake clears any earlier generic upload permission.
+Ordinary Node executors and no-handshake generic debuggers retain their bridges.
+
+The new paired routes are `POST /workflows-latest/<endpoint>@<channel>` and
+`/ws/latest-debugger@<channel>`. Codes are case-sensitive ASCII letters, digits,
+underscores or hyphens, 1–32 characters; leading zeroes are significant. The
+unsuffixed routes use a separate default channel. Codes are routing labels, not
+credentials: normal API and UI authentication remain mandatory, and admins using
+the same code intentionally share controls. No channel registration or database
+migration is required. Published routes do not accept the suffix.
+
+Latest endpoint parsing is captured once before authorization and reused during
+lookup/execution. Only the base endpoint name reaches recording/statistics and
+publication identity. Latest web-app actions remain in the default channel.
+
+`LatestDebuggerPolicy` binds request-owned processors to channels and exact
+root/owner-incarnation identities. Its prompt handles retain the original input
+callback; replies never use the legacy node-ID fan-out. Handles are consumed
+before invoking the callback and released at cancellation/terminal/disposal.
+The Node debugger's opt-in `interceptMessage` hook consumes managed frames before
+legacy handlers, leaving ordinary executor and generic debugger behavior unchanged.
+
+Unregistered/contradictory event identities are dropped into a bounded 32-entry
+policy diagnostic ring (event name/reason only, no graph payloads). They are never
+assigned to a most-recent run. Already-paused, unpaused-resume and cancelling
+execution controls are explicitly rejected. The editor distinguishes outputs
+ready, abort requested, finishing and physically settled outcomes.
+Physical settlement without a retained outcome is labelled settled/incomplete,
+never converted to success.
+Root outputs-ready status is attributed only to the root invocation. A called
+graph becoming ready does not imply that its caller's outputs are ready.
+
+The existing HA stream also runs without peers for standalone installations.
+Channel filtering applies to both live and replay delivery; authenticated peers
+transport scoped envelopes. Controls use `latest-control` with `commandId`,
+`target` (channel, rootRunId, projectId, owner, incarnation), `action`, and optional
+`promptId`/`answers`. Replies use `latest-control-result` with accepted, rejected,
+or outcome-unknown status. Commands are never automatically replayed. Remote
+commands require a v2-capable exact owner; this is not an arbitrary failover path.
+Replay remains globally bounded to 32 MiB/8,192 events, not that amount per channel.
+
+Managed HA connections require authenticated `x-rivet-latest-protocol: 2` peers.
+An old peer must not receive named-channel history and forward it to unfiltered
+browsers. The v2 peer hello and event envelope must agree on owner/incarnation.
+An unsupported/changed owner cannot receive commands through a broadcast fallback.
+
+The editor session owns at most 32 run entries and one bounded serialized wire
+history (32 MiB/8,192 events). A bundle shares follow-newest/pinned selection;
+unrelated project groups do not. Immutable owner admission time, with local order
+as a tie-breaker, chooses the newest relevant root even when another owner's older
+start is replayed later. Pausing pins that root. Selection reconstructs a view
+through canonical snapshot reducers; it never dispatches execution, records/uploads
+a run or substitutes another root's outputs. Eviction/gap notices make retained
+views explicitly incomplete. Root `done`/`error` and physical `latest-settled`
+remain separate; control ownership is removed only at physical settlement.
+
+`useManagedLatestExecution` captures original tab binding tokens at root admission.
+Reconstruction cannot adopt a reopened/rebound tab, bypass recording ownership or
+replace authored graph definitions. Dependency provenance and original Run
+Activity ancestry are preserved, including calls returning to the source project.
+Passive members stay view-only; exact prompt handles remain at the root. An
+explicit channel change retires selection/history. Unexpected reconnect retains
+selection and disables controls until the matching handshake. Neither reconnect
+nor Stop Remote Debugger replays or aborts accepted work.
+Stopping observation settles its source and passive-member displays, preserving
+received outputs but clearing running indicators and interactive prompts. A physical
+settlement without a retained terminal does the same and remains incomplete, not
+successful. These display-only changes retain original binding/root checks: they
+cannot stop a new local run, replace a recording, or disconnect the remaining group
+when only one bundle member leaves.
+
+Focused server verification:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/latest-debugger-policy.test.ts src/tests/latest-debugger-channels-ha.test.ts src/tests/latest-workflow-remote-debugger.test.ts src/tests/ha-latest-relay.test.ts src/tests/ha-latest-replay.test.ts src/tests/ha-latest-peer-replay.test.ts src/tests/proxy-image-contract.test.ts
+```
+
+The API tests use disposable data and real loopback sockets. Channel API tests
+execute actual workflows. Headless `managed-debugger-channels.spec.ts` uses two
+independent contexts, real processors and the real policy/HA transport; hosted
+tree/bootstrap responses are synthetic. Separate NGINX integration executes all
+three actual template route blocks, authentication, suffix/query preservation and
+a custom latest-workflow base. See [local debugger verification](development.md#isolated-latest-debugger-verification).
+
 Latest remote debugging is enabled by default and separate from the executor websocket:
 
 - it is enabled unless `RIVET_ENABLE_LATEST_REMOTE_DEBUGGER` is explicitly set to `false`, `0`, `no`, or `off`
 - it applies to latest workflow endpoint runs and latest web-app action runs under `${RIVET_LATEST_APPS_BASE_PATH:-/apps-latest}/:slug/actions/run`
 - published workflow endpoint runs and published web-app action runs never attach the remote debugger
-- the browser-facing websocket path is `/ws/latest-debugger`
+- the browser-facing websocket path is `/ws/latest-debugger`, optionally followed by `@<channel>`
 - when disabled, websocket upgrades on `/ws/latest-debugger` are rejected with `404`
 
 Endpoint recording persistence is unaffected by debugger state. Latest workflow runs still persist normal recording history when recordings are enabled:
@@ -668,7 +779,7 @@ Kubernetes support note:
 - execution-plane API replicas may scale independently for `${RIVET_PUBLISHED_WORKFLOWS_BASE_PATH:-/workflows}` and `${RIVET_PUBLISHED_APPS_BASE_PATH:-/apps}`
 - latest workflow endpoint runs and latest web-app action runs remain debuggable in that topology because both the latest execution route family and `/ws/latest-debugger` stay on the same backend process boundary
 - published workflow endpoint runs and published web-app action runs remain non-debuggable
-- manually scaling the backend outside the chart guardrails is unsupported for latest debugging because the current debugger is still process-local, not a distributed cross-replica debugger
+- manually scaling the backend outside the chart guardrails remains unsupported; the authenticated HA relay transports observations and scoped controls, while execution remains on its original owner
 
 ## Local dev note
 

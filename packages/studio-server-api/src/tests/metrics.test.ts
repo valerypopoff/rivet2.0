@@ -10,7 +10,17 @@ import {
   StudioMetrics,
 } from '../metrics.js';
 
-test('catalog and parsed metrics have submillisecond buckets and aggregate owner accounting', () => {
+void test('latest debugger counters expose finite reasons without execution identities', () => {
+  const metrics = new StudioMetrics({ enabled: true, profile: 'control' });
+  metrics.recordLatestDebuggerDiagnostic('history');
+  metrics.recordLatestDebuggerDiagnostic('history');
+  assert.match(metrics.render(), /rivet_latest_debugger_diagnostics_total\{profile="control",reason="history"\} 2/);
+  const disabled = new StudioMetrics({ enabled: false, profile: 'control' });
+  disabled.recordLatestDebuggerDiagnostic('broadcast');
+  assert.doesNotMatch(disabled.render(), /rivet_latest_debugger_diagnostics_total/);
+});
+
+void test('catalog and parsed metrics have submillisecond buckets and aggregate owner accounting', () => {
   const metrics = new StudioMetrics({ enabled: true, profile: 'control' });
   metrics.adjustCatalogState({ pending: 2, active: 1, reservedBytes: 10, workers: 1 });
   metrics.adjustCatalogState({ pending: 1, active: 1, reservedBytes: 5, workers: 1 });
@@ -26,7 +36,7 @@ test('catalog and parsed metrics have submillisecond buckets and aggregate owner
   assert.match(metrics.render(), /rivet_catalog_worker_instances\{profile="control"\} 0/);
 });
 
-test('recording search metrics use bounded payload-free labels', () => {
+void test('recording search metrics use bounded payload-free labels', () => {
   const metrics = new StudioMetrics(getMetricsConfig({ RIVET_METRICS_ENABLED: 'true' }));
   metrics.recordRecordingInputCacheEvent('hit');
   metrics.recordRecordingInputCacheEvent('oversized');
@@ -62,7 +72,7 @@ async function startMetricsServer(metrics: StudioMetrics) {
   };
 }
 
-test('metrics registry renders only finite, fixed-label metric families', () => {
+void test('metrics registry renders only finite, fixed-label metric families', () => {
   const metrics = new StudioMetrics({ enabled: true, profile: 'execution' });
   metrics.observeHttpRequest({ durationMs: 125, method: 'POST', route: 'published_workflow', status: 429 });
   metrics.observeHttpRequest({ durationMs: 250, method: 'TRACE', route: 'other', status: 799 });
@@ -248,7 +258,7 @@ test('metrics registry renders only finite, fixed-label metric families', () => 
   assert.doesNotMatch(rendered, /workflow name|prompt|secret|http:\/\//i);
 });
 
-test('metrics config accepts only an explicit boolean switch', () => {
+void test('metrics config accepts only an explicit boolean switch', () => {
   assert.deepEqual(getMetricsConfig({ RIVET_METRICS_ENABLED: 'true' }, 'execution'), {
     enabled: true,
     profile: 'execution',
@@ -263,7 +273,7 @@ test('metrics config accepts only an explicit boolean switch', () => {
   );
 });
 
-test('enabled metrics endpoint is pull-only and does not instrument its own scrape', async () => {
+void test('enabled metrics endpoint is pull-only and does not instrument its own scrape', async () => {
   const metrics = new StudioMetrics({ enabled: true, profile: 'execution' });
   const server = await startMetricsServer(metrics);
   try {
@@ -292,7 +302,7 @@ test('enabled metrics endpoint is pull-only and does not instrument its own scra
   }
 });
 
-test('one unavailable scrape source does not suppress other process-local gauges', async () => {
+void test('one unavailable scrape source does not suppress other process-local gauges', async () => {
   const metrics = new StudioMetrics({ enabled: true, profile: 'execution' });
   const app = createApiApp('execution', {
     health: {
@@ -322,7 +332,7 @@ test('one unavailable scrape source does not suppress other process-local gauges
   }
 });
 
-test('disabled metrics do not add a scrape route', async () => {
+void test('disabled metrics do not add a scrape route', async () => {
   const metrics = new StudioMetrics({ enabled: false, profile: 'execution' });
   const server = await startMetricsServer(metrics);
   try {
@@ -333,7 +343,7 @@ test('disabled metrics do not add a scrape route', async () => {
   }
 });
 
-test('telemetry configuration failures cannot change the object-storage operation being observed', async () => {
+void test('telemetry configuration failures cannot change the object-storage operation being observed', async () => {
   const previous = process.env.RIVET_METRICS_ENABLED;
   process.env.RIVET_METRICS_ENABLED = 'invalid';
   resetStudioMetricsForTests();

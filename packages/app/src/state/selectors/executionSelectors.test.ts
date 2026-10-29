@@ -295,6 +295,17 @@ describe('executionSelectors', () => {
     );
   });
 
+  test('ready managed observation does not require execution-dispatch capability', () => {
+    const session = {
+      connection: { kind: 'managed-latest', protocol: 2, channel: '00123' },
+      capabilities: { ...readyCapabilities, canSendRun: false, canUploadProject: false },
+      status: 'ready',
+      target: { type: 'external-debugger', url: 'ws://localhost/ws/latest-debugger@00123' },
+    } as const;
+    assert.equal(getExecutorProductState({ selectedExecutor: 'browser', session }).type, 'external-debugger-ready');
+    assert.equal(shouldUseRemoteExecutor({ selectedExecutor: 'browser', session }), true);
+  });
+
   test('action bar keeps node executor run controls visible while internal sidecar reconnects', () => {
     const session = {
       capabilities: inactiveCapabilities,

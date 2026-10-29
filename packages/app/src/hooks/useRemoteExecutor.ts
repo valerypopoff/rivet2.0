@@ -2,6 +2,7 @@ import {
   getProjectRemoteObservations,
   isProjectObservingRemote,
   remoteObservationsState,
+  remoteObservationNoticesState,
 } from '../state/remoteObservation.js';
 import {
   logRuntimeDebug,
@@ -19,6 +20,7 @@ import {
   type GraphId,
   type Project,
   type CombinedDataset,
+  type LatestDebuggerPrompt,
   serializeDatasets,
   serializeProject,
 } from '@valerypopoff/rivet2-core';
@@ -36,6 +38,7 @@ import {
   projectDataState,
   projectState,
   projectsState,
+  projectUnsavedChangesState,
 } from '../state/savedGraphs';
 import { useStableCallback } from './useStableCallback';
 import { readProjectBundleForExecution } from '../io/DesktopProjectBundle.js';
@@ -120,6 +123,8 @@ import {
 } from './preparedEditorRun.js';
 import { EditorRunSession } from './editorRunSession.js';
 import { useExecutionSnapshotWriter } from './useExecutionSnapshotWriter.js';
+import { checkRemoteExecutionCompatibility } from './remoteExecutionProjection.js';
+import { getManagedLatestControlState } from './managedLatestControlState.js';
 
 type RemoteExecutorMessageHandler = Parameters<ExecutorSessionRuntime['subscribeMessages']>[0];
 
@@ -335,6 +340,7 @@ export function useRemoteExecutor() {
   }, [executorSession]);
 
   const handleExecutorMessage: RemoteExecutorMessageHandler = useStableCallback((message, data, requestId, routing) => {
+    if (routing?.managedLatest) return; // The managed transport uses the canonical projection adapter, including active tabs.
     if (store.get(projectState).metadata.id !== project.metadata.id) {
       return;
     }
@@ -353,6 +359,22 @@ export function useRemoteExecutor() {
     if (externalDebuggerTarget && routing.projectId != null && routing.projectId !== project.metadata.id) return;
     const dispatchDecision = routing.decision;
     const shouldDispatchExecutionEvent = sourceDisplayAllowed && dispatchDecision.shouldDispatch;
+    if (
+      externalDebuggerTarget &&
+      shouldDispatchExecutionEvent &&
+      !checkRemoteExecutionCompatibility({
+        projectId: project.metadata.id,
+        project: store.get(projectState),
+        message,
+        data,
+        dirty: !!store.get(projectUnsavedChangesState)[project.metadata.id],
+        notice: (text) =>
+          store.set(remoteObservationNoticesState, (previous) =>
+            previous[project.metadata.id] === text ? previous : { ...previous, [project.metadata.id]: text },
+          ),
+      })
+    )
+      return;
     // Legacy debuggers may omit request IDs. Release only the active request
     // whose terminal event the existing routing policy actually accepted.
     if (!requestId && shouldDispatchExecutionEvent && (message === 'done' || message === 'error')) {
@@ -1387,23 +1409,40 @@ export function useRemoteExecutor() {
     }
   }
 
-  const submitUserInput = useStableCallback((nodeId: NodeId, answers: StringArrayDataValue) => {
-    const requestId = getActiveGraphRunRequestId(activeGraphRequestIdRef, executorSession);
-    const inputSent = remoteDebugger.send(
-      'user-input',
-      requestId ? { nodeId, answers, requestId } : { nodeId, answers },
-    );
-    if (!inputSent) {
-      logRuntimeDebug('Remote user input skipped because executor session disconnected before send.', {
-        target: executorSession.getRuntimeState().target?.type ?? 'none',
-      });
-    }
-    setUserInputQuestions((q) =>
-      produce(q, (draft) => {
-        delete draft[nodeId];
-      }),
-    );
-  });
+  const submitUserInput = useStableCallback(
+    (nodeId: NodeId, answers: StringArrayDataValue, prompt?: LatestDebuggerPrompt) => {
+      // A captured managed prompt must never fall back to legacy node-ID input
+      // after selection, tab, or transport ownership has changed.
+      if (prompt) {
+        const controls = getManagedLatestControlState(
+          store,
+          executorRegistry,
+          executorSession,
+          store.get(projectState).metadata.id,
+          JSON.stringify([prompt.target.owner, prompt.target.incarnation, prompt.target.rootRunId]),
+        );
+        if (!controls || controls.readOnly || !controls.graphRunning) return;
+        executorSession.sendLatestPrompt(prompt.target, prompt.promptId, answers);
+        return;
+      }
+      if (executorSession.getLatestDebuggerState()) return;
+      const requestId = getActiveGraphRunRequestId(activeGraphRequestIdRef, executorSession);
+      const inputSent = remoteDebugger.send(
+        'user-input',
+        requestId ? { nodeId, answers, requestId } : { nodeId, answers },
+      );
+      if (!inputSent) {
+        logRuntimeDebug('Remote user input skipped because executor session disconnected before send.', {
+          target: executorSession.getRuntimeState().target?.type ?? 'none',
+        });
+      }
+      setUserInputQuestions((q) =>
+        produce(q, (draft) => {
+          delete draft[nodeId];
+        }),
+      );
+    },
+  );
 
   return {
     remoteDebugger,

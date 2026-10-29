@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
-import { createConnection } from 'node:net';
+import { createServer } from 'node:net';
 import test from 'node:test';
 import {
   assertMaintenancePlan,
@@ -753,6 +753,24 @@ test('a hung local adapter is stopped at its timeout and cannot produce success'
   );
 });
 
+async function reserveLoopbackPort(t, port = 0) {
+  const server = createServer((socket) => socket.destroy());
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  t.after(() => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))));
+  return server;
+}
+
+test('shutdown proof rejects a port still held by a connection-resetting listener', async (t) => {
+  const live = await reserveLoopbackPort(t);
+  await assert.rejects(reserveLoopbackPort(t, live.address().port), { code: 'EADDRINUSE' });
+});
+
 test('a timed-out adapter cannot leave a capture child writing while recovery begins', async (t) => {
   const childProgram = `const fs = require('node:fs');
 const net = require('node:net');
@@ -783,21 +801,9 @@ setInterval(() => {}, 1000);
   const port = Number(await fs.readFile(path.join(state.artifactsDir, directory, 'child-started'), 'utf8'));
   assert.ok(Number.isInteger(port) && port > 0 && port <= 65535, 'The child must actually listen before termination.');
   // Recovery is allowed only after confirmed shutdown, not at a fixed time after spawn.
-  // Even a paused surviving child retains its listener: a timeout is not proof of exit.
-  await assert.rejects(
-    new Promise((resolve, reject) => {
-      const socket = createConnection({ host: '127.0.0.1', port });
-      const settle = (error) => {
-        socket.destroy();
-        if (error) reject(error);
-        else resolve();
-      };
-      socket.once('connect', () => settle());
-      socket.once('error', settle);
-      socket.setTimeout(1_000, () => settle(new Error('Child shutdown remains unconfirmed')));
-    }),
-    { code: 'ECONNREFUSED' },
-  );
+  // Even a paused surviving child retains its listener. Rebinding proves the
+  // exact port was released, independently of connect/reset error timing.
+  await reserveLoopbackPort(t, port);
   await fs.writeFile(path.join(state.artifactsDir, directory, 'recovery-started'), 'recovery');
   await new Promise((resolve) => setTimeout(resolve, 100));
   await assert.rejects(fs.stat(path.join(state.artifactsDir, directory, 'late-child-write')), { code: 'ENOENT' });

@@ -1,18 +1,22 @@
-import type {
-  OutgoingMessageMap,
-  ProcessEventMessageMap,
-  GraphOutputs,
-  GraphProgress,
-  RemoteRunRequestId,
-  SocketRecordingChannel,
-  ProjectId,
-  RootRunId,
+import {
+  type OutgoingMessageMap,
+  type ProcessEventMessageMap,
+  type GraphOutputs,
+  type GraphProgress,
+  type RemoteRunRequestId,
+  type SocketRecordingChannel,
+  type ProjectId,
+  type RootRunId,
+  logRuntimeDebug,
+  parseLatestDebuggerPath,
+  type LatestDebuggerScope,
+  type LatestDebuggerLifecycleMessage,
 } from '@valerypopoff/rivet2-core';
-import { logRuntimeDebug } from '@valerypopoff/rivet2-core';
+import type { LatestDebuggerRuns } from './latestDebuggerRuns.js';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
 import { handleError } from '../utils/errorHandling.js';
 import { toast } from 'react-toastify';
-import { readLatestDebuggerDiagnostic } from './latestDebuggerDiagnostic.js';
+import { ManagedLatestSession } from './managedLatestSession.js';
 import {
   createUnscopedRemoteExecutionRoutingState,
   getRemoteExecutionEventDispatchDecision,
@@ -48,6 +52,11 @@ export type { ExecutorSessionTarget } from './executorSessionTarget.js';
 
 export type ExecutorSessionStatus = 'idle' | 'connecting' | 'ready' | 'reconnecting';
 
+/** Negotiated transport identity; readiness and execution authority remain separate. */
+export type ExecutorSessionConnection =
+  | { kind: 'none' | 'executor' | 'generic-debugger' }
+  | { kind: 'managed-latest'; protocol: 0 | 1 | 2; channel: string | null };
+
 export type ExecutorSessionCapabilities = {
   canBridgeDatasets: boolean;
   canRecordSocket: boolean;
@@ -59,6 +68,7 @@ export type ExecutorSessionCapabilities = {
 };
 
 export type ExecutorSessionState = {
+  connection: ExecutorSessionConnection;
   capabilities: ExecutorSessionCapabilities;
   isInternalExecutor: boolean;
   reconnecting: boolean;
@@ -73,6 +83,13 @@ export type ExecutorSessionState = {
 type MaybePromise<T> = T | Promise<T>;
 
 export type RemoteEventAdmission = {
+  managedLatest?: {
+    scope: LatestDebuggerScope;
+    selected: boolean;
+    reset: boolean;
+    replay: boolean;
+    retained: string[];
+  };
   /** Actual root project, which need not be the tab that opened a bundle debugger. */
   projectId?: ProjectId;
   /** Root events remain admitted for dependencies after its source tab is replaced. */
@@ -87,6 +104,10 @@ type DebuggerMessageHandler = <K extends keyof ProcessEventMessageMap>(
   data: ProcessEventMessageMap[K],
   requestId?: RemoteRunRequestId,
   admission?: RemoteEventAdmission,
+) => MaybePromise<void>;
+type ManagedLatestLifecycleHandler = (
+  frame: LatestDebuggerLifecycleMessage,
+  admission: RemoteEventAdmission,
 ) => MaybePromise<void>;
 
 export type ExecutorSessionDisconnectReason = 'manual-disconnect' | 'unexpected-disconnect' | 'replaced';
@@ -119,6 +140,9 @@ type StateChangeCallback = () => MaybePromise<void>;
 export type { PendingGraphExecution } from './executorSessionPendingExecutions.js';
 
 export type ExecutorSessionRuntime = {
+  getLatestDebuggerState(): ReturnType<LatestDebuggerRuns['state']> | undefined;
+  selectLatestDebuggerRun(key?: string): void;
+  sendLatestPrompt(target: LatestDebuggerScope, promptId: string, answers: unknown): boolean;
   buildSessionState(legacyDebuggerConfig?: unknown, legacyConnectionState?: unknown): ExecutorSessionState;
   connect(url?: string): Promise<void>;
   connectExternalDebugger(url?: string): Promise<void>;
@@ -134,7 +158,14 @@ export type ExecutorSessionRuntime = {
   getActiveGraphRunRequestId(): RemoteRunRequestId | null;
   getRuntimeState(): Pick<
     ExecutorSessionState,
-    'capabilities' | 'isInternalExecutor' | 'remoteUploadAllowed' | 'socket' | 'status' | 'target' | 'url'
+    | 'connection'
+    | 'capabilities'
+    | 'isInternalExecutor'
+    | 'remoteUploadAllowed'
+    | 'socket'
+    | 'status'
+    | 'target'
+    | 'url'
   >;
   isReady(): boolean;
   rejectPendingGraphExecution(requestId: RemoteRunRequestId | undefined, reason: unknown): void;
@@ -146,12 +177,13 @@ export type ExecutorSessionRuntime = {
   setActiveGraphRunRequestId(requestId: RemoteRunRequestId | null): void;
   setDatasetProvider(datasetProvider: AppDatasetProvider | null): void;
   subscribeLifecycle(type: 'connect' | 'disconnect', callback: LifecycleCallback): () => void;
-  subscribeMessages(handler: DebuggerMessageHandler): () => void;
+  subscribeMessages(handler: DebuggerMessageHandler, lifecycle?: ManagedLatestLifecycleHandler): () => void;
 };
 
 export function createExecutorSessionRuntime(options: {
   projectId?: ProjectId;
   acceptsProject?: (projectId: ProjectId) => boolean;
+  acceptsLatestProject?: (projectId: string) => boolean;
   getProjectLifetime?: (projectId: ProjectId) => string | undefined;
   datasetProvider?: AppDatasetProvider | null;
   onStateChange: StateChangeCallback;
@@ -170,12 +202,36 @@ export function createExecutorSessionRuntime(options: {
   let retryDelay = 0;
   let resumeCapability: string | undefined;
   let resumeSequence = 0;
-  let latestObservation = false;
+
+  const latest = new ManagedLatestSession({
+    eligible: (id) => options.acceptsLatestProject?.(id) ?? id === options.projectId,
+    notify: notifySessionStateChanged,
+    warn: (message, options) => {
+      toast.warn(message, options);
+    },
+    canSend: () => currentStatus === 'ready' && currentSocket?.readyState === WebSocket.OPEN,
+    send: (raw) => safeSendExecutorSocket(currentSocket, raw, 'Failed to send latest control', {}),
+    deliver(frame, selected, reset, replay, retained) {
+      const admission: RemoteEventAdmission = {
+        projectId: frame.rivetScope.projectId as ProjectId,
+        decision: { reason: 'active-root-accepted', shouldDispatch: true },
+        managedLatest: { scope: frame.rivetScope, selected, reset, replay, retained },
+      };
+      for (const [handler, lifecycle] of [...debuggerMessageHandlers])
+        runExecutorSessionCallback(
+          () => {
+            if (frame.message === 'latest-settled' || frame.message === 'latest-prompt-closed')
+              return lifecycle?.(frame, admission);
+            return handler(frame.message, frame.data, undefined, admission);
+          },
+          'Managed latest debugger subscriber failed',
+          { message: frame.message },
+        );
+    },
+  });
   // The first ready may arrive on a replacement transport after identity replay.
   let connectionNotified = false;
   let idleHandoff: symbol | undefined;
-  const latestEventCursors = new Map<string, number>();
-  const latestDiagnostics = new Set<string>();
   let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
   let recordingChannel: (EventTarget & { readyState: number }) | undefined;
   // Retain completed dataset responses across transport gaps, never requests,
@@ -239,7 +295,7 @@ export function createExecutorSessionRuntime(options: {
 
   const onConnectCallbacks = new Set<LifecycleCallback>();
   const onDisconnectCallbacks = new Set<LifecycleCallback>();
-  const debuggerMessageHandlers = new Set<DebuggerMessageHandler>();
+  const debuggerMessageHandlers = new Map<DebuggerMessageHandler, ManagedLatestLifecycleHandler | undefined>();
 
   function notifyConnect(event: ExecutorSessionConnectedEvent) {
     notifyLifecycleCallbacks(onConnectCallbacks, event);
@@ -297,16 +353,33 @@ export function createExecutorSessionRuntime(options: {
 
   function getCapabilities(): ExecutorSessionCapabilities {
     const socketReady = currentStatus === 'ready' && currentSocket?.readyState === WebSocket.OPEN;
+    const managedUrl = latest.observation || isNamedLatestTarget(currentTarget);
+    const policy = latest.getSelectedControlPolicy();
+    const readyForControls = socketReady && (!managedUrl || latest.ready);
 
     return {
-      canBridgeDatasets: socketReady && currentDatasetProvider != null,
+      canBridgeDatasets: socketReady && !managedUrl && currentDatasetProvider != null,
       canRecordSocket: socketReady,
-      canSendAbort: socketReady,
-      canSendPause: socketReady,
-      canSendResume: socketReady,
-      canSendRun: socketReady,
-      canUploadProject: socketReady && currentRemoteUploadAllowed,
+      canSendAbort: readyForControls && (!managedUrl || !!policy?.canAbort),
+      canSendPause: readyForControls && (!managedUrl || !!policy?.canPause),
+      canSendResume: readyForControls && (!managedUrl || !!policy?.canResume),
+      canSendRun: socketReady && !managedUrl && !latest.runs,
+      canUploadProject: socketReady && !managedUrl && currentRemoteUploadAllowed,
     };
+  }
+
+  function getConnection(): ExecutorSessionConnection {
+    if (!currentTarget) return { kind: 'none' };
+    if (isInternalExecutorTarget(currentTarget)) return { kind: 'executor' };
+    if (latest.channel !== undefined) return { kind: 'managed-latest', protocol: 2, channel: latest.channel };
+    if (latest.observation) return { kind: 'managed-latest', protocol: 1, channel: null };
+    if (typeof latest.requestedChannel === 'string')
+      return { kind: 'managed-latest', protocol: 0, channel: latest.requestedChannel };
+    return { kind: 'generic-debugger' };
+  }
+
+  function isNamedLatestTarget(target: ExecutorSessionTarget | null) {
+    return target?.type === 'external-debugger' && typeof latest.requestedChannel === 'string';
   }
 
   async function connectToTarget(nextTarget: ExecutorSessionTarget) {
@@ -337,6 +410,15 @@ export function createExecutorSessionRuntime(options: {
     }
 
     currentTarget = nextTarget;
+    latest.requestedChannel = undefined;
+    if (nextTarget.type === 'external-debugger') {
+      try {
+        latest.requestedChannel = parseLatestDebuggerPath(new URL(nextTarget.url).pathname);
+      } catch {
+        // Generic debuggers keep their existing adapter; only a valid latest
+        // route may negotiate managed protocol identity below.
+      }
+    }
     currentRemoteUploadAllowed = false;
     notifySessionStateChanged();
 
@@ -395,7 +477,10 @@ export function createExecutorSessionRuntime(options: {
         resumeTimeout ??= setTimeout(failResume, 60_000);
         return;
       }
-      if (latestObservation) return;
+      if (latest.observation || isNamedLatestTarget(socketTarget)) {
+        resumeTimeout ??= setTimeout(failResume, 60_000);
+        return;
+      }
       logRuntimeDebug('Executor websocket opened.', {
         target: getExecutorSessionTargetLabel(socketTarget),
       });
@@ -411,12 +496,13 @@ export function createExecutorSessionRuntime(options: {
 
       const closedTarget = socketTarget;
       currentSocket = null;
+      latest.suspend();
       idleHandoff = undefined;
       if (resumeCapability && event?.code === 4409) {
         failResume();
         return;
       }
-      const canResume = resumeCapability != null || latestObservation;
+      const canResume = resumeCapability != null || latest.observation;
       if (canResume) {
         resumeTimeout ??= setTimeout(failResume, 60_000);
       }
@@ -435,7 +521,7 @@ export function createExecutorSessionRuntime(options: {
         activeRunDisplayBinding = undefined;
       }
 
-      if (!isInternalExecutorTarget(closedTarget) && !latestObservation) {
+      if (!isInternalExecutorTarget(closedTarget) && !latest.observation) {
         logRuntimeDebug('External debugger websocket closed; automatic reconnect skipped.', {
           target: getExecutorSessionTargetLabel(closedTarget),
         });
@@ -505,48 +591,36 @@ export function createExecutorSessionRuntime(options: {
         rawMessage: event.data,
         socketUrl: socket.url,
         target: socketTarget,
+        managedLatest: latest.runs !== undefined,
         acceptEnvelope: (value) => {
           const envelope = (typeof value === 'object' && value != null ? value : {}) as {
             message?: string;
-            data?: { capability?: string; protocol?: number };
+            data?: {
+              capability?: string;
+              protocol?: number;
+              channel?: unknown;
+              channelIsolation?: boolean;
+              runScopedControls?: boolean;
+              commandId?: string;
+              status?: string;
+              reason?: string;
+            };
             rivetSequence?: number;
             rivetEventId?: string;
           };
-          if (
-            socketTarget.type === 'external-debugger' &&
-            envelope.message === 'latest-session' &&
-            envelope.data?.protocol === 1
-          ) {
-            latestObservation = true;
-            clearResumeTimeout();
-            setConnectionStatus('ready');
-            return false;
-          }
-          if (latestObservation && typeof envelope.rivetEventId === 'string') {
-            const split = envelope.rivetEventId.lastIndexOf(':');
-            const origin = envelope.rivetEventId.slice(0, split),
-              sequence = Number(envelope.rivetEventId.slice(split + 1));
-            if (
-              envelope.rivetEventId.length > 200 ||
-              split < 1 ||
-              !Number.isSafeInteger(sequence) ||
-              sequence < 1 ||
-              sequence <= (latestEventCursors.get(origin) ?? 0)
-            )
-              return false;
-            latestEventCursors.set(origin, sequence);
-            if (latestEventCursors.size > 256) latestEventCursors.delete(latestEventCursors.keys().next().value!);
-          }
-          if (latestObservation) {
-            const diagnostic = readLatestDebuggerDiagnostic(value);
-            if (diagnostic) {
-              if (!latestDiagnostics.has(diagnostic.code)) {
-                latestDiagnostics.add(diagnostic.code);
-                toast.warn(diagnostic.message, { toastId: `latest-debugger-${diagnostic.code}` });
-              }
-              return false;
-            }
-          }
+          const managedAdmission = latest.acceptEnvelope(envelope, value, {
+            external: socketTarget.type === 'external-debugger',
+            named: isNamedLatestTarget(socketTarget),
+            fail: failResume,
+            onReady() {
+              currentRemoteUploadAllowed = false;
+              clearResumeTimeout();
+              setConnectionStatus('ready');
+              notifySessionStateChanged();
+              notifySocketConnected();
+            },
+          });
+          if (managedAdmission !== undefined) return managedAdmission;
           if (resumableTarget && envelope.message === 'executor-session') {
             if (
               envelope.data?.protocol !== 1 ||
@@ -642,6 +716,20 @@ export function createExecutorSessionRuntime(options: {
         },
       });
       if (!incoming) {
+        return;
+      }
+      // Managed latest is observation/control only, not an executor for this
+      // browser's datasets. Keep the generic/ordinary Node bridge unchanged.
+      if (
+        (latest.observation || isNamedLatestTarget(socketTarget)) &&
+        incoming.kind !== 'process-event' &&
+        incoming.kind !== 'managed-event'
+      )
+        return;
+
+      if (incoming.kind === 'managed-event') {
+        const frame = incoming.incoming;
+        latest.receive(frame.message, frame.data, frame.rivetScope, String(event.data));
         return;
       }
 
@@ -753,7 +841,7 @@ export function createExecutorSessionRuntime(options: {
           )
             activeGraphRunRequestId = null;
         }
-        for (const handler of [...debuggerMessageHandlers]) {
+        for (const handler of [...debuggerMessageHandlers.keys()]) {
           runExecutorSessionCallback(
             () => handler(processEvent.message, processEvent.data, processEvent.requestId, admission),
             'Executor process-message subscriber failed',
@@ -772,6 +860,7 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function replaceCurrentSession(nextTarget: ExecutorSessionTarget) {
+    latest.reset();
     resetUnscopedRemoteExecutionRoutingState(eventRouting);
     connectionNotified = false;
     retryDelay = 0;
@@ -779,9 +868,6 @@ export function createExecutorSessionRuntime(options: {
     datasetResponses.length = 0;
     datasetResponseBytes = 0;
     closeRecordingChannel();
-    latestObservation = false;
-    latestEventCursors.clear();
-    latestDiagnostics.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
     resumeSequence = 0;
@@ -824,15 +910,13 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function disconnect(options: ExecutorSessionDisconnectOptions = {}) {
+    latest.reset();
     resetUnscopedRemoteExecutionRoutingState(eventRouting);
     connectionNotified = false;
     idleHandoff = undefined;
     datasetResponses.length = 0;
     datasetResponseBytes = 0;
     closeRecordingChannel();
-    latestObservation = false;
-    latestEventCursors.clear();
-    latestDiagnostics.clear();
     clearResumeTimeout();
     resumeCapability = undefined;
     resumeSequence = 0;
@@ -879,9 +963,13 @@ export function createExecutorSessionRuntime(options: {
   }
 
   const runtime: ExecutorSessionRuntime = {
+    getLatestDebuggerState: () => latest.runs?.state(),
+    selectLatestDebuggerRun: (key) => latest.select(key),
+    sendLatestPrompt: (target, promptId, answers) => latest.sendControl('user-input', target, { promptId, answers }),
     buildSessionState(_legacyDebuggerConfig?: unknown, _legacyConnectionState?: unknown) {
       return {
         ...legacyConnectionStateFor(currentStatus),
+        connection: getConnection(),
         capabilities: getCapabilities(),
         isInternalExecutor: isInternalExecutorTarget(currentTarget),
         remoteUploadAllowed: currentRemoteUploadAllowed,
@@ -924,6 +1012,7 @@ export function createExecutorSessionRuntime(options: {
     },
     getRuntimeState() {
       return {
+        connection: getConnection(),
         capabilities: getCapabilities(),
         isInternalExecutor: isInternalExecutorTarget(currentTarget),
         remoteUploadAllowed: currentRemoteUploadAllowed,
@@ -959,6 +1048,14 @@ export function createExecutorSessionRuntime(options: {
       pendingGraphExecutions.resolvePendingGraphExecution(requestId, outputs);
     },
     sendMessage(type, data) {
+      if (latest.runs) {
+        return latest.sendSelectedControl(type);
+      }
+      if (
+        (latest.observation || isNamedLatestTarget(currentTarget)) &&
+        ['abort', 'pause', 'resume', 'user-input'].includes(type)
+      )
+        return false;
       return safeSendExecutorSocket(
         currentSocket,
         serializeExecutorSessionMessage(type, data),
@@ -993,8 +1090,8 @@ export function createExecutorSessionRuntime(options: {
         callbacks.delete(callback);
       };
     },
-    subscribeMessages(handler) {
-      debuggerMessageHandlers.add(handler);
+    subscribeMessages(handler, lifecycle) {
+      debuggerMessageHandlers.set(handler, lifecycle);
       return () => {
         debuggerMessageHandlers.delete(handler);
       };

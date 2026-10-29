@@ -142,6 +142,7 @@ function createLifecycleHarness() {
 
 function getExternalDebuggerRuntimeState() {
   return {
+    connection: { kind: 'generic-debugger' },
     capabilities: {
       canBridgeDatasets: false,
       canRecordSocket: false,
@@ -162,6 +163,7 @@ function getExternalDebuggerRuntimeState() {
 
 function getInternalHostedRuntimeState() {
   return {
+    connection: { kind: 'executor' },
     capabilities: {
       canBridgeDatasets: false,
       canRecordSocket: false,
@@ -451,11 +453,7 @@ describe('useExecutorSessionCoordinator', () => {
     await flushMicrotasks();
     await flushMicrotasks();
 
-    assert.deepEqual(harness.calls, [
-      'sidecar-start',
-      'sidecar-stop',
-      'connect-hosted:ws://executor.example/internal',
-    ]);
+    assert.deepEqual(harness.calls, ['sidecar-start', 'sidecar-stop', 'connect-hosted:ws://executor.example/internal']);
   });
 
   test('does not disconnect an external debugger session during coordinator cleanup', async () => {

@@ -17,6 +17,8 @@ import PlayIcon from 'majesticons/line/play-circle-line.svg?react';
 import MoreMenuVerticalIcon from 'majesticons/line/more-menu-vertical-line.svg?react';
 import Popup from '@atlaskit/popup';
 import { useRemoteDebugger } from '../hooks/useRemoteDebugger';
+import { ManagedLatestRunControls } from './ManagedLatestRunControls.js';
+import { useManagedLatestControlState } from '../hooks/useExecutorSession.js';
 import { ActionBarMoreMenu } from './ActionBarMoreMenu';
 import { AddRunInputsToEvaluationModal } from './CopyAsTestCaseModal';
 import { PopupMenuContainer } from './PopupMenu.js';
@@ -250,8 +252,9 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const evaluationInputCopyEnabled = isRivetAppHostCapabilityEnabled(hostUiConfig, 'evaluationInputCopy');
   const { hasRecordingToSave, saveRecording } = useSaveRecording();
 
-  const graphRunning = useAtomValue(graphRunningState);
-  const graphPaused = useAtomValue(graphPausedState);
+  const snapshotRunning = useAtomValue(graphRunningState);
+  const snapshotPaused = useAtomValue(graphPausedState);
+  const managedControls = useManagedLatestControlState();
 
   const loadedRecording = useAtomValue(currentProjectLoadedRecordingState);
   const canUnloadRecording = useAtomValue(canUnloadCurrentProjectRecordingState);
@@ -260,7 +263,11 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
   const [menuIsOpen, toggleMenuIsOpen] = useToggle();
   const selectedExecutor = useAtomValue(selectedExecutorState);
   const activeRecording = recordingsEnabled ? loadedRecording : undefined;
-  const observingRemote = useAtomValue(remoteObservationReadOnlyState) && !activeRecording;
+  const managedLatest = !activeRecording && !!managedControls;
+  const graphRunning = managedLatest ? managedControls.graphRunning : snapshotRunning;
+  const graphPaused = managedLatest ? managedControls.graphPaused : snapshotPaused;
+  const observingRemote =
+    (useAtomValue(remoteObservationReadOnlyState) || (managedLatest && managedControls.readOnly)) && !activeRecording;
   const recordingPlaybackIsStarting = !!activeRecording && recordingPlaybackStarting && !graphRunning;
 
   const { sessionState: remoteDebugger, disconnect } = useRemoteDebugger();
@@ -272,7 +279,9 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
     selectedExecutor,
     session: remoteDebugger,
   });
-  const runButtonsBlocked = !actionBarExecutionState.canRun && !graphRunning;
+  const runButtonsBlocked =
+    (!actionBarExecutionState.canRun && !graphRunning) ||
+    (managedLatest && graphRunning && !managedControls.canSendAbort);
   const showPrimaryGraphControlButton = !observingRemote && (actionBarExecutionState.showRunButton || graphRunning);
   const [addRunInputsToEvaluationModalOpen, toggleAddRunInputsToEvaluationModalOpen] = useToggle();
 
@@ -342,6 +351,7 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
       aria-label={activeRecording ? 'Loaded recording' : undefined}
     >
       <div className="action-bar-controls">
+        {!activeRecording && <ManagedLatestRunControls />}
         <RemoteDebuggerInfo
           key={`${projectMetadata.id}:${!!actionBarExecutionState.remoteDebuggerBanner}`}
           connected={!!actionBarExecutionState.remoteDebuggerBanner}
@@ -363,7 +373,10 @@ export const ActionBar: FC<ActionBarProps> = ({ onRunGraph, onAbortGraph, onPaus
         )}
         {graphRunning && !observingRemote && (
           <div className={clsx('pause-button', { paused: graphPaused })}>
-            <button onClick={graphPaused ? onResumeGraph : onPauseGraph}>
+            <button
+              disabled={managedLatest && !(graphPaused ? managedControls.canSendResume : managedControls.canSendPause)}
+              onClick={graphPaused ? onResumeGraph : onPauseGraph}
+            >
               {graphPaused ? (
                 <>
                   Resume <PlayIcon />

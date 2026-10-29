@@ -1,5 +1,148 @@
 # Development
 
+## Isolated latest-debugger verification
+
+### Ownership and extension points
+
+Managed latest channels reuse the Node debugger, one bounded HA stream and the
+canonical per-project snapshot store. The ownership split is:
+
+| Responsibility                                                                            | Owner                                                            |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Sockets, generations, reconnects and ordinary Node bridges                                | `executorSession`                                                |
+| Verified handshake/channel facts, cursors, acknowledgements and selected-control dispatch | `ManagedLatestSession`                                           |
+| Root lifecycle, follow/pin selection and serialized history                               | `LatestDebuggerRuns`                                             |
+| Original receiver lifetimes and bundle membership                                         | Existing registry/coordinator and `useManagedLatestExecution`    |
+| Canvas, prompts and Run Activity                                                          | Canonical snapshots/reducers through `remoteExecutionProjection` |
+| Request-owned processors and private prompt callbacks                                     | Server `LatestDebuggerPolicy`                                    |
+| Authenticated peer delivery, filtering and replay                                         | `LatestDebuggerRelay`                                            |
+
+Core's `LatestDebuggerProtocol` defines the managed union and shared routing/control
+readers/builders. Managed ingress is classified before legacy executor parsing;
+typed lifecycle callbacks share the existing subscription and disposal without
+pretending prompt closure/physical settlement are graph events. Producers retain
+sentinels, authored payloads and the historical event-ID-first writer contract;
+peer readers accept property reordering.
+
+Add events through this contract with exact root/channel/owner provenance and
+canonical reducers. Add controls with captured targets, never legacy node-ID or
+processor broadcasts. Extend presentation roles in `ExecutorSessionState.connection`,
+root lifecycle/control policy in the catalogue and `managedLatestControlState`,
+and definition compatibility in `remoteExecutionProjection`. Do not add another
+mutable ownership database, snapshot store or URL-based UI classification.
+
+### Safety and regression contracts
+
+Each genuine history loss invalidates pending-prompt proof, even after an earlier
+warning. Toast deduplication is separate. An unavailable control owner alone is
+not a history gap. The existing relay regression produces two actual ring
+overruns; the two-browser prompt journey establishes fresh proof between two
+losses while the other observer remains usable.
+
+An owner advertising `promptLifecycle: 1` emits `latest-prompt-closed` before
+consuming the exact callback. Retained questions are interactive only with valid
+pending proof. Gap, closure, node/graph terminal and physical settlement handling
+must not reopen an answered question. A throwing observer transport cannot
+swallow an accepted answer or prevent registration cleanup.
+
+HA acknowledgements require the original peer socket, forwarding ID, command ID
+and validated result shape. Malformed/wrong-command replies leave the bounded
+deadline to report outcome-unknown; no command is replayed. Timers are registered
+before sending, disposed after failed sends/reset, and fenced against stale
+generations. Replay also has a projection revision so nested selection or reset
+retires the superseded reconstruction turn. Unsupported events invalidate only
+their exact admitted root, not another root's prompt proof.
+
+Original receiver authority is captured at root admission. Broader reconciliation
+runs on ownership changes, not payload updates. The mounted ingress regression
+uses 32 retained roots and two open members: 100 payload-only snapshot writes
+cause zero full admission checks, while 100 real source partial outputs still
+perform exactly 100 targeted checks. Recording/local-run conflicts, tab renewal,
+verified renames, membership retirement/rejoin and outside-group callers retain
+their original lifetime fences.
+
+The catalogue's phase, pause and abort facts drive controls independently of
+evicted canvas history. Root outputs-ready, logical completion and physical
+settlement are distinct; child readiness cannot change root status. The browser
+history journey covers pause → root outputs-ready → resume, incomplete history,
+and exact post-reconstruction controls. Selection releases superseded payload
+references without rewriting authored graphs.
+
+Production diagnostics use finite `ownership`, `broadcast`, `history` and
+`unavailable` categories. Logs include only event/reason/cumulative count, sampled
+at most once per reason per minute. Optional existing metrics expose
+`rivet_latest_debugger_diagnostics_total{reason}`. No channel/run/prompt IDs,
+answers, credentials or raw frames are logged. Throwing sinks are observational,
+never execution authority. The unused strict debugger getter is removed;
+optional accessors and generic adapters remain supported.
+
+### Local verification and completion boundaries
+
+Run the focused API gate in [routing](access-and-routing.md#channel-isolation-implementation-status),
+App session/catalogue/mounted ingress and registry/selector suites, affected
+Core/Node regressions, builds and App/API typechecks. The channel policy/HA tests
+are enrolled in the default API manifest; five managed browser journeys are in
+the weighted editor CI shards. Preserve enrollment when adding/renaming tests.
+
+Start an isolated frontend on an unused port and use the required runner:
+
+```powershell
+$env:PLAYWRIGHT_HEADLESS = '1'
+$env:PLAYWRIGHT_SLOW_MO = '0'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:5197'
+yarn studio-server:ui:observe managed-debugger-channels.spec.ts remote-bundle-observation.spec.ts ha-latest-replay.spec.ts run-cost-statistics.spec.ts --workers=1
+```
+
+Do not edit frontend source during acceptance: Vite HMR destroys sessions under
+test. Do not restart the user's installation. Inspect screenshots/traces under
+`artifacts/playwright/` on failure rather than weaken assertions.
+
+The managed browser fixture owns real processors, policy/relay and independent
+contexts, with synthetic hosted bootstrap/tree responses and ambient API rejection.
+It checks different/shared channels, pinning, old terminals, prompts, repeated gaps,
+reconnect, invalid handshakes and controls without replay. Legacy bundle and replay
+journeys retain separate compatibility coverage. Real API/proxy fixtures exercise
+routing/authentication independently; synthetic browser responses are not live
+storage evidence.
+
+The real storage/statistics journey executes a named-channel A → B → C bundle
+while two admins observe, then adds a replay observer. Disposable PostgreSQL/MinIO
+and deterministic providers assert one retained root, exactly four physical calls
+(one LLM and three Decision AI), USD 0.009068 at explicit fixture prices, and
+unchanged cost/request counts after replay. Published-version statistics remain
+unchanged. The fixture is not evidence of live provider billing.
+
+Actual forwarding is an explicit Docker integration, not a template-only check:
+
+```powershell
+$env:RIVET_DEBUGGER_PROXY_TEST_IMAGE = '<immutable sha256 ID of a cached proxy image>'
+# Optional cached Node image ID/tag; default node:24-alpine, resolved locally.
+$env:RIVET_DEBUGGER_PROXY_TEST_NODE_IMAGE = '<cached Node image ID>'
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/latest-debugger-proxy.integration.ts
+```
+
+It never pulls images. New labelled upstream/proxy/network resources are verified
+by exact IDs before cleanup. All three real templates forward the suffix and
+query with a custom latest base; the obsolete fixed-path upstream variable is
+absent. No paid calls, real workflow data, Kubernetes or GCP are required.
+
+Local verification on 2026-10-29 passed 514 focused tests (202 App/session,
+201 Core, 51 Node and 60 API/HA/metrics/proxy contracts), with no skips, plus all
+22 headless journeys and actual forwarding through all three templates.
+Core/Node/API/hosted builds, App typecheck, typed lint/format, architecture/import,
+test-style, doc links and diff checks passed. Seven shard/enrollment and 15
+CI-performance contracts passed. This is focused local evidence, not the entire
+repository suite, native packaged-desktop acceptance or provider/production
+qualification. Existing hosted dependency/chunk warnings remain. Disposable
+fixtures were removed; the user's existing installation was unchanged.
+Publication and deployment remain separate approvals.
+
+Commit preparation repeated all 202 App/session tests, 60 API/HA/metrics/proxy
+contracts, 22 browser journeys and three-template forwarding. It removed the
+unused fixed-path NGINX variable, consolidated this guide's repeated review logs,
+and cleaned duplicate/type-only imports and explicit Node test registrations in
+touched API files. Assertions and lint rules are unchanged.
+
 ### Explicit bundle changes
 
 See [project bundles](project-bundles.md) for the managed container/duplication
@@ -1573,18 +1716,20 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.32.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.34.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since `1ebeef366`: shared editor host policies,
-execution/observation lifecycle hardening, narrower repository/resource ownership,
-editor loading and Run Activity improvements, question-image/Bounding Box support
-and container security hardening. Unchanged workspaces are release companions.
+This minor release covers changes since `ee0748968` through `2edd4a77c`:
+isolated latest-debugger channels and run-scoped controls, bounded replay and
+diagnostics, recording refresh/replay and independent statistics grouping, rolling
+migration policy and repeatable qualification/infrastructure lifecycle tooling.
+API/Web/Shared change locally; unchanged Bootstrap/Executor workspaces are
+release companions, not separate implementations of these features.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable overlap or establish GKE qualification.
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-25) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-29) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -1593,12 +1738,12 @@ commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
 
-The explicit-bundle runtime already advances managed storage to schema16. Keep
-the chart's ordinary `workflowSchema.compatibility` defaults at16/16 to match
+The current recording-cost runtime already advances managed storage to schema18.
+Keep the chart's ordinary `workflowSchema.compatibility` defaults at18/18 to match
 that build, independently of package versioning. The promoted release launcher
 still derives exact migration and allowed reader windows from the immutable
 manifest; predecessor compatibility remains a separate contract, not permission
-to leave new-build chart defaults at15. The Kubernetes contract tests exercise
+to leave new-build chart defaults at16. The Kubernetes contract tests exercise
 both an ordinary exact-version migration and a lower serving-only rollback floor.
 
 ## Main commands

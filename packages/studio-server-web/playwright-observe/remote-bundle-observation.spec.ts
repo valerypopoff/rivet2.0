@@ -16,7 +16,7 @@ import {
 import { createProcessor } from '../../node/src/api.js';
 import { startDebuggerServer } from '../../node/src/debugger.js';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
-import { createLatestDebuggerFixture } from './helpers/latestDebuggerFixture';
+import { createLatestDebuggerFixture } from './latestDebuggerFixture';
 
 function gate() {
   let release!: () => void;

@@ -13,7 +13,7 @@ import {
 import { createProcessor } from '../../node/src/api.js';
 import { mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
-import { createLatestDebuggerFixture } from './helpers/latestDebuggerFixture';
+import { createLatestDebuggerFixture } from './latestDebuggerFixture';
 
 for (const ha of [true, false])
   test(`${ha ? 'HA large-history' : 'local'} remote debugger stays usable through repeated observation`, async ({

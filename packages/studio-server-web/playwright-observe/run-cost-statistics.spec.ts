@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+import type * as WebSocketModule from 'ws';
 import { startAsyncWorkflowProcess } from '../../studio-server-api/src/tests/helpers/workflow-async-process';
 import { listenTestServer } from '../../studio-server-api/src/tests/helpers/http-server-harness';
 import { startRunCostStorage } from '../../studio-server-api/src/tests/helpers/run-cost-storage';
@@ -8,6 +9,7 @@ import {
   connectWebSocket,
   closeWebSocket,
   waitForWebSocketMessages,
+  type WebSocketMessage,
 } from '../../studio-server-api/src/tests/helpers/websocket-harness';
 import { extractWebAppRevisionKey } from '../../studio-server-api/src/tests/helpers/workflow-web-app-fixtures';
 import type { WorkflowRunStatisticsTarget } from '../../studio-server-shared/workflow-recording-types';
@@ -16,6 +18,10 @@ import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEdi
 const { createCostProviderServer } = createRequire(import.meta.url)(
   '../../studio-server-api/src/tests/helpers/cost-provider.cjs',
 );
+// Keep socket construction on the owning API's declared ws dependency.
+const { WebSocket: DebuggerSocket } = createRequire(
+  new URL('../../studio-server-api/src/ha-latest-relay.ts', import.meta.url),
+)('ws') as typeof WebSocketModule;
 
 test('real bundle costs survive recording, failed background work and a statistics UI reload', async ({ page }) => {
   test.setTimeout(180_000);
@@ -117,7 +123,10 @@ test('real bundle costs survive recording, failed background work and a statisti
       await expect(modal.locator('.run-statistics-period-label')).toHaveText(/^2 runs, .+ to .+$/);
       await expect(cost).toContainText(/0[.,]008168/);
       await expect(cost).toContainText('Cost over time');
-      await expect(cost.locator('.recharts-legend-item-text')).toHaveText(['Average per complete run', 'Known subtotal']);
+      await expect(cost.locator('.recharts-legend-item-text')).toHaveText([
+        'Average per complete run',
+        'Known subtotal',
+      ]);
       await expect(cost.locator('.recharts-line')).toHaveCount(2);
       await modal.getByLabel('Include failed runs').check();
       await expect(modal.locator('.run-statistics-period-label')).toHaveText(/^3 runs, .+ to .+$/);
@@ -218,6 +227,68 @@ test('real bundle costs survive recording, failed background work and a statisti
     await expect(pricedModal.locator('.run-statistics-target-select__control')).toContainText('Cost root priced');
     await expect(pricedModal.locator('.run-statistics-period-label')).toHaveText(/^1 run, .+ to .+$/);
     await expect(pricedModal.getByRole('region', { name: 'Cost statistics' })).toContainText(/0[.,]009068/);
+
+    // Exercise nonzero LLM + Decision AI accounting through the managed latest
+    // route with shared observers. A zero-cost graph alone cannot prove that
+    // fan-out/replay leaves physical provider attempts and persisted totals alone.
+    const observers: WebSocketModule.WebSocket[] = [];
+    let observations: Promise<WebSocketMessage[][]> | undefined;
+    const observe = () => {
+      const socket = new DebuggerSocket(`${api.baseUrl.replace('http:', 'ws:')}/ws/latest-debugger@cost_01`, {
+        headers: { 'x-rivet-proxy-auth': proxyToken },
+      });
+      observers.push(socket);
+      return socket;
+    };
+    const parseDebuggerFrame = (raw: WebSocketModule.RawData) => JSON.parse(raw.toString());
+    const latestStatistics = async () => {
+      const response = await page.request.post(`${api.baseUrl}/api/workflows/run-statistics/query`, {
+        headers: { 'x-rivet-proxy-auth': proxyToken },
+        data: { ...query, target: pricedTarget, runKind: 'latest' },
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    };
+    try {
+      await Promise.all([observe(), observe()].map((socket) => waitForWebSocketMessages(socket, ['latest-session'])));
+      observations = Promise.all(
+        observers.map((socket) =>
+          waitForWebSocketMessages(socket, ['start', 'done', 'latest-settled'], { parser: parseDebuggerFrame }),
+        ),
+      );
+      // Observe rejection immediately even if the HTTP request/assertion fails
+      // before its normal await. Normal execution still requires all frames.
+      void observations.catch(() => {});
+      const callsBefore = await (await page.request.get(`${providerUrl}/__requests`)).json();
+      const latestResponse = await page.request.post(`${api.baseUrl}/workflows-latest/${priced.endpointName}@cost_01`, {
+        data: { ...request, model: 'unpriced-fixture' },
+      });
+      expect(latestResponse.ok(), await latestResponse.text()).toBe(true);
+      const streams = await observations;
+      const start = streams[0]!.find((frame) => frame.message === 'start');
+      expect(start).toMatchObject({ rivetScope: { channel: 'cost_01', projectId: priced.workflowId } });
+      expect(streams[1]!.find((frame) => frame.message === 'start')).toEqual(start);
+      await expect.poll(async () => (await latestStatistics()).cost.runCount).toBe(1);
+      const latestCost = (await latestStatistics()).cost;
+      expect(latestCost).toMatchObject({ completeCount: 1, partialCount: 0, unknownCount: 0 });
+      expect(latestCost.knownCostUsd).toBeCloseTo(0.009068, 12);
+      const callsAfter = await (await page.request.get(`${providerUrl}/__requests`)).json();
+      const newCalls = callsAfter.slice(callsBefore.length);
+      expect(newCalls).toHaveLength(4); // One LLM and one Decision AI call in each of A, B and C.
+      expect(newCalls.filter((call: { kind?: string }) => call.kind === 'llm')).toHaveLength(1);
+      const replay = await waitForWebSocketMessages(observe(), ['start', 'done', 'latest-settled'], {
+        parser: parseDebuggerFrame,
+      });
+      expect(replay.find((frame) => frame.message === 'start')).toEqual(start);
+      expect((await latestStatistics()).cost).toEqual(latestCost);
+      expect(await (await page.request.get(`${providerUrl}/__requests`)).json()).toEqual(callsAfter);
+      expect((await statistics(pricedTarget)).cost, 'latest channels do not alter published totals').toEqual(
+        pricedCost,
+      );
+    } finally {
+      observers.forEach(closeWebSocket);
+      await observations?.catch(() => {}); // Settle owned waiters without replacing the primary failure.
+    }
   } finally {
     retiringRoutes = true;
     // Stop dashboard polling and settle intercepted requests before its API disappears.

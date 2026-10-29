@@ -1,4 +1,5 @@
-import { useAtomValue } from 'jotai';
+import { useAtomValue, useStore } from 'jotai';
+import { getManagedLatestControlState } from './managedLatestControlState.js';
 import { type ProjectId } from '@valerypopoff/rivet2-core';
 import { useExecutorSessionRegistry, useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
 import { projectState } from '../state/savedGraphs.js';
@@ -12,6 +13,14 @@ export {
 export function useExecutorSessionState(projectId?: ProjectId) {
   const runtime = useExecutorSessionRuntime(projectId);
   return runtime.buildSessionState();
+}
+
+export function useManagedLatestControlState() {
+  const store = useStore();
+  const runtime = useExecutorSessionRuntime();
+  const registry = useExecutorSessionRegistry();
+  const project = useAtomValue(projectState);
+  return getManagedLatestControlState(store, registry, runtime, project.metadata.id);
 }
 
 /** Persistence describes the tab's own executor, not its transient bundle observer. */

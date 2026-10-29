@@ -99,6 +99,39 @@ The statistics details panel owns vertical scrolling at every width. Do not swit
 
 The broader read-path audit also leaves two explicit profiling candidates: SQLite readiness performs full `quick_check`/foreign-key checks on the catalog, and structural/publication mutations still capture full history snapshots for CAS. Both can become costly as metadata/history grows. This patch does not throttle integrity checks or replace mutation consistency proofs just to improve a nominal timing. Evaluation run lists also intentionally return complete run documents under their current API contract; introducing summary pagination there is a separate API/UI change. Production measurements should distinguish these costs from the now metadata-only browsing paths.
 
+## Local synthetic history previews
+
+For a manual statistics preview, synthetic historical copies may be added to an
+explicitly verified **dev/local-storage** installation. That launcher uses local
+PostgreSQL and MinIO, not the compatibility SQLite catalog. Guard both Compose
+identity and the actual database/object-store addresses; never seed production.
+
+Use new recording IDs and correlation IDs, and visibly mark the endpoint-at-run
+label as synthetic. Vary timestamps, daily run counts, durations and stored cost
+summaries without executing providers or changing authored model prices. Exact
+original-row hashes should remain unchanged. Immutable replay artifacts can be
+shared through their existing descriptors: managed cleanup checks all live
+references before deleting an object. Such a copy replays the original event
+stream, not a newly observed AI call; it is a **chart preview**, not runtime
+accounting or provider-billing evidence.
+
+Inspect retention first. Old demo rows or an exceeded endpoint/byte limit can
+trigger cleanup, including of real recordings. Preserve the prior settings and
+their revision, increase only the needed local limits with the ordinary
+conditional settings API, and keep an exact batch-ID/recording-ID receipt for
+later removal. Do not blindly replay an uncertain insert or restore settings over
+a subsequent user edit. No recording-format or statistics-aggregation change is
+needed for this data-only operation.
+
+Keep re-verification independent of temporary container files: the durable host
+receipt supplies the exact expected rows and original hashes. Check each row,
+including replay references and correlation identity, rather than accepting a
+matching aggregate (swapped costs can preserve a total). Confirm shared artifact
+reachability and compare API totals/complete-only averages with the same stable
+SQL population. Allow new genuine recordings without weakening checks on the
+captured originals. Give each browser/audit run its own output directory so a
+previous success file cannot fail a valid rerun or masquerade as fresh evidence.
+
 ## All-workflow scope
 
 The icon-only **Refresh run recordings** button follows the modal title. It starts

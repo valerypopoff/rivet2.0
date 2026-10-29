@@ -4,7 +4,13 @@ import { useBundleExecutionRouting } from '../hooks/useBundleExecutionRouting.js
 import { projectBindingRegistryState } from '../state/projectBindings.js';
 import { isInternalExecutorTarget } from '../hooks/executorSessionTarget.js';
 import { useRemoteExecutionObservations } from '../hooks/useRemoteExecutionObservations.js';
-import { type ProcessEventMessageMap, type ProjectId, type RemoteRunRequestId } from '@valerypopoff/rivet2-core';
+import { useManagedLatestExecution } from '../hooks/useManagedLatestExecution.js';
+import {
+  type ProcessEventMessageMap,
+  type ProjectId,
+  type RemoteRunRequestId,
+  type LatestDebuggerLifecycleMessage,
+} from '@valerypopoff/rivet2-core';
 import {
   createExecutorSessionRuntime,
   type ExecutorSessionLifecycleEvent,
@@ -15,7 +21,14 @@ import {
 import type { ExecutionSourceKind } from '../domain/execution/executionEventNormalization.js';
 import { releaseRuntimeExecutorResources } from '../hooks/executorSessionRuntimeResources.js';
 import { executorSessionRevisionState, getLoadedRecordingForTab, loadedRecordingState } from '../state/execution.js';
-import { projectsState, projectState } from '../state/savedGraphs.js';
+import {
+  projectsState,
+  projectState,
+  openedProjectSnapshotsState,
+  projectUnsavedChangesState,
+} from '../state/savedGraphs.js';
+import { remoteObservationNoticesState } from '../state/remoteObservation.js';
+import { checkRemoteExecutionCompatibility } from '../hooks/remoteExecutionProjection.js';
 import { getRemoteDebuggerBundleProjects, getRemoteDebuggerBundleKey } from '../hooks/remoteDebuggerBundle.js';
 import { useDataRefs, useDatasetProvider, type AppDatasetProvider } from './ProvidersContext.js';
 import { graphRunningState, projectExecutionSnapshotsState } from '../state/dataFlow.js';
@@ -46,7 +59,10 @@ export type ExecutorSessionRegistry = {
   removeProject(projectId: ProjectId): void;
   setDatasetProvider(datasetProvider: AppDatasetProvider | null): void;
   subscribeDisconnectsForAllProjects(handler: ProjectExecutorDisconnectHandler): () => void;
-  subscribeMessagesForAllProjects(handler: ProjectExecutorMessageHandler): () => void;
+  subscribeMessagesForAllProjects(
+    handler: ProjectExecutorMessageHandler,
+    lifecycle?: ProjectManagedLifecycleHandler,
+  ): () => void;
 };
 
 type ProjectExecutorMessageHandler = <K extends keyof ProcessEventMessageMap>(
@@ -56,6 +72,12 @@ type ProjectExecutorMessageHandler = <K extends keyof ProcessEventMessageMap>(
   data: ProcessEventMessageMap[K],
   requestId?: RemoteRunRequestId,
   admission?: RemoteEventAdmission,
+) => void;
+type ProjectManagedLifecycleHandler = (
+  projectId: ProjectId,
+  runtime: ExecutorSessionRuntime,
+  frame: LatestDebuggerLifecycleMessage,
+  admission: RemoteEventAdmission,
 ) => void;
 type ProjectExecutorDisconnectHandler = (
   projectId: ProjectId,
@@ -116,7 +138,7 @@ export function createExecutorSessionRegistry(options: {
   const debuggerBundles = new Map<ProjectId, DebuggerBundle>();
   const bundleRuntimes = new WeakSet<ExecutorSessionRuntime>();
   const disconnectSubscribers = new Set<ProjectExecutorDisconnectHandler>();
-  const messageSubscribers = new Set<ProjectExecutorMessageHandler>();
+  const messageSubscribers = new Map<ProjectExecutorMessageHandler, ProjectManagedLifecycleHandler | undefined>();
   let currentDatasetProvider: AppDatasetProvider | null = null;
 
   function createRuntime(projectId: ProjectId, bundle?: DebuggerBundle) {
@@ -127,23 +149,29 @@ export function createExecutorSessionRegistry(options: {
       // Root lifecycle can originate outside the container and call a member.
       // Lifetime fencing and observation eligibility still forbid outsider display.
       acceptsProject: bundle ? () => true : undefined,
+      acceptsLatestProject: (id) => (bundle ? bundle.members.has(id as ProjectId) : id === projectId),
       getProjectLifetime,
       onStateChange: options.onStateChange,
       resolveInternalHostedExecutorUrl: options.resolveInternalHostedExecutorUrl,
     });
     runtime.setDatasetProvider(currentDatasetProvider);
-    runtime.subscribeMessages((message, data, requestId, admission) => {
-      if (
-        bundle &&
-        admission?.decision.shouldDispatch &&
-        admission.sourceDisplayAllowed !== false &&
-        admission.projectId
-      )
-        bundle.sourceProjects.add(admission.projectId);
-      for (const subscriber of [...messageSubscribers]) {
-        subscriber(projectId, runtime, message, data, requestId, admission);
-      }
-    });
+    runtime.subscribeMessages(
+      (message, data, requestId, admission) => {
+        if (
+          bundle &&
+          admission?.decision.shouldDispatch &&
+          admission.sourceDisplayAllowed !== false &&
+          admission.projectId
+        )
+          bundle.sourceProjects.add(admission.projectId);
+        for (const subscriber of [...messageSubscribers.keys()]) {
+          subscriber(projectId, runtime, message, data, requestId, admission);
+        }
+      },
+      (frame, admission) => {
+        for (const subscriber of [...messageSubscribers.values()]) subscriber?.(projectId, runtime, frame, admission);
+      },
+    );
     runtime.subscribeLifecycle('disconnect', (event) => {
       if (bundle && !event.target) return;
       const members = bundle ? [...bundle.members.keys()] : [projectId];
@@ -287,8 +315,8 @@ export function createExecutorSessionRegistry(options: {
         disconnectSubscribers.delete(handler);
       };
     },
-    subscribeMessagesForAllProjects(handler) {
-      messageSubscribers.add(handler);
+    subscribeMessagesForAllProjects(handler, lifecycle) {
+      messageSubscribers.set(handler, lifecycle);
       return () => {
         messageSubscribers.delete(handler);
       };
@@ -333,6 +361,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
     [bumpExecutorSessionRevision, store],
   );
   const observations = useRemoteExecutionObservations(registry);
+  const managedLatest = useManagedLatestExecution(registry);
   const opened = useAtomValue(projectsState).openedProjects;
   const activeProject = useAtomValue(projectState);
   const activeRunning = useAtomValue(graphRunningState);
@@ -370,6 +399,10 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
         const runtimeState = runtime.getRuntimeState();
 
         if (!admission) return;
+        if (admission.managedLatest) {
+          managedLatest.receive(runtime, message, data, admission.managedLatest);
+          return;
+        }
         projectId = admission.projectId ?? projectId;
         const dispatchDecision = admission.decision;
         if (runtimeState.target?.type === 'external-debugger')
@@ -433,18 +466,33 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
           mapSnapshot: shouldFlushFrozenOutputs ? (snapshot) => ({ ...snapshot, frozenNodeOutputs: {} }) : undefined,
           previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
           onInactive: accountInactiveRequest,
-          shouldApply: () => dispatchDecision.shouldDispatch,
+          shouldApply: () =>
+            dispatchDecision.shouldDispatch &&
+            (runtimeState.target?.type !== 'external-debugger' ||
+              checkRemoteExecutionCompatibility({
+                projectId,
+                project: store.get(openedProjectSnapshotsState)[projectId]?.project,
+                message,
+                data,
+                dirty: !!store.get(projectUnsavedChangesState)[projectId],
+                notice: (text) =>
+                  store.set(remoteObservationNoticesState, (previous) =>
+                    previous[projectId] === text ? previous : { ...previous, [projectId]: text },
+                  ),
+              })),
         });
+      },
+      (_projectId, runtime, frame, admission) => {
+        if (admission.managedLatest) managedLatest.receive(runtime, frame.message, frame.data, admission.managedLatest);
       },
     );
     const unsubscribeDisconnects = registry.subscribeDisconnectsForAllProjects((projectId, runtime) => {
+      const hasRemainingMembers = Object.keys(store.get(projectsState).openedProjects).some(
+        (id) => registry.getRemoteDebuggerRuntime(id as ProjectId) === runtime,
+      );
+      managedLatest.disconnect(runtime, hasRemainingMembers ? projectId : undefined);
       routeBundleExecution.settle(runtime);
-      if (
-        Object.keys(store.get(projectsState).openedProjects).some(
-          (id) => registry.getRemoteDebuggerRuntime(id as ProjectId) === runtime,
-        )
-      )
-        observations.reconcileOwnership();
+      if (hasRemainingMembers) observations.reconcileOwnership();
       else observations.disconnect(runtime);
       if (
         registry.isBundleDebuggerRuntime(runtime) &&
@@ -467,7 +515,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
       unsubscribeMessages();
       unsubscribeDisconnects();
     };
-  }, [dataRefs, registry, store, routeBundleExecution, observations]);
+  }, [dataRefs, registry, store, routeBundleExecution, observations, managedLatest]);
 
   useEffect(() => {
     return () => {
