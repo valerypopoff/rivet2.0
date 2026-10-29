@@ -23,7 +23,12 @@ import {
   HA_BROWSER_CONTRACT,
   HA_RUNTIME_CONTROL_CHECKS,
   HA_DEVELOPER_OVERLAP_CHECKS,
+  HA_PROVIDER_OVERLAP_CHECKS,
+  HA_ORDINARY_RUNTIME_CHECKS,
+  HA_COOPERATIVE_AUTOSCALING_CHECKS,
 } from './lib/ha-release-evidence.mjs';
+import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 test('fresh operator inputs reject stale rollout guards without rewriting bound recovery inputs', () => {
@@ -98,6 +103,7 @@ test('deployment fixtures initialize an absent artifacts directory and remain is
 });
 
 async function fixture(t, mode, fault, schemaChange = false) {
+  const adoptionStage = mode.startsWith('adoption-') ? mode.slice('adoption-'.length) : null;
   const directory = await createFixtureDirectory(root);
   t.after(async () => {
     await fs.rm(directory, { recursive: true, force: true });
@@ -234,11 +240,74 @@ async function fixture(t, mode, fault, schemaChange = false) {
     base.resources.backendOverlap = clone(base.resources.backend);
     base.resourceLimitAcknowledgements.backendOverlap = clone(base.resourceLimitAcknowledgements.backend);
   }
+  if (adoptionStage) {
+    merge(base, await read('deploy/studio-server/helm/overlays/gke-runtime-ha.yaml'));
+    merge(base, await read('deploy/studio-server/helm/overlays/gke-compact-edge.yaml'));
+    merge(base, await read('deploy/studio-server/helm/overlays/gke-runtime-autoscaling.yaml'));
+    base.autoscaling.execution.maxReplicas = 7;
+    base.postgres = {
+      ...base.postgres,
+      maxConnections: 200,
+      reservedConnections: 30,
+      poolMaxPerApiPod: adoptionStage === 'sizing' ? 10 : 9,
+    };
+    const profile = {
+      protocol: 1,
+      maxConnections: 200,
+      reservedConnections: 30,
+      poolMaxPerApiPod: 9,
+      backendResources: {
+        requests: { cpu: '750m', memory: '1536Mi', 'ephemeral-storage': '256Mi' },
+        limits: { memory: '3Gi', 'ephemeral-storage': '2Gi' },
+      },
+    };
+    base.resources.backendOverlap = clone(profile.backendResources);
+    base.ha.namespaceUid = '11111111-1111-4111-8111-111111111111';
+    const common = {
+      candidateSourceSha: sha,
+      candidateImages: candidate.images,
+      chartDigest: candidate.chart.contentDigest,
+      requestSamples: 150,
+      failedRequests: 0,
+    };
+    const policyDigest = autoscalerPolicyDigest(autoscalerPolicy({ maxReplicas: 7 }));
+    candidate.evidence.runtimeControl = {
+      ...common,
+      protocol: 3,
+      purpose: 'ordinary-upgrade',
+      controlPlaneMode: 'singleton-overlap',
+      predecessorSourceSha: previous.source.sha,
+      predecessorImages: previous.images,
+      predecessorManifestDigest: getStudioServerReleaseManifestDigest(previous),
+      autoscalerPolicyDigest: policyDigest,
+      edgeProfiles: ['compact'],
+      checks: [...HA_ORDINARY_RUNTIME_CHECKS],
+      developerOverlap: {
+        protocol: 2,
+        sourceMode: 'singleton',
+        sourcePool: 10,
+        profile,
+        profileDigest: overlapProfileDigest(profile),
+        checks: [...HA_PROVIDER_OVERLAP_CHECKS],
+      },
+    };
+    candidate.evidence.runtimeAutoscaling = {
+      ...common,
+      protocol: 2,
+      provider: 'gke',
+      policyDigest,
+      checks: [...HA_COOPERATIVE_AUTOSCALING_CHECKS],
+    };
+  }
   const operator =
     mode === 'topology'
       ? merge(clone(base), await read('deploy/studio-server/helm/overlays/gke-runtime-ha.yaml'))
       : clone(base);
   operator.autoscaling = clone(base.autoscaling);
+  if (adoptionStage) {
+    operator.postgres.poolMaxPerApiPod = 9;
+    operator.ha.controlPlane.mode = adoptionStage === 'sizing' ? 'singleton' : 'singleton-overlap';
+  }
   const artifacts = path.join(directory, 'artifacts');
   await fs.mkdir(artifacts);
   const initialFile = path.join(artifacts, 'initial.json');
@@ -268,17 +337,19 @@ async function fixture(t, mode, fault, schemaChange = false) {
   const state = {
     release: 'rivet',
     namespace: 'fixture',
-    namespaceUid: mode === 'overlap' ? base.ha.namespaceUid : 'fixture-namespace-uid',
+    namespaceUid: mode === 'overlap' || adoptionStage ? base.ha.namespaceUid : 'fixture-namespace-uid',
     version: 0,
     resources: [],
     pods: [],
     retirements: {},
     installed: {},
     fault: null,
+    simulateAutoscaler: Boolean(adoptionStage),
   };
   await fs.writeFile(path.join(directory, 'state.json'), JSON.stringify(state));
   await fs.writeFile(path.join(artifacts, 'values.json'), JSON.stringify(operator));
-  await fs.writeFile(path.join(artifacts, 'manifest.json'), JSON.stringify(candidate));
+  await fs.writeFile(path.join(artifacts, 'manifest.json'), JSON.stringify(adoptionStage ? previous : candidate));
+  if (adoptionStage) await fs.writeFile(path.join(artifacts, 'adoption-certificate.json'), JSON.stringify(candidate));
   await fs.writeFile(path.join(artifacts, 'adapter.mjs'), adapter);
   const policy = {
     formatVersion: 1,
@@ -422,6 +493,15 @@ async function fixture(t, mode, fault, schemaChange = false) {
           'rivet',
           '--timeout',
           '2h',
+          ...(adoptionStage
+            ? [
+                '--overlap-adoption-certificate',
+                'artifacts/adoption-certificate.json',
+                '--overlap-adoption-stage',
+                adoptionStage,
+                ...(adoptionStage === 'ownership' ? ['--ha-control-plane-transition'] : []),
+              ]
+            : []),
           ...(schemaChange && !extra.includes('--acceptance-only')
             ? ['--maintenance-plan', 'artifacts/maintenance-plan.json']
             : []),
@@ -510,6 +590,58 @@ const clone = structuredClone;
 // Bound overlap rather than serialize all real CLI recovery journeys into one
 // CI timeout. Operations inside an individual journey remain strictly ordered.
 describe('isolated deployment command journeys', { concurrency: 3 }, () => {
+  for (const stage of ['sizing', 'ownership'])
+    test(`certified same-image overlap adoption ${stage} runs the actual command`, { timeout: 330000 }, async (t) => {
+      const f = await fixture(t, `adoption-${stage}`, 'lostTemplate');
+      const before = await f.state();
+      const preflight = await f.invoke(['--preflight-only']);
+      assert.equal(preflight.code, 0, preflight.stdout + preflight.stderr);
+      assert.equal(
+        (await f.calls()).filter((c) =>
+          ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]),
+        ).length,
+        0,
+      );
+      const lost = await f.invoke();
+      assert.equal(lost.code, 1, lost.stdout + lost.stderr);
+      const token = await f.expireLease();
+      const helmWrites = () =>
+        f.calls().then((calls) => calls.filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length);
+      const beforeRecoveryWrites = await helmWrites();
+      const result = await f.invoke(['--resume-ha', token]);
+      const diagnostics = await fs.readdir(path.join(f.directory, 'artifacts/result'));
+      const headroom = await Promise.all(
+        diagnostics
+          .filter((n) => n.startsWith('ha-headroom'))
+          .map((n) => fs.readFile(path.join(f.directory, 'artifacts/result', n), 'utf8')),
+      );
+      assert.equal(result.code, 0, result.stdout + result.stderr + headroom.join('\n'));
+      const after = await f.state();
+      assert.equal(
+        after.installed.release.production.manifestDigest,
+        before.installed.release.production.manifestDigest,
+      );
+      assert.deepEqual(after.installed.images, before.installed.images);
+      assert.equal(after.installed.postgres.poolMaxPerApiPod, 9);
+      assert.equal(after.installed.ha.controlPlane.mode, stage === 'sizing' ? 'singleton' : 'singleton-overlap');
+      const record = after.completedCutover ?? JSON.parse(after.journal.data.record);
+      assert.equal(record.phase, 'complete');
+      assert.equal(record.workflowIdentity.adoptionStage, stage);
+      assert.equal(record.token, token);
+      assert.equal(
+        await helmWrites(),
+        beforeRecoveryWrites + (stage === 'sizing' ? 1 : 0),
+        'Template acknowledgement loss must not replay Helm',
+      );
+      if (stage === 'ownership') {
+        const runtime = (state) =>
+          state.pods
+            .filter((p) => p.metadata.labels['app.kubernetes.io/component'] === 'execution')
+            .map((p) => p.metadata.uid)
+            .sort();
+        assert.deepEqual(runtime(after), runtime(before));
+      }
+    });
   test(
     'schema-changing waiver is rejected before downtime without its explicit migration-validation approval',
     { timeout: 330000 },

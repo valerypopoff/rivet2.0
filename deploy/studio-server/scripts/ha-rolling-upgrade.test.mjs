@@ -159,6 +159,34 @@ test('owner identity accepts API-omitted empty literal values without hiding mis
   );
 });
 
+test('explicit same-image pool preparation cannot authorize a credential, image or pool increase', () => {
+  const template = (pool, image = 'exact-image', endpoint = 'exact-endpoint') => ({
+    spec: {
+      containers: [
+        {
+          name: 'backend',
+          image,
+          env: [
+            { name: 'RIVET_DEPLOYMENT_DATABASE_POOL_MAX', value: String(pool) },
+            { name: 'RIVET_DEPLOYMENT_STORAGE_ENDPOINT', value: endpoint },
+          ],
+        },
+      ],
+    },
+  });
+  const transition = { from: 10, to: 9 };
+  assert.equal(hasSameHaOwnerIdentity(template(10), template(9)), false);
+  assert.equal(hasSameHaOwnerIdentity(template(10), template(9), transition), true);
+  assert.equal(hasSameHaOwnerIdentity(template(9), template(9), transition), true);
+  assert.equal(hasSameHaOwnerIdentity(template(11), template(9), transition), false);
+  assert.equal(hasSameHaOwnerIdentity(template(10), template(9, 'other-image'), transition), false);
+  assert.equal(hasSameHaOwnerIdentity(template(10), template(9, 'exact-image', 'other-endpoint'), transition), false);
+  assert.throws(
+    () => hasSameHaOwnerIdentity(template(9), template(10), { from: 9, to: 10 }),
+    /only retain or decrease/,
+  );
+});
+
 test('bridge mode normalizes only an absent replicated literal, never secret-derived owner policy', () => {
   const template = (env) => ({ spec: { containers: [{ name: 'backend', env }] } });
   assert.equal(

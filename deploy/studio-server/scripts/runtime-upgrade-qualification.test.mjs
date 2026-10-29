@@ -221,9 +221,11 @@ test('real Helm render keeps seven owners, live autoscalers and installed schema
 
 // This crosses real HTTP plus the rollout/probe adapter boundary, not real
 // Kubernetes. The local cluster command remains the separate continuity proof.
-for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'aborted']) {
+for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'aborted', 'overlap', 'overlap-failure']) {
   test(`ordinary observation keeps a single truthful window: ${scenario}`, async (t) => {
     const { previous, candidate } = pair();
+    const overlap = scenario.startsWith('overlap'),
+      developerCalls = [];
     const archive = Buffer.from('immutable-fixture-archive');
     let failing = false,
       images = previous.images,
@@ -253,7 +255,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
     const probes = {
       background: [],
       bundle: { id: 'bundle', archiveHash: createHash('sha256').update(archive).digest('hex') },
-      prepare: async (options) => assert.equal(options.embeddedMaintenance, 'singleton'),
+      prepare: async (options) => assert.equal(options.embeddedMaintenance, overlap ? true : 'singleton'),
       beforeRetirement: async (pod) => probes.background.push({ uid: pod.uid }),
       afterWithdrawal: async (pod) => {
         if (scenario !== 'missing-recording') probes.background.find((p) => p.uid === pod.uid).recordingId = pod.uid;
@@ -289,6 +291,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       assertAutoscalerActive: async () => ({ policyDigest: autoscalerPolicyDigest({}) }),
       waitForDeveloperRoute: async () => {},
       isolateRuntime: async () => {
+        if (overlap) assert.deepEqual(developerCalls, ['adopt', 'roll', 'finish', 'close']);
         independence++;
         return { browser: true, schedule: true };
       },
@@ -311,8 +314,29 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       until,
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
       sampleIntervalMs: 5,
+      ...(overlap
+        ? {
+            prepareDeveloperOverlap: async () => {
+              developerCalls.push('adopt');
+            },
+            startDeveloperOverlap: async () => ({
+              roll: async (callbacks) => {
+                developerCalls.push('roll');
+                await gate.roll(candidate.images, true, callbacks);
+              },
+              finish: async () => {
+                developerCalls.push('finish');
+                if (scenario === 'overlap-failure') throw Error('browser continuity failed');
+                return { observed: true };
+              },
+              close: async () => {
+                developerCalls.push('close');
+              },
+            }),
+          }
+        : {}),
     });
-    if (scenario === 'pass') {
+    if (scenario === 'pass' || scenario === 'overlap') {
       const report = await work;
       assert.equal(report.outcome, 'passed');
       assert.equal(report.qualification, 'local-functional-only');
@@ -322,6 +346,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       assert.ok(report.readiness.samples > 0);
       assert.deepEqual(report.readiness.minimumReady, { execution: 2, proxy: 2 });
       assert.equal(probes.background.length, 2);
+      if (overlap) assert.deepEqual(report.outcomes.developerOverlap, { observed: true });
     } else {
       await assert.rejects(work);
       const report = JSON.parse(artifacts.get('runtime-ordinary-upgrade-report.json'));
@@ -329,6 +354,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       assert.equal(rolls, 1);
       assert.equal(independence, 0);
       assert.ok(captures.includes('ordinary-upgrade-failure'));
+      if (overlap) assert.deepEqual(developerCalls, ['adopt', 'roll', 'finish', 'close']);
       if (scenario === '502') {
         assert.ok(report.workflow.failedRequests.some((r) => r.error.status === 502));
         assert.ok(report.workflow.failedRequests.some((r) => r.http?.server === 'nginx' && r.http.format === 'html'));

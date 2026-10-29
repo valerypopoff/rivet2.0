@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
+  getStudioServerReleaseManifestDigest,
 } from './lib/studio-server-release-manifest.mjs';
 import {
   HA_REQUIRED_CHECKS,
@@ -112,6 +113,41 @@ function fixture() {
   };
 }
 
+test('temporary infrastructure declarations cannot publish before matching outer cleanup is verified', () => {
+  const f = fixture();
+  const cleanup = {
+    protocol: 1,
+    operationId: f.control.operationId,
+    inputHash: 'a'.repeat(64),
+    inventoryHash: 'b'.repeat(64),
+    cleanupVerified: true,
+    verifiedAt: '2026-10-21T02:00:00Z',
+  };
+  for (const key of ['control', 'autoscaling']) {
+    f[key].protocol = 2;
+    f[key].temporaryEnvironment = structuredClone(cleanup);
+  }
+  assert.ok(prepareRuntimeQualification(f));
+  for (const change of [
+    (x) => {
+      x.control.temporaryEnvironment.cleanupVerified = false;
+    },
+    (x) => {
+      x.autoscaling.temporaryEnvironment.inputHash = 'c'.repeat(64);
+    },
+    (x) => {
+      delete x.control.temporaryEnvironment;
+    },
+    (x) => {
+      x.control.temporaryEnvironment.verifiedAt = '2026-10-21T00:30:00Z';
+    },
+  ]) {
+    const broken = structuredClone(f);
+    change(broken);
+    assert.throws(() => prepareRuntimeQualification(broken));
+  }
+});
+
 test('ordinary compact publication does not invent adoption checks and still requires cooperative autoscaling', () => {
   const f = fixture();
   f.control.evidence = {
@@ -162,6 +198,27 @@ test('qualification publication requires the exact successful main image-build r
     );
   for (const runId of ['../123', '123;echo bad', '', '0'])
     assert.throws(() => assertRuntimeQualificationBuild(run, { repository, sourceSha, runId }));
+});
+
+test('qualification promotion uses the frozen publication baseline, not a separately selected installed predecessor', () => {
+  const f = fixture();
+  const published = promoteStudioServerReleaseManifest(create('c'.repeat(40), 'published'), {
+    promotionEvidence: evidence,
+  });
+  const reference = {
+    manifestDigest: getStudioServerReleaseManifestDigest(published),
+    sourceSha: published.source.sha,
+    managedWorkflowSchemaVersion: published.database.managedWorkflowSchema.version,
+    images: published.images,
+  };
+  f.candidate.lineage.publicationHead = reference;
+  f.promoted.lineage.publicationHead = reference;
+  const result = prepareRuntimeQualification(f);
+  assert.equal(result.publicationBaselineDigest, reference.manifestDigest);
+  assert.equal(result.predecessorDigest, f.candidate.lineage.predecessor.manifestDigest);
+  assert.notEqual(result.publicationBaselineDigest, result.predecessorDigest);
+  assertRuntimeQualificationPointer(f.promoted, result.expectedProductionDigest);
+  assert.throws(() => assertRuntimeQualificationPointer(published, result.expectedProductionDigest));
 });
 
 test('qualification preserves candidate lineage/images/schema and binds both provider declarations and exact policy', () => {

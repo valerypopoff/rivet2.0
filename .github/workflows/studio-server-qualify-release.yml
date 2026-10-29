@@ -85,7 +85,8 @@ jobs:
   qualified:
     name: Qualified — execute provider probes and verify cleanup
     needs: built
-    runs-on: [self-hosted, linux, x64, rivet-qualification]
+    # Temporary mode must coordinate from outside the disposable GKE cluster.
+    runs-on: ${{ vars.RIVET_QUALIFICATION_ENVIRONMENT_MODE == 'temporary' && fromJSON('["self-hosted","linux","x64","rivet-qualification-control"]') || fromJSON('["self-hosted","linux","x64","rivet-qualification"]') }}
     environment: rivet-managed-staging
     timeout-minutes: 180
     permissions:
@@ -96,6 +97,14 @@ jobs:
       control: ${{ steps.execute.outputs.control }}
       autoscaling: ${{ steps.execute.outputs.autoscaling }}
     env:
+      RIVET_QUALIFICATION_ENVIRONMENT_MODE: ${{ vars.RIVET_QUALIFICATION_ENVIRONMENT_MODE }}
+      RIVET_TEMPORARY_STAGING_TEMPLATE: ${{ vars.RIVET_TEMPORARY_STAGING_TEMPLATE }}
+      RIVET_TEMPORARY_STAGING_CERTIFICATE: ${{ vars.RIVET_TEMPORARY_STAGING_CERTIFICATE }}
+      RIVET_TEMPORARY_STAGING_KEY: ${{ vars.RIVET_TEMPORARY_STAGING_KEY }}
+      RIVET_TEMPORARY_STAGING_ESTIMATE: ${{ vars.RIVET_TEMPORARY_STAGING_ESTIMATE }}
+      RIVET_TEMPORARY_STAGING_REGISTRY: ${{ vars.RIVET_TEMPORARY_STAGING_REGISTRY }}
+      RIVET_QUALIFICATION_PRODUCTION_KUBECONFIG: ${{ vars.RIVET_QUALIFICATION_PRODUCTION_KUBECONFIG }}
+      RIVET_QUALIFICATION_OVERLAP_PROFILE: ${{ vars.RIVET_QUALIFICATION_OVERLAP_PROFILE }}
       RIVET_AUTOMATED_QUALIFICATION_ENABLED: ${{ vars.RIVET_AUTOMATED_QUALIFICATION_ENABLED }}
       RIVET_QUALIFICATION_PROJECT_ID: ${{ vars.RIVET_QUALIFICATION_PROJECT_ID }}
       RIVET_QUALIFICATION_PROJECT_NUMBER: ${{ vars.RIVET_QUALIFICATION_PROJECT_NUMBER }}
@@ -151,7 +160,7 @@ jobs:
       runtime_autoscaling_declaration: ${{ needs.qualified.outputs.autoscaling }}
 
   preflight:
-    name: Production preflight passed — no deployment
+    name: Production readiness observation — no deployment
     needs: [qualified, publish]
     runs-on: [self-hosted, linux, x64, rivet-production-readonly]
     environment: rivet-production-readiness

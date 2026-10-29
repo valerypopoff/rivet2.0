@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
 import { RuntimeControlLocalGate, mergeRuntimeControlGuards } from '../kubernetes-runtime-control-local.mjs';
@@ -18,6 +19,7 @@ import { getStudioServerReleaseManifestDigest } from '../lib/studio-server-relea
 import { assertGkeFrontendAvailability, waitForGkeFrontendAvailability } from '../lib/ha-gke-availability.mjs';
 import { resolveHelmBinOrThrow } from '../lib/k8s-tools.mjs';
 import { inspectStagingPrerequisites } from '../lib/reusable-staging-prerequisites.mjs';
+import { applyOverlapQualificationProfile } from '../lib/qualification-overlap-profile.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -37,7 +39,7 @@ export async function until(label, check, timeoutMs = 1200000) {
 const imageDigest = (manifest) =>
   getStudioServerReleaseManifestDigest(manifest, { requirePromoted: manifest.state === 'promoted' });
 export class ReusableProviderGate extends RuntimeControlLocalGate {
-  constructor(operation, settings, state, privateDirectory) {
+  constructor(operation, settings, state, privateDirectory, { runRollout = runHaKubernetesRollout } = {}) {
     const namespace = `rivet-staging-${operation.operationId}`,
       release = 'rivet-qualification';
     const config = {
@@ -65,17 +67,31 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.state = state;
     this.profile = 'compact';
     this.singleton = true;
+    this.overlap = operation.installed.controlPlaneMode === 'singleton-overlap';
+    this.overlapProfilePrepared = this.overlap;
     this.controllerEnabled = true;
     this.manifest = operation.candidate;
     this.currentManifest = operation.previous;
     this.identity = { clusterServer: settings.clusterServer, expiresAt: operation.expiresAt };
     this.journalName = releaseOperationJournalName(release);
+    this.runRollout = runRollout;
   }
   async assertLocalContext() {
     await this.assertProofContext();
   }
   async verifySharedPrerequisites() {
     return inspectStagingPrerequisites(this.state);
+  }
+  async verifyOverlapCapacity() {
+    if (!this.operation.developerOverlapProfile) return;
+    // Render-only identity cannot be used by apply(): that independently reads
+    // the real staging namespace. No cluster command or billable write occurs.
+    const values = applyOverlapQualificationProfile(
+      this.values(this.operation.previous.images),
+      this.operation.developerOverlapProfile,
+    );
+    values.ha = { ...values.ha, namespaceUid: randomUUID(), controlPlane: { mode: 'singleton-overlap' } };
+    await this.resources(values, 'overlap-capacity-preflight');
   }
   async verifyLocalBrowserFixture() {
     // Intercepted page/WS only: prove the runner can launch its actual browser
@@ -169,7 +185,30 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'true', // Only the approved Gateway reaches this ClusterIP edge.
       },
     };
+    if (this.operation.developerOverlapProfile && this.overlapProfilePrepared)
+      this.providerValues = applyOverlapQualificationProfile(
+        this.providerValues,
+        this.operation.developerOverlapProfile,
+      );
+    this.providerValues.ha.controlPlane.mode = this.overlap ? 'singleton-overlap' : 'singleton';
     return this.providerValues;
+  }
+  async verifyDeveloperAcceptance(pod) {
+    const source = await fs.readFile(
+      path.join(root, 'deploy/studio-server/scripts/fixtures/ha-developer-acceptance.mjs'),
+      'utf8',
+    );
+    const result = await this.kube(
+      ['exec', '-i', pod.name, '-c', 'backend', '--', 'node', '--input-type=module', '-', pod.uid, pod.incarnation],
+      { input: source },
+    );
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.podUid, pod.uid);
+    assert.ok(pod.incarnation);
+    assert.equal(receipt.incarnation, pod.incarnation);
+    assert.equal(receipt.developerApi, true);
+    assert.equal(receipt.editorSession, true);
+    return receipt;
   }
   async apply(values, label = 'provider-values.json') {
     await this.assertProofContext();
@@ -177,10 +216,13 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
   }
   async roll(images, singleton = true, probes = {}) {
     assert.equal(singleton, true);
-    const values = this.values(images),
-      resources = await this.resources(values, `roll-${Date.now()}`);
+    const values = this.values(images);
+    if (probes.ownerPoolTransition)
+      values.workflowSchema = { ...values.workflowSchema, migrationJob: { enabled: false } };
+    const resources = await this.resources(values, `roll-${Date.now()}`);
     const target = [this.operation.previous, this.operation.candidate].find((m) => isDeepStrictEqual(m.images, images));
-    const result = await runHaKubernetesRollout({
+    const { artifact: observeArtifact, ...rolloutProbes } = probes;
+    const result = await this.runRollout({
       safety: this.deploymentSafety('rolling', imageDigest(target)),
       kube: (...args) => this.kube(...args),
       namespace: this.config.namespace,
@@ -188,9 +230,14 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       manifestDigest: imageDigest(target),
       previousManifestDigest: imageDigest(this.currentManifest),
       resources,
-      ...probes,
+      ...rolloutProbes,
       timeoutMs: 1200000,
-      artifact: (...args) => this.artifact(...args),
+      artifact: async (...args) => {
+        // The adapter owns persistence. The observer must run after the exact
+        // journal is saved, and its failure must stop the qualification.
+        await this.artifact(...args);
+        await observeArtifact?.(...args);
+      },
       applyTemplates: (_work, guards) =>
         this.apply(mergeRuntimeControlGuards(values, guards), 'provider-roll-template.json'),
       restoreAutoscalers: (_work, guards) =>

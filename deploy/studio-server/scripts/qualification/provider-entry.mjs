@@ -23,6 +23,7 @@ import { assertReleaseManifestMatchesCurrentChart } from '../lib/studio-server-r
 import { qualificationHash } from '../lib/runtime-qualification-execution.mjs';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from '../lib/ha-workflow-traffic.mjs';
 import { waitForManagedGateCommands } from '../kubernetes-managed-release-gate.mjs';
+import { adoptProviderOverlap, startProviderOverlapProbe } from './provider-overlap.mjs';
 
 export function normalizeProviderAutoscaling(raw, hpa) {
   const result = (name) => {
@@ -63,6 +64,7 @@ export async function executeProviderPhase({
     ...Object.fromEntries(['operationId', 'inputHash', 'projectId', 'projectNumber'].map((k) => [k, operation[k]])),
   });
   if (phase === 'armExpiry') {
+    if (operation.developerOverlapProfile) await gate.verifyOverlapCapacity();
     await cloud.project();
     await gate.verifyLocalBrowserFixture();
     await gate.verifySharedPrerequisites();
@@ -120,6 +122,13 @@ export async function executeProviderPhase({
         probes,
         baseUrl: gate.config.baseUrl,
         until: wait,
+        ...(operation.developerOverlapProfile
+          ? {
+              prepareDeveloperOverlap: () => adoptProviderOverlap(gate),
+              startDeveloperOverlap: (ownedProbes) =>
+                startProviderOverlapProbe(gate, ownedProbes, operation.previous, operation.candidate, { wait }),
+            }
+          : {}),
       });
       result = {
         ...report,
@@ -130,6 +139,8 @@ export async function executeProviderPhase({
         policyDigest: operation.policyDigest,
       };
     } else {
+      gate.overlap = !!operation.developerOverlapProfile;
+      gate.overlapProfilePrepared = gate.overlap;
       gate.currentManifest = operation.candidate;
       const startedAt = new Date().toISOString();
       let subphase = 'autoscaling-preparation';
@@ -208,13 +219,18 @@ async function main() {
   const settings = reusableStagingSettings(
     JSON.parse(await fs.readFile(new URL('./settings.json', import.meta.url), 'utf8')),
   );
+  assert.deepEqual(
+    settings.developerOverlapProfile,
+    operation.developerOverlapProfile,
+    'Driver and operation target profiles differ',
+  );
   const actor = { namespace: settings.runnerNamespace, name: process.env.POD_NAME, uid: process.env.POD_UID };
   assert.ok(
     actor.name && actor.uid && process.platform === 'linux',
     'Exact ephemeral in-cluster Linux runner required',
   );
   const WebSocketClass = createRequire(path.join(root, 'packages/studio-server-api/package.json'))('ws');
-  const api = createKubernetesTransport({ origin: settings.clusterServer, WebSocketClass });
+  const api = createKubernetesTransport({ origin: settings.inClusterServer ?? settings.clusterServer, WebSocketClass });
   const state = new ReusableStagingState(api, settings, operation),
     cloud = stagingCloudReader(settings);
   const stop = () => {

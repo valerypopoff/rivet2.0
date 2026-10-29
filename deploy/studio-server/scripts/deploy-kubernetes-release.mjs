@@ -40,6 +40,11 @@ import {
 import { createMaintenanceValidationValues, getMaintenanceValidationTargets } from './lib/maintenance-validation.mjs';
 import { readDeploymentPolicy, runDeploymentStage, executeDeploymentWorkflow } from './lib/deployment-workflow.mjs';
 import { planInstalledUpgrade } from './lib/installed-upgrade-plan.mjs';
+import {
+  overlapAdoptionAuthority,
+  assertOverlapAdoptionInstalled,
+  assertOverlapAdoptionResources,
+} from './lib/overlap-adoption.mjs';
 import { preserveDeploymentFailure } from './lib/deployment-operation.mjs';
 import {
   createDeploymentSafety,
@@ -99,6 +104,8 @@ const supportedOptions = new Set([
   '--context',
   '--resume-ha',
   '--ha-control-plane-transition',
+  '--overlap-adoption-certificate',
+  '--overlap-adoption-stage',
 ]);
 
 export function parseArgs(argv) {
@@ -354,7 +361,30 @@ export async function resolveDeploymentRelease(
     }
     const manifestDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
     console.log(`[${runnerName}] Selected source commit ${manifest.source.sha}; manifest digest ${manifestDigest}.`);
-    await verifyCheckout(manifest);
+    const adoptionCertificate = options.has('--overlap-adoption-certificate')
+      ? await readManifest(
+          insideRepository(required(options, '--overlap-adoption-certificate'), '--overlap-adoption-certificate'),
+          { requirePromoted: true },
+        )
+      : null;
+    const adoption = adoptionCertificate
+      ? overlapAdoptionAuthority(manifest, adoptionCertificate, required(options, '--overlap-adoption-stage'))
+      : null;
+    if (
+      options.has('--overlap-adoption-stage') !== Boolean(adoption) ||
+      (adoption &&
+        (!options.has('--manifest') ||
+          options.has('--rollback-to') ||
+          options.has('--maintenance-plan') ||
+          options.has('--maintenance-cutover') ||
+          options.has('--resume-cutover') ||
+          options.has('--single-machine') ||
+          options.has('--ha-control-plane-transition') !== (adoption.stage === 'ownership')))
+    )
+      throw Error(
+        'Overlap adoption requires an explicit installed manifest, candidate certificate and matching same-image stage only.',
+      );
+    await verifyCheckout(adoptionCertificate ?? manifest);
     await verifyClean();
     assertReleaseManifestMatchesCurrentChart(manifest, rootDir);
     const generatedValues = rollbackManifestPath
@@ -363,6 +393,7 @@ export async function resolveDeploymentRelease(
           rollbackRelease: await readManifest(rollbackManifestPath, { requirePromoted: true }),
         })
       : createProductionHelmValues(manifest);
+    if (adoption?.stage === 'sizing') generatedValues.workflowSchema.migrationJob.enabled = false;
     // An explicit pin may itself be the retained diagnostic file. Do not rewrite it.
     const inputIsArtifact = (fileName) =>
       options.has('--manifest') && path.relative(manifestPath, path.join(artifactsDir, fileName)) === '';
@@ -381,7 +412,7 @@ export async function resolveDeploymentRelease(
         2,
       )}\n`,
     );
-    return { manifest, manifestPath, rollbackManifestPath, generatedValues };
+    return { manifest, manifestPath, rollbackManifestPath, generatedValues, adoption, adoptionCertificate };
   } finally {
     if (temporaryDirectory) await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -494,11 +525,10 @@ async function main() {
   // A forward rollback is still a production operation. Its failed release
   // must have passed the same CI gates as an ordinary deployment; only the
   // image set and migration-Job behavior differ.
-  const { manifest, manifestPath, rollbackManifestPath, generatedValues } = await resolveDeploymentRelease(
-    options,
-    artifactsDir,
-  );
+  const { manifest, manifestPath, rollbackManifestPath, generatedValues, adoption, adoptionCertificate } =
+    await resolveDeploymentRelease(options, artifactsDir);
   const candidateDigest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+  const qualificationManifest = adoptionCertificate ?? manifest;
   const deploymentPolicy = options.has('--deployment-policy')
     ? await readDeploymentPolicy(required(options, '--deployment-policy'), rootDir, {
         release,
@@ -618,8 +648,8 @@ async function main() {
       (singletonControlRequested || options.has('--ha-control-plane-transition') || edgeProfile === 'compact')
     )
       assertRuntimeControlEvidence(
-        manifest.evidence.runtimeControl,
-        manifest,
+        qualificationManifest.evidence.runtimeControl,
+        qualificationManifest,
         edgeProfile,
         renderedResources.some(
           (r) =>
@@ -634,14 +664,15 @@ async function main() {
         'HA reverse-image replacement is not certified by a forward mixed-version certificate. Repair forward; no automatic image/schema rollback was attempted.',
       );
     if (haRequested && !maintenance && !options.has('--plan-only') && !options.has('--acceptance-only'))
-      assertHaUpgradeEvidence(manifest, null);
+      assertHaUpgradeEvidence(qualificationManifest, null);
     const autoscalerResource = renderedResources.find(
       (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === 'autoscaler',
     );
-    if (!maintenance) assertOrdinaryRuntimeResources(manifest.evidence.runtimeControl, renderedResources);
+    if (adoption) assertOverlapAdoptionResources(adoption, renderedResources, adoptionCertificate);
+    else if (!maintenance) assertOrdinaryRuntimeResources(manifest.evidence.runtimeControl, renderedResources);
     let deploymentAutoscalingPolicyDigest;
     if (autoscalerResource) {
-      if (options.has('--ha-control-plane-transition'))
+      if (options.has('--ha-control-plane-transition') && adoption?.stage !== 'ownership')
         throw new Error(
           'Disable automatic execution scaling in a separate settled release before changing control topology.',
         );
@@ -651,8 +682,8 @@ async function main() {
       deploymentAutoscalingPolicyDigest = autoscalerPolicyDigest(config.policy);
       if (!maintenance && !options.has('--plan-only') && !options.has('--acceptance-only'))
         assertCooperativeAutoscalingEvidence(
-          manifest.evidence.runtimeAutoscaling,
-          manifest,
+          qualificationManifest.evidence.runtimeAutoscaling,
+          qualificationManifest,
           autoscalerPolicyDigest(config.policy),
         );
       if (
@@ -716,6 +747,7 @@ async function main() {
     let workflowContext;
     if (
       !maintenance &&
+      !adoption &&
       !options.has('--acceptance-only') &&
       exists &&
       (deploymentPolicy ||
@@ -750,7 +782,14 @@ async function main() {
           'The installed version needs a qualified multi-hop route. Review upgrade-plan.json and use each pinned source/chart in order; no workloads were changed.',
         );
     }
-    if (options.has('--plan-only')) throw Error('An installed release is required for --plan-only.');
+    if (adoption) {
+      assertOverlapAdoptionInstalled(adoption, adoptionCertificate, installed, {
+        journal: pendingJournal,
+        resumeToken: options.get('--resume-ha'),
+      });
+      await writeArtifact(artifactsDir, 'overlap-adoption.json', JSON.stringify(adoption, null, 2));
+      if (options.has('--plan-only')) return;
+    } else if (options.has('--plan-only')) throw Error('An installed release is required for --plan-only.');
     if (exists && !singleMachine && !deploymentPolicy)
       throw Error(
         'Production upgrades require --deployment-policy with reviewed recovery and application acceptance adapters. Run --plan-only to inspect the version route first.',
@@ -764,6 +803,8 @@ async function main() {
         resumeToken: options.get('--resume-ha') ?? options.get('--resume-cutover'),
         policyDigest: deploymentPolicy.digest,
         valuesDigest,
+        authorizationManifestDigest: adoption?.authorizationManifestDigest,
+        adoptionStage: adoption?.stage,
       });
       workflowContext = {
         operationId: recovery?.operationId ?? randomUUID(),
@@ -775,6 +816,9 @@ async function main() {
         installedManifestDigest: recovery?.installedManifestDigest ?? installedDigest,
         candidateManifestDigest: candidateDigest,
         valuesDigest,
+        ...(adoption
+          ? { authorizationManifestDigest: adoption.authorizationManifestDigest, adoptionStage: adoption.stage }
+          : {}),
       };
       if (ns.metadata.uid !== deploymentPolicy.policy.namespaceUid)
         throw Error('Deployment policy namespace identity changed.');
@@ -931,13 +975,22 @@ async function main() {
     const cutover = options.has('--maintenance-cutover') || options.has('--resume-cutover');
     const haRollout = haRequested && exists && installed?.ha?.enabled && !cutover;
     const controlTransition = options.has('--ha-control-plane-transition');
+    const targetControlMode =
+      renderedResources
+        .find((r) => r.kind === 'StatefulSet' && r.metadata.labels?.['app.kubernetes.io/component'] === 'backend')
+        ?.spec.template.spec.containers.find((c) => c.name === 'backend')
+        ?.env?.find((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE')?.value ?? 'replicated';
+    if (haRollout && !controlTransition && (installed.ha.controlPlane?.mode ?? 'replicated') !== targetControlMode)
+      throw Error(
+        'Control topology changed: finish the separately certified same-image adoption before an ordinary image upgrade.',
+      );
     if (controlTransition && (!haRollout || installedDigest !== candidateDigest || rollbackManifestPath))
       throw new Error(
         'Control topology transfer requires the already installed same-image bridge manifest, HA, and no cutover/rollback.',
       );
     if (options.has('--resume-ha') && (!haRollout || options.has('--resume-cutover')))
       throw new Error('--resume-ha requires an installed HA release and cannot be combined with maintenance cutover.');
-    if (haRequested && !cutover) assertHaUpgradeEvidence(manifest, installed);
+    if (haRequested && !cutover) assertHaUpgradeEvidence(qualificationManifest, installed);
     if (installed?.ha?.enabled && !haRequested && !cutover)
       throw new Error('Disabling HA requires maintenance; ordinary Helm must not delete accepted owners.');
     if (exists && !installedDigest && !cutover)
@@ -1221,6 +1274,9 @@ async function main() {
               resources: renderedResources,
               safety,
               previousManifestDigest: installedDigest,
+              ...(adoption?.stage === 'sizing'
+                ? { ownerPoolTransition: { from: adoption.sourcePool, to: adoption.profile.poolMaxPerApiPod } }
+                : {}),
               resumeToken: options.get('--resume-ha'),
               timeoutMs,
               artifact: (name, value) => writeArtifact(artifactsDir, name, value),

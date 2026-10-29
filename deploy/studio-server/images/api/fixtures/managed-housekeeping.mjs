@@ -10,6 +10,21 @@ const { Pool } = require('pg');
 const { S3Client, CreateBucketCommand } = require('@aws-sdk/client-s3');
 const prefix = '/app/packages/studio-server-api/dist/studio-server-api/src';
 const root = await fs.mkdtemp('/tmp/rivet-managed-handover-');
+let prepareOverlapBundle;
+if (process.env.RIVET_HOUSEKEEPING_PROVIDER_FIXTURE === '1') {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    assert.ok(size < 4 * 1024 * 1024);
+    chunks.push(chunk);
+  }
+  // Generated code stays inside this disposable container. A real module path
+  // also keeps error stacks bounded, unlike embedding the whole module in a URI.
+  const helper = `${root}/provider-fixture.mjs`;
+  await fs.writeFile(helper, Buffer.concat(chunks), { flag: 'wx', mode: 0o600 });
+  ({ prepareOverlapBundle } = await import(helper));
+}
 const target = {
   databaseMode: 'managed',
   databaseUrl: 'postgres://postgres@db:5432/overlap',
@@ -57,6 +72,9 @@ const env = {
   RIVET_DEPLOYMENT_DATABASE_MODE: 'managed',
   RIVET_DEPLOYMENT_DATABASE_CONNECTION_STRING: target.databaseUrl,
   RIVET_DEPLOYMENT_DATABASE_SSL_MODE: 'disable',
+  // The provider-fixture option validates the documented seven-owner target;
+  // the separate Helm regression still rejects ten pooled connections.
+  RIVET_DEPLOYMENT_DATABASE_POOL_MAX: prepareOverlapBundle ? '9' : '10',
   RIVET_DEPLOYMENT_STORAGE_MODE: 'managed',
   RIVET_DEPLOYMENT_STORAGE_BUCKET: target.objectStorageBucket,
   RIVET_DEPLOYMENT_STORAGE_ENDPOINT: target.objectStorageEndpoint,
@@ -91,7 +109,7 @@ try {
   const { ManagedWorkflowBackend } = await import(`${prefix}/routes/workflows/managed/backend.js`);
   backend = new ManagedWorkflowBackend(target, undefined, { migrationMode: 'verify' });
   const bundle = await backend.bundles.create(`Handover ${randomUUID()}`, '');
-  await backend.createWorkflowProjectItem(bundle.relativePath, 'Preserved project');
+  const savedProject = await backend.createWorkflowProjectItem(bundle.relativePath, 'Preserved project');
   const make = (port) =>
     createHousekeepingSupervisor({
       env: {
@@ -118,6 +136,7 @@ try {
       'x-rivet-housekeeping-incarnation': owner.incarnation,
       'x-rivet-housekeeping-capability': owner.capability,
       'x-rivet-bundle-intent': '1',
+      'x-rivet-namespace-intent': '1',
       'x-rivet-migration-intent': '1',
       'content-type': 'application/json',
     };
@@ -130,6 +149,36 @@ try {
     assert.ok(response.ok, `HTTP ${response.status}: ${await response.clone().text()}`);
     return binary ? Buffer.from(await response.arrayBuffer()) : response.json();
   };
+  if (prepareOverlapBundle) {
+    const template = (
+      await request(
+        '/api/workflows/projects/download',
+        { relativePath: savedProject.relativePath, version: 'live' },
+        true,
+      )
+    ).toString('utf8');
+    const fixture = await prepareOverlapBundle(
+      {
+        config: { baseUrl: 'http://isolated-fixture' },
+        requestWorkflow: async (_base, route, options = {}) =>
+          request(route, options.body ? JSON.parse(options.body) : undefined),
+      },
+      template,
+    );
+    assert.equal(fixture.projectIds.length, 2);
+    // Use the actual catalog and object-storage export path, not fake project
+    // DTOs: member ownership/reference errors must be found before paid setup.
+    const exported = await request('/api/workflows/project-bundles/container', {
+      bundleId: fixture.bundleId,
+      version: 'latest',
+      requestId: randomUUID(),
+    });
+    await wait(async () => (await request(`/api/workflows/project-bundles/${exported.id}`)).phase === 'ready');
+    assert.ok((await request(`/api/workflows/project-bundles/${exported.id}/download`, undefined, true)).length > 0);
+    console.log(
+      'Provider bundle fixture: real guarded folder/upload/conversion/publication and saved two-project export passed.',
+    );
+  }
   const job = await request('/api/workflows/project-bundles/container', {
     bundleId: bundle.bundleId,
     version: 'latest',

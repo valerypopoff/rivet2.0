@@ -4,6 +4,8 @@ import { getHaConfigurationDigest, hasSameHaOwnerIdentity, hasSameHaServiceRouti
 import { releaseOperationJournalName, journalForReleaseOperation } from './release-operation-journal.mjs';
 import { waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
+import { matchesKubernetesTemplate as matchesTopologyTemplate } from './kubernetes-template-match.mjs';
+export { matchesKubernetesTemplate as matchesTopologyTemplate } from './kubernetes-template-match.mjs';
 
 const role = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
 const container = (r) => r.spec?.template?.spec?.containers?.find((c) => ['backend', 'api'].includes(c.name));
@@ -16,41 +18,6 @@ const mode = (r) => {
 };
 const ready = (p) =>
   !p.metadata.deletionTimestamp && p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
-
-// API defaults may add fields and omit empty strings. Named Kubernetes arrays
-// are sets keyed by name; commands/args remain ordered. Never ignore a changed
-// desired field when reconciling a lost Helm acknowledgement.
-export function matchesTopologyTemplate(actual, desired) {
-  if ((desired === '' || desired === null) && actual === undefined) return true;
-  if (
-    actual === undefined &&
-    desired &&
-    typeof desired === 'object' &&
-    !Array.isArray(desired) &&
-    Object.keys(desired).length === 0
-  )
-    return true;
-  if (Array.isArray(desired)) {
-    if (!Array.isArray(actual) || actual.length < desired.length) return false;
-    if (desired.every((v) => v && typeof v === 'object' && typeof v.name === 'string')) {
-      const used = new Set();
-      return desired.every((v) => {
-        const index = actual.findIndex((a, i) => !used.has(i) && a.name === v.name && matchesTopologyTemplate(a, v));
-        if (index < 0) return false;
-        used.add(index);
-        return true;
-      });
-    }
-    return actual.length === desired.length && desired.every((v, i) => matchesTopologyTemplate(actual[i], v));
-  }
-  if (desired && typeof desired === 'object')
-    return (
-      actual &&
-      typeof actual === 'object' &&
-      Object.entries(desired).every(([k, v]) => matchesTopologyTemplate(actual[k], v))
-    );
-  return isDeepStrictEqual(actual, desired);
-}
 
 /** Same-image bridge-only transfer. The adapter never calls a public endpoint,
  * reads a Secret, deletes a PVC, drains a node, or changes a runtime replica. */
@@ -434,7 +401,8 @@ export async function runHaKubernetesControlTopology({
         // An idle autoscaler may advance a completed journal during preflight.
         // Refresh before the first CAS; never retry an uncertain ownership write.
         const latest = await readJournal();
-        if (latest && latest.phase !== 'complete') throw Error('Another release operation acquired the journal during preflight.');
+        if (latest && latest.phase !== 'complete')
+          throw Error('Another release operation acquired the journal during preflight.');
         rv = observedVersion;
       }
       const { resourceVersion: _, ...data } = record;
@@ -489,8 +457,12 @@ export async function runHaKubernetesControlTopology({
       for (const c of frontends) {
         const t = resources.find((r) => r.kind === 'Deployment' && r.metadata.name === c.metadata.name);
         if (role(c) === 'autoscaler') {
-          if (!t || role(t) !== 'autoscaler' || c.spec.replicas !== t.spec.replicas ||
-              !matchesTopologyTemplate(c.spec.template, t.spec.template))
+          if (
+            !t ||
+            role(t) !== 'autoscaler' ||
+            c.spec.replicas !== t.spec.replicas ||
+            !matchesTopologyTemplate(c.spec.template, t.spec.template)
+          )
             throw Error('Topology transfer may not change the independent autoscaler.');
           continue;
         }
@@ -537,7 +509,12 @@ export async function runHaKubernetesControlTopology({
             (!contract.executionOwnedProxySettings || contract.scheduledRunScope !== 'published'))
         )
           throw new Error('Bridge runtime contract is missing; no owner was changed.');
-        if (from === 'singleton' && to === 'singleton-overlap' && role(p) === 'backend' && contract.maintenanceIdle !== true)
+        if (
+          from === 'singleton' &&
+          to === 'singleton-overlap' &&
+          role(p) === 'backend' &&
+          contract.maintenanceIdle !== true
+        )
           throw Error('Bridge maintenance is busy or unconfirmed; no developer owner was withdrawn.');
       }
       await artifact('ha-control-topology-preflight.json', JSON.stringify(identity, null, 2));
@@ -667,9 +644,22 @@ export async function runHaKubernetesControlTopology({
           }
           if (to === 'singleton-overlap') {
             const owner = mounts[0];
-            const status = JSON.parse((await kube(['exec', owner.metadata.name, '-c', 'backend', '--', 'node', '/opt/rivet/retire-backend.mjs'])).stdout);
+            const status = JSON.parse(
+              (
+                await kube([
+                  'exec',
+                  owner.metadata.name,
+                  '-c',
+                  'backend',
+                  '--',
+                  'node',
+                  '/opt/rivet/retire-backend.mjs',
+                ])
+              ).stdout,
+            );
             if (status.housekeeping?.state !== 'owner' || status.housekeeping.podUid !== owner.metadata.uid) {
-              pending = 'confirmed exclusive housekeeping worker'; return false;
+              pending = 'confirmed exclusive housekeeping worker';
+              return false;
             }
           }
           return true;

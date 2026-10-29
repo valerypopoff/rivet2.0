@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { assertOrdinaryRuntimeLayout } from './ha-release-evidence.mjs';
+import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
 
 const canonical = (value) =>
   Array.isArray(value)
@@ -24,7 +25,7 @@ export function qualificationSizing(values) {
   const pick = (value, keys) =>
     Object.fromEntries(keys.filter((k) => value?.[k] !== undefined).map((k) => [k, structuredClone(value[k])]));
   const resources = Object.fromEntries(
-    ['proxy', 'web', 'backend', 'execution', 'api'].map((role) => [
+    ['proxy', 'web', 'backend', 'backendOverlap', 'execution', 'api'].map((role) => [
       role,
       Object.fromEntries(
         ['requests', 'limits']
@@ -113,7 +114,25 @@ export async function inspectQualificationInstallation({
     ),
   );
   const policyDigest = autoscalerPolicyDigest(policy);
-  assertOrdinaryRuntimeLayout({ protocol: 2, autoscalerPolicyDigest: policyDigest }, values);
+  const controlPlaneMode = values.ha?.controlPlane?.mode;
+  const profile =
+    controlPlaneMode === 'singleton-overlap'
+      ? overlapQualificationProfile({
+          protocol: 1,
+          poolMaxPerApiPod: values.postgres.poolMaxPerApiPod,
+          maxConnections: values.postgres.maxConnections,
+          reservedConnections: values.postgres.reservedConnections,
+          backendResources: values.resources.backendOverlap,
+        })
+      : undefined;
+  assertOrdinaryRuntimeLayout(
+    {
+      protocol: profile ? 3 : 2,
+      autoscalerPolicyDigest: policyDigest,
+      ...(profile ? { developerOverlap: { profile } } : {}),
+    },
+    values,
+  );
   const manifestDigest = values.release?.production?.manifestDigest;
   assert.match(manifestDigest, /^sha256:[a-f0-9]{64}$/);
   // A namespace replaced while Helm was being read must not inherit the old
@@ -145,7 +164,7 @@ export async function inspectQualificationInstallation({
     valuesDigest: `sha256:${createHash('sha256').update(valuesText).digest('hex')}`,
     policy,
     policyDigest,
-    controlPlaneMode: 'singleton',
+    controlPlaneMode,
     edgeProfile: 'compact',
     baseline: { backend: 1, web: 1, execution: 2, proxy: 2, autoscaler: 1 },
     qualificationValues: qualificationSizing(values),

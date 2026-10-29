@@ -39,7 +39,10 @@ export function assertDeploymentBaseline(expected, installed, namespaceResource)
     throw Error('Deployment namespace identity changed or is terminating; no workload changes are allowed.');
 }
 
-export function deploymentRecoveryIdentity(journal, { resumeToken, policyDigest, valuesDigest }) {
+export function deploymentRecoveryIdentity(
+  journal,
+  { resumeToken, policyDigest, valuesDigest, authorizationManifestDigest, adoptionStage },
+) {
   const unfinished = Boolean(journal && journal.phase !== 'complete');
   if (!resumeToken && !unfinished) return null;
   if (!resumeToken || !unfinished || journal.token !== resumeToken)
@@ -48,6 +51,8 @@ export function deploymentRecoveryIdentity(journal, { resumeToken, policyDigest,
   if (
     identity?.policyDigest !== policyDigest ||
     identity.valuesDigest !== valuesDigest ||
+    identity.authorizationManifestDigest !== authorizationManifestDigest ||
+    identity.adoptionStage !== adoptionStage ||
     identity.beforeVerified !== true ||
     !text(identity.operationId) ||
     !digest.test(identity.installedManifestDigest ?? '')
@@ -68,6 +73,12 @@ export function deploymentPreparationBinding(context, policyDigest, stage) {
     valuesDigest: context.valuesDigest,
     installedManifestDigest: context.installedManifestDigest,
     candidateManifestDigest: context.candidateManifestDigest,
+    ...(context.authorizationManifestDigest
+      ? {
+          authorizationManifestDigest: context.authorizationManifestDigest,
+          adoptionStage: context.adoptionStage,
+        }
+      : {}),
   });
 }
 
@@ -99,6 +110,11 @@ export function createDeploymentSafety({
   )
     throw Error('Deployment safety installation identity is incomplete.');
   const production = scope === 'production';
+  if (
+    context?.authorizationManifestDigest &&
+    (!digest.test(context.authorizationManifestDigest) || !['sizing', 'ownership'].includes(context.adoptionStage))
+  )
+    throw Error('Adoption safety requires an exact authorization manifest and stage.');
   if (!production && context)
     throw Error('A production workflow context cannot be admitted with a non-production safety scope.');
   if (
@@ -132,6 +148,12 @@ export function createDeploymentSafety({
         operationId: context.operationId,
         installedManifestDigest: context.installedManifestDigest,
         beforeVerified: true,
+        ...(context.authorizationManifestDigest
+          ? {
+              authorizationManifestDigest: context.authorizationManifestDigest,
+              adoptionStage: context.adoptionStage,
+            }
+          : {}),
       })
     : installation.workflowIdentity
       ? Object.freeze(structuredClone(installation.workflowIdentity))

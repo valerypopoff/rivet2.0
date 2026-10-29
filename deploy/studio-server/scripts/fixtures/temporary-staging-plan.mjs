@@ -1,0 +1,37 @@
+import { temporaryStagingPlan } from '../lib/temporary-staging-contract.mjs';
+export function temporaryPlan(changes = {}) {
+  return temporaryStagingPlan({
+    protocol: 1,
+    operationId: 'rivet-q-12345-1',
+    projectId: 'isolated-project',
+    projectNumber: '123456789',
+    region: 'europe-central2',
+    sourceSha: 'a'.repeat(40),
+    candidateDigest: `sha256:${'b'.repeat(64)}`,
+    predecessorDigest: `sha256:${'c'.repeat(64)}`,
+    actorImage: `registry.test/actor@sha256:${'d'.repeat(64)}`,
+    postgresImage: `registry.test/postgres@sha256:${'e'.repeat(64)}`,
+    objectStorageImage: `registry.test/minio@sha256:${'f'.repeat(64)}`,
+    actorSourceRoot: '/app',
+    nodeServiceAccount: 'node@isolated-project.iam.gserviceaccount.com',
+    janitorServiceAccount: 'reader@isolated-project.iam.gserviceaccount.com',
+    operatorServiceAccount: 'operator@isolated-project.iam.gserviceaccount.com',
+    domain: 'staging.example.net',
+    managedZone: 'staging',
+    cidrs: { nodes: '10.11.0.0/20', pods: '10.12.0.0/16', services: '10.13.0.0/20', proxy: '10.14.0.0/26' },
+    trustedClients: ['192.0.2.1/32'],
+    allowance: {
+      maxUsd: 50,
+      maxSeconds: 86400,
+      cleanupReserveSeconds: 3600,
+      minimumTestSeconds: 3600,
+      approvalExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+    },
+    estimate: { usd: 40, cpus: 64, ssdGb: 1000, externalAddresses: 16, evidenceSha256: '1'.repeat(64) },
+    kubernetesVersion: '1.34.1-gke.1822000',
+    codeHashes: { 'deploy/studio-server/scripts/temporary-staging.mjs': '2'.repeat(64) },
+    certificateSha256: '3'.repeat(64),
+    privateKeySha256: '4'.repeat(64),
+    ...changes,
+  });
+}

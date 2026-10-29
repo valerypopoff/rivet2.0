@@ -68,12 +68,10 @@ assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);
 assert.equal(automaticQualification.jobs.built.if, undefined);
 assert.equal(automaticQualification.jobs.built.steps[0].run, 'test "$GITHUB_REF" = refs/heads/main');
 assert.equal(automaticQualification.jobs.qualified.environment, 'rivet-managed-staging');
-assert.deepEqual(automaticQualification.jobs.qualified['runs-on'], [
-  'self-hosted',
-  'linux',
-  'x64',
-  'rivet-qualification',
-]);
+assert.equal(
+  automaticQualification.jobs.qualified['runs-on'],
+  '${{ vars.RIVET_QUALIFICATION_ENVIRONMENT_MODE == \'temporary\' && fromJSON(\'["self-hosted","linux","x64","rivet-qualification-control"]\') || fromJSON(\'["self-hosted","linux","x64","rivet-qualification"]\') }}',
+);
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');

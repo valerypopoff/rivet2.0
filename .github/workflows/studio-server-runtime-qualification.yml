@@ -96,16 +96,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Read the candidate's immutable predecessor
+      - name: Read the candidate's immutable publication baseline
         env:
-          PREDECESSOR_REFERENCE: ${{ steps.qualification.outputs.predecessor_reference }}
+          PUBLICATION_BASE_REFERENCE: ${{ steps.qualification.outputs.promotion_base_reference }}
         run: |
           node deploy/studio-server/scripts/release-manifest-oci.mjs pull \
-            --reference "$PREDECESSOR_REFERENCE" --output "$PACKET/predecessor.json"
+            --reference "$PUBLICATION_BASE_REFERENCE" --output "$PACKET/publication-baseline.json"
       - name: Promote the same candidate with this publication's provenance
         run: |
           node deploy/studio-server/scripts/create-release-manifest.mjs promote \
-            --input "$PACKET/qualified-candidate.json" --current "$PACKET/predecessor.json" \
+            --input "$PACKET/qualified-candidate.json" --current "$PACKET/publication-baseline.json" \
             --output "$PACKET/promoted-release-manifest.json" \
             --workflow "$GITHUB_WORKFLOW" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Publish qualified immutable manifest and advance the checked pointer

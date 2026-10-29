@@ -1,5 +1,10 @@
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { assertSchemaCompatibilityEvidence } from './schema-compatibility-probe.mjs';
+import {
+  overlapQualificationProfile,
+  overlapProfileDigest,
+  assertOverlapQualificationValues,
+} from './qualification-overlap-profile.mjs';
 
 export const HA_REQUIRED_CHECKS = [
   'two-ready-backends',
@@ -120,15 +125,18 @@ export const HA_DEVELOPER_OVERLAP_CHECKS = [
   'interrupted-handover-recovery',
   'return-to-single-backend',
 ];
+export const HA_PROVIDER_OVERLAP_CHECKS = [...HA_DEVELOPER_OVERLAP_CHECKS, 'retained-browser-editing'];
 export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile, requireDeveloperOverlap = false) {
   const overlap = value?.developerOverlap;
+  const providerOverlap = value?.protocol === 3;
+  const overlapChecks = providerOverlap ? HA_PROVIDER_OVERLAP_CHECKS : HA_DEVELOPER_OVERLAP_CHECKS;
   if (
     (requireDeveloperOverlap || overlap) &&
-    (overlap?.protocol !== 1 ||
+    (overlap?.protocol !== (providerOverlap ? 2 : 1) ||
       !Array.isArray(overlap.checks) ||
-      overlap.checks.length !== HA_DEVELOPER_OVERLAP_CHECKS.length ||
-      new Set(overlap.checks).size !== HA_DEVELOPER_OVERLAP_CHECKS.length ||
-      !HA_DEVELOPER_OVERLAP_CHECKS.every((check) => overlap.checks.includes(check)))
+      overlap.checks.length !== overlapChecks.length ||
+      new Set(overlap.checks).size !== overlapChecks.length ||
+      !overlapChecks.every((check) => overlap.checks.includes(check)))
   )
     throw Error('Developer overlap requires its own exact-image handover and session-continuity qualification.');
   const profiles = value?.edgeProfiles ?? ['regional'];
@@ -140,14 +148,22 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     (expectedEdgeProfile !== undefined && !profiles.includes(expectedEdgeProfile))
   )
     throw new Error('Runtime HA evidence does not qualify the requested GKE edge profile.');
-  const ordinary = value?.protocol === 2;
+  if (providerOverlap && (!overlap || overlap.profileDigest !== overlapProfileDigest(overlap.profile)))
+    throw Error('Provider overlap target sizing profile is missing or changed.');
+  if (
+    providerOverlap &&
+    (!['singleton', 'singleton-overlap'].includes(overlap.sourceMode) ||
+      !Number.isSafeInteger(overlap.sourcePool) ||
+      overlap.sourcePool < overlap.profile.poolMaxPerApiPod)
+  )
+    throw Error('Provider overlap source preparation is missing or changed.');
+  const ordinary = [2, 3].includes(value?.protocol);
   if (
     ordinary &&
     (value.purpose !== 'ordinary-upgrade' ||
       !equal(profiles, ['compact']) ||
-      requireDeveloperOverlap ||
-      overlap ||
-      value.controlPlaneMode !== 'singleton' ||
+      (!providerOverlap && (requireDeveloperOverlap || overlap)) ||
+      value.controlPlaneMode !== (providerOverlap ? 'singleton-overlap' : 'singleton') ||
       !/^[a-f0-9]{64}$/.test(value.autoscalerPolicyDigest ?? '') ||
       value.predecessorManifestDigest !== release.lineage?.predecessor?.manifestDigest)
   )
@@ -158,7 +174,7 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     ? HA_ORDINARY_RUNTIME_CHECKS
     : [...HA_RUNTIME_CONTROL_CHECKS, ...(profiles.includes('compact') ? HA_COMPACT_EDGE_CHECKS : [])];
   if (
-    ![1, 2].includes(value?.protocol) ||
+    ![1, 2, 3].includes(value?.protocol) ||
     value.candidateSourceSha !== release.source.sha ||
     !equal(value.candidateImages, release.images) ||
     value.chartDigest !== release.chart.contentDigest ||
@@ -182,7 +198,7 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     ...(ordinary
       ? {
           purpose: 'ordinary-upgrade',
-          controlPlaneMode: 'singleton',
+          controlPlaneMode: providerOverlap ? 'singleton-overlap' : 'singleton',
           autoscalerPolicyDigest: value.autoscalerPolicyDigest,
           predecessorManifestDigest: value.predecessorManifestDigest,
         }
@@ -195,7 +211,20 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     predecessorSourceSha: value.predecessorSourceSha,
     predecessorImages: value.predecessorImages,
     ...(value.edgeProfiles ? { edgeProfiles: [...profiles] } : {}),
-    ...(overlap ? { developerOverlap: { protocol: 1, checks: [...HA_DEVELOPER_OVERLAP_CHECKS] } } : {}),
+    ...(overlap
+      ? {
+          developerOverlap: providerOverlap
+            ? {
+                protocol: 2,
+                sourceMode: overlap.sourceMode,
+                sourcePool: overlap.sourcePool,
+                profile: overlapQualificationProfile(overlap.profile),
+                profileDigest: overlap.profileDigest,
+                checks: [...overlapChecks],
+              }
+            : { protocol: 1, checks: [...overlapChecks] },
+        }
+      : {}),
     checks: required,
   };
 }
@@ -493,7 +522,7 @@ export function assertHaUpgradeEvidence(manifest, installed) {
     );
   if (!installed) return;
   assertOrdinaryRuntimeLayout(manifest.evidence?.runtimeControl, installed);
-  if (manifest.evidence?.runtimeControl?.protocol === 2)
+  if ([2, 3].includes(manifest.evidence?.runtimeControl?.protocol))
     assertCooperativeAutoscalingEvidence(
       manifest.evidence.runtimeAutoscaling,
       manifest,
@@ -537,10 +566,13 @@ export function assertHaUpgradeEvidence(manifest, installed) {
 
 /** A routine certificate never grants first adoption or a different tier layout. */
 export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
-  if (proof?.protocol !== 2) return;
+  if (![2, 3].includes(proof?.protocol)) return;
+  const overlap = proof.protocol === 3;
+  if (overlap && values.ha?.controlPlane?.mode === 'singleton-overlap')
+    assertOverlapQualificationValues(values, proof.developerOverlap.profile);
   if (
     !values?.ha?.enabled ||
-    values.ha.controlPlane?.mode !== 'singleton' ||
+    !(overlap ? ['singleton', 'singleton-overlap'] : ['singleton']).includes(values.ha.controlPlane?.mode) ||
     values.availability?.gkeGatewayProfile !== 'compact' ||
     values.replicaCount?.backend !== 1 ||
     values.replicaCount?.web !== 1 ||
@@ -584,8 +616,8 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
     throw Error('Ordinary runtime evidence autoscaler policy differs from the installed configuration.');
 }
 
-export function assertOrdinaryRuntimeResources(proof, resources) {
-  if (proof?.protocol !== 2) return;
+export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizing = false } = {}) {
+  if (![2, 3].includes(proof?.protocol)) return;
   const workloads = resources.filter((r) => ['StatefulSet', 'Deployment'].includes(r.kind));
   const counts = { backend: 1, web: 1, proxy: 2, execution: 2, autoscaler: 1 };
   if (
@@ -605,8 +637,23 @@ export function assertOrdinaryRuntimeResources(proof, resources) {
     backend.spec.template.spec.containers
       .find((c) => c.name === 'backend')
       ?.env?.filter((e) => e.name === 'RIVET_HA_CONTROL_PLANE_MODE') ?? [];
-  if (modes.length !== 1 || modes[0].valueFrom || modes[0].value !== 'singleton')
+  if (
+    modes.length !== 1 ||
+    modes[0].valueFrom ||
+    modes[0].value !== (proof.protocol === 3 && !adoptionSizing ? 'singleton-overlap' : 'singleton')
+  )
     throw Error('Ordinary runtime qualification cannot authorize a control topology change.');
+  if (proof.protocol === 3) {
+    const c = backend.spec.template.spec.containers.find((c) => c.name === 'backend');
+    const pools = c.env.filter((e) => e.name === 'RIVET_DEPLOYMENT_DATABASE_POOL_MAX');
+    if (
+      pools.length !== 1 ||
+      pools[0].valueFrom ||
+      pools[0].value !== String(proof.developerOverlap.profile.poolMaxPerApiPod) ||
+      (!adoptionSizing && !equal(c.resources, proof.developerOverlap.profile.backendResources))
+    )
+      throw Error('Rendered overlap resources differ from the qualified sizing profile.');
+  }
   const controller = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'autoscaler');
   const configs =
     controller.spec.template.spec.containers

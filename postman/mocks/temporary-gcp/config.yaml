@@ -1,0 +1,10 @@
+version: 1
+name: Temporary Rivet GCP foundation
+slug: temporary-gcp
+protocol: http
+port: 4942
+interceptRequests: true
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

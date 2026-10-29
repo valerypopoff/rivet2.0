@@ -240,6 +240,7 @@ export class HaReleaseProbes {
         marker,
         neighbor,
         String(holdMs),
+        ...(this.overlapBundle ? [JSON.stringify(this.overlapBundle)] : []),
       ],
       { input: source },
     ).then(

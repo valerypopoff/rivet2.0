@@ -85,6 +85,20 @@ export async function planInstalledUpgrade({
     try {
       if (current.ha?.enabled) {
         assertHaUpgradeEvidence(next, current);
+        if (next.evidence.runtimeControl?.protocol === 3 && current.ha.controlPlane?.mode === 'singleton')
+          return {
+            formatVersion: 1,
+            status: 'adoption-required',
+            installedDigest,
+            targetDigest,
+            steps: [],
+            reason:
+              'Prepare the certified pool and same-image ownership transfer before the ordinary overlap image upgrade.',
+            requiredPair: {
+              installedSourceSha: current.release.production.sourceSha,
+              candidateSourceSha: next.source.sha,
+            },
+          };
         assertOrdinaryRuntimeLayout(next.evidence.runtimeControl, current, autoscalingPolicyDigest);
         if (['singleton', 'singleton-overlap'].includes(current.ha.controlPlane?.mode))
           assertRuntimeControlEvidence(
@@ -133,6 +147,16 @@ export async function planInstalledUpgrade({
   if (!steps.length && current.ha?.enabled) {
     try {
       assertHaUpgradeEvidence(candidate, installed);
+      if (candidate.evidence.runtimeControl?.protocol === 3 && installed.ha.controlPlane?.mode === 'singleton')
+        return {
+          formatVersion: 1,
+          status: 'adoption-required',
+          installedDigest,
+          targetDigest,
+          steps: [],
+          reason:
+            'The candidate images are installed, but the separately approved same-image ownership transfer is still required.',
+        };
       if (autoscalingPolicyDigest)
         assertCooperativeAutoscalingEvidence(candidate.evidence.runtimeAutoscaling, candidate, autoscalingPolicyDigest);
     } catch (error) {
