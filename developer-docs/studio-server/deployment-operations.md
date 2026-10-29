@@ -1205,6 +1205,22 @@ These are local tooling checks, not production deployment or GKE qualification.
 
 ## Frozen recovery adapter
 
+### Refresh installation-specific recovery packets
+
+An adapter packet from an earlier deployment is not automatically reusable.
+Before downtime, rebind its exact installation/source/schema, table ownership,
+dependency hashes, client configuration and acceptance fixtures to the new
+operation. A schema-17 restore verifier is not evidence for an installed schema-18
+database, even when the next release does not change the schema. Exercise native
+imports, local restore and headless-browser prerequisites before quiescence.
+
+Online preparation may warm a private object cache. Reuse bytes only after a
+fresh snapshot-reference inventory and exact generation/size/checksum checks;
+it never substitutes for the final frozen SQL capture, object coverage and key
+recovery. Keep settings and recovery files out of Git/uploads and restrict their
+directory ACLs on Windows as well as POSIX modes. Preserve prior packets and
+diagnostics rather than overwriting them to make a new operation appear verified.
+
 After the journal is owned, release autoscalers and admission stop, and all old
 writers disappear, the command invokes the reviewed, hash-pinned `.mjs` adapter:
 

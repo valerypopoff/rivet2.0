@@ -1,8 +1,22 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import WebSocket, { type WebSocketServer } from 'ws';
-import { WarningsPort } from '@valerypopoff/rivet2-core';
 import type { OwnerRoutingConfig } from './ha-owner-routing.js';
+import type { LatestControlResult } from './latest-debugger-policy.js';
+import {
+  WarningsPort,
+  isLatestDebuggerScope,
+  parseLatestDebuggerPath,
+  type LatestDebuggerChannel,
+  readLatestDebuggerControl,
+  isLatestDebuggerControlResult,
+  readLatestDebuggerEventId,
+  encodeLatestDebuggerEnvelope,
+  createLatestDebuggerSession,
+  createLatestDebuggerDiagnostic,
+  createLatestDebuggerControlResult,
+  type LatestDebuggerDiagnosticCode,
+} from '@valerypopoff/rivet2-core';
 
 const HISTORY_BYTES = 32 * 1024 * 1024;
 const HISTORY_EVENTS = 8192;
@@ -18,8 +32,15 @@ const TERMINALS = new Set([
   'graphError',
   'graphAbort',
 ]);
-type Diagnostic = 'history-truncated' | 'history-gap' | 'event-too-large' | 'owner-unavailable';
-type RetainedEvent = { index: number; origin: string; sequence: number; payload: string; bytes: number };
+type Diagnostic = LatestDebuggerDiagnosticCode;
+type RetainedEvent = {
+  index: number;
+  origin: string;
+  sequence: number;
+  payload: string;
+  bytes: number;
+  channel?: LatestDebuggerChannel;
+};
 
 /** Keep a terminal's identity/outcome when its values cannot fit the diagnostic
  * ring. Dropping it would strand a live run in the editor. Never invent results. */
@@ -91,6 +112,7 @@ function compactOversizedTerminal(payload: string, eventId: string): string | un
     return JSON.stringify({
       rivetEventId: eventId,
       message: envelope.message,
+      ...(isLatestDebuggerScope(envelope.rivetScope) ? { rivetScope: envelope.rivetScope } : {}),
       ...(typeof envelope.requestId === 'string' && envelope.requestId.length <= 1024
         ? { requestId: envelope.requestId }
         : {}),
@@ -110,6 +132,7 @@ type Writer = {
   prefixBytes: number;
   diagnostics: Set<Diagnostic>;
   onWritten?: () => void;
+  channel?: LatestDebuggerChannel;
   timeout?: ReturnType<typeof setTimeout>;
   wake?: ReturnType<typeof setImmediate>;
 };
@@ -127,6 +150,11 @@ export class LatestDebuggerRelay {
   #sequence = 0;
   #truncated = false;
   #closed = false;
+  #protocolPeers = new Set<string>();
+  #pendingControls = new Map<
+    string,
+    { client: WebSocket; commandId: string; timer: ReturnType<typeof setTimeout>; peer: WebSocket }
+  >();
   #timer: ReturnType<typeof setInterval>;
   readonly #origin: string;
   constructor(
@@ -135,8 +163,11 @@ export class LatestDebuggerRelay {
     private readonly peerLimit: number,
     private readonly connect: (url: string, options: WebSocket.ClientOptions) => WebSocket = (url, options) =>
       new WebSocket(url, options),
+    private readonly managedControl?: (input: unknown, channel: LatestDebuggerChannel) => LatestControlResult,
+    private readonly report: (reason: 'ownership' | 'history' | 'unavailable') => void = () => {},
   ) {
-    if (!Number.isInteger(peerLimit) || peerLimit < 2 || peerLimit > 33) throw new Error('Invalid HA peer bound');
+    if (!Number.isInteger(peerLimit) || (peerLimit !== 0 && peerLimit < 2) || peerLimit > 33)
+      throw new Error('Invalid HA peer bound');
     this.#origin = `${config.pod}:${config.incarnation}`;
     server.prependListener('connection', this.#connection);
     this.#timer = setInterval(() => this.#connect(), 1000);
@@ -150,6 +181,9 @@ export class LatestDebuggerRelay {
   }
   authorize(request: IncomingMessage): boolean {
     if (request.headers.origin !== undefined) return false;
+    // An old peer would forward all channels to its unfiltered browsers.
+    // Do not send managed history to a peer without explicit v2 support.
+    if (this.managedControl && request.headers['x-rivet-latest-protocol'] !== '2') return false;
     const pod = request.headers['x-rivet-ha-pod'],
       incarnation = request.headers['x-rivet-ha-incarnation'],
       token = request.headers['x-rivet-ha-peer'];
@@ -165,7 +199,7 @@ export class LatestDebuggerRelay {
       return false;
     return timingSafeEqual(Buffer.from(token), Buffer.from(this.#token(pod, incarnation)));
   }
-  #remember(origin: string, sequence: number, payload: string): string | undefined {
+  #remember(origin: string, sequence: number, payload: string, decoded?: { rivetScope?: unknown }): string | undefined {
     let bytes = Buffer.byteLength(payload);
     if (bytes > HISTORY_BYTES) {
       this.#truncated = true;
@@ -175,7 +209,17 @@ export class LatestDebuggerRelay {
       payload = terminal;
       bytes = Buffer.byteLength(payload);
     }
-    this.#events.push({ index: ++this.#index, origin, sequence, payload, bytes });
+    let channel: LatestDebuggerChannel | undefined;
+    if (this.managedControl) {
+      try {
+        const scope = decoded ? decoded.rivetScope : JSON.parse(payload).rivetScope;
+        if (isLatestDebuggerScope(scope) && `${scope.owner}:${scope.incarnation}` === origin) channel = scope.channel;
+        else return undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    this.#events.push({ index: ++this.#index, origin, sequence, payload, bytes, channel });
     this.#bytes += bytes;
     while (this.#bytes > HISTORY_BYTES || this.#events.length > HISTORY_EVENTS) {
       const removed = this.#events.shift()!;
@@ -231,11 +275,24 @@ export class LatestDebuggerRelay {
     writer.prefixBytes += bytes;
     this.#pump(client, writer);
   }
+  #report(reason: 'ownership' | 'history' | 'unavailable'): void {
+    try {
+      this.report(reason);
+    } catch {
+      /* observational */
+    }
+  }
   #diagnostic(client: WebSocket, code: Diagnostic): void {
     const writer = this.#writers.get(client);
-    if (!writer || writer.peer || writer.diagnostics.has(code)) return;
-    writer.diagnostics.add(code);
-    this.#send(client, JSON.stringify({ message: 'latest-diagnostic', data: { protocol: 1, code } }));
+    if (!writer || writer.peer) return;
+    this.#report(code === 'owner-unavailable' ? 'unavailable' : 'history');
+    // Availability warnings may be deduplicated, but each new loss must
+    // invalidate fresh prompt proof established since the previous loss.
+    if (code === 'owner-unavailable') {
+      if (writer.diagnostics.has(code)) return;
+      writer.diagnostics.add(code);
+    }
+    this.#send(client, JSON.stringify(createLatestDebuggerDiagnostic(code)));
   }
   #notify(code: Diagnostic): void {
     for (const client of this.server.clients) if (!this.#inbound.has(client)) this.#diagnostic(client, code);
@@ -257,6 +314,12 @@ export class LatestDebuggerRelay {
       const offset = Math.max(0, writer.cursor - first.index + 1);
       for (let i = offset; i < this.#events.length; i++) {
         const event = this.#events[i]!;
+        if (!writer.peer && this.managedControl) {
+          if (event.channel === undefined || event.channel !== writer.channel) {
+            writer.cursor = event.index;
+            continue;
+          }
+        }
         if (writer.peer && (event.origin !== this.#origin || event.sequence <= writer.after)) {
           writer.cursor = event.index;
           continue;
@@ -315,16 +378,33 @@ export class LatestDebuggerRelay {
       peer && Number.isSafeInteger(sequence) && sequence >= 0 && sequence <= this.#sequence ? sequence : 0,
     );
     if (!peer) {
-      this.#send(client, JSON.stringify({ message: 'latest-session', data: { protocol: 1 } }));
+      if (this.managedControl)
+        writer.channel = parseLatestDebuggerPath(new URL(request.url ?? '/', 'http://localhost').pathname);
+      this.#send(
+        client,
+        JSON.stringify(
+          this.managedControl
+            ? createLatestDebuggerSession(writer.channel!)
+            : { message: 'latest-session', data: { protocol: 1 } },
+        ),
+      );
       if (this.#truncated) this.#diagnostic(client, 'history-truncated');
     }
+    if (peer && this.managedControl)
+      this.#send(
+        client,
+        JSON.stringify({
+          message: 'latest-peer',
+          data: { protocol: 2, owner: this.config.pod, incarnation: this.config.incarnation },
+        }),
+      );
     this.#pump(client, writer);
   };
   transformBroadcast = (payload: string): string => {
     if (this.#closed) return '';
     const sequence = ++this.#sequence;
     const id = `${this.#origin}:${sequence}`;
-    const encoded = `{"rivetEventId":${JSON.stringify(id)},${payload.slice(1)}`;
+    const encoded = encodeLatestDebuggerEnvelope(payload, undefined, id);
     return this.#remember(this.#origin, sequence, encoded) ?? '';
   };
   /** The live path must share the replay cursor, never overtake retained history. */
@@ -334,6 +414,70 @@ export class LatestDebuggerRelay {
       if (onWritten) writer.onWritten = onWritten;
       this.#pump(client, writer);
     }
+  };
+  /** Consumes every browser frame in managed mode; no legacy fan-out is reachable. */
+  interceptMessage = (client: WebSocket, payload: string): boolean => {
+    if (!this.managedControl) return false;
+    let frame: { type?: string; data?: Record<string, unknown> };
+    try {
+      frame = JSON.parse(payload);
+    } catch {
+      this.#report('ownership');
+      return true;
+    }
+    const data = frame?.data;
+    const commandId = typeof data?.commandId === 'string' && data.commandId.length <= 200 ? data.commandId : '';
+    const reply = (result: LatestControlResult, failure?: 'ownership' | 'unavailable') => {
+      if (result.status !== 'accepted')
+        this.#report(failure ?? (result.status === 'outcome-unknown' ? 'unavailable' : 'ownership'));
+      const response = createLatestDebuggerControlResult(commandId, result);
+      this.#send(
+        client,
+        JSON.stringify({
+          ...response,
+          data: { ...response.data, ...(this.#inbound.has(client) ? { forwardId: data?.forwardId } : {}) },
+        }),
+      );
+    };
+    if (!readLatestDebuggerControl(frame) || !commandId || !isLatestDebuggerScope(data?.target)) {
+      reply({ status: 'rejected', reason: 'Upgrade required: an exact latest execution target is mandatory' });
+      return true;
+    }
+    const channel = this.#inbound.has(client) ? data.target.channel : this.#writers.get(client)?.channel;
+    if (channel === undefined || channel !== data.target.channel) {
+      reply({ status: 'rejected', reason: 'Execution channel does not match connection' });
+      return true;
+    }
+    if (data.target.owner === this.config.pod) {
+      try {
+        reply(this.managedControl(data, channel));
+      } catch {
+        reply({ status: 'outcome-unknown', reason: 'Control failed; inspect runtime state before acting again' });
+      }
+      return true;
+    }
+    const peer = this.#outbound.get(data.target.owner);
+    if (
+      this.#inbound.has(client) ||
+      !this.#protocolPeers.has(data.target.owner) ||
+      peer?.readyState !== WebSocket.OPEN ||
+      this.#pendingControls.size >= 256
+    ) {
+      reply(
+        { status: 'rejected', reason: 'Execution owner is unavailable or does not support scoped controls' },
+        'unavailable',
+      );
+      return true;
+    }
+    const forwardId = randomUUID();
+    const timer = setTimeout(() => {
+      this.#pendingControls.delete(forwardId);
+      reply({ status: 'outcome-unknown', reason: 'Owner acknowledgement lost; command was not retried' });
+    }, 10_000);
+    timer.unref();
+    this.#pendingControls.set(forwardId, { client, commandId, timer, peer });
+    this.#send(peer, JSON.stringify({ type: 'latest-control', data: { ...data, forwardId } }));
+    return true;
   };
   onControl = (client: WebSocket, payload: string): void => {
     if (this.#inbound.has(client)) return; // A control traverses each owner at most once.
@@ -356,6 +500,7 @@ export class LatestDebuggerRelay {
           'x-rivet-ha-pod': this.config.pod,
           'x-rivet-ha-incarnation': this.config.incarnation,
           'x-rivet-ha-peer': this.#token(this.config.pod, this.config.incarnation),
+          ...(this.managedControl ? { 'x-rivet-latest-protocol': '2' } : {}),
           ...(cursor ? { 'x-rivet-ha-after': `${cursor.incarnation}:${cursor.sequence}` } : {}),
         },
       });
@@ -363,13 +508,59 @@ export class LatestDebuggerRelay {
       socket.once('open', () => this.#seenPeers.add(pod));
       socket.on('error', () => {});
       socket.once('close', () => {
+        this.#protocolPeers.delete(pod);
         if (this.#outbound.get(pod) === socket) this.#outbound.delete(pod);
       });
       let streamIncarnation: string | undefined;
+      let peerIncarnation: string | undefined;
       socket.on('message', (data) => {
         if (this.#closed || this.#outbound.get(pod) !== socket) return;
         const payload = data.toString();
-        const id = /^\{"rivetEventId":"([a-z0-9:-]{1,200})",/.exec(payload)?.[1];
+        let decoded: { rivetEventId?: unknown; rivetScope?: unknown; message?: string; data?: Record<string, unknown> };
+        try {
+          decoded = JSON.parse(payload);
+          if (!decoded || typeof decoded !== 'object') throw new Error('Invalid peer envelope');
+        } catch {
+          socket.terminate();
+          return;
+        }
+        if (this.managedControl) {
+          const control = decoded;
+          if (control.message === 'latest-peer' && control.data?.protocol === 2) {
+            if (
+              control.data.owner !== pod ||
+              typeof control.data.incarnation !== 'string' ||
+              !/^[a-f0-9-]{36}$/.test(control.data.incarnation) ||
+              (peerIncarnation && peerIncarnation !== control.data.incarnation)
+            ) {
+              socket.terminate();
+              return;
+            }
+            peerIncarnation = control.data.incarnation;
+            this.#protocolPeers.add(pod);
+            return;
+          }
+          if (control.message === 'latest-control-result') {
+            const id = control.data?.forwardId;
+            const pending = typeof id === 'string' ? this.#pendingControls.get(id) : undefined;
+            // An authentic peer/forwarding ID is not enough: malformed or
+            // contradictory replies must leave the command's outcome unknown.
+            if (
+              pending?.peer === socket &&
+              isLatestDebuggerControlResult(control) &&
+              control.data.commandId === pending.commandId
+            ) {
+              clearTimeout(pending.timer);
+              this.#pendingControls.delete(id as string);
+              this.#send(
+                pending.client,
+                JSON.stringify(createLatestDebuggerControlResult(pending.commandId, control.data)),
+              );
+            } else if (pending?.peer === socket) this.#report('ownership');
+            return;
+          }
+        }
+        const id = readLatestDebuggerEventId(decoded);
         if (!id?.startsWith(`${pod}:`)) {
           socket.terminate();
           return;
@@ -378,6 +569,7 @@ export class LatestDebuggerRelay {
         const sequence = Number(sequenceText);
         if (
           !incarnation ||
+          (this.managedControl && incarnation !== peerIncarnation) ||
           !Number.isSafeInteger(sequence) ||
           sequence < 1 ||
           (streamIncarnation && streamIncarnation !== incarnation)
@@ -393,7 +585,7 @@ export class LatestDebuggerRelay {
           this.#notify('history-gap');
         }
         this.#peerCursors.set(pod, { incarnation, sequence });
-        this.#remember(`${pod}:${incarnation}`, sequence, payload);
+        this.#remember(`${pod}:${incarnation}`, sequence, payload, decoded);
         for (const observer of this.server.clients)
           if (!this.#inbound.has(observer)) this.sendBroadcast(observer, payload);
       });
@@ -405,12 +597,15 @@ export class LatestDebuggerRelay {
     // required dependencies. Replicated control keeps its peer-ready gate.
     return (
       !this.#closed &&
-      (['singleton', 'singleton-overlap'].includes(process.env.RIVET_HA_CONTROL_PLANE_MODE ?? '') ||
+      (this.peerLimit === 0 ||
+        ['singleton', 'singleton-overlap'].includes(process.env.RIVET_HA_CONTROL_PLANE_MODE ?? '') ||
         [...this.#outbound.values()].some((socket) => socket.readyState === WebSocket.OPEN))
     );
   }
   dispose(): void {
     this.#closed = true;
+    for (const pending of this.#pendingControls.values()) clearTimeout(pending.timer);
+    this.#pendingControls.clear();
     clearInterval(this.#timer);
     this.server.off('connection', this.#connection);
     for (const [client, writer] of this.#writers) this.#forget(client, writer);

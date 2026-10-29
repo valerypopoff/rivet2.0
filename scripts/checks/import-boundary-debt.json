@@ -383,8 +383,6 @@
     "packages/studio-server-web/overrides/utils/tauri.ts\t../../../app/src/utils/resolveEnvironmentSettings",
     "packages/studio-server-web/overrides/utils/tauri.ts\t../../../studio-server-shared/environment-variable-events",
     "packages/studio-server-web/overrides/utils/tauri.ts\t../../../studio-server-shared/hosted-env",
-    "packages/studio-server-web/playwright-observe/helpers/latestDebuggerFixture.ts\t../../../node/src/debugger.js",
-    "packages/studio-server-web/playwright-observe/helpers/latestDebuggerFixture.ts\t../../../studio-server-api/src/ha-latest-relay.js",
     "packages/studio-server-web/playwright-observe/helpers/workflowLibraryObserve.ts\t../../../studio-server-shared/workflow-types"
   ]
 }

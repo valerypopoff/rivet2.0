@@ -131,3 +131,4 @@ export { WarningsPort } from './utils/symbols.js';
 
 import * as openai from './utils/openai.js';
 export { openai };
+export * from './model/LatestDebuggerProtocol.js';

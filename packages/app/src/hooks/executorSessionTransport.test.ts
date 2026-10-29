@@ -116,6 +116,26 @@ test('executor transport decodes debugger sentinels in process event messages', 
   assert.equal(parsed.incoming.data.outputs['output' as PortId]?.value, undefined);
 });
 
+test('verified managed transport keeps lifecycle/unknown events out of executor classification and decodes once', () => {
+  const target = createExternalDebuggerTarget('ws://debugger.example/ws/latest-debugger@A');
+  for (const message of ['latest-settled', 'latest-prompt-closed', 'future-event']) {
+    const parsed = parseExecutorSessionIncomingMessage({
+      target,
+      socketUrl: target.url,
+      managedLatest: true,
+      rawMessage: JSON.stringify({
+        message,
+        rivetScope: { channel: 'A' },
+        data: { authored: createDebuggerTransportUndefinedSentinel() },
+      }),
+    });
+    assert.equal(parsed?.kind, 'managed-event');
+    if (parsed?.kind !== 'managed-event') assert.fail('Expected managed admission, not a fake graph event');
+    assert.equal(parsed.incoming.message, message);
+    assert.deepEqual(parsed.incoming.data, { authored: undefined });
+  }
+});
+
 test('executor transport preserves retained Watch child execution lineage', () => {
   const target = createExternalDebuggerTarget('ws://debugger.example/latest');
   const execution: GraphExecutionMetadata = {
@@ -128,10 +148,10 @@ test('executor transport preserves retained Watch child execution lineage', () =
     rawMessage: JSON.stringify({
       data: {
         execution,
-      node: { id: 'watch-branch-node', type: 'text' },
-      outputs: { output: { type: 'string', value: 'final retained value' } },
-      processId: 'watch-branch-process',
-      streamingWatchTerminal: true,
+        node: { id: 'watch-branch-node', type: 'text' },
+        outputs: { output: { type: 'string', value: 'final retained value' } },
+        processId: 'watch-branch-process',
+        streamingWatchTerminal: true,
       },
       message: 'nodeFinish',
     }),

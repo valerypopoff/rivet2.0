@@ -6,6 +6,7 @@ import {
   type ProjectId,
   type NodeId,
   type GraphExecutionMetadata,
+  type LatestDebuggerPrompt,
 } from '@valerypopoff/rivet2-core';
 import {
   createEmptyProjectExecutionSnapshot,
@@ -549,6 +550,7 @@ function applyUserInput(
   if (data.isReplay) {
     return snapshot;
   }
+  const latestPrompt = (data as typeof data & { latestPrompt?: LatestDebuggerPrompt }).latestPrompt;
 
   return produce(snapshot, (draft) => {
     draft.userInputQuestions ??= {};
@@ -557,6 +559,7 @@ function applyUserInput(
       nodeId: data.node.id,
       processId: data.processId,
       questions: data.inputStrings,
+      ...(latestPrompt ? { latestPrompt } : {}),
     });
     if (!isLiveCalledProjectExecutionEvent(data) && selectProcessPage !== false)
       draft.selectedProcessPageNodes[data.node.id] = 'latest';

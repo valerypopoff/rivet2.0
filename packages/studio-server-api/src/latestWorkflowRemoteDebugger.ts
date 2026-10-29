@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { startDebuggerServer, type RivetDebuggerServer } from '@valerypopoff/rivet2-node';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, type WebSocket } from 'ws';
 import { isTrustedProxyRequest } from './auth.js';
 import { isServerUiAuthRequestAllowed } from './server-ui-auth.js';
 import { watchAuthorization } from './watch-authorization.js';
@@ -9,6 +9,10 @@ import { isVmMigrationMaintenanceActive } from './vm-migration-maintenance.js';
 import { isLegacyRestorePaused } from './legacy-restore/service.js';
 import { readOwnerRoutingConfig } from './ha-owner-routing.js';
 import { LatestDebuggerRelay } from './ha-latest-relay.js';
+import { randomUUID } from 'node:crypto';
+import { parseLatestDebuggerPath, type LatestDebuggerChannel } from '@valerypopoff/rivet2-core';
+import { LatestDebuggerPolicy } from './latest-debugger-policy.js';
+import { createLatestDebuggerReporter } from './latest-debugger-diagnostics.js';
 
 export const LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH = '/ws/latest-debugger';
 
@@ -17,7 +21,10 @@ type RivetDebuggerServerOptions = NonNullable<Parameters<typeof startDebuggerSer
 let latestWorkflowRemoteDebugger: RivetDebuggerServer | null = null;
 let retiring = false;
 let relay: LatestDebuggerRelay | undefined;
-export function isLatestDebuggerRelayReady(): boolean { return !relay || relay.ready; }
+let policy: LatestDebuggerPolicy | undefined;
+export function isLatestDebuggerRelayReady(): boolean {
+  return !relay || relay.ready;
+}
 
 export function beginLatestWorkflowRemoteDebuggerDrain(): void {
   retiring = true;
@@ -39,7 +46,7 @@ function rejectWebSocketUpgrade(socket: Duplex, statusCode: 400 | 401 | 404 | 50
 
 export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): RivetDebuggerServer | null {
   if (latestWorkflowRemoteDebugger) {
-    return latestWorkflowRemoteDebugger;
+    return policy!.forChannel(latestWorkflowRemoteDebugger, null);
   }
 
   const debuggerEnabled = isLatestWorkflowRemoteDebuggerEnabled();
@@ -50,7 +57,27 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
 
   const webSocketServer = debuggerEnabled ? new WebSocketServer({ noServer: true }) : null;
   const owner = readOwnerRoutingConfig();
-  if (owner && webSocketServer) relay = new LatestDebuggerRelay(owner, webSocketServer, Number(process.env.RIVET_HA_PEER_LIMIT));
+  const identity = owner ?? {
+    pod: 'local',
+    incarnation: randomUUID(),
+    headless: '',
+    backendName: 'local',
+    apiPort: 1,
+    executorPort: 1,
+    installation: 'local',
+    key: randomUUID(),
+  };
+  const report = createLatestDebuggerReporter();
+  policy = new LatestDebuggerPolicy(identity.pod, identity.incarnation, report);
+  if (webSocketServer)
+    relay = new LatestDebuggerRelay(
+      identity,
+      webSocketServer,
+      owner ? Number(process.env.RIVET_HA_PEER_LIMIT) : 0,
+      undefined,
+      (input, channel) => policy!.control(input, channel),
+      report,
+    );
 
   if (!latestWorkflowRemoteDebuggerUpgradeHandler) {
     latestWorkflowRemoteDebuggerUpgradeHandler = (request, socket, head) => {
@@ -63,11 +90,22 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
       }
 
       if (url.pathname === '/internal/ha/latest' && relay && webSocketServer) {
-        if (!relay.authorize(request)) { rejectWebSocketUpgrade(socket, 401, 'Unauthorized'); return; }
-        webSocketServer.handleUpgrade(request, socket, head, (client) => webSocketServer.emit('connection', client, request));
+        if (!relay.authorize(request)) {
+          rejectWebSocketUpgrade(socket, 401, 'Unauthorized');
+          return;
+        }
+        webSocketServer.handleUpgrade(request, socket, head, (client) =>
+          webSocketServer.emit('connection', client, request),
+        );
         return;
       }
-      if (url.pathname !== LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH) {
+      if (!url.pathname.startsWith(LATEST_WORKFLOW_REMOTE_DEBUGGER_PATH)) {
+        return;
+      }
+      try {
+        parseLatestDebuggerPath(url.pathname);
+      } catch {
+        rejectWebSocketUpgrade(socket, 400, 'Bad Request');
         return;
       }
 
@@ -94,7 +132,7 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
         return;
       }
 
-      const handleUpgradeComplete = (webSocket: import('ws').WebSocket) => {
+      const handleUpgradeComplete = (webSocket: WebSocket) => {
         const stop = watchAuthorization(
           () => isServerUiAuthRequestAllowed(request),
           () => webSocket.terminate(),
@@ -114,26 +152,25 @@ export function initializeLatestWorkflowRemoteDebugger(httpServer: HttpServer): 
     return null;
   }
 
+  const activePolicy = policy;
+  const activeRelay = relay!;
   latestWorkflowRemoteDebugger = startDebuggerServer({
     server: webSocketServer as RivetDebuggerServerOptions['server'],
-    transformBroadcast: relay?.transformBroadcast,
+    transformBroadcast: (payload, processor, message, data) => {
+      const scoped = activePolicy.decorate(payload, processor, message, data);
+      return scoped ? activeRelay.transformBroadcast(scoped) : '';
+    },
     sendBroadcast: relay?.sendBroadcast,
-    onControl: relay?.onControl,
+    interceptMessage: relay?.interceptMessage,
   });
 
-  return latestWorkflowRemoteDebugger;
+  return policy!.forChannel(latestWorkflowRemoteDebugger, null);
 }
 
-export function getLatestWorkflowRemoteDebugger(): RivetDebuggerServer {
-  if (!latestWorkflowRemoteDebugger) {
-    throw new Error('Latest workflow remote debugger has not been initialized');
-  }
-
-  return latestWorkflowRemoteDebugger;
-}
-
-export function maybeGetLatestWorkflowRemoteDebugger(): RivetDebuggerServer | undefined {
-  return latestWorkflowRemoteDebugger ?? undefined;
+export function maybeGetLatestWorkflowRemoteDebugger(
+  channel: LatestDebuggerChannel = null,
+): RivetDebuggerServer | undefined {
+  return latestWorkflowRemoteDebugger && policy ? policy.forChannel(latestWorkflowRemoteDebugger, channel) : undefined;
 }
 
 async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
@@ -147,7 +184,9 @@ async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
 }
 
 export async function disposeLatestWorkflowRemoteDebugger(): Promise<void> {
-  relay?.dispose(); relay = undefined;
+  relay?.dispose();
+  relay = undefined;
+  policy = undefined;
   const debuggerServer = latestWorkflowRemoteDebugger;
   const httpServer = latestWorkflowRemoteDebuggerHttpServer;
   const upgradeHandler = latestWorkflowRemoteDebuggerUpgradeHandler;

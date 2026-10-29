@@ -20,6 +20,9 @@ export function createExecutionObservationCoordinator() {
     currentBindingToken?: number;
   }> = [];
   return {
+    get(source: object, root: string) {
+      return runs.get(source)?.get(root);
+    },
     capture(
       source: object,
       root: string,

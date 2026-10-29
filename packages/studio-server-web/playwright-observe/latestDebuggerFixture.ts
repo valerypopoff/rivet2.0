@@ -3,16 +3,21 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import type { GraphProcessor } from '@valerypopoff/rivet2-core';
-import { startDebuggerServer } from '../../../node/src/debugger.js';
-import { LatestDebuggerRelay } from '../../../studio-server-api/src/ha-latest-relay.js';
+import { startDebuggerServer } from '../../node/src/debugger.js';
+import { LatestDebuggerRelay } from '../../studio-server-api/src/ha-latest-relay.js';
+import { LatestDebuggerPolicy } from '../../studio-server-api/src/latest-debugger-policy.js';
 
 // Use the owning API's ws version. All sockets and generated data are local;
 // browser API/bootstrap responses remain owned by each Playwright scenario.
 const { WebSocketServer, WebSocket } = createRequire(
-  new URL('../../../studio-server-api/src/ha-latest-relay.ts', import.meta.url),
+  new URL('../../studio-server-api/src/ha-latest-relay.ts', import.meta.url),
 )('ws') as typeof import('ws');
 
-export async function createLatestDebuggerFixture(options: { ha: boolean; throttlePartialOutputs?: number }) {
+export async function createLatestDebuggerFixture(options: {
+  ha: boolean;
+  managed?: boolean;
+  throttlePartialOutputs?: number;
+}) {
   const listeners = [createServer(), ...(options.ha ? [createServer()] : [])];
   const sockets = listeners.map(() => new WebSocketServer({ noServer: true }));
   const ports: number[] = [];
@@ -27,43 +32,49 @@ export async function createLatestDebuggerFixture(options: { ha: boolean; thrott
     observerOwner = options.ha ? 1 : 0;
   const observers = new Set<InstanceType<typeof WebSocket>>();
   const commands: string[] = [];
-  const relays = options.ha
-    ? sockets.map(
-        (server, index) =>
-          new LatestDebuggerRelay(
-            {
-              pod: `backend-${index}`,
-              backendName: 'backend',
-              headless: 'unused',
-              apiPort: ports[index]!,
-              executorPort: 21889,
-              installation: 'ui-replay-fixture',
-              key: 'k'.repeat(32),
-              incarnation: randomUUID(),
-            },
-            server,
-            2,
-            (url, connectOptions) => {
-              const owner = Number(/backend-(\d)/.exec(url)![1]);
-              const socket = new WebSocket(`ws://127.0.0.1:${ports[owner]}/internal/ha/latest`, connectOptions);
-              if (index === 1)
-                socket.on('message', (raw) => {
-                  const sequence = /^\{"rivetEventId":"[^" ]+:(\d+)",/.exec(raw.toString())?.[1];
-                  if (sequence) peerSequence = Number(sequence);
-                });
-              return socket;
-            },
-          ),
-      )
-    : [];
+  const incarnations = listeners.map(() => randomUUID());
+  const policies = listeners.map((_, index) => new LatestDebuggerPolicy(`backend-${index}`, incarnations[index]!));
+  const relays =
+    options.ha || options.managed
+      ? sockets.map(
+          (server, index) =>
+            new LatestDebuggerRelay(
+              {
+                pod: `backend-${index}`,
+                backendName: 'backend',
+                headless: 'unused',
+                apiPort: ports[index]!,
+                executorPort: 21889,
+                installation: 'ui-replay-fixture',
+                key: 'k'.repeat(32),
+                incarnation: incarnations[index]!,
+              },
+              server,
+              options.ha ? 2 : 0,
+              (url, connectOptions) => {
+                const owner = Number(/backend-(\d)/.exec(url)![1]);
+                const socket = new WebSocket(`ws://127.0.0.1:${ports[owner]}/internal/ha/latest`, connectOptions);
+                if (index === 1)
+                  socket.on('message', (raw) => {
+                    const sequence = /^\{"rivetEventId":"[^" ]+:(\d+)",/.exec(raw.toString())?.[1];
+                    if (sequence) peerSequence = Number(sequence);
+                  });
+                return socket;
+              },
+              options.managed ? (input, channel) => policies[index]!.control(input, channel) : undefined,
+            ),
+        )
+      : [];
   const debuggers = sockets.map((server, index) =>
     startDebuggerServer({
       server: server as NonNullable<Parameters<typeof startDebuggerServer>[0]>['server'],
       heartbeatIntervalMs: 0,
       throttlePartialOutputs: options.throttlePartialOutputs,
       transformBroadcast: relays[index]
-        ? (payload) => {
-            const encoded = relays[index]!.transformBroadcast(payload);
+        ? (payload, processor, message, data) => {
+            const scoped = options.managed ? policies[index]!.decorate(payload, processor, message, data) : payload;
+            if (!scoped) return '';
+            const encoded = relays[index]!.transformBroadcast(scoped);
             if (index === 0) {
               const sequence = /^\{"rivetEventId":"[^" ]+:(\d+)",/.exec(encoded)?.[1];
               if (sequence) sourceSequence = Number(sequence);
@@ -73,6 +84,7 @@ export async function createLatestDebuggerFixture(options: { ha: boolean; thrott
         : undefined,
       sendBroadcast: relays[index]?.sendBroadcast,
       onControl: relays[index]?.onControl,
+      interceptMessage: options.managed ? relays[index]?.interceptMessage : undefined,
     }),
   );
   listeners.forEach((listener, index) =>
@@ -97,6 +109,9 @@ export async function createLatestDebuggerFixture(options: { ha: boolean; thrott
     });
   let history = 0;
   return {
+    forChannel(channel: string | null) {
+      return policies[0]!.forChannel(debuggers[0]!, channel);
+    },
     debuggerServer: debuggers[0]!,
     peerDebugger: debuggers[1],
     port: ports[0]!,
@@ -111,6 +126,9 @@ export async function createLatestDebuggerFixture(options: { ha: boolean; thrott
     },
     disconnectObservers() {
       for (const client of observers) client.terminate();
+    },
+    announceUnsupportedProtocol() {
+      for (const client of observers) client.send(JSON.stringify({ message: 'latest-session', data: { protocol: 3 } }));
     },
     warmHistory() {
       const burst = ++history;

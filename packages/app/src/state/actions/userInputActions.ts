@@ -1,6 +1,15 @@
-import { type ArrayDataValue, type NodeId, type StringDataValue } from '@valerypopoff/rivet2-core';
+import {
+  type ArrayDataValue,
+  type NodeId,
+  type StringDataValue,
+  type LatestDebuggerPrompt,
+} from '@valerypopoff/rivet2-core';
 
-type UserInputSubmitHandler = (nodeId: NodeId, answers: ArrayDataValue<StringDataValue>) => void;
+type UserInputSubmitHandler = (
+  nodeId: NodeId,
+  answers: ArrayDataValue<StringDataValue>,
+  prompt?: LatestDebuggerPrompt,
+) => void;
 
 let submitHandler: UserInputSubmitHandler = () => {};
 
@@ -12,6 +21,10 @@ export function clearUserInputSubmitHandler(): void {
   submitHandler = () => {};
 }
 
-export function submitUserInputAnswers(nodeId: NodeId, answers: ArrayDataValue<StringDataValue>): void {
-  submitHandler(nodeId, answers);
+export function submitUserInputAnswers(
+  nodeId: NodeId,
+  answers: ArrayDataValue<StringDataValue>,
+  prompt?: LatestDebuggerPrompt,
+): void {
+  submitHandler(nodeId, answers, prompt);
 }

@@ -1,5 +1,85 @@
 # Architecture
 
+## Managed latest-debugger isolation
+
+Core's `LatestDebuggerMessage` union covers handshake, scoped process/lifecycle
+messages, diagnostics, controls and replies. Shared readers/builders govern the
+real relay and editor boundaries without cloning authored payloads or changing
+sentinel encoding. Managed transport has its own classification before legacy
+executor parsing. One subscription may provide a typed lifecycle callback; prompt
+closure and physical settlement never masquerade as `ProcessEventMessageMap`
+events. Both callback roles share disposal and canonical display admission.
+
+The adapter owns selected-run command policy and pause-to-pin dispatch as well as
+handshake facts, cursors and acknowledgement timers. The socket runtime projects
+those facts and calls `suspend()` on a transient disconnect. It does not duplicate
+selection rules or cast managed lifecycle messages into legacy graph events.
+
+Rejected/stale controls and malformed acknowledgements report finite `ownership`
+metadata; unavailable owners and acknowledgement timeouts report `unavailable`.
+These reuse the same production reporter as history/publication failures. Every
+reporting call is best-effort, including rejection and timeout paths.
+
+`ManagedLatestSession` owns managed handshake/channel facts, cursors, acknowledgement
+timers and reconstruction coordination under the existing socket runtime.
+`LatestDebuggerRuns` remains the sole catalogue/history owner. Socket generations,
+reconnect scheduling and ordinary Node bridges remain in `executorSession`.
+Every independent history loss invalidates state; only availability warnings are
+connection-deduplicated. Shared wire helpers preserve historical writer ordering
+while peer readers accept property reordering. Reconciliation watches canonical
+root/running facts rather than payload updates, without renewing original admission.
+Production diagnostics use finite categories, never execution contents or IDs.
+
+HA command acknowledgement requires the original peer socket, forwarding ID,
+command ID and the shared validated result shape. A wrong-command or malformed
+reply cannot settle pending state or be rewritten into a valid acknowledgement.
+The existing bounded deadline reports outcome-unknown; the command is not resent.
+
+Replay delivery is fenced by a projection revision: reset or nested selection
+retires the previous replay turn before its remaining frames can update a view.
+Pending command timers are registered before the transport effect, so an immediate
+acknowledgement or disposal cannot leave an orphaned timeout. Failed sends dispose
+their timer without retrying. Unsupported events from an already admitted, exact
+root mark only that root's history incomplete and withdraw its pending-prompt proof;
+foreign or contradictory scopes have no such authority. The fixed compatibility
+warning is deduplicated while each loss still invalidates state.
+
+Editor presentation separates negotiated transport identity, selected-root
+lifecycle and retained canvas detail. The session exposes its verified role and
+channel; ActionBar and product selectors do not reparse URLs. Root controls use
+the bounded catalogue plus the original coordinator admission, not canvas
+`graphRunning` reconstructed from possibly evicted history. Shared compatibility
+policy in `remoteExecutionProjection` protects managed and legacy source/member
+views while leaving their intentional transport/presentation differences explicit.
+
+The server and editor implement channel/protocol-v2 isolation.
+It reuses the existing Node debugger and bounded HA event stream rather than
+creating per-admin execution services. Request-owned processors retain execution
+and persistence; authenticated observers subscribe to one routing channel.
+Exact root/owner-incarnation controls and one-shot prompt callbacks replace
+unscoped modifying commands for this managed transport only.
+
+An execution owner advertising scope `promptLifecycle: 1` publishes an exact
+`latest-prompt-closed` event before invoking a consumed prompt callback. This
+reuses the channel-filtered live/replay stream across HA peers and carries only
+the prompt ID, not its answers. The editor keeps bounded pending-prompt metadata
+so historical selection cannot reopen an answered question. Stream gaps and
+older owners without that capability do not constitute proof of a pending prompt;
+their retained questions are activity-only rather than guessed interactive state.
+The session withdraws already displayed uncertifiable questions on a history
+diagnostic by rebuilding the selected view; control-owner availability notices do
+not invalidate history. Closure/settlement publication is best-effort: observer
+delivery failures cannot prevent an accepted answer or ownership cleanup.
+
+`executorSession` delegates channel handshake and pending command replies to
+`ManagedLatestSession`, which coordinates the existing catalogue/history owner.
+`useManagedLatestExecution` admits only that
+root's display updates through existing lifetime fences and canonical reducers.
+Historical selection performs no execution, recording persistence or command
+replay. The server retains execution ownership through physical settlement,
+independently of browser observation. Local acceptance is not provider qualification.
+See [routing contracts and current verification](access-and-routing.md#channel-isolation-implementation-status).
+
 ## Supported serving stack
 
 New server deployments use PostgreSQL and S3-compatible storage. Docker Compose
@@ -979,7 +1059,7 @@ That control-plane singleton is intentional, not accidental. In the current supp
 - `web` may stay at `1` when dashboard/editor traffic is negligible
 - latest workflow execution, latest web-app action execution, and `/ws/latest-debugger` stay on the same control-plane process boundary
 - published endpoint execution and published web-app action execution scale on the execution Deployment and remain non-debuggable
-- the latest debugger is still process-local rather than a distributed cross-replica service
+- processors remain on their original owner; authenticated v2 HA peers relay bounded observations and exact controls without transferring execution
 
 The important operational detail is that these tiers scale independently. A new execution replica is only another execution-plane API pod; it does not automatically imply a matching proxy pod. In an endpoint-heavy deployment, `execution` is the primary scale target, `proxy` is the supporting ingress tier, `web` can remain fixed at `1`, and `backend` remains singleton by constraint rather than by capacity preference.
 
@@ -1202,7 +1282,7 @@ session atom, persisted token or copied history is introduced.
 - Workflow and web-app route slugs are wrapper-owned app settings, not project YAML. API route getters read the active repository snapshot dynamically; do not cache route families in module-level constants. In supported Compose and Kubernetes deployments, the proxy fetches the non-secret route/timeout/trusted-host projection from the authenticated internal `/internal/app-settings/proxy-config` endpoint, validates the generated nginx config, and reloads only after `nginx -t` succeeds. A failed fetch or invalid candidate keeps the last valid proxy config. Custom legacy deployments can retain the existing JSON-file watcher fallback. Changing slugs from Settings updates `/api/config` and the proxy route families without a manual stack restart.
 - Runtime outbound proxy settings for the hosted Node executor are wrapper-owned app settings, not upstream Rivet settings and not `.env` proxy variables. In Kubernetes the PostgreSQL row is authoritative; the co-located executor reads an authenticated loopback snapshot before accepting work and polls for changes, retaining the last valid policy on refresh failure. Execution API pods read the repository directly. Optional executor/default-debugger websocket URL overrides remain typed settings; blank values derive from the public host. No execution or proxy replica depends on a cross-pod app-data filesystem.
 - Hosted opened-project state follows Rivet 2.0's split model: tab metadata stays in `projectsState.openedProjects`, while full project content stays in `openedProjectSnapshotsState`. Wrapper hosted hooks should prefer `RivetWorkspaceHost` for open/replace/close/path-move and title/description metadata behavior. Wrapper atom reads are still acceptable for hosted-only path lookup, duplicate-id checks, stale-empty-tab cleanup, and session/revision cache synchronization, but wrapper code should not manually reimplement tab close fallback, path rewriting, or live project metadata patching when the workspace host provides it. If the wrapper overrides upstream opened-project sync, it must still preserve Rivet's saved-content digest comparison so `savedProjectContentDigestsState` and `projectUnsavedChangesState` keep driving the editor-owned unsaved-changes dot, and it must preserve `OpenedProjectInfo.executorMode` so per-project Browser/Node/Remote Debugger selection survives tab switches.
-- External Remote Debugger uses one shared session for an open bundle, attachable from any member. Explicit project references (cross-project Subgraph nodes and legacy `project.references`, in both directions) or a bundle manifest define membership, not folders or URLs. Every member immediately has the same Stop Remote Debugger button; stopping from any tab disconnects the shared observation, not the runtime execution. Actual root identities route A → B → C data correctly even when attaching from C. Source display and disconnect cleanup respect membership generations: closing/reopening A does not let its old run paint the new A tab, while B/C can finish observing. A normal file move does not end the source tab's lifetime. Dependency views retain existing data/lifetime protections and local executor preferences; runtime graph mismatches never replace authored definitions. See [execution identity](../EXECUTION-IDENTITY-AND-SNAPSHOTS.md#remote-dependency-observations-across-open-tabs) for ownership and verification. Node executor and deployment/HA transport contracts are unchanged.
+- External Remote Debugger uses one shared session for an open bundle, attachable from any member. Explicit project references (cross-project Subgraph nodes and legacy `project.references`, in both directions) or a bundle manifest define membership, not folders or URLs. Every member immediately has the same Stop Remote Debugger button; stopping from any tab disconnects the shared observation, not the runtime execution. Actual root identities route A → B → C data correctly even when attaching from C. Source display and disconnect cleanup respect membership generations: closing/reopening A does not let its old run paint the new A tab, while B/C can finish observing. A normal file move does not end the source tab's lifetime. Dependency views retain existing data/lifetime protections and local executor preferences; runtime graph mismatches never replace authored definitions. See [execution identity](../EXECUTION-IDENTITY-AND-SNAPSHOTS.md#remote-dependency-observations-across-open-tabs) for ownership and verification. Ordinary Node executor contracts and deployment topology stay unchanged; managed latest-debugger HA transport uses protocol v2 channel filtering and exact-owner controls.
 - Overlapping roots on that shared debugger retain source priority in both directions: a new root retires its own old passive view, and cannot paint passive calls into another still-active source tab. Exclusions are captured once per root and exact tab lifetime, do not hide descendants, and do not turn same-root return calls into independent runs.
 - Tree opens of an already-open project use `RivetWorkspaceHost.activateProject`, not `openProjectSnapshot` or `replaceCurrent`. Re-activating the current project is a content-preserving no-op; selecting an inactive tab restores its workspace snapshot without marking it clean. Preview promotion changes only tab UI state. Explicit refresh (`reloadFromDisk`) remains a separate snapshot-replacement operation with identity validation and a new saved baseline. Optional Subgraph navigation can select a graph without replacing the project or clearing its unsaved state.
 - Tab activation is coordinated per atom store, with the newest selection aborting pending preparation (including a click on the active tab). Preparation never holds a queue lock: even an IO provider that ignores cancellation cannot block the next selection. The default 60-second deadline exposes a retryable loading error. Fetch and worker deserialization accept the same cancellation signal; hosted IO defers dataset imports and revision binding until identity/path/current-selection checks pass. Dataset replacement uses one abortable IndexedDB transaction, and inactive refreshes do not change the live dataset owner. Async recovery rereads the latest snapshot after IO; an absent static-data payload means deleted data, not permission to restore saved data. Workspace transitions read the current project and live graph from the store at execution time, not from a pre-IO render closure.

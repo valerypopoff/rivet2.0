@@ -19,7 +19,7 @@ function readProxyTemplates(): string[] {
   return proxyTemplatePaths.map((templatePath) => readRepoFile(templatePath));
 }
 
-test('DNS fixture cleanup uses only recorded resources and releases its directory', async () => {
+void test('DNS fixture cleanup uses only recorded resources and releases its directory', async () => {
   const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
   const containers = new Set(['owned-container']);
   const calls: string[][] = [];
@@ -41,7 +41,7 @@ test('DNS fixture cleanup uses only recorded resources and releases its director
   }
 });
 
-test('DNS fixture cleanup failures cannot pass or erase the original failure', async () => {
+void test('DNS fixture cleanup failures cannot pass or erase the original failure', async () => {
   for (const originalFailure of [undefined, new Error('original routing failure')]) {
     const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
     const containers = new Set(['first-owned-container', 'second-owned-container']);
@@ -82,7 +82,7 @@ test('DNS fixture cleanup failures cannot pass or erase the original failure', a
   }
 });
 
-test('DNS fixture finalization preserves a test failure when no Docker resource was created', async () => {
+void test('DNS fixture finalization preserves a test failure when no Docker resource was created', async () => {
   const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
   const originalFailure = new Error('Docker startup unavailable');
   try {
@@ -101,7 +101,7 @@ test('DNS fixture finalization preserves a test failure when no Docker resource 
   }
 });
 
-test('a network removal failure alone fails otherwise successful DNS verification', async () => {
+void test('a network removal failure alone fails otherwise successful DNS verification', async () => {
   const fixture = mkdtempSync(path.join(tmpdir(), 'rivet-dns-cleanup-test-'));
   const removalFailure = new Error('network is still in use');
   try {
@@ -127,7 +127,7 @@ test('a network removal failure alone fails otherwise successful DNS verificatio
   }
 });
 
-test('proxy DNS refresh keeps shared upstream peers independently of request-time resolution', () => {
+void test('proxy DNS refresh keeps shared upstream peers independently of request-time resolution', () => {
   // check-ci-workflows.mjs owns exact image-pin validation against the scanner's
   // security policy. This contract owns DNS behavior, not a second version check.
   for (const template of readProxyTemplates()) {
@@ -181,7 +181,7 @@ function composeServiceNames(compose: string): string[] {
   return names;
 }
 
-test('supported Compose proxies consume authenticated settings projections for SQLite and legacy installations', () => {
+void test('supported Compose proxies consume authenticated settings projections for SQLite and legacy installations', () => {
   for (const file of [
     'deploy/studio-server/compose/docker-compose.yml',
     'deploy/studio-server/compose/docker-compose.dev.yml',
@@ -193,7 +193,7 @@ test('supported Compose proxies consume authenticated settings projections for S
   }
 });
 
-test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-only hop', () => {
+void test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-only hop', () => {
   const image = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');
   const overlay = readRepoFile('deploy/studio-server/compose/docker-compose.vm-tls.yml');
   const compose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
@@ -223,7 +223,7 @@ test('single-VM TLS overlay preserves the existing proxy gate behind a loopback-
   assert.match(normalizer, /incomplete VM TLS proxy configuration/);
 });
 
-test('VM TLS fixture rejects a partial certificate pair before touching a supplied file', () => {
+void test('VM TLS fixture rejects a partial certificate pair before touching a supplied file', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'rivet-vm-tls-config-test-'));
   const cert = path.join(directory, 'existing.pem');
   try {
@@ -249,7 +249,7 @@ test('VM TLS fixture rejects a partial certificate pair before touching a suppli
   }
 });
 
-test('bodyless UI authentication does not apply its inherited body limit to restore uploads', () => {
+void test('bodyless UI authentication does not apply its inherited body limit to restore uploads', () => {
   for (const template of readProxyTemplates()) {
     const auth = proxyLocation(template, /location = \/__rivet_ui_auth_check\s*\{/);
     assert.match(auth, /internal;/);
@@ -271,7 +271,7 @@ test('bodyless UI authentication does not apply its inherited body limit to rest
   }
 });
 
-test('VM TLS fixture does not change the supplied certificate pair', () => {
+void test('VM TLS fixture does not change the supplied certificate pair', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'rivet-vm-tls-config-test-'));
   const cert = path.join(directory, 'existing-cert.pem');
   const key = path.join(directory, 'existing-key.pem');
@@ -309,7 +309,7 @@ test('VM TLS fixture does not change the supplied certificate pair', () => {
   }
 });
 
-test('proxy templates route public workflow traffic to the right API plane', () => {
+void test('proxy templates route public workflow traffic to the right API plane', () => {
   const imageProxyTemplate = readRepoFile('deploy/studio-server/images/proxy/default.conf.template');
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
 
@@ -339,8 +339,17 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   );
 
   const latestDebuggerLocation = proxyLocation(imageProxyTemplate, /location \/ws\/latest-debugger\s*\{/);
-  assert.match(imageProxyTemplate, /set \$api_latest_debugger_upstream http:\/\/rivet_api\/ws\/latest-debugger;/);
-  assert.match(latestDebuggerLocation, /proxy_pass \$api_latest_debugger_upstream;/);
+  assert.match(latestDebuggerLocation, /proxy_pass \$api_upstream\$request_uri;/);
+  for (const template of readProxyTemplates()) {
+    assert.doesNotMatch(template, /\$api_latest_debugger_upstream\b/, 'obsolete fixed-path upstream is removed');
+    const location = proxyLocation(template, /location \/ws\/latest-debugger\s*\{/);
+    assert.match(
+      location,
+      /proxy_pass \$api_upstream\$request_uri;/,
+      'channel suffix and query must reach the API unchanged',
+    );
+    assert.match(location, /auth_request \/__rivet_ui_auth_check;/);
+  }
   assert.match(latestDebuggerLocation, /proxy_set_header X-Rivet-Proxy-Auth \$\{RIVET_PROXY_AUTH_TOKEN\};/);
   assert.match(latestDebuggerLocation, /proxy_set_header Upgrade \$http_upgrade;/);
   assert.match(latestDebuggerLocation, /proxy_set_header Connection \$connection_upgrade;/);
@@ -394,13 +403,13 @@ test('proxy templates route public workflow traffic to the right API plane', () 
   );
 });
 
-test('proxy templates replace client correlation IDs before forwarding requests', () => {
+void test('proxy templates replace client correlation IDs before forwarding requests', () => {
   for (const template of readProxyTemplates()) {
     assert.match(template, /proxy_set_header X-Rivet-Correlation-Id \$request_id;/);
   }
 });
 
-test('proxy templates keep the authenticated workflow-tree event stream unbuffered and long-lived', () => {
+void test('proxy templates keep the authenticated workflow-tree event stream unbuffered and long-lived', () => {
   for (const template of readProxyTemplates()) {
     const streamLocation = proxyLocation(template, /location = \/api\/workflows\/tree\/events\s*\{/);
     const apiLocationIndex = template.indexOf('location /api/ {');
@@ -418,7 +427,7 @@ test('proxy templates keep the authenticated workflow-tree event stream unbuffer
   }
 });
 
-test('proxy UI gate prompt is API-rendered and receives the original route', () => {
+void test('proxy UI gate prompt is API-rendered and receives the original route', () => {
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
   const proxyDockerfile = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
@@ -450,7 +459,7 @@ test('proxy UI gate prompt is API-rendered and receives the original route', () 
   assert.doesNotMatch(prodCompose, /image\/proxy\/ui-gate-prompt\.html:/);
 });
 
-test('proxy templates forward hosted web apps to the API-owned auth layer', () => {
+void test('proxy templates forward hosted web apps to the API-owned auth layer', () => {
   const proxyBootstrap = readRepoFile('deploy/studio-server/images/proxy/normalize-workflow-paths.sh');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
@@ -524,7 +533,7 @@ test('proxy templates forward hosted web apps to the API-owned auth layer', () =
   assert.match(proxyBootstrap, /proxy_set_header X-Forwarded-Proto \\\$rivet_forwarded_proto;/);
 });
 
-test('dev backend exposes the host machine to both Node execution processes', () => {
+void test('dev backend exposes the host machine to both Node execution processes', () => {
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
 
   assert.equal((devCompose.match(/host\.docker\.internal:host-gateway/g) ?? []).length, 1);
@@ -535,7 +544,7 @@ test('dev backend exposes the host machine to both Node execution processes', ()
   );
 });
 
-test('frontend mode changes refresh Nginx resolution without restarting executor sockets', () => {
+void test('frontend mode changes refresh Nginx resolution without restarting executor sockets', () => {
   const proxy = composeServiceBlock(readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml'), 'proxy');
   const frontendDependency = proxy.split('\n      web:')[1]!.split('\n      api:')[0]!;
   assert.doesNotMatch(frontendDependency, /restart: true/);
@@ -543,7 +552,7 @@ test('frontend mode changes refresh Nginx resolution without restarting executor
   assert.match(readRepoFile('deploy/studio-server/scripts/dev-docker.mjs'), /exec -T proxy nginx -s reload/);
 });
 
-test('compose fallback artifact mounts stay isolated under app data', () => {
+void test('compose fallback artifact mounts stay isolated under app data', () => {
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
 
@@ -565,7 +574,7 @@ test('compose fallback artifact mounts stay isolated under app data', () => {
   }
 });
 
-test('proxy templates keep HTTP workflow routes bounded and websocket routes long-lived', () => {
+void test('proxy templates keep HTTP workflow routes bounded and websocket routes long-lived', () => {
   const proxyDockerfile = readRepoFile('deploy/studio-server/images/proxy/Dockerfile');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
   const devCompose = readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml');
@@ -607,7 +616,7 @@ test('proxy templates keep HTTP workflow routes bounded and websocket routes lon
   assert.doesNotMatch(devCompose, /RIVET_PROXY_READ_TIMEOUT/);
 });
 
-test('executor image and Compose contracts keep the websocket port independent from API PORT', () => {
+void test('executor image and Compose contracts keep the websocket port independent from API PORT', () => {
   const executorEntrypoint = readRepoFile('deploy/studio-server/images/executor/entrypoint.sh');
   const executorDockerfile = readRepoFile('deploy/studio-server/images/executor/Dockerfile');
   const executorBundler = readRepoFile('packages/studio-server-executor/build/bundle-executor.cjs');
@@ -654,7 +663,7 @@ test('executor image and Compose contracts keep the websocket port independent f
   assert.match(composeServiceBlock(prodCompose, 'proxy'), /RIVET_EXECUTOR_UPSTREAM_HOST=api/);
 });
 
-test('Docker launchers attach the selected dotenv only to the combined backend', () => {
+void test('Docker launchers attach the selected dotenv only to the combined backend', () => {
   const runtimeEnvCompose = readRepoFile('deploy/studio-server/compose/docker-compose.runtime-env.yml');
   const devLauncher = readRepoFile('deploy/studio-server/scripts/dev-docker.mjs');
   const prodLauncher = readRepoFile('deploy/studio-server/scripts/prod-docker.mjs');
@@ -674,7 +683,7 @@ test('Docker launchers attach the selected dotenv only to the combined backend',
   }
 });
 
-test('images and local launchers build directly from the monorepo workspace', () => {
+void test('images and local launchers build directly from the monorepo workspace', () => {
   const apiDockerfile = readRepoFile('deploy/studio-server/images/api/Dockerfile');
   const webDockerfile = readRepoFile('deploy/studio-server/images/web/Dockerfile');
   const composeWebDockerfile = readRepoFile('deploy/studio-server/compose/docker/Dockerfile.web');
@@ -800,7 +809,7 @@ test('images and local launchers build directly from the monorepo workspace', ()
   );
 });
 
-test('CI and production launchers publish and run the Studio Server image set from one commit', () => {
+void test('CI and production launchers publish and run the Studio Server image set from one commit', () => {
   const imageBuildWorkflow = readRepoFile('.github/workflows/studio-server-images.yml').replace(/\r\n/g, '\n');
   const verificationWorkflow = readRepoFile('.github/workflows/studio-server-verify.yml').replace(/\r\n/g, '\n');
   const prodCompose = readRepoFile('deploy/studio-server/compose/docker-compose.yml');
@@ -893,7 +902,7 @@ test('CI and production launchers publish and run the Studio Server image set fr
   assert.match(prodDockerLauncher, /--build --force-recreate --remove-orphans --wait/);
 });
 
-test('Compose explicitly initializes every writable storage mount before runtime services start', () => {
+void test('Compose explicitly initializes every writable storage mount before runtime services start', () => {
   type Mount = string | { target: string; read_only?: boolean };
   const { parse } = createRequire(path.join(repoRoot, 'package.json'))('yaml') as {
     parse(contents: string): { services: Record<string, { volumes: Mount[] }> };
@@ -960,7 +969,7 @@ test('Compose explicitly initializes every writable storage mount before runtime
   }
 });
 
-test('Compose and candidate smoke keep metrics enabled only on the direct API path', () => {
+void test('Compose and candidate smoke keep metrics enabled only on the direct API path', () => {
   const composeTopologies = [
     ['production', readRepoFile('deploy/studio-server/compose/docker-compose.yml')],
     ['development', readRepoFile('deploy/studio-server/compose/docker-compose.dev.yml')],

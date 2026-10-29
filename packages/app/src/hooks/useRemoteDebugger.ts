@@ -17,6 +17,7 @@ import {
 } from '../utils/projectExecutorMode.js';
 import { type ExecutorSessionLifecycleEvent, type ExecutorSessionState } from './executorSession';
 import { runExecutorSessionCallback } from './executorSessionCallbackIsolation.js';
+import { getManagedLatestControlState } from './managedLatestControlState.js';
 
 export function useRemoteDebugger(
   options: {
@@ -121,6 +122,18 @@ export function useRemoteDebugger(
         setCurrentProjectExecutorMode(createLocalProjectExecutorMode(selectedExecutor));
     },
     send<T extends keyof OutgoingMessageMap>(type: T, data: OutgoingMessageMap[T]) {
+      const controls = getManagedLatestControlState(store, registry, runtime, store.get(projectState).metadata.id);
+      if (
+        controls &&
+        !(type === 'abort'
+          ? controls.canSendAbort
+          : type === 'pause'
+            ? controls.canSendPause
+            : type === 'resume'
+              ? controls.canSendResume
+              : false)
+      )
+        return false;
       return runtime.sendMessage(type, data);
     },
     sendRaw(data: string) {

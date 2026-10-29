@@ -8,6 +8,8 @@ import type {
 import type { GraphExecutionMetadata, GraphRunId, NodeId } from '@valerypopoff/rivet2-core';
 import type { DefaultExecutor } from '../settings.js';
 import type { ExecutorSessionState } from '../../hooks/executorSession.js';
+type SessionPresentation = Pick<ExecutorSessionState, 'capabilities' | 'status' | 'target'> &
+  Partial<Pick<ExecutorSessionState, 'connection'>>;
 import type { GraphViewContext, GraphViewKey } from '../../domain/graphEditing/navigationActions.js';
 
 export type ExecutorProductState =
@@ -296,7 +298,7 @@ export function getActionBarExecutionState(options: {
   hasLoadedRecording?: boolean;
   recordingPlaybackStarting?: boolean;
   selectedExecutor: DefaultExecutor;
-  session: ExecutorSessionState;
+  session: SessionPresentation;
 }) {
   const {
     graphPaused,
@@ -337,7 +339,7 @@ export function getActionBarExecutionState(options: {
 export function getExecutorProductState(options: {
   hasLoadedRecording?: boolean;
   selectedExecutor: DefaultExecutor;
-  session: Pick<ExecutorSessionState, 'capabilities' | 'status' | 'target'>;
+  session: SessionPresentation;
 }): ExecutorProductState {
   const { hasLoadedRecording = false, selectedExecutor, session } = options;
 
@@ -348,7 +350,10 @@ export function getExecutorProductState(options: {
   }
 
   if (session.target?.type === 'external-debugger') {
-    if (session.status === 'ready' && session.capabilities.canSendRun) {
+    // Managed latest sessions observe/control existing runs; they deliberately
+    // cannot dispatch new runs. Connection readiness is not dispatch authority.
+    const managedLatest = session.connection?.kind === 'managed-latest' && session.connection.protocol !== 0;
+    if (session.status === 'ready' && (session.capabilities.canSendRun || managedLatest)) {
       return { type: 'external-debugger-ready' };
     }
 
@@ -410,7 +415,7 @@ export function canRunGraphFromEditor(options: {
   observingRemote?: boolean;
   hasLoadedRecording?: boolean;
   selectedExecutor: DefaultExecutor;
-  session: Pick<ExecutorSessionState, 'capabilities' | 'status' | 'target'>;
+  session: SessionPresentation;
 }) {
   const executorProductState = getExecutorProductState({
     hasLoadedRecording: options.hasLoadedRecording,
@@ -424,7 +429,7 @@ export function canRunGraphFromEditor(options: {
 export function shouldUseRemoteExecutor(options: {
   hasLoadedRecording?: boolean;
   selectedExecutor: DefaultExecutor;
-  session: Pick<ExecutorSessionState, 'capabilities' | 'status' | 'target'>;
+  session: SessionPresentation;
 }) {
   if (options.hasLoadedRecording) {
     return false;

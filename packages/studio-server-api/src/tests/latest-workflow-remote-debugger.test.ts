@@ -6,7 +6,10 @@ import { once } from 'node:events';
 import { createHmac, randomUUID } from 'node:crypto';
 import type { GraphProcessor, Project, ProjectId, GraphId } from '@valerypopoff/rivet2-core';
 import test from 'node:test';
-import { createReviewedBackendPublicationFixtures, createReviewedFilesystemMutationFixtures } from './helpers/reviewed-publication.js';
+import {
+  createReviewedBackendPublicationFixtures,
+  createReviewedFilesystemMutationFixtures,
+} from './helpers/reviewed-publication.js';
 import WebSocket from 'ws';
 import { listenTestServer } from './helpers/http-server-harness.js';
 import { createWorkflowTestRoots, resetWorkflowTestRoots } from './helpers/workflow-fixtures.js';
@@ -28,6 +31,7 @@ import {
 const envKeys = [
   'RIVET_WORKSPACE_ROOT',
   'RIVET_WORKFLOWS_ROOT',
+  'RIVET_WORKFLOW_RECORDINGS_ROOT',
   'RIVET_APP_DATA_ROOT',
   'RIVET_RUNTIME_LIBRARIES_ROOT',
   'RIVET_STORAGE_MODE',
@@ -48,10 +52,12 @@ for (const key of envKeys) {
   previousEnv.set(key, process.env[key]);
 }
 
-const { tempRoot, workflowsRoot, appDataRoot, runtimeLibrariesRoot } = await createWorkflowTestRoots('rivet-latest-debugger-');
+const { tempRoot, workflowsRoot, recordingsRoot, appDataRoot, runtimeLibrariesRoot } =
+  await createWorkflowTestRoots('rivet-latest-debugger-');
 
 process.env.RIVET_WORKSPACE_ROOT = tempRoot;
 process.env.RIVET_WORKFLOWS_ROOT = workflowsRoot;
+process.env.RIVET_WORKFLOW_RECORDINGS_ROOT = recordingsRoot;
 process.env.RIVET_APP_DATA_ROOT = appDataRoot;
 process.env.RIVET_RUNTIME_LIBRARIES_ROOT = runtimeLibrariesRoot;
 process.env.RIVET_STORAGE_MODE = 'filesystem';
@@ -75,11 +81,16 @@ const {
   resetLatestWorkflowRemoteDebuggerForTests,
 } = await import('../latestWorkflowRemoteDebugger.js');
 const workflowFs = await import('../routes/workflows/fs-helpers.js');
-const workflowMutations = createReviewedFilesystemMutationFixtures(await import('../routes/workflows/workflow-mutations.js'));
-const workflowStorageBackend = createReviewedBackendPublicationFixtures(await import('../routes/workflows/storage-backend.js'));
+const workflowMutations = createReviewedFilesystemMutationFixtures(
+  await import('../routes/workflows/workflow-mutations.js'),
+);
+const workflowStorageBackend = createReviewedBackendPublicationFixtures(
+  await import('../routes/workflows/storage-backend.js'),
+);
 const filesystemExecutionCache = await import('../routes/workflows/filesystem-execution-cache.js');
 const workflowEndpointAuthSettings = await import('../workflow-endpoint-auth-settings.js');
 const rivetNode = await import('@valerypopoff/rivet2-node');
+const workflowRecordings = await import('../routes/workflows/recordings.js');
 
 type ApiProfile = 'combined' | 'control' | 'execution';
 
@@ -94,11 +105,13 @@ function toWebSocketUrl(baseUrl: string): string {
 }
 
 async function resetFilesystemState(): Promise<void> {
+  process.env.RIVET_RECORDINGS_ENABLED = 'false';
+  await workflowRecordings.resetWorkflowRecordingStorageForTests();
   filesystemExecutionCache.resetFilesystemExecutionCacheForTests();
   await resetLatestWorkflowRemoteDebuggerForTests();
   await workflowStorageBackend.disposeWorkflowStorage();
   delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
-  await resetWorkflowTestRoots({ workflowsRoot, appDataRoot, runtimeLibrariesRoot });
+  await resetWorkflowTestRoots({ workflowsRoot, recordingsRoot, appDataRoot, runtimeLibrariesRoot });
   await workflowEndpointAuthSettings.writeWorkflowEndpointAuthSettings({
     requireBearerAuth: false,
   });
@@ -118,10 +131,12 @@ async function createPublishedWebApp(projectName: string, slug: string, appName:
   const serializedProject = serializeWebAppProject(rivetNode, project);
 
   await fs.writeFile(created.absolutePath, serializedProject, 'utf8');
-  await workflowStorageBackend.publishWorkflowProjectWebAppsWithBackend(created.relativePath, [{
-    uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
-    slug,
-  }]);
+  await workflowStorageBackend.publishWorkflowProjectWebAppsWithBackend(created.relativePath, [
+    {
+      uiGraphId: WEB_APP_TEST_UI_GRAPH_ID,
+      slug,
+    },
+  ]);
 
   return created;
 }
@@ -159,13 +174,13 @@ async function startApiServer(
   };
 }
 
-async function connectDebuggerSocket(baseUrl: string, trusted = true): Promise<WebSocket> {
-  return connectWebSocket(toWebSocketUrl(baseUrl), {
+async function connectDebuggerSocket(baseUrl: string, trusted = true, suffix = ''): Promise<WebSocket> {
+  return connectWebSocket(toWebSocketUrl(baseUrl) + suffix, {
     headers: trusted ? trustedProxyHeaders() : {},
   });
 }
 
-test('latest debugger revokes an established trusted-client socket after policy removal', async () => {
+void test('latest debugger revokes an established trusted-client socket after policy removal', async () => {
   const previousMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
   process.env.RIVET_SERVER_UI_AUTH_MODE = 'key';
   await resetFilesystemState();
@@ -197,17 +212,21 @@ async function expectDebuggerConnectionFailure(baseUrl: string, trusted = true) 
   });
 }
 
-test('latest debugger rejects unreadable OAuth policy without escaping the upgrade callback', async (t) => {
+void test('latest debugger rejects unreadable OAuth policy without escaping the upgrade callback', async (t) => {
   await resetFilesystemState();
   const previousMode = process.env.RIVET_SERVER_UI_AUTH_MODE;
   process.env.RIVET_SERVER_UI_AUTH_MODE = 'oauth';
   const { webAppAuthSettingsRepository } = await import('../web-app-auth-settings.js');
-  t.mock.method(webAppAuthSettingsRepository, 'readSync', () => { throw new Error('policy storage unavailable'); });
+  t.mock.method(webAppAuthSettingsRepository, 'readSync', () => {
+    throw new Error('policy storage unavailable');
+  });
   const server = http.createServer();
   initializeLatestWorkflowRemoteDebugger(server);
   const socket = new PassThrough();
   let response = '';
-  socket.on('data', (data) => { response += data.toString(); });
+  socket.on('data', (data) => {
+    response += data.toString();
+  });
   try {
     const req = { url: '/ws/latest-debugger', headers: trustedProxyHeaders() } as http.IncomingMessage;
     assert.doesNotThrow(() => server.emit('upgrade', req, socket, Buffer.alloc(0)));
@@ -215,7 +234,9 @@ test('latest debugger rejects unreadable OAuth policy without escaping the upgra
     assert.equal(socket.destroyed, true);
     const malformedSocket = new PassThrough();
     let malformedResponse = '';
-    malformedSocket.on('data', (data) => { malformedResponse += data.toString(); });
+    malformedSocket.on('data', (data) => {
+      malformedResponse += data.toString();
+    });
     assert.doesNotThrow(() => server.emit('upgrade', { ...req, url: 'http://[' }, malformedSocket, Buffer.alloc(0)));
     assert.match(malformedResponse, /^HTTP\/1.1 400 /);
     assert.equal(malformedSocket.destroyed, true);
@@ -299,7 +320,7 @@ function closeDebuggerSocket(socket: WebSocket | null | undefined): void {
 
 async function assertSuccessfulBlankWorkflowResponse(response: Response): Promise<void> {
   assert.equal(response.status, 200);
-  const payload = await response.json() as { durationMs: number };
+  const payload = (await response.json()) as { durationMs: number };
   assert.equal(typeof payload.durationMs, 'number');
 }
 
@@ -312,6 +333,7 @@ test.afterEach(async () => {
 });
 
 test.after(async () => {
+  await workflowRecordings.resetWorkflowRecordingStorageForTests();
   await resetLatestWorkflowRemoteDebuggerForTests();
   await workflowStorageBackend.disposeWorkflowStorage();
   await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
@@ -326,7 +348,7 @@ test.after(async () => {
   }
 });
 
-test('latest debugger defaults on unless explicitly disabled', () => {
+void test('latest debugger defaults on unless explicitly disabled', () => {
   delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
   assert.equal(isLatestWorkflowRemoteDebuggerEnabled(), true);
 
@@ -341,7 +363,7 @@ test('latest debugger defaults on unless explicitly disabled', () => {
   }
 });
 
-test('disposing latest debugger removes its HTTP upgrade listener', async () => {
+void test('disposing latest debugger removes its HTTP upgrade listener', async () => {
   const server = http.createServer();
   const initialUpgradeListeners = server.listenerCount('upgrade');
 
@@ -358,7 +380,7 @@ test('disposing latest debugger removes its HTTP upgrade listener', async () => 
   assert.equal(server.listenerCount('upgrade'), initialUpgradeListeners);
 });
 
-test('latest debugger receives events for latest endpoint execution', async () => {
+void test('latest debugger receives events for latest endpoint execution', async () => {
   await createPublishedWorkflow('Latest Debugger Fixture', 'latest-debugger-endpoint');
   const server = await startApiServer('control');
   let socket: WebSocket | null = null;
@@ -385,12 +407,8 @@ test('latest debugger receives events for latest endpoint execution', async () =
   }
 });
 
-test('latest debugger receives events for latest web app action execution', async () => {
-  await createPublishedWebApp(
-    'Latest Debugger Web App Fixture',
-    'latest-debugger-web-app',
-    'Latest Debugger Web App',
-  );
+void test('latest debugger receives events for latest web app action execution', async () => {
+  await createPublishedWebApp('Latest Debugger Web App Fixture', 'latest-debugger-web-app', 'Latest Debugger Web App');
   const server = await startApiServer('control', { debuggerEnabled: true });
   let socket: WebSocket | null = null;
 
@@ -418,7 +436,7 @@ test('latest debugger receives events for latest web app action execution', asyn
     });
 
     assert.equal(response.status, 200);
-    const payload = await response.json() as { statePatch?: Record<string, unknown> };
+    const payload = (await response.json()) as { statePatch?: Record<string, unknown> };
     assert.deepEqual(payload.statePatch, { result: 'latest web app action' });
 
     const messages = await messagesPromise;
@@ -430,7 +448,7 @@ test('latest debugger receives events for latest web app action execution', asyn
   }
 });
 
-test('published endpoint execution does not emit latest debugger events', async () => {
+void test('published endpoint execution does not emit latest debugger events', async () => {
   await createPublishedWorkflow('Published Debugger Fixture', 'published-no-debugger-endpoint');
   const server = await startApiServer('combined', { debuggerEnabled: true });
   let socket: WebSocket | null = null;
@@ -444,7 +462,8 @@ test('published endpoint execution does not emit latest debugger events', async 
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ value: 'published' }),
         signal: AbortSignal.timeout(5000),
-      }));
+      }),
+    );
 
     await assertSuccessfulBlankWorkflowResponse(response);
   } finally {
@@ -453,7 +472,7 @@ test('published endpoint execution does not emit latest debugger events', async 
   }
 });
 
-test('published web app action execution does not emit latest debugger events', async () => {
+void test('published web app action execution does not emit latest debugger events', async () => {
   await createPublishedWebApp(
     'Published Debugger Web App Fixture',
     'published-no-debugger-web-app',
@@ -483,7 +502,8 @@ test('published web app action execution does not emit latest debugger events', 
           },
         }),
         signal: AbortSignal.timeout(5000),
-      }));
+      }),
+    );
 
     assert.equal(response.status, 200);
   } finally {
@@ -492,7 +512,7 @@ test('published web app action execution does not emit latest debugger events', 
   }
 });
 
-test('latest debugger websocket rejects untrusted upgrades', async () => {
+void test('latest debugger websocket rejects untrusted upgrades', async () => {
   const server = await startApiServer('control', { debuggerEnabled: true });
 
   try {
@@ -503,7 +523,7 @@ test('latest debugger websocket rejects untrusted upgrades', async () => {
   }
 });
 
-test('latest debugger websocket is unavailable when disabled', async () => {
+void test('latest debugger websocket is unavailable when disabled', async () => {
   const server = await startApiServer('control', { debuggerEnabled: false });
 
   try {
@@ -515,7 +535,7 @@ test('latest debugger websocket is unavailable when disabled', async () => {
 });
 
 for (const disabledValue of ['false', '0', 'no', 'off']) {
-  test(`latest debugger websocket is unavailable when env is ${disabledValue}`, async () => {
+  void test(`latest debugger websocket is unavailable when env is ${disabledValue}`, async () => {
     const server = await startApiServer('control', { debuggerEnvValue: disabledValue });
 
     try {
@@ -527,7 +547,7 @@ for (const disabledValue of ['false', '0', 'no', 'off']) {
   });
 }
 
-test('execution-only profile does not provide latest debugger', async () => {
+void test('execution-only profile does not provide latest debugger', async () => {
   const server = await startApiServer('execution');
 
   try {
@@ -538,7 +558,7 @@ test('execution-only profile does not provide latest debugger', async () => {
   }
 });
 
-test('api config advertises latest debugger websocket only when supported', async () => {
+void test('api config advertises latest debugger websocket only when supported', async () => {
   const controlEnabled = await startApiServer('control');
   try {
     const response = await fetch(`${controlEnabled.baseUrl}/api/config`, {
@@ -546,7 +566,7 @@ test('api config advertises latest debugger websocket only when supported', asyn
       signal: AbortSignal.timeout(5000),
     });
     assert.equal(response.status, 200);
-    const payload = await response.json() as {
+    const payload = (await response.json()) as {
       latestAppsBasePath: string;
       publishedAppsBasePath: string;
       remoteDebuggerDefaultWs: string;
@@ -565,7 +585,7 @@ test('api config advertises latest debugger websocket only when supported', asyn
       signal: AbortSignal.timeout(5000),
     });
     assert.equal(response.status, 200);
-    const payload = await response.json() as { remoteDebuggerDefaultWs: string };
+    const payload = (await response.json()) as { remoteDebuggerDefaultWs: string };
     assert.equal(payload.remoteDebuggerDefaultWs, '');
   } finally {
     await combinedDisabled.close();
@@ -584,7 +604,7 @@ test('api config advertises latest debugger websocket only when supported', asyn
   }
 });
 
-test('multiple debugger clients on the single backend all observe latest runs', async () => {
+void test('multiple debugger clients on the single backend all observe latest runs', async () => {
   await createPublishedWorkflow('Multi Client Fixture', 'multi-client-latest-endpoint');
   const server = await startApiServer('control', { debuggerEnabled: true });
   let firstSocket: WebSocket | null = null;
@@ -606,10 +626,7 @@ test('multiple debugger clients on the single backend all observe latest runs', 
 
     await assertSuccessfulBlankWorkflowResponse(response);
 
-    const [firstMessages, secondMessages] = await Promise.all([
-      firstMessagesPromise,
-      secondMessagesPromise,
-    ]);
+    const [firstMessages, secondMessages] = await Promise.all([firstMessagesPromise, secondMessagesPromise]);
 
     assert.ok(firstMessages.some((message) => message.message === 'start'));
     assert.ok(firstMessages.some((message) => message.message === 'done'));
@@ -622,7 +639,75 @@ test('multiple debugger clients on the single backend all observe latest runs', 
   }
 });
 
-test('production HA initializer preserves authenticated large-history replay and real workflow observations', async () => {
+void test('same endpoint executions are isolated by URL channel, including late replay and the default channel', async () => {
+  const created = await createPublishedWorkflow('Channel Fixture', 'channel-fixture');
+  const [project] = await rivetNode.loadProjectAndAttachedDataFromFile(created.absolutePath);
+  process.env.RIVET_RECORDINGS_ENABLED = 'true';
+  const server = await startApiServer('control', { debuggerEnabled: true });
+  const clients: WebSocket[] = [];
+  try {
+    const a = await connectDebuggerSocket(server.baseUrl, true, '@00123');
+    clients.push(a);
+    const b = await connectDebuggerSocket(server.baseUrl, true, '@B');
+    clients.push(b);
+    const ordinary = await connectDebuggerSocket(server.baseUrl);
+    clients.push(ordinary);
+    const received = clients.map(() => [] as Array<{ message: string; rivetScope?: { channel: string | null } }>);
+    clients.forEach((client, i) => client.on('message', (raw) => received[i]!.push(JSON.parse(raw.toString()))));
+    clients.push(await connectDebuggerSocket(server.baseUrl, true, '@00123'));
+    for (const [client, suffix] of [
+      [a, '@00123'],
+      [b, '@B'],
+      [ordinary, ''],
+    ] as const) {
+      const terminal = waitForDebuggerMessages(client, ['start', 'done']);
+      const response = await fetch(`${server.baseUrl}/workflows-latest/channel-fixture${suffix}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      await assertSuccessfulBlankWorkflowResponse(response);
+      await terminal;
+    }
+    for (const [i, channel] of ['00123', 'B', null].entries()) {
+      const starts = received[i]!.filter((message) => message.message === 'start');
+      assert.equal(starts.length, 1);
+      assert.equal(starts[0]!.rivetScope?.channel, channel);
+      assert.ok(received[i]!.every((message) => !message.rivetScope || message.rivetScope.channel === channel));
+    }
+    const replay: Array<{ message: string; rivetScope?: { channel: string | null } }> = [];
+    const late = new WebSocket(toWebSocketUrl(server.baseUrl) + '@00123', { headers: trustedProxyHeaders() });
+    clients.push(late);
+    late.on('message', (raw) => replay.push(JSON.parse(raw.toString())));
+    await waitForDebuggerMessages(late, ['start', 'done']);
+    assert.equal(replay.filter((message) => message.message === 'start').length, 1);
+    assert.ok(replay.every((message) => !message.rivetScope || message.rivetScope.channel === '00123'));
+    await workflowRecordings.flushWorkflowExecutionRecordingPersistence();
+    const recordings = await workflowRecordings.listWorkflowRecordingRunsPage(
+      workflowsRoot,
+      project.metadata.id!,
+      1,
+      20,
+      'all',
+    );
+    assert.equal(recordings.runs.length, 3, 'two viewers and replay cannot create extra recordings');
+    assert.equal(new Set(recordings.runs.map((run) => run.id)).size, 3);
+    assert.ok(
+      recordings.runs.every((run) => run.endpointNameAtExecution === 'channel-fixture'),
+      'channel suffixes never become recording endpoint identity',
+    );
+    assert.ok(
+      recordings.runs.every((run) => run.cost?.status === 'complete' && run.cost.knownCostUsd === 0),
+      'the real no-AI execution accounting is persisted independently of observers',
+    );
+  } finally {
+    await workflowRecordings.flushWorkflowExecutionRecordingPersistence();
+    clients.forEach(closeDebuggerSocket);
+    await server.close();
+  }
+});
+
+void test('production HA initializer preserves authenticated large-history replay and real workflow observations', async () => {
   const identity = randomUUID();
   const configuration = {
     RIVET_HA_PROTOCOL: '1',
@@ -661,6 +746,7 @@ test('production HA initializer preserves authenticated large-history replay and
     );
     const incarnation = randomUUID();
     const peerHeaders = {
+      'x-rivet-latest-protocol': '2',
       'x-rivet-ha-pod': 'backend-1',
       'x-rivet-ha-incarnation': incarnation,
       'x-rivet-ha-peer': createHmac('sha256', process.env.RIVET_KEY!)
@@ -675,12 +761,18 @@ test('production HA initializer preserves authenticated large-history replay and
         .digest('hex'),
     };
     for (const headers of [
+      { ...peerHeaders, 'x-rivet-latest-protocol': '1' },
       { ...peerHeaders, 'x-rivet-ha-peer': '0'.repeat(64) },
       { ...peerHeaders, origin: 'https://public.invalid' },
     ])
       assert.equal((await expectWebSocketConnectionFailure(`${base}/internal/ha/latest`, { headers })).statusCode, 401);
+    const historyProcessor = { id: 'history-fixture', on: () => () => {} } as unknown as GraphProcessor;
+    debuggerServer.attach(historyProcessor);
+    debuggerServer.broadcast(historyProcessor, 'start', {
+      execution: { projectId: 'history-project', rootRunId: 'history-root', graphRunId: 'history-graph' },
+    });
     for (let i = 0; i < 40; i++)
-      debuggerServer.broadcast({} as GraphProcessor, 'trace', {
+      debuggerServer.broadcast(historyProcessor, 'trace', {
         marker: `history-${i}`,
         padding: 'x'.repeat(1024 * 1024),
       });
@@ -704,7 +796,7 @@ test('production HA initializer preserves authenticated large-history replay and
       await once(client, 'open');
       await wait(() => frames.some((frame) => frame.data?.marker === 'history-39'));
       assert.equal(client.readyState, WebSocket.OPEN);
-      if (peer) assert.ok(frames.every((frame) => frame.rivetEventId));
+      if (peer) assert.ok(frames.every((frame) => frame.rivetEventId || frame.message === 'latest-peer'));
       else {
         assert.equal(frames[0]!.message, 'latest-session');
         assert.equal(frames.filter((frame) => frame.data?.code === 'history-truncated').length, 1);
@@ -732,7 +824,7 @@ test('production HA initializer preserves authenticated large-history replay and
     const resumed = await observe();
     await runner.run();
     const fence = `live-fence-${randomUUID()}`;
-    debuggerServer.broadcast({} as GraphProcessor, 'trace', { marker: fence });
+    debuggerServer.broadcast(historyProcessor, 'trace', { marker: fence });
     await wait(() =>
       [resumed, peer].every((observer) => observer.frames.some((frame) => frame.data?.marker === fence)),
     );

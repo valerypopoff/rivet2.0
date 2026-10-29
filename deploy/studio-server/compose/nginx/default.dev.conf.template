@@ -61,7 +61,6 @@ server {
     set $api_ui_auth_upstream http://rivet_api/ui-auth;
     set $api_ui_auth_check_upstream http://rivet_api/ui-auth/check;
     set $api_ui_auth_prompt_upstream http://rivet_api/ui-auth/prompt;
-    set $api_latest_debugger_upstream http://rivet_api/ws/latest-debugger;
     set $executor_internal_upstream http://rivet_executor/internal;
     set $executor_upstream http://rivet_executor/;
 
@@ -218,7 +217,7 @@ server {
     location /ws/latest-debugger {
         auth_request /__rivet_ui_auth_check;
 
-        proxy_pass $api_latest_debugger_upstream;
+        proxy_pass $api_upstream$request_uri;
         proxy_http_version 1.1;
         proxy_set_header X-Rivet-Proxy-Auth ${RIVET_PROXY_AUTH_TOKEN};
         proxy_set_header X-Rivet-Client-IP $rivet_client_ip;

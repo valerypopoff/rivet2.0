@@ -19,7 +19,7 @@ import {
 } from '../state/remoteObservation.js';
 import { createRemoteExecutionObservationRouter } from './remoteExecutionObservation.js';
 import { updateOpenProjectExecutionSnapshot } from './projectExecutionSnapshotRouting.js';
-import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import { projectRemoteExecutionEvent } from './remoteExecutionProjection.js';
 import { handleError } from '../utils/errorHandling.js';
 import { settleProjectExecutionObservation } from './projectExecutionObservationSettlement.js';
 import { projectBindingRegistryState } from '../state/projectBindings.js';
@@ -93,30 +93,11 @@ export function useRemoteExecutionObservations(registry: ExecutorSessionRegistry
                 store.get(projectState).metadata.id === id
                   ? store.get(projectState)
                   : store.get(openedProjectSnapshotsState)[id]?.project;
-              const event = data as {
-                execution?: { graphId: string };
-                node?: { id: string };
-                graph?: { nodes: unknown[]; connections: unknown[] };
-              };
-              const graph = project?.graphs[event.execution?.graphId as keyof typeof project.graphs];
-              if (!graph || (event.node && !graph.nodes.some((node) => node.id === event.node!.id))) {
-                notice(
-                  id,
-                  'The runtime graph differs from this editor. Missing graph/node data is not painted; save or open the matching project version.',
-                );
-                return snapshot;
-              }
-              if (
-                message === 'graphStart' &&
-                (store.get(projectUnsavedChangesState)[id] ||
-                  JSON.stringify([graph.nodes, graph.connections]) !==
-                    JSON.stringify([event.graph?.nodes, event.graph?.connections]))
-              )
-                notice(
-                  id,
-                  'The runtime uses a saved graph that may differ from the current editor. Unsaved definitions were not changed.',
-                );
-              const result = applyProcessEventToProjectExecutionSnapshot({
+              return projectRemoteExecutionEvent({
+                project,
+                dirty: !!store.get(projectUnsavedChangesState)[id],
+                notice: (message) => notice(id, message),
+                clearFrozenOnGraphStart: true,
                 message,
                 data,
                 activityData,
@@ -126,9 +107,6 @@ export function useRemoteExecutionObservations(registry: ExecutorSessionRegistry
                 refStore,
                 previousDataPerNodeToKeep: store.get(previousDataPerNodeToKeepState),
               });
-              // Do not acquire graphRunning ownership. Preserve the existing flag
-              // (including an explicit source's own run on A → B → A return calls).
-              return message === 'graphStart' ? { ...result.snapshot, frozenNodeOutputs: {} } : result.snapshot;
             },
             bindingToken,
           );

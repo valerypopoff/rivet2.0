@@ -105,6 +105,10 @@ export class StudioMetrics {
     return this.#enabled;
   }
 
+  recordLatestDebuggerDiagnostic(reason: 'ownership' | 'broadcast' | 'history' | 'unavailable'): void {
+    this.incrementCounter('rivet_latest_debugger_diagnostics_total', { reason });
+  }
+
   recordCatalogEvent(
     event:
       | 'started'

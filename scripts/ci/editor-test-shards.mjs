@@ -21,6 +21,8 @@ const weightedSpecs = [
   ['hosted-subgraph-auth.spec.ts', 198],
   ['remote-bundle-observation.spec.ts', 220],
   ['ha-latest-replay.spec.ts', 16],
+  // Two independent contexts, scoped HA transport, real runs and reconnect.
+  ['managed-debugger-channels.spec.ts', 56],
   ['ha-recording-selection.spec.ts', 12],
   ['recording-playback-history.spec.ts', 50],
   ['graph-deletion-references.spec.ts', 46],

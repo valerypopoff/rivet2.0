@@ -6,6 +6,82 @@ Remote debugging allows you to integrate the Rivet Core or Rivet Node libraries 
 
 ## Connecting the Remote Debugger
 
+### Studio Server channels and run selection
+
+Use matching channel codes in the latest endpoint URL and the Remote Debugger
+WebSocket URL:
+
+```text
+Admin A:
+POST /workflows-latest/endpoint@12345
+wss://your-server/ws/latest-debugger@12345
+
+Admin B:
+POST /workflows-latest/endpoint@67890
+wss://your-server/ws/latest-debugger@67890
+```
+
+Give your application/test client the endpoint URL and enter the matching
+WebSocket URL in Remote Debugger. If your server uses a custom latest-workflow
+base path, use that instead of `/workflows-latest`. No extra channel header or
+registration is required; existing endpoint and debugger authentication still
+apply. Codes are case-sensitive routing labels, **not passwords**, containing
+1–32 ASCII letters, digits, underscores or hyphens. Leading zeroes matter.
+
+Different codes separate events, replay and controls. Admins using the same code
+intentionally share observation and controls, but select runs independently on
+their own computers. Unsuffixed URLs use a separate default channel containing
+only untagged executions. Published endpoints are not observed. Latest web-app
+actions retain their usual URLs and use the default channel.
+
+#### Choosing a run
+
+The action bar shows the channel and a run picker with start time, short ID and
+status. It follows the newest relevant run by default:
+
+- Choose a run to pin it. **Follow newest** returns to automatic selection.
+- Pausing pins the selected run, so a later request cannot hide it.
+- Open bundle members share the selected root. The graph's **Execution n/N**
+  selector still chooses invocations within that root.
+- Unrelated projects do not steal selection. Called-project tabs are
+  observation-only; use the debugger source tab for controls.
+
+Controls target the run selected when clicked, not whichever run becomes newest
+afterward. Prompt replies target the original question; the first valid answer
+wins, even if two admins see it. A rejected control or lost acknowledgement is
+never automatically retried. Inspect the observed run state before acting again.
+
+#### History, reconnects and stopping
+
+Rivet retains at most 32 selectable runs and a bounded event history. **Retained
+history is incomplete** means details were evicted, unsupported or unavailable;
+Rivet does not rerun workflows or borrow another run's output to fill gaps.
+Incomplete canvas history does not prevent a live source run retaining its
+appropriate controls.
+
+Returning to history restores an answer form only when the question is still
+known to be waiting. Answered questions do not reopen. Every independent history
+gap withdraws answer forms whose pending state is no longer trustworthy, even
+after an earlier warning. A question can remain in activity history without an
+answer form. This never stops the workflow or affects another admin's intact
+connection.
+
+If saved runtime definitions differ from unsaved editor content, Rivet warns
+without replacing your edits. Missing graph/node identities are not painted onto
+unrelated content. Reconnect preserves selection where possible, with controls
+disabled until verified ready. An incompatible managed-server handshake closes
+observation without stopping execution.
+
+**Stop Remote Debugger** disconnects observation only. Accepted work, recordings
+and AI cost accounting continue, independently of the number of viewers.
+Outputs-ready does not mean background work has physically stopped.
+
+Older editors can observe the default channel but must be upgraded for scoped
+controls; named channels require the managed protocol. Generic third-party
+debuggers retain their legacy behavior and do not gain channel isolation from
+these URL conventions. Operators can inspect sanitized server diagnostics for
+control/owner failures without exposing channel codes, answers or graph contents.
+
 Select the **Remote Debugger** menu option in the Action Bar's menu dropdown, or press the **F5** key to open the remote debugger dialog. You must enter a WebSocket URI here to connect to. This URI must be a WebSocket server that uses `startDebuggerServer` from `@valerypopoff/rivet2-node`. You can use this function to start a WebSocket server that will allow the Rivet application to connect to it.
 
 ![remote debugger](assets/remote-debugger.png)
@@ -22,13 +98,18 @@ While Rivet is connected to a remote debugger, the editor disables its normal ru
 
 ## Using the Remote Debugger
 
-Whenever a graph is started on the server, its execution will immediately be visible in Rivet if it is connected as a remote debugger.
+With a generic debugger server, attached graph executions are visible through that
+server's existing observation policy. Studio Server managed debugging instead
+shows the selected relevant root in your subscribed channel, as described above.
 
 When `Show node run durations` is enabled in Rivet settings, Remote Debugger node outputs show `Duration: ...ms` if the remote debugger server sends duration metadata. Current `@valerypopoff/rivet2-node` processors attached with `remoteDebugger` send this metadata by default; older or custom debugger servers may omit it.
 
 If you see an output placeholder that says an unserializable value was sent, the remote workflow still produced its original value. The placeholder means the Remote Debugger replaced only the displayed branch so the editor could continue receiving terminal node and graph events.
 
-By default, you can both pause and abort the current execution in Rivet, and the execution will be paused or aborted on the remote server. This can be useful if you want to pause the execution to inspect the current state of the graph, or if you want to abort the execution because you detect some incorrect behavior.
+Pause and abort controls are available when the connected debugger supports them.
+For Studio Server managed channels, use the source tab: these controls act only
+on the explicitly selected root, not every workflow currently running on the
+server. Generic debugger controls retain their server-defined behavior.
 
 ## Following calls across project tabs
 

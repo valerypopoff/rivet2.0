@@ -74,7 +74,9 @@ export function startDebuggerServer(
     isAcceptingConnections?: (request: IncomingMessage) => boolean;
     sessions?: DebuggerSessions;
     /** Hosting adapters can relay observations/controls without owning processors. */
-    transformBroadcast?: (payload: string) => string;
+    transformBroadcast?: (payload: string, processor: GraphProcessor, message: string, data: unknown) => string;
+    /** Host-owned protocol: true consumes the frame before any legacy handler. */
+    interceptMessage?: (client: WebSocket, payload: string) => boolean | Promise<boolean>;
     /**
      * Order live observations through the adapter's bounded replay writer.
      * Call onWritten after successful delivery, never merely after enqueueing.
@@ -167,7 +169,7 @@ export function startDebuggerServer(
     const clients = options.getClientsForProcessor?.(processor, [...server.clients]) ?? [...server.clients];
     const resolvedRequestId = requestId ?? processorAttachments.getRequestId(processor);
     const serialized = stringifyDebuggerMessage({ message, data, requestId: resolvedRequestId }, emitter);
-    const payload = serialized && (options.transformBroadcast?.(serialized) ?? serialized);
+    const payload = serialized && (options.transformBroadcast?.(serialized, processor, message, data) ?? serialized);
 
     if (!payload) {
       return;
@@ -220,6 +222,7 @@ export function startDebuggerServer(
       try {
         if (options.sessions && !options.sessions.isCurrent(socket)) return;
         const stringData = data.toString();
+        if (options.interceptMessage && (await options.interceptMessage(socket, stringData))) return;
 
         if (stringData.startsWith('set-static-data:')) {
           const [, id, value] = stringData.split(':');
