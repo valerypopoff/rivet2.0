@@ -66,7 +66,7 @@ test('retirement controls negotiate scoped targets without confusing concurrent 
       commands = [];
     const controls = createHaLatestRunControls({
       session: protocol === 1 ? { message: 'latest-session', data: { protocol: 1 } } : session,
-      started,
+      started: protocol === 1 ? { ...started, rivetScope: undefined } : started,
       owner: 'backend-0',
       observations,
       socket: {
@@ -114,6 +114,25 @@ test('retirement controls negotiate scoped targets without confusing concurrent 
     { ...session.data, runScopedControls: false },
   ])
     assert.throws(() => assertHaLatestSession({ message: 'latest-session', data }));
+  for (const protocol of [1, 2]) {
+    const controls = createHaLatestRunControls({
+      session: { ...session, data: { ...session.data, protocol } },
+      started: { ...started, ...(protocol === 2 ? { rivetLegacyOwner: true } : {}) },
+      owner: 'backend-0',
+      socket: {
+        send() {
+          assert.fail('Mixed observation cannot send controls');
+        },
+      },
+      observations: [],
+      waitFor() {
+        assert.fail('No modifying command should be sent');
+      },
+    });
+    assert.equal(controls.matches(started), true);
+    assert.equal(controls.matches({ ...started, rivetScope: { ...scope, rootRunId: 'concurrent' } }), false);
+    await assert.rejects(controls.send('pause'), /read-only/);
+  }
   for (const status of ['rejected', 'outcome-unknown', 'lost']) {
     const commands = [],
       observations = [];

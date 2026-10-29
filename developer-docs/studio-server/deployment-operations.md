@@ -56,14 +56,27 @@ both predecessor and candidate images run the reviewed client without depending
 on new package exports. Scoped events from a concurrent root cannot satisfy its
 pause/completion proof.
 
-This client compatibility does **not** establish mixed-version server peer
-compatibility. The first isolated-channel release rejects protocol-1 incoming
-peers and their unscoped histories/controls. A replicated v1-to-v2 predecessor
-transition may consequently block replacement readiness; fixing the probe is not
-permission to waive that failure or publish rolling qualification. Preserve the
-old serving owners and use a separately reviewed compatible transition or an
-explicitly approved maintenance procedure. Never remove channel checks merely to
-make a qualification window pass.
+Mixed v1/v2 replicas retain authenticated, **default-only observation**. The v2
+writer filters both live and replayed history before sending it to an old peer;
+named-channel data never reaches that peer. A legacy stream's root start supplies
+its root project identity, while the authenticated peer/event identity supplies
+owner/incarnation. Unattributed or contradictory legacy events are omitted with a
+history diagnostic, not assigned to the previous root. This provenance cache is
+bounded across the relay and disposed with it.
+
+Legacy owners are never advertised as scoped-control capable. Legacy incoming
+peer commands are consumed without execution/forwarding; v2 commands targeting
+legacy owners are rejected without downgrade or retry. Named observations and
+cross-owner controls still require v2. Legacy observations do not invent private
+prompt handles or physical-settlement notifications.
+
+The retirement probe therefore controls a run through a second, direct owner
+socket using that owner's verified protocol, while the neighbor must observe the
+same event ID, pause, completion and bundle ancestry. This preserves the mesh
+proof, exactly-one pause/completion, accepted editor drain and no-abort checks
+without requiring an unsafe cross-version control broadcast. Local mixed-peer
+and browser regressions are not a completed release-image or GKE qualification;
+the exact predecessor/candidate image gate must still pass before promotion.
 
 ## Rolling database compatibility contract
 

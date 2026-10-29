@@ -16,6 +16,7 @@ const { WebSocketServer, WebSocket } = createRequire(
 export async function createLatestDebuggerFixture(options: {
   ha: boolean;
   managed?: boolean;
+  legacyOwner?: boolean;
   throttlePartialOutputs?: number;
 }) {
   const listeners = [createServer(), ...(options.ha ? [createServer()] : [])];
@@ -34,6 +35,7 @@ export async function createLatestDebuggerFixture(options: {
   const commands: string[] = [];
   const incarnations = listeners.map(() => randomUUID());
   const policies = listeners.map((_, index) => new LatestDebuggerPolicy(`backend-${index}`, incarnations[index]!));
+  const managed = (index: number) => options.managed && !(options.legacyOwner && index === 0);
   const relays =
     options.ha || options.managed
       ? sockets.map(
@@ -61,7 +63,7 @@ export async function createLatestDebuggerFixture(options: {
                   });
                 return socket;
               },
-              options.managed ? (input, channel) => policies[index]!.control(input, channel) : undefined,
+              managed(index) ? (input, channel) => policies[index]!.control(input, channel) : undefined,
             ),
         )
       : [];
@@ -72,7 +74,7 @@ export async function createLatestDebuggerFixture(options: {
       throttlePartialOutputs: options.throttlePartialOutputs,
       transformBroadcast: relays[index]
         ? (payload, processor, message, data) => {
-            const scoped = options.managed ? policies[index]!.decorate(payload, processor, message, data) : payload;
+            const scoped = managed(index) ? policies[index]!.decorate(payload, processor, message, data) : payload;
             if (!scoped) return '';
             const encoded = relays[index]!.transformBroadcast(scoped);
             if (index === 0) {
@@ -84,7 +86,7 @@ export async function createLatestDebuggerFixture(options: {
         : undefined,
       sendBroadcast: relays[index]?.sendBroadcast,
       onControl: relays[index]?.onControl,
-      interceptMessage: options.managed ? relays[index]?.interceptMessage : undefined,
+      interceptMessage: managed(index) ? relays[index]?.interceptMessage : undefined,
     }),
   );
   listeners.forEach((listener, index) =>
@@ -110,6 +112,10 @@ export async function createLatestDebuggerFixture(options: {
   let history = 0;
   return {
     forChannel(channel: string | null) {
+      if (options.legacyOwner) {
+        if (channel !== null) throw new Error('Legacy fixture owners have only a default channel');
+        return debuggers[0]!;
+      }
       return policies[0]!.forChannel(debuggers[0]!, channel);
     },
     debuggerServer: debuggers[0]!,

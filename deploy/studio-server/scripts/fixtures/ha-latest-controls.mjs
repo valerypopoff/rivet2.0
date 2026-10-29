@@ -16,11 +16,13 @@ export function assertHaLatestSession(session) {
 export function createHaLatestRunControls({ session, started, owner, socket, observations, waitFor }) {
   assertHaLatestSession(session);
   const managed = session.data.protocol === 2;
+  const scoped = managed || started.rivetScope !== undefined;
+  const controllable = managed ? started.rivetLegacyOwner !== true : !scoped;
   const sequence = Number(started.rivetEventId?.split(':').at(-1));
   assert.ok(started.rivetEventId?.startsWith(`${owner}:`) && Number.isSafeInteger(sequence) && sequence > 0);
   const keys = ['channel', 'rootRunId', 'projectId', 'owner', 'incarnation'];
   let target;
-  if (managed) {
+  if (scoped) {
     const scope = started.rivetScope;
     assert.equal(scope?.channel, null);
     assert.equal(scope?.owner, owner);
@@ -33,12 +35,13 @@ export function createHaLatestRunControls({ session, started, owner, socket, obs
   }
   return {
     matches(frame) {
-      return managed
+      return scoped
         ? keys.every((key) => frame.rivetScope?.[key] === target[key])
         : frame.rivetEventId?.startsWith(`${owner}:`) && Number(frame.rivetEventId.split(':').at(-1)) >= sequence;
     },
     async send(action) {
       assert.ok(action === 'pause' || action === 'resume', 'Unsupported retirement probe control');
+      assert.ok(controllable, 'Mixed-version latest observation is read-only; no legacy control fallback');
       if (!managed) {
         // Only an explicitly negotiated predecessor v1 may use its legacy path.
         socket.send(JSON.stringify({ type: action }));

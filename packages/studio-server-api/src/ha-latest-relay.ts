@@ -5,6 +5,7 @@ import type { OwnerRoutingConfig } from './ha-owner-routing.js';
 import type { LatestControlResult } from './latest-debugger-policy.js';
 import {
   WarningsPort,
+  decodeDebuggerTransportSentinels,
   isLatestDebuggerScope,
   parseLatestDebuggerPath,
   type LatestDebuggerChannel,
@@ -133,6 +134,7 @@ type Writer = {
   diagnostics: Set<Diagnostic>;
   onWritten?: () => void;
   channel?: LatestDebuggerChannel;
+  legacyPeer?: boolean;
   timeout?: ReturnType<typeof setTimeout>;
   wake?: ReturnType<typeof setImmediate>;
 };
@@ -151,6 +153,8 @@ export class LatestDebuggerRelay {
   #truncated = false;
   #closed = false;
   #protocolPeers = new Set<string>();
+  // Root provenance for old, default-only streams. Shared bound, not per channel.
+  #legacyRoots = new Map<string, string>();
   #pendingControls = new Map<
     string,
     { client: WebSocket; commandId: string; timer: ReturnType<typeof setTimeout>; peer: WebSocket }
@@ -181,9 +185,10 @@ export class LatestDebuggerRelay {
   }
   authorize(request: IncomingMessage): boolean {
     if (request.headers.origin !== undefined) return false;
-    // An old peer would forward all channels to its unfiltered browsers.
-    // Do not send managed history to a peer without explicit v2 support.
-    if (this.managedControl && request.headers['x-rivet-latest-protocol'] !== '2') return false;
+    // Authenticated v1 peers are read-only/default-only. Unknown declarations
+    // must not silently select that compatibility adapter.
+    const protocol = request.headers['x-rivet-latest-protocol'];
+    if (this.managedControl && protocol !== undefined && protocol !== '2') return false;
     const pod = request.headers['x-rivet-ha-pod'],
       incarnation = request.headers['x-rivet-ha-incarnation'],
       token = request.headers['x-rivet-ha-peer'];
@@ -314,7 +319,7 @@ export class LatestDebuggerRelay {
       const offset = Math.max(0, writer.cursor - first.index + 1);
       for (let i = offset; i < this.#events.length; i++) {
         const event = this.#events[i]!;
-        if (!writer.peer && this.managedControl) {
+        if ((!writer.peer || writer.legacyPeer) && this.managedControl) {
           if (event.channel === undefined || event.channel !== writer.channel) {
             writer.cursor = event.index;
             continue;
@@ -377,6 +382,8 @@ export class LatestDebuggerRelay {
       peer,
       peer && Number.isSafeInteger(sequence) && sequence >= 0 && sequence <= this.#sequence ? sequence : 0,
     );
+    writer.legacyPeer = peer && !!this.managedControl && request.headers['x-rivet-latest-protocol'] === undefined;
+    if (writer.legacyPeer) writer.channel = null;
     if (!peer) {
       if (this.managedControl)
         writer.channel = parseLatestDebuggerPath(new URL(request.url ?? '/', 'http://localhost').pathname);
@@ -390,7 +397,7 @@ export class LatestDebuggerRelay {
       );
       if (this.#truncated) this.#diagnostic(client, 'history-truncated');
     }
-    if (peer && this.managedControl)
+    if (peer && this.managedControl && !writer.legacyPeer)
       this.#send(
         client,
         JSON.stringify({
@@ -418,6 +425,12 @@ export class LatestDebuggerRelay {
   /** Consumes every browser frame in managed mode; no legacy fan-out is reachable. */
   interceptMessage = (client: WebSocket, payload: string): boolean => {
     if (!this.managedControl) return false;
+    if (this.#writers.get(client)?.legacyPeer) {
+      // Old peers broadcast controls to every processor. Never execute or
+      // forward those commands, even when their payload resembles v2.
+      this.#report('ownership');
+      return true;
+    }
     let frame: { type?: string; data?: Record<string, unknown> };
     try {
       frame = JSON.parse(payload);
@@ -513,9 +526,10 @@ export class LatestDebuggerRelay {
       });
       let streamIncarnation: string | undefined;
       let peerIncarnation: string | undefined;
+      let legacyStream = false;
       socket.on('message', (data) => {
         if (this.#closed || this.#outbound.get(pod) !== socket) return;
-        const payload = data.toString();
+        let payload = data.toString();
         let decoded: { rivetEventId?: unknown; rivetScope?: unknown; message?: string; data?: Record<string, unknown> };
         try {
           decoded = JSON.parse(payload);
@@ -528,6 +542,7 @@ export class LatestDebuggerRelay {
           const control = decoded;
           if (control.message === 'latest-peer' && control.data?.protocol === 2) {
             if (
+              legacyStream ||
               control.data.owner !== pod ||
               typeof control.data.incarnation !== 'string' ||
               !/^[a-f0-9-]{36}$/.test(control.data.incarnation) ||
@@ -569,7 +584,7 @@ export class LatestDebuggerRelay {
         const sequence = Number(sequenceText);
         if (
           !incarnation ||
-          (this.managedControl && incarnation !== peerIncarnation) ||
+          (this.managedControl && peerIncarnation !== undefined && incarnation !== peerIncarnation) ||
           !Number.isSafeInteger(sequence) ||
           sequence < 1 ||
           (streamIncarnation && streamIncarnation !== incarnation)
@@ -585,6 +600,48 @@ export class LatestDebuggerRelay {
           this.#notify('history-gap');
         }
         this.#peerCursors.set(pod, { incarnation, sequence });
+        if (this.managedControl && peerIncarnation === undefined) {
+          // A v1 owner has no named-channel support or private prompt handles.
+          // Admit only its root-provenanced default observations; never infer
+          // an owner from another run or mark it capable of scoped controls.
+          legacyStream = true;
+          const execution = decoded.data?.execution as
+            | { rootRunId?: unknown; projectId?: unknown; parentGraphRunId?: unknown }
+            | undefined;
+          const root = execution?.rootRunId;
+          if (decoded.rivetScope !== undefined || typeof root !== 'string' || root.length === 0 || root.length > 200) {
+            this.#notify('history-gap');
+            return;
+          }
+          const key = `${pod}:${incarnation}:${root}`;
+          if (
+            decoded.message === 'start' &&
+            !decodeDebuggerTransportSentinels(execution?.parentGraphRunId) &&
+            typeof execution?.projectId === 'string' &&
+            execution.projectId.length > 0 &&
+            execution.projectId.length <= 200
+          ) {
+            const existing = this.#legacyRoots.get(key);
+            if (existing && existing !== execution.projectId) {
+              this.#notify('history-gap');
+              return;
+            }
+            this.#legacyRoots.set(key, execution.projectId);
+            while (this.#legacyRoots.size > HISTORY_EVENTS)
+              this.#legacyRoots.delete(this.#legacyRoots.keys().next().value!);
+          }
+          const projectId = this.#legacyRoots.get(key);
+          if (!projectId) {
+            this.#notify('history-gap');
+            return;
+          }
+          const scope = { channel: null, rootRunId: root, projectId, owner: pod, incarnation };
+          const envelope = { ...decoded, rivetLegacyOwner: true };
+          delete envelope.rivetEventId;
+          delete envelope.rivetScope;
+          decoded = { ...decoded, rivetScope: scope };
+          payload = encodeLatestDebuggerEnvelope(JSON.stringify(envelope), scope, id);
+        }
         this.#remember(`${pod}:${incarnation}`, sequence, payload, decoded);
         for (const observer of this.server.clients)
           if (!this.#inbound.has(observer)) this.sendBroadcast(observer, payload);
@@ -613,6 +670,7 @@ export class LatestDebuggerRelay {
     this.#outbound.clear();
     this.#events = [];
     this.#peerCursors.clear();
+    this.#legacyRoots.clear();
     this.#bytes = 0;
   }
 }

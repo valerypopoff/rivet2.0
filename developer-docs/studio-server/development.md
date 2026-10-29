@@ -153,6 +153,17 @@ against a real local WebSocket server and processor: legacy blanket pause is
 rejected, while exact pause/resume commands receive accepted acknowledgements
 and matching runtime events. These tests remain in their existing CI suites.
 
+The mixed-peer regression in `latest-debugger-channels-ha.test.ts` exercises
+real sockets with one legacy and one managed relay: readiness, root/child
+provenance, omitted unattributed history, default-only live/replay, exact-control
+rejection, ignored legacy broadcasts and reconnect without event/command replay.
+The legacy root's undefined parent uses the real transport sentinel; decode only
+that routing field, without decoding/cloning authored event payloads in the relay.
+The mixed-predecessor journey in `managed-debugger-channels.spec.ts` observes a
+real legacy processor from a managed browser, reconnects both independent browser
+contexts and verifies that the named observer remains empty. Existing v2 channel,
+prompt, selection and eviction scenarios remain required.
+
 Run the two focused suites with:
 
 ```powershell

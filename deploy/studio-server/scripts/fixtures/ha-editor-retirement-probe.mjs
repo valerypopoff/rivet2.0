@@ -57,6 +57,14 @@ try {
     observations.find((e) => e.message === 'latest-session'),
   );
   assertHaLatestSession(session);
+  // Cross-version peers intentionally provide read-only default observation.
+  // Controls go directly to the actual source, using its own verified protocol.
+  const localObservations = [];
+  const localLatest = await connect(`ws://127.0.0.1:${process.env.PORT}/ws/latest-debugger`, localObservations);
+  const localSession = await waitFor('owner observer greeting', () =>
+    localObservations.find((e) => e.message === 'latest-session'),
+  );
+  assertHaLatestSession(localSession);
   const initial = observations.length;
   const inputMarker = `ha-latest-${marker.split('/').at(-1)}`;
   const latestCall = fetch(`${base}/workflows-latest/${bundle?.endpoint ?? 'managed-release-workflow'}`, {
@@ -86,9 +94,20 @@ try {
   });
   // Replayed or concurrent roots cannot satisfy this run's pause/done proof.
   const peerEvents = () => observations.filter((event) => latestControls.matches(event));
-  await latestControls.send('pause');
+  const localStarted = await waitFor('owner latest start', () =>
+    localObservations.find((e) => e.message === 'start' && e.rivetEventId === started.rivetEventId),
+  );
+  const ownerControls = createHaLatestRunControls({
+    session: localSession,
+    started: localStarted,
+    owner: process.env.RIVET_POD_NAME,
+    socket: localLatest,
+    observations: localObservations,
+    waitFor,
+  });
+  await ownerControls.send('pause');
   await waitFor('remote latest pause', () => peerEvents().find((e) => e.message === 'pause'));
-  await latestControls.send('resume');
+  await ownerControls.send('resume');
   const latestResponse = await latestCall;
   assert.equal(latestResponse.status, 200, await latestResponse.text());
   await waitFor('remote latest completion', () => peerEvents().find((e) => e.message === 'done'));
@@ -107,6 +126,7 @@ try {
   assert.equal(peerEvents().filter((e) => e.message === 'pause').length, 1);
   assert.equal(peerEvents().filter((e) => e.message === 'done').length, 1);
   latest.close();
+  localLatest.close();
 
   const configResponse = await fetch(`${base}/api/config`, { headers });
   assert.equal(configResponse.status, 200);

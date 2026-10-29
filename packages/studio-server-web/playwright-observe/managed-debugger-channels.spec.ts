@@ -71,12 +71,21 @@ function projects(bundle: boolean) {
   return result;
 }
 
-async function openDebugger(page: Page, items: Map<string, Project>, port: number, channel: string, encoded = false) {
+async function openDebugger(
+  page: Page,
+  items: Map<string, Project>,
+  port: number,
+  channel: string | null,
+  encoded = false,
+) {
   let outputReadyFrames = 0;
+  const observedEvents: Array<{ message: string; rivetScope?: unknown }> = [];
   page.on('websocket', (socket) =>
     socket.on('framereceived', ({ payload }) => {
       try {
-        if (JSON.parse(String(payload)).message === 'graphOutputsReady') outputReadyFrames++;
+        const frame = JSON.parse(String(payload));
+        if (frame.message === 'graphOutputsReady') outputReadyFrames++;
+        if (frame.message) observedEvents.push({ message: frame.message, rivetScope: frame.rivetScope });
       } catch {
         /* Vite's websocket is not the debugger transport. */
       }
@@ -130,16 +139,47 @@ async function openDebugger(page: Page, items: Map<string, Project>, port: numbe
   await editor.getByRole('button', { name: 'Remote Debugger', exact: true }).click();
   await editor
     .getByPlaceholder('(Default)')
-    .fill(`ws://127.0.0.1:${port}/ws/latest-debugger${encoded ? '%40' : '@'}${channel}`);
+    .fill(`ws://127.0.0.1:${port}/ws/latest-debugger${channel === null ? '' : `${encoded ? '%40' : '@'}${channel}`}`);
   await editor.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(editor.getByRole('combobox', { name: 'Debugger run', exact: true })).toBeVisible();
   return {
     outputReadyFrames: () => outputReadyFrames,
+    observedEvents,
     editor,
     output: editor.locator('.node[data-nodeid="shared-node"] .node-output'),
     picker: editor.getByRole('combobox', { name: 'Debugger run', exact: true }),
   };
 }
+
+test('mixed predecessor default history reaches the managed browser without entering a named channel', async ({
+  browser,
+}) => {
+  const fixture = await createLatestDebuggerFixture({ ha: true, managed: true, legacyOwner: true });
+  const contexts = [await browser.newContext(), await browser.newContext()];
+  const items = projects(false);
+  const runner = createProcessor(items.get('a')!, { remoteDebugger: fixture.forChannel(null) });
+  try {
+    await expect.poll(fixture.ready).toBe(true);
+    const first = await openDebugger(await contexts[0]!.newPage(), items, fixture.port, null);
+    const named = await openDebugger(await contexts[1]!.newPage(), items, fixture.port, 'private');
+    await runner.run();
+    await expect.poll(() => first.observedEvents.filter((frame) => frame.message === 'start')).toHaveLength(1);
+    await expect(first.output).toContainText('Fixture');
+    await expect(named.editor.locator('.node[data-nodeid="shared-node"]')).toBeVisible();
+    await expect(named.output).toHaveCount(0);
+    expect(named.observedEvents.filter((frame) => frame.message === 'start')).toHaveLength(0);
+    fixture.disconnectObservers();
+    await expect.poll(fixture.connectionCount).toBe(4);
+    await expect(first.output).toContainText('Fixture');
+    await expect(named.output).toHaveCount(0);
+    expect(named.observedEvents.filter((frame) => frame.message === 'start')).toHaveLength(0);
+    expect(fixture.commands.filter((raw) => /latest-control|"type":"run"/.test(raw))).toHaveLength(0);
+  } finally {
+    runner.dispose();
+    for (const context of contexts) await context.close();
+    await fixture.close();
+  }
+});
 
 for (const scenario of [
   'different channels',

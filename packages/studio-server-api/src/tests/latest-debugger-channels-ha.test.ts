@@ -4,10 +4,205 @@ import { EventEmitter, once } from 'node:events';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
-import type { GraphProcessor, LatestDebuggerScope } from '@valerypopoff/rivet2-core';
+import {
+  createDebuggerTransportUndefinedSentinel,
+  type GraphProcessor,
+  type LatestDebuggerScope,
+} from '@valerypopoff/rivet2-core';
 import { startDebuggerServer } from '@valerypopoff/rivet2-node';
 import { LatestDebuggerRelay } from '../ha-latest-relay.js';
 import { LatestDebuggerPolicy } from '../latest-debugger-policy.js';
+
+void test('mixed peers stay ready with default-only replay and never downgrade scoped controls', async () => {
+  const servers = [createServer(), createServer()];
+  const sockets = servers.map(() => new WebSocketServer({ noServer: true }));
+  const ports: number[] = [],
+    relays: LatestDebuggerRelay[] = [],
+    clients: WebSocket[] = [];
+  const controls: string[] = [],
+    wire: string[] = [];
+  const legacyInbound: WebSocket[] = [];
+  const configs = [0, 1].map((i) => ({
+    pod: `backend-${i}`,
+    incarnation: randomUUID(),
+    backendName: 'backend',
+    headless: 'unused',
+    apiPort: 1,
+    executorPort: 1,
+    installation: 'fixture',
+    key: 'k'.repeat(32),
+  }));
+  const until = async (condition: () => boolean) => {
+    const deadline = Date.now() + 6000;
+    while (!condition()) {
+      assert.ok(Date.now() < deadline, 'Mixed relay fixture timed out');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  const receive = async (index: number, path = '/ws/latest-debugger') => {
+    const frames: Array<{
+      message: string;
+      rivetEventId?: string;
+      rivetScope?: LatestDebuggerScope;
+      rivetLegacyOwner?: boolean;
+      data?: { commandId?: string; status?: string };
+    }> = [];
+    const client = new WebSocket(`ws://127.0.0.1:${ports[index]}${path}`);
+    clients.push(client);
+    client.on('message', (raw) => frames.push(JSON.parse(raw.toString())));
+    await once(client, 'open');
+    return { client, frames };
+  };
+  try {
+    for (const server of servers) {
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      ports.push((server.address() as { port: number }).port);
+    }
+    for (let i = 0; i < 2; i++) {
+      const relay = new LatestDebuggerRelay(
+        configs[i]!,
+        sockets[i]!,
+        2,
+        (url, options) =>
+          new WebSocket(`ws://127.0.0.1:${ports[Number(/backend-(\d)/.exec(url)![1])]}/internal/ha/latest`, options),
+        i === 1
+          ? () => {
+              controls.push('managed');
+              return { status: 'accepted' };
+            }
+          : undefined,
+      );
+      relays.push(relay);
+      servers[i]!.on('upgrade', (req, socket, head) => {
+        if (req.url === '/internal/ha/latest' && !relay.authorize(req)) {
+          socket.destroy();
+          return;
+        }
+        sockets[i]!.handleUpgrade(req, socket, head, (client) => sockets[i]!.emit('connection', client, req));
+      });
+      sockets[i]!.on('connection', (client, req) => {
+        if (i === 0 && req.url === '/internal/ha/latest') {
+          legacyInbound.push(client);
+          client.on('message', (raw) => wire.push(raw.toString()));
+        }
+        client.on('message', (raw) => {
+          if (relay.interceptMessage(client, raw.toString())) return;
+          if (JSON.parse(raw.toString()).type === 'pause') controls.push('legacy');
+          relay.onControl(client, raw.toString());
+        });
+      });
+    }
+    const oldStart = relays[0]!.transformBroadcast(
+      JSON.stringify({
+        message: 'start',
+        data: {
+          project: { metadata: { id: 'old-project' } },
+          execution: {
+            rootRunId: 'old-root',
+            projectId: 'old-project',
+            parentGraphRunId: createDebuggerTransportUndefinedSentinel(),
+          },
+        },
+      }),
+    );
+    await until(() => relays.every((relay) => relay.ready));
+    const legacy = await receive(0),
+      modern = await receive(1),
+      named = await receive(1, '/ws/latest-debugger@private');
+    await until(() => modern.frames.some((frame) => frame.message === 'start'));
+    const old = modern.frames.find((frame) => frame.message === 'start')!;
+    assert.equal(old.rivetEventId, JSON.parse(oldStart).rivetEventId);
+    assert.deepEqual(old.rivetScope, {
+      channel: null,
+      rootRunId: 'old-root',
+      projectId: 'old-project',
+      owner: 'backend-0',
+      incarnation: configs[0]!.incarnation,
+    });
+    assert.equal(old.rivetLegacyOwner, true);
+    // Child projects retain the admitted root's project identity. Unattributed
+    // history is omitted, never assigned to the last root seen on the stream.
+    const child = relays[0]!.transformBroadcast(
+      JSON.stringify({
+        message: 'graphStart',
+        data: {
+          execution: { rootRunId: 'old-root', projectId: 'child-project', parentGraphRunId: 'parent' },
+        },
+      }),
+    );
+    const unattributed = relays[0]!.transformBroadcast(
+      JSON.stringify({ message: 'trace', data: { marker: 'untrusted' } }),
+    );
+    for (const client of sockets[0]!.clients) relays[0]!.sendBroadcast(client, '');
+    await until(() => modern.frames.some((frame) => frame.rivetEventId === JSON.parse(child).rivetEventId));
+    assert.equal(modern.frames.find((frame) => frame.message === 'graphStart')!.rivetScope!.projectId, 'old-project');
+    assert.ok(modern.frames.every((frame) => frame.rivetEventId !== JSON.parse(unattributed).rivetEventId));
+    modern.client.send(
+      JSON.stringify({
+        type: 'latest-control',
+        data: {
+          commandId: 'never-broadcast',
+          target: old.rivetScope,
+          action: 'pause',
+        },
+      }),
+    );
+    await until(() => modern.frames.some((frame) => frame.data?.commandId === 'never-broadcast'));
+    assert.equal(modern.frames.find((frame) => frame.data?.commandId === 'never-broadcast')!.data!.status, 'rejected');
+    assert.deepEqual(controls, []);
+    legacy.client.send(JSON.stringify({ type: 'pause' }));
+    await until(() => controls.length === 1);
+    const scope = {
+      channel: 'private',
+      rootRunId: 'private-root',
+      projectId: 'new-project',
+      owner: 'backend-1',
+      incarnation: configs[1]!.incarnation,
+    };
+    relays[1]!.transformBroadcast(JSON.stringify({ message: 'start', rivetScope: scope, data: {} }));
+    relays[1]!.transformBroadcast(
+      JSON.stringify({ message: 'done', rivetScope: { ...scope, channel: null }, data: {} }),
+    );
+    for (const client of sockets[1]!.clients) relays[1]!.sendBroadcast(client, '');
+    await until(
+      () =>
+        legacy.frames.some((frame) => frame.message === 'done') &&
+        named.frames.some((frame) => frame.message === 'start'),
+    );
+    const late = await receive(0);
+    await until(() => late.frames.some((frame) => frame.message === 'done'));
+    assert.ok([...legacy.frames, ...late.frames].every((frame) => frame.rivetScope?.channel !== 'private'));
+    assert.ok(modern.frames.every((frame) => frame.rivetScope?.channel !== 'private'));
+    assert.ok(named.frames.every((frame) => !frame.rivetScope || frame.rivetScope.channel === 'private'));
+    assert.deepEqual(controls, ['legacy'], 'A legacy broadcast cannot reach the managed owner');
+    assert.equal(wire.length, 0, 'Managed controls must never be forwarded into the legacy handler');
+    assert.ok(relays.every((relay) => relay.ready));
+    const beforeReconnect = legacyInbound.length;
+    legacyInbound.at(-1)!.terminate();
+    await until(() => legacyInbound.length > beforeReconnect && relays.every((relay) => relay.ready));
+    const afterReconnect = relays[0]!.transformBroadcast(
+      JSON.stringify({
+        message: 'done',
+        data: {
+          execution: { rootRunId: 'old-root', projectId: 'old-project' },
+        },
+      }),
+    );
+    for (const client of sockets[0]!.clients) relays[0]!.sendBroadcast(client, '');
+    await until(() => modern.frames.some((frame) => frame.rivetEventId === JSON.parse(afterReconnect).rivetEventId));
+    assert.equal(modern.frames.filter((frame) => frame.rivetEventId === old.rivetEventId).length, 1);
+    assert.deepEqual(controls, ['legacy'], 'Reconnect never replays an old command');
+  } finally {
+    clients.forEach((client) => client.terminate());
+    relays.forEach((relay) => relay.dispose());
+    for (const socket of sockets) {
+      socket.clients.forEach((client) => client.terminate());
+      await new Promise<void>((resolve) => socket.close(() => resolve()));
+    }
+    for (const server of servers) await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 void test('managed HA replay filters channels and forwards controls only to the exact owner', async (t) => {
   const servers = [createServer(), createServer()];
