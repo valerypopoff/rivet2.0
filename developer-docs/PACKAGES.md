@@ -2,6 +2,31 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-10-29 — isolated debugging and scoped cost inspection
+
+Every track last changed versions in `ee0748968`. This update covers subsequent
+commits through `2edd4a77c`; use that range, not just the latest debugger commit,
+when reviewing the release contents.
+
+| Packages                        | Version             | Changes since the last bump                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.31.0` → `2.32.0` | Managed debugger channels, follow/pin run selection, exact controls/prompts and canonical member display; latest-root-only bundle history, persistent graph-tree search and AI Cost node presentation.                                                                                                                                               |
+| Core, Node, CLI, Evaluations    | `2.25.0` → `2.26.0` | Additive managed-debugger protocol types and optional Node hosting hooks; AI Cost node with per-project-subtree LLM/Decision AI accounting, pricing/accounting fixes. CLI and Evaluations have no package-local source changes and follow the required public-family lockstep.                                                                       |
+| App Executor                    | `2.17.0` → `2.18.0` | Source-bundled Core/Node companion for the new node, accounting and optional debugger hooks; no separate sidecar protocol or package-local source change.                                                                                                                                                                                            |
+| All five Studio Server packages | `1.33.0` → `1.34.0` | Server-side channel isolation, exact-owner controls, bounded HA replay and diagnostics; recording refresh/replay and independent statistics grouping; rolling migration policy, repeatable qualification and temporary-infrastructure lifecycle tooling. API/Web/Shared change locally; Bootstrap and Executor remain unchanged lockstep companions. |
+| Docs                            | `2.25.0` → `2.26.0` | AI Cost node, recording refresh, paired debugger URLs, shared channels, run selection, prompts and history limitations.                                                                                                                                                                                                                              |
+
+These minor increments reflect additive capabilities, not independent features in
+every companion package. Managed latest controls require the scoped protocol;
+older editors retain default-channel observation only. Ordinary Node execution
+and generic debugger APIs retain their compatibility contracts.
+
+Tauri/Cargo metadata follows App; the CLI Docker default follows the public
+family. Existing workspace ranges and Yarn resolutions stay unchanged. Helm
+metadata and managed schema numbers are not bumped by package versioning. This
+is local release preparation, not publication, deployment or provider qualification.
+See the [prepared release matrix](BUILD-AND-CI.md#prepared-release-versions-2026-10-29).
+
 ## Version update: 2026-10-27 — run cost statistics and persistence safety
 
 All tracks last changed versions in `85615dc79`. This preparation includes the

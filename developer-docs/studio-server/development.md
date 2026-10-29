@@ -1716,18 +1716,20 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.32.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.34.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since `1ebeef366`: shared editor host policies,
-execution/observation lifecycle hardening, narrower repository/resource ownership,
-editor loading and Run Activity improvements, question-image/Bounding Box support
-and container security hardening. Unchanged workspaces are release companions.
+This minor release covers changes since `ee0748968` through `2edd4a77c`:
+isolated latest-debugger channels and run-scoped controls, bounded replay and
+diagnostics, recording refresh/replay and independent statistics grouping, rolling
+migration policy and repeatable qualification/infrastructure lifecycle tooling.
+API/Web/Shared change locally; unchanged Bootstrap/Executor workspaces are
+release companions, not separate implementations of these features.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable overlap or establish GKE qualification.
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-25) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-29) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -1736,12 +1738,12 @@ commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
 
-The explicit-bundle runtime already advances managed storage to schema16. Keep
-the chart's ordinary `workflowSchema.compatibility` defaults at16/16 to match
+The current recording-cost runtime already advances managed storage to schema18.
+Keep the chart's ordinary `workflowSchema.compatibility` defaults at18/18 to match
 that build, independently of package versioning. The promoted release launcher
 still derives exact migration and allowed reader windows from the immutable
 manifest; predecessor compatibility remains a separate contract, not permission
-to leave new-build chart defaults at15. The Kubernetes contract tests exercise
+to leave new-build chart defaults at16. The Kubernetes contract tests exercise
 both an ordinary exact-version migration and a lower serving-only rollback floor.
 
 ## Main commands

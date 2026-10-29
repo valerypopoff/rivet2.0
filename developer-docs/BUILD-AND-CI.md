@@ -1957,6 +1957,38 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-10-29)
+
+All tracks last bumped in `ee0748968`. Reviewing that commit through `2edd4a77c`
+prepares these compatible feature-release tracks:
+
+| Track                               | Version change      | Reason                                                                                                                                                                                                                       |
+| ----------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop app                         | `2.31.0` → `2.32.0` | Channel/run selection and exact managed controls; canonical bundle observation, latest-run history, graph-tree search and AI Cost presentation.                                                                              |
+| Public Core/Node/Evaluations/CLI    | `2.25.0` → `2.26.0` | AI Cost subtree inspection and accounting, typed managed debugger protocol and optional Node hosting hooks; Evaluations/CLI are lockstep companions.                                                                         |
+| App executor                        | `2.17.0` → `2.18.0` | Source-bundled Core/Node capability companion; no separate sidecar protocol change.                                                                                                                                          |
+| Documentation site                  | `2.25.0` → `2.26.0` | AI Cost, recording refresh, channel pairing, shared controls, run selection and incomplete-history guidance.                                                                                                                 |
+| Five private Studio Server packages | `1.33.0` → `1.34.0` | Managed channel/HA replay and control isolation, diagnostics, recording/statistics improvements and rolling-release/temporary-qualification tooling. Bootstrap/Executor have no package-local changes and remain companions. |
+
+The [package matrix](PACKAGES.md#version-update-2026-10-29--isolated-debugging-and-scoped-cost-inspection)
+distinguishes implementation changes from coordinated companion bumps. Managed
+latest controls require scoped protocol support; older default-channel clients
+remain observation-only. This does not change ordinary Node/generic debugger APIs.
+
+Keep existing workspace ranges and Yarn resolutions. Synchronize App's
+Tauri/Cargo metadata and the CLI Docker fallback; do not bump Helm or database
+schema metadata as a side effect. Use the existing checks:
+
+```sh
+node scripts/sync-desktop-version.mjs --check
+node scripts/publish-npm-packages.mjs --check-versions
+yarn studio-server:verify:repo-structure
+node scripts/checks/check-doc-links.mjs
+```
+
+No package publication, production change or cloud qualification is authorized
+by preparing these versions.
+
 ### Prepared release versions (2026-10-27)
 
 Every track last changed versions in `85615dc79`. Subsequent commits through
