@@ -281,9 +281,31 @@ test('actor dependency installation preserves tracked source when switching Yarn
   );
   await fs.writeFile(path.join(temp, '.yarnrc.yml'), 'pnpEnableEsmLoader: true\n');
   await fs.writeFile(path.join(temp, '.gitignore'), 'node_modules/\n.yarn/install-state.gz\n');
-  const env = { ...process.env, YARN_ENABLE_NETWORK: '0', YARN_ENABLE_TELEMETRY: '0', YARN_NODE_LINKER: 'pnp' };
-  const runYarn = (args) => execFileSync(process.execPath, [yarn, ...args], { cwd: temp, env, stdio: 'pipe' });
-  runYarn(['install']);
+  const env = {
+    ...process.env,
+    CI: 'true',
+    YARN_ENABLE_IMMUTABLE_INSTALLS: 'true',
+    YARN_ENABLE_NETWORK: '0',
+    YARN_ENABLE_TELEMETRY: '0',
+    YARN_NODE_LINKER: 'pnp',
+  };
+  const runYarn = (args, overrides = {}) =>
+    execFileSync(process.execPath, [yarn, ...args], {
+      cwd: temp,
+      env: { ...env, ...overrides },
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+  assert.throws(
+    () => runYarn(['install']),
+    (error) => {
+      assert.match(error.stdout, /YN0028/); // A fresh fixture has no lockfile yet.
+      return true;
+    },
+  );
+  // Only seed the disposable fixture non-immutably, then commit its lockfile.
+  // The real installer and repeated CLI call below retain CI's immutable policy.
+  runYarn(['install'], { YARN_ENABLE_IMMUTABLE_INSTALLS: 'false' });
   const git = (...args) =>
     execFileSync('git', ['-c', `core.hooksPath=${path.join(temp, 'no-hooks')}`, ...args], {
       cwd: temp,

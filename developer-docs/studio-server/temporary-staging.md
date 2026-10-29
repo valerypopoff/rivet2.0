@@ -413,6 +413,12 @@ expiry after client loss, idempotent historical cleanup receipts, lost/corrupt
 terminal evidence, late test admission and repeated Gateway-child waits. They
 exercise the maintained paths without changing developer dependencies, replaying
 uncertain writes or targeting existing development containers.
+The linker regression always sets `CI=true` and enables immutable installs.
+It first verifies Yarn rejects the absent fixture lockfile with `YN0028`, then
+permits only its disposable seed install to create that lockfile before committing
+the fixture. The actual actor installer and repeated CLI install remain immutable;
+no production or repository install guard is disabled. Captured Yarn diagnostics
+are text rather than opaque buffers so another fixture failure remains readable.
 
 The full qualification actor Docker image was not built from this dirty
 implementation checkout. Its clean-candidate build/scan and actual GKE
