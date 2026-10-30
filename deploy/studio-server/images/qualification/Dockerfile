@@ -15,7 +15,7 @@ COPY source/deploy/studio-server/images/qualification/kubectl /kubectl-policy
 COPY source/deploy/studio-server/images/qualification/rebuild-kubectl.sh /rebuild-kubectl.sh
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build sh /rebuild-kubectl.sh "$TARGETARCH"
 
-FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS qualification-toolchain
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS qualification-toolchain
 ARG TARGETARCH=amd64
 COPY source/deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
 RUN apk add --no-cache git chromium ffmpeg openssl util-linux curl ca-certificates bash && corepack enable && \

@@ -1,7 +1,8 @@
 # Production update continuity implementation plan
 
-Status: **Repository changes implemented; exact-image verification, provider
-qualification and production activation remain open.** See the
+Status: **Repository changes and first-candidate exact-image verification are
+complete; regional provider qualification and production activation remain
+open.** See the
 [implemented contract and operator guide](production-update-continuity.md).
 
 The implementation adds the opt-in Helm profile, journal-owned ingress bridge,
@@ -13,8 +14,8 @@ provider evidence; no production guarantee follows from repository tests alone.
 
 Release preparation began on 2026-10-30 after authorization to carry out the
 remaining sequence. The candidate includes the continuity changes and their
-existing temporary-staging/toolchain prerequisites. Fresh read-only inspection
-confirmed production revision 60, the recorded predecessor manifest and schema
+existing temporary-staging/toolchain prerequisites. The initial read-only
+inspection confirmed production revision 60, the recorded predecessor manifest and schema
 18, seven ready pods, and a 520-second running proxy timeout. These observations
 are retained in the private `artifacts/continuity-release-20261030/` packet;
 they do not constitute provider qualification or an activation receipt. No
@@ -30,29 +31,32 @@ plane, verified its compiled transport behavior, and added offline version-skew
 admission. The follow-up headless model/fixture check passed all 23 cases.
 Workflow limits now cover a reviewed four-hour qualification operation and the
 20-minute continuity preflight plus setup; operation-specific allowance/expiry
-still govern admission. A costed cloud/certificate activation request is retained
-in the private packet with no affirmative consent assumed. Full final-image
-scanning and regional qualification remain required before activation.
+still govern admission. The first candidate completed the final-image
+gates described below. Each live activation still requires operation-specific
+budget, access, certificate and cleanup authority; historical approvals do not
+authorize a new window. Regional qualification remains open.
 
 ### Requirement reconciliation after implementation audit
 
-The earlier completion label overstated phases A/E. Local source checks cannot
-complete the clean-candidate, packaged-image or provider gates. The audit also
+The earlier completion label overstated phases A/E before exact-image
+verification. Those gates are now complete for the first candidate at `938683d8c`; they
+must be repeated for the later release. Local source checks alone cannot
+complete packaged-image or provider gates. The audit also
 found and completed missing qualification coverage: native protected
 proxy replacement timing, return handoff, the 60/180/295-second duration matrix and
 requests actually admitted before HPA removal. Version 2 evidence requires their
 facts and temporal overlap rather than successful scenario names.
 
-| Phase | Current disposition                          | Implementation / remaining evidence                                                                                                                                                                          |
-| ----- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A     | Release gate open                            | Existing actor/toolchain work is preserved; clean reviewed source and exact actor build/scan remain required.                                                                                                |
-| B     | Implemented, locally checked                 | `helm/overlays/gke-proxy-continuity.yaml`, lifecycle validation, `request-continuity.mjs` and profile/render tests.                                                                                          |
-| C     | Implemented, locally checked                 | `proxy-continuity-transition.mjs`, Kubernetes/Compute adapter, exact-token recovery and per-resource lost-create/route/delete tests.                                                                         |
-| D     | Implemented, locally checked                 | `provider-request-continuity.mjs`, HPA observer, admission markers, duration/native-roll/return probes, version-2 evidence validators and provider behavior tests. Actual provider observations remain in F. |
-| E     | Local checks recorded; exact-image gate open | Kubernetes, browser, transport, qualification, cutover and documentation checks; the clean candidate's complete packaged actor/image verification remains required.                                          |
-| F     | Not executed                                 | Fresh budget/expiry/hostname/cleanup authority, isolated regional qualification, retained observations and verified cleanup.                                                                                 |
-| G     | Not executed                                 | Publish the qualified immutable release, fresh production packet/preflight/backup, then the approved first transition and independent acceptance.                                                            |
-| H     | Supported in code; live completion pending   | Already-protected admission omits bootstrap; a later actual mixed-image update must still prove this on GKE.                                                                                                 |
+| Phase | Current disposition                        | Implementation / remaining evidence                                                                                                                                                                          |
+| ----- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A     | First candidate verified                   | Clean reviewed main `938683d8c`, exact workload images and actor build/scan passed. The later merged release requires its own matching artifacts.                                                            |
+| B     | Implemented, locally checked               | `helm/overlays/gke-proxy-continuity.yaml`, lifecycle validation, `request-continuity.mjs` and profile/render tests.                                                                                          |
+| C     | Implemented, locally checked               | `proxy-continuity-transition.mjs`, Kubernetes/Compute adapter, exact-token recovery and per-resource lost-create/route/delete tests.                                                                         |
+| D     | Implemented, locally checked               | `provider-request-continuity.mjs`, HPA observer, admission markers, duration/native-roll/return probes, version-2 evidence validators and provider behavior tests. Actual provider observations remain in F. |
+| E     | First candidate exact-image checks passed  | Main Build Images `41112537828` and actor publication `41115559841` passed, including packaged browser/adoption checks, scans and disposable Kind scenarios. Regional evidence remains in F.                 |
+| F     | Not executed                               | Fresh budget/expiry/hostname/cleanup authority, isolated regional qualification, retained observations and verified cleanup.                                                                                 |
+| G     | Not executed                               | Publish the qualified immutable release, fresh production packet/preflight/backup, then the approved first transition and independent acceptance.                                                            |
+| H     | Supported in code; live completion pending | Already-protected admission omits bootstrap; a later actual mixed-image update must still prove this on GKE.                                                                                                 |
 
 Optional developer-service continuity remains outside the mandatory scope. None
 of the repository changes constitutes an uninterrupted-production acceptance.
@@ -585,6 +589,25 @@ Handoff must distinguish: code implemented, local checks passed, exact images
 built, provider qualification passed, evidence published, production preflight
 passed, production deployed, and independent acceptance completed. Each has its
 own evidence; none implies the next.
+
+The first preparation campaign completed main Build Images
+[`41112537828`](https://github.com/valerypopoff/rivet2.0/actions/runs/41112537828)
+and native actor publication
+[`41115559841`](https://github.com/valerypopoff/rivet2.0/actions/runs/41115559841)
+for source `938683d8cf1ee408890733006ad5441391456ad5`. Its local, packaged-image,
+scan and disposable Kind checks passed. No regional qualification or production
+adoption was completed in that campaign; its temporary resources and access were
+removed and the address quota restored. Preserve its failed setup evidence.
+
+A fresh campaign can reuse those immutable first-candidate artifacts while main
+and the actual installed predecessor remain unchanged. Do not merge a
+documentation-only or unrelated source change merely to restart it: exact-source
+publication would then require new matching artifacts. Keep the legacy optional
+provider jobs disabled; carry their public-artifact allowlist hardening with the
+genuine later release. That later merged source still requires its own complete
+build, actor scan and regional qualification. Refresh Windows readiness only
+after qualified publication, immediately before the read-only preflight job;
+creating its short-lived proof before a multi-hour provider run makes it stale.
 
 Stop for a changed installation/predecessor, unknown route/policy owner, missing
 certificate, incompatible schema/browser contract, stale metrics, failed/unknown

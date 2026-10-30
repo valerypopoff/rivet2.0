@@ -924,7 +924,9 @@ jobs:
         with:
           # Do not collide with, or replace, diagnostics from an earlier retry.
           name: managed-kubernetes-provider-gate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/kubernetes-managed-provider-gate
+          # Protected staging diagnostics may contain inline settings or app
+          # output. Only this explicitly selected metadata snapshot is public.
+          path: artifacts/kubernetes-managed-provider-gate/config.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -1033,7 +1035,10 @@ jobs:
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: managed-kubernetes-capacity-${{ inputs.run_managed_kubernetes_capacity_gate == true && 'certificate' || 'observe' }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/kubernetes-managed-provider-gate/published-capacity
+          # Keep raw workload logs and Kubernetes diagnostics off public Actions.
+          path: |
+            artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json
+            artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md
           if-no-files-found: warn
           retention-days: 90
   managed-kubernetes-evaluation-gate:
@@ -1128,11 +1133,12 @@ jobs:
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: managed-kubernetes-evaluation-gate-${{ github.run_id }}-${{ github.run_attempt }}
-          # A joint certificate is one logical study. Retain the parent
-          # lifecycle evidence alongside the child capacity report/review.
+          # A joint certificate retains only normalized parent/child evidence.
+          # Whole directories also include private logs and pod manifests.
           path: |
-            artifacts/kubernetes-managed-provider-gate/hosted-evaluations
-            artifacts/kubernetes-managed-provider-gate/published-capacity
+            artifacts/kubernetes-managed-provider-gate/hosted-evaluations/hosted-evaluation-report.json
+            artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json
+            artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md
           if-no-files-found: warn
           retention-days: 90
   promote-images:

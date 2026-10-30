@@ -7,7 +7,7 @@ import path from 'node:path';
 
 // Run inside the final API/executor image, non-root, with only temporary scratch.
 const require = createRequire('/app/package.json');
-assert.equal(process.versions.node, '24.22.1');
+assert.equal(process.versions.node, '24.22.2');
 const esbuild = require('esbuild');
 assert.equal(esbuild.version, '0.25.12');
 const cli = require.resolve('esbuild/bin/esbuild');

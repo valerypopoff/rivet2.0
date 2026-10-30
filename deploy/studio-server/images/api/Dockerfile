@@ -4,7 +4,7 @@ ARG TARGETARCH
 COPY deploy/studio-server/images/lib/rebuild-esbuild.sh /rebuild-esbuild.sh
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build sh /rebuild-esbuild.sh "$TARGETARCH"
 
-FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS builder
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 AS builder
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -64,7 +64,7 @@ RUN node deploy/studio-server/images/lib/remove-dependency-test-fixtures.mjs /ap
 COPY --from=esbuild-security /out/@esbuild /app/node_modules/@esbuild
 COPY --from=esbuild-security /out/esbuild /app/node_modules/esbuild/bin/esbuild
 
-FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+FROM node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
 COPY deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
 
 ARG HTTP_PROXY

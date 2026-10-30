@@ -182,6 +182,18 @@ children do not inherit production-prefixed variables, production KUBECONFIG,
 GitHub tokens or Actions variables. Only sanitized success packets are uploaded;
 failed reports, bounded stderr and exact inventories stay in private storage.
 
+The repository is public, including downloadable Actions artifacts. The legacy
+optional managed-provider CI jobs therefore export only exact file allowlists:
+the provider metadata snapshot, the normalized capacity report and its generated
+review, and the normalized hosted Evaluation report. Raw pod YAML, Helm
+manifests/values, workload logs and browser diagnostics remain local to the
+runner; never upload their containing directories. Those files can contain
+inline credentials or application output even when kubeconfig and protected
+input files themselves live outside the artifact directory. Preserve required
+private diagnostics through an approved private storage path before runner
+cleanup. The local disposable Kind jobs have separate synthetic fixture data
+and do not consume protected staging credentials.
+
 Credential filtering is enforced by the driver factory itself, not only its
 CLI caller. Names are compared case-insensitively (including Windows environment
 aliases); GitHub/Actions and GH Enterprise tokens are removed and KUBECONFIG is
