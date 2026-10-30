@@ -134,6 +134,11 @@ presentation changes. Browser replay covers both current and legacy errors,
 including full output, Response Inspector and Run Activity, while preserving
 authored profile names and raw diagnostic bodies.
 
+After changing provider model labels or authoring documentation, regenerate both
+Graph Builder catalogs with `yarn check:graph-builder-node-specs --write` and run
+the same check without `--write`. CI validates the help and specification files
+together; updating the visible node labels alone leaves stale generated help.
+
 Regression coverage checks registered types, port IDs and configuration keys in
 Core, exact-title aliases and unchanged recorded journals in App, and retained
 profile names/health identities in the hosted UI. The headless node and recording

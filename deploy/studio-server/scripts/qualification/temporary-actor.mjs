@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { verifyActorSource } from '../../images/qualification/verify-source.mjs';
+import { assertKubectlVersionSkew } from '../lib/temporary-staging-actor.mjs';
 
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const base = '/qualification/private';
@@ -25,12 +26,13 @@ export async function actorMain(mode) {
     for (const tool of [
       ['timeout', '--help'],
       ['helm', 'version', '--short'],
-      ['kubectl', 'version', '--client'],
       ['openssl', 'version'],
       ['flock', '--version'],
       ['ffmpeg', '-version'],
     ])
       execFileSync(tool[0], tool.slice(1), { stdio: 'pipe' });
+    const client = JSON.parse(execFileSync('kubectl', ['version', '--client', '-o', 'json'], { stdio: 'pipe' }));
+    if (packet.kubernetesVersion) assertKubectlVersionSkew(client.clientVersion.gitVersion, packet.kubernetesVersion);
     try {
       execFileSync(
         process.execPath,

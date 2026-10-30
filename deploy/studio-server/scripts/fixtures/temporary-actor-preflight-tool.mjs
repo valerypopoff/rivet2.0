@@ -6,6 +6,7 @@ for await (const chunk of process.stdin) chunks.push(chunk);
 const packet = JSON.parse(Buffer.concat(chunks));
 assert.equal(packet.sourceRoot, '/app');
 assert.match(packet.sourceSha, /^[a-f0-9]{40}$/);
+if (mode === 'ok') assert.equal(packet.kubernetesVersion, '1.36.4-gke.2046003');
 if (mode !== 'preflight') {
   const args = process.argv.slice(3);
   for (const flag of ['--interactive', '--init', '--rm', '--pull=never', '--network=none'])

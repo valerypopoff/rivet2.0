@@ -60,6 +60,8 @@ No local passing result substitutes for these gates or authorizes production.
    explicit staging identity, quotas, Kubernetes version, existing service
    accounts, DNS zone when applicable and the absence of all reserved names. Capture a complete
    baseline inventory. No quota or API-enablement request is automatic.
+   Offline actor admission compares its actual kubectl client version with the
+   pinned GKE version and rejects more than one minor of skew before provisioning.
    Node, in-cluster reader and external operator accounts must be distinct;
    assigning the operator identity to a Pod or node is rejected before access.
 4. Create one custom VPC, two disjoint subnets (nodes/secondary Pod and Service
@@ -129,6 +131,10 @@ No local passing result substitutes for these gates or authorizes production.
 
 The inner janitor still cannot delete the cluster, Gateway or network. It owns
 application settlement at expiry; the external watchdog owns foundation expiry.
+The Actions coordinator allows 300 minutes for a reviewed four-hour operation and
+its setup overhead; this does not extend the operation's frozen deadline. The
+separate production-readiness job allows 45 minutes because continuity preflight
+can itself take at least 20 minutes, in addition to checkout, dependencies and pulls.
 Management tokens use IAM Credentials' returned expiry, a five-minute safety
 margin and a maximum 50-minute single-flight cache for requested one-hour
 impersonated credentials. A printed source token is never assumed newly minted.
@@ -176,8 +182,9 @@ startup inherits this original deadline and allowance; it never resets either.
 Provisioning, tests and cleanup share the allowance. Reserve enough cleanup time
 and a minimum test window; recheck both before each new test phase, not only
 once before bootstrap. Slow preparation cannot consume the cleanup reserve and
-then admit another protected window. Stop admission if insufficient time remains. USD 50
-is an approved allowance, **not a hard billing cap**. Reviewed estimates and
+then admit another protected window. Stop admission if insufficient time remains.
+A configured allowance (for example USD 50) requires approval for the current
+operation and is **not a hard billing cap**. Reviewed estimates and
 quota headroom are necessary, not a guarantee of actual spend or provisioning
 speed.
 The template's project ID/number and allowance must also match the protected

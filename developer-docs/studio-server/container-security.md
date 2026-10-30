@@ -423,6 +423,14 @@ ignored, reclassified, or waived by the desktop's separate audit policy.
 
 ### Qualification actor scan — 2026-10-30
 
+Release preparation later observed production on GKE 1.36.4. The current actor
+therefore deliberately advances kubectl to upstream 1.36.6 and its matching
+0.36.6 libraries, retaining the pinned Go compiler and reviewed networking/text
+minimums. The previous 1.34 client is outside the supported one-minor client skew.
+This client update requires a fresh build, transport probe and full actor scan;
+the historical image/scan below does not qualify it. See the upstream
+[version-skew policy](https://kubernetes.io/releases/version-skew-policy/).
+
 The final local Linux-amd64 actor
 `sha256:9dedcb136e4dd71cda5a519162a563474008c59cac331f6f50441c1895783b25`
 passed the unchanged Trivy gate with **zero High/Critical** findings, compared

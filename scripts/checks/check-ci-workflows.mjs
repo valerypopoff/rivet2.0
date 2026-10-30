@@ -73,6 +73,8 @@ assert.equal(
   '${{ vars.RIVET_QUALIFICATION_ENVIRONMENT_MODE == \'temporary\' && fromJSON(\'["self-hosted","linux","x64","rivet-qualification-control"]\') || fromJSON(\'["self-hosted","linux","x64","rivet-qualification"]\') }}',
 );
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
+assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 300);
+assert.equal(automaticQualification.jobs.preflight['timeout-minutes'], 45);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');
 assert.equal(
@@ -818,7 +820,7 @@ assert.match(actorDockerfile, /sh \/rebuild-kubectl\.sh "\$TARGETARCH"/);
 assert.match(actorDockerfile, /COPY --from=kubectl-security \/out\/kubectl \/usr\/local\/bin\/kubectl/);
 const kubectlPolicy = read('deploy/studio-server/images/qualification/kubectl/go.mod');
 assert.match(kubectlPolicy, /tool k8s\.io\/kubernetes\/cmd\/kubectl/);
-assert.match(kubectlPolicy, /k8s\.io\/kubernetes v1\.34\.13/);
+assert.match(kubectlPolicy, /k8s\.io\/kubernetes v1\.36\.6/);
 assert.match(kubectlPolicy, /golang\.org\/x\/net v0\.60\.0/);
 assert.match(kubectlPolicy, /golang\.org\/x\/text v0\.42\.0/);
 assert.doesNotMatch(read('deploy/studio-server/images/qualification/rebuild-kubectl.sh'), /go (?:get|mod tidy)/);

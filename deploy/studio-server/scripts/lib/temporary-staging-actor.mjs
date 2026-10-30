@@ -4,6 +4,22 @@ import fs from 'node:fs/promises';
 import { temporaryHash } from './temporary-staging-contract.mjs';
 import { deploymentFailureDetails } from './deployment-diagnostics.mjs';
 
+/** kubectl supports control planes within one minor of its own version. */
+export function assertKubectlVersionSkew(clientVersion, serverVersion) {
+  const parse = (version) => {
+    assert.equal(typeof version, 'string', 'Kubernetes version must be a string');
+    const match = /^v?(\d+)\.(\d+)\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.exec(version);
+    assert.ok(match, `Invalid Kubernetes version: ${version}`);
+    return match.slice(1).map(Number);
+  };
+  const [clientMajor, clientMinor] = parse(clientVersion);
+  const [serverMajor, serverMinor] = parse(serverVersion);
+  assert.ok(
+    clientMajor === serverMajor && Math.abs(clientMinor - serverMinor) <= 1,
+    `kubectl ${clientVersion} is outside the supported version range for Kubernetes ${serverVersion}`,
+  );
+}
+
 /** Bound terminal diagnostics, not cleanup authority. A successful exec with
  * truncated/corrupt contents cannot qualify a release. */
 export function verifyTemporaryActorExport(value) {
@@ -137,6 +153,12 @@ export function verifyOfflineTemporaryActor(plan, { spawnImpl = spawn, timeoutMs
         void fail('Offline actor returned an invalid receipt', error, code);
       }
     });
-    child.stdin.end(JSON.stringify({ sourceRoot: plan.actorSourceRoot, sourceSha: plan.sourceSha }));
+    child.stdin.end(
+      JSON.stringify({
+        sourceRoot: plan.actorSourceRoot,
+        sourceSha: plan.sourceSha,
+        kubernetesVersion: plan.kubernetesVersion,
+      }),
+    );
   });
 }

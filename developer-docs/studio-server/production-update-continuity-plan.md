@@ -21,6 +21,19 @@ they do not constitute provider qualification or an activation receipt. No
 self-hosted qualification runner or qualification variables were configured at
 inspection, so the external Linux control host must be prepared for the new run.
 
+The reviewed candidate is published in
+[PR 204](https://github.com/valerypopoff/rivet2.0/pull/204). Its first CI run passed
+compilation, lint, dependency audits and application/Core/Node tests, but rejected
+stale generated model help. Both catalogs were regenerated. Release preparation
+also advanced the actor's real kubectl to 1.36.6 for the observed GKE 1.36 control
+plane, verified its compiled transport behavior, and added offline version-skew
+admission. The follow-up headless model/fixture check passed all 23 cases.
+Workflow limits now cover a reviewed four-hour qualification operation and the
+20-minute continuity preflight plus setup; operation-specific allowance/expiry
+still govern admission. A costed cloud/certificate activation request is retained
+in the private packet with no affirmative consent assumed. Full final-image
+scanning and regional qualification remain required before activation.
+
 ### Requirement reconciliation after implementation audit
 
 The earlier completion label overstated phases A/E. Local source checks cannot

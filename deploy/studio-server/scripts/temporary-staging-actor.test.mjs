@@ -6,10 +6,22 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { verifyOfflineTemporaryActor, verifyTemporaryActorExport } from './lib/temporary-staging-actor.mjs';
+import {
+  assertKubectlVersionSkew,
+  verifyOfflineTemporaryActor,
+  verifyTemporaryActorExport,
+} from './lib/temporary-staging-actor.mjs';
 import { temporaryHash } from './lib/temporary-staging-contract.mjs';
 
 const fixture = fileURLToPath(new URL('./fixtures/temporary-actor-preflight-tool.mjs', import.meta.url));
+
+test('actor admission rejects unsupported kubectl skew and malformed version claims', () => {
+  for (const version of ['v1.35.9', 'v1.36.6+rivet.go1.27.3', 'v1.37.0'])
+    assertKubectlVersionSkew(version, '1.36.4-gke.2046003');
+  for (const version of ['v1.34.13', 'v1.38.0', 'v2.36.0', '1.36', 'v1.36.6 trailing', null])
+    assert.throws(() => assertKubectlVersionSkew(version, '1.36.4-gke.2046003'));
+  assert.throws(() => assertKubectlVersionSkew('v1.36.6', 'unknown'));
+});
 
 test('terminal actor export validates exact bytes and bounds without treating omitted large diagnostics as missing receipts', () => {
   const file = { name: 'results/terminal.json', bytes: 'e30=', hash: temporaryHash('{}') };
@@ -31,7 +43,12 @@ test('terminal actor export validates exact bytes and bounds without treating om
 test('offline actor input, identity, bounded output and physical process completion are mandatory', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-preflight-diagnostics-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  const plan = { actorImage: 'fixture/image', actorSourceRoot: '/app', sourceSha: 'a'.repeat(40) };
+  const plan = {
+    actorImage: 'fixture/image',
+    actorSourceRoot: '/app',
+    sourceSha: 'a'.repeat(40),
+    kubernetesVersion: '1.36.4-gke.2046003',
+  };
   for (const mode of [
     'ok',
     'wrong-source',
