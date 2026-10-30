@@ -3,6 +3,7 @@ import { execFile, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -1327,4 +1328,32 @@ test('provider staging gate preserves secret inputs outside uploaded artifacts',
   assert.match(workflow, /RIVET_K8S_STAGING_KUBECONFIG_B64/);
   assert.match(workflow, /must not contain symbolic or hard links/);
   assert.match(workflow, /artifacts\/kubernetes-managed-provider-gate/);
+});
+
+test('public provider artifacts exclude raw staging diagnostics through exact file allowlists', async () => {
+  type Upload = { uses?: string; with: { path: string; 'include-hidden-files'?: boolean } };
+  const { parse } = createRequire(path.join(rootDir, 'package.json'))('yaml') as {
+    parse(value: string): { jobs: Record<string, { steps: Upload[] }> };
+  };
+  const workflow = parse(
+    await fs.readFile(path.join(rootDir, '.github', 'workflows', 'studio-server-images.yml'), 'utf8'),
+  );
+  const expected = {
+    'managed-kubernetes-provider-gate': ['artifacts/kubernetes-managed-provider-gate/config.json'],
+    'managed-kubernetes-capacity-gate': [
+      'artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json',
+      'artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md',
+    ],
+    'managed-kubernetes-evaluation-gate': [
+      'artifacts/kubernetes-managed-provider-gate/hosted-evaluations/hosted-evaluation-report.json',
+      'artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-report.json',
+      'artifacts/kubernetes-managed-provider-gate/published-capacity/capacity-review.md',
+    ],
+  };
+  for (const [job, files] of Object.entries(expected)) {
+    const uploads = workflow.jobs[job].steps.filter((step) => step.uses?.startsWith('actions/upload-artifact@'));
+    assert.equal(uploads.length, 1, `${job} must have one reviewed public export boundary`);
+    assert.deepEqual(uploads[0].with.path.trim().split(/\r?\n/u), files);
+    assert.notEqual(uploads[0].with['include-hidden-files'], true);
+  }
 });
