@@ -244,6 +244,35 @@ credentials; inspect/report uncertain resources rather than force them.
 
 ## Control-host configuration
 
+### Publishing reviewed actor and fixture archives
+
+`studio-server-publish-qualification-images.yml` is an explicit main-only dispatch
+on the external control runner. It publishes locally verified images using the
+job's package-write token; no personal registry token is required. Before dispatch,
+put the clean main actor's `docker save` archive at
+`/srv/rivet-private/image-publication/actor.tar` and the reviewed cached MinIO
+archive at `minio.tar`, then supply both SHA-256 values and the actor's image ID.
+The input root must be a real directory, not a redirected path. The publisher
+checks actual archive bytes before and after scanning, actual actor source/clean
+tree, the fixed MinIO image identity/version and a complete fresh-database actor
+scan before pushing uniquely named tags. Its receipt records immutable registry
+digests, archive hashes, source and scan identity. This is publication, not GKE
+qualification or production approval.
+
+Release preparation found the maintained MinIO release unavailable anonymously
+from both upstream registries. The controlled `qualification-minio` package
+preserves the already-tested image ID
+`sha256:9d668e47f1fc60ea49af4203deee87a657eb1aa0e2761fee2c7c2d1df282c880`,
+upstream digest and [release source](https://github.com/minio/minio/tree/RELEASE.2025-04-22T22-12-26Z).
+This does not certify its dependency security or update the MinIO version. Use
+the immutable published reference in the private template. The actor and MinIO
+packages must be made public once by their owner; the ordinary anonymous-pull
+admission still rejects private/unavailable images before paid GKE creation.
+The isolated control host is a separately budgeted prerequisite and is retained
+until all qualification and cleanup work finishes.
+
+### Coordinator settings
+
 Configure the protected `rivet-managed-staging` environment and
 `rivet-qualification-control` runner label. These are administrator file paths,
 not workflow-dispatch command strings:
