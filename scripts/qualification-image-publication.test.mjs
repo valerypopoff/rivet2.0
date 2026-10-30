@@ -9,6 +9,7 @@ import {
   publicationInputs,
   verifyPublicationArchive,
   preparePublicationOutput,
+  runPublicationCommand,
 } from './qualification-image-publication.mjs';
 
 const env = {
@@ -22,6 +23,17 @@ const env = {
   ACTOR_ARCHIVE_SHA256: 'c'.repeat(64),
   MINIO_ARCHIVE_SHA256: 'd'.repeat(64),
 };
+
+test('real subprocesses support captured or inherited output while preserving failures', () => {
+  assert.equal(
+    runPublicationCommand(process.execPath, ['-e', 'console.log("  captured receipt  ")']),
+    'captured receipt',
+  );
+  assert.equal(runPublicationCommand(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'inherit' }), '');
+  assert.throws(() => runPublicationCommand(process.execPath, ['-e', 'process.exit(7)'], { stdio: 'inherit' }), {
+    status: 7,
+  });
+});
 
 test('publication refuses branch/event confusion and command-shaped dispatch inputs before Docker access', () => {
   assert.equal(publicationInputs(env).namespace, 'ghcr.io/owner/repo-studio-server');

@@ -11,6 +11,17 @@ const inputRoot = '/srv/rivet-private/image-publication';
 export const minioImageId = 'sha256:9d668e47f1fc60ea49af4203deee87a657eb1aa0e2761fee2c7c2d1df282c880';
 const minioRelease = 'RELEASE.2025-04-22T22-12-26Z';
 
+export function runPublicationCommand(program, args, options = {}) {
+  const output = execFileSync(program, args, {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: 720000,
+    ...options,
+  });
+  return output?.trim() ?? '';
+}
+
 export function publicationInputs(env) {
   assert.equal(env.GITHUB_REF, 'refs/heads/main', 'Publication requires main');
   assert.equal(env.GITHUB_EVENT_NAME, 'workflow_dispatch', 'Publication requires explicit dispatch');
@@ -48,8 +59,7 @@ export async function publishQualificationImages(env = process.env) {
   const input = publicationInputs(env);
   assert.equal(process.platform, 'linux');
   assert.ok(process.getuid() > 0, 'Use the non-root external runner');
-  const run = (program, args, options = {}) =>
-    execFileSync(program, args, { cwd: root, encoding: 'utf8', stdio: 'pipe', timeout: 720000, ...options }).trim();
+  const run = runPublicationCommand;
   assert.equal(run('git', ['rev-parse', 'HEAD']), input.sourceSha);
   assert.equal(run('git', ['status', '--porcelain']), '', 'Publication checkout must be clean');
   assert.equal(await fs.realpath(inputRoot), inputRoot, 'Publication input root cannot be redirected');

@@ -258,6 +258,10 @@ tree, the fixed MinIO image identity/version and a complete fresh-database actor
 scan before pushing uniquely named tags. Its receipt records immutable registry
 digests, archive hashes, source and scan identity. This is publication, not GKE
 qualification or production approval.
+Scanner output is inherited for live diagnostics; its successful exit does not
+produce a captured stdout string. The command helper accepts that result while
+preserving nonzero exits, so passing a scan can proceed to assessment validation
+and publication. A real subprocess regression covers both output modes and failure.
 The publisher creates the ignored `artifacts` parent on a pristine runner but
 requires a new publication directory; retained scan/receipt output blocks reuse.
 
@@ -272,6 +276,14 @@ packages must be made public once by their owner; the ordinary anonymous-pull
 admission still rejects private/unavailable images before paid GKE creation.
 The isolated control host is a separately budgeted prerequisite and is retained
 until all qualification and cleanup work finishes.
+
+On a native GCE control host, Docker may inherit `169.254.169.254` as its DNS
+resolver. If the host blocks container access to metadata, configure an explicit
+approved Docker DNS resolver too. Verify actual container DNS resolution and
+metadata denial together before registration; blocking metadata must not prevent
+the scanner or ACME worker from resolving their public services. Apply host
+configuration while no operation or container is active, and retain failed scan
+evidence outside the runner checkout before a fresh publication attempt.
 
 The real network-disabled ACME hook test runs with the same host UID/GID mapping
 as the certificate worker. Dropping container capabilities does not let a root
