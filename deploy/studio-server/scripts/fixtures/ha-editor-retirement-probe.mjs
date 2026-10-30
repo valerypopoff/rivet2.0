@@ -7,13 +7,13 @@ import WebSocket from 'ws';
 import { UserInputNodeImpl, GraphOutputNodeImpl } from '@valerypopoff/rivet2-core';
 import { requestBackendRetirement } from '/opt/rivet/retire-backend.mjs';
 
-const [marker, neighbor, hold = '25000', bundleText, controlsModule] = process.argv.slice(2);
+const [marker, neighbor, hold = '25000', latestFixtureText, controlsModule] = process.argv.slice(2);
 const { assertHaLatestSession, createHaLatestRunControls } = await import(controlsModule);
-const bundle = bundleText ? JSON.parse(bundleText) : undefined;
-if (bundle) {
-  assert.match(bundle.endpoint, /^handover-[a-f0-9-]{36}$/);
-  assert.equal(bundle.projectIds.length, 2);
-  for (const id of bundle.projectIds) assert.match(id, /^[a-f0-9-]{36}$/);
+const latestFixture = JSON.parse(latestFixtureText);
+assert.match(latestFixture.endpoint, /^(?:handover|ha-latest)-[a-f0-9-]{36}$/);
+if (latestFixture.projectIds) {
+  assert.equal(latestFixture.projectIds.length, 2);
+  for (const id of latestFixture.projectIds) assert.match(id, /^[a-f0-9-]{36}$/);
 }
 if (
   !/^\/tmp\/rivet-ha-probe-[a-f0-9-]{36}\.json$/.test(marker ?? '') ||
@@ -67,7 +67,7 @@ try {
   assertHaLatestSession(localSession);
   const initial = observations.length;
   const inputMarker = `ha-latest-${marker.split('/').at(-1)}`;
-  const latestCall = fetch(`${base}/workflows-latest/${bundle?.endpoint ?? 'managed-release-workflow'}`, {
+  const latestCall = fetch(`${base}/workflows-latest/${latestFixture.endpoint}`, {
     method: 'POST',
     headers: { ...headers, authorization: `Bearer ${process.env.RIVET_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({ input: inputMarker }),
@@ -105,17 +105,26 @@ try {
     observations: localObservations,
     waitFor,
   });
+  await waitFor('latest workflow control admission', async () => {
+    try {
+      return (await fs.readFile(marker + '.latest.waiting', 'utf8')) === inputMarker;
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+  });
   await ownerControls.send('pause');
   await waitFor('remote latest pause', () => peerEvents().find((e) => e.message === 'pause'));
   await ownerControls.send('resume');
+  await fs.writeFile(marker + '.latest.release', 'released', { flag: 'wx' });
   const latestResponse = await latestCall;
   assert.equal(latestResponse.status, 200, await latestResponse.text());
   await waitFor('remote latest completion', () => peerEvents().find((e) => e.message === 'done'));
-  if (bundle) {
+  if (latestFixture.projectIds) {
     const graphs = peerEvents()
       .filter((e) => e.message === 'graphStart')
       .map((e) => e.data.execution);
-    for (const id of bundle.projectIds)
+    for (const id of latestFixture.projectIds)
       assert.ok(
         graphs.some((e) => e.projectId === id),
         'Missing bundle project data flow',
@@ -210,7 +219,7 @@ try {
     completions: 1,
     latestMesh: true,
     latestPauseCount: 1,
-    ...(bundle ? { bundleProjectIds: bundle.projectIds, bundleSharedExecution: true } : {}),
+    ...(latestFixture.projectIds ? { bundleProjectIds: latestFixture.projectIds, bundleSharedExecution: true } : {}),
   };
   await fs.writeFile(marker, JSON.stringify(receipt));
   console.log(JSON.stringify(receipt));

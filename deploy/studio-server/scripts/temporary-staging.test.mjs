@@ -200,6 +200,8 @@ test('real network-disabled certificate hook enforces hostname, exchange bytes a
           'rivet.dev/acme-hook-test=' + nonce,
           '--pull=never',
           '--network=none',
+          '--user',
+          `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`,
           '--read-only',
           '--cap-drop',
           'ALL',

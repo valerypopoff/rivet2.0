@@ -3,6 +3,42 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
+// This function is also serialized into disposable Code nodes. Keep it
+// self-contained; production workflows and debugger authorization are unchanged.
+export async function waitForHaLatestRelease(value, fs, directory = '/tmp', timeoutMs = 20000) {
+  const match = typeof value === 'string' && /^ha-latest-(rivet-ha-probe-[a-f0-9-]{36}\.json)$/.exec(value);
+  if (!match) return;
+  const file = `${directory}/${match[1]}.latest`;
+  await fs.promises.writeFile(file + '.waiting', value, { flag: 'wx' });
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(file + '.release')) {
+    if (Date.now() >= deadline) throw Error('Latest retirement probe was not released before its deadline');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  await fs.promises.unlink(file + '.release');
+  await fs.promises.unlink(file + '.waiting');
+}
+
+export function withHaLatestAdmission(nodes) {
+  const input = Object.values(nodes).filter((node) => node.data?.id === 'input' && node.outgoingConnections);
+  assert.equal(input.length, 1, 'Latest probe requires one input node');
+  assert.ok(!nodes['[latest-admission]:code "Latest admission"']);
+  const outgoing = input[0].outgoingConnections;
+  assert.ok(outgoing.every((connection) => connection.startsWith('data->')));
+  input[0].outgoingConnections = ['data->"Latest admission" latest-admission/input'];
+  nodes['[latest-admission]:code "Latest admission"'] = {
+    data: {
+      inputNames: ['input'],
+      outputNames: ['output'],
+      code: `await (${waitForHaLatestRelease.toString()})(inputs.input.value,require('node:fs'));
+return {output:{type:'string',value:inputs.input.value}};`,
+    },
+    outgoingConnections: outgoing.map((connection) => connection.replace(/^data->/, 'output->')),
+    visualData: '90/150/300/null//',
+  };
+  return nodes;
+}
+
 export function assertHaLatestSession(session) {
   assert.equal(session?.message, 'latest-session', 'Missing latest-debugger handshake');
   assert.ok(session.data?.protocol === 1 || session.data?.protocol === 2, 'Unsupported latest-debugger protocol');
@@ -52,7 +88,11 @@ export function createHaLatestRunControls({ session, started, owner, socket, obs
       const result = await waitFor(`remote latest ${action} acknowledgement`, () =>
         observations.find((frame) => frame.message === 'latest-control-result' && frame.data?.commandId === commandId),
       );
-      assert.equal(result.data.status, 'accepted', `Latest ${action} was not acknowledged; no command was retried`);
+      assert.equal(
+        result.data.status,
+        'accepted',
+        `Latest ${action} was not acknowledged (${String(result.data.reason ?? 'no reason').slice(0, 200)}); no command was retried`,
+      );
     },
   };
 }

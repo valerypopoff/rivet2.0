@@ -62,6 +62,21 @@ assert.equal(
   '${{ jobs.publish.outputs.manifest_digest }}',
 );
 const automaticQualification = parseWorkflow('.github/workflows/studio-server-qualify-release.yml').workflow;
+const qualificationPublisher = parseWorkflow(
+  '.github/workflows/studio-server-publish-qualification-images.yml',
+).workflow;
+assert.deepEqual(Object.keys(qualificationPublisher.on), ['workflow_dispatch']);
+assert.deepEqual(qualificationPublisher.permissions, { contents: 'read', packages: 'write' });
+assert.equal(qualificationPublisher.concurrency['cancel-in-progress'], false);
+assert.equal(qualificationPublisher.jobs.publish.if, "${{ github.ref == 'refs/heads/main' }}");
+assert.deepEqual(qualificationPublisher.jobs.publish['runs-on'], [
+  'self-hosted',
+  'linux',
+  'x64',
+  'rivet-qualification-control',
+]);
+assert.equal(qualificationPublisher.jobs.publish.environment, 'rivet-managed-staging');
+assert.ok(qualificationPublisher.jobs.publish.steps.every((s) => !s.uses || /@[a-f0-9]{40}$/.test(s.uses)));
 assert.deepEqual(Object.keys(automaticQualification.on), ['workflow_dispatch']);
 assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), ['build_run_id']);
 assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);

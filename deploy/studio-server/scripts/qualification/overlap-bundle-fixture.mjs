@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
+import { withHaLatestAdmission } from '../fixtures/ha-latest-controls.mjs';
 
 /** New, synthetic bundle only. Each modifying request is sent once. The outer
  * provider phase already journals intent; an uncertain response ends the phase. */
@@ -57,7 +58,9 @@ export async function prepareOverlapBundle(gate, template) {
     return saved;
   };
   const child = project('Handover child'),
-    savedChild = await upload(child, 'child');
+    childGraph = child.data.graphs[child.data.metadata.mainGraphId];
+  withHaLatestAdmission(childGraph.nodes);
+  const savedChild = await upload(child, 'child');
   const root = project('Handover root'),
     graph = root.data.graphs[root.data.metadata.mainGraphId];
   delete graph.nodes['[delay]:delay "Delay"'];

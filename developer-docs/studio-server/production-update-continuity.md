@@ -241,6 +241,16 @@ from the qualified profile (at least 20 minutes), including termination headroom
 
 ## Verification and activation gates
 
+Image-CI retirement probes use a separate synthetic latest workflow with an
+explicit file admission/release barrier. A 300 ms workflow can complete before
+its pause reaches the owner, so elapsed delay alone cannot prove live controls.
+The probe observes the admitted file, sends one scoped pause/resume to the owner,
+verifies peer events, then releases that exact nonce. The same barrier is used
+inside the optional bundle child; ordinary requests pass through immediately.
+It has a bounded deadline and cannot retry controls, reuse an old marker or
+change production debugger authorization. Recovery probes prepare the fixture
+once per probe instance; failed/uncertain publication is never replayed.
+
 Focused tests are enrolled in `verify-kubernetes.mjs`:
 
 ```powershell
