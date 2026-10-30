@@ -13,6 +13,7 @@ import { assertClassifierImages } from '../../../src/model/classifier/images.js'
 import { normalizeClassifierState } from '../../../src/model/classifier/state.js';
 import type { ClassifierProviderEvaluateArgs } from '../../../src/model/classifier/providers.js';
 import type { ClassifierQuestionDefinition } from '../../../src/model/classifier/types.js';
+import { RunCostLedger } from '../../../src/model/RunCostLedger.js';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -154,6 +155,137 @@ test('OpenAI runs existing real Choice, Score and Noul nodes and preserves nativ
   assert.deepEqual(output['responseBody' as PortId]!.value, native);
   assert.equal((output['usage' as PortId]!.value as any).totalCost, (42 * 0.1) / 1_000_000);
   assert.equal(JSON.stringify(output).includes('openai-test-key'), false);
+});
+
+test('OpenAI cache prices reach inline/Profile outputs, attempt receipts and run accounting without altering native usage', async () => {
+  const usage = {
+    input_tokens: 1000,
+    output_tokens: 0,
+    input_tokens_details: { cached_tokens: 400, cache_write_tokens: 100 },
+  };
+  const manual = {
+    inputPerMillionTokens: 2,
+    outputPerMillionTokens: 0,
+    cacheReadPerMillionTokens: 0.5,
+    cacheWritePerMillionTokens: 3,
+  };
+  for (const mode of ['inline', 'profile'] as const)
+    for (const tokenPricing of [undefined, manual]) {
+      const expected = tokenPricing ? 0.0015 : (500 * 0.1 + 400 * 0.01 + 100 * 0.125) / 1e6;
+      const ledger = new RunCostLedger();
+      const receipts: unknown[] = [];
+      const context = {
+        ...ctx(),
+        onLLMProfileAttempt: (event: Parameters<RunCostLedger['observeClassifier']>[0]) => {
+          ledger.observeClassifier(event);
+          if (event.classifierUsage) receipts.push(event.classifierUsage);
+        },
+      };
+      globalThis.fetch = async (_url, init) =>
+        Response.json({ ...reply(JSON.parse(String(init?.body)).questions), usage });
+      const profile = ClassifierProfileNodeImpl.create();
+      Object.assign(profile.data, { provider: 'openai', tokenPricing });
+      const profileResult = await new ClassifierProfileNodeImpl(profile).process({}, { ...ctx(), node: profile });
+      const result = await evaluator({ configurationMode: mode, tokenPricing, outputClassifierAttempts: true }).process(
+        {
+          question1: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Ready?' } },
+          ...(mode === 'profile' ? { classifierProfile: profileResult.profile! } : {}),
+        },
+        context,
+      );
+      assert.equal(result.cost!.value, expected);
+      assert.deepEqual(result.usage!.value, { ...usage, totalCost: expected });
+      assert.deepEqual((result.responseBody!.value as { usage: unknown }).usage, usage);
+      assert.deepEqual(receipts, [{ inputTokens: 1000, outputTokens: 0, estimatedCostUsd: expected }]);
+      assert.deepEqual(ledger.snapshot(), { status: 'complete', knownCostUsd: expected });
+      assert.equal(Object.hasOwn(usage, 'totalCost'), false);
+    }
+});
+
+test('OpenAI cached failed answers retain their paid receipt before Profile fallback succeeds', async () => {
+  const usage = {
+    input_tokens: 1000,
+    output_tokens: 0,
+    input_tokens_details: { cached_tokens: 400, cache_write_tokens: 100 },
+  };
+  const ledger = new RunCostLedger();
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    const body = reply(JSON.parse(String(init?.body)).questions);
+    if (++calls === 1) body.answers = [];
+    return Response.json({ ...body, usage });
+  };
+  const profiles = [];
+  for (const tokenPricing of [
+    undefined,
+    {
+      inputPerMillionTokens: 2,
+      outputPerMillionTokens: 0,
+      cacheReadPerMillionTokens: 0.5,
+      cacheWritePerMillionTokens: 3,
+    },
+  ]) {
+    const node = ClassifierProfileNodeImpl.create();
+    Object.assign(node.data, { provider: 'openai', tokenPricing });
+    profiles.push((await new ClassifierProfileNodeImpl(node).process({}, { ...ctx(), node })).profile!.value);
+  }
+  const result = await evaluator({ configurationMode: 'profile', outputClassifierAttempts: true }).process(
+    {
+      question1: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Ready?' } },
+      classifierProfile: { type: 'classifier-config[]', value: profiles } as never,
+    },
+    { ...ctx(), onLLMProfileAttempt: (event) => ledger.observeClassifier(event) },
+  );
+  const attempts = result.classifierAttempts!.value as {
+    outcome: string;
+    classifierUsage?: { estimatedCostUsd?: number };
+  }[];
+  assert.equal(calls, 2);
+  assert.equal(result.cost!.value, 0.0015);
+  const paid = attempts.filter((attempt) => attempt.classifierUsage);
+  assert.deepEqual(
+    paid.map((attempt) => attempt.outcome),
+    ['failure', 'success'],
+  );
+  assert.deepEqual(
+    paid.map((attempt) => attempt.classifierUsage!.estimatedCostUsd),
+    [(500 * 0.1 + 400 * 0.01 + 100 * 0.125) / 1e6, 0.0015],
+  );
+  assert.deepEqual(ledger.snapshot(), {
+    status: 'complete',
+    knownCostUsd: (500 * 0.1 + 400 * 0.01 + 100 * 0.125) / 1e6 + 0.0015,
+  });
+});
+
+test('OpenAI invalid or partial cache usage keeps answers but excludes cost and marks run accounting unknown', async () => {
+  for (const details of [
+    { cached_tokens: 900, cache_write_tokens: 101 },
+    {},
+    { cached_tokens: 400 },
+    { cache_write_tokens: 100 },
+  ]) {
+    const ledger = new RunCostLedger();
+    globalThis.fetch = async (_url, init) =>
+      Response.json({
+        ...reply(JSON.parse(String(init?.body)).questions),
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 0,
+          input_tokens_details: details,
+        },
+      });
+    const result = await evaluator().process(
+      { question1: { type: 'object', value: { questionId: 'q', type: 'noul', instructions: 'Ready?' } } },
+      {
+        ...ctx(),
+        onLLMProfileAttempt: (event) => ledger.observeClassifier(event),
+      },
+    );
+    assert.deepEqual({ ...(result.answers!.value as object) }, { q: { type: 'noul', noul: 0.83 } });
+    assert.equal(result.cost!.type, 'control-flow-excluded');
+    assert.equal(Object.hasOwn(result.usage!.value as object, 'totalCost'), false);
+    assert.deepEqual(ledger.snapshot(), { status: 'unknown', knownCostUsd: null });
+  }
 });
 
 test('Evaluate exposes only State and sends native image bytes as shared evidence', async () => {

@@ -80,7 +80,7 @@ exports.handler = () => {
       if (service === 'iam' && /^projects\/-\/serviceAccounts\/[^/:]+$/.test(resource))
         return respond(200, { email: resource.split('/').at(-1), uniqueId: '111111111111111111111' });
       if (service === 'dns' && resource === `${root}/managedZones/${plan.managedZone}`)
-        return respond(200, { dnsName: `${plan.domain}.` });
+        return respond(200, resources.get(resource) ?? { dnsName: `${plan.domain}.` });
       if (service === 'dns' && resource.endsWith('/rrsets'))
         return respond(200, { rrsets: resources.get('dns') ?? [] });
       if (service === 'dns' && resource.endsWith('/changes') && req.method === 'POST') {

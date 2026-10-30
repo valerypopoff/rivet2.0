@@ -292,12 +292,12 @@ test('Rivet web app classifier inspector mirrors request failures and suspension
   await page.locator('.rivet-web-app-chat-message').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Inspect response', exact: true }).click();
   const inspector = page.getByRole('dialog', { name: 'Response inspector' });
-  await expect(inspector).toContainText('Classifier requests1 (retained evidence only)');
+  await expect(inspector).toContainText('Decision AI requests1 (retained evidence only)');
   await expect(inspector).toContainText('3 additional profile-attempt rows (requests or decisions) omitted');
   await expect(inspector).toContainText('Profile fallbacks1');
   const requests = inspector
     .locator('details')
-    .filter({ has: page.locator('summary', { hasText: /^Classifier requests$/ }) });
+    .filter({ has: page.locator('summary', { hasText: /^Decision AI requests$/ }) });
   const decisions = inspector
     .locator('details')
     .filter({ has: page.locator('summary', { hasText: /^Profile attempts$/ }) });

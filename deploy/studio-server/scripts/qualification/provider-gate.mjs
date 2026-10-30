@@ -12,7 +12,7 @@ import {
   runManagedGateCommand as run,
   createReleaseGateWebAppOAuthSession,
 } from '../kubernetes-managed-release-gate.mjs';
-import { runHaKubernetesRollout } from '../lib/ha-kubernetes-rollout.mjs';
+import { runHaKubernetesRollout, haRolloutAutoscalingValues } from '../lib/ha-kubernetes-rollout.mjs';
 import { createDeploymentSafety } from '../lib/deployment-safety.mjs';
 import { releaseOperationJournalName } from '../lib/release-operation-journal.mjs';
 import { getStudioServerReleaseManifestDigest } from '../lib/studio-server-release-manifest.mjs';
@@ -20,6 +20,10 @@ import { assertGkeFrontendAvailability, waitForGkeFrontendAvailability } from '.
 import { resolveHelmBinOrThrow } from '../lib/k8s-tools.mjs';
 import { inspectStagingPrerequisites } from '../lib/reusable-staging-prerequisites.mjs';
 import { applyOverlapQualificationProfile } from '../lib/qualification-overlap-profile.mjs';
+import { requestContinuityProfile, continuityTimeoutMs, continuityFromResources } from '../lib/request-continuity.mjs';
+import { createKubernetesProxyContinuity, createComputeBackendObserver } from '../lib/proxy-continuity-kubernetes.mjs';
+import { stagingAccessToken, stagingCloudReader } from '../lib/reusable-staging-cloud.mjs';
+import { observeStagingInventory } from '../lib/reusable-staging-cleanup.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -190,6 +194,27 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         this.providerValues,
         this.operation.developerOverlapProfile,
       );
+    const continuity =
+      manifest === this.operation.candidate
+        ? this.operation.requestContinuityProfile
+        : requestContinuityProfile(envelope);
+    if (continuity) {
+      this.providerValues.requestContinuity = {
+        enabled: true,
+        maxProtectedRequestSeconds: continuity.maxProtectedRequestSeconds,
+        backendServiceDrainSeconds: continuity.backendServiceDrainSeconds,
+        propagationSeconds: continuity.propagationSeconds,
+        routeName: 'qualification',
+        backendPolicyName: 'qualification',
+        gatewayName: this.settings.gatewayName,
+        gcpProject: this.settings.projectId,
+        gcpRegion: this.settings.region,
+      };
+      this.providerValues.lifecycle.proxy = {
+        preStopDelaySeconds: continuity.proxyPreStopDelaySeconds,
+        terminationGracePeriodSeconds: continuity.proxyTerminationGracePeriodSeconds,
+      };
+    }
     this.providerValues.ha.controlPlane.mode = this.overlap ? 'singleton-overlap' : 'singleton';
     return this.providerValues;
   }
@@ -231,15 +256,53 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       previousManifestDigest: imageDigest(this.currentManifest),
       resources,
       ...rolloutProbes,
-      timeoutMs: 1200000,
+      createProxyContinuity: (args) =>
+        createKubernetesProxyContinuity({
+          ...args,
+          observeBackend: createComputeBackendObserver(args.config.network, { accessToken: stagingAccessToken }),
+        }),
+      timeoutMs: this.operation.requestContinuityProfile
+        ? continuityTimeoutMs(this.operation.requestContinuityProfile)
+        : 1200000,
       artifact: async (...args) => {
         // The adapter owns persistence. The observer must run after the exact
         // journal is saved, and its failure must stop the qualification.
         await this.artifact(...args);
+        if (args[0] === 'ha-rollout.json' && this.operation.requestContinuityProfile) {
+          const record = JSON.parse(args[1]),
+            continuity = record.proxyContinuity;
+          await this.continuityProbes?.observeJournal(record);
+          if (continuity?.phase === 'bridge-serving' && !this.continuityInventoryRecorded) {
+            await observeStagingInventory(this.state, stagingCloudReader(this.settings));
+            this.continuityInventoryRecorded = true;
+          }
+          if (continuity?.phase === 'cleanup' && !this.continuityInventoryRetiring) {
+            const service = JSON.parse((await this.kube(['get', 'service', continuity.name, '-o', 'json'])).stdout);
+            assert.equal(service.metadata.uid, continuity.entries.find((e) => e.desired.kind === 'Service').uid);
+            const status = JSON.parse(service.metadata.annotations['cloud.google.com/neg-status']);
+            const paths = status.zones.flatMap((zone) =>
+              Object.values(status.network_endpoint_groups).map(
+                (name) => `projects/${this.settings.projectId}/zones/${zone}/networkEndpointGroups/${name}`,
+              ),
+            );
+            await this.state.change((r) => {
+              r.retiringNegIds = [
+                ...new Set([
+                  ...(r.retiringNegIds ?? []),
+                  ...r.inventory.filter((i) => i.kind === 'neg' && paths.includes(i.resource)).map((i) => i.id),
+                ]),
+              ];
+            });
+            this.continuityInventoryRetiring = true;
+          }
+        }
         await observeArtifact?.(...args);
       },
       applyTemplates: (_work, guards) =>
-        this.apply(mergeRuntimeControlGuards(values, guards), 'provider-roll-template.json'),
+        this.apply(
+          mergeRuntimeControlGuards(mergeRuntimeControlGuards(values, haRolloutAutoscalingValues(resources)), guards),
+          'provider-roll-template.json',
+        ),
       restoreAutoscalers: (_work, guards) =>
         this.apply(
           {
@@ -359,6 +422,25 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     };
     await this.kube(['create', '-f', '-'], { input: JSON.stringify(service) });
     const metadata = { name: 'qualification', namespace: this.config.namespace };
+    if (this.operation.requestContinuityProfile)
+      await this.kube(['create', '-f', '-'], {
+        input: JSON.stringify({
+          apiVersion: 'networking.gke.io/v1',
+          kind: 'GCPBackendPolicy',
+          metadata,
+          spec: {
+            default: {
+              timeoutSec: 3600,
+              connectionDraining: {
+                drainingTimeoutSec:
+                  requestContinuityProfile(this.operation.installed.qualificationValues)?.backendServiceDrainSeconds ??
+                  60,
+              },
+            },
+            targetRef: { group: '', kind: 'Service', name: serviceName },
+          },
+        }),
+      });
     await this.kube(['create', '-f', '-'], {
       input: JSON.stringify({
         apiVersion: 'gateway.networking.k8s.io/v1',
@@ -456,6 +538,24 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       'compact',
     );
   }
+  async verifyProtectedProxyAvailability() {
+    const resources = await this.resources(this.values(this.config.images), 'protected-proxy-acceptance');
+    const continuity = continuityFromResources(resources);
+    assert.ok(continuity, 'The isolated proxy must retain its continuity profile');
+    return createKubernetesProxyContinuity({
+      kube: (...args) => this.kube(...args),
+      config: {
+        ...continuity,
+        release: this.config.release,
+        namespace: this.config.namespace,
+        hpaSpec: resources.find(
+          (r) => r.kind === 'HorizontalPodAutoscaler' && r.spec.scaleTargetRef.name === continuity.proxyName,
+        )?.spec,
+      },
+      timeoutMs: continuityTimeoutMs(continuity.profile),
+      observeBackend: createComputeBackendObserver(continuity.network, { accessToken: stagingAccessToken }),
+    }).inspect();
+  }
   async readyPublic() {
     await waitForGkeFrontendAvailability(this);
     await this.loadWorkflowKey();
@@ -468,6 +568,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         path.join(root, '.yarn/releases/yarn-4.17.1.cjs'),
         'studio-server:ui:observe',
         'runtime-control-independence.spec.ts',
+        ...(this.continuityProbes ? ['web-app-accepted-resume.spec.ts'] : []),
       ],
       {
         env: {
@@ -479,10 +580,12 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
           RIVET_RUNTIME_PROVIDER_ORIGIN: this.config.baseUrl,
           RIVET_QUALIFICATION_BROWSER_ARTIFACTS: path.join(this.config.artifactsDir, 'browser'),
           RIVET_RUNTIME_PROVIDER_UI_COOKIE: this.uiCookie,
+          RIVET_REQUEST_CONTINUITY_FIXTURE: this.continuityProbes ? '1' : '0',
         },
         capture: true,
       },
     );
+    if (this.continuityProbes) this.continuityProbes.browserResume = true;
   }
   async scaleExact(kind, name, from, to) {
     const current = JSON.parse((await this.kube(['get', kind, name, '-o', 'json'])).stdout);

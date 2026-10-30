@@ -288,6 +288,8 @@ release:
       managedWorkflowSchemaVersion: 0
 
 lifecycle:
+  # Optional proxy-only overrides; absent fields inherit the global lifecycle.
+  proxy: {}
   health:
     refreshSeconds: 5
     checkTimeoutSeconds: 3
@@ -315,6 +317,18 @@ rollout:
   # Provider load-balancer programming can lag Pod readiness. Tune and qualify
   # this stabilization window alongside provider health checks and drain time.
   minReadySeconds: 0
+
+# Opt-in GKE contract. Network identities belong to the reviewed installation.
+requestContinuity:
+  enabled: false
+  maxProtectedRequestSeconds: 300
+  backendServiceDrainSeconds: 600
+  propagationSeconds: 60
+  routeName: ''
+  backendPolicyName: ''
+  gatewayName: ''
+  gcpProject: ''
+  gcpRegion: ''
 
 availability:
   # Opt-in regional GKE Gateway policy; see overlays/gke-ha.yaml. This is not

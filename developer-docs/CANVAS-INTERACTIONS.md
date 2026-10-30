@@ -31,6 +31,16 @@ Text-like node-card bodies use core's `buildNodeBodyPreview(...)` formatter. It 
 
 ## Connection Mode
 
+### Connection highlighting
+
+`WireLayer` increases visible connection strokes to 1.5x their normal width while
+the existing `highlighted` state is active, including node hover and selection.
+Clearing that state restores the normal width. Specialized styles set the baseline
+through `--wire-stroke-width` so they do not override the highlight multiplier.
+Ordinary and paired tool wires use 1px, unpaired tool wires use 2px, and comparison
+styles use 3px unless overridden by the paired style. Hit areas, bend handles and
+fixed-size directional markers keep their own sizes. Route geometry is unchanged.
+
 ### Connection visibility during pan/zoom
 
 `getRenderableWireCandidates` tests cached, canvas-space route bounds, not the

@@ -84,6 +84,11 @@ const wiresStyles = css`
     stroke: gray;
   }
 
+  .wire {
+    --wire-stroke-width: 1px;
+    stroke-width: var(--wire-stroke-width);
+  }
+
   .wire.isNotRan {
     stroke: var(--grey-lightish);
     stroke-dasharray: 5;
@@ -91,22 +96,23 @@ const wiresStyles = css`
 
   .wire.highlighted {
     stroke: var(--primary);
+    stroke-width: calc(var(--wire-stroke-width) * 1.5);
     transition: stroke 0.2s ease-out;
   }
 
   .wire.compare-added {
     stroke: var(--success);
-    stroke-width: 3px;
+    --wire-stroke-width: 3px;
   }
 
   .wire.compare-changed {
     stroke: var(--warning);
-    stroke-width: 3px;
+    --wire-stroke-width: 3px;
   }
 
   .wire.compare-removed {
     stroke: var(--error);
-    stroke-width: 3px;
+    --wire-stroke-width: 3px;
     stroke-dasharray: 8 5;
     opacity: 0.75;
   }
@@ -115,7 +121,7 @@ const wiresStyles = css`
       .compare-removed
     ) {
     stroke: var(--primary);
-    stroke-width: 2px;
+    --wire-stroke-width: 2px;
   }
 
   .wire.tool-continuation-active {
@@ -130,7 +136,7 @@ const wiresStyles = css`
   }
 
   .wire.tool-continuation-paired {
-    stroke-width: 1px;
+    --wire-stroke-width: 1px;
   }
 
   .tool-continuation-endpoint-marker-path {

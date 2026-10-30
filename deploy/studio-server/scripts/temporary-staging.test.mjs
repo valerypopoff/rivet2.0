@@ -15,7 +15,16 @@ import {
   temporaryBinding,
   verifyTemporaryPlan,
   temporaryExpiry,
+  temporaryHostname,
 } from './lib/temporary-staging-contract.mjs';
+import { temporaryAcmeServer } from './qualification/temporary-acme-server.mjs';
+import {
+  issueTemporaryCertificate,
+  settleTemporaryCertificate,
+  verifyTemporaryChallenge,
+  temporaryAcmeHook,
+  transientTemporaryChallengeError,
+} from './lib/temporary-staging-certificate.mjs';
 import { TemporaryStagingStore } from './lib/temporary-staging-store.mjs';
 import {
   temporaryGcp,
@@ -30,6 +39,7 @@ import {
 } from './lib/temporary-staging-images.mjs';
 import { temporaryHash } from './lib/temporary-staging-contract.mjs';
 import { prepareTemporaryActorContext } from './build-temporary-staging-actor.mjs';
+import { actorSparsePatterns, verifyActorSource } from '../images/qualification/verify-source.mjs';
 import { verifyOfflineTemporaryActor } from './lib/temporary-staging-actor.mjs';
 import { installActorDependencies } from '../images/qualification/install-dependencies.mjs';
 import {
@@ -43,10 +53,376 @@ const registryHandler = createRequire(import.meta.url)(
   '../../../postman/mocks/anonymous-registry/contract.cjs',
 ).handler;
 const fixtureLock = async () => ({ close: async () => {} });
+const ipPlan = (changes = {}) =>
+  temporaryPlan({
+    hostnameMode: 'ip-encoded-http01',
+    domain: 'sslip.io',
+    managedZone: null,
+    certificateSha256: null,
+    privateKeySha256: null,
+    acme: {
+      image: `certbot/certbot@sha256:${'1'.repeat(64)}`,
+      termsUrl: 'https://letsencrypt.org/documents/test.pdf',
+      subscriberTermsApproved: true,
+      certificateIssuanceApproved: true,
+    },
+    ...changes,
+  });
 const wait = async (label, check) => {
   for (let i = 0; i < 4; i++) if (await check()) return;
   throw Error(`Local waiter blocked: ${label}`);
 };
+
+test('IP hostname admission is explicit and public HTTP serves only the current exact challenge', async (t) => {
+  assert.equal(transientTemporaryChallengeError(new DOMException('cold start', 'TimeoutError')), true);
+  assert.equal(
+    transientTemporaryChallengeError(
+      new TypeError('fetch failed', { cause: Object.assign(new Error(), { code: 'ECONNREFUSED' }) }),
+    ),
+    true,
+  );
+  assert.equal(transientTemporaryChallengeError(new TypeError('programming error')), false);
+  assert.equal(transientTemporaryChallengeError(new Error('unexpected redirect')), false);
+  const plan = ipPlan(),
+    hostname = temporaryHostname(plan, '203.0.113.10');
+  assert.equal(hostname, `${plan.operationId}.203-0-113-10.sslip.io`);
+  assert.equal(temporaryHostname(temporaryPlan(), '203.0.113.10'), `${plan.operationId}.staging.example.net`);
+  for (const address of ['127.0.0.1', '10.0.0.1', '172.16.0.1', '192.168.1.1', '169.254.1.1', '224.0.0.1', '::1'])
+    assert.throws(() => temporaryHostname(plan, address));
+  for (const changes of [
+    { managedZone: 'owned' },
+    { certificateSha256: '1'.repeat(64) },
+    { domain: 'litnet.com' },
+    { acme: { ...plan.acme, subscriberTermsApproved: false } },
+    { acme: { ...plan.acme, certificateIssuanceApproved: false } },
+    { acme: { ...plan.acme, image: 'certbot/certbot:latest' } },
+  ])
+    assert.throws(() => ipPlan(changes));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-challenge-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'challenge.json');
+  const packet = { token: 'a'.repeat(24), validation: 'b'.repeat(40) };
+  await fs.writeFile(file, JSON.stringify(packet));
+  const server = temporaryAcmeServer(file);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        server.closeAllConnections();
+        server.close(resolve);
+      }),
+  );
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const options = {
+    resolve: async (name) => {
+      assert.equal(name, hostname);
+      return ['203.0.113.10'];
+    },
+    fetchImpl: (url, opts) => fetch(origin + new URL(url).pathname, opts),
+  };
+  assert.equal(await verifyTemporaryChallenge({ hostname, address: '203.0.113.10', ...packet }, options), true);
+  await assert.rejects(
+    verifyTemporaryChallenge({ hostname, address: '203.0.113.11', ...packet }, options),
+    /owned address/,
+  );
+  assert.equal(
+    await verifyTemporaryChallenge({ hostname, address: '203.0.113.10', ...packet, validation: 'wrong' }, options),
+    false,
+  );
+  for (const suffix of ['', '?token=x', '/../policy.json', '%2fextra'])
+    assert.equal(
+      (await fetch(`${origin}/.well-known/acme-challenge/${suffix ? packet.token + suffix : 'missing'}`)).status,
+      404,
+    );
+  assert.equal((await fetch(origin + '/.well-known/acme-challenge/' + packet.token, { method: 'POST' })).status, 404);
+  await fs.writeFile(file, 'x'.repeat(2049));
+  assert.equal((await fetch(origin + '/.well-known/acme-challenge/' + packet.token)).status, 404);
+  assert.equal(await (await fetch(origin + '/health')).text(), 'ready');
+});
+
+test('real network-disabled certificate hook enforces hostname, exchange bytes and its original deadline', async (t) => {
+  const image =
+    process.env.RIVET_CERTIFICATE_TEST_IMAGE ||
+    'certbot/certbot@sha256:09c5c6e899adc7d0c422c73ad181a6747cfe7399b2ecd8f61095ccb5740ef202';
+  assert.match(image, /^(?:docker\.io\/)?certbot\/certbot@sha256:[a-f0-9]{64}$/);
+  try {
+    execFileSync('docker', ['image', 'inspect', image], { stdio: 'pipe', timeout: 15000 });
+  } catch (error) {
+    if (process.env.RIVET_CERTIFICATE_TEST_IMAGE) throw error;
+    execFileSync('docker', ['pull', image], { stdio: 'pipe', timeout: 120000 });
+  }
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-acme-hook-'));
+  const containers = [];
+  t.after(async () => {
+    for (const { name, nonce } of containers) {
+      const ids = execFileSync(
+        'docker',
+        ['container', 'ls', '--all', '--no-trunc', '--filter', `name=^/${name}$`, '--format', '{{.ID}}'],
+        { encoding: 'utf8', stdio: 'pipe', timeout: 15000 },
+      ).trim();
+      if (!ids) continue;
+      assert.match(ids, /^[a-f0-9]{64}$/);
+      const [value] = JSON.parse(
+        execFileSync('docker', ['inspect', ids], { encoding: 'utf8', stdio: 'pipe', timeout: 15000 }),
+      );
+      assert.equal(value.Id, ids);
+      assert.equal(value.Config.Image, image);
+      assert.equal(value.Config.Labels['rivet.dev/acme-hook-test'], nonce);
+      assert.equal(value.HostConfig.NetworkMode, 'none');
+      // Only this credential-free synthetic fixture can be force-settled.
+      execFileSync('docker', ['container', 'rm', '--force', ids], { stdio: 'pipe', timeout: 15000 });
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const hostname = temporaryHostname(ipPlan(), '203.0.113.10'),
+    packet = { token: 'a'.repeat(24), validation: 'b'.repeat(40) };
+  for (const mode of ['valid', 'wrong hostname', 'expired']) {
+    const directory = path.join(root, mode.replaceAll(' ', '-'));
+    const nonce = randomUUID(),
+      name = 'rivet-acme-hook-' + nonce;
+    containers.push({ name, nonce });
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, 'auth.py'), temporaryAcmeHook);
+    await fs.writeFile(
+      path.join(directory, 'policy.json'),
+      JSON.stringify({ hostname, deadline: Date.now() + (mode === 'expired' ? -1000 : 60000) }),
+    );
+    if (mode !== 'expired') await fs.writeFile(path.join(directory, 'verified'), temporaryHash(JSON.stringify(packet)));
+    const run = () =>
+      execFileSync(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--name',
+          name,
+          '--label',
+          'rivet.dev/acme-hook-test=' + nonce,
+          '--pull=never',
+          '--network=none',
+          '--read-only',
+          '--cap-drop',
+          'ALL',
+          '--security-opt',
+          'no-new-privileges',
+          '--mount',
+          `type=bind,source=${directory},target=/exchange`,
+          '--env',
+          `CERTBOT_IDENTIFIER=${mode === 'wrong hostname' ? 'unrelated.invalid' : hostname}`,
+          '--env',
+          'CERTBOT_REMAINING_CHALLENGES=0',
+          '--env',
+          'CERTBOT_TOKEN=' + packet.token,
+          '--env',
+          'CERTBOT_VALIDATION=' + packet.validation,
+          '--entrypoint',
+          'python3',
+          image,
+          '/exchange/auth.py',
+        ],
+        { stdio: 'pipe', timeout: 30000 },
+      );
+    if (mode === 'valid') {
+      run();
+      assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, 'challenge.json'), 'utf8')), packet);
+    } else assert.throws(run);
+  }
+});
+
+test('certificate issuance owns one exact local worker and uncertainty never repeats account/order writes', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-certificate-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const plan = ipPlan(),
+    hostname = temporaryHostname(plan, '203.0.113.10');
+  const cert = path.join(directory, 'cert.pem'),
+    key = path.join(directory, 'key.pem');
+  execFileSync(
+    process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl',
+    [
+      'req',
+      '-x509',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      key,
+      '-out',
+      cert,
+      '-days',
+      '2',
+      '-subj',
+      '/CN=' + hostname,
+      '-addext',
+      'subjectAltName=DNS:' + hostname,
+    ],
+    { stdio: 'pipe' },
+  );
+  for (const mode of [
+    'success',
+    'changed terms',
+    'lost create',
+    'lost start',
+    'lost remove',
+    'changed identity',
+    'never started',
+    'paused',
+  ])
+    await t.test(mode, async () => {
+      const store = new TemporaryStagingStore(path.join(directory, mode), { lock: fixtureLock });
+      await store.initialize(plan);
+      await store.locked(async () => {
+        await store.change((r) => {
+          r.firstBillableIntentAt = new Date().toISOString();
+          r.expiresAt = new Date(Date.now() + 86400000).toISOString();
+          r.hostname = { name: hostname, address: '203.0.113.10', addressId: '123' };
+        });
+        const calls = [];
+        let worker,
+          exchange,
+          state,
+          paused = mode === 'paused';
+        const docker = async (args) => {
+          calls.push([...args]);
+          if (args[0] === 'container') return worker ? worker.Id : '';
+          if (args[0] === 'create') {
+            const mount = (target) =>
+              args
+                .find((value) => value.startsWith('type=bind,source=') && value.endsWith('target=' + target))
+                .split(',')[1]
+                .slice(7);
+            exchange = mount('/exchange');
+            state = mount('/state');
+            worker = {
+              Id: 'a'.repeat(64),
+              Name: '/' + plan.operationId + '-certificate',
+              Image: 'sha256:' + 'b'.repeat(64),
+              Created: '2026-10-30T00:00:00Z',
+              Config: { Image: plan.acme.image, Labels: { 'rivet.temporary-certificate': plan.inputHash } },
+              State: { Running: false, Status: 'created', ExitCode: 0 },
+            };
+            assert.ok(
+              args.includes('--read-only') && args.includes('no-new-privileges') && args.includes('--pull=never'),
+            );
+            assert.equal(args.filter((v) => v.startsWith('type=bind')).length, 2);
+            if (mode === 'lost create') throw Error('lost creation acknowledgement');
+            return worker.Id;
+          }
+          if (args[0] === 'inspect') {
+            if (worker.State.Running && (await fs.stat(path.join(exchange, 'verified')).catch(() => null))) {
+              const live = path.join(state, 'config/live', hostname);
+              await fs.mkdir(live, { recursive: true });
+              await fs.copyFile(cert, path.join(live, 'fullchain.pem'));
+              await fs.copyFile(key, path.join(live, 'privkey.pem'));
+              worker.State = { Running: false, Status: 'exited', ExitCode: 0 };
+            }
+            return JSON.stringify([worker]);
+          }
+          if (args[0] === 'start') {
+            if (mode === 'never started') throw Error('start rejected');
+            worker.State = { Running: true, Status: 'running' };
+            await fs.writeFile(
+              path.join(exchange, 'challenge.json'),
+              JSON.stringify({ token: 'a'.repeat(24), validation: 'b'.repeat(40) }),
+            );
+            if (mode === 'changed identity') worker.Created = 'replacement';
+            if (mode === 'lost start' || paused) throw Error('lost start acknowledgement');
+            return worker.Id;
+          }
+          if (args[0] === 'kill') {
+            assert.deepEqual(args, ['kill', '--signal=TERM', worker.Id]);
+            if (!paused) worker.State = { Running: false, Status: 'exited', ExitCode: 143 };
+            return '';
+          }
+          if (args[0] === 'rm') {
+            assert.equal(args[1], worker.Id);
+            worker = null;
+            if (mode === 'lost remove') throw Error('lost removal acknowledgement');
+            return '';
+          }
+          throw Error('Unexpected Docker request');
+        };
+        let published = 0;
+        const issue = () =>
+          issueTemporaryCertificate(
+            store,
+            {
+              hostname,
+              wait,
+              guard: async () => {},
+              publishChallenge: async () => {
+                published++;
+              },
+            },
+            {
+              docker,
+              fetchDirectory: async () =>
+                new Response(
+                  JSON.stringify({
+                    meta: { termsOfService: mode === 'changed terms' ? 'https://changed.invalid' : plan.acme.termsUrl },
+                  }),
+                ),
+            },
+          );
+        if (mode === 'success') {
+          const issued = await issue();
+          assert.deepEqual(issued.certificate, await fs.readFile(cert));
+          assert.deepEqual(issued.key, await fs.readFile(key));
+          assert.equal(published, 1);
+        } else await assert.rejects(issue());
+        if (mode === 'changed identity') {
+          const before = calls.length;
+          await assert.rejects(settleTemporaryCertificate(store, { wait, stop: true, docker }), /replaced/);
+          assert.equal(
+            calls.slice(before).some((c) => ['kill', 'rm'].includes(c[0])),
+            false,
+          );
+          worker.Created = '2026-10-30T00:00:00Z'; // Restore only the synthetic replacement.
+        }
+        if (paused) {
+          await assert.rejects(settleTemporaryCertificate(store, { wait, stop: true, docker }), /physical shutdown/);
+          assert.equal(
+            calls.some((c) => c[0] === 'rm'),
+            false,
+          );
+          paused = false;
+          worker.State = { Running: false, Status: 'exited', ExitCode: 143 }; // Release only this synthetic paused worker.
+        }
+        await settleTemporaryCertificate(store, { wait, stop: true, docker });
+        if (mode === 'changed terms') {
+          assert.equal(calls.length, 0);
+          return;
+        }
+        assert.equal(worker, null);
+        assert.equal((await store.read()).record.certificateWorker.removed, true);
+        await assert.rejects(issue(), /Never repeat/);
+        assert.equal(calls.filter((c) => c[0] === 'create').length, 1);
+        assert.equal(calls.filter((c) => c[0] === 'start').length, mode === 'lost create' ? 0 : 1);
+        assert.equal(calls.filter((c) => c[0] === 'rm').length, 1);
+        await assert.rejects(
+          store.change((r) => {
+            r.certificateWorker.identity.id = 'replacement';
+          }),
+          /history changed/,
+        );
+      });
+    });
+});
+
+test('cleanup settles the exact local certificate worker before an unavailable provider can block it', async (t) => {
+  const f = await fixture(t);
+  let stopped = false;
+  f.runtime.settleCertificate = async () => {
+    stopped = true;
+  };
+  f.cloud.project = async () => {
+    assert.equal(stopped, true);
+    throw Error('local provider unavailable');
+  };
+  await f.store.locked(async () => {
+    await assert.rejects(cleanupTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait }), /provider unavailable/);
+    assert.equal((await f.store.read()).record.complete, false);
+  });
+});
 function offlineTestImage() {
   // This probes the Docker transport, not the complete release actor/toolchain.
   // CI may pull only this pinned public base; local runs can reuse the existing
@@ -224,6 +600,7 @@ test('actor build context contains only the exact current tree and one commit, n
   git('init');
   git('config', 'user.email', 'fixture@example.invalid');
   git('config', 'user.name', 'Fixture');
+  git('config', 'core.autocrlf', 'true'); // Actor bytes must not inherit the control host's Windows preference.
   await fs.writeFile(path.join(source, 'historical-only.txt'), 'historical content must not enter the image');
   git('add', '.');
   git('commit', '-m', 'history');
@@ -232,6 +609,11 @@ test('actor build context contains only the exact current tree and one commit, n
   await fs.mkdir(path.dirname(dockerfile), { recursive: true });
   await fs.writeFile(dockerfile, 'FROM scratch\n');
   await fs.writeFile(path.join(source, 'committed-text.txt'), 'first line\nsecond line\n');
+  const native = path.join(source, 'packages/app/src-tauri');
+  await fs.mkdir(path.join(native, 'src'), { recursive: true });
+  const nativeLock = 'native desktop dependency metadata\n';
+  await fs.writeFile(path.join(native, 'Cargo.lock'), nativeLock);
+  await fs.writeFile(path.join(native, 'src/main.rs'), 'fn main() {}\n');
   await fs.writeFile(path.join(source, '.gitignore'), '.private\n');
   git('add', '.');
   git('commit', '-m', 'current');
@@ -265,20 +647,120 @@ test('actor build context contains only the exact current tree and one commit, n
     'false',
   );
   assert.equal(await fs.readFile(path.join(checkout, 'committed-text.txt'), 'utf8'), 'first line\nsecond line\n');
+  await verifyActorSource(checkout, sha);
+  assert.equal(await fs.readFile(path.join(native, 'Cargo.lock'), 'utf8'), nativeLock);
+  await assert.rejects(fs.stat(path.join(checkout, 'packages/app/src-tauri')), { code: 'ENOENT' });
+  // Removing the unused component must not weaken attestation of required code.
+  const actorGit = (...args) => execFileSync('git', args, { cwd: checkout, encoding: 'utf8', stdio: 'pipe' });
+  await assert.rejects(verifyActorSource(checkout, 'f'.repeat(40)), /revision differs/);
+  // A user's status display preference must not hide extra code from admission.
+  actorGit('config', 'status.showUntrackedFiles', 'no');
+  const untracked = path.join(checkout, 'unexpected-source.mjs');
+  await fs.writeFile(untracked, 'unreviewed source');
+  assert.equal(actorGit('status', '--porcelain').trim(), ''); // Reproduce the hidden-file case.
+  await assert.rejects(verifyActorSource(checkout, sha), /exact clean source/);
+  await fs.unlink(untracked);
+  actorGit('config', '--unset', 'status.showUntrackedFiles');
+  await verifyActorSource(checkout, sha);
+  const monitor = path.join(temp, 'fsmonitor.cjs'),
+    monitorMarker = path.join(temp, 'fsmonitor-called');
+  await fs.writeFile(
+    monitor,
+    `require('node:fs').writeFileSync(${JSON.stringify(monitorMarker)}, 'called'); process.stdout.write('fixture-token\\0/\\0');`,
+  );
+  const monitorCommand = `"${process.execPath.replaceAll('\\', '/')}" "${monitor.replaceAll('\\', '/')}"`;
+  actorGit('config', 'core.fsmonitor', monitorCommand);
+  actorGit('config', 'core.fsmonitorHookVersion', '2');
+  actorGit('status', '--porcelain');
+  assert.equal(await fs.readFile(monitorMarker, 'utf8'), 'called'); // Prove the real hook is active.
+  await fs.unlink(monitorMarker);
+  await verifyActorSource(checkout, sha);
+  await assert.rejects(fs.lstat(monitorMarker), { code: 'ENOENT' });
+  actorGit('config', '--unset', 'core.fsmonitor');
+  actorGit('config', '--unset', 'core.fsmonitorHookVersion');
+  // Local replacement refs can make a different tree appear clean at the
+  // expected SHA. Source admission must inspect the actual commit object.
+  await fs.writeFile(path.join(checkout, 'committed-text.txt'), 'replacement source\n');
+  actorGit('add', 'committed-text.txt');
+  const replacement = actorGit(
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit-tree',
+    actorGit('write-tree').trim(),
+    '-m',
+    'Replacement fixture',
+  ).trim();
+  actorGit('replace', sha, replacement);
+  try {
+    assert.equal(actorGit('rev-parse', 'HEAD').trim(), sha);
+    assert.equal(actorGit('status', '--porcelain').trim(), ''); // Reproduce substituted clean source.
+    await assert.rejects(verifyActorSource(checkout, sha), /exact clean source/);
+    const replacedContext = path.join(temp, 'replaced-context');
+    await fs.mkdir(replacedContext);
+    await assert.rejects(prepareTemporaryActorContext(checkout, sha, replacedContext), /exact clean source/);
+    await assert.rejects(fs.lstat(path.join(replacedContext, 'source')), { code: 'ENOENT' });
+  } finally {
+    actorGit('replace', '-d', sha);
+    actorGit('restore', '--source', sha, '--staged', '--worktree', '--', 'committed-text.txt');
+  }
+  await verifyActorSource(checkout, sha);
+  for (const flag of ['assume-unchanged', 'skip-worktree']) {
+    actorGit('update-index', `--${flag}`, 'committed-text.txt');
+    if (flag === 'skip-worktree') await fs.unlink(path.join(checkout, 'committed-text.txt'));
+    else await fs.writeFile(path.join(checkout, 'committed-text.txt'), 'hidden modification');
+    await assert.rejects(verifyActorSource(checkout, sha), /index flags|hides required source/);
+    await fs.writeFile(path.join(checkout, 'committed-text.txt'), 'first line\nsecond line\n');
+    actorGit('update-index', `--no-${flag}`, 'committed-text.txt');
+    await verifyActorSource(checkout, sha);
+  }
+  actorGit('sparse-checkout', 'set', '--no-cone', ...actorSparsePatterns, '!/committed-text.txt');
+  await assert.rejects(verifyActorSource(checkout, sha), /Unknown actor source projection/);
+  actorGit('sparse-checkout', 'set', '--no-cone', ...actorSparsePatterns);
+  await fs.mkdir(path.join(checkout, 'packages/app/src-tauri'), { recursive: true });
+  await fs.writeFile(path.join(checkout, 'packages/app/src-tauri/Cargo.lock'), nativeLock);
+  await assert.rejects(verifyActorSource(checkout, sha));
+  await fs.rm(path.join(checkout, 'packages/app/src-tauri'), { recursive: true });
+  await verifyActorSource(checkout, sha);
   for (const name of ['.private', 'historical-only.txt'])
     await assert.rejects(fs.stat(path.join(checkout, name)), { code: 'ENOENT' });
+  // The builder must use the same admission contract before cloning, not a
+  // weaker second implementation that honors the control host's preferences.
+  git('config', 'status.showUntrackedFiles', 'no');
+  git('config', 'core.fsmonitor', monitorCommand);
+  git('config', 'core.fsmonitorHookVersion', '2');
+  await fs.writeFile(path.join(source, 'unexpected-source.mjs'), 'unreviewed source');
+  const rejectedContext = path.join(temp, 'rejected-context');
+  await fs.mkdir(rejectedContext);
+  await assert.rejects(prepareTemporaryActorContext(source, sha, rejectedContext), /exact clean source/);
+  await assert.rejects(fs.lstat(path.join(rejectedContext, 'source')), { code: 'ENOENT' });
+  await assert.rejects(fs.lstat(monitorMarker), { code: 'ENOENT' });
 });
 
 test('actor dependency installation preserves tracked source when switching Yarn to node-modules', async (t) => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-actor-dependencies-'));
+  const seedCache = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-actor-seed-cache-'));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  t.after(() => fs.rm(seedCache, { recursive: true, force: true }));
   await fs.mkdir(path.join(temp, '.yarn/releases'), { recursive: true });
   const yarn = path.join(temp, '.yarn/releases/yarn-4.17.1.cjs');
   await fs.copyFile(fileURLToPath(new URL('../../../.yarn/releases/yarn-4.17.1.cjs', import.meta.url)), yarn);
   await fs.writeFile(
     path.join(temp, 'package.json'),
-    JSON.stringify({ name: 'isolated-actor-fixture', private: true, packageManager: 'yarn@4.17.1' }),
+    JSON.stringify({
+      name: 'isolated-actor-fixture',
+      private: true,
+      packageManager: 'yarn@4.17.1',
+      dependencies: { 'fixture-platform': 'file:./platform' },
+    }),
   );
+  await fs.mkdir(path.join(temp, 'platform'));
+  await fs.writeFile(
+    path.join(temp, 'platform/package.json'),
+    JSON.stringify({ name: 'fixture-platform', version: '1.0.0', main: 'index.js' }),
+  );
+  await fs.writeFile(path.join(temp, 'platform/index.js'), 'module.exports = 42;\n');
   await fs.writeFile(path.join(temp, '.yarnrc.yml'), 'pnpEnableEsmLoader: true\n');
   await fs.writeFile(path.join(temp, '.gitignore'), 'node_modules/\n.yarn/install-state.gz\n');
   const env = {
@@ -288,6 +770,8 @@ test('actor dependency installation preserves tracked source when switching Yarn
     YARN_ENABLE_NETWORK: '0',
     YARN_ENABLE_TELEMETRY: '0',
     YARN_NODE_LINKER: 'pnp',
+    YARN_ENABLE_GLOBAL_CACHE: 'false',
+    YARN_GLOBAL_FOLDER: path.join(seedCache, 'global'),
   };
   const runYarn = (args, overrides = {}) =>
     execFileSync(process.execPath, [yarn, ...args], {
@@ -305,7 +789,12 @@ test('actor dependency installation preserves tracked source when switching Yarn
   );
   // Only seed the disposable fixture non-immutably, then commit its lockfile.
   // The real installer and repeated CLI call below retain CI's immutable policy.
-  runYarn(['install'], { YARN_ENABLE_IMMUTABLE_INSTALLS: 'false' });
+  try {
+    runYarn(['install'], { YARN_ENABLE_IMMUTABLE_INSTALLS: 'false', YARN_CACHE_FOLDER: seedCache });
+  } catch (error) {
+    error.message += '\n' + error.stdout + '\n' + error.stderr;
+    throw error;
+  }
   const git = (...args) =>
     execFileSync('git', ['-c', `core.hooksPath=${path.join(temp, 'no-hooks')}`, ...args], {
       cwd: temp,
@@ -343,6 +832,10 @@ test('actor dependency installation preserves tracked source when switching Yarn
     originals,
   );
   await fs.stat(path.join(temp, 'node_modules'));
+  assert.equal(
+    execFileSync(process.execPath, ['-p', "require('fixture-platform')"], { cwd: temp, encoding: 'utf8' }).trim(),
+    '42',
+  );
   // Exercise the Dockerfile's actual CLI entry, including a repeated install.
   execFileSync(
     process.execPath,
@@ -454,6 +947,23 @@ async function fixture(t, { fault, plan = temporaryPlan() } = {}) {
   });
   return { plan, store, cloud, runtime, calls, control, base, guard: async () => {} };
 }
+
+test('managed DNS admission requires a complete label boundary, not a lookalike suffix', async (t) => {
+  for (const domain of ['example.net', 'staging.example.net', 'notexample.net'])
+    await t.test(domain, async (child) => {
+      const f = await fixture(child, { plan: temporaryPlan({ domain }) });
+      await f.control('_replace', {
+        resource: `projects/${f.plan.projectId}/managedZones/${f.plan.managedZone}`,
+        value: { dnsName: 'example.net.' },
+      });
+      if (domain === 'notexample.net') await assert.rejects(f.cloud.preflight(), /outside the managed DNS zone/);
+      else assert.equal((await f.cloud.preflight()).length, 3);
+      assert.equal(
+        (await f.control('_requests')).some((r) => r.method === 'POST'),
+        false,
+      );
+    });
+});
 
 test('temporary plan freezes private ranges, exact images and a non-resettable parent allowance', () => {
   const plan = temporaryPlan();

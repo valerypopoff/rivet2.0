@@ -47,7 +47,8 @@ No local passing result substitutes for these gates or authorizes production.
 
 1. Validate exact main build/artifacts and the freshly observed installed
    predecessor. Freeze the private template, code closure, image digests,
-   certificate/key hashes, project ID/number and allowance in an operation plan.
+   certificate/key hashes (or the explicit IP-hostname/ACME policy), project
+   ID/number and allowance in an operation plan.
 2. Arm a detached watchdog on a **native, durable, self-hosted Linux control
    host outside GKE**. It has a separate process group and does not inherit
    Actions tracking/GitHub tokens or production credentials. Verify its actual
@@ -57,8 +58,10 @@ No local passing result substitutes for these gates or authorizes production.
 3. Before cloud writes, verify the complete release pair, local actor image,
    tools and headless browser fixture with Docker networking disabled. Check
    explicit staging identity, quotas, Kubernetes version, existing service
-   accounts, DNS zone and the absence of all reserved names. Capture a complete
+   accounts, DNS zone when applicable and the absence of all reserved names. Capture a complete
    baseline inventory. No quota or API-enablement request is automatic.
+   Offline actor admission compares its actual kubectl client version with the
+   pinned GKE version and rejects more than one minor of skew before provisioning.
    Node, in-cluster reader and external operator accounts must be distinct;
    assigning the operator identity to a Pod or node is rejected before access.
 4. Create one custom VPC, two disjoint subnets (nodes/secondary Pod and Service
@@ -70,7 +73,8 @@ No local passing result substitutes for these gates or authorizes production.
    inventoried and must be removed normally; they are never forcibly detached.
 5. Create fresh UID-bound control, actor and edge namespaces. Add only the two
    previously absent Workload Identity members on the existing reader account.
-   Install the exact TLS Secret, staging A record and regional Gateway. Package
+   Install the exact TLS Secret, staging A record and regional Gateway, or use
+   the approved IP-hostname HTTP-01 procedure below. Package
    the existing provider/janitor against the newly observed cluster/Gateway
    identities. Start the digest-pinned actor Pod with a staging-only Kubernetes
    service account; send the closed driver package over authenticated v5 exec
@@ -127,6 +131,10 @@ No local passing result substitutes for these gates or authorizes production.
 
 The inner janitor still cannot delete the cluster, Gateway or network. It owns
 application settlement at expiry; the external watchdog owns foundation expiry.
+The Actions coordinator allows 300 minutes for a reviewed four-hour operation and
+its setup overhead; this does not extend the operation's frozen deadline. The
+separate production-readiness job allows 45 minutes because continuity preflight
+can itself take at least 20 minutes, in addition to checkout, dependencies and pulls.
 Management tokens use IAM Credentials' returned expiry, a five-minute safety
 margin and a maximum 50-minute single-flight cache for requested one-hour
 impersonated credentials. A printed source token is never assumed newly minted.
@@ -174,8 +182,9 @@ startup inherits this original deadline and allowance; it never resets either.
 Provisioning, tests and cleanup share the allowance. Reserve enough cleanup time
 and a minimum test window; recheck both before each new test phase, not only
 once before bootstrap. Slow preparation cannot consume the cleanup reserve and
-then admit another protected window. Stop admission if insufficient time remains. USD 50
-is an approved allowance, **not a hard billing cap**. Reviewed estimates and
+then admit another protected window. Stop admission if insufficient time remains.
+A configured allowance (for example USD 50) requires approval for the current
+operation and is **not a hard billing cap**. Reviewed estimates and
 quota headroom are necessary, not a guarantee of actual spend or provisioning
 speed.
 The template's project ID/number and allowance must also match the protected
@@ -242,8 +251,9 @@ not workflow-dispatch command strings:
 - `RIVET_TEMPORARY_STAGING_TEMPLATE`: reviewed JSON described below.
 - `RIVET_TEMPORARY_STAGING_CERTIFICATE`, `RIVET_TEMPORARY_STAGING_KEY`: private
   operation-hostname certificate/chain and matching key, valid for the allowance.
-  Obtain certificate/terms approval separately; this code does not issue one or
-  use production certificates/DNS.
+  Required for the default managed-DNS mode. The opt-in HTTP-01 mode below
+  obtains a new staging-only certificate instead; neither mode uses production
+  certificates, account keys or DNS.
 - `RIVET_TEMPORARY_STAGING_ESTIMATE`: reviewed itemized estimate file; its exact
   bytes must match the template's estimate digest before cloud access.
 - Optional `RIVET_TEMPORARY_STAGING_REGISTRY`: explicitly approved, operation-
@@ -294,6 +304,92 @@ a usable configuration. The exact config must fit the candidate's tested peak
 capacity, including infrastructure Pods, temporary developer backend and
 autoscaling tests—not just the seven application Pods.
 
+### IP-encoded hostname and approved HTTP-01 issuance
+
+The existing managed-zone + preprovided-certificate path remains the default;
+its plan and receipt hash inputs are unchanged. Its zone check requires the
+same domain or a complete DNS-label boundary, not a lookalike textual suffix.
+If no delegated staging domain
+is available, the maintained alternative adds these exact template fields:
+
+```json
+{
+  "hostnameMode": "ip-encoded-http01",
+  "domain": "sslip.io",
+  "managedZone": null,
+  "certificateSha256": null,
+  "privateKeySha256": null,
+  "acme": {
+    "image": "certbot/certbot@sha256:<reviewed-64-hex-digest>",
+    "termsUrl": "https://letsencrypt.org/documents/<explicitly-approved-terms>.pdf",
+    "subscriberTermsApproved": true,
+    "certificateIssuanceApproved": true
+  }
+}
+```
+
+These placeholders are deliberately unusable. Approval must cover the exact
+operation, public staging hostname, certificate issuance and subscriber terms;
+a spending allowance alone is not certificate-terms approval. Pin/pull the
+official Certbot image on the external Linux control host. Offline admission
+verifies its manifest, local availability and network-disabled `--version` in
+addition to the actual actor preflight. No certificate is requested locally.
+
+After the reserved address's exact cloud ID is verified, the hostname becomes
+`<operation-id>.<IPv4-with-dashes>.sslip.io`; the name/address/ID are frozen in
+the external journal. No Cloud DNS zone, domain purchase or DNS API write is
+required in this mode. The dependency is the public
+[sslip.io/nip.io IP-DNS service](https://nip.io/), not an availability guarantee.
+Private/loopback/link-local/multicast addresses are rejected. DNS A answers must
+all equal the owned address. DNS availability, CA policy/rate limits and public
+port-80 reachability remain real activation prerequisites; local stand-ins do
+not qualify those services.
+
+Bootstrap first installs a challenge-only HTTP Gateway listener and UID-bound
+HTTPRoute, Service, HealthCheckPolicy, ConfigMap and digest-pinned actor-image
+Pod. The Pod has no service-account token or cloud credentials and receives
+its reviewed image-pull Secret before starting. Budget the extra `250m` CPU /
+`512Mi` request plus the external certificate client (`0.25` CPU / `256m` limit).
+Only the current exact `/.well-known/acme-challenge/<token>` and `/health` are
+served; arbitrary paths, uploads and application forwarding are not exposed.
+A successful public probe is mandatory **before** creating a certificate order.
+Only transient DNS/connect errors and the real fetch timeout may wait within
+the original bounded readiness window. Redirects, contradictory DNS ownership
+and programming errors are not hidden behind a generic `TypeError` retry.
+
+The external, restricted Certbot container mounts only private certificate and
+hook-exchange directories. No Docker socket or cloud, Kubernetes, GitHub or
+production credential files/tokens are passed into it. The approved control
+host must also prevent containers from obtaining ambient credentials through
+instance metadata or privileged proxies; absence of credential mounts alone
+does not establish that network boundary. The
+[manual validation hook](https://eff-certbot.readthedocs.io/en/stable/using.html#pre-and-post-validation-hooks)
+is hostname-bound and waits for the parent to publish and publicly verify its
+exact challenge. A changed CA terms URL blocks issuance. The runner journals
+create/start/stop/remove intents and pins the container ID, image ID and creation
+identity. The runner never starts a second certificate request after a lost
+response; the reviewed CA client still owns its own ACME protocol exchanges.
+
+After actual issuer exit 0, certificate name/lifetime and key match are checked;
+their hashes are frozen, the TLS Secret is created, and a UID/resourceVersion-
+tested JSON patch changes the Gateway to HTTPS only. Temporary HTTP challenge
+objects are then removed. The ordinary trusted-TLS/authentication/readiness
+checks must still pass before protected tests. A lost patch acknowledgement
+blocks bootstrap and permits inspection/cleanup, not redispatch.
+
+Cleanup first settles the exact certificate container, even if the cloud or
+cluster API is unavailable. A paused/unconfirmed worker blocks deletion; there
+is no forced kill, ownership stealing or wildcard cleanup. A never-started
+container can be removed after exact inspection. `status` reports its immutable
+ID and stop/removal status. Cleanup cannot certify completion with an unsettled
+certificate worker. Private certificate/account evidence remains in the external
+operation directory; never publish it with qualification artifacts.
+
+Local tests exercise the actual challenge HTTP server, guarded HTTPS API
+bootstrap and teardown, private-image pull order, changed terms/owners, lost
+create/start/remove/HTTPS acknowledgements and legacy managed-DNS behavior.
+They do not issue real certificates or establish GKE qualification.
+
 Build the maintained actor locally from an exact **clean published** candidate:
 
 ```sh
@@ -322,6 +418,18 @@ verification. Publish/scan that image through the reviewed delivery process and
 put its immutable registry digest in the template. Pull it onto the control host
 before dispatch: the admission check uses `--pull=never`. Local image creation
 and passing mocks do not themselves qualify the provider.
+Video recording remains enabled. Alpine's native FFmpeg (including VP8) is
+installed alongside Chromium. A build-only adapter obtains the executable
+location from the locked Playwright registry and exclusively links that path to
+the system FFmpeg; it does not guess a revision, download a glibc binary or patch
+Playwright. An upstream registry contract change fails the build. Actual offline
+preflight requires a successful browser journey **and a nonempty video artifact**,
+so a missing media dependency cannot be concealed by disabling video.
+Failed offline preflight also saves a unique `actor-preflight-<uuid>.private.json`
+in the external operation directory. It bounds stderr to 64 KiB, retains the
+actual exit/timeout state and keeps readable browser failure details out of
+public Actions output. Diagnostic-write failure preserves the original failure;
+it never admits an image or causes command replay. Keep these logs private.
 Without a private pull config, preflight checks anonymous GHCR, Docker Hub and
 Quay manifests. With an explicitly approved private config it validates the
 exact manifests using that isolated Docker configuration, then creates separate
@@ -346,6 +454,19 @@ loaders with their original permission bits, refuses unexpected replacement
 types/contents/permissions, and requires the entire
 checkout to remain clean afterward. Authored source, lockfiles and unrelated
 edits are never reset or ignored. Runtime commands still use `node-modules`.
+The image copies the checkout with its final UID/GID and installs/builds as
+that same non-root user. It does not recursively rewrite ownership of the large
+source, Git objects and dependency tree in a final copy-on-write layer. Offline
+preflight still runs as UID 10001 and must prove source identity, tool access
+and the actual browser fixture.
+The committed cache may lack Alpine/musl optional packages. Installation seeds
+a unique cache **outside** the checkout with the committed archives, fetches
+missing immutable-lockfile dependencies there, then removes that cache. It
+does not add platform archives to tracked `.yarn/cache` or broaden Git ignores.
+The real Yarn regression starts without its local file dependency's archive,
+checks the installed module actually loads, repeats the install and retains
+the full clean-source/loader checks. A clean full Linux image build plus offline
+actor/browser preflight is still required; a mocked installer is not that proof.
 Linux Git tracks the executable bit; byte-identical restoration with a fixed
 `0644` mode is not necessarily source-identical. Restoration uses an exclusive
 file handle and reapplies the captured mode independent of the current umask.
@@ -431,3 +552,75 @@ The full qualification actor Docker image was not built from this dirty
 implementation checkout. Its clean-candidate build/scan and actual GKE
 qualification remain activation gates, not implied by these local results.
 No cloud resources, production changes, publication or paid test occurred.
+
+### Local packaging follow-up — 2026-10-30
+
+Security remediation now reuses the API/executor's maintained esbuild, npm and
+cache-policy fixes. The final-image runtime probe is mandatory, in addition to
+the actual offline browser/video preflight and complete image scan. See
+[the actor security boundary](container-security.md#temporary-qualification-actor-boundary).
+
+The actor context is an exact-revision Git sparse checkout excluding only the
+native desktop backend (`packages/app/src-tauri`), which server qualification
+does not build or execute. This leaves the desktop source and audits unchanged
+in the real repository. It retains all browser-editor sources and the complete
+commit identity. Source admission rejects any other hidden/missing source or
+changed projection; ordinary full clean checkouts remain compatible. Do not
+manually edit sparse rules or index flags to make admission pass.
+The context builder, installer and runtime share the same source verifier.
+It rejects non-ignored untracked files even when Git's user configuration hides
+them, and it never invokes a configured filesystem-monitor hook. The source
+repository is checked before a clone is created; the projected clone is checked
+again afterward. Ignored dependency/build artifacts remain permitted.
+Both verification and cloning disable Git replacement objects. Local replacement
+refs cannot substitute different source behind an otherwise unchanged commit
+SHA; this does not remove or modify the control host's refs.
+
+A disposable clean Git snapshot was used to build the complete actor as UID 10001. Its immutable image passed the actual network-disabled browser preflight,
+including nonempty video output. The updated staging client matrix passed 41
+tests without skips; the current-code Linux actor/bootstrap matrix passed 20.
+These are local functional results, not provider qualification.
+
+The initial full-image container-security gate **failed** with 247 High or
+Critical findings. They include the installed Helm and kubectl executables,
+esbuild binaries (including the Linux executable), npm's bundled dependencies,
+and tracked desktop Cargo dependency metadata. Counts include repeated findings
+in foreign-platform binaries; they are not 247 distinct runtime exploits. The
+scan was a release blocker: a successful browser or bootstrap check could not
+substitute for it. The follow-up below supersedes that image's security result,
+not the requirement for scanning. Do not suppress findings or remove arbitrary
+tracked source merely to obtain a passing report.
+
+The local evidence directory records the image/snapshot identities, sanitized
+scan reports and failed attempts. No production or staging project was accessed;
+only local stand-ins and public package/image/vulnerability downloads were used.
+No public certificate request, paid staging, deployment or publication occurred.
+
+### Security-remediated actor — 2026-10-30
+
+The final local actor `sha256:9dedcb136e4dd71cda5a519162a563474008c59cac331f6f50441c1895783b25`,
+from disposable snapshot `a2c8c523aa2678053548c5ac0415183239f47563`, passed the
+unchanged full-image gate: **0 High/Critical, 77 total** findings (56 Medium,
+11 Low, 10 Unknown). The database was updated at `2026-10-30T01:01:11Z`; the
+assessment is dated `2026-10-30T10:37:38Z`. All lower-severity evidence remains
+visible; this is not a zero-vulnerability claim or a desktop dependency fix.
+
+The actual toolchain probe passed trusted TLS/HTTP2 and uncertain-write/stale
+identity checks. Core/Node, Evaluations, Shared and hosted Web builds passed,
+along with the final-image transform/plugin/converter/offline-install probe.
+The scanned image also passed its actual offline browser/video preflight and
+a headless save/editing/Evaluations journey against its real built frontend,
+with controlled API responses. That additional UI check did not contact or
+restart the user's running installation.
+
+On that same immutable image, all 78 Linux transport/chart tests, two
+source/installer tests and 27 real kernel-lock/process tests passed without
+skips. No host source was overlaid for acceptance. The archive SHA-256 is
+`a616b1f903bf9d989e93927bb668b0776ec118cb6c45948572d233cc7954badf`.
+
+Sanitized reports and private test evidence are retained locally under
+`artifacts/staging-security-20261030/acceptance/`; the adjacent verification
+record distinguishes failed/intermediate attempts from accepted results.
+These are local results, not a published candidate or GKE qualification. Normal
+review/CI, exact published-source builds and separately approved provider
+qualification remain necessary before production use.

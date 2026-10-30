@@ -1,0 +1,16 @@
+# Installation-owned policy; preserve the current target, timeout and identity.
+# Replace the placeholders in a private reviewed operator file before use.
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: REPLACE_WITH_EXISTING_POLICY_NAME
+  namespace: REPLACE_WITH_NAMESPACE
+spec:
+  default:
+    timeoutSec: 3600
+    connectionDraining:
+      drainingTimeoutSec: 600
+  targetRef:
+    group: ''
+    kind: Service
+    name: REPLACE_WITH_PROXY_SERVICE

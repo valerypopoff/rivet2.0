@@ -38,21 +38,20 @@ const args = () => ({
   signal: new AbortController().signal,
 });
 
-void test('Baseten inline/Profile modes preserve both exact model slugs, multimodal order and unknown cost without exposing credentials', async () => {
+void test('Baseten inline/Profile modes preserve all exact model slugs, multimodal order and unknown cost without exposing credentials', async () => {
   const assembled = await new AssembleMessageNodeImpl(AssembleMessageNodeImpl.create()).process({
     part1: { type: 'string', value: 'Before' },
     part2: { type: 'image', value: { mediaType: 'image/png', data: png } },
     part3: { type: 'string', value: 'After' },
   });
-  let calls = 0;
+  const requestedModels: string[] = [];
   globalThis.fetch = async (url, init) => {
-    calls++;
     assert.equal(url, 'https://inference.baseten.co/v1/systemone');
     assert.equal(init?.method, 'POST');
     assert.equal(init?.redirect, 'error');
     assert.deepEqual(init?.headers, { Authorization: 'Bearer fixture-key', 'Content-Type': 'application/json' });
     const body = JSON.parse(String(init?.body));
-    assert.ok(BASETEN_DECISION_MODELS.includes(body.model));
+    requestedModels.push(body.model);
     assert.deepEqual(body.state, {
       messages: [
         {
@@ -97,7 +96,10 @@ void test('Baseten inline/Profile modes preserve both exact model slugs, multimo
       assert.equal((result.usage!.value as Record<string, unknown>).totalCost, undefined);
       assert.doesNotMatch(JSON.stringify(result), /fixture-key/);
     }
-  assert.equal(calls, 4);
+  assert.deepEqual(
+    requestedModels,
+    BASETEN_DECISION_MODELS.flatMap((model) => [model, model]),
+  );
   assert.equal(provider.browserExecutionSupported, false);
   assert.equal(
     calculateClassifierUsageCost(provider, response.usage, {

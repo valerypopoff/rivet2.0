@@ -6,8 +6,13 @@ LLM Chat/Decision AI run in Inline mode and their separate Profile nodes optiona
 USD per million tokens. Physical-call accounting applies the active inline/profile configuration's
 rates to provider-reported usage before the run-owned ledger receives the amount.
 Manual rates override built-in/provider monetary estimates; absent overrides
-preserve existing behavior. Cache rates require reported cache breakdowns (the
-current Decision AI contracts have none). Missing usage is not free usage.
+preserve existing behavior. Cache rates require reported cache breakdowns;
+OpenAI Decisions uses native cached-read/write counts as subsets of total input.
+The physical-attempt estimate applies those rates before ledger aggregation,
+including paid responses with invalid answers before fallback. Invalid or partial cache
+breakdowns retain aggregate token evidence but leave cost unknown; a reported
+breakdown must include both read and write counts, even when zero. Missing usage is
+not free usage. Other Decision AI providers retain aggregate pricing.
 Statistics/storage aggregate the resulting snapshots unchanged, including bundle
 children and failed attempts. Editing a profile cannot reprice old recordings.
 These are still estimates, not invoices. No additional migration is needed for

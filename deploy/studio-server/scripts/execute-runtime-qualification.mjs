@@ -23,6 +23,7 @@ import {
 import { runManagedGateCommand as run } from './kubernetes-managed-release-gate.mjs';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { assertReleaseManifestMatchesCurrentChart } from './lib/studio-server-release-manifest.mjs';
+import { continuityTimeoutMs } from './lib/request-continuity.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const packet = path.resolve(
@@ -152,6 +153,9 @@ async function main(mode) {
       [
         path.join(root, 'deploy/studio-server/scripts/deploy-kubernetes-release.mjs'),
         '--preflight-only',
+        ...(qualified.evidence.runtimeControl?.requestContinuity
+          ? ['--timeout', `${continuityTimeoutMs(qualified.evidence.runtimeControl.requestContinuity.profile) / 1000}s`]
+          : []),
         '--manifest',
         adoptionStage ? path.join(packet, 'predecessor.json') : file,
         ...adoptionArgs,
@@ -202,6 +206,9 @@ async function main(mode) {
         previous,
         installed,
         policy: installed.policy,
+        ...(process.env.RIVET_QUALIFICATION_CONTINUITY_PROFILE
+          ? { requestContinuityProfile: await read(process.env.RIVET_QUALIFICATION_CONTINUITY_PROFILE) }
+          : {}),
         ...(process.env.RIVET_QUALIFICATION_OVERLAP_PROFILE
           ? { developerOverlapProfile: await read(process.env.RIVET_QUALIFICATION_OVERLAP_PROFILE) }
           : {}),
@@ -219,8 +226,7 @@ async function main(mode) {
   assert.ok(process.env.RIVET_QUALIFICATION_STAGING_KUBECONFIG, 'An isolated staging credential context is required');
   await verifyQualificationDriver(bundle, bundleDigest); // Before provisioning or creating an operation.
   const driverManifest = await read(path.join(bundle, 'driver.json'));
-  const settings =
-    driverManifest.suite === 'compact-seven-overlap-v1' ? await read(path.join(bundle, 'settings.json')) : {};
+  const settings = driverManifest.files['settings.json'] ? await read(path.join(bundle, 'settings.json')) : {};
   const operation = qualificationOperation({
     candidate,
     previous,
@@ -229,6 +235,7 @@ async function main(mode) {
     operationId: `rivet-q-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`,
     approval: {
       developerOverlapProfile: settings.developerOverlapProfile,
+      requestContinuityProfile: settings.requestContinuityProfile,
       enabled: process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED === 'true',
       projectId: process.env.RIVET_QUALIFICATION_PROJECT_ID,
       projectNumber: process.env.RIVET_QUALIFICATION_PROJECT_NUMBER,

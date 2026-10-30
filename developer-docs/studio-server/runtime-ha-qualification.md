@@ -4,6 +4,13 @@ The compact singleton layout and drain-aware autoscaler need separate exact-imag
 provider evidence in addition to ordinary replicated-HA qualification. Local
 functional tests are not a GKE certificate.
 
+The optional [bounded request-continuity profile](production-update-continuity.md)
+requires version-2 request evidence alongside those runtime and autoscaling
+certificates. Its native proxy rollout, return handoff, duration matrix and
+pre-removal admission observations are executable gates; missing or non-overlapping
+observations reject publication. Exact-image qualification and a later protected
+mixed-image update remain distinct live acceptance steps.
+
 For a schema-changing pair, HA release creation and rolling admission additionally
 require the [rolling database contract](deployment-operations.md#rolling-database-compatibility-contract).
 Startup/schema verification alone cannot produce that receipt. The image gate

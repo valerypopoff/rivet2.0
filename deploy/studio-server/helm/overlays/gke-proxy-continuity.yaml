@@ -1,0 +1,11 @@
+# Opt-in; requires exact-image regional GKE qualification and installation IDs.
+# Existing short-lifecycle proxies require the journaled first-transition bridge.
+requestContinuity:
+  enabled: true
+  maxProtectedRequestSeconds: 300
+  backendServiceDrainSeconds: 600
+  propagationSeconds: 60
+lifecycle:
+  proxy:
+    preStopDelaySeconds: 660
+    terminationGracePeriodSeconds: 900

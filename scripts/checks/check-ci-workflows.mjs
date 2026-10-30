@@ -73,6 +73,8 @@ assert.equal(
   '${{ vars.RIVET_QUALIFICATION_ENVIRONMENT_MODE == \'temporary\' && fromJSON(\'["self-hosted","linux","x64","rivet-qualification-control"]\') || fromJSON(\'["self-hosted","linux","x64","rivet-qualification"]\') }}',
 );
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
+assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 300);
+assert.equal(automaticQualification.jobs.preflight['timeout-minutes'], 45);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');
 assert.equal(
@@ -786,6 +788,48 @@ for (const service of ['api', 'executor', 'web']) {
   }
 }
 assert.match(read('deploy/studio-server/images/api/Dockerfile'), /pnpm@10\.34\.8/);
+const actorDockerfile = read('deploy/studio-server/images/qualification/Dockerfile');
+assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
+assert.ok(actorDockerfile.includes(`FROM ${runtimeNodeImage}`));
+assert.match(actorDockerfile, /COPY source\/deploy\/studio-server\/images\/lib\/rebuild-esbuild\.sh/);
+assert.match(actorDockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH"/);
+assert.match(actorDockerfile, /COPY --from=esbuild-security --chown=10001:10001 \/out\/@esbuild/);
+assert.match(
+  actorDockerfile,
+  /COPY --from=esbuild-security --chown=10001:10001 \/out\/esbuild \/app\/node_modules\/esbuild\/bin\/esbuild/,
+);
+assert.match(actorDockerfile, /npm install -g npm@11\.21\.1/);
+assert.match(actorDockerfile, /--prefix \/tmp\/rivet-npm-security[^\n]+undici@6\.29\.1/);
+assert.match(actorDockerfile, /node \/opt\/rivet\/harden-package-manager-caches\.mjs npm/);
+assert.match(actorDockerfile, /node \/tmp\/verify-runtime-dependencies\.mjs npm/);
+assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS helm-security`));
+assert.match(actorDockerfile, /sh \/rebuild-helm\.sh "\$TARGETARCH"/);
+assert.match(actorDockerfile, /COPY --from=helm-security \/out\/helm \/usr\/local\/bin\/helm/);
+assert.match(read('deploy/studio-server/images/qualification/rebuild-helm.sh'), /version=3\.22\.1/);
+assert.match(read('deploy/studio-server/images/qualification/rebuild-helm.sh'), /go install[^\n]+-mod=readonly/);
+assert.match(
+  read('deploy/studio-server/images/qualification/rebuild-helm.sh'),
+  /helm\.sh\/helm\/v3\/cmd\/helm@v\$\{version\}/,
+);
+assert.ok(
+  actorDockerfile.indexOf('ARG SOURCE_SHA') > actorDockerfile.indexOf('USER 10001:10001'),
+  'Source revisions must not invalidate independent tool-install layers',
+);
+assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS kubectl-security`));
+assert.match(actorDockerfile, /sh \/rebuild-kubectl\.sh "\$TARGETARCH"/);
+assert.match(actorDockerfile, /COPY --from=kubectl-security \/out\/kubectl \/usr\/local\/bin\/kubectl/);
+const kubectlPolicy = read('deploy/studio-server/images/qualification/kubectl/go.mod');
+assert.match(kubectlPolicy, /tool k8s\.io\/kubernetes\/cmd\/kubectl/);
+assert.match(kubectlPolicy, /k8s\.io\/kubernetes v1\.36\.6/);
+assert.match(kubectlPolicy, /golang\.org\/x\/net v0\.60\.0/);
+assert.match(kubectlPolicy, /golang\.org\/x\/text v0\.42\.0/);
+assert.doesNotMatch(read('deploy/studio-server/images/qualification/rebuild-kubectl.sh'), /go (?:get|mod tidy)/);
+assert.match(actorDockerfile, /AS qualification-toolchain/);
+assert.match(actorDockerfile, /node \/opt\/rivet\/verify-toolchain\.mjs/);
+assert.ok(
+  actorDockerfile.indexOf('node /opt/rivet/verify-toolchain.mjs') <
+    actorDockerfile.indexOf('COPY --chown=10001:10001 source /app'),
+);
 const esbuildVersion = JSON.parse(read('package.json')).resolutions.esbuild;
 assert.ok(
   read('deploy/studio-server/images/lib/rebuild-esbuild.sh')

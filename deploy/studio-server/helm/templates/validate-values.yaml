@@ -706,6 +706,45 @@
 {{- if lt (int .Values.lifecycle.terminationGracePeriodSeconds) (add (int .Values.lifecycle.shutdownGraceSeconds) (int .Values.lifecycle.preStopDelaySeconds) 25) -}}
 {{- fail "lifecycle.terminationGracePeriodSeconds must allow shutdownGraceSeconds, preStopDelaySeconds, and a 25-second finalization margin" -}}
 {{- end -}}
+{{- if not (kindIs "map" .Values.lifecycle.proxy) -}}
+{{- fail "lifecycle.proxy must be an object" -}}
+{{- end -}}
+{{- $proxyLifecycle := include "rivet.proxyLifecycle" . | fromJson -}}
+{{- range $key, $value := $proxyLifecycle -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" (printf "lifecycle.proxy.%s" $key) "value" $value) -}}
+{{- end -}}
+{{- if lt (int $proxyLifecycle.terminationGracePeriodSeconds) (add (int $proxyLifecycle.preStopDelaySeconds) (int .Values.lifecycle.shutdownGraceSeconds) 25) -}}
+{{- fail "Effective proxy termination grace must cover proxy preStop, shutdown grace, and finalization" -}}
+{{- end -}}
+{{- if not (kindIs "bool" .Values.requestContinuity.enabled) -}}
+{{- fail "requestContinuity.enabled must be a boolean" -}}
+{{- end -}}
+{{- if .Values.requestContinuity.enabled -}}
+{{- if .Values.metrics.proxyExporter.enabled -}}
+{{- fail "Request continuity currently qualifies the single-container proxy; proxyExporter needs separate lifecycle qualification" -}}
+{{- end -}}
+{{- if not .Values.autoscaling.proxy.enabled -}}
+{{- fail "Request continuity requires the qualified proxy HPA policy" -}}
+{{- end -}}
+{{- if not (and .Values.ha.enabled .Values.availability.gkeGateway (eq .Values.availability.gkeGatewayProfile "compact")) -}}
+{{- fail "Request continuity requires the qualified compact GKE HA profile" -}}
+{{- end -}}
+{{- range $key := list "maxProtectedRequestSeconds" "backendServiceDrainSeconds" "propagationSeconds" -}}
+{{- include "rivet.assertNonNegativeWholeNumber" (dict "path" (printf "requestContinuity.%s" $key) "value" (index $.Values.requestContinuity $key)) -}}
+{{- end -}}
+{{- if or (ne (int .Values.requestContinuity.maxProtectedRequestSeconds) 300) (lt (int .Values.requestContinuity.backendServiceDrainSeconds) 600) (gt (int .Values.requestContinuity.backendServiceDrainSeconds) 3600) (lt (int .Values.requestContinuity.propagationSeconds) 60) -}}
+{{- fail "Request continuity requires 300-second protection, 600–3600-second LB drain and at least 60-second propagation" -}}
+{{- end -}}
+{{- if lt (int $proxyLifecycle.preStopDelaySeconds) (add (int .Values.requestContinuity.backendServiceDrainSeconds) (int .Values.requestContinuity.propagationSeconds)) -}}
+{{- fail "Proxy preStop must cover LB draining plus propagation" -}}
+{{- end -}}
+{{- range $key := list "routeName" "backendPolicyName" "gatewayName" "gcpProject" "gcpRegion" -}}
+{{- $value := index $.Values.requestContinuity $key -}}
+{{- if or (not (kindIs "string" $value)) (not (regexMatch "^[a-z][a-z0-9-]{0,62}$" (toString $value))) -}}
+{{- fail (printf "requestContinuity.%s requires an explicit installation identity" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- range $name, $probe := .Values.lifecycle.probes -}}
 {{- range $field := list
   (dict "path" (printf "lifecycle.probes.%s.periodSeconds" $name) "value" $probe.periodSeconds)

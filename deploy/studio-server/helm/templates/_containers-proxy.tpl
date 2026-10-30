@@ -35,7 +35,7 @@
     periodSeconds: 5
     timeoutSeconds: 2
     failureThreshold: 2
-  {{- include "rivet.pod.preStop" . | nindent 2 }}
+  {{- include "rivet.pod.proxyPreStop" . | nindent 2 }}
   env:
     - name: RIVET_VAULT_DOTENV_FILE_NAME
       value: {{ .Values.vault.dotenvFileName | quote }}

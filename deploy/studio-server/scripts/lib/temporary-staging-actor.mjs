@@ -1,6 +1,24 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
 import { temporaryHash } from './temporary-staging-contract.mjs';
+import { deploymentFailureDetails } from './deployment-diagnostics.mjs';
+
+/** kubectl supports control planes within one minor of its own version. */
+export function assertKubectlVersionSkew(clientVersion, serverVersion) {
+  const parse = (version) => {
+    assert.equal(typeof version, 'string', 'Kubernetes version must be a string');
+    const match = /^v?(\d+)\.(\d+)\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.exec(version);
+    assert.ok(match, `Invalid Kubernetes version: ${version}`);
+    return match.slice(1).map(Number);
+  };
+  const [clientMajor, clientMinor] = parse(clientVersion);
+  const [serverMajor, serverMinor] = parse(serverVersion);
+  assert.ok(
+    clientMajor === serverMajor && Math.abs(clientMinor - serverMinor) <= 1,
+    `kubectl ${clientVersion} is outside the supported version range for Kubernetes ${serverVersion}`,
+  );
+}
 
 /** Bound terminal diagnostics, not cleanup authority. A successful exec with
  * truncated/corrupt contents cannot qualify a release. */
@@ -33,7 +51,7 @@ export function verifyTemporaryActorExport(value) {
 
 /** Offline admission only: no cloud credentials, network, host mounts or Docker
  * socket enter the actor. Wait for actual process closure, not just JSON output. */
-export function verifyOfflineTemporaryActor(plan, { spawnImpl = spawn, timeoutMs = 240000 } = {}) {
+export function verifyOfflineTemporaryActor(plan, { spawnImpl = spawn, timeoutMs = 240000, diagnosticFile } = {}) {
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
   return new Promise((resolve, reject) => {
     const child = spawnImpl(
@@ -62,6 +80,35 @@ export function verifyOfflineTemporaryActor(plan, { spawnImpl = spawn, timeoutMs
       { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
     );
     const chunks = [];
+    const diagnostics = [];
+    let diagnosticBytes = 0;
+    const fail = async (message, cause, code) => {
+      let detail = message;
+      if (diagnosticFile) {
+        try {
+          await fs.writeFile(
+            diagnosticFile,
+            JSON.stringify({
+              formatVersion: 1,
+              exitCode: code,
+              timedOut,
+              overflow,
+              failure: deploymentFailureDetails(cause),
+              stderr: Buffer.concat(diagnostics).toString(),
+              stderrTruncated: diagnosticBytes > 65536,
+            }),
+            { flag: 'wx', mode: 0o600 },
+          );
+          detail += `; private diagnostics: ${diagnosticFile}`;
+        } catch (error) {
+          cause = new AggregateError(
+            [cause, error].filter(Boolean),
+            'Preflight failed and private diagnostics could not be retained',
+          );
+        }
+      }
+      reject(new Error(detail, { cause }));
+    };
     let bytes = 0,
       overflow = false,
       timedOut = false,
@@ -78,7 +125,11 @@ export function verifyOfflineTemporaryActor(plan, { spawnImpl = spawn, timeoutMs
         overflow = true;
       } else chunks.push(chunk);
     });
-    child.stderr.resume(); // Private command output is never copied to Actions.
+    child.stderr.on('data', (chunk) => {
+      const remaining = Math.max(0, 65536 - diagnosticBytes);
+      if (remaining) diagnostics.push(chunk.subarray(0, remaining));
+      diagnosticBytes += chunk.length;
+    }); // Private command output is never copied to Actions.
     child.stdin.on('error', (error) => {
       failure ??= error;
     });
@@ -88,8 +139,10 @@ export function verifyOfflineTemporaryActor(plan, { spawnImpl = spawn, timeoutMs
     child.on('close', (code) => {
       clearTimeout(timer);
       if (failure || timedOut || overflow || code !== 0)
-        return reject(
-          new Error('Offline actor preflight did not acknowledge success after process closure', { cause: failure }),
+        return void fail(
+          'Offline actor preflight did not acknowledge success after process closure',
+          failure ?? new Error(`Actor exited with code ${code}`),
+          code,
         );
       try {
         const result = JSON.parse(Buffer.concat(chunks));
@@ -97,9 +150,15 @@ export function verifyOfflineTemporaryActor(plan, { spawnImpl = spawn, timeoutMs
         assert.equal(result.sourceSha, plan.sourceSha, 'Offline actor acknowledged another source');
         resolve(result);
       } catch (error) {
-        reject(new Error('Offline actor returned an invalid receipt', { cause: error }));
+        void fail('Offline actor returned an invalid receipt', error, code);
       }
     });
-    child.stdin.end(JSON.stringify({ sourceRoot: plan.actorSourceRoot, sourceSha: plan.sourceSha }));
+    child.stdin.end(
+      JSON.stringify({
+        sourceRoot: plan.actorSourceRoot,
+        sourceSha: plan.sourceSha,
+        kubernetesVersion: plan.kubernetesVersion,
+      }),
+    );
   });
 }

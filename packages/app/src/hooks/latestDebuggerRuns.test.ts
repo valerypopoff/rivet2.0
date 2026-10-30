@@ -258,6 +258,38 @@ test('duplicate legacy v2 hello cannot promote initial history or notify logical
   adapter.reset();
 });
 
+test('retention diagnostics quietly mark managed history incomplete while other warnings stay visible', () => {
+  const warnings: string[] = [];
+  const adapter = new ManagedLatestSession({
+    eligible: () => true,
+    notify() {},
+    deliver() {},
+    warn(message) {
+      warnings.push(message);
+    },
+    canSend: () => true,
+    send: () => true,
+  });
+  adapter.ready = true;
+  adapter.observation = true;
+  adapter.runs = new LatestDebuggerRuns(() => true);
+  const start = frame('root');
+  const run = adapter.runs.receive(start, JSON.stringify(start))!;
+  const diagnostic = { message: 'latest-diagnostic', data: { protocol: 1, code: 'history-truncated' } };
+  assert.equal(
+    adapter.acceptEnvelope(diagnostic, diagnostic, { external: true, named: true, fail() {}, onReady() {} }),
+    false,
+  );
+  assert.equal(run.incomplete, true);
+  assert.equal(run.status, 'running');
+  assert.deepEqual(warnings, []);
+  const gap = { message: 'latest-diagnostic', data: { protocol: 1, code: 'history-gap' } };
+  adapter.acceptEnvelope(gap, gap, { external: true, named: true, fail() {}, onReady() {} });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /history has a gap/);
+  adapter.reset();
+});
+
 test('session retirement fences replay and diagnostics without suppressing replacement notices', () => {
   for (const action of ['replay', 'history-gap', 'owner-unavailable']) {
     let deliveries = 0,

@@ -22,6 +22,7 @@ export function temporaryCleanupReceipt(record, verifiedAt) {
       edgeChildren: record.edgeChildren ?? [],
       dns: record.dns ?? null,
       iam: record.iam ?? [],
+      ...(record.certificateWorker ? { certificateWorker: record.certificateWorker } : {}),
     }),
   });
 }
@@ -32,6 +33,7 @@ export function completedTemporaryCleanup(record) {
   assert.ok(record.closed && record.complete && record.cleanupVerified, 'Verified cleanup is required');
   assert.ok(['cleaned', 'cleaned-unactivated'].includes(record.phase), 'Cleanup is not terminal');
   assert.ok(record.cleanupReceipt, 'Missing bound cleanup receipt; inspect without inventing an acknowledgement');
+  assert.ok(!record.certificateWorker || record.certificateWorker.removed, 'Certificate worker cleanup is unverified');
   assert.deepEqual(
     record.cleanupReceipt,
     temporaryCleanupReceipt(record, record.finishedAt),
@@ -91,6 +93,7 @@ export function temporaryStagingPlan(input) {
     'kubernetesVersion',
     'estimate',
     ...(input.registrySecretSha256 ? ['registrySecretSha256'] : []),
+    ...(input.hostnameMode === undefined ? [] : ['hostnameMode', 'acme']),
   ]);
   assert.equal(input.protocol, 1);
   assert.match(input.operationId, /^rivet-q-[1-9][0-9]*-[1-9][0-9]*$/);
@@ -120,7 +123,18 @@ export function temporaryStagingPlan(input) {
   assert.match(input.estimate.evidenceSha256, /^[a-f0-9]{64}$/);
   assert.match(input.domain, /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/);
   assert.ok(!input.domain.includes('litnet.com'));
-  assert.match(input.managedZone, /^[a-z][a-z0-9-]+$/);
+  if (input.hostnameMode !== undefined) {
+    assert.equal(input.hostnameMode, 'ip-encoded-http01');
+    assert.equal(input.domain, 'sslip.io');
+    assert.equal(input.managedZone, null);
+    assert.equal(input.certificateSha256, null);
+    assert.equal(input.privateKeySha256, null);
+    exact(input.acme, ['image', 'termsUrl', 'subscriberTermsApproved', 'certificateIssuanceApproved']);
+    assert.match(input.acme.image, /^(?:docker\.io\/)?certbot\/certbot@sha256:[a-f0-9]{64}$/);
+    assert.equal(input.acme.subscriberTermsApproved, true);
+    assert.equal(input.acme.certificateIssuanceApproved, true);
+    assert.match(input.acme.termsUrl, /^https:\/\/letsencrypt\.org\/documents\/[a-zA-Z0-9._-]+\.pdf$/);
+  } else assert.match(input.managedZone, /^[a-z][a-z0-9-]+$/);
   assert.match(input.actorSourceRoot, /^\/[a-zA-Z0-9_/-]+$/);
   assert.ok(!input.actorSourceRoot.includes('..'));
   assert.equal(input.actorSourceRoot, '/app', 'The maintained actor/janitor image uses /app');
@@ -152,7 +166,8 @@ export function temporaryStagingPlan(input) {
   );
   assert.ok(Number.isFinite(Date.parse(input.allowance.approvalExpiresAt)));
   assert.match(input.allowance.approvalExpiresAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/);
-  for (const key of ['certificateSha256', 'privateKeySha256']) assert.match(input[key], /^[a-f0-9]{64}$/);
+  if (!input.hostnameMode)
+    for (const key of ['certificateSha256', 'privateKeySha256']) assert.match(input[key], /^[a-f0-9]{64}$/);
   if (input.registrySecretSha256) assert.match(input.registrySecretSha256, /^[a-f0-9]{64}$/);
   assert.ok(input.codeHashes && Object.keys(input.codeHashes).length);
   for (const [file, hash] of Object.entries(input.codeHashes)) {
@@ -171,10 +186,20 @@ export function verifyTemporaryPlan(plan) {
 export function verifyTemporaryCertificate(plan, certificate, key, now = Date.now()) {
   assert.equal(temporaryHash(certificate), plan.certificateSha256);
   assert.equal(temporaryHash(key), plan.privateKeySha256);
-  const cert = new X509Certificate(certificate),
-    hostname = `${plan.operationId}.${plan.domain}`;
+  assertTemporaryCertificate(`${plan.operationId}.${plan.domain}`, plan.allowance.maxSeconds, certificate, key, now);
+}
+export function temporaryHostname(plan, address) {
+  if (!plan.hostnameMode) return `${plan.operationId}.${plan.domain}`;
+  assert.equal(plan.hostnameMode, 'ip-encoded-http01');
+  assert.equal(isIP(address), 4);
+  assert.ok(!/^(?:0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/.test(address));
+  assert.ok(Number(address.split('.')[0]) < 224);
+  return `${plan.operationId}.${address.replaceAll('.', '-')}.sslip.io`;
+}
+export function assertTemporaryCertificate(hostname, maxSeconds, certificate, key, now = Date.now()) {
+  const cert = new X509Certificate(certificate);
   assert.ok(cert.checkHost(hostname));
-  assert.ok(Date.parse(cert.validFrom) <= now && Date.parse(cert.validTo) > now + plan.allowance.maxSeconds * 1000);
+  assert.ok(Date.parse(cert.validFrom) <= now && Date.parse(cert.validTo) > now + maxSeconds * 1000);
   assert.equal(
     createPublicKey(createPrivateKey(key))
       .export({ type: 'spki', format: 'der' })

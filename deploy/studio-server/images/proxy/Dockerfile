@@ -36,4 +36,7 @@ ENV RIVET_PROXY_INTERNAL_LISTEN=8080
 EXPOSE 8080 8443
 USER 10001:10001
 
+# Keep graceful Nginx shutdown explicit rather than relying on the base image.
+STOPSIGNAL SIGQUIT
+
 ENTRYPOINT ["/opt/rivet/proxy/entrypoint.sh"]

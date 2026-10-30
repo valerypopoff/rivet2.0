@@ -590,6 +590,29 @@ const clone = structuredClone;
 // Bound overlap rather than serialize all real CLI recovery journeys into one
 // CI timeout. Operations inside an individual journey remain strictly ordered.
 describe('isolated deployment command journeys', { concurrency: 3 }, () => {
+  test(
+    'maintenance uses private file-backed management documents without piped write acknowledgements',
+    { timeout: 330000 },
+    async (t) => {
+      const f = await fixture(t, 'maintenance', 'rejectPipedInput');
+      const result = await f.invoke();
+      assert.equal(result.code, 0, result.stdout + result.stderr);
+      const writes = (await f.calls()).filter(
+        (c) => c.kind === 'kubectl' && ['create', 'replace', 'delete'].includes(c.args[0]) && c.args.includes('-f'),
+      );
+      assert.ok(writes.length > 2);
+      for (const call of writes) {
+        const file = call.args[call.args.indexOf('-f') + 1];
+        assert.notEqual(file, '-');
+        await assert.rejects(
+          fs.stat(file),
+          { code: 'ENOENT' },
+          'private management input is removed after physical command completion',
+        );
+      }
+      assert.equal(JSON.parse((await f.state()).journal.data.record).phase, 'complete');
+    },
+  );
   for (const stage of ['sizing', 'ownership'])
     test(`certified same-image overlap adoption ${stage} runs the actual command`, { timeout: 330000 }, async (t) => {
       const f = await fixture(t, `adoption-${stage}`, 'lostTemplate');
@@ -1084,6 +1107,16 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
       assert.equal(report.operation.phase, 'validating');
       assert.equal(report.operation.aborted, false);
       assert.equal(report.outcome.infrastructure, 'unconfirmed');
+      const reports = await fs.readdir(path.join(f.directory, 'artifacts/result'));
+      const privateReport = reports.filter((file) => /^deployment-failure-[a-f0-9-]+\.private\.json$/.test(file));
+      assert.equal(privateReport.length, 1);
+      const failure = JSON.parse(
+        await fs.readFile(path.join(f.directory, 'artifacts/result', privateReport[0]), 'utf8'),
+      );
+      const details = JSON.stringify(failure);
+      assert.match(details, /diagnostics disk unavailable/);
+      assert.match(details, /lost|failed|unconfirmed/i);
+      assert.ok(failure.error.cause, 'the public wrapper must not hide the original failure');
     },
   );
 

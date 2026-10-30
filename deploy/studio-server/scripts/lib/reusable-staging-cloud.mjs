@@ -1,22 +1,22 @@
 import assert from 'node:assert/strict';
 
+export async function stagingAccessToken(fetchImpl = fetch) {
+  const response = await fetchImpl(
+    'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+    {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: AbortSignal.timeout(10000),
+      redirect: 'error',
+    },
+  );
+  assert.equal(response.status, 200);
+  const value = await response.json();
+  assert.ok(typeof value.access_token === 'string' && value.access_token);
+  return value.access_token;
+}
+
 export function stagingCloudReader(settings, { fetchImpl = fetch, token } = {}) {
-  const credentials =
-    token ??
-    (async () => {
-      const response = await fetchImpl(
-        'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
-        {
-          headers: { 'Metadata-Flavor': 'Google' },
-          signal: AbortSignal.timeout(10000),
-          redirect: 'error',
-        },
-      );
-      assert.equal(response.status, 200);
-      const value = await response.json();
-      assert.ok(typeof value.access_token === 'string' && value.access_token);
-      return value.access_token;
-    });
+  const credentials = token ?? (() => stagingAccessToken(fetchImpl));
   const read = async (resource) => {
     assert.ok(
       [settings.projectId, settings.projectNumber].includes(resource.split('/')[1]),

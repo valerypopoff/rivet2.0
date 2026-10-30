@@ -1,6 +1,7 @@
 import { css } from '@emotion/react';
 import Button from '@atlaskit/button';
 import {
+  classifierProviders,
   getChatV2SystemTokenPricing,
   getClassifierSystemTokenPricing,
   validateTokenPricing,
@@ -50,6 +51,15 @@ export const AIProfilePricingEditor: FC<SharedEditorProps> = ({ node, onChange, 
   const locked = isDisabled || isReadonly;
   const isInlineNode = node.type === 'llmChatV2' || node.type === 'classifierEvaluate';
   const isDecision = node.type === 'classifierProfile' || node.type === 'classifierEvaluate';
+  const decisionProvider = isDecision
+    ? classifierProviders.find(({ id }) => id === (data.provider ?? 'jev'))
+    : undefined;
+  const decisionModel = data.model?.trim() || decisionProvider?.defaultModel;
+  const aggregateTokenUsageOnly =
+    !data.useModelInput &&
+    decisionProvider?.modelOptions?.some(
+      ({ value, aggregateTokenUsageOnly }) => value === decisionModel && aggregateTokenUsageOnly === true,
+    );
   const readEditableData = () => {
     const current = (session?.getNode() ?? node).data as typeof data;
     return locked || (isInlineNode && current.configurationMode === 'profile') ? undefined : current;
@@ -58,10 +68,7 @@ export const AIProfilePricingEditor: FC<SharedEditorProps> = ({ node, onChange, 
   const system: (TokenPricing & Pick<ClassifierTokenPricing, 'longContext'>) | undefined = isDecision
     ? getClassifierSystemTokenPricing(data.provider, data.model)
     : getChatV2SystemTokenPricing((data.provider ?? 'openai') as ChatV2Provider, data.model ?? '');
-  const systemOverride = system && {
-    inputPerMillionTokens: system.inputPerMillionTokens,
-    outputPerMillionTokens: system.outputPerMillionTokens,
-  };
+  const systemOverride = validateTokenPricing(system);
   let error: string | undefined;
   try {
     validateTokenPricing(data.tokenPricing);
@@ -84,6 +91,12 @@ export const AIProfilePricingEditor: FC<SharedEditorProps> = ({ node, onChange, 
           <div>
             Long context: above {system.longContext.aboveInputTokens} input tokens, input $
             {system.longContext.inputPerMillionTokens}, output ${system.longContext.outputPerMillionTokens}.
+            {system.longContext.cacheReadPerMillionTokens !== undefined && (
+              <> Cached input (read) ${system.longContext.cacheReadPerMillionTokens}.</>
+            )}
+            {system.longContext.cacheWritePerMillionTokens !== undefined && (
+              <> Cache write ${system.longContext.cacheWritePerMillionTokens}.</>
+            )}
           </div>
         )}
         {data.provider === 'openrouter' && !isDecision && (
@@ -92,10 +105,10 @@ export const AIProfilePricingEditor: FC<SharedEditorProps> = ({ node, onChange, 
         {data.useModelInput && (
           <div>Preview rates are for the configured model; the runtime input may select a different model.</div>
         )}
-        {isDecision && (
+        {aggregateTokenUsageOnly && (
           <div>
-            Decision AI currently reports aggregate input/output tokens only; cache rates cannot apply without a
-            reported breakdown.
+            This model reports aggregate input/output tokens only; cache rates cannot apply without a reported
+            breakdown.
           </div>
         )}
       </div>

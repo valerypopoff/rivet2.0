@@ -269,7 +269,10 @@ export class ManagedLatestSession {
           // selection replay. Reconstruction never sends commands.
           this.rebuild();
         } else this.options.notify();
-        if (generation === this.generation) this.warnOnce(diagnostic.code, diagnostic.message);
+        // Server-wide retention notices can refer to old, unrelated runs.
+        // Still consume them and mark history incomplete, without a toast.
+        if (generation === this.generation && diagnostic.code !== 'history-truncated')
+          this.warnOnce(diagnostic.code, diagnostic.message);
         return false;
       }
     }

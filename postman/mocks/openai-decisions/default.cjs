@@ -23,6 +23,7 @@ createServer(async (req, res) => {
       return send(400, { error: 'Invalid Decisions request' });
     if (body.questions.some((q) => q.type !== 'predicate')) return send(501, { error: 'Only predicates modeled' });
     for (const question of body.questions) {
+      if (typeof question.instructions === 'string' && question.instructions.trim()) continue;
       if (
         !Array.isArray(question.instructions) ||
         !question.instructions.length ||
@@ -37,7 +38,18 @@ createServer(async (req, res) => {
     send(200, {
       model: body.model,
       answers: body.questions.map((q) => ({ name: q.name, type: 'predicate', probability: 0.8 })),
-      usage: { input_tokens: 1000, output_tokens: 0 },
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 0,
+        ...(['cache-accounting', 'cache-invalid', 'cache-partial'].includes(body.input)
+          ? {
+              input_tokens_details: {
+                cached_tokens: body.input === 'cache-invalid' ? 901 : 400,
+                ...(body.input === 'cache-partial' ? {} : { cache_write_tokens: 100 }),
+              },
+            }
+          : {}),
+      },
     });
   } catch {
     send(400, { error: 'Invalid JSON' });

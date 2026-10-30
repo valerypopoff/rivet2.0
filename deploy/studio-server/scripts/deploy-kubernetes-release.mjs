@@ -22,7 +22,20 @@ import {
   assertCutoverVerificationTarget,
   assertNoExecutionStartupFences,
 } from './lib/deployment-readiness.mjs';
-import { runHaKubernetesRollout, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
+import {
+  runHaKubernetesRollout,
+  haRolloutAutoscalingValues,
+  getHaConfigurationDigest,
+} from './lib/ha-kubernetes-rollout.mjs';
+import {
+  assertContinuityUpgrade,
+  assertContinuityConfiguration,
+  assertContinuityAcceptance,
+  continuityFromResources,
+  requestContinuityProfile,
+  continuityRecoveryLayout,
+} from './lib/request-continuity.mjs';
+import { createKubernetesProxyContinuity } from './lib/proxy-continuity-kubernetes.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 import {
@@ -46,6 +59,7 @@ import {
   assertOverlapAdoptionResources,
 } from './lib/overlap-adoption.mjs';
 import { preserveDeploymentFailure } from './lib/deployment-operation.mjs';
+import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
 import {
   createDeploymentSafety,
   deploymentRecoveryIdentity,
@@ -316,6 +330,7 @@ async function run(program, args, { capture = false, allowFailure = false, input
 let selectedContext;
 let selectedKubectl;
 let selectedHelm;
+let failureArtifactsDirectory;
 
 async function writeArtifact(artifactsDir, fileName, contents) {
   await fs.mkdir(artifactsDir, { recursive: true, mode: 0o700 });
@@ -511,6 +526,7 @@ async function main() {
     options.get('--artifacts') ?? `artifacts/kubernetes-production-release/${release}`,
     '--artifacts',
   );
+  failureArtifactsDirectory = artifactsDir;
 
   if (
     !dryRun &&
@@ -547,7 +563,7 @@ async function main() {
         allowExpiredForRecovery: options.has('--resume-cutover'),
       })
     : null;
-  let generatedValuesDir;
+  let generatedValuesDir, primaryFailure;
   try {
     generatedValuesDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-production-release-'));
     const frozenInput = path.join(
@@ -825,6 +841,35 @@ async function main() {
     }
     const kubeForRelease = (args, extra = {}) =>
       run(kubectl, ['--namespace', namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
+    const kubeWithDocument = async (args, document) => {
+      // A fast-exiting Windows child can close its pipe before the parent
+      // observes stdin completion. Do not turn that into an accepted write or
+      // retry it: avoid the pipe altogether, keeping UID/RV and JSON checks.
+      const file = path.join(generatedValuesDir, `kubernetes-input-${randomUUID()}.json`);
+      await fs.writeFile(file, JSON.stringify(document), { flag: 'wx', mode: 0o600 });
+      return kubeForRelease([...args, '-f', file]);
+    };
+    const continuityTarget = continuityFromResources(renderedResources);
+    const inspectContinuity = async (stage) => {
+      if (!continuityTarget) return;
+      const continuity = createKubernetesProxyContinuity({
+        kube: kubeForRelease,
+        config: {
+          ...continuityTarget,
+          release,
+          namespace,
+          hpaSpec: renderedResources.find(
+            (r) => r.kind === 'HorizontalPodAutoscaler' && r.spec.scaleTargetRef.name === continuityTarget.proxyName,
+          )?.spec,
+        },
+        timeoutMs,
+      });
+      const receipt = { observedAt: new Date().toISOString(), ...(await continuity.inspect()) };
+      if (stage === 'acceptance' || requestContinuityProfile(installed ?? {}))
+        assertContinuityAcceptance(receipt, continuityTarget.profile);
+      await writeArtifact(artifactsDir, `request-continuity-${stage}.json`, JSON.stringify(receipt, null, 2));
+      return receipt;
+    };
     // Both non-replaying recovery routes must prove the same final settings,
     // not just match image digests or trust Helm's release identity metadata.
     const assertFinalCandidateConfiguration = async (settlement, retainedExecution = []) => {
@@ -859,6 +904,7 @@ async function main() {
           namespace,
           retainedExecution,
         });
+      if (settlement) await inspectContinuity('acceptance');
     };
     if (options.has('--acceptance-only')) {
       if (
@@ -990,7 +1036,27 @@ async function main() {
       );
     if (options.has('--resume-ha') && (!haRollout || options.has('--resume-cutover')))
       throw new Error('--resume-ha requires an installed HA release and cannot be combined with maintenance cutover.');
-    if (haRequested && !cutover) assertHaUpgradeEvidence(qualificationManifest, installed);
+    if (cutover) {
+      const configuration = assertContinuityConfiguration(installed, continuityTarget ?? {});
+      if (configuration.profile && !configuration.sourceProfile)
+        throw Error('First request continuity adoption requires its qualified ordinary HA transition.');
+    } else assertContinuityUpgrade(qualificationManifest, installed, continuityTarget ?? {});
+    if (continuityTarget && !haRollout && !cutover)
+      throw Error('Request continuity activation requires the ordinary installed HA rolling path.');
+    if (haRequested && !cutover)
+      assertHaUpgradeEvidence(
+        qualificationManifest,
+        continuityRecoveryLayout(installed, continuityTarget, {
+          journal: pendingJournal,
+          resumeToken: options.get('--resume-ha'),
+          configurationDigest: getHaConfigurationDigest(renderedResources),
+          manifestDigest: candidateDigest,
+          release,
+          namespace,
+        }),
+      );
+    if (continuityTarget && !options.has('--resume-ha') && !workflowContext?.recovering)
+      await inspectContinuity('preflight');
     if (installed?.ha?.enabled && !haRequested && !cutover)
       throw new Error('Disabling HA requires maintenance; ordinary Helm must not delete accepted owners.');
     if (exists && !installedDigest && !cutover)
@@ -1192,6 +1258,7 @@ async function main() {
         }),
       verifyActivation: async () => {
         await captureHelmDiagnostics(helmBin, release, namespace, artifactsDir);
+        await inspectContinuity('acceptance');
         // This is post-deployment verification, not part of workload mutation.
         // An error must never re-enter retirement or imply Helm needs replay.
         const activation = await waitForExecutionAutoscalerActivation({
@@ -1396,11 +1463,7 @@ async function main() {
                 data: { record: JSON.stringify(data) },
               };
               const saved = JSON.parse(
-                (
-                  await kube([resourceVersion ? 'replace' : 'create', '-f', '-', '-o', 'json'], {
-                    input: JSON.stringify(resource),
-                  })
-                ).stdout,
+                (await kubeWithDocument([resourceVersion ? 'replace' : 'create', '-o', 'json'], resource)).stdout,
               );
               observedJournalResource = saved;
               return { ...data, resourceVersion: saved.metadata.resourceVersion };
@@ -1470,20 +1533,16 @@ async function main() {
                 const live = JSON.parse(raw);
                 if (!hpa.uid || live.metadata.uid !== hpa.uid)
                   throw Error('Maintenance HPA identity changed before quiescing.');
-                return kube(
+                return kubeWithDocument(
                   [
                     'delete',
                     '--raw',
                     `/apis/autoscaling/v2/namespaces/${namespace}/horizontalpodautoscalers/${hpa.name}`,
-                    '-f',
-                    '-',
                   ],
                   {
-                    input: JSON.stringify({
-                      apiVersion: 'v1',
-                      kind: 'DeleteOptions',
-                      preconditions: { uid: hpa.uid, resourceVersion: live.metadata.resourceVersion },
-                    }),
+                    apiVersion: 'v1',
+                    kind: 'DeleteOptions',
+                    preconditions: { uid: hpa.uid, resourceVersion: live.metadata.resourceVersion },
                   },
                 );
               },
@@ -1581,15 +1640,32 @@ async function main() {
     console.log(
       `[${runnerName}] ${outcome.state === 'complete' ? (rollbackManifestPath ? 'Forward rollback' : 'Production release') + ' completed with application acceptance' : 'Infrastructure completed; application acceptance is not configured'}. Diagnostics: ${path.relative(rootDir, artifactsDir)}.`,
     );
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
   } finally {
     if (generatedValuesDir) {
-      await fs.rm(generatedValuesDir, { recursive: true, force: true });
+      try {
+        await fs.rm(generatedValuesDir, { recursive: true, force: true, maxRetries: 3 });
+      } catch (cleanupError) {
+        throw primaryFailure ? preserveDeploymentFailure(primaryFailure, cleanupError) : cleanupError;
+      }
     }
   }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
+  main().catch(async (error) => {
+    if (failureArtifactsDirectory) {
+      try {
+        await fs.mkdir(failureArtifactsDirectory, { recursive: true, mode: 0o700 });
+        const file = path.join(failureArtifactsDirectory, `deployment-failure-${randomUUID()}.private.json`);
+        await fs.writeFile(file, JSON.stringify(deploymentFailureDetails(error), null, 2), { flag: 'wx', mode: 0o600 });
+        console.error(`[${runnerName}] Private failure details: ${file}`);
+      } catch {
+        console.error(`[${runnerName}] Private failure diagnostics could not be saved; original failure follows.`);
+      }
+    }
     console.error(`[${runnerName}] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });

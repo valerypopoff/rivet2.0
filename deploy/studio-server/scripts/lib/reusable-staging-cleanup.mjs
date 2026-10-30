@@ -53,7 +53,13 @@ export async function observeStagingInventory(state, cloud, { settlement } = {})
     });
   };
   k8s(namespace, 'namespace', nsPath(record.namespace));
-  for (const [kind, version, plural] of lists) {
+  const operationLists = [
+    ...lists,
+    ...(state.operation.requestContinuityProfile
+      ? [['gcpbackendpolicy', '/apis/networking.gke.io/v1', 'gcpbackendpolicies']]
+      : []),
+  ];
+  for (const [kind, version, plural] of operationLists) {
     const root = `${version}/namespaces/${record.namespace}/${plural}`;
     const result = await state.api.json('GET', root);
     assert.ok(Array.isArray(result?.items));

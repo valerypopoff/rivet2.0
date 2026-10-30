@@ -8,6 +8,13 @@ chart fingerprint, immutable images and schema controls remain mandatory.
 
 ## Ordinary seven-pod qualification and headroom
 
+The opt-in [bounded request-continuity profile](production-update-continuity.md)
+extends only proxy lifetimes and protects the first transition with a temporary
+ingress bridge. Its read-only preflight checks actual Compute drain, running
+Nginx timeouts and exact network identities. It pauses proxy HPA scale-down before
+warming the bridge and requires both quiet windows plus owned cleanup before
+journal completion. Existing short-request evidence cannot authorize this profile.
+
 See [automated qualification](automated-runtime-qualification.md) for the separate
 Built, Qualified and Production-preflight statuses. Qualification does not start
 a deployment or waive live backup/identity checks. The maintained reusable fixture
@@ -1209,6 +1216,35 @@ a new checkpoint, including writes accepted during a partially completed resume.
 release, prove ownership/capacity, create a backup, or authorize a later run.
 
 ## Fresh maintenance ownership claim
+
+### Management-document transport and pause diagnostics
+
+Maintenance journal create/replace and UID/resourceVersion-bound HPA deletion
+use exclusive `0600` JSON files in the runner's private temporary directory,
+not `kubectl -f -`. A fast child closing stdin can otherwise produce a Windows
+pipe error independently of its exit status. This change avoids that transport
+race; it does **not** ignore pipe errors, infer a successful write from exit 0,
+retry a write, weaken CAS or alter the exact-token recovery procedure.
+The file stays available until the command physically closes. Final removal
+has bounded local filesystem retries; a cleanup error retains any primary
+operation error instead of replacing its recovery instructions.
+
+Each failed CLI attempt writes a new `deployment-failure-<uuid>.private.json`
+under `--artifacts` and prints its location. It preserves bounded nested
+`cause`/`AggregateError` messages, stacks and error codes, not arbitrary adapter
+properties, environments, request bodies or stdout. Earlier reports are never
+overwritten. Error messages themselves may contain private installation details:
+restrict the directory's Windows ACL/POSIX permissions, keep these files out of
+Git/public CI uploads and sanitize them before sharing. A diagnostic-write
+failure cannot replace the deployment failure or mark it successful.
+
+The October maintenance pauses were not reproduced with their original nested
+causes; no precise production root cause is claimed retrospectively. Local
+regressions exercise real CLI execution against strict Helm/Kubernetes stand-ins,
+including refusal of piped management input and a nested failure during failed
+diagnostic export. Existing interruption and lost-acknowledgement checks remain
+the authority for recovery behavior. No healthy release should be reapplied
+merely to obtain a better diagnostic.
 
 The maintenance strategy rereads journal admission **after** workload inventory,
 immediately before its first ownership write. Inventory can overlap an idle

@@ -2,6 +2,20 @@
 
 ## Implementation versus activation
 
+The optional [bounded request-continuity extension](production-update-continuity.md)
+adds real five-minute HTTP/1 and HTTP/2 bodies, late WebSocket admission/resume,
+proxy replacement and HPA removal to either compact suite. Select its reviewed
+`requestContinuityProfile` in the hash-pinned private driver settings (and staging
+`region`), or `RIVET_QUALIFICATION_CONTINUITY_PROFILE` for temporary staging.
+Its nested runtime-control certificate is compiled only after validated upgrade,
+autoscaling and cleanup facts. Version 2 additionally requires the duration
+matrix, return handoff, real pre-removal admissions and native-roll timing.
+Long HTTP cohorts run one at a time to keep fixture demand within the compact
+runtime's admitted capacity. Qualification preflight derives its timeout from
+the qualified lifecycle profile rather than using the shorter legacy default.
+This extension has no provider activation receipt
+yet and cannot be inferred from the existing short-request certificate.
+
 `studio-server-qualify-release.yml` implements Actions orchestration;
 `execute-runtime-qualification.mjs` owns its command boundary. Neither authorizes
 GCP access, enables automation, installs credentials or deploys production. The

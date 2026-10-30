@@ -14,6 +14,8 @@ import { autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
 import { prepareHaReplacements } from './ha-rollout-preparation.mjs';
 import { matchesKubernetesTemplate } from './kubernetes-template-match.mjs';
+import { continuityFromResources } from './request-continuity.mjs';
+import { createKubernetesProxyContinuity } from './proxy-continuity-kubernetes.mjs';
 
 export const haFrozenAutoscalingValues = {
   autoscaling: {
@@ -242,6 +244,7 @@ export async function runHaKubernetesRollout({
   ownerPoolTransition,
   verifyDeveloperReady,
   prepareReplacements = prepareHaReplacements,
+  createProxyContinuity = createKubernetesProxyContinuity,
 }) {
   requireDeploymentSafety(safety, 'rolling', { release, namespace, manifestDigest });
   settle = safety.requireSettlement(settle);
@@ -437,7 +440,7 @@ export async function runHaKubernetesRollout({
       clock: routingWithdrawalClock,
       readSlices: async () => JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items,
     });
-  const guardedTemplateValues = async () => {
+  const guardedTemplateValues = async (continuityValues = {}) => {
     const versions = {};
     const replicas = {};
     for (const w of workloads) {
@@ -456,6 +459,7 @@ export async function runHaKubernetesRollout({
     // the read conflicts at the API server rather than overwriting new owners.
     const frontends = await frontendCapacity();
     return {
+      ...continuityValues,
       replicaCount: { ...replicas, ...frontends.replicas },
       ha: { rolloutResourceVersions: { ...versions, ...frontends.versions } },
     };
@@ -470,6 +474,21 @@ export async function runHaKubernetesRollout({
     artifact,
   });
   const checkProxyHeadroom = createHaProxyHeadroomGuard({ kube, release, namespace, resources, artifact });
+  const continuity = continuityFromResources(resources);
+  const proxyContinuity = continuity
+    ? createProxyContinuity({
+        kube,
+        config: {
+          ...continuity,
+          release,
+          namespace,
+          hpaSpec: resources.find(
+            (r) => r.kind === 'HorizontalPodAutoscaler' && r.spec.scaleTargetRef.name === continuity.proxyName,
+          )?.spec,
+        },
+        timeoutMs,
+      })
+    : undefined;
   const result = await runHaRollingUpgrade({
     identity: {
       release,
@@ -482,7 +501,9 @@ export async function runHaKubernetesRollout({
       ...(housekeepingDisk ? { housekeepingDisk } : {}),
       ...(ownerPoolTransition ? { ownerPoolTransition } : {}),
       ...(poolPreparationControllers ? { poolPreparationControllers } : {}),
+      ...(proxyContinuity ? { proxyContinuityIdentity: proxyContinuity.identity } : {}),
     },
+    proxyContinuity,
     workloads,
     safety,
     resumeToken,
@@ -592,7 +613,8 @@ export async function runHaKubernetesRollout({
         if (pod && pod.uid !== owner.uid) throw new Error('HA surge was replaced during scale-down.');
         return !pod;
       }, `surge removal for ${owner.name}`),
-    applyTemplates: async () => applyTemplates(workloads, await guardedTemplateValues()),
+    applyTemplates: async (operation) =>
+      applyTemplates(workloads, await guardedTemplateValues(proxyContinuity?.templateValues(operation))),
     ...(ownerPoolTransition
       ? {
           verifyPoolPreparationTemplates: async () => {
@@ -621,7 +643,8 @@ export async function runHaKubernetesRollout({
           },
         }
       : {}),
-    restoreAutoscalers: async () => restoreAutoscalers(workloads, await guardedTemplateValues()),
+    restoreAutoscalers: async (operation) =>
+      restoreAutoscalers(workloads, await guardedTemplateValues(proxyContinuity?.templateValues(operation))),
     settle: async () => {
       const { replicaCount } = await guardedTemplateValues();
       const effective = structuredClone(resources);

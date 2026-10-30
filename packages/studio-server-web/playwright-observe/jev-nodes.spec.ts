@@ -1,4 +1,5 @@
 import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
+import { deserializeProject } from '@valerypopoff/rivet2-core';
 import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowTreeResponse } from '../dashboard/types';
 
@@ -368,7 +369,7 @@ test('Decision AI Profile copy/paste preserves provider configuration and create
   const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
   await provider.fill('Liquid AI');
   await provider.press('Enter');
-  await selectDecisionModel(editor, 'Default (d1)');
+  await selectDecisionModel(editor, 'd1');
   await expect(first).toContainText('Model: d1');
   await page.keyboard.press('Escape');
   await first.locator('.node-title').click();
@@ -705,10 +706,10 @@ test('Liquid AI selection preserves d1 and supports d1.1 with independent creden
   await provider.press('Enter');
   await expect(evaluate).toContainText('Provider: Liquid AI');
   // This migrated legacy node pins jev-latest. Switching provider must not
-  // silently rewrite that explicit contract; clearing it selects Liquid's default.
+  // silently rewrite that explicit contract; select Liquid's default model.
   const model = editor.getByRole('textbox', { name: 'Custom model', exact: true });
   await expect(model).toHaveValue('jev-latest');
-  await selectDecisionModel(editor, 'Default (d1)');
+  await selectDecisionModel(editor, 'd1');
   await expect(model).toHaveCount(0);
   await expect(evaluate).toContainText('Model: d1');
   await expect(editor.locator('input[value="liquidApiKey"]')).toBeVisible();
@@ -723,7 +724,8 @@ test('Liquid AI selection preserves d1 and supports d1.1 with independent creden
   await provider.fill('Jev');
   await provider.press('Enter');
   await expect(editor.locator('input[value="typesafeApiKey"]')).toBeVisible();
-  await expect(evaluate).toContainText('Model: jev-latest');
+  await expect(evaluate).toContainText('Model: d1');
+  await expect(model).toHaveValue('d1');
   await provider.fill('Liquid AI');
   await provider.press('Enter');
   await expect(programmaticName).toHaveValue('myLiquidKey');
@@ -762,7 +764,7 @@ test('OpenAI Decisions selection exposes its model, credentials and single multi
   await provider.press('Enter');
   const model = editor.getByRole('textbox', { name: 'Custom model', exact: true });
   await expect(model).toHaveValue('jev-latest');
-  await selectDecisionModel(editor, 'Default (gpt-6-luna)');
+  await selectDecisionModel(editor, 'gpt-6-luna');
   await expect(evaluate).toContainText('Provider: OpenAI');
   await expect(evaluate).toContainText('Model: gpt-6-luna');
   await expect(editor.locator('input[value="openAiApiKey"]')).toBeVisible();
@@ -775,28 +777,32 @@ test('OpenAI Decisions selection exposes its model, credentials and single multi
   await expect(choice.locator('.port-label', { hasText: /^Images$/ })).toHaveCount(0);
 });
 
-for (const { label, defaultModel, keyName, environmentVariable } of [
+for (const { label, defaultModel, modelLabel, keyName, environmentVariable } of [
   {
     label: 'OpenRouter',
     defaultModel: 'microsoft/microsoft-decision-1',
+    modelLabel: 'Microsoft Decision-1 (9b)',
     keyName: 'openRouterApiKey',
     environmentVariable: 'OPENROUTER_API_KEY',
   },
   {
     label: 'Perplexity',
     defaultModel: 'pplx-decider-v1.1-27b',
+    modelLabel: 'pplx-decider-v1.1 (27b)',
     keyName: 'perplexityApiKey',
     environmentVariable: 'PERPLEXITY_API_KEY',
   },
   {
     label: 'SubQ',
     defaultModel: 'subq-snap-1.1',
+    modelLabel: 'subq-snap-1.1',
     keyName: 'subqApiKey',
     environmentVariable: 'SUBQ_API_KEY',
   },
   {
     label: 'Baseten',
     defaultModel: 'decision-models/baseten-elephant-9b-latest',
+    modelLabel: 'Elephant-1 (9b)',
     keyName: 'basetenApiKey',
     environmentVariable: 'BASETEN_API_KEY',
   },
@@ -810,18 +816,17 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
     await provider.press('Enter');
     const model = editor.getByRole('textbox', { name: 'Custom model', exact: true });
     await expect(model).toHaveValue('jev-latest');
-    await selectDecisionModel(editor, `Default (${defaultModel})`);
     if (label === 'Baseten') {
       await expect(
         editor.getByText('Images belong in shared State, not Question Instructions.', { exact: true }),
       ).toBeVisible();
-      await selectDecisionModel(editor, 'Mammoth-1');
+      await selectDecisionModel(editor, 'Mammoth-1 (27b)');
       await expect(evaluate).toContainText('Model: decision-models/baseten-mammoth-27b-latest');
+      await selectDecisionModel(editor, 'Joey-1 (2b)');
+      await expect(evaluate).toContainText('Model: decision-models/baseten-joey-2b-latest');
     }
     await expect(editor.locator(`input[value="${keyName}"]`)).toBeVisible();
     await expect(editor.locator(`input[value="${environmentVariable}"]`)).toBeVisible();
-    const modelLabel =
-      label === 'Baseten' ? 'Elephant-1' : label === 'OpenRouter' ? 'Microsoft Decision-1' : defaultModel;
     await selectDecisionModel(editor, modelLabel);
     await expect(evaluate).toContainText(`Model: ${defaultModel}`);
     await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
@@ -836,6 +841,10 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
         .filter({ has: editor.getByRole('combobox', { name: 'Model', exact: true }) })
         .getByText(modelLabel, { exact: true }),
     ).toBeVisible();
+    if (label === 'Baseten') {
+      await selectDecisionModel(editor, 'Joey-1 (2b)');
+      await expect(profile).toContainText('Model: decision-models/baseten-joey-2b-latest');
+    }
     await page.keyboard.press('Escape');
     await editor.getByRole('button', { name: 'Menu', exact: true }).click();
     await editor.getByRole('menuitem', { name: 'Rivet settings', exact: true }).click();
@@ -854,6 +863,141 @@ for (const { label, defaultModel, keyName, environmentVariable } of [
     await settings.getByRole('button', { name: 'Close modal', exact: true }).click();
   });
 
+for (const savedModel of ['missing', 'blank']) {
+  test(`Decision AI selects an implicit default with ${savedModel} Model in run and Profile menus`, async ({
+    page,
+  }) => {
+    const editor = await openFixture(
+      page,
+      fixture.replace('model: jev-latest', savedModel === 'missing' ? '' : 'model: ""'),
+    );
+    const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+    await evaluate.locator('button.edit-button').dispatchEvent('click');
+    await expect(editor.locator('.projects-container .project.active')).not.toHaveClass(/\bhas-unsaved-changes\b/);
+    for (const mode of ['inline', 'profile']) {
+      if (mode === 'profile') {
+        await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
+        const profile = editor
+          .locator('.node')
+          .filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
+        await profile.locator('button.edit-button').dispatchEvent('click');
+      }
+      for (const [providerName, modelLabel] of [
+        ['Jev', 'jev-latest'],
+        ['Liquid AI', 'd1'],
+        ['OpenAI', 'gpt-6-luna'],
+        ['OpenRouter', 'Microsoft Decision-1 (9b)'],
+        ['Perplexity', 'pplx-decider-v1.1 (27b)'],
+        ['SubQ', 'subq-snap-1.1'],
+        ['Baseten', 'Elephant-1 (9b)'],
+      ] as const) {
+        const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+        await provider.fill(providerName);
+        await provider.press('Enter');
+        const model = editor.getByRole('combobox', { name: 'Model', exact: true });
+        const row = editor.locator('.row.custom').filter({ has: model });
+        await expect(row.getByText(modelLabel, { exact: true })).toBeVisible();
+        await expect(editor.getByRole('textbox', { name: 'Custom model', exact: true })).toHaveCount(0);
+        await model.click();
+        await expect(editor.getByText(/^Default \(/)).toHaveCount(0);
+        // One selected label and one menu choice, even for an empty saved Model.
+        await expect(editor.getByText(modelLabel, { exact: true })).toHaveCount(2);
+        await model.press('Escape');
+      }
+    }
+  });
+}
+
+test('Decision AI forgets empty Custom editing mode across provider round trips', async ({ page }) => {
+  const editor = await openFixture(page, fixture.replace('model: jev-latest', 'model: ""'));
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  for (const mode of ['inline', 'profile']) {
+    if (mode === 'profile') {
+      await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
+      const profile = editor.locator('.node').filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
+      await profile.locator('button.edit-button').dispatchEvent('click');
+    }
+    await selectDecisionModel(editor, 'Custom model…');
+    const custom = editor.getByRole('textbox', { name: 'Custom model', exact: true });
+    await custom.fill('temporary-model');
+    await custom.fill('');
+    for (const [providerName, modelLabel] of [
+      ['Liquid AI', 'd1'],
+      ['Jev', 'jev-latest'],
+    ] as const) {
+      const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+      await provider.fill(providerName);
+      await provider.press('Enter');
+      await expect(custom).toHaveCount(0);
+      const model = editor.getByRole('combobox', { name: 'Model', exact: true });
+      await expect(
+        editor.locator('.row.custom').filter({ has: model }).getByText(modelLabel, { exact: true }),
+      ).toBeVisible();
+    }
+    await selectDecisionModel(editor, 'Custom model…');
+    await custom.fill('private-model');
+    const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+    for (const providerName of ['Liquid AI', 'Jev']) {
+      await provider.fill(providerName);
+      await provider.press('Enter');
+      await expect(custom).toHaveValue('private-model');
+    }
+    await custom.fill('');
+  }
+});
+
+test('Joey model IDs and labels survive saving and reloading run and Profile settings', async ({ page }) => {
+  const editor = await openFixture(page);
+  let savedContents = fixture;
+  let saves = 0;
+  await page.route('**/api/projects/save', async (route) => {
+    const body = route.request().postDataJSON() as { path: string; contents: string };
+    expect(body.path).toBe(projectPath);
+    savedContents = body.contents;
+    saves++;
+    await route.fulfill({ json: { path: projectPath, revisionId: 'model-save' } });
+  });
+  await page.route('**/api/projects/load', (route) =>
+    route.fulfill({ json: { contents: savedContents, datasetsContents: null, revisionId: 'model-save' } }),
+  );
+  const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
+  await provider.fill('Baseten');
+  await provider.press('Enter');
+  await selectDecisionModel(editor, 'Joey-1 (2b)');
+  await editor.getByRole('button', { name: 'Export Decision AI settings to profile node', exact: true }).click();
+  await page.getByRole('button', { name: 'Save current project', exact: true }).click();
+  await expect.poll(() => saves).toBe(1);
+  await expect(page.locator('.active-project-save-button')).toHaveCount(0);
+  const [savedProject] = deserializeProject(savedContents);
+  const modelNodes = savedProject.graphs.main!.nodes.filter((node) =>
+    ['classifierEvaluate', 'classifierProfile'].includes(node.type),
+  );
+  expect(modelNodes).toHaveLength(2);
+  for (const node of modelNodes)
+    expect(node.data).toMatchObject({ provider: 'baseten', model: 'decision-models/baseten-joey-2b-latest' });
+  expect(savedContents).not.toContain('Joey-1 (2b)');
+  expect(savedContents).not.toContain('__rivet_custom_model__');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  await expect(evaluate).toBeVisible({ timeout: 60_000 });
+  const profile = editor.locator('.node').filter({ has: editor.locator('.port-label', { hasText: /^Profile$/ }) });
+  await profile.locator('button.edit-button').dispatchEvent('click');
+  const model = editor.getByRole('combobox', { name: 'Model', exact: true });
+  await expect(
+    editor.locator('.row.custom').filter({ has: model }).getByText('Joey-1 (2b)', { exact: true }),
+  ).toBeVisible();
+  await expect(editor.getByRole('textbox', { name: 'Custom model', exact: true })).toHaveCount(0);
+  await evaluate.locator('button.edit-button').dispatchEvent('click');
+  await editor.getByRole('button', { name: 'Inline', exact: true }).click();
+  await expect(
+    editor.locator('.row.custom').filter({ has: model }).getByText('Joey-1 (2b)', { exact: true }),
+  ).toBeVisible();
+});
+
 test('Decision AI model selectors preserve custom names and input ports across all providers', async ({ page }) => {
   const editor = await openFixture(page);
   const evaluate = editor.locator('.node[data-nodeid="evaluate"]');
@@ -871,10 +1015,10 @@ test('Decision AI model selectors preserve custom names and input ports across a
     ['Jev', 'jev-latest', ['jev-latest', 'jev-preview', 'jev-1.14.0', 'jev-1.13.0']],
     ['Liquid AI', 'd1', ['d1', 'd1.1']],
     ['OpenAI', 'gpt-6-luna', ['gpt-6-luna']],
-    ['OpenRouter', 'microsoft/microsoft-decision-1', ['Microsoft Decision-1']],
-    ['Perplexity', 'pplx-decider-v1.1-27b', ['pplx-decider-v1.1-27b', 'pplx-decider-v1-27b']],
+    ['OpenRouter', 'microsoft/microsoft-decision-1', ['Microsoft Decision-1 (9b)']],
+    ['Perplexity', 'pplx-decider-v1.1-27b', ['pplx-decider-v1.1 (27b)', 'pplx-decider-v1 (27b)']],
     ['SubQ', 'subq-snap-1.1', ['subq-snap-1.1']],
-    ['Baseten', 'decision-models/baseten-elephant-9b-latest', ['Elephant-1', 'Mammoth-1']],
+    ['Baseten', 'decision-models/baseten-elephant-9b-latest', ['Elephant-1 (9b)', 'Mammoth-1 (27b)', 'Joey-1 (2b)']],
   ] as const) {
     const provider = editor.getByRole('combobox', { name: 'Provider', exact: true });
     await provider.fill(providerName);
@@ -901,7 +1045,7 @@ test('Decision AI model selectors preserve custom names and input ports across a
     await expect(evaluate.locator('.port-label', { hasText: /^Model$/ })).toHaveCount(1);
     await inputToggle.click();
     await expect(custom).toHaveValue(authored);
-    await selectDecisionModel(editor, `Default (${defaultModel})`);
+    await selectDecisionModel(editor, models[0]);
     await expect(custom).toHaveCount(0);
     await expect(evaluate).toContainText(`Model: ${defaultModel}`);
   }
@@ -936,7 +1080,7 @@ test('A saved custom Decision AI model stays editable through blank and known-mo
   await expect(custom).toBeVisible();
   await custom.pressSequentially('-again');
   await expect(custom).toHaveValue('jev-latest-again');
-  await selectDecisionModel(editor, 'Default (jev-latest)');
+  await selectDecisionModel(editor, 'jev-latest');
   await expect(custom).toHaveCount(0);
 });
 

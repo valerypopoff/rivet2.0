@@ -74,6 +74,35 @@ test('concrete provider rollout persists each journal before observing it and pr
     ['persist', 'ha-rollout.json', 'exact journal'],
     ['observe', 'ha-rollout.json', 'exact journal'],
   ]);
+  const applied = [];
+  const originalRollout = gate.runRollout;
+  const values = {
+    autoscaling: {
+      execution: { enabled: false, minReplicas: 2, maxReplicas: 7 },
+      executionController: { enabled: true, suspended: false, pollSeconds: 15 },
+      proxy: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
+    },
+  };
+  gate.values = () => values;
+  gate.resources = async () => [
+    { kind: 'Deployment', metadata: { labels: { 'app.kubernetes.io/component': 'autoscaler' } } },
+    { kind: 'HorizontalPodAutoscaler', metadata: { labels: { 'app.kubernetes.io/component': 'proxy' } } },
+  ];
+  gate.apply = async (value) => applied.push(value);
+  gate.runRollout = async (options) => {
+    await options.applyTemplates([], { autoscaling: { proxy: { minReplicas: 4, scaleDownPaused: true } } });
+    await options.restoreAutoscalers([], {});
+    return { phase: 'complete' };
+  };
+  await gate.roll(manifest.images, true);
+  assert.deepEqual(applied[0].autoscaling.proxy, {
+    ...values.autoscaling.proxy,
+    minReplicas: 4,
+    scaleDownPaused: true,
+  });
+  assert.deepEqual(applied[0].autoscaling.executionController, values.autoscaling.executionController);
+  assert.deepEqual(applied[1].autoscaling, values.autoscaling, 'The final apply restores the original HPA policy');
+  gate.runRollout = originalRollout;
   await assert.rejects(
     gate.roll(manifest.images, true, {
       artifact: async () => {

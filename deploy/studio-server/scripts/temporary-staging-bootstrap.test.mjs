@@ -22,6 +22,7 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { temporaryHash } from './lib/temporary-staging-contract.mjs';
+import { verifyTemporaryChallenge } from './lib/temporary-staging-certificate.mjs';
 const require = createRequire(new URL('../../../packages/studio-server-api/package.json', import.meta.url));
 const { WebSocketServer } = require('ws');
 const { handler } = createRequire(import.meta.url)('../../../postman/mocks/temporary-gcp/contract.cjs');
@@ -38,10 +39,14 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
     'lost export',
     'corrupt export',
     'late test admission',
+    'IP hostname bootstrap',
+    'lost HTTPS acknowledgement',
   ])
     await t.test(mode, async (child) => {
       const lostActor = mode === 'lost actor acknowledgement',
-        failedExport = mode === 'lost export' || mode === 'corrupt export';
+        failedExport = mode === 'lost export' || mode === 'corrupt export',
+        ipHostname = mode === 'IP hostname bootstrap' || mode === 'lost HTTPS acknowledgement',
+        lostHttps = mode === 'lost HTTPS acknowledgement';
       const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-bootstrap-'));
       child.after(() => fs.rm(temp, { recursive: true, force: true }));
       const certFile = path.join(temp, 'cert.pem'),
@@ -59,11 +64,11 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           '-out',
           certFile,
           '-days',
-          '1',
+          '2',
           '-subj',
           '/CN=127.0.0.1',
           '-addext',
-          'subjectAltName=IP:127.0.0.1',
+          'subjectAltName=IP:127.0.0.1,DNS:rivet-q-12345-1.staging.example.net',
         ],
         { stdio: 'pipe' },
       );
@@ -74,6 +79,8 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
         packets = [];
       let serial = 1;
       let exportCalls = 0;
+      let cloudBase;
+      const httpChildren = [];
       const server = https.createServer({ cert, key }, async (req, res) => {
         const send = (code, value) => {
           res.writeHead(code, { 'content-type': 'application/json' });
@@ -116,25 +123,30 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
             { name: 'secrets', kind: 'Secret' },
             { name: 'serviceaccounts', kind: 'ServiceAccount' },
             { name: 'events', kind: 'Event' },
+            { name: 'services', kind: 'Service' },
           ].map((r) => ({ ...r, namespaced: true, verbs: ['list'] }));
           if (resource === '/api/v1') return send(200, { resources });
           if (resource === '/apis')
             return send(200, {
-              groups: ['apps/v1', 'rbac.authorization.k8s.io/v1', 'gateway.networking.k8s.io/v1'].map(
-                (groupVersion) => ({ preferredVersion: { groupVersion } }),
-              ),
+              groups: [
+                'apps/v1',
+                'rbac.authorization.k8s.io/v1',
+                'gateway.networking.k8s.io/v1',
+                'networking.gke.io/v1',
+              ].map((groupVersion) => ({ preferredVersion: { groupVersion } })),
             });
           const groupResources = {
             '/apis/apps/v1': ['deployments'],
             '/apis/rbac.authorization.k8s.io/v1': ['roles', 'rolebindings'],
-            '/apis/gateway.networking.k8s.io/v1': ['gateways'],
+            '/apis/gateway.networking.k8s.io/v1': ['gateways', 'httproutes'],
+            '/apis/networking.gke.io/v1': ['healthcheckpolicies'],
           };
           if (groupResources[resource])
             return send(200, {
               resources: groupResources[resource].map((name) => ({ name, namespaced: true, verbs: ['list'] })),
             });
           if (
-            /\/namespaces\/[^/]+\/(?:pods|configmaps|secrets|serviceaccounts|events|deployments|roles|rolebindings|gateways)$/.test(
+            /\/namespaces\/[^/]+\/(?:pods|configmaps|secrets|serviceaccounts|events|services|deployments|roles|rolebindings|gateways|httproutes|healthcheckpolicies)$/.test(
               resource,
             )
           )
@@ -167,6 +179,31 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           body.metadata.resourceVersion = String(++serial);
           objects.set(resource, body);
           return send(200, body);
+        }
+        if (req.method === 'PATCH' && objects.has(resource)) {
+          assert.equal(req.headers['content-type'], 'application/json-patch+json');
+          const value = objects.get(resource);
+          assert.deepEqual(body.slice(0, 2), [
+            { op: 'test', path: '/metadata/uid', value: value.metadata.uid },
+            { op: 'test', path: '/metadata/resourceVersion', value: value.metadata.resourceVersion },
+          ]);
+          for (const patch of body.slice(2)) {
+            assert.equal(patch.op, 'replace');
+            if (patch.path === '/data/challenge.json') value.data['challenge.json'] = patch.value;
+            else {
+              assert.equal(patch.path, '/spec/listeners');
+              value.spec.listeners = patch.value;
+            }
+          }
+          value.metadata.resourceVersion = String(++serial);
+          if (value.kind === 'Gateway')
+            for (const child of httpChildren.filter((_, i) => i === 0 || lostHttps))
+              await fetch(new URL('compute/' + child.resource, cloudBase), {
+                method: 'DELETE',
+                headers: { authorization: 'Bearer local-only' },
+              });
+          if (lostHttps && value.kind === 'Gateway') return res.destroy();
+          return send(200, value);
         }
         return send(501, { kind: 'Status' });
       });
@@ -247,6 +284,7 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
         return new Promise((r) => cloudServer.close(r));
       });
       const url = `http://127.0.0.1:${cloudServer.address().port}/`;
+      cloudBase = url;
       const image = { repository: 'registry.test/image', digest: `sha256:${'a'.repeat(64)}` };
       const create = (previous) =>
         createStudioServerReleaseManifest({
@@ -294,10 +332,51 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
         );
       await fs.writeFile(registryFile, registry, { mode: 0o600 });
       const plan = temporaryPlan({
+        certificateSha256: temporaryHash(cert),
+        privateKeySha256: temporaryHash(key),
         registrySecretSha256: temporaryHash(registry),
         candidateDigest: getStudioServerReleaseManifestDigest(candidate),
         predecessorDigest: getStudioServerReleaseManifestDigest(previous, { requirePromoted: true }),
+        ...(ipHostname
+          ? {
+              hostnameMode: 'ip-encoded-http01',
+              domain: 'sslip.io',
+              managedZone: null,
+              certificateSha256: null,
+              privateKeySha256: null,
+              acme: {
+                image: `certbot/certbot@sha256:${'1'.repeat(64)}`,
+                termsUrl: 'https://letsencrypt.org/documents/test.pdf',
+                subscriberTermsApproved: true,
+                certificateIssuanceApproved: true,
+              },
+            }
+          : {}),
       });
+      let certificateCalls = 0,
+        publicChecks = 0;
+      const challengeServer = http.createServer((req, res) => {
+        const config = [...objects.values()].find(
+          (v) => v.kind === 'ConfigMap' && v.metadata.name === 'qualification-acme',
+        );
+        const packet = JSON.parse(config.data['challenge.json']);
+        const gateway = [...objects.values()].find((v) => v.kind === 'Gateway');
+        assert.equal(gateway.spec.listeners[0].protocol, 'HTTP');
+        const pod = [...objects.values()].find((v) => v.kind === 'Pod' && v.metadata.name === 'qualification-acme');
+        assert.deepEqual(pod.spec.imagePullSecrets, [{ name: 'rivet-qualification-pull' }]);
+        assert.equal(pod.spec.automountServiceAccountToken, false);
+        assert.ok([...objects.values()].some((v) => v.kind === 'HTTPRoute'));
+        assert.equal(req.url, '/.well-known/acme-challenge/' + packet.token);
+        res.end(packet.validation);
+      });
+      await new Promise((resolve) => challengeServer.listen(0, '127.0.0.1', resolve));
+      child.after(
+        () =>
+          new Promise((resolve) => {
+            challengeServer.closeAllConnections();
+            challengeServer.close(resolve);
+          }),
+      );
       await fetch(new URL('_control', url), { method: 'POST', body: JSON.stringify({ plan }) });
       const cloud = temporaryGcp(plan, {
         origins: Object.fromEntries(
@@ -321,6 +400,72 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           await state.cluster();
           return { publicTlsVerified: true };
         },
+        ...(ipHostname
+          ? {
+              verifyPublicChallenge: (packet) => {
+                publicChecks++;
+                if (publicChecks === 1)
+                  throw new DOMException('Synthetic cold Gateway connection timeout', 'TimeoutError');
+                return verifyTemporaryChallenge(packet, {
+                  resolve: async () => [packet.address],
+                  fetchImpl: (url, options) =>
+                    fetch(`http://127.0.0.1:${challengeServer.address().port}` + new URL(url).pathname, options),
+                });
+              },
+              certificateIssuer: async (s, { hostname, publishChallenge }) => {
+                certificateCalls++;
+                assert.equal(
+                  publicChecks,
+                  2,
+                  'Public probe must succeed after its cold-start timeout before any certificate order',
+                );
+                assert.equal((await s.read()).record.hostname.name, hostname);
+                await publishChallenge({ token: 'a'.repeat(24), validation: 'b'.repeat(40) });
+                const prefix = `projects/${plan.projectId}/regions/${plan.region}`;
+                const proxy = `${prefix}/targetHttpProxies/retired-http`;
+                httpChildren.push(
+                  {
+                    resource: `${prefix}/forwardingRules/preparation`,
+                    value: {
+                      id: '9801',
+                      name: 'preparation',
+                      IPAddress: (await s.read()).record.hostname.address,
+                      target: `https://www.googleapis.com/compute/v1/${proxy}`,
+                    },
+                  },
+                  { resource: proxy, value: { id: '9802', name: 'retired-http' } },
+                );
+                for (const child of httpChildren)
+                  await fetch(new URL('_replace', url), {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      ...child,
+                      value: { ...child.value, selfLink: `https://www.googleapis.com/compute/v1/${child.resource}` },
+                    }),
+                  });
+                const target = path.join(temp, 'issued.pem');
+                execFileSync(
+                  process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl',
+                  [
+                    'req',
+                    '-x509',
+                    '-key',
+                    keyFile,
+                    '-out',
+                    target,
+                    '-days',
+                    '2',
+                    '-subj',
+                    '/CN=' + hostname,
+                    '-addext',
+                    'subjectAltName=DNS:' + hostname,
+                  ],
+                  { stdio: 'pipe' },
+                );
+                return { certificate: await fs.readFile(target), key };
+              },
+            }
+          : {}),
       });
       // Provisioning is the subject of the other HTTP matrix. Here we inject only
       // the cluster's actual local HTTPS endpoint before exercising real bootstrap.
@@ -375,7 +520,7 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
             : value,
         );
       await store.locked(async () => {
-        if (lostActor)
+        if (lostActor || lostHttps)
           await assert.rejects(provisionTemporaryEnvironment(store, cloud, runtime, { wait, guard: async () => {} }));
         else {
           await provisionTemporaryEnvironment(store, cloud, runtime, { wait, guard: async () => {} });
@@ -388,6 +533,21 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           assert.equal(pod.spec.serviceAccountName, 'rivet-qualification-actor');
           assert.deepEqual(pod.spec.imagePullSecrets, [{ name: 'rivet-qualification-pull' }]);
           assert.ok(record.settings.registrySecret.uid && record.settings.janitorRegistrySecret.uid);
+          if (ipHostname) {
+            assert.equal(certificateCalls, 1);
+            assert.equal(publicChecks, 3);
+            assert.equal(record.dns, undefined);
+            assert.equal(record.tlsMaterial.hostname, `${plan.operationId}.${record.settings.domain}`);
+            assert.equal([...objects.values()].find((v) => v.kind === 'Gateway').spec.listeners[0].protocol, 'HTTPS');
+            assert.ok(
+              record.edgeChildren.some((child) => child.id === '9802'),
+              'Detached HTTP children must remain cleanup-owned',
+            );
+            assert.equal(
+              (await cloud.edgeChildren(record.hostname.address)).some((child) => child.id === '9802'),
+              false,
+            );
+          }
           assert.equal(
             pod.spec.containers[0].env.some((e) => /GITHUB|PRODUCTION/.test(e.name)),
             false,
@@ -464,7 +624,7 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           });
           await assert.rejects(cleanupTemporaryEnvironment(store, cloud, bootstrap, { wait }), /Unowned bootstrap/);
           assert.equal(
-            requests.some((r) => r.method === 'DELETE'),
+            requests.some((r) => r.method === 'DELETE' && !r.resource.endsWith('/qualification-acme')),
             false,
             'Ambiguous inventory must block all bootstrap deletion',
           );
@@ -501,17 +661,38 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
               'Retried cleanup must retain the controller/actor until edge children disappear',
             );
             assert.equal(
-              requests.filter((r) => r.method === 'DELETE' && !r.resource.endsWith('/gateways/qualification')).length,
+              requests.filter(
+                (r) =>
+                  r.method === 'DELETE' &&
+                  !r.resource.endsWith('/gateways/qualification') &&
+                  !r.resource.endsWith('/qualification-acme'),
+              ).length,
               0,
             );
           }
           // Simulate controller GC through the local provider HTTP fixture.
           for (const { resource } of childResources) await cloud.request('compute', 'DELETE', resource);
+          if (ipHostname) await cloud.request('compute', 'DELETE', httpChildren[1].resource);
         }
         await cleanupTemporaryEnvironment(store, cloud, bootstrap, { wait });
         assert.equal((await store.read()).record.complete, true);
-        assert.equal(requests.filter((r) => r.method === 'POST' && r.resource.endsWith('/pods')).length, 1);
+        assert.equal(
+          requests.filter((r) => r.method === 'POST' && r.resource.endsWith('/pods')).length,
+          lostHttps ? 1 : ipHostname ? 2 : 1,
+        );
+        assert.equal(
+          requests.filter((r) => r.method === 'PATCH' && r.resource.endsWith('/gateways/qualification')).length,
+          ipHostname ? 1 : 0,
+        );
         assert.equal(objects.size, 0);
+        if (ipHostname) {
+          const traffic = await (await fetch(new URL('_requests', url))).json();
+          assert.equal(
+            traffic.some((row) => row.service === 'dns'),
+            false,
+            'IP-hostname bootstrap must not require a managed DNS zone',
+          );
+        }
       });
     });
 });

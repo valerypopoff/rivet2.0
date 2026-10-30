@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { qualificationHash } from './runtime-qualification-execution.mjs';
 import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
+import { assertRequestContinuityProfile } from './request-continuity.mjs';
 
 export const stagingOwner = 'rivet.dev/qualification-operation';
 export const stagingRegistry = 'rivet.dev/qualification-registry';
@@ -12,6 +13,10 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  if (value.requestContinuityProfile) {
+    assertRequestContinuityProfile(value.requestContinuityProfile);
+    assert.match(value.region, /^[a-z]+-[a-z]+[0-9]+$/, 'Continuity requires the actual regional Compute scope');
+  }
   if (value.developerOverlapProfile) overlapQualificationProfile(value.developerOverlapProfile);
   assert.equal(value.protocol, 1);
   assert.equal(value.mode, 'reusable-cluster');

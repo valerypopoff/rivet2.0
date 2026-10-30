@@ -271,12 +271,12 @@ major upgrades simply to obtain a zero-count report.
 All final platform scans pass the **unchanged** High/Critical gate using Trivy
 0.76.1 and database `UpdatedAt=2026-10-25T07:10:41.872962161Z`:
 
-| Image | Platforms | Previous High/Critical | Final High/Critical | Final total findings |
-| ----- | --------- | ---------------------: | ------------------: | -------------------: |
-| Proxy | amd64, arm64 | 0 | 0 | 0 |
-| Web | amd64, arm64 | 27 each | 0 | 0 |
-| API | amd64 | 203 | 0 | 67 |
-| Executor | amd64 | 191 | 0 | 67 |
+| Image    | Platforms    | Previous High/Critical | Final High/Critical | Final total findings |
+| -------- | ------------ | ---------------------: | ------------------: | -------------------: |
+| Proxy    | amd64, arm64 |                      0 |                   0 |                    0 |
+| Web      | amd64, arm64 |                27 each |                   0 |                    0 |
+| API      | amd64        |                    203 |                   0 |                   67 |
+| Executor | amd64        |                    191 |                   0 |                   67 |
 
 API/executor each have the lower-severity breakdown described above. Their final
 image IDs are `sha256:91845d06c3dca2fac7d266d0200b743c89cd9202ab740b933b1b1a4160d28884`
@@ -346,3 +346,132 @@ was added and no production resource was accessed.
 These are local image/functional results, not GKE qualification. Committing this
 source change does not deploy, change cloud resources or publish images. Follow
 normal CI and release approval separately before changing a running installation.
+
+## Temporary qualification actor boundary
+
+The qualification actor is a separate final-image security boundary, not covered
+by passing API/executor scans. Its Dockerfile must use the same pinned Node and
+Go/esbuild remediation as the graph-capable images. It retains esbuild 0.25.12's
+JavaScript API and all six platform packages, replacing their binaries with the
+existing Go 1.27.3 build. Both executable resolution paths are tested. npm stays
+available, with npm 11.21.1, its dependency-only Undici 6.29.1 update and the
+existing cache-policy source/behavior guard. The final UID-10001 image runs the
+same transform/plugin, converter and offline npm installation checks.
+
+The actor's Helm 3 and kubectl 1.34 patch-line updates must also pass the complete
+image scan and real chart/transport checks; updating a version is not itself
+security evidence. Do not switch Helm majors or use an incompatible kubectl
+minor merely to reduce findings. Kubernetes documents the supported
+[kubectl version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+Helm 3.22.1 is rebuilt from its checksum-verified upstream module using the pinned
+Go 1.27.3 compiler without changing its module graph (`-mod=readonly`). The
+versioned `go install` preserves its actual main-module version/checksum in Go's
+build inventory; a `(devel)` main module is rejected, not relabeled or ignored.
+This preserves future advisory matching in addition to fixing today's findings.
+The official binary still uses Go 1.26.9. The local build identifies itself with
+`+rivet.go1.27.3`, not a fabricated upstream Git commit; its build inventory and
+license are retained under `/opt/rivet/toolchain`. The official kubectl 1.34.13
+binary still contains vulnerable x/net and x/text versions. A small locked
+build-only Go tool module compiles its **unmodified upstream main package** with
+matching Kubernetes 0.34.13 libraries, x/net 0.60.0 and x/text 0.42.0. The retained
+tooling/test-only compression dependency resolves to patched 1.18.7 source too.
+No local replacement main or Kubernetes source fork is maintained. Normal image
+builds cannot rewrite this policy or its checksums. Both CLIs retain actual
+upstream module versions/checksums and explicit Rivet rebuild markers; no Go
+compiler or build cache enters the final actor.
+
+The additional mandatory non-root final-image probe runs real kubectl against a
+temporary local trusted-TLS/HTTP2 API, with an explicit synthetic kubeconfig.
+It checks file-backed exact-identity writes, a committed write with a lost
+acknowledgement (no resend), read-only inspection and rejection of a stale
+resource version. It cannot access a host kubeconfig or live cluster. The
+separate actor browser/video and chart-render checks remain required.
+The named `qualification-toolchain` build stage runs that probe before copying
+or compiling the application checkout. Independent tool layers do not depend on
+`SOURCE_SHA`; full actor builds still include all source, dependency and browser
+gates. Testing this stage alone is not a passing full-actor vulnerability scan.
+
+The maintained actor source projection excludes **only**
+`packages/app/src-tauri`, the unused native desktop backend, using Git's explicit
+sparse-checkout mechanism. The browser editor and hosted source remain present;
+no native desktop binary is built or installed in this image. This is removal of
+an unused component from the actor package, not an advisory exception or scanner
+path exclusion. Desktop source files, Cargo manifests/lockfile and their separate
+audit in the real repository are unchanged. This does not remediate or qualify
+the desktop ZIP dependency itself. Its
+[upstream advisory](https://github.com/zip-rs/zip2/security/advisories/GHSA-m665-v7pm-7grj)
+remains relevant to desktop maintenance.
+
+The full commit/tree identity is retained. Shared source admission validates the
+original SHA, exact allowed projection, exact excluded paths and absence of the
+excluded working-tree directory. Unexpected sparse paths, assume-unchanged flags,
+hidden required files, dirty content and foreign revisions fail closed. Full
+clean checkouts remain supported; they cannot use arbitrary skip-worktree flags.
+The installer, offline actor and provider entry point all use this boundary.
+The context builder uses that same verifier before cloning and after applying
+the permitted projection. Admission explicitly includes all non-ignored
+untracked files, regardless of `status.showUntrackedFiles`, and disables Git's
+configured filesystem-monitor hooks. A user's display/performance preference is
+not source-integrity evidence and must not execute a host hook during inspection.
+All verification and context-building Git commands disable replacement objects:
+an expected `HEAD` SHA must refer to its actual committed tree, not a local
+`refs/replace` substitution. A replacement cannot make unrelated bytes qualify
+as the expected source. Existing host replacement refs are left untouched.
+Regression tests check original native bytes remain unchanged, along with hidden
+edits/missing required files and projection changes. No container scan finding is
+ignored, reclassified, or waived by the desktop's separate audit policy.
+
+### Qualification actor scan — 2026-10-30
+
+Release preparation later observed production on GKE 1.36.4. The current actor
+therefore deliberately advances kubectl to upstream 1.36.6 and its matching
+0.36.6 libraries, retaining the pinned Go compiler and reviewed networking/text
+minimums. The previous 1.34 client is outside the supported one-minor client skew.
+This client update requires a fresh build, transport probe and full actor scan;
+the historical image/scan below does not qualify it. See the upstream
+[version-skew policy](https://kubernetes.io/releases/version-skew-policy/).
+
+The final local Linux-amd64 actor
+`sha256:9dedcb136e4dd71cda5a519162a563474008c59cac331f6f50441c1895783b25`
+passed the unchanged Trivy gate with **zero High/Critical** findings, compared
+with 247 in the initial actor. It retains 56 Medium, 11 Low and 10 Unknown
+finding instances. They remain in the report; no exception or suppression was
+added. The analysis used database `UpdatedAt=2026-10-30T01:01:11.134360213Z` and
+was recorded at `2026-10-30T10:37:38.284Z`. The sanitized assessment binds its
+image ID, platform and archive hash. Reports are under
+`artifacts/staging-security-20261030/acceptance/actor-scan`.
+
+This is a disposable clean-source local build, not a published release. The
+separate actor preflight, real frontend Playwright journey and CLI/TLS/HTTP2
+probe passed. The exact scanned image also passed 78 Linux transport/chart,
+two source/installer and 27 kernel-lock/process tests, with no skips; their
+fixtures use synthetic local data. Preserve normal CI,
+published-source binding and provider qualification before cloud admission.
+
+### Source-admission review follow-up — 2026-10-30
+
+The subsequent review reproduced a clean-source bypass when
+`status.showUntrackedFiles=no` hid an extra source file. It also verified that a
+configured Git filesystem-monitor hook could execute during the earlier source
+inspection. The shared verifier now explicitly includes untracked files and
+disables that hook. The builder uses it on both sides of cloning instead of
+maintaining separate, weaker clean-checkout assertions.
+
+The strengthened existing source/installer regressions passed on Windows and
+Linux, including real configured-hook and hidden-file cases. Linux used the
+previously scanned image with only the three reviewed source/test files mounted
+read-only; this is current-source test evidence, not a new immutable-image scan.
+The earlier image/scan identities above remain historical, unchanged evidence.
+Rebuild and scan the exact published candidate through normal CI before using
+the updated actor. No dependency versions, scanner rules or native desktop
+sources changed in this follow-up.
+
+Further source-identity review reproduced a local `refs/replace` substitution:
+`HEAD` still reported the expected SHA and ordinary Git status was clean, but
+the working tree contained different source. Verification and context-building
+commands now use `--no-replace-objects`. The existing regression checks both
+direct verification and rejection before cloning; after removing the fixture's
+replacement, ordinary verification succeeds again. Both source/installer tests
+passed on Windows and Linux without skips, along with the seven security-policy
+regressions. Linux again used reviewed read-only overlays, not a newly built or
+scanned actor. No real repository replacement refs were changed.

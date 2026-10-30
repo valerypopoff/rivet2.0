@@ -41,7 +41,7 @@ spec:
       imagePullSecrets:
 {{ toYaml . | nindent 8 }}
       {{- end }}
-      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ (include "rivet.proxyLifecycle" . | fromJson).terminationGracePeriodSeconds }}
       {{- include "rivet.pod.placement" (dict "root" . "component" "proxy") | nindent 6 }}
       securityContext:
         fsGroup: 10001

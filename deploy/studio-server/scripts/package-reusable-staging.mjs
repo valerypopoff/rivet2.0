@@ -56,7 +56,11 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
         { apiGroups: ['apps'], resources: ['statefulsets', 'deployments'], verbs: ['get', 'list', 'patch'] },
         { apiGroups: ['batch'], resources: ['jobs'], verbs: ['get', 'list'] },
         { apiGroups: ['gateway.networking.k8s.io'], resources: ['gateways', 'httproutes'], verbs: ['get', 'list'] },
-        { apiGroups: ['networking.gke.io'], resources: ['healthcheckpolicies'], verbs: ['get', 'list'] },
+        {
+          apiGroups: ['networking.gke.io'],
+          resources: ['healthcheckpolicies', 'gcpbackendpolicies'],
+          verbs: ['get', 'list'],
+        },
         { apiGroups: [''], resources: ['pods/exec'], verbs: ['get', 'create'] },
         { apiGroups: [''], resources: ['pods', 'namespaces'], verbs: ['delete'] },
         { apiGroups: ['gateway.networking.k8s.io'], resources: ['httproutes'], verbs: ['delete'] },

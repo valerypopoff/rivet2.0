@@ -107,8 +107,8 @@ for (const ha of [true, false])
       };
       await connect();
       if (ha) {
-        await expect(page.getByText(/Latest debugger history was truncated/)).toBeVisible();
         await expect.poll(() => receivedFrames).toBeGreaterThanOrEqual(33);
+        await expect(page.getByText(/Latest debugger history was truncated/)).toHaveCount(0);
       }
       const output = page.locator(`.node[data-nodeid="${node.id}"] .node-output`);
       await runner.run();
@@ -157,6 +157,7 @@ for (const ha of [true, false])
       }
       await expect(page.getByRole('button', { name: 'Stop Remote Debugger', exact: true })).toBeVisible();
       await expect(page.getByText(/Graph execution error/)).toHaveCount(0);
+      await expect(page.getByText(/Latest debugger history was truncated/)).toHaveCount(0);
       expect(fixture.connectionCount()).toBe(2);
       expect(commands).toEqual([]);
       await page.getByRole('button', { name: 'Stop Remote Debugger', exact: true }).click();

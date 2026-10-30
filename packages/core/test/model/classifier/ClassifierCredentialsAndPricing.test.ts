@@ -125,7 +125,7 @@ void test('Jev 1.14 produces numeric Cost in inline and profile modes, independe
       }
 });
 
-void test('Decisions pricing ignores cache/output metadata and uses input tokens for the context threshold', () => {
+void test('OpenAI Decisions prices cache subsets and uses total input tokens for the context threshold', () => {
   const provider = getClassifierProvider('openai');
   const models = { requestedModel: 'gpt-6-luna', responseModel: 'gpt-6-luna' };
   for (const input_tokens of [0, 1, 271_999, 272_000, 272_001, 1_000_000]) {
@@ -133,14 +133,20 @@ void test('Decisions pricing ignores cache/output metadata and uses input tokens
       input_tokens,
       output_tokens: 9_999,
       total_tokens: 2_000_000,
-      input_tokens_details: { cached_tokens: input_tokens, cache_write_tokens: input_tokens },
+      input_tokens_details: {
+        cached_tokens: Math.floor(input_tokens / 2),
+        cache_write_tokens: input_tokens - Math.floor(input_tokens / 2),
+      },
     };
-    const expected = (input_tokens * (input_tokens > 272_000 ? 0.2 : 0.1)) / 1_000_000;
+    const expected =
+      ((Math.floor(input_tokens / 2) * 0.01 + (input_tokens - Math.floor(input_tokens / 2)) * 0.125) *
+        (input_tokens > 272_000 ? 2 : 1)) /
+      1_000_000;
     assert.equal(calculateClassifierUsageCost(provider, usage, models), expected);
     assert.equal(
       calculateClassifierUsageCost(provider, { input_tokens, output_tokens: 0 }, models),
-      expected,
-      'optional usage details must not add charges or discounts to Decisions',
+      (input_tokens * (input_tokens > 272_000 ? 0.2 : 0.1)) / 1_000_000,
+      'legacy receipts without cache details retain aggregate input pricing',
     );
   }
 });
@@ -213,7 +219,10 @@ void test('All providers price aggregate multi-question usage once and preserve 
           settings: { classifierProviders: { [providerId]: { apiKey: 'fixture' } } },
         } as InternalProcessContext,
       );
-      const expected = (3_200 * inputRate) / 1_000_000;
+      const expected =
+        providerId === 'openai'
+          ? (2_900 * inputRate + 100 * 0.01 + 200 * 0.125) / 1_000_000
+          : (3_200 * inputRate) / 1_000_000;
       assert.equal(calls, 1);
       assert.equal(Object.keys(sent.questions).length, 2);
       if (providerId === 'liquid') assert.deepEqual(sent.images, [image]);
