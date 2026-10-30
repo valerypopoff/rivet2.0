@@ -37,8 +37,25 @@ function gauge(text, name, labels) {
   return value;
 }
 
+class KubernetesResponseError extends Error {
+  constructor(method, response) {
+    super(`Kubernetes ${method} failed (${response.statusCode}); write acknowledgement may be unknown.`);
+    this.status = response.statusCode;
+    this.retryAfter = response.headers['retry-after'];
+  }
+}
+function readRetryDelay(value, attempt) {
+  if (typeof value === 'string') {
+    if (/^\d+$/.test(value)) return Number(value) * 1000;
+    const date = Date.parse(value);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  }
+  return 250 * 2 ** attempt;
+}
+
 /** Strict TLS in-cluster; loopback HTTP is injectable only by the local tests.
- * No automatic retries, redirects or response bodies in error logs. */
+ * Only explicit GET throttling is retried, within one deadline. No write
+ * retries, redirects or response bodies in error logs. */
 export function createKubernetesTransport({
   origin,
   token = () => readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/token', 'utf8').trim(),
@@ -62,55 +79,65 @@ export function createKubernetesTransport({
     ...(base.protocol === 'https:' ? { ca: ca(), rejectUnauthorized: true } : {}),
   });
   return {
-    json(method, path, body, contentType = 'application/json') {
-      return new Promise((resolve, reject) => {
-        const auth = credentials();
-        const payload = body === undefined ? undefined : JSON.stringify(body);
-        const request = (base.protocol === 'https:' ? https : http).request(
-          new URL(path, base),
-          {
-            ...auth,
-            method,
-            headers: {
-              ...auth.headers,
-              accept: 'application/json',
-              'content-type': contentType,
-              ...(payload === undefined ? {} : { 'content-length': Buffer.byteLength(payload) }),
+    async json(method, path, body, contentType = 'application/json') {
+      const deadline = performance.now() + timeoutMs;
+      const requestOnce = () =>
+        new Promise((resolve, reject) => {
+          const auth = credentials();
+          const payload = body === undefined ? undefined : JSON.stringify(body);
+          const request = (base.protocol === 'https:' ? https : http).request(
+            new URL(path, base),
+            {
+              ...auth,
+              method,
+              headers: {
+                ...auth.headers,
+                accept: 'application/json',
+                'content-type': contentType,
+                ...(payload === undefined ? {} : { 'content-length': Buffer.byteLength(payload) }),
+              },
             },
-          },
-          (response) => {
-            const chunks = [];
-            let bytes = 0;
-            response.on('data', (chunk) => {
-              if ((bytes += chunk.length) > 4 * 1024 * 1024)
-                response.destroy(new Error('Kubernetes response exceeds the bounded inventory size.'));
-              else chunks.push(chunk);
-            });
-            response.once('error', reject);
-            response.once('end', () => {
-              if (response.statusCode === 404 && method === 'GET') return resolve(null);
-              if (response.statusCode < 200 || response.statusCode >= 300)
-                return reject(
-                  new Error(
-                    `Kubernetes ${method} failed (${response.statusCode}); write acknowledgement may be unknown.`,
-                  ),
-                );
-              try {
-                resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-              } catch {
-                reject(new Error('Kubernetes returned a non-JSON response.'));
-              }
-            });
-          },
-        );
-        const timer = setTimeout(
-          () => request.destroy(new Error('Kubernetes request deadline exceeded; observe before retrying writes.')),
-          timeoutMs,
-        );
-        request.once('close', () => clearTimeout(timer));
-        request.once('error', reject);
-        request.end(payload);
-      });
+            (response) => {
+              const chunks = [];
+              let bytes = 0;
+              response.on('data', (chunk) => {
+                if ((bytes += chunk.length) > 4 * 1024 * 1024)
+                  response.destroy(new Error('Kubernetes response exceeds the bounded inventory size.'));
+                else chunks.push(chunk);
+              });
+              response.once('error', reject);
+              response.once('end', () => {
+                if (response.statusCode === 404 && method === 'GET') return resolve(null);
+                if (response.statusCode < 200 || response.statusCode >= 300)
+                  return reject(new KubernetesResponseError(method, response));
+                try {
+                  resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                } catch {
+                  reject(new Error('Kubernetes returned a non-JSON response.'));
+                }
+              });
+            },
+          );
+          const timer = setTimeout(
+            () => request.destroy(new Error('Kubernetes request deadline exceeded; observe before retrying writes.')),
+            Math.max(1, deadline - performance.now()),
+          );
+          request.once('close', () => clearTimeout(timer));
+          request.once('error', reject);
+          request.end(payload);
+        });
+      for (let attempt = 0; ; attempt++) {
+        try {
+          if (performance.now() >= deadline) throw new Error('Kubernetes request deadline exceeded.');
+          return await requestOnce();
+        } catch (error) {
+          if (method !== 'GET' || !(error instanceof KubernetesResponseError) || error.status !== 429 || attempt >= 2)
+            throw error;
+          const delay = readRetryDelay(error.retryAfter, attempt);
+          if (!Number.isFinite(delay) || delay >= deadline - performance.now()) throw error;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
     },
     exec(path, command, { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr } = {}) {
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(container)) throw new Error('Kubernetes exec container is invalid.');

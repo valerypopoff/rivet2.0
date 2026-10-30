@@ -1157,6 +1157,28 @@ backups, reserved addresses, load balancers, log sinks and bucket versions are
 accounted for so teardown does not leave unnoticed recurring charges. Never
 delete a project, database, bucket or cluster inferred from the current context.
 
+### Temporary namespace diagnostic Events
+
+Temporary bootstrap inventory first verifies each operation-owned namespace's
+exact UID and performs complete namespaced API discovery. Cleanup inventory
+includes only listable resources that also support individual deletion; read-only
+projections such as PodMetrics are not listed or admitted as persisted objects.
+Deletable objects still require their UID and exact namespace. Standard core/v1 and
+events.k8s.io Events inside that namespace are ephemeral diagnostics; their
+regarding reference need not remain present or carry a UID. GKE can emit
+UID-less Pod eviction Events and retain NEG Events after the referenced
+controller object has already been garbage-collected. Both mirrored API paths
+are retained for the final namespace-absence checks.
+
+This allowance applies only to the standard Event API resources in the exact
+owned namespace. Event UIDs never seed or extend the ownership graph, including
+Events retained in an earlier inventory snapshot. An unknown custom resource
+owned only by an Event still blocks cleanup, as does an unrelated custom API
+whose kind happens to be named Event. Namespace replacement and foreign
+namespace contents also remain failures. Do not substitute name-prefix matching,
+Event messages or controller text for exact resource ownership. Blocked private
+diagnostics retain object identities and paths, without exporting raw bodies.
+
 ### Provider-retained networking
 
 Cloud SQL can acknowledge instance deletion while retaining its producer-side

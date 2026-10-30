@@ -5,7 +5,6 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
-import { isIP } from 'node:net';
 import { parse } from 'yaml';
 import { createKubernetesTransport } from './execution-autoscaler-kubernetes.mjs';
 import { packageReusableStaging } from '../package-reusable-staging.mjs';
@@ -21,9 +20,10 @@ import {
   temporaryHostname,
   assertTemporaryCertificate,
 } from './temporary-staging-contract.mjs';
-import { temporaryFoundationSpecs } from './temporary-staging-gcp.mjs';
+import { temporaryFoundationSpecs, assertTemporaryClusterNodeIdentity } from './temporary-staging-gcp.mjs';
 import { inspectStagingPrerequisites } from './reusable-staging-prerequisites.mjs';
 import { captureTemporaryBootstrap } from './temporary-staging-inventory.mjs';
+import { inspectTemporaryActorNodeIdentity } from './temporary-staging-node-identity.mjs';
 import { verifyOfflineTemporaryActor, verifyTemporaryActorExport } from './temporary-staging-actor.mjs';
 import {
   verifyAnonymousStagingImage,
@@ -235,11 +235,7 @@ export function temporaryStagingRuntime({
     assert.ok(ready(pod), 'Exact actor is not ready');
     if (record.actorNodeIdentity) {
       const node = await api.json('GET', `/api/v1/nodes/${pod.spec.nodeName}`);
-      assert.equal(node?.metadata.uid, record.actorNodeIdentity.nodeUid);
-      assert.equal(node.spec.providerID, record.actorNodeIdentity.providerId);
-      const [, project, zone, name] = /^gce:\/\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(node.spec.providerID);
-      const instance = await cloud.request('compute', 'GET', `projects/${project}/zones/${zone}/instances/${name}`);
-      assert.equal(String(instance?.id), record.actorNodeIdentity.instanceId);
+      await inspectTemporaryActorNodeIdentity(record, cloud, pod, node, record.actorNodeIdentity);
     }
     const diagnostics = [];
     let bytes = 0,
@@ -372,6 +368,13 @@ export function temporaryStagingRuntime({
       checkpoint = guard;
       let record = await hydrate(store, cloud),
         plan = record.plan;
+      const clusterSpec = temporaryFoundationSpecs(plan).find((spec) => spec.key === 'cluster');
+      const liveCluster = await cloud.get(clusterSpec);
+      assert.equal(
+        cloud.identity(clusterSpec, liveCluster).id,
+        record.resources.find((item) => item.key === 'cluster').identity.id,
+      );
+      assertTemporaryClusterNodeIdentity(plan, liveCluster);
       const clusterUid = (await api.json('GET', ns('kube-system'))).metadata.uid;
       const kubernetesService = await api.json('GET', '/api/v1/namespaces/default/services/kubernetes');
       assert.ok(kubernetesService?.metadata.uid);
@@ -824,33 +827,15 @@ export function temporaryStagingRuntime({
       });
       const actorPod = await api.json('GET', `${ns(runner)}/pods/qualification-actor`);
       const node = await api.json('GET', `/api/v1/nodes/${actorPod.spec.nodeName}`);
-      assert.ok(node?.metadata.uid && node.spec?.providerID);
-      const match = new RegExp(`^gce://${plan.projectId}/(${plan.region}-[a-z])/([a-z0-9-]+)$`).exec(
-        node.spec.providerID,
+      const actorNodeIdentity = await inspectTemporaryActorNodeIdentity(
+        (await store.read()).record,
+        cloud,
+        actorPod,
+        node,
       );
-      assert.ok(match);
-      const instance = await cloud.request(
-        'compute',
-        'GET',
-        `projects/${plan.projectId}/zones/${match[1]}/instances/${match[2]}`,
-      );
-      assert.ok(instance?.id && instance.name === match[2]);
-      const interfaces =
-        instance.networkInterfaces?.filter((i) =>
-          i.network?.endsWith(`/projects/${plan.projectId}/global/networks/${plan.operationId}`),
-        ) ?? [];
-      assert.equal(interfaces.length, 1);
-      const egress = interfaces[0].accessConfigs?.map((i) => i.natIP).filter(Boolean) ?? [];
-      assert.equal(egress.length, 1, 'Actor requires verified public-node egress; no implicit NAT or world-open auth');
-      assert.equal(isIP(egress[0]), 4);
-      settings.trustedClients = [...new Set([...settings.trustedClients, `${egress[0]}/32`])];
+      settings.trustedClients = [...new Set([...settings.trustedClients, `${actorNodeIdentity.egressIp}/32`])];
       await store.change((r) => {
-        r.actorNodeIdentity = {
-          nodeUid: node.metadata.uid,
-          providerId: node.spec.providerID,
-          instanceId: String(instance.id),
-          egressIp: egress[0],
-        };
+        r.actorNodeIdentity = actorNodeIdentity;
       });
       const output = path.join(store.directory, 'package');
       const { driverDigest } = await packageReusableStaging({

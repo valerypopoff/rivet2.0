@@ -11,6 +11,18 @@ local validation results are recorded in that guide and the implementation
 handoff. Phases F–G still require their operation-specific approvals and actual
 provider evidence; no production guarantee follows from repository tests alone.
 
+The first isolated Autopilot attempt in the October 31 campaign failed before
+application qualification. Live observations exposed an ignored legacy node
+service-account field, managed nodes absent from the customer Compute inventory,
+and cleanup discovery that confused diagnostic Events and read-only metrics with
+persisted owned objects. The repaired source uses the Autopilot node defaults,
+checks the actual node account before bootstrap writes, validates managed Node
+identity against the pinned cluster/network, and inventories only deletable
+objects without treating Events as ownership authority. The failed attempt does
+not qualify a release. Fresh exact-source image/actor checks, successful regional
+qualifications, their verified cleanup, and both observed production updates
+remain required; production serving configuration is unchanged.
+
 Release preparation began on 2026-10-30 after authorization to carry out the
 remaining sequence. The candidate includes the continuity changes and their
 existing temporary-staging/toolchain prerequisites. Fresh read-only inspection
@@ -50,7 +62,7 @@ facts and temporal overlap rather than successful scenario names.
 | C     | Implemented, locally checked                 | `proxy-continuity-transition.mjs`, Kubernetes/Compute adapter, exact-token recovery and per-resource lost-create/route/delete tests.                                                                         |
 | D     | Implemented, locally checked                 | `provider-request-continuity.mjs`, HPA observer, admission markers, duration/native-roll/return probes, version-2 evidence validators and provider behavior tests. Actual provider observations remain in F. |
 | E     | Local checks recorded; exact-image gate open | Kubernetes, browser, transport, qualification, cutover and documentation checks; the clean candidate's complete packaged actor/image verification remains required.                                          |
-| F     | Not executed                                 | Fresh budget/expiry/hostname/cleanup authority, isolated regional qualification, retained observations and verified cleanup.                                                                                 |
+| F     | Attempted; no successful qualification       | Repair and revalidate the exact source after the failed Autopilot bootstrap; successful isolated regional qualification, retained observations and verified cleanup remain required.                         |
 | G     | Not executed                                 | Publish the qualified immutable release, fresh production packet/preflight/backup, then the approved first transition and independent acceptance.                                                            |
 | H     | Supported in code; live completion pending   | Already-protected admission omits bootstrap; a later actual mixed-image update must still prove this on GKE.                                                                                                 |
 

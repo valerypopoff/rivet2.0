@@ -276,6 +276,7 @@ export async function prepareHaReplacements({
     'Preparation receipt lost or changed a required Job',
   );
   const jobState = (name) => operation.record.preparation.jobs.find((j) => j.name === name);
+  const hasWarmIdentity = (j) => j.createIssued && j.uid && j.warmed && j.podUid && j.nodeUid && j.nodeName;
   const verifyPreparedNodes = () =>
     parallel(
       operation.record.preparation.jobs.filter((j) => j.warmed),
@@ -305,9 +306,7 @@ export async function prepareHaReplacements({
   const read = (name) => json(['get', 'job', name, '--ignore-not-found', '-o', 'json']);
   if (preparation.state === 'complete') {
     assert.ok(
-      preparation.jobs.every(
-        (j) => j.createIssued && j.uid && j.warmed && j.podUid && j.nodeUid && j.nodeName && j.deleteIssued && j.absent,
-      ),
+      preparation.jobs.every((j) => hasWarmIdentity(j) && j.deleteIssued && j.absent),
       'Preparation completion facts are incomplete',
     );
     for (const item of preparation.jobs) {
@@ -343,6 +342,13 @@ export async function prepareHaReplacements({
       jobs,
       async (desired) => {
         const item = jobState(desired.metadata.name);
+        // Cleanup may have applied before its final checkpoint was acknowledged.
+        // Keep the warming proof; cleanup below still verifies exact absence and
+        // current Node identity without replaying CREATE or DELETE.
+        if (item.warmed && item.deleteIssued) {
+          assert.ok(hasWarmIdentity(item), 'Deleted preparation Job has incomplete warming proof');
+          return;
+        }
         let job;
         if (!item.createIssued) {
           assertAdmission();

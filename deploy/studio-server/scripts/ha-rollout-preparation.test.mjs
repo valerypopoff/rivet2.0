@@ -82,6 +82,11 @@ async function fixture(t, fault, selectedResources = resources) {
     },
     async checkpoint(changes) {
       this.assertLease();
+      if (faults.has('lost-final-checkpoint') && !consumed && changes.preparation?.state === 'complete') {
+        consumed = true;
+        operation.expired = true;
+        throw new Error('fixture lost final preparation checkpoint');
+      }
       Object.assign(record, structuredClone(changes));
       if (faults.has('namespace-change') && record.preparation?.jobs.some((j) => j.createIssued))
         namespaceUid = 'replacement-ns';
@@ -107,7 +112,7 @@ async function fixture(t, fault, selectedResources = resources) {
       if (url.pathname.includes('/nodes/')) {
         if (faults.has('admission-expiry')) clock = 1001;
         return send({
-          metadata: { name, uid: `uid-${name}` },
+          metadata: { name, uid: faults.has('replaced-node') ? 'replacement-node' : `uid-${name}` },
           status: {
             conditions: [{ type: 'Ready', status: faults.has('node-loss-at-cleanup') && consumed ? 'False' : 'True' }],
           },
@@ -203,6 +208,10 @@ async function fixture(t, fault, selectedResources = resources) {
         req.socket.destroy();
         return;
       }
+      if (faults.has('lease-loss-after-delete') && !consumed) {
+        consumed = true;
+        operation.expired = true;
+      }
       return send({ kind: 'Status' });
     }
     res.statusCode = 501;
@@ -244,6 +253,7 @@ async function fixture(t, fault, selectedResources = resources) {
     jobs,
     pods,
     calls,
+    faults,
     operation,
     maximumCreates: () => maximumCreates,
     run: () =>
@@ -497,7 +507,82 @@ test('lease loss fences cleanup; exact recovery observes accepted Jobs without c
   assert.equal(f.jobs.size + f.pods.size, 0);
 });
 
-for (const fault of ['no-capacity', 'image-pull', 'lost-create', 'lost-delete', 'replaced-job', 'orphan-pod'])
+test('interrupted cleanup and a lost completion checkpoint recover recorded warming without replay', async (t) => {
+  for (const fault of ['lease-loss-after-delete', 'lost-final-checkpoint'])
+    await t.test(fault, async (t) => {
+      const f = await fixture(t, fault, [...resources, resource('evaluation')]);
+      await assert.rejects(f.run(), /lease expired|lost final preparation checkpoint/);
+      const saved = structuredClone(f.operation.record.preparation);
+      assert.equal(saved.state, 'preparing');
+      assert.ok(saved.jobs.every((j) => j.warmed && j.uid && j.podUid && j.nodeUid));
+      const creates = f.calls.filter((c) => c.method === 'POST').length;
+      const deleted = f.calls.filter((c) => c.method === 'DELETE').map((c) => c.url);
+      assert.ok(deleted.length > 0);
+      if (fault === 'lease-loss-after-delete') {
+        assert.ok(f.jobs.size > 0, 'The interruption must leave cleanup unfinished');
+        assert.ok(
+          saved.jobs.some((j) => j.deleteIssued && !j.absent),
+          'Absence acknowledgement must be lost',
+        );
+      } else {
+        assert.equal(f.jobs.size + f.pods.size, 0);
+        assert.ok(saved.jobs.every((j) => j.deleteIssued && j.absent));
+      }
+      f.operation.expired = false; // Explicit recovery owns the same operation token.
+      await f.run();
+      assert.equal(f.operation.record.preparation.state, 'complete');
+      assert.equal(f.jobs.size + f.pods.size, 0);
+      assert.equal(f.calls.filter((c) => c.method === 'POST').length, creates);
+      for (const url of deleted) assert.equal(f.calls.filter((c) => c.method === 'DELETE' && c.url === url).length, 1);
+      assert.equal(f.calls.filter((c) => c.method === 'DELETE').length, saved.jobs.length);
+    });
+});
+
+test('lost DELETE acknowledgement recovers only from complete warming proof and observed absence', async (t) => {
+  const f = await fixture(t, 'lost-delete');
+  await assert.rejects(f.run());
+  assert.equal(f.operation.record.preparation.state, 'preparing');
+  assert.ok(f.operation.record.preparation.jobs.every((j) => j.warmed && j.uid && j.podUid && j.nodeUid));
+  assert.equal(f.jobs.size + f.pods.size, 0);
+  const writes = f.calls.filter((c) => c.method !== 'GET').length;
+  await f.run();
+  assert.equal(f.operation.record.preparation.state, 'complete');
+  assert.equal(f.calls.filter((c) => c.method !== 'GET').length, writes);
+});
+
+test('interrupted preparation completion rejects changed identities, surviving children and incomplete proof', async (t) => {
+  for (const fault of ['replaced-node', 'replaced-job', 'orphan-pod', 'missing-warming-identity'])
+    await t.test(fault, async (t) => {
+      const f = await fixture(t, 'lost-final-checkpoint');
+      await assert.rejects(f.run(), /lost final preparation checkpoint/);
+      f.operation.expired = false;
+      const item = f.operation.record.preparation.jobs[0];
+      if (fault === 'replaced-node') f.faults.add(fault);
+      if (fault === 'replaced-job') {
+        const created = structuredClone(
+          f.calls.find((c) => c.method === 'POST' && c.body.metadata.name === item.name).body,
+        );
+        Object.assign(created.metadata, { uid: 'replacement-job', resourceVersion: '99' });
+        f.jobs.set(item.name, created);
+      }
+      if (fault === 'orphan-pod')
+        f.pods.set(item.uid, {
+          metadata: {
+            name: item.name + '-orphan',
+            uid: item.podUid,
+            labels: { 'job-name': item.name },
+            ownerReferences: [{ controller: true, uid: item.uid }],
+          },
+        });
+      if (fault === 'missing-warming-identity') delete item.nodeUid;
+      const writes = f.calls.filter((c) => c.method !== 'GET').length;
+      await assert.rejects(f.run(), /node identity|Job was replaced|child cleanup|incomplete warming proof/);
+      assert.notEqual(f.operation.record.preparation.state, 'complete');
+      assert.equal(f.calls.filter((c) => c.method !== 'GET').length, writes);
+    });
+});
+
+for (const fault of ['no-capacity', 'image-pull', 'lost-create', 'replaced-job', 'orphan-pod'])
   test(`real HTTP ${fault} cannot retire an owner or replay a preparation write`, async (t) => {
     const f = await fixture(t, fault);
     await assert.rejects(f.run());

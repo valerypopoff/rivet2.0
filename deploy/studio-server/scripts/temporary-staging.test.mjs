@@ -30,6 +30,7 @@ import { TemporaryStagingStore } from './lib/temporary-staging-store.mjs';
 import {
   temporaryGcp,
   temporaryFoundationSpecs,
+  assertTemporaryClusterNodeIdentity,
   cachedTemporaryToken,
   mintTemporaryToken,
 } from './lib/temporary-staging-gcp.mjs';
@@ -1017,6 +1018,66 @@ test('managed DNS admission requires a complete label boundary, not a lookalike 
       else assert.equal((await f.cloud.preflight()).length, 3);
       assert.equal((await f.control('_requests')).some(cloudWrite), false);
     });
+});
+
+test('Autopilot creation sends the dedicated node identity through auto-provisioned pool defaults', async (t) => {
+  const f = await fixture(t);
+  const spec = temporaryFoundationSpecs(f.plan).find((item) => item.kind === 'cluster');
+  await f.cloud.create(spec);
+  const actual = await f.cloud.get(spec);
+  assert.deepEqual(actual.autoscaling.autoprovisioningNodePoolDefaults, {
+    serviceAccount: f.plan.nodeServiceAccount,
+    oauthScopes: ['https://www.googleapis.com/auth/cloud-platform'],
+  });
+  assert.equal(actual.nodeConfig, undefined, 'Deprecated nodeConfig cannot configure Autopilot node provisioning');
+  assertTemporaryClusterNodeIdentity(f.plan, actual);
+});
+
+test('live Autopilot node identity rejects default, foreign and incompletely observed pools without losing cleanup ownership', () => {
+  const plan = temporaryPlan();
+  const spec = temporaryFoundationSpecs(plan).find((item) => item.kind === 'cluster');
+  const cluster = {
+    ...structuredClone(spec.body),
+    id: 'cluster-123',
+    endpoint: '192.0.2.10',
+    masterAuth: { clusterCaCertificate: 'local-fixture-ca' },
+    nodePools: [
+      {
+        config: {
+          serviceAccount: plan.nodeServiceAccount,
+          oauthScopes: ['https://www.googleapis.com/auth/cloud-platform'],
+        },
+      },
+    ],
+  };
+  assertTemporaryClusterNodeIdentity(plan, cluster);
+  for (const change of [
+    (value) => delete value.autoscaling,
+    (value) => (value.autoscaling.autoprovisioningNodePoolDefaults.serviceAccount = 'default'),
+    (value) => (value.autoscaling.autoprovisioningNodePoolDefaults.serviceAccount = plan.operatorServiceAccount),
+    (value) => (value.autoscaling.autoprovisioningNodePoolDefaults.oauthScopes = []),
+    (value) =>
+      (value.autoscaling.autoprovisioningNodePoolDefaults.oauthScopes =
+        'https://www.googleapis.com/auth/cloud-platform'),
+    (value) => (value.nodePools[0].config.serviceAccount = 'default'),
+    (value) => (value.nodePools[0].config.serviceAccount = plan.janitorServiceAccount),
+    (value) => delete value.nodePools[0].config,
+    (value) => (value.nodePools[0].config.oauthScopes = []),
+    (value) => (value.nodePools[0].config.oauthScopes = 'https://www.googleapis.com/auth/cloud-platform'),
+    (value) => (value.nodePools = {}),
+    (value) => (value.autopilot.enabled = false),
+  ]) {
+    const wrong = structuredClone(cluster);
+    change(wrong);
+    // A plausible legacy echo cannot override the authoritative defaults/pools.
+    wrong.nodeConfig = { serviceAccount: plan.nodeServiceAccount };
+    assert.throws(() => assertTemporaryClusterNodeIdentity(plan, wrong), /Autopilot/);
+    assert.equal(
+      temporaryGcp(plan).identity(spec, wrong).id,
+      cluster.id,
+      'Owned misconfiguration must remain cleanable',
+    );
+  }
 });
 
 test('missing firewall or certificate cleanup privileges block before any infrastructure write', async (t) => {

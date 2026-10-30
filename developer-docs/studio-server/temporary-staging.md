@@ -116,7 +116,8 @@ locked journal and immutable resource identities.
    separate Kubernetes Secrets, not actor environment variables.
    The actor and janitor use the UID-verified internal Kubernetes Service;
    management access remains on the separately restricted external endpoint.
-   Observe the actor's exact node/VM and add only its verified egress IPv4 `/32`
+   Observe the actor's exact authenticated Node and its visible VM, when available,
+   and add only its verified public egress IPv4 `/32`
    to the fixture's dummy-auth allowlist. This does not widen management access.
 6. Wait for fresh janitor, Gateway/listener, trusted TLS, CSI and metrics
    evidence. Re-observe production **read-only**, reject installation changes
@@ -718,3 +719,37 @@ record distinguishes failed/intermediate attempts from accepted results.
 These are local results, not a published candidate or GKE qualification. Normal
 review/CI, exact published-source builds and separately approved provider
 qualification remain necessary before production use.
+
+### Autopilot actor node identity
+
+The actor does not assume that an Autopilot Node has a customer-visible Compute
+Engine instance. When the instance lookup returns 404, only a live GKE response
+with `autopilot.enabled=true` can establish the explicit `gke-autopilot-node`
+proof. The response must retain the journaled immutable cluster ID, endpoint and
+CA. Its full `networkConfig.network` and `networkConfig.subnetwork` references
+must name this operation's project/VPC/node subnet; those Compute resources'
+immutable IDs and node CIDR are independently reread. The authenticated
+Kubernetes API must report the exact actor Pod/Node UIDs, project/zone-bound
+provider ID, one public IPv4 ExternalIP and one InternalIP in the owned node
+subnet. No Compute instance ID is invented for this proof.
+
+Visible instances retain the separate `compute-instance` proof with their exact
+Compute ID, canonical name, owned VPC/node subnet, subnet-bound InternalIP and
+public egress. The InternalIP is pinned and rechecked on later commands. Standard or unknown
+cluster capability cannot turn a 404 into an Autopilot proof, and a previously
+visible instance disappearing cannot silently switch proof kind. Each actor
+command rereads live GKE ownership and node/address identity before exec;
+replacement, address drift or changed network/CA stops it. Bootstrap also checks
+the reviewed Autopilot node-service-account configuration before any namespace,
+Workload Identity binding, ACME or workload write; cleanup does not inherit that
+admission check and can remove an originally misconfigured cluster.
+
+The GKE API documents `autopilot.enabled` and full project-relative network
+references in [Cluster/NetworkConfig](https://cloud.google.com/kubernetes-engine/docs/reference/rest/v1/projects.locations.clusters).
+Kubernetes documents the provider ID and InternalIP/ExternalIP address fields in
+the [Node API](https://kubernetes.io/docs/reference/kubernetes-api/core/node-v1/).
+The choice to combine these authenticated observations is Rivet's explicit
+Autopilot ownership contract, not a claim that Compute returned a hidden VM ID.
+Local HTTPS bootstrap regression includes a ready Autopilot actor with a404
+Compute lookup; node-identity tests reject wrong cluster/network/subnet,
+non-public addresses, changed node/address identities and a Standard cluster returning 404.

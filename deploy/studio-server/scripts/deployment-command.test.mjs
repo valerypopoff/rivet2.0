@@ -629,6 +629,11 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
       );
       const lost = await f.invoke();
       assert.equal(lost.code, 1, lost.stdout + lost.stderr);
+      assert.equal(
+        (await f.state()).injected,
+        true,
+        'Expected the intended lost template acknowledgement.\n' + lost.stdout + lost.stderr,
+      );
       const token = await f.expireLease();
       const helmWrites = () =>
         f.calls().then((calls) => calls.filter((c) => c.kind === 'helm' && c.args[0] === 'upgrade').length);
