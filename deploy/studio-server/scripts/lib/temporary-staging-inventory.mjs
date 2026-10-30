@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 
+const standardEventPath = (apiPath) =>
+  /^\/(?:api\/v1|apis\/events\.k8s\.io\/[^/]+)\/namespaces\/[^/]+\/events\/[^/]+$/.test(apiPath);
+
 /** Complete API discovery, not name-prefix ownership. Fresh namespace UIDs and
- * exact controller references delimit bootstrap garbage collection. Ambiguous
- * Events or unknown custom objects block deletion and are reported privately. */
+ * exact controller references delimit bootstrap garbage collection. Standard
+ * Events are diagnostic namespace contents, never ownership roots. Unknown
+ * custom objects still block deletion and are reported privately. */
 export async function captureTemporaryBootstrap(api, record) {
   const core = await api.json('GET', '/api/v1'),
     groups = await api.json('GET', '/apis');
@@ -16,8 +20,12 @@ export async function captureTemporaryBootstrap(api, record) {
     versions.push([`/apis/${version}`, resources]);
   }
   const known = new Set([
-      ...record.resources.filter((i) => i.kind === 'kubernetes' && i.identity).map((i) => i.identity.id),
-      ...(record.bootstrapChildren ?? []).map((i) => i.uid),
+      ...record.resources
+        .filter((i) => i.kind === 'kubernetes' && i.identity && !standardEventPath(i.apiPath))
+        .map((i) => i.identity.id),
+      ...(record.bootstrapChildren ?? [])
+        .filter((i) => i.kind !== 'Event' && !standardEventPath(i.apiPath))
+        .map((i) => i.uid),
     ]),
     found = [];
   for (const namespace of record.resources.filter(
@@ -29,9 +37,11 @@ export async function captureTemporaryBootstrap(api, record) {
   )) {
     const ns = await api.json('GET', namespace.apiPath);
     assert.equal(ns?.metadata.uid, namespace.identity.id);
+    // Read-only projections such as PodMetrics are not persisted namespace
+    // contents and have no object UID or namespace deletion lifecycle.
     for (const [prefix, list] of versions)
       for (const type of list.resources.filter(
-        (r) => r.namespaced && !r.name.includes('/') && r.verbs?.includes('list'),
+        (r) => r.namespaced && !r.name.includes('/') && r.verbs?.includes('list') && r.verbs.includes('delete'),
       )) {
         assert.match(type.name, /^[a-z0-9.-]+$/);
         let continuation;
@@ -44,7 +54,15 @@ export async function captureTemporaryBootstrap(api, record) {
           );
           assert.ok(Array.isArray(page?.items), 'Incomplete bootstrap inventory');
           for (const item of page.items) {
-            assert.ok(item.metadata?.uid && item.metadata.namespace === ns.metadata.name);
+            assert.ok(
+              item.metadata?.uid,
+              'Bootstrap resource UID is missing: ' + resource + '/' + (item.metadata?.name ?? '<unnamed>'),
+            );
+            assert.equal(
+              item.metadata.namespace,
+              ns.metadata.name,
+              'Bootstrap resource namespace differs from exact inventory namespace',
+            );
             const kind = item.kind ?? type.kind;
             assert.ok(typeof kind === 'string' && kind.length > 0, 'Bootstrap resource kind is missing');
             if (type.kind) assert.equal(kind, type.kind, 'Bootstrap resource kind differs from API discovery');
@@ -55,7 +73,10 @@ export async function captureTemporaryBootstrap(api, record) {
               kind,
               name: item.metadata.name,
               owners: (item.metadata.ownerReferences ?? []).map((r) => r.uid),
-              eventUid: item.regarding?.uid ?? item.involvedObject?.uid,
+              diagnosticEvent:
+                kind === 'Event' &&
+                type.name === 'events' &&
+                (prefix === '/api/v1' || prefix.startsWith('/apis/events.k8s.io/')),
               defaultAccount: kind === 'ServiceAccount' && item.metadata.name === 'default',
               rootCa:
                 kind === 'ConfigMap' &&
@@ -77,23 +98,23 @@ export async function captureTemporaryBootstrap(api, record) {
         } while (continuation);
       }
   }
+  // A previous snapshot or mirrored API view must not turn an Event UID into
+  // authority for another object, even when that Event has an owned parent.
+  for (const item of found) if (item.kind === 'Event') known.delete(item.uid);
   let changed = true;
   while (changed) {
     changed = false;
     for (const item of found)
       if (
+        item.kind !== 'Event' &&
         !known.has(item.uid) &&
-        (item.defaultAccount ||
-          item.rootCa ||
-          item.fixtureRegistry ||
-          item.owners.some((uid) => known.has(uid)) ||
-          (item.kind === 'Event' && known.has(item.eventUid)))
+        (item.defaultAccount || item.rootCa || item.fixtureRegistry || item.owners.some((uid) => known.has(uid)))
       ) {
         known.add(item.uid);
         changed = true;
       }
   }
-  const unknown = found.filter((item) => !known.has(item.uid));
+  const unknown = found.filter((item) => !item.diagnosticEvent && !known.has(item.uid));
   if (unknown.length) {
     const error = new Error('Unowned bootstrap objects block cleanup');
     error.resources = unknown.map(({ apiPath, uid, namespaceUid, kind, name }) => ({

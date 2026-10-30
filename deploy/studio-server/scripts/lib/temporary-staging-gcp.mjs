@@ -36,6 +36,36 @@ const defaults = {
   iam: 'https://iam.googleapis.com/v1/',
   dns: 'https://dns.googleapis.com/dns/v1/',
 };
+export function assertTemporaryClusterNodeIdentity(plan, cluster) {
+  assert.equal(cluster.autopilot?.enabled, true, 'Staging cluster is not Autopilot');
+  const defaults = cluster.autoscaling?.autoprovisioningNodePoolDefaults;
+  assert.equal(
+    defaults?.serviceAccount,
+    plan.nodeServiceAccount,
+    'Autopilot node defaults do not use the approved staging service account',
+  );
+  assert.ok(
+    Array.isArray(defaults.oauthScopes) &&
+      defaults.oauthScopes.includes('https://www.googleapis.com/auth/cloud-platform'),
+    'Autopilot node defaults lack the approved cloud-platform scope',
+  );
+  assert.ok(
+    cluster.nodePools === undefined || Array.isArray(cluster.nodePools),
+    'Unexpected Autopilot node-pool inventory',
+  );
+  for (const pool of cluster.nodePools ?? []) {
+    assert.equal(
+      pool.config?.serviceAccount,
+      plan.nodeServiceAccount,
+      'Autopilot node pool does not use the approved staging service account',
+    );
+    assert.ok(
+      Array.isArray(pool.config.oauthScopes) &&
+        pool.config.oauthScopes.includes('https://www.googleapis.com/auth/cloud-platform'),
+      'Autopilot node pool lacks the approved cloud-platform scope',
+    );
+  }
+}
 export class TemporaryCloudError extends Error {
   constructor(status) {
     super(`Staging cloud request failed (${status}); inspect the journal before another write`);
@@ -496,9 +526,11 @@ export function temporaryFoundationSpecs(plan) {
         privateClusterConfig: { enablePrivateNodes: false, enablePrivateEndpoint: false },
         network,
         subnetwork: subnet,
-        nodeConfig: {
-          serviceAccount: plan.nodeServiceAccount,
-          oauthScopes: ['https://www.googleapis.com/auth/cloud-platform'],
+        autoscaling: {
+          autoprovisioningNodePoolDefaults: {
+            serviceAccount: plan.nodeServiceAccount,
+            oauthScopes: ['https://www.googleapis.com/auth/cloud-platform'],
+          },
         },
         resourceLabels: { 'rivet-operation': plan.inputHash.slice(0, 63) },
         releaseChannel: { channel: 'REGULAR' },

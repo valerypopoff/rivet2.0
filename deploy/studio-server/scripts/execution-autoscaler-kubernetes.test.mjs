@@ -1174,6 +1174,95 @@ test('strict transport rejects remote plaintext and unreachable local connection
   assert.throws(() => cpuQuantity('garbage'));
 });
 
+test('transport retries explicit GET throttling with Retry-After and a bounded fallback', async (t) => {
+  for (const retryAfter of ['0', new Date(0).toUTCString(), 'invalid', undefined, '1'])
+    await t.test(retryAfter ?? 'missing header', async (child) => {
+      let calls = 0;
+      const server = createServer((request, response) => {
+        calls++;
+        assert.equal(request.method, 'GET');
+        assert.equal(request.headers.authorization, 'Bearer local-test-only');
+        if (calls === 1) {
+          response.writeHead(429, retryAfter === undefined ? {} : { 'retry-after': retryAfter });
+          response.end('private provider diagnostics');
+        } else response.end('{"kind":"APIResourceList","resources":[]}');
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      child.after(() => {
+        server.closeAllConnections();
+        return new Promise((resolve) => server.close(resolve));
+      });
+      const api = createKubernetesTransport({
+        origin: `http://127.0.0.1:${server.address().port}`,
+        allowLoopbackHttp: true,
+        token: () => 'local-test-only',
+        timeoutMs: 3000,
+      });
+      const started = performance.now();
+      assert.deepEqual(await api.json('GET', '/apis/networking.gke.io/v1'), {
+        kind: 'APIResourceList',
+        resources: [],
+      });
+      const elapsed = performance.now() - started;
+      assert.equal(calls, 2);
+      if (retryAfter === '1') assert.ok(elapsed >= 900, 'Retry-After delay was ignored');
+      if (retryAfter === 'invalid' || retryAfter === undefined)
+        assert.ok(elapsed >= 200, 'Missing or invalid Retry-After must not hot-loop');
+    });
+});
+
+test('transport throttling cannot replay writes, retry other failures or exceed read attempt and time limits', async (t) => {
+  for (const scenario of [
+    { method: 'GET', status: 429, retryAfter: '0', expectedCalls: 3 },
+    { method: 'GET', status: 429, retryAfter: '60', expectedCalls: 1 },
+    { method: 'GET', status: 429, retryAfter: new Date(Date.now() + 60000).toUTCString(), expectedCalls: 1 },
+    { method: 'GET', status: 503, expectedCalls: 1 },
+    { method: 'GET', status: 403, expectedCalls: 1 },
+    { method: 'POST', status: 429, retryAfter: '0', expectedCalls: 1 },
+    { method: 'PATCH', status: 429, retryAfter: '0', expectedCalls: 1 },
+    { method: 'DELETE', status: 429, retryAfter: '0', expectedCalls: 1 },
+    { method: 'GET', status: 429, retryAfter: '1', hangAfterThrottle: true, expectedCalls: 2 },
+    { method: 'GET', reset: true, expectedCalls: 1 },
+  ])
+    await t.test(JSON.stringify(scenario), async (child) => {
+      let calls = 0;
+      const server = createServer((request, response) => {
+        calls++;
+        assert.equal(request.method, scenario.method);
+        if (scenario.reset) return request.socket.destroy();
+        if (scenario.hangAfterThrottle && calls > 1) return;
+        response.writeHead(
+          scenario.status,
+          scenario.retryAfter === undefined ? {} : { 'retry-after': scenario.retryAfter },
+        );
+        response.end('private provider diagnostics');
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      child.after(() => {
+        server.closeAllConnections();
+        return new Promise((resolve) => server.close(resolve));
+      });
+      const api = createKubernetesTransport({
+        origin: `http://127.0.0.1:${server.address().port}`,
+        allowLoopbackHttp: true,
+        token: () => 'local-test-only',
+        timeoutMs: scenario.hangAfterThrottle ? 1500 : 400,
+      });
+      const started = performance.now();
+      await assert.rejects(api.json(scenario.method, '/api/v1/namespaces/fixture/pods'), (error) => {
+        assert.ok(!error.message.includes('private provider diagnostics'));
+        return scenario.reset || scenario.hangAfterThrottle
+          ? /deadline|socket/i.test(error.message)
+          : error.message.includes(String(scenario.status));
+      });
+      assert.equal(calls, scenario.expectedCalls);
+      if (scenario.hangAfterThrottle)
+        assert.ok(performance.now() - started < 2100, 'Read retries reset the original deadline');
+    });
+});
+
 test(
   'optional Postman simulation exercises the same real transport and distinct dependency failures',
   { skip: !process.env.RIVET_AUTOSCALER_SIMULATION },

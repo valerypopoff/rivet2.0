@@ -366,9 +366,14 @@ Kubernetes cannot name-restrict ConfigMap creation, so create is namespace-wide
 while the client creates only the deterministic journal. It cannot read Secrets
 or mutate developer workloads. Treat exec capability as privileged within the
 execution pods. Mounted rotating tokens and the service-account CA enforce
-strict HTTPS, deadlines and bounded output. No redirect/retry, token/body
-logging or shell-evaluated command is used. Exec requires explicit successful
-exit status. HTTP loopback injection is a local-test seam, not a deployed env
+strict HTTPS, deadlines and bounded output. Explicit HTTP 429 on a GET may retry
+at most twice within the original request deadline, honoring a valid
+`Retry-After` seconds/date delay or a bounded 250/500 ms fallback. A delay that
+cannot fit the remaining deadline fails immediately. This also lets temporary
+staging discovery/inventory tolerate API-server throttling before cleanup.
+Other statuses, network failures, writes and exec are never retried. No
+redirect, token/body logging or shell-evaluated command is used. Exec requires
+explicit successful exit status. HTTP loopback injection is a local-test seam, not a deployed env
 switch.
 
 The bounded `pods/exec` rule grants both `get` and `create`: Kubernetes 1.35+

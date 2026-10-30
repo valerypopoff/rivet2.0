@@ -35,6 +35,7 @@ const wait = async (label, check) => {
 test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears down partial creation without replay', async (t) => {
   for (const mode of [
     'normal bootstrap',
+    'opaque Autopilot bootstrap',
     'lost actor acknowledgement',
     'lost export',
     'corrupt export',
@@ -98,8 +99,19 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           return send(200, { metadata: { uid: 'kubernetes-service-uid' }, spec: { clusterIP: '10.13.0.1' } });
         if (resource === '/api/v1/nodes/actor-node')
           return send(200, {
-            metadata: { uid: 'actor-node-uid' },
+            metadata: {
+              name: 'actor-node',
+              uid: 'actor-node-uid',
+              labels: { 'topology.kubernetes.io/zone': 'europe-central2-a' },
+            },
             spec: { providerID: 'gce://isolated-project/europe-central2-a/actor-node' },
+            status: {
+              conditions: [{ type: 'Ready', status: 'True' }],
+              addresses: [
+                { type: 'InternalIP', address: '10.11.0.2' },
+                { type: 'ExternalIP', address: '34.118.0.99' },
+              ],
+            },
           });
         if (req.method === 'POST') {
           const target = `${resource}/${body.metadata.name}`;
@@ -124,7 +136,7 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
             { name: 'serviceaccounts', kind: 'ServiceAccount' },
             { name: 'events', kind: 'Event' },
             { name: 'services', kind: 'Service' },
-          ].map((r) => ({ ...r, namespaced: true, verbs: ['list'] }));
+          ].map((r) => ({ ...r, namespaced: true, verbs: ['list', 'delete'] }));
           if (resource === '/api/v1') return send(200, { resources });
           if (resource === '/apis')
             return send(200, {
@@ -143,7 +155,11 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           };
           if (groupResources[resource])
             return send(200, {
-              resources: groupResources[resource].map((name) => ({ name, namespaced: true, verbs: ['list'] })),
+              resources: groupResources[resource].map((name) => ({
+                name,
+                namespaced: true,
+                verbs: ['list', 'delete'],
+              })),
             });
           if (
             /\/namespaces\/[^/]+\/(?:pods|configmaps|secrets|serviceaccounts|events|services|deployments|roles|rolebindings|gateways|httproutes|healthcheckpolicies)$/.test(
@@ -475,23 +491,39 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
         bootstrap: async (s, c, opts) => {
           const specResource = `projects/${plan.projectId}/locations/${plan.region}/clusters/${plan.operationId}`;
           const value = await c.request('container', 'GET', specResource);
-          await fetch(new URL('_replace', url), {
-            method: 'POST',
-            body: JSON.stringify({
-              resource: `projects/${plan.projectId}/zones/europe-central2-a/instances/actor-node`,
-              value: {
-                id: '999',
-                name: 'actor-node',
-                createdByClusterId: value.id,
-                networkInterfaces: [
-                  {
-                    network: `https://www.googleapis.com/compute/v1/projects/${plan.projectId}/global/networks/${plan.operationId}`,
-                    accessConfigs: [{ natIP: '192.0.2.99' }],
-                  },
-                ],
-              },
-            }),
-          });
+          value.networkConfig = {
+            ...value.networkConfig,
+            network: `projects/${plan.projectId}/global/networks/${plan.operationId}`,
+            subnetwork: `projects/${plan.projectId}/regions/${plan.region}/subnetworks/${plan.operationId}-nodes`,
+            defaultEnablePrivateNodes: false,
+          };
+          if (mode !== 'opaque Autopilot bootstrap')
+            await fetch(new URL('_replace', url), {
+              method: 'POST',
+              body: JSON.stringify({
+                resource: `projects/${plan.projectId}/zones/europe-central2-a/instances/actor-node`,
+                value: {
+                  id: '999',
+                  name: 'actor-node',
+                  createdByClusterId: value.id,
+                  networkInterfaces: [
+                    {
+                      network: `https://www.googleapis.com/compute/v1/projects/${plan.projectId}/global/networks/${plan.operationId}`,
+                      subnetwork:
+                        'projects/' +
+                        plan.projectId +
+                        '/regions/' +
+                        plan.region +
+                        '/subnetworks/' +
+                        plan.operationId +
+                        '-nodes',
+                      networkIP: '10.11.0.2',
+                      accessConfigs: [{ natIP: '34.118.0.99' }],
+                    },
+                  ],
+                },
+              }),
+            });
           value.endpoint = `127.0.0.1:${server.address().port}`;
           value.masterAuth.clusterCaCertificate = cert.toString('base64');
           await fetch(new URL('_replace', url), {
@@ -527,7 +559,12 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           const record = (await store.read()).record;
           assert.equal(record.operation.expiresAt, record.expiresAt);
           assert.equal(record.settings.inClusterServer, 'https://10.13.0.1/');
-          assert.ok(record.settings.trustedClients.includes('192.0.2.99/32'));
+          assert.ok(record.settings.trustedClients.includes('34.118.0.99/32'));
+          assert.equal(
+            record.actorNodeIdentity.kind,
+            mode === 'opaque Autopilot bootstrap' ? 'gke-autopilot-node' : 'compute-instance',
+          );
+          assert.equal('instanceId' in record.actorNodeIdentity, mode !== 'opaque Autopilot bootstrap');
           assert.equal(packets.length, 1);
           const pod = [...objects.values()].find((v) => v.kind === 'Pod');
           assert.equal(pod.spec.serviceAccountName, 'rivet-qualification-actor');
@@ -615,12 +652,15 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
             );
           }
           assert.equal(await fs.readFile(staleExport, 'utf8'), 'preserve earlier partial diagnostics');
-          const eventPath = `/api/v1/namespaces/${record.settings.runnerNamespace}/events/ambiguous`;
+          const eventPath = `/apis/networking.gke.io/v1/namespaces/${record.settings.runnerNamespace}/healthcheckpolicies/ambiguous`;
           objects.set(eventPath, {
-            apiVersion: 'v1',
-            kind: 'Event',
-            metadata: { name: 'ambiguous', namespace: record.settings.runnerNamespace, uid: 'unowned-event-uid' },
-            involvedObject: { kind: 'Pod', name: 'qualification-actor' },
+            apiVersion: 'networking.gke.io/v1',
+            kind: 'HealthCheckPolicy',
+            metadata: {
+              name: 'ambiguous',
+              namespace: record.settings.runnerNamespace,
+              uid: 'unowned-custom-object-uid',
+            },
           });
           await assert.rejects(cleanupTemporaryEnvironment(store, cloud, bootstrap, { wait }), /Unowned bootstrap/);
           assert.equal(

@@ -934,6 +934,13 @@ and object-key ordering does not affect this identity; ordered arrays do. Restor
 the original values for `--resume-ha`. Unfinished older journals without this
 binding require explicit operator reconciliation, not an inferred configuration.
 
+Exact-token preparation recovery retains a Job's recorded warming proof when
+its deletion was already issued. This covers interrupted cleanup and a lost final
+completion checkpoint without creating or deleting that Job again. Recovery must
+still confirm the exact Job and its children are absent, and that every recorded
+Node UID is current and Ready. Unknown creates, replaced Jobs or Nodes, surviving
+children and incomplete warming proof remain blocking conditions.
+
 Every Helm update in the HA controller carries each StatefulSet's freshly read
 `metadata.resourceVersion` alongside the preserved replica count. A capacity
 change before that read is rejected; a scale or status update after it conflicts
