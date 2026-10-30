@@ -10,6 +10,7 @@ import {
   assertReleaseManifestMatchesCurrentChart,
   assertReleaseManifestMatchesCurrentSource,
   assertStudioServerReleasePredecessor,
+  assertStudioServerReleaseInstalledPredecessor,
   assertStudioServerReleaseManifest,
   createForwardRollbackHelmValues,
   createProductionHelmValues,
@@ -75,9 +76,13 @@ test('explicit installed lineage preserves the separate publication head and its
   assert.equal(next.lineage.predecessor.manifestDigest, getStudioServerReleaseManifestDigest(installed));
   assert.equal(next.lineage.publicationHead.manifestDigest, getStudioServerReleaseManifestDigest(published));
   assert.doesNotThrow(() => assertStudioServerReleasePredecessor(next, published));
+  assert.doesNotThrow(() => assertStudioServerReleaseInstalledPredecessor(next, installed));
+  assert.throws(() => assertStudioServerReleaseInstalledPredecessor(next, published), /Installed predecessor/);
+  assert.throws(() => assertStudioServerReleaseInstalledPredecessor(next, null), /predecessor/);
   assert.throws(() => assertStudioServerReleasePredecessor(next, installed), /exact predecessor manifest/);
   const advanced = promoted({}, { predecessorRelease: published, sourceSha: 'd'.repeat(40) });
   assert.throws(() => assertStudioServerReleasePredecessor(next, advanced), /exact predecessor manifest/);
+  assert.throws(() => assertStudioServerReleaseInstalledPredecessor(next, advanced), /Installed predecessor/);
   assert.throws(() => assertStudioServerReleasePredecessor(next, null), /pointer is missing/);
   const roundTrip = assertStudioServerReleaseManifest(JSON.parse(JSON.stringify(next)));
   assert.deepEqual(roundTrip.lineage, next.lineage);

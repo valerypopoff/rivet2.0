@@ -108,6 +108,10 @@ publication head. This is not a pointer rewind, qualification waiver or authorit
 to deploy an unobserved predecessor. Omitted input preserves historical lineage
 and digest semantics. The actual installed snapshot must still match before any
 provider test can start.
+The local HA scenarios and container launcher validate that installed predecessor,
+including its complete immutable manifest identity. They do not substitute the
+newer publication head as the fixture's source. Promotion separately rechecks the
+frozen publication head, so this distinction preserves the freshness fence.
 
 First production activation uses the existing deployment command in three
 separately journaled steps, with normal policy, backup, ownership and acceptance

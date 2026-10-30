@@ -52,6 +52,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { resolveHelmBinOrThrow, resolveKubectlForwardBin } from './lib/k8s-tools.mjs';
 import {
   createStudioServerReleaseManifest,
+  getStudioServerReleaseManifestDigest,
   promoteStudioServerReleaseManifest,
   readManagedWorkflowSchemaReleaseContract,
 } from './lib/studio-server-release-manifest.mjs';
@@ -1672,7 +1673,7 @@ test('provider HTTP login uses the public proxy contract and retains only its se
     await new Promise((resolve) => server.close(resolve));
   }
 });
-function certificationFixture(predecessorRelease = null) {
+function certificationFixture(predecessorRelease = null, publicationHeadRelease) {
   const images = Object.fromEntries(
     ['proxy', 'web', 'api', 'executor'].map((key, index) => [
       key,
@@ -1686,6 +1687,7 @@ function certificationFixture(predecessorRelease = null) {
     images,
     candidateEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
     predecessorRelease,
+    publicationHeadRelease,
   });
   return { manifest, options: { rootDir, sourceSha, images, previous: predecessorRelease } };
 }
@@ -1731,6 +1733,30 @@ test('HA candidate preflight preserves source, chart, image and exact predecesso
   });
   const next = certificationFixture(previous);
   assert.equal(validateHaCertificationManifest(next.manifest, next.options).mode, 'bootstrap');
+  assert.throws(
+    () => validateHaCertificationManifest(next.manifest, { ...next.options, previous: null }),
+    /predecessor/,
+  );
+});
+
+test('HA fixtures use the installed predecessor when the publication head has advanced', () => {
+  const initial = certificationFixture();
+  const installed = promoteStudioServerReleaseManifest(initial.manifest, {
+    promotionEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+  });
+  const publicationCandidate = certificationFixture(installed).manifest;
+  const published = promoteStudioServerReleaseManifest(publicationCandidate, {
+    promotionEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+  });
+  const next = certificationFixture(installed, published);
+  assert.equal(
+    validateHaCertificationManifest(next.manifest, next.options).candidate.lineage.predecessor.manifestDigest,
+    getStudioServerReleaseManifestDigest(installed),
+  );
+  assert.throws(
+    () => validateHaCertificationManifest(next.manifest, { ...next.options, previous: published }),
+    /Installed predecessor/,
+  );
   assert.throws(
     () => validateHaCertificationManifest(next.manifest, { ...next.options, previous: null }),
     /predecessor/,

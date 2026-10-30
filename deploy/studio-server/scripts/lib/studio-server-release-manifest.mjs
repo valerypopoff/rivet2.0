@@ -315,6 +315,16 @@ function assertPredecessorReferenceMatchesRelease(reference, release, descriptio
  * different release has become production.
  */
 export function assertStudioServerReleasePredecessor(candidateManifest, currentProductionManifest = null) {
+  return assertReleasePredecessor(candidateManifest, currentProductionManifest, 'publication');
+}
+
+/** Compatibility fixtures and deployment compare the actual installed release,
+ * independently of the publication head checked again before promotion. */
+export function assertStudioServerReleaseInstalledPredecessor(candidateManifest, installedManifest = null) {
+  return assertReleasePredecessor(candidateManifest, installedManifest, 'installed');
+}
+
+function assertReleasePredecessor(candidateManifest, currentManifest, scope) {
   const candidate = assertStudioServerReleaseManifest(candidateManifest);
   if (candidate.state !== 'candidate') {
     throw new Error('[studio-server-release-manifest] Predecessor validation requires a candidate release manifest');
@@ -324,24 +334,28 @@ export function assertStudioServerReleasePredecessor(candidateManifest, currentP
   }
   const predecessor = candidate.lineage.predecessor;
   if (predecessor === null) {
-    if (currentProductionManifest !== null) {
+    if (currentManifest !== null) {
       throw new Error(
-        '[studio-server-release-manifest] Candidate was created as a bootstrap release, but a production predecessor now exists. Rebuild and retest the candidate against the current production release.',
+        scope === 'publication'
+          ? '[studio-server-release-manifest] Candidate was created as a bootstrap release, but a production predecessor now exists. Rebuild and retest the candidate against the current production release.'
+          : '[studio-server-release-manifest] Candidate was created as a bootstrap release, but an installed predecessor exists. Select and qualify that exact installed release.',
       );
     }
     return candidate;
   }
-  if (currentProductionManifest === null) {
+  if (currentManifest === null) {
     throw new Error(
-      '[studio-server-release-manifest] Candidate requires a production predecessor, but the production release-manifest pointer is missing. Restore the immutable predecessor evidence before promotion.',
+      scope === 'publication'
+        ? '[studio-server-release-manifest] Candidate requires a production predecessor, but the production release-manifest pointer is missing. Restore the immutable predecessor evidence before promotion.'
+        : '[studio-server-release-manifest] Candidate requires an installed predecessor, but its immutable manifest is missing.',
     );
   }
   // Publication and installation advance independently. An explicitly selected
   // installed predecessor does not waive the publication-head freshness fence.
   assertPredecessorReferenceMatchesRelease(
-    candidate.lineage.publicationHead ?? predecessor,
-    currentProductionManifest,
-    'Current publication head',
+    scope === 'publication' ? candidate.lineage.publicationHead ?? predecessor : predecessor,
+    currentManifest,
+    scope === 'publication' ? 'Current publication head' : 'Installed predecessor',
   );
   return candidate;
 }
