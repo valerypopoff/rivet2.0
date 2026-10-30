@@ -1,4 +1,5 @@
 import test from 'node:test';
+// test-style: fixture-read: Read only test-owned admission markers, journals and serialized workflow fixtures.
 import assert from 'node:assert/strict';
 import {
   HaReleaseGate,
@@ -8,7 +9,12 @@ import {
   withHaProofGeneration,
 } from './kubernetes-ha-release-gate.mjs';
 import { HaReleaseProbes, haProofTimeoutMs, haRetirementProbeDelayMs } from './lib/ha-release-probes.mjs';
-import { assertHaLatestSession, createHaLatestRunControls } from './fixtures/ha-latest-controls.mjs';
+import {
+  assertHaLatestSession,
+  createHaLatestRunControls,
+  waitForHaLatestRelease,
+  withHaLatestAdmission,
+} from './fixtures/ha-latest-controls.mjs';
 import { HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
 import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
@@ -39,7 +45,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import * as nativeFs from 'node:fs';
+import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
 import { resolveHelmBinOrThrow, resolveKubectlForwardBin } from './lib/k8s-tools.mjs';
 import {
@@ -49,6 +57,48 @@ import {
 } from './lib/studio-server-release-manifest.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('latest retirement admission keeps the actual run alive until one explicit release', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-latest-admission-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const name = `rivet-ha-probe-${randomUUID()}.json`;
+  const value = 'ha-latest-' + name;
+  const file = path.join(directory, name + '.latest');
+  let completed = false;
+  const pending = waitForHaLatestRelease(value, nativeFs, directory, 5000).then(() => {
+    completed = true;
+  });
+  const deadline = Date.now() + 5000;
+  while (!nativeFs.existsSync(file + '.waiting')) {
+    assert.ok(Date.now() < deadline, 'Actual admission file did not appear');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(await fs.readFile(file + '.waiting', 'utf8'), value);
+  assert.equal(completed, false);
+  await assert.rejects(waitForHaLatestRelease(value, nativeFs, directory), { code: 'EEXIST' });
+  await fs.writeFile(file + '.release', 'released', { flag: 'wx' });
+  await pending;
+  assert.equal(nativeFs.existsSync(file + '.waiting'), false);
+  assert.equal(nativeFs.existsSync(file + '.release'), false);
+  await assert.rejects(
+    waitForHaLatestRelease(`ha-latest-rivet-ha-probe-${randomUUID()}.json`, nativeFs, directory, 0),
+    /deadline/,
+  );
+  const nodes = {
+    '[input]:graphInput "Input"': { data: { id: 'input' }, outgoingConnections: ['data->"Output" output/value'] },
+  };
+  withHaLatestAdmission(nodes);
+  const admission = nodes['[latest-admission]:code "Latest admission"'];
+  assert.deepEqual(admission.outgoingConnections, ['output->"Output" output/value']);
+  const execute = new (Object.getPrototypeOf(async function () {}).constructor)(
+    'inputs',
+    'require',
+    admission.data.code,
+  );
+  assert.deepEqual(await execute({ input: { value: 'ordinary request' } }, createRequire(import.meta.url)), {
+    output: { type: 'string', value: 'ordinary request' },
+  });
+});
 
 test('retirement controls negotiate scoped targets without confusing concurrent roots or downgrading', async () => {
   const scope = { channel: null, rootRunId: 'root', projectId: 'project', owner: 'backend-0', incarnation: 'process' };
@@ -166,7 +216,16 @@ test('retirement controls negotiate scoped targets without confusing concurrent 
 
 test('editor retirement probe carries its self-contained control module into the exact stdin actor', async () => {
   let invocation;
+  const projectId = randomUUID();
+  const requests = [];
   const gate = {
+    requestWorkflow: async (_base, route) => {
+      requests.push(route);
+      if (route.endsWith('/upload')) return { project: { id: projectId, relativePath: 'fixture.rivet-project' } };
+      if (route.includes('/web-apps?')) return { projectId, draftRevisionId: 'draft', publicationVersion: null };
+      assert.ok(route.endsWith('/publish'));
+      return {};
+    },
     kubectl: async (args, options) => {
       if (args.includes('-i')) {
         invocation = { args, options };
@@ -177,13 +236,46 @@ test('editor retirement probe carries its self-contained control module into the
     config: { namespace: 'fixture' },
   };
   const probes = new HaReleaseProbes(gate, 'http://unused.invalid', rootDir);
+  assert.deepEqual(await Promise.all([probes.prepareLatestProbe(), probes.prepareLatestProbe()]), [
+    `ha-latest-${projectId}`,
+    `ha-latest-${projectId}`,
+  ]);
   await probes.startEditor({ name: 'backend-0', uid: 'owner', container: 'backend' }, 'backend-1');
   await probes.editors[0].completed;
-  assert.equal(invocation.args.at(-2), '', 'No bundle must retain the helper argument position');
+  assert.deepEqual(JSON.parse(invocation.args.at(-2)), { endpoint: `ha-latest-${projectId}` });
+  assert.equal(requests.filter((route) => route.endsWith('/upload')).length, 1);
+  assert.equal(requests.filter((route) => route.endsWith('/publish')).length, 1);
   const module = await import(invocation.args.at(-1));
   module.assertHaLatestSession({ message: 'latest-session', data: { protocol: 1 } });
   assert.equal(typeof module.createHaLatestRunControls, 'function');
   assert.equal(probes.editors[0].receipt.phase, 'passed');
+});
+
+test('an uncertain latest fixture publication cannot be recreated by a later probe call', async () => {
+  const failure = Error('publication acknowledgement lost');
+  const projectId = randomUUID();
+  let uploads = 0;
+  let publications = 0;
+  const probes = new HaReleaseProbes(
+    {
+      requestWorkflow: async (_base, route) => {
+        if (route.endsWith('/upload')) {
+          uploads++;
+          return { project: { id: projectId, relativePath: 'fixture' } };
+        }
+        if (route.includes('/web-apps?'))
+          return { projectId, draftRevisionId: 'draft', publicationVersion: null };
+        publications++;
+        throw failure;
+      },
+    },
+    'http://unused.invalid',
+    rootDir,
+  );
+  for (let attempt = 0; attempt < 2; attempt++)
+    await assert.rejects(probes.prepareLatestProbe(), (error) => error === failure);
+  assert.equal(uploads, 1);
+  assert.equal(publications, 1);
 });
 
 test('predecessor schema verification respects the rollback floor without concealing compatible failures', async () => {

@@ -271,6 +271,11 @@ admission still rejects private/unavailable images before paid GKE creation.
 The isolated control host is a separately budgeted prerequisite and is retained
 until all qualification and cleanup work finishes.
 
+The real network-disabled ACME hook test runs with the same host UID/GID mapping
+as the certificate worker. Dropping container capabilities does not let a root
+container write a non-root runner's private exchange directory; the test must
+exercise the actual mapping instead of relying on Docker Desktop permissions.
+
 ### Coordinator settings
 
 Configure the protected `rivet-managed-staging` environment and

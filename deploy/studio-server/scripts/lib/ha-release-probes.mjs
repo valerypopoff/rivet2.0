@@ -5,6 +5,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 import { HA_ROUTING_PROPAGATION_MS } from './ha-routing-withdrawal.mjs';
+import { withHaLatestAdmission } from '../fixtures/ha-latest-controls.mjs';
 import {
   createHostedEvaluationSubmission,
   createHostedEvaluationFixtureContents,
@@ -49,6 +50,50 @@ export class HaReleaseProbes {
   }
   kube(args, extra = {}) {
     return this.gate.kubectl(['-n', this.gate.config.namespace, ...args], { capture: true, ...extra });
+  }
+  prepareLatestProbe() {
+    return (this.latestFixturePromise ??= (async () => {
+      const template =
+        this.template ??
+        (await fs.readFile(
+          path.join(this.rootDir, 'deploy/studio-server/scripts/fixtures/managed-release-gate.rivet-project'),
+          'utf8',
+        ));
+      const project = parse(template);
+      project.data.metadata.id = randomUUID();
+      project.data.metadata.title = `HA latest controls ${project.data.metadata.id}`;
+      delete project.data.uiGraphs;
+      withHaLatestAdmission(project.data.graphs[project.data.metadata.mainGraphId].nodes);
+      const upload = await this.request('/api/workflows/projects/upload', {
+        method: 'POST',
+        headers: { 'X-Rivet-Namespace-Intent': '1' },
+        body: JSON.stringify({
+          folderRelativePath: '',
+          mutation: rootStructuralMutation(),
+          fileName: `ha-latest-${project.data.metadata.id}.rivet-project`,
+          contents: stringify(project),
+        }),
+      });
+      const relativePath = upload.project.relativePath;
+      const snapshot = await this.request(
+        `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(relativePath)}`,
+      );
+      const endpoint = `ha-latest-${upload.project.id}`;
+      await this.request('/api/workflows/projects/publish', {
+        method: 'POST',
+        body: JSON.stringify({
+          relativePath,
+          settings: { endpointName: endpoint },
+          preconditions: {
+            expectedProjectId: snapshot.projectId,
+            expectedDraftRevisionId: snapshot.draftRevisionId,
+            expectedPublicationVersion: snapshot.publicationVersion,
+          },
+        }),
+      });
+      this.latestEndpoint = endpoint;
+      return endpoint;
+    })());
   }
   async sql(query) {
     if (this.gate.readProofSql) return this.gate.readProofSql(query);
@@ -222,6 +267,7 @@ export class HaReleaseProbes {
     }
   }
   async startEditor(pod, neighbor, holdMs = 25_000) {
+    if (!this.overlapBundle) await this.prepareLatestProbe();
     const marker = `/tmp/rivet-ha-probe-${randomUUID()}.json`;
     const source = await fs.readFile(
       path.join(this.rootDir, 'deploy/studio-server/scripts/fixtures/ha-editor-retirement-probe.mjs'),
@@ -246,7 +292,7 @@ export class HaReleaseProbes {
         marker,
         neighbor,
         String(holdMs),
-        this.overlapBundle ? JSON.stringify(this.overlapBundle) : '',
+        JSON.stringify(this.overlapBundle ?? { endpoint: this.latestEndpoint }),
         `data:text/javascript;base64,${controls.toString('base64')}`,
       ],
       { input: source },
