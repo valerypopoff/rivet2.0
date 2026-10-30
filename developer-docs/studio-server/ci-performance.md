@@ -28,6 +28,16 @@ for the regression and verification contract.
 
 ## Keep release fixtures aligned without weakening checks
 
+Same-image overlap adoption tests run three sequential CLI invocations:
+preflight, an application with a lost acknowledgement, and exact-token recovery.
+Each child keeps its 300-second deadline and physical process cleanup. The
+complete journey has a 930-second budget (three child budgets plus 30 seconds
+for fixture work); a single 330-second outer budget could cancel the combined
+journey under hosted-runner contention. Concurrency, production timeouts and
+all recovery/no-replay assertions remain unchanged. A cancelled test still
+fails the release gate; retain its log and require the fresh candidate's complete
+image workflow to pass before provider activation.
+
 Schema 18's current version differs from its rollback floor (17). Helm defaults
 and migration commands must use the current version. Forward rollback uses the
 previous image's own schema version as its lower reader bound, not that image's

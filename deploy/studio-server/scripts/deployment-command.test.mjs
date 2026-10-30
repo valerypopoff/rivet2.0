@@ -613,8 +613,10 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
       assert.equal(JSON.parse((await f.state()).journal.data.record).phase, 'complete');
     },
   );
+  // Preflight, lost application and recovery each retain their own 300s child
+  // deadline. Give the complete three-command journey those budgets plus 30s.
   for (const stage of ['sizing', 'ownership'])
-    test(`certified same-image overlap adoption ${stage} runs the actual command`, { timeout: 330000 }, async (t) => {
+    test(`certified same-image overlap adoption ${stage} runs the actual command`, { timeout: 930000 }, async (t) => {
       const f = await fixture(t, `adoption-${stage}`, 'lostTemplate');
       const before = await f.state();
       const preflight = await f.invoke(['--preflight-only']);
