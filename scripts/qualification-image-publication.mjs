@@ -37,6 +37,13 @@ export async function verifyPublicationArchive(file, expectedHash) {
   assert.equal(digest.digest('hex'), expectedHash, 'Publication archive differs from reviewed bytes');
 }
 
+export async function preparePublicationOutput(root) {
+  const output = path.join(root, 'artifacts/qualification-image-publication');
+  await fs.mkdir(path.dirname(output), { recursive: true });
+  await fs.mkdir(output); // Never inherit a scan or publication receipt from an earlier attempt.
+  return output;
+}
+
 export async function publishQualificationImages(env = process.env) {
   const input = publicationInputs(env);
   assert.equal(process.platform, 'linux');
@@ -70,8 +77,7 @@ export async function publishQualificationImages(env = process.env) {
   assert.ok(
     run('docker', ['run', '--rm', '--pull=never', '--network=none', minioImageId, '--version']).includes(minioRelease),
   );
-  const output = path.join(root, 'artifacts/qualification-image-publication');
-  await fs.mkdir(output); // No stale scan or publication receipt can survive a retry.
+  const output = await preparePublicationOutput(root);
   const scan = path.join(output, 'actor-scan');
   run(
     process.execPath,

@@ -5,7 +5,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { publicationInputs, verifyPublicationArchive } from './qualification-image-publication.mjs';
+import {
+  publicationInputs,
+  verifyPublicationArchive,
+  preparePublicationOutput,
+} from './qualification-image-publication.mjs';
 
 const env = {
   GITHUB_REF: 'refs/heads/main',
@@ -44,4 +48,14 @@ test('actual archive bytes are checked, including post-admission mutation and no
   await fs.appendFile(file, 'changed');
   await assert.rejects(verifyPublicationArchive(file, hash), /reviewed bytes/);
   await assert.rejects(verifyPublicationArchive(directory, hash), /regular file/);
+});
+
+test('a pristine runner can publish, while retained output blocks a second attempt', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-publish-output-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const output = await preparePublicationOutput(root);
+  const receipt = path.join(output, 'publication.json');
+  await fs.writeFile(receipt, 'retained receipt');
+  await assert.rejects(preparePublicationOutput(root), { code: 'EEXIST' });
+  assert.equal(await fs.readFile(receipt, 'utf8'), 'retained receipt');
 });

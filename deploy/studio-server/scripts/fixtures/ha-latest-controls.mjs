@@ -6,6 +6,15 @@ import { randomUUID } from 'node:crypto';
 // This function is also serialized into disposable Code nodes. Keep it
 // self-contained; production workflows and debugger authorization are unchanged.
 export async function waitForHaLatestRelease(value, fs, directory = '/tmp', timeoutMs = 20000) {
+  // HTTP workflow input is the complete JSON body. A string Graph Input
+  // serializes that object before this Code node receives it.
+  if (typeof value === 'string' && value.startsWith('{')) {
+    try {
+      value = JSON.parse(value).input;
+    } catch {
+      return;
+    }
+  }
   const match = typeof value === 'string' && /^ha-latest-(rivet-ha-probe-[a-f0-9-]{36}\.json)$/.exec(value);
   if (!match) return;
   const file = `${directory}/${match[1]}.latest`;
@@ -30,7 +39,7 @@ export function withHaLatestAdmission(nodes) {
     data: {
       inputNames: ['input'],
       outputNames: ['output'],
-      code: `await (${waitForHaLatestRelease.toString()})(inputs.input.value,require('node:fs'));
+      code: `await (${waitForHaLatestRelease.toString()})(inputs.input.value,require('node:fs'),require('node:os').tmpdir());
 return {output:{type:'string',value:inputs.input.value}};`,
     },
     outgoingConnections: outgoing.map((connection) => connection.replace(/^data->/, 'output->')),
