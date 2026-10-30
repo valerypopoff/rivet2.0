@@ -22,7 +22,7 @@ import { probeSchemaLockContention, readSchemaRepositoryReceipt } from './lib/sc
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
-import { parseAllDocuments } from 'yaml';
+import { parse, parseAllDocuments, stringify } from 'yaml';
 import {
   publishHaBrowserBaseline,
   waitForHaFrontendReplacement,
@@ -98,6 +98,45 @@ test('latest retirement admission keeps the actual run alive until one explicit 
   assert.deepEqual(await execute({ input: { value: 'ordinary request' } }, createRequire(import.meta.url)), {
     output: { type: 'string', value: 'ordinary request' },
   });
+});
+
+test('latest control admission survives the real HTTP body and string Graph Input conversion', async (t) => {
+  const { loadProjectFromString } = await import('@valerypopoff/rivet2-core');
+  const { createProcessor } = await import('@valerypopoff/rivet2-node');
+  const serialized = parse(
+    await fs.readFile(
+      path.join(rootDir, 'deploy/studio-server/scripts/fixtures/managed-release-gate.rivet-project'),
+      'utf8',
+    ),
+  );
+  delete serialized.data.uiGraphs;
+  withHaLatestAdmission(serialized.data.graphs[serialized.data.metadata.mainGraphId].nodes);
+  const name = `rivet-ha-probe-${randomUUID()}.json`;
+  const marker = 'ha-latest-' + name;
+  const waiting = path.join(os.tmpdir(), name + '.latest.waiting');
+  const release = path.join(os.tmpdir(), name + '.latest.release');
+  t.after(async () => {
+    await Promise.all([waiting, release].map((file) => fs.rm(file, { force: true })));
+  });
+  const project = loadProjectFromString(stringify(serialized));
+  const runner = createProcessor(project, { inputs: { input: { type: 'any', value: { input: marker } } } });
+  t.after(() => runner.dispose());
+  let settled = false;
+  const completion = runner.run().finally(() => {
+    settled = true;
+  });
+  void completion.catch(() => {});
+  const deadline = Date.now() + 5000;
+  while (!nativeFs.existsSync(waiting)) {
+    assert.equal(settled, false, 'The HTTP-body fixture bypassed admission');
+    assert.ok(Date.now() < deadline, 'Real Graph Input never reached the barrier');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(await fs.readFile(waiting, 'utf8'), marker);
+  await fs.writeFile(release, 'released', { flag: 'wx' });
+  const result = await completion;
+  assert.equal(result.value.value.environmentValue, JSON.stringify({ input: marker }));
+  assert.equal(nativeFs.existsSync(waiting), false);
 });
 
 test('retirement controls negotiate scoped targets without confusing concurrent roots or downgrading', async () => {
@@ -263,8 +302,7 @@ test('an uncertain latest fixture publication cannot be recreated by a later pro
           uploads++;
           return { project: { id: projectId, relativePath: 'fixture' } };
         }
-        if (route.includes('/web-apps?'))
-          return { projectId, draftRevisionId: 'draft', publicationVersion: null };
+        if (route.includes('/web-apps?')) return { projectId, draftRevisionId: 'draft', publicationVersion: null };
         publications++;
         throw failure;
       },

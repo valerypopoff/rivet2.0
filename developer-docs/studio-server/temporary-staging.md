@@ -258,6 +258,8 @@ tree, the fixed MinIO image identity/version and a complete fresh-database actor
 scan before pushing uniquely named tags. Its receipt records immutable registry
 digests, archive hashes, source and scan identity. This is publication, not GKE
 qualification or production approval.
+The publisher creates the ignored `artifacts` parent on a pristine runner but
+requires a new publication directory; retained scan/receipt output blocks reuse.
 
 Release preparation found the maintained MinIO release unavailable anonymously
 from both upstream registries. The controlled `qualification-minio` package
@@ -275,6 +277,13 @@ The real network-disabled ACME hook test runs with the same host UID/GID mapping
 as the certificate worker. Dropping container capabilities does not let a root
 container write a non-root runner's private exchange directory; the test must
 exercise the actual mapping instead of relying on Docker Desktop permissions.
+
+The latest-control fixture must use the endpoint's actual input contract: the
+entire HTTP JSON body becomes the graph's `input`. Its string Graph Input
+serializes that object, so admission extracts the synthetic marker from the
+serialized body. A real Node processor regression covers this conversion.
+An HTTP failure or completion before the control barrier now fails the probe
+immediately instead of leaving the outer paused-run check to time out.
 
 ### Coordinator settings
 

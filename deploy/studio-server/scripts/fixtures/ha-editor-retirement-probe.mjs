@@ -29,8 +29,11 @@ const headers = {
 };
 const base = `http://127.0.0.1:${process.env.PORT}`;
 const sockets = [];
+let latestFinished = false,
+  latestFailure;
 const waitFor = async (description, condition) => {
   while (Date.now() < deadline) {
+    if (latestFailure) throw latestFailure;
     const value = await condition();
     if (value) return value;
     await delay(25);
@@ -73,7 +76,15 @@ try {
     body: JSON.stringify({ input: inputMarker }),
     signal: AbortSignal.timeout(30_000),
   });
-  void latestCall.catch(() => {}); // Observe rejection even if a control fails before the HTTP await.
+  void latestCall.then(
+    (response) => {
+      latestFinished = true;
+      if (!response.ok) latestFailure = Error(`Latest fixture request failed (${response.status})`);
+    },
+    (error) => {
+      latestFailure = error;
+    },
+  );
   const started = await waitFor('remote latest start', () =>
     observations
       .slice(initial)
@@ -106,6 +117,7 @@ try {
     waitFor,
   });
   await waitFor('latest workflow control admission', async () => {
+    assert.equal(latestFinished, false, 'Latest fixture completed before reaching its control admission');
     try {
       return (await fs.readFile(marker + '.latest.waiting', 'utf8')) === inputMarker;
     } catch (error) {
