@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-ARG NODE_IMAGE=node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+ARG NODE_IMAGE=node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
 
 FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS dependencies
 

@@ -170,10 +170,16 @@ the version running in production.
 The table above records the pre-remediation inventory, not the current release
 candidate. The follow-up keeps the strict scanner policy unchanged:
 
-- API, executor and static web use the same digest-pinned Node **24.22.1 Alpine**
+- API, executor and static web use the same digest-pinned Node **24.22.2 Alpine**
   base. Executor/web no longer inherit end-of-life Node 20 and its older OpenSSL
   and package-manager dependency trees. This changes the server container runtime,
   not desktop's supported OS or project/recording formats.
+  The October 28 [Node 24.22.2 maintenance release](https://nodejs.org/en/blog/release/v24.22.2)
+  contains V8 backports and a stream async-context fix. API/executor builders,
+  runtime images, the static web build, the qualification toolchain and the
+  vulnerability scanner use the same official multi-platform digest; the runtime
+  dependency probe asserts this exact Node patch version. This candidate still
+  requires fresh image scans and runtime qualification before production use.
 - API retains npm (**11.21.1**, same major as the Node 24 base) and pnpm
   (**10.34.8**, same major as before); executor retains npm for dynamic runtime
   libraries and restore preparation. The static web server does not install

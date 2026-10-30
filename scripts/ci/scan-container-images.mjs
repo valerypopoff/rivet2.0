@@ -12,7 +12,7 @@ export const nginxImage = 'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ec
 export const scannerImage =
   'ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c';
 export const runtimeNodeImage =
-  'node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53';
+  'node:24.22.2-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85';
 export const esbuildCompilerImage =
   'golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c';
 export const imagePlatforms = Object.freeze({
