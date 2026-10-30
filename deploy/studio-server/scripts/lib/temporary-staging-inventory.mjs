@@ -45,22 +45,25 @@ export async function captureTemporaryBootstrap(api, record) {
           assert.ok(Array.isArray(page?.items), 'Incomplete bootstrap inventory');
           for (const item of page.items) {
             assert.ok(item.metadata?.uid && item.metadata.namespace === ns.metadata.name);
+            const kind = item.kind ?? type.kind;
+            assert.ok(typeof kind === 'string' && kind.length > 0, 'Bootstrap resource kind is missing');
+            if (type.kind) assert.equal(kind, type.kind, 'Bootstrap resource kind differs from API discovery');
             found.push({
               apiPath: `${resource}/${item.metadata.name}`,
               uid: item.metadata.uid,
               namespaceUid: ns.metadata.uid,
-              kind: item.kind,
+              kind,
               name: item.metadata.name,
               owners: (item.metadata.ownerReferences ?? []).map((r) => r.uid),
               eventUid: item.regarding?.uid ?? item.involvedObject?.uid,
-              defaultAccount: item.kind === 'ServiceAccount' && item.metadata.name === 'default',
+              defaultAccount: kind === 'ServiceAccount' && item.metadata.name === 'default',
               rootCa:
-                item.kind === 'ConfigMap' &&
+                kind === 'ConfigMap' &&
                 item.metadata.name === 'kube-root-ca.crt' &&
                 item.data?.['ca.crt'] ===
                   Buffer.from(record.resources.find((r) => r.key === 'cluster').identity.ca, 'base64').toString('utf8'),
               fixtureRegistry:
-                item.kind === 'ConfigMap' &&
+                kind === 'ConfigMap' &&
                 item.metadata.name === record.plan.operationId &&
                 item.metadata.labels?.['rivet.dev/qualification-operation'] === record.plan.operationId &&
                 JSON.parse(item.data?.record ?? 'null')?.operation?.inputHash === record.operation?.inputHash,

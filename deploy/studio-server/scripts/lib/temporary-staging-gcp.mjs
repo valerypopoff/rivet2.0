@@ -3,6 +3,32 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
+const projectLifecyclePermissions = [
+  'compute.networks.create',
+  'compute.networks.delete',
+  'compute.subnetworks.create',
+  'compute.subnetworks.delete',
+  'compute.firewalls.create',
+  'compute.firewalls.delete',
+  'compute.addresses.create',
+  'compute.addresses.delete',
+  'compute.routes.delete',
+  'container.clusters.create',
+  'container.clusters.delete',
+  'compute.forwardingRules.delete',
+  'compute.regionTargetHttpsProxies.delete',
+  'compute.regionTargetHttpProxies.delete',
+  'compute.regionUrlMaps.delete',
+  'compute.regionBackendServices.delete',
+  'compute.regionHealthChecks.delete',
+  'compute.regionSslCertificates.delete',
+  'compute.targetHttpsProxies.delete',
+  'compute.targetHttpProxies.delete',
+  'compute.urlMaps.delete',
+  'compute.backendServices.delete',
+  'compute.healthChecks.delete',
+  'compute.sslCertificates.delete',
+];
 const defaults = {
   compute: 'https://compute.googleapis.com/compute/v1/',
   container: 'https://container.googleapis.com/v1/',
@@ -92,6 +118,7 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
     assert.ok(
       resource.startsWith(`projects/${plan.projectId}/`) ||
         resource === `projects/${plan.projectId}` ||
+        (service === 'crm' && method === 'POST' && resource === `projects/${plan.projectId}:testIamPermissions`) ||
         (service === 'iam' &&
           resource.startsWith(`projects/-/serviceAccounts/`) &&
           resource.includes(`@${plan.projectId}.iam.gserviceaccount.com`)),
@@ -119,6 +146,14 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
       throw Error('Staging cloud returned invalid JSON; acknowledgement is uncertain');
     }
   }
+  const readerPolicy = async (expectedAccountId) => {
+    const base = `projects/-/serviceAccounts/${plan.janitorServiceAccount}`;
+    const account = await request('iam', 'GET', base);
+    assert.equal(account?.uniqueId, expectedAccountId, 'Staging reader account identity changed');
+    const policy = await request('iam', 'POST', `${base}:getIamPolicy?options.requestedPolicyVersion=3`);
+    assert.ok(policy?.etag, 'Staging reader policy must include its current etag');
+    return { base, policy };
+  };
   return {
     request,
     simulation,
@@ -244,6 +279,11 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
     },
     async preflight() {
       await this.project();
+      const access = await request('crm', 'POST', `projects/${plan.projectId}:testIamPermissions`, {
+        permissions: projectLifecyclePermissions,
+      });
+      const missing = projectLifecyclePermissions.filter((permission) => !access?.permissions?.includes(permission));
+      assert.equal(missing.length, 0, `Staging lifecycle permissions are missing: ${missing.join(', ')}`);
       const [project, region, server] = await Promise.all([
         request('compute', 'GET', `projects/${plan.projectId}`),
         request('compute', 'GET', `projects/${plan.projectId}/regions/${plan.region}`),
@@ -273,6 +313,7 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
         assert.ok(account.uniqueId && !account.disabled);
         accounts.push({ email, id: account.uniqueId, preexisting: true });
       }
+      await readerPolicy(accounts.find((account) => account.email === plan.janitorServiceAccount).id);
       return accounts;
     },
     async get(spec) {
@@ -359,21 +400,13 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
       return data.rrsets;
     },
     async readBinding(member, expectedAccountId) {
-      const base = `projects/-/serviceAccounts/${plan.janitorServiceAccount}`;
-      const account = await request('iam', 'GET', base);
-      assert.equal(account.uniqueId, expectedAccountId);
-      const policy = await request('iam', 'GET', `${base}:getIamPolicy?options.requestedPolicyVersion=3`);
-      assert.ok(policy.etag);
+      const { policy } = await readerPolicy(expectedAccountId);
       return !!policy.bindings?.some(
         (b) => b.role === 'roles/iam.workloadIdentityUser' && !b.condition && b.members?.includes(member),
       );
     },
     async iamBinding(member, remove, expectedAccountId) {
-      const base = `projects/-/serviceAccounts/${plan.janitorServiceAccount}`;
-      const account = await request('iam', 'GET', base);
-      assert.equal(account.uniqueId, expectedAccountId);
-      const policy = await request('iam', 'GET', `${base}:getIamPolicy?options.requestedPolicyVersion=3`);
-      assert.ok(policy.etag);
+      const { base, policy } = await readerPolicy(expectedAccountId);
       const role = 'roles/iam.workloadIdentityUser',
         before = policy.bindings?.find((b) => b.role === role && !b.condition);
       const exists = !!before?.members?.includes(member);

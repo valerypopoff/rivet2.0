@@ -10,6 +10,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { temporaryPlan } from './fixtures/temporary-staging-plan.mjs';
+import { retainTemporaryFailure } from './temporary-staging.mjs';
 import {
   temporaryAdmission,
   temporaryBinding,
@@ -53,6 +54,10 @@ const registryHandler = createRequire(import.meta.url)(
   '../../../postman/mocks/anonymous-registry/contract.cjs',
 ).handler;
 const fixtureLock = async () => ({ close: async () => {} });
+const cloudWrite = (request) =>
+  request.method !== 'GET' &&
+  !request.resource.endsWith(':testIamPermissions') &&
+  !request.resource.endsWith(':getIamPolicy');
 const ipPlan = (changes = {}) =>
   temporaryPlan({
     hostnameMode: 'ip-encoded-http01',
@@ -876,6 +881,56 @@ test('private pull configuration is exact, scoped to required hosts, helper-free
     stagingRegistryConfig(temporaryPlan({ registrySecretSha256: temporaryHash(withHelper) }), file, [image]),
   );
 });
+test('workflow failure diagnostics are bounded and exclude arbitrary command properties', async (t) => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-private-error-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const failure = Object.assign(new Error('x'.repeat(9000)), { stdout: 'private body', env: { TOKEN: 'private' } });
+  await retainTemporaryFailure(temp, 'execute', failure);
+  const files = await fs.readdir(temp);
+  assert.equal(files.length, 1);
+  const report = JSON.parse(await fs.readFile(path.join(temp, files[0]), 'utf8'));
+  assert.deepEqual(Object.keys(report).sort(), ['at', 'message', 'mode', 'name']);
+  assert.equal(report.mode, 'execute');
+  assert.equal(report.name, 'Error');
+  assert.equal(report.message, 'x'.repeat(8192));
+  assert.ok(Number.isFinite(Date.parse(report.at)));
+  // An unavailable diagnostic location must preserve the original operation failure.
+  await retainTemporaryFailure(path.join(temp, 'absent'), 'execute', failure);
+});
+
+test('tagged Docker Hub images retain their repository and credential host', async (t) => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-tagged-pull-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const bytes = Buffer.from(
+    JSON.stringify({ auths: { 'docker.io': { auth: Buffer.from('pull-reader:fixture-only').toString('base64') } } }),
+  );
+  const file = path.join(temp, 'pull.json');
+  await fs.writeFile(file, bytes);
+  const plan = temporaryPlan({ registrySecretSha256: temporaryHash(bytes) });
+  for (const [image, repository] of [
+    ['postgres:16.8-alpine', 'library/postgres'],
+    ['library/postgres:16.8-alpine', 'library/postgres'],
+    ['docker.io/library/postgres:16.8-alpine', 'library/postgres'],
+    ['minio/minio:RELEASE.2025-04-22T22-12-26Z', 'minio/minio'],
+  ]) {
+    const reference = `${image}@${digest}`;
+    await stagingRegistryConfig(plan, file, [reference]);
+    let calls = 0;
+    await verifyAnonymousStagingImage(reference, {
+      fetchImpl: async (url, options) => {
+        calls++;
+        assert.equal(url, `https://registry-1.docker.io/v2/${repository}/manifests/${digest}`);
+        assert.equal(options.method, 'HEAD');
+        assert.equal(options.headers.authorization, undefined);
+        return new Response(null, { status: 200, headers: { 'docker-content-digest': digest } });
+      },
+    });
+    assert.equal(calls, 1);
+  }
+  await assert.rejects(stagingRegistryConfig(plan, file, [`ghcr.io/owner/image@${digest}`]));
+});
+
 test('anonymous registry admission uses a scoped token and rejects private, changed and unsafe images before GCP', async (t) => {
   let base, server;
   if (process.env.RIVET_TEMPORARY_SIMULATION_URL)
@@ -960,10 +1015,62 @@ test('managed DNS admission requires a complete label boundary, not a lookalike 
       });
       if (domain === 'notexample.net') await assert.rejects(f.cloud.preflight(), /outside the managed DNS zone/);
       else assert.equal((await f.cloud.preflight()).length, 3);
-      assert.equal(
-        (await f.control('_requests')).some((r) => r.method === 'POST'),
-        false,
+      assert.equal((await f.control('_requests')).some(cloudWrite), false);
+    });
+});
+
+test('missing firewall or certificate cleanup privileges block before any infrastructure write', async (t) => {
+  for (const permission of [
+    'compute.firewalls.create',
+    'compute.firewalls.delete',
+    'compute.regionSslCertificates.delete',
+    'compute.sslCertificates.delete',
+  ])
+    await t.test(permission, async (child) => {
+      const f = await fixture(child, { fault: { type: 'missing-permission', permission } });
+      await assert.rejects(
+        f.store.locked(() => provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard })),
+        (error) => error.message.includes(permission),
       );
+      const requests = await f.control('_requests');
+      assert.equal(requests.filter((request) => request.resource.endsWith(':testIamPermissions')).length, 1);
+      assert.equal(requests.some(cloudWrite), false);
+      const { record } = await f.store.read();
+      assert.equal(record.firstBillableIntentAt, null);
+      assert.deepEqual(record.resources, []);
+    });
+});
+
+test('reader IAM policy reads use POST before infrastructure and preserve exact member changes', async (t) => {
+  const f = await fixture(t);
+  const accounts = await f.cloud.preflight();
+  const id = accounts.find((account) => account.email === f.plan.janitorServiceAccount).id;
+  const member = `serviceAccount:${f.plan.projectId}.svc.id.goog[${f.plan.operationId}-ctl/janitor]`;
+  assert.equal(await f.cloud.readBinding(member, id), false);
+  await f.cloud.iamBinding(member, false, id);
+  assert.equal(await f.cloud.readBinding(member, id), true);
+  await f.cloud.iamBinding(member, true, id);
+  assert.equal(await f.cloud.readBinding(member, id), false);
+  const requests = await f.control('_requests');
+  const reads = requests.filter((request) => request.resource.endsWith(':getIamPolicy'));
+  assert.equal(reads.length, 6);
+  assert.ok(reads.every((request) => request.method === 'POST'));
+  assert.equal(requests.filter(cloudWrite).length, 2);
+  await assert.rejects(f.cloud.iamBinding(member, false, 'replaced-account'), /identity changed/);
+  assert.equal((await f.control('_requests')).filter(cloudWrite).length, 2);
+});
+
+test('unreadable reader policy or missing etag stops before any infrastructure write', async (t) => {
+  for (const type of ['policy-read-denied', 'policy-without-etag'])
+    await t.test(type, async (child) => {
+      const f = await fixture(child, { fault: { type } });
+      await assert.rejects(
+        f.store.locked(() => provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard })),
+      );
+      assert.equal((await f.control('_requests')).some(cloudWrite), false);
+      const { record } = await f.store.read();
+      assert.equal(record.firstBillableIntentAt, null);
+      assert.deepEqual(record.resources, []);
     });
 });
 
@@ -1158,7 +1265,10 @@ test('unknown HTML/timeout outcomes never authorize retries or assumed absence',
       const f = await fixture(child, { fault: { type, kind: 'networks' } });
       await f.store.locked(async () => {
         await assert.rejects(provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard }));
-        assert.equal((await f.control('_requests')).filter((r) => r.method === 'POST').length, 1);
+        assert.equal(
+          (await f.control('_requests')).filter((request) => request.method === 'POST' && cloudWrite(request)).length,
+          1,
+        );
         if (type === 'html')
           await assert.rejects(cleanupTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait }), /unknown/);
         else {

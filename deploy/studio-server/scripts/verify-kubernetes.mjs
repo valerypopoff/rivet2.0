@@ -245,6 +245,7 @@ async function main() {
       'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',
       'deploy/studio-server/scripts/reusable-staging.test.mjs',
       'deploy/studio-server/scripts/temporary-staging.test.mjs',
+      'deploy/studio-server/scripts/temporary-staging-inventory.test.mjs',
       'deploy/studio-server/scripts/temporary-staging-actor.test.mjs',
       'deploy/studio-server/scripts/qualification-browser-tools.test.mjs',
       'deploy/studio-server/scripts/temporary-staging-bootstrap.test.mjs',

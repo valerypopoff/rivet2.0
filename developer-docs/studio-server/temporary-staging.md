@@ -43,6 +43,39 @@ This closes repository implementation, not release qualification. Separately:
 
 No local passing result substitutes for these gates or authorizes production.
 
+Image admission accepts both Docker Hub shorthand and explicit registry names.
+For example, `postgres:16.8-alpine@sha256:...` and
+`docker.io/library/postgres:16.8-alpine@sha256:...` resolve to the same repository.
+A dot in an image tag is not a registry hostname; a registry component must
+precede a slash. Private pull credentials are scoped to that resolved host too.
+The registry allowlist, anonymous digest check and Actions-token exclusion still
+apply before provider creation.
+
+The cloud preflight also calls the read-only Resource Manager
+`projects.testIamPermissions` endpoint for the project-level create and cleanup
+permissions used by the maintained lifecycle. Missing access fails before even
+the network is created. Network Admin excludes firewall changes and SSL
+certificate deletion; an approved narrowly scoped custom role can supply those
+permissions without granting Compute Security Admin. Named-account IAM access,
+quotas, service availability and later live ownership checks remain separate.
+
+The preflight also reads the exact reader service account's IAM policy before
+infrastructure creation. Google's `serviceAccounts.getIamPolicy` REST method
+requires **POST**, an empty body and `options.requestedPolicyVersion=3`.
+The response must contain an etag. Member inspection, addition and removal use
+the same identity-checked read, preserving that etag and unrelated bindings.
+A denied or incomplete policy response therefore fails before billable intent.
+See the [official IAM method](https://docs.cloud.google.com/iam/docs/reference/rest/v1/projects.serviceAccounts/getIamPolicy).
+
+Bootstrap inventory obtains item kinds from API discovery when Kubernetes
+omits them from typed List entries. An explicit conflicting kind fails closed.
+This allows genuine default service accounts and cluster-CA ConfigMaps to be
+recognized while preserving namespace UID, exact CA, controller-reference and
+unknown-object checks. `temporary-staging-inventory.test.mjs` covers the real
+omitted-kind response shape and rejection of replacement namespaces, unrelated
+CAs and conflicting kinds. Cleanup still requires the original operation's
+locked journal and immutable resource identities.
+
 ## Owners and sequence
 
 1. Validate exact main build/artifacts and the freshly observed installed
@@ -204,7 +237,8 @@ collected by the control host's operational alerting. If the host powers off,
 credentials expire, or the frozen checkout changes, cleanup can be blocked; no
 local process is an independent cloud-enforced billing cap. Keep that host,
 checkout and credentials available until verified cleanup.
-CLI failures retain a bounded reason in private `terminal-error-*.json` files;
+CLI and automated workflow failures retain a bounded reason in private
+`terminal-error-*.json` files, including failures before cloud activation;
 they do not print cloud responses, private settings or credentials to Actions.
 Diagnostic export never changes cleanup authority or replaces the failed exit.
 Unchanged blocked observations do not append duplicate journal snapshots or
