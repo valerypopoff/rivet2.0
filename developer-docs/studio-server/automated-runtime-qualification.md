@@ -235,6 +235,19 @@ credentials narrowly scoped; do not broaden access to make a failed preflight
 pass. Actual credentials/settings remain private files, not variables/artifacts.
 Missing prerequisites fail, rather than create a successful skipped job.
 
+For a fresh runner checkout, that policy file may live in a protected external
+directory alongside its two self-contained, checksum-pinned `.mjs` adapters.
+Only read-only qualification preflight validates the installation and adapter
+bytes, copies them into a new private packet directory and rewrites their local
+paths. Path escapes, redirected directories, changed checksums and retained
+output are rejected. No adapter executes during copying. Keep any private
+prerequisite evidence outside the checkout and pin it in the reviewed adapter.
+When the actual recovery operator uses another OS, its dependency and capacity
+checks must run there; the read-only coordinator may verify their exact bound
+receipt, but cannot claim it ran those tools locally. Actual backup and application
+acceptance remain required on the deployment operator, using its own freshly
+validated policy; this copy step neither delegates writes nor permits deployment.
+
 ## Provider driver contract
 
 `driver.json`: `protocol:1`, `suite:"compact-seven-v1"` or the explicitly opted-in

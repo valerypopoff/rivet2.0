@@ -31,10 +31,90 @@ import { prepareRuntimeQualification } from './lib/runtime-qualification-publica
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { HA_REQUIRED_CHECKS } from './lib/ha-release-evidence.mjs';
 import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
+import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
+import { readDeploymentPolicy } from './lib/deployment-workflow.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sha = 'a'.repeat(40),
   repository = 'example/rivet';
 const evidence = { workflow: 'Build Images', runId: '123', runAttempt: 1 };
+
+test('fresh read-only checkout receives exact reviewed private policy without executing adapters', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-readiness-policy-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const bundle = path.join(directory, 'private');
+  const checkout = path.join(directory, 'checkout');
+  const packet = path.join(checkout, 'artifacts');
+  await fs.mkdir(bundle);
+  await fs.mkdir(packet, { recursive: true });
+  const source = "throw Error('Adapter must not execute during materialization');\n";
+  await fs.writeFile(path.join(bundle, 'adapter.mjs'), source);
+  const identity = { context: 'production-context', namespace: 'rivet', release: 'rivet' };
+  const policy = {
+    formatVersion: 1,
+    ...identity,
+    namespaceUid: 'namespace-uid',
+    ...Object.fromEntries(
+      ['backup', 'acceptance'].map((name) => [
+        name,
+        {
+          script: 'adapter.mjs',
+          sha256: `sha256:${createHash('sha256').update(source).digest('hex')}`,
+        },
+      ]),
+    ),
+  };
+  const policyFile = path.join(bundle, 'policy.json');
+  await fs.writeFile(policyFile, JSON.stringify(policy));
+  const prepare = () => prepareQualificationReadinessPolicy({ policyFile, root: checkout, packet, identity });
+  const file = await prepare();
+  const copied = await readDeploymentPolicy(file, checkout, identity);
+  assert.equal(await fs.readFile(copied.scripts.backup, 'utf8'), source);
+  assert.equal(await fs.readFile(copied.scripts.acceptance, 'utf8'), source);
+  await assert.rejects(prepare(), { code: 'EEXIST' });
+  assert.equal(await fs.readFile(path.join(bundle, 'adapter.mjs'), 'utf8'), source);
+});
+
+test('private readiness preparation rejects changed bytes, escaped scripts and installation confusion', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-readiness-policy-invalid-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const bundle = path.join(directory, 'private'),
+    checkout = path.join(directory, 'checkout');
+  await fs.mkdir(bundle);
+  await fs.mkdir(checkout);
+  await fs.writeFile(path.join(bundle, 'adapter.mjs'), 'changed');
+  const entry = { script: 'adapter.mjs', sha256: `sha256:${'a'.repeat(64)}` };
+  const identity = { context: 'production-context', namespace: 'rivet', release: 'rivet' };
+  const policy = { formatVersion: 1, ...identity, namespaceUid: 'uid', backup: entry, acceptance: entry };
+  const policyFile = path.join(bundle, 'policy.json');
+  const prepare = () => prepareQualificationReadinessPolicy({ policyFile, root: checkout, packet: checkout, identity });
+  await fs.writeFile(policyFile, JSON.stringify(policy));
+  await assert.rejects(prepare(), /adapter changed/i);
+  policy.backup = { ...entry, script: '../outside.mjs' };
+  await fs.writeFile(policyFile, JSON.stringify(policy));
+  await assert.rejects(prepare(), /inside the repository/);
+  policy.release = 'other';
+  await fs.writeFile(policyFile, JSON.stringify(policy));
+  await assert.rejects(prepare(), /installation identity/);
+  const verifiedEntry = { ...entry, sha256: `sha256:${createHash('sha256').update('changed').digest('hex')}` };
+  Object.assign(policy, { release: identity.release, backup: verifiedEntry, acceptance: verifiedEntry });
+  await fs.writeFile(policyFile, JSON.stringify(policy));
+  await assert.rejects(
+    prepareQualificationReadinessPolicy({ policyFile, root: checkout, packet: bundle, identity }),
+    /packet escaped checkout/,
+  );
+  const link = path.join(directory, 'redirect');
+  await fs.symlink(bundle, link, 'junction');
+  await assert.rejects(
+    prepareQualificationReadinessPolicy({
+      policyFile: path.join(link, 'policy.json'),
+      root: checkout,
+      packet: checkout,
+      identity,
+    }),
+    /directory cannot be redirected/,
+  );
+  assert.deepEqual(await fs.readdir(checkout), []);
+});
 function fixture(overlap = false) {
   const imageSet = (prefix) =>
     Object.fromEntries(

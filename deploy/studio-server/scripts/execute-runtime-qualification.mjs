@@ -24,6 +24,7 @@ import { runManagedGateCommand as run } from './kubernetes-managed-release-gate.
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { assertReleaseManifestMatchesCurrentChart } from './lib/studio-server-release-manifest.mjs';
 import { continuityTimeoutMs } from './lib/request-continuity.mjs';
+import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const packet = path.resolve(
@@ -148,6 +149,16 @@ async function main(mode) {
       adoptionArgs.push('--overlap-adoption-certificate', file, '--overlap-adoption-stage', adoptionStage);
       if (adoptionStage === 'ownership') adoptionArgs.push('--ha-control-plane-transition');
     }
+    const policyFile = await prepareQualificationReadinessPolicy({
+      policyFile: process.env.RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE,
+      root,
+      packet,
+      identity: {
+        context: process.env.RIVET_QUALIFICATION_PRODUCTION_CONTEXT,
+        namespace: process.env.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE,
+        release: process.env.RIVET_QUALIFICATION_PRODUCTION_RELEASE,
+      },
+    });
     await run(
       process.execPath,
       [
@@ -170,7 +181,7 @@ async function main(mode) {
         '--values',
         preflightValues,
         '--deployment-policy',
-        process.env.RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE,
+        policyFile,
         '--artifacts',
         artifacts,
       ],
