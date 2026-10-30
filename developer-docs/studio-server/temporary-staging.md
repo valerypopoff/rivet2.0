@@ -51,6 +51,14 @@ precede a slash. Private pull credentials are scoped to that resolved host too.
 The registry allowlist, anonymous digest check and Actions-token exclusion still
 apply before provider creation.
 
+The cloud preflight also calls the read-only Resource Manager
+`projects.testIamPermissions` endpoint for the project-level create and cleanup
+permissions used by the maintained lifecycle. Missing access fails before even
+the network is created. Network Admin excludes firewall changes and SSL
+certificate deletion; an approved narrowly scoped custom role can supply those
+permissions without granting Compute Security Admin. Named-account IAM access,
+quotas, service availability and later live ownership checks remain separate.
+
 ## Owners and sequence
 
 1. Validate exact main build/artifacts and the freshly observed installed

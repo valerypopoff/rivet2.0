@@ -61,6 +61,15 @@ exports.handler = () => {
       if (resource.includes('wartime-storyteller')) return respond(403, { error: 'Production excluded' });
       if (service === 'crm' && resource === root && req.method === 'GET')
         return respond(200, { projectId: plan.projectId, projectNumber: plan.projectNumber, lifecycleState: 'ACTIVE' });
+      if (service === 'crm' && resource === `${root}:testIamPermissions` && req.method === 'POST') {
+        if (!Array.isArray(body?.permissions) || body.permissions.some((permission) => permission.includes('*')))
+          return respond(400, { error: 'Explicit permissions required' });
+        return respond(200, {
+          permissions: body.permissions.filter(
+            (permission) => fault?.type !== 'missing-permission' || permission !== fault.permission,
+          ),
+        });
+      }
       if (service === 'compute' && resource === root)
         return respond(200, {
           quotas: [
