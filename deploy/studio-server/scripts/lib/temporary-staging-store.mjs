@@ -23,6 +23,8 @@ function transition(previous, record) {
     'finishedAt',
     'cleanupReceipt',
     'evidenceFailure',
+    'hostname',
+    'tlsMaterial',
   ])
     if (previous[key]) assert.deepEqual(record[key], previous[key], 'Frozen operation authority changed');
   for (const [key, value] of Object.entries(previous.identities ?? {}))
@@ -43,6 +45,8 @@ function transition(previous, record) {
       'description',
       'createOperation',
       'deleteOperation',
+      'challengePublishIssued',
+      'httpsInstallIssued',
     ])
       if (item[key] !== undefined) assert.deepEqual(next[key], item[key], 'Pinned inventory identity changed');
     for (const key of ['absent', 'createIssued', 'deleteIssued', 'rejected'])
@@ -68,6 +72,11 @@ function transition(previous, record) {
         'Controller-child history lost',
       );
   if (previous.dns) assert.deepEqual(record.dns.rrset, previous.dns.rrset, 'DNS authority changed');
+  if (previous.certificateWorker) {
+    assert.ok(record.certificateWorker, 'Certificate worker authority lost');
+    for (const [key, value] of Object.entries(previous.certificateWorker))
+      assert.deepEqual(record.certificateWorker[key], value, 'Certificate worker identity/history changed');
+  }
   for (const item of previous.iam ?? []) {
     const next = record.iam?.find((i) => i.member === item.member);
     assert.ok(next);

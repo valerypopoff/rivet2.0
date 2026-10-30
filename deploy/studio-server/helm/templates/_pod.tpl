@@ -200,10 +200,30 @@ readinessProbe:
   failureThreshold: {{ .root.Values.lifecycle.probes.readiness.failureThreshold }}
 {{- end -}}
 
+{{- define "rivet.proxyLifecycle" -}}
+{{- $result := dict "preStopDelaySeconds" .Values.lifecycle.preStopDelaySeconds "terminationGracePeriodSeconds" .Values.lifecycle.terminationGracePeriodSeconds -}}
+{{- range $key, $value := .Values.lifecycle.proxy -}}
+{{- if not (has $key (list "preStopDelaySeconds" "terminationGracePeriodSeconds")) -}}
+{{- fail (printf "Unknown lifecycle.proxy field %s" $key) -}}
+{{- end -}}
+{{- $_ := set $result $key $value -}}
+{{- end -}}
+{{- toJson $result -}}
+{{- end -}}
+
+{{- define "rivet.pod.proxyPreStop" -}}
+{{- $lifecycle := include "rivet.proxyLifecycle" . | fromJson -}}
+{{- include "rivet.pod.preStopWithDelay" (dict "root" . "delay" $lifecycle.preStopDelaySeconds) -}}
+{{- end -}}
+
 {{- define "rivet.pod.preStop" -}}
+{{- include "rivet.pod.preStopWithDelay" (dict "root" . "delay" .Values.lifecycle.preStopDelaySeconds) -}}
+{{- end -}}
+
+{{- define "rivet.pod.preStopWithDelay" -}}
 lifecycle:
   preStop:
     exec:
       {{- /* Validation owners have never admitted work and have no public edge. */}}
-      command: ["/bin/sh", "-c", {{ printf "sleep %v" (ternary 0 .Values.lifecycle.preStopDelaySeconds .Values.workflowSchema.maintenanceValidation) | quote }}]
+      command: ["/bin/sh", "-c", {{ printf "sleep %v" (ternary 0 .delay .root.Values.workflowSchema.maintenanceValidation) | quote }}]
 {{- end -}}

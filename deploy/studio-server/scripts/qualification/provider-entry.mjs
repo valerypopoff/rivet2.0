@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
 import { ReusableProviderGate, root, until } from './provider-gate.mjs';
 import { FixtureJournal } from './fixture-journal.mjs';
 import { runProviderAutoscaling } from './provider-autoscaling.mjs';
@@ -24,6 +23,8 @@ import { qualificationHash } from '../lib/runtime-qualification-execution.mjs';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from '../lib/ha-workflow-traffic.mjs';
 import { waitForManagedGateCommands } from '../kubernetes-managed-release-gate.mjs';
 import { adoptProviderOverlap, startProviderOverlapProbe } from './provider-overlap.mjs';
+import { verifyActorSource } from '../../images/qualification/verify-source.mjs';
+import { ProviderRequestContinuity } from './provider-request-continuity.mjs';
 
 export function normalizeProviderAutoscaling(raw, hpa) {
   const result = (name) => {
@@ -113,6 +114,7 @@ export async function executeProviderPhase({
     assert.ok(['upgrade', 'autoscaling'].includes(phase));
     await gate.loadWorkflowKey({ webAppSession: true });
     if (phase === 'upgrade') {
+      if (operation.requestContinuityProfile) gate.continuityProbes = new ProviderRequestContinuity(gate);
       gate.currentManifest = operation.previous;
       const probes = new HaReleaseProbes(gate, gate.config.baseUrl, root);
       const report = await runOrdinaryRuntimeUpgrade({
@@ -147,6 +149,17 @@ export async function executeProviderPhase({
       const workflow = startHaWorkflowTraffic(gate, gate.config.baseUrl, () => subphase);
       const web = startHaWebAppTraffic(gate, gate.config.baseUrl, () => subphase);
       try {
+        if (operation.requestContinuityProfile) {
+          gate.continuityProbes = new ProviderRequestContinuity(gate, { hpaOnly: true });
+          const seed = JSON.parse(
+            await fs.readFile(path.join(gate.config.artifactsDir, 'ha-persisted-state.json'), 'utf8'),
+          );
+          const template = await gate.requestWorkflow(gate.config.baseUrl, '/api/workflows/projects/download', {
+            method: 'POST',
+            body: JSON.stringify({ relativePath: seed.relativePath, version: 'live' }),
+          });
+          await gate.continuityProbes.prepare(template);
+        }
         const owned = new FixtureJournal(state);
         const raw = await runProviderAutoscaling(gate, owned, {
           phase: (name) => {
@@ -161,6 +174,7 @@ export async function executeProviderPhase({
         });
         subphase = 'proxy-hpa';
         const hpa = await runProviderProxyHpa(gate, owned);
+        const requestContinuity = gate.continuityProbes ? await gate.continuityProbes.finish() : undefined;
         await waitForOrdinaryRuntime(gate, operation.candidate.images, wait);
         await wait(
           'one hundred independent autoscaling completions',
@@ -168,11 +182,13 @@ export async function executeProviderPhase({
         );
         result = {
           ...normalizeProviderAutoscaling(raw, hpa),
+          ...(requestContinuity ? { requestContinuity } : {}),
           startedAt,
           finishedAt: new Date().toISOString(),
           outcome: 'passed',
         };
       } finally {
+        await gate.continuityProbes?.close();
         await Promise.all([workflow.stop(), web.stop()]);
         if (result) {
           result.workflow = workflow.report;
@@ -190,15 +206,7 @@ export async function executeProviderPhase({
 }
 
 export async function assertProviderCheckout(operation) {
-  assert.equal(
-    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
-    operation.candidate.source.sha,
-  );
-  assert.equal(
-    execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' }).trim(),
-    '',
-    'Qualification checkout must be clean',
-  );
+  await verifyActorSource(root, operation.candidate.source.sha);
   assertReleaseManifestMatchesCurrentChart(operation.candidate, root, { requirePromoted: false });
 }
 async function main() {
@@ -225,6 +233,11 @@ async function main() {
     'Driver and operation target profiles differ',
   );
   const actor = { namespace: settings.runnerNamespace, name: process.env.POD_NAME, uid: process.env.POD_UID };
+  assert.deepEqual(
+    settings.requestContinuityProfile,
+    operation.requestContinuityProfile,
+    'Driver and operation continuity profiles differ',
+  );
   assert.ok(
     actor.name && actor.uid && process.platform === 'linux',
     'Exact ephemeral in-cluster Linux runner required',

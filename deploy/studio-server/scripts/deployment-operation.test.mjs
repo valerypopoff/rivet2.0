@@ -5,6 +5,25 @@ import { runHaRollingUpgrade } from './lib/ha-rolling-upgrade.mjs';
 import { runManagedReleaseCutover } from './lib/managed-release-cutover.mjs';
 import { runHaControlTopologyTransition } from './lib/ha-control-topology.mjs';
 import { fixtureDeploymentSafety } from './fixtures/deployment-safety.mjs';
+import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
+
+test('private deployment diagnostics preserve bounded causes without copying arbitrary process/request data', () => {
+  const primary = new Error('management observation failed', { cause: new Error('underlying read failure') });
+  primary.stdout = 'private stdout must not be serialized';
+  primary.request = { password: 'must not be serialized' };
+  const aggregate = new AggregateError([primary, new Error('admission cleanup also failed')], 'cutover paused');
+  const report = deploymentFailureDetails(aggregate);
+  assert.equal(report.error.errors[0].cause.message, 'underlying read failure');
+  assert.equal(report.error.errors[1].message, 'admission cleanup also failed');
+  assert.ok(!JSON.stringify(report).includes('must not be serialized'));
+  primary.cause = aggregate;
+  assert.equal(deploymentFailureDetails(aggregate).error.errors[0].cause.circular, true);
+  const many = new AggregateError(
+    Array.from({ length: 100 }, () => new Error('x'.repeat(50000))),
+    'bounded',
+  );
+  assert.ok(JSON.stringify(deploymentFailureDetails(many)).length < 240000);
+});
 
 const modes = ['rolling', 'maintenance', 'topology'];
 function fixture(mode) {

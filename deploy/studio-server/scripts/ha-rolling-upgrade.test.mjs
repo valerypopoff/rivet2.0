@@ -100,6 +100,39 @@ test('HA template updates preserve HPA-grown frontend capacity with UID and reso
   assert.deepEqual(await unused(), { replicas: {}, versions: {} });
 });
 
+test('ingress handoff fences templates and retirement; unfinished bridge prevents preflight abandonment', async () => {
+  for (const fault of [false, true]) {
+    const f = fixture();
+    f.options.proxyContinuity = {
+      async prepare(operation) {
+        f.operations.push('ingress-prepare');
+        await operation.checkpoint({
+          proxyContinuity: { phase: 'bridge-serving', routeRestored: false, entries: [{ intent: true }] },
+        });
+        if (fault) throw Error('bridge outcome unknown');
+      },
+      async verify() {
+        f.operations.push('ingress-verify');
+      },
+      async finish(operation) {
+        f.operations.push('ingress-finish');
+        await operation.checkpoint({ proxyContinuity: { phase: 'complete', routeRestored: true, entries: [] } });
+      },
+    };
+    if (fault) {
+      await assert.rejects(runHaRollingUpgrade(f.options), /bridge outcome unknown/);
+      assert.equal(f.journal.phase, 'preflight');
+      assert.equal(f.journal.abortedBeforeTemplates, undefined);
+      assert.ok(!f.operations.includes('templates'));
+    } else {
+      await runHaRollingUpgrade(f.options);
+      assert.ok(f.operations.indexOf('ingress-prepare') < f.operations.indexOf('templates'));
+      assert.ok(f.operations.indexOf('ingress-finish') > f.operations.indexOf('templates'));
+      assert.equal(f.journal.phase, 'complete');
+    }
+  }
+});
+
 test('singleton rollout rejects absent or malformed inventory through its validation boundary', () => {
   for (const inventory of [undefined, null, {}, [], [null, { role: 'backend' }]])
     assert.throws(() => assertHaRolloutPlan(inventory, 'singleton'), /Missing HA backends/);

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { verifyActorSource } from '../../images/qualification/verify-source.mjs';
 
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const base = '/qualification/private';
@@ -20,35 +21,42 @@ export async function actorMain(mode) {
   assert.ok(Number(process.versions.node.split('.')[0]) >= 24);
   const packet = await input();
   if (mode === 'preflight') {
-    assert.equal(
-      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: packet.sourceRoot, encoding: 'utf8' }).trim(),
-      packet.sourceSha,
-    );
-    assert.equal(
-      execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
-        cwd: packet.sourceRoot,
-        encoding: 'utf8',
-      }).trim(),
-      '',
-    );
+    await verifyActorSource(packet.sourceRoot, packet.sourceSha);
     for (const tool of [
       ['timeout', '--help'],
       ['helm', 'version', '--short'],
       ['kubectl', 'version', '--client'],
       ['openssl', 'version'],
       ['flock', '--version'],
+      ['ffmpeg', '-version'],
     ])
       execFileSync(tool[0], tool.slice(1), { stdio: 'pipe' });
-    execFileSync(
-      process.execPath,
-      ['.yarn/releases/yarn-4.17.1.cjs', 'studio-server:ui:observe', 'runtime-control-fixture-contract.spec.ts'],
-      {
-        cwd: packet.sourceRoot,
-        stdio: 'pipe',
-        timeout: 180000,
-        env: { ...process.env, PLAYWRIGHT_HEADLESS: '1', PLAYWRIGHT_SLOW_MO: '0' },
-      },
+    try {
+      execFileSync(
+        process.execPath,
+        ['.yarn/releases/yarn-4.17.1.cjs', 'studio-server:ui:observe', 'runtime-control-fixture-contract.spec.ts'],
+        {
+          cwd: packet.sourceRoot,
+          stdio: 'pipe',
+          timeout: 180000,
+          env: { ...process.env, PLAYWRIGHT_HEADLESS: '1', PLAYWRIGHT_SLOW_MO: '0' },
+        },
+      );
+    } catch (error) {
+      // This command runs only the synthetic offline fixture; preserve readable
+      // bounded failures for the external private preflight diagnostic owner.
+      process.stderr.write(
+        Buffer.concat([error.stdout ?? Buffer.alloc(0), error.stderr ?? Buffer.alloc(0)]).subarray(-49152),
+      );
+      throw error;
+    }
+    const results = path.join(
+      process.env.RIVET_QUALIFICATION_BROWSER_ARTIFACTS ?? path.join(packet.sourceRoot, 'artifacts/playwright'),
+      'test-results',
     );
+    const videos = (await fs.readdir(results, { recursive: true })).filter((file) => file.endsWith('video.webm'));
+    assert.ok(videos.length > 0, 'Offline browser preflight must retain video recording');
+    for (const file of videos) assert.ok((await fs.stat(path.join(results, file))).size > 0, 'Empty browser video');
     return { sourceSha: packet.sourceSha, offlineFixturePassed: true };
   }
   assert.match(packet.operationId, /^rivet-q-[1-9][0-9]*-[1-9][0-9]*$/);

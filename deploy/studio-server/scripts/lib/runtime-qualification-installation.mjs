@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { assertOrdinaryRuntimeLayout } from './ha-release-evidence.mjs';
 import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
+import { requestContinuityProfile } from './request-continuity.mjs';
 
 const canonical = (value) =>
   Array.isArray(value)
@@ -36,13 +37,28 @@ export function qualificationSizing(values) {
   );
   return {
     resources,
-    lifecycle: pick(values.lifecycle, [
-      'health',
-      'shutdownGraceSeconds',
-      'terminationGracePeriodSeconds',
-      'preStopDelaySeconds',
-      'probes',
-    ]),
+    ...(requestContinuityProfile(values)
+      ? {
+          requestContinuity: pick(values.requestContinuity, [
+            'enabled',
+            'maxProtectedRequestSeconds',
+            'backendServiceDrainSeconds',
+            'propagationSeconds',
+          ]),
+        }
+      : {}),
+    lifecycle: {
+      ...pick(values.lifecycle, [
+        'health',
+        'shutdownGraceSeconds',
+        'terminationGracePeriodSeconds',
+        'preStopDelaySeconds',
+        'probes',
+      ]),
+      ...(values.lifecycle?.proxy
+        ? { proxy: pick(values.lifecycle.proxy, ['preStopDelaySeconds', 'terminationGracePeriodSeconds']) }
+        : {}),
+    },
     rollout: pick(values.rollout, ['minReadySeconds', 'maxUnavailable', 'maxSurge']),
     postgres: pick(values.postgres, ['maxConnections', 'reservedConnections', 'poolMaxPerApiPod']),
     legacyRestore: pick(values.legacyRestore, ['enabled', 'size']),

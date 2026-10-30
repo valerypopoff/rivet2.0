@@ -354,7 +354,7 @@ spec:
 `;
 }
 
-function extractWebAppRevisionKey(html) {
+export function extractWebAppRevisionKey(html) {
   const match = html.match(/\bdata-rivet-web-app-config="([^"]*)"/);
   if (!match?.[1]) throw new Error('Web app HTML did not contain an action revision key');
   const config = JSON.parse(
@@ -566,7 +566,7 @@ function isWebSocketActionTerminalMessage(message) {
   ].includes(message.type);
 }
 
-function openWebSocketAction(
+export function openWebSocketAction(
   baseUrl,
   {
     componentId = 'release-gate-run-button',

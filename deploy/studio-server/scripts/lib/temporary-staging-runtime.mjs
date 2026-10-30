@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
@@ -18,6 +18,8 @@ import {
   temporaryAdmission,
   temporaryHash,
   verifyTemporaryCertificate,
+  temporaryHostname,
+  assertTemporaryCertificate,
 } from './temporary-staging-contract.mjs';
 import { temporaryFoundationSpecs } from './temporary-staging-gcp.mjs';
 import { inspectStagingPrerequisites } from './reusable-staging-prerequisites.mjs';
@@ -28,6 +30,12 @@ import {
   stagingRegistryConfig,
   verifyPrivateStagingImages,
 } from './temporary-staging-images.mjs';
+import {
+  issueTemporaryCertificate,
+  settleTemporaryCertificate,
+  verifyTemporaryChallenge,
+  transientTemporaryChallengeError,
+} from './temporary-staging-certificate.mjs';
 
 const exec = promisify(execFile);
 const ns = (name) => `/api/v1/namespaces/${name}`;
@@ -48,8 +56,23 @@ export function temporaryStagingRuntime({
   signal,
   refreshInstalled,
   verifyPrerequisites = inspectStagingPrerequisites,
+  certificateIssuer = issueTemporaryCertificate,
+  certificateSettlement = settleTemporaryCertificate,
+  verifyPublicChallenge = verifyTemporaryChallenge,
+  diagnosticDirectory,
 }) {
   inputs = immutable(inputs);
+  const requiredImages = (plan) => [
+    ...new Set([
+      plan.actorImage,
+      plan.postgresImage,
+      plan.objectStorageImage,
+      ...(plan.acme ? [plan.acme.image] : []),
+      ...[inputs.previous, inputs.candidate].flatMap((m) =>
+        Object.values(m.images).map((i) => `${i.repository}@${i.digest}`),
+      ),
+    ]),
+  ];
   let api,
     settings,
     operation,
@@ -128,6 +151,29 @@ export function temporaryStagingRuntime({
         r.resources.find((i) => i.key === item.key).identity = { id: value.metadata.uid, name: value.metadata.name };
       });
     return value;
+  };
+  const captureEdge = async (store, cloud, item) => {
+    const gateway = await reconcile(store, item);
+    if (!gateway) return;
+    const { record } = await store.read();
+    const spec = temporaryFoundationSpecs(record.plan).find((s) => s.key === 'address');
+    const address = await cloud.get(spec);
+    assert.equal(String(address.id), record.resources.find((i) => i.key === 'address').identity.id);
+    assert.equal(gateway.spec.addresses[0].value, address.name);
+    const children = await cloud.edgeChildren(address.address);
+    const baseline = new Set(record.baseline.map((i) => i.id));
+    assert.ok(
+      children.every((i) => !baseline.has(i.id)),
+      'A pre-existing edge child is not cleanup-owned',
+    );
+    await store.change((r) => {
+      r.edgeChildren ??= [];
+      for (const child of children) {
+        const prior = r.edgeChildren.find((i) => i.resource === child.resource);
+        if (prior) assert.equal(prior.id, child.id);
+        else r.edgeChildren.push(child);
+      }
+    });
   };
   const snapshotBootstrap = async (store) => {
     let children;
@@ -272,7 +318,8 @@ export function temporaryStagingRuntime({
         plan.estimate.evidenceSha256,
         'Reviewed itemized estimate changed or is missing',
       );
-      verifyTemporaryCertificate(plan, await fs.readFile(certificateFile), await fs.readFile(keyFile));
+      if (!plan.hostnameMode)
+        verifyTemporaryCertificate(plan, await fs.readFile(certificateFile), await fs.readFile(keyFile));
       assert.equal(inputs.candidate.source.sha, plan.sourceSha);
       const { getStudioServerReleaseManifestDigest } = await import('./studio-server-release-manifest.mjs');
       assert.equal(getStudioServerReleaseManifestDigest(inputs.candidate), plan.candidateDigest);
@@ -293,6 +340,7 @@ export function temporaryStagingRuntime({
           maxSeconds: plan.allowance.maxSeconds,
           driverBundleSha256: '0'.repeat(64),
           developerOverlapProfile: inputs.developerOverlapProfile,
+          requestContinuityProfile: inputs.requestContinuityProfile,
           staging: {
             mode: 'reusable-cluster',
             clusterUid: 'uncreated-temporary-cluster',
@@ -301,25 +349,24 @@ export function temporaryStagingRuntime({
           },
         },
       });
-      const requiredImages = [
-        ...new Set([
-          plan.actorImage,
-          plan.postgresImage,
-          plan.objectStorageImage,
-          ...[inputs.previous, inputs.candidate].flatMap((m) =>
-            Object.values(m.images).map((i) => `${i.repository}@${i.digest}`),
-          ),
-        ]),
-      ];
+      const images = requiredImages(plan);
       if (plan.registrySecretSha256)
-        await verifyPrivateStagingImages(
-          await stagingRegistryConfig(plan, registryFile, requiredImages),
-          requiredImages,
-          exec,
-        );
-      else for (const image of requiredImages) await verifyAnonymousStagingImage(image);
+        await verifyPrivateStagingImages(await stagingRegistryConfig(plan, registryFile, images), images, exec);
+      else for (const image of images) await verifyAnonymousStagingImage(image);
       await exec('docker', ['image', 'inspect', plan.actorImage], { timeout: 15000, maxBuffer: 65536 });
-      await verifyOfflineTemporaryActor(plan);
+      await verifyOfflineTemporaryActor(
+        plan,
+        diagnosticDirectory
+          ? { diagnosticFile: path.join(diagnosticDirectory, `actor-preflight-${randomUUID()}.private.json`) }
+          : {},
+      );
+      if (plan.acme) {
+        await exec('docker', ['image', 'inspect', plan.acme.image], { timeout: 15000, maxBuffer: 65536 });
+        await exec('docker', ['run', '--rm', '--pull=never', '--network=none', plan.acme.image, '--version'], {
+          timeout: 30000,
+          maxBuffer: 65536,
+        });
+      }
     },
     async bootstrap(store, cloud, { wait, guard }) {
       checkpoint = guard;
@@ -346,8 +393,22 @@ export function temporaryStagingRuntime({
         await created(store, `ns-${name}`, '/api/v1/namespaces', {
           apiVersion: 'v1',
           kind: 'Namespace',
-          metadata: { name },
+          metadata: {
+            name,
+            ...(plan.hostnameMode && name === edge ? { labels: { 'rivet.dev/qualification-route': 'true' } } : {}),
+          },
         });
+      let challengePull;
+      if (plan.hostnameMode && plan.registrySecretSha256) {
+        const bytes = await stagingRegistryConfig(plan, registryFile, requiredImages(plan));
+        challengePull = await created(store, 'challenge-pull', `${ns(edge)}/secrets`, {
+          apiVersion: 'v1',
+          kind: 'Secret',
+          metadata: { name: 'rivet-qualification-pull', namespace: edge },
+          type: 'kubernetes.io/dockerconfigjson',
+          data: { '.dockerconfigjson': bytes.toString('base64') },
+        });
+      }
       const accountId = record.accounts.find((a) => a.email === plan.janitorServiceAccount).id;
       for (const [namespace, name] of [
         [control, 'rivet-qualification-janitor'],
@@ -366,28 +427,49 @@ export function temporaryStagingRuntime({
           r.iam.find((i) => i.member === member).added = true;
         });
       }
-      await created(store, 'tls', `${ns(edge)}/secrets`, {
-        apiVersion: 'v1',
-        kind: 'Secret',
-        metadata: { name: 'qualification-tls', namespace: edge },
-        type: 'kubernetes.io/tls',
-        data: {
-          'tls.crt': (await fs.readFile(certificateFile)).toString('base64'),
-          'tls.key': (await fs.readFile(keyFile)).toString('base64'),
-        },
-      });
       const address = await cloud.get(temporaryFoundationSpecs(plan).find((s) => s.key === 'address'));
-      const rrset = { name: `${plan.operationId}.${plan.domain}.`, type: 'A', ttl: 60, rrdatas: [address.address] };
-      assert.equal((await cloud.readDns(rrset.name)).length, 0);
-      await guard();
-      await cloud.project();
-      await store.change((r) => {
-        r.dns = { rrset, addIssued: true };
-      });
-      await cloud.dnsRecord(rrset);
-      await store.change((r) => {
-        r.dns.added = true;
-      });
+      assert.equal(String(address.id), record.resources.find((r) => r.key === 'address').identity.id);
+      const hostname = temporaryHostname(plan, address.address);
+      let certificate, key;
+      const httpsListener = {
+        name: 'https',
+        hostname,
+        port: 443,
+        protocol: 'HTTPS',
+        tls: { mode: 'Terminate', certificateRefs: [{ name: 'qualification-tls' }] },
+        allowedRoutes: {
+          namespaces: { from: 'Selector', selector: { matchLabels: { 'rivet.dev/qualification-route': 'true' } } },
+        },
+      };
+      if (!plan.hostnameMode) {
+        certificate = await fs.readFile(certificateFile);
+        key = await fs.readFile(keyFile);
+        verifyTemporaryCertificate(plan, certificate, key);
+        await created(store, 'tls', `${ns(edge)}/secrets`, {
+          apiVersion: 'v1',
+          kind: 'Secret',
+          metadata: { name: 'qualification-tls', namespace: edge },
+          type: 'kubernetes.io/tls',
+          data: {
+            'tls.crt': certificate.toString('base64'),
+            'tls.key': key.toString('base64'),
+          },
+        });
+        const rrset = { name: `${plan.operationId}.${plan.domain}.`, type: 'A', ttl: 60, rrdatas: [address.address] };
+        assert.equal((await cloud.readDns(rrset.name)).length, 0);
+        await guard();
+        await cloud.project();
+        await store.change((r) => {
+          r.dns = { rrset, addIssued: true };
+        });
+        await cloud.dnsRecord(rrset);
+        await store.change((r) => {
+          r.dns.added = true;
+        });
+      } else
+        await store.change((r) => {
+          r.hostname = { name: hostname, address: address.address, addressId: String(address.id) };
+        });
       const gateway = await created(
         store,
         'gateway',
@@ -400,23 +482,176 @@ export function temporaryStagingRuntime({
             gatewayClassName: 'gke-l7-regional-external-managed',
             addresses: [{ type: 'NamedAddress', value: address.name }],
             listeners: [
-              {
-                name: 'https',
-                hostname: `${plan.operationId}.${plan.domain}`,
-                port: 443,
-                protocol: 'HTTPS',
-                tls: { mode: 'Terminate', certificateRefs: [{ name: 'qualification-tls' }] },
-                allowedRoutes: {
-                  namespaces: {
-                    from: 'Selector',
-                    selector: { matchLabels: { 'rivet.dev/qualification-route': 'true' } },
-                  },
-                },
-              },
+              plan.hostnameMode
+                ? {
+                    name: 'http',
+                    hostname,
+                    port: 80,
+                    protocol: 'HTTP',
+                    allowedRoutes: { namespaces: { from: 'Same' } },
+                  }
+                : httpsListener,
             ],
           },
         },
       );
+      if (plan.hostnameMode) {
+        const label = { 'rivet.dev/acme': plan.operationId },
+          probe = { token: randomBytes(24).toString('base64url'), validation: randomBytes(32).toString('base64url') };
+        await created(store, 'acme-config', `${ns(edge)}/configmaps`, {
+          apiVersion: 'v1',
+          kind: 'ConfigMap',
+          metadata: { name: 'qualification-acme', namespace: edge },
+          data: { 'challenge.json': JSON.stringify(probe) },
+        });
+        await created(store, 'acme-service', `${ns(edge)}/services`, {
+          apiVersion: 'v1',
+          kind: 'Service',
+          metadata: { name: 'qualification-acme', namespace: edge },
+          spec: { selector: label, ports: [{ port: 8080, targetPort: 8080 }] },
+        });
+        await created(store, 'acme-health', `/apis/networking.gke.io/v1/namespaces/${edge}/healthcheckpolicies`, {
+          apiVersion: 'networking.gke.io/v1',
+          kind: 'HealthCheckPolicy',
+          metadata: { name: 'qualification-acme', namespace: edge },
+          spec: {
+            default: {
+              config: {
+                type: 'HTTP',
+                httpHealthCheck: { portSpecification: 'USE_SERVING_PORT', requestPath: '/health' },
+              },
+            },
+            targetRef: { group: '', kind: 'Service', name: 'qualification-acme' },
+          },
+        });
+        await created(store, 'acme-pod', `${ns(edge)}/pods`, {
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: 'qualification-acme', namespace: edge, labels: label },
+          spec: {
+            automountServiceAccountToken: false,
+            restartPolicy: 'Never',
+            ...(challengePull ? { imagePullSecrets: [{ name: challengePull.metadata.name }] } : {}),
+            securityContext: {
+              runAsNonRoot: true,
+              runAsUser: 10001,
+              runAsGroup: 10001,
+              seccompProfile: { type: 'RuntimeDefault' },
+            },
+            containers: [
+              {
+                name: 'challenge',
+                image: plan.actorImage,
+                command: ['node', '/app/deploy/studio-server/scripts/qualification/temporary-acme-server.mjs'],
+                ports: [{ containerPort: 8080 }],
+                resources: { requests: { cpu: '250m', memory: '512Mi' } },
+                securityContext: {
+                  allowPrivilegeEscalation: false,
+                  readOnlyRootFilesystem: true,
+                  capabilities: { drop: ['ALL'] },
+                },
+                readinessProbe: { httpGet: { path: '/health', port: 8080 } },
+                volumeMounts: [{ name: 'challenge', mountPath: '/acme', readOnly: true }],
+              },
+            ],
+            volumes: [{ name: 'challenge', configMap: { name: 'qualification-acme' } }],
+          },
+        });
+        await created(store, 'acme-route', `/apis/gateway.networking.k8s.io/v1/namespaces/${edge}/httproutes`, {
+          apiVersion: 'gateway.networking.k8s.io/v1',
+          kind: 'HTTPRoute',
+          metadata: { name: 'qualification-acme', namespace: edge },
+          spec: {
+            parentRefs: [{ name: 'qualification', sectionName: 'http' }],
+            hostnames: [hostname],
+            rules: [
+              {
+                matches: [{ path: { type: 'PathPrefix', value: '/.well-known/acme-challenge/' } }],
+                backendRefs: [{ name: 'qualification-acme', port: 8080 }],
+              },
+            ],
+          },
+        });
+        const verifyChallenge = async (packet) => {
+          await wait('owned public HTTP challenge response', async () => {
+            await guard(plan);
+            try {
+              return await verifyPublicChallenge({ hostname, address: address.address, ...packet });
+            } catch (e) {
+              if (transientTemporaryChallengeError(e)) return false;
+              throw e;
+            }
+          });
+        };
+        const patchOnce = async (resourceKey, intent, operations) => {
+          const item = (await store.read()).record.resources.find((r) => r.key === resourceKey);
+          assert.ok(!item[intent], 'Never replay an unacknowledged bootstrap patch');
+          const live = await reconcile(store, item);
+          assert.ok(live);
+          await guard(plan);
+          await store.change((r) => {
+            r.resources.find((x) => x.key === resourceKey)[intent] = {
+              uid: live.metadata.uid,
+              resourceVersion: live.metadata.resourceVersion,
+              operationsHash: temporaryHash(operations),
+            };
+          });
+          const patched = await api.json(
+            'PATCH',
+            item.apiPath,
+            [
+              { op: 'test', path: '/metadata/uid', value: live.metadata.uid },
+              { op: 'test', path: '/metadata/resourceVersion', value: live.metadata.resourceVersion },
+              ...operations,
+            ],
+            'application/json-patch+json',
+          );
+          assert.equal(patched.metadata.uid, live.metadata.uid);
+        };
+        await verifyChallenge(probe);
+        ({ certificate, key } = await certificateIssuer(store, {
+          hostname,
+          wait,
+          guard: () => guard(plan),
+          publishChallenge: async (packet) => {
+            await patchOnce('acme-config', 'challengePublishIssued', [
+              { op: 'replace', path: '/data/challenge.json', value: JSON.stringify(packet) },
+            ]);
+            await verifyChallenge(packet);
+          },
+        }));
+        assertTemporaryCertificate(hostname, plan.allowance.maxSeconds, certificate, key);
+        await store.change((r) => {
+          r.tlsMaterial = {
+            hostname,
+            certificateSha256: temporaryHash(certificate),
+            privateKeySha256: temporaryHash(key),
+          };
+        });
+        await created(store, 'tls', `${ns(edge)}/secrets`, {
+          apiVersion: 'v1',
+          kind: 'Secret',
+          metadata: { name: 'qualification-tls', namespace: edge },
+          type: 'kubernetes.io/tls',
+          data: { 'tls.crt': certificate.toString('base64'), 'tls.key': key.toString('base64') },
+        });
+        // Retain the HTTP listener's exact cloud children before its replacement
+        // can detach them. Final cleanup also observes the HTTPS children.
+        await captureEdge(
+          store,
+          cloud,
+          (await store.read()).record.resources.find((i) => i.key === 'gateway'),
+        );
+        await patchOnce('gateway', 'httpsInstallIssued', [
+          { op: 'replace', path: '/spec/listeners', value: [httpsListener] },
+        ]);
+        for (const name of ['acme-route', 'acme-health', 'acme-service', 'acme-pod', 'acme-config'])
+          await remove(
+            store,
+            (await store.read()).record.resources.find((r) => r.key === name),
+            wait,
+          );
+      }
       settings = {
         protocol: 1,
         mode: 'reusable-cluster',
@@ -432,23 +667,17 @@ export function temporaryStagingRuntime({
         gatewayNamespace: edge,
         gatewayName: 'qualification',
         gatewayUid: gateway.metadata.uid,
-        domain: plan.domain,
+        domain: hostname.slice(plan.operationId.length + 1),
         trustedClients: plan.trustedClients,
         postgresImage: plan.postgresImage,
         objectStorageImage: plan.objectStorageImage,
         storageClassName: 'standard-rwo',
         ...(inputs.developerOverlapProfile ? { developerOverlapProfile: inputs.developerOverlapProfile } : {}),
+        ...(inputs.requestContinuityProfile ? { requestContinuityProfile: inputs.requestContinuityProfile } : {}),
+        ...(inputs.requestContinuityProfile ? { region: plan.region } : {}),
       };
       if (plan.registrySecretSha256) {
-        const requiredImages = [
-          plan.actorImage,
-          plan.postgresImage,
-          plan.objectStorageImage,
-          ...[inputs.previous, inputs.candidate].flatMap((m) =>
-            Object.values(m.images).map((i) => `${i.repository}@${i.digest}`),
-          ),
-        ];
-        const bytes = await stagingRegistryConfig(plan, registryFile, requiredImages),
+        const bytes = await stagingRegistryConfig(plan, registryFile, requiredImages(plan)),
           name = 'rivet-qualification-pull';
         const secret = (namespace) => ({
           apiVersion: 'v1',
@@ -692,6 +921,7 @@ export function temporaryStagingRuntime({
           maxSeconds: plan.allowance.maxSeconds,
           driverBundleSha256: driverDigest,
           developerOverlapProfile: settings.developerOverlapProfile,
+          requestContinuityProfile: settings.requestContinuityProfile,
           staging: { mode: 'reusable-cluster', ...record.identities },
           temporaryEnvironment: {
             inputHash: plan.inputHash,
@@ -723,6 +953,9 @@ export function temporaryStagingRuntime({
         (state) => write(path.join(store.directory, `fixture-${String(sequence++).padStart(3, '0')}.json`), state),
         { signal },
       );
+    },
+    async settleCertificate(store, { wait }) {
+      await certificateSettlement(store, { wait, stop: true });
     },
     async settleAndExport(store, cloud, { wait }) {
       let record = (await store.read()).record;
@@ -805,27 +1038,7 @@ export function temporaryStagingRuntime({
       await snapshotBootstrap(store);
       const edge = record.resources.find((i) => i.key === 'gateway');
       if (edge && !edge.absent) {
-        const gateway = await reconcile(store, edge);
-        if (gateway) {
-          const spec = temporaryFoundationSpecs(record.plan).find((s) => s.key === 'address'),
-            address = await cloud.get(spec);
-          assert.equal(String(address.id), record.resources.find((i) => i.key === 'address').identity.id);
-          assert.equal(gateway.spec.addresses[0].value, address.name);
-          const children = await cloud.edgeChildren(address.address);
-          const baseline = new Set(record.baseline.map((i) => i.id));
-          assert.ok(
-            children.every((i) => !baseline.has(i.id)),
-            'A pre-existing edge child is not cleanup-owned',
-          );
-          await store.change((r) => {
-            r.edgeChildren ??= [];
-            for (const child of children) {
-              const prior = r.edgeChildren.find((i) => i.resource === child.resource);
-              if (prior) assert.equal(prior.id, child.id);
-              else r.edgeChildren.push(child);
-            }
-          });
-        }
+        await captureEdge(store, cloud, edge);
         await remove(store, edge, wait);
       }
       // A previous cleanup may have deleted the Gateway but timed out waiting

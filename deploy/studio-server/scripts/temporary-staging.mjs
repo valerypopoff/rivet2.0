@@ -97,6 +97,15 @@ export async function runTemporaryCommand(mode, directory, { inputs, refreshInst
       evidenceExported: record.evidenceExported === true,
       cleanupVerified: record.cleanupVerified === true,
       evidenceFailure: record.evidenceFailure ?? null,
+      hostname: record.hostname?.name ?? null,
+      certificateWorker: record.certificateWorker
+        ? {
+            name: record.certificateWorker.name,
+            id: record.certificateWorker.identity?.id ?? null,
+            stopIssued: record.certificateWorker.stopIssued === true,
+            removed: record.certificateWorker.removed === true,
+          }
+        : null,
       resources: record.resources.map((r) => ({ key: r.key, id: r.identity?.id ?? null, absent: !!r.absent })),
       residualResources: record.residualResources ?? [],
     };
@@ -111,6 +120,7 @@ export async function runTemporaryCommand(mode, directory, { inputs, refreshInst
   assert.equal(temporaryHash(inputs), record.inputsHash, 'Frozen qualification inputs changed');
   const runtime = temporaryStagingRuntime({
     root,
+    diagnosticDirectory: directory,
     inputs,
     refreshInstalled,
     certificateFile: env.RIVET_TEMPORARY_STAGING_CERTIFICATE,

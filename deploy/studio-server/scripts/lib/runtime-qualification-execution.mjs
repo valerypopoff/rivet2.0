@@ -9,6 +9,8 @@ import {
   HA_PROVIDER_OVERLAP_CHECKS,
 } from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
+import { assertRequestContinuityProfile, requestContinuityProfile } from './request-continuity.mjs';
+import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './request-continuity-evidence.mjs';
 
 export const qualificationHash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const time = (value) => {
@@ -102,6 +104,18 @@ export function qualificationOperation({
     ),
   );
   assert.equal(installed.edgeProfile, 'compact');
+  const adoptedContinuity = requestContinuityProfile(installed.qualificationValues ?? {});
+  if (adoptedContinuity)
+    assert.deepEqual(
+      approval.requestContinuityProfile,
+      adoptedContinuity,
+      'Adopted continuity must be qualified again for the new exact image pair',
+    );
+  if (approval.requestContinuityProfile)
+    assert.ok(
+      approval.maxSeconds >= 7200,
+      'Continuity observation and cleanup require at least a two-hour approved window',
+    );
   if (approval.developerOverlapProfile) {
     const sourcePool = installed.qualificationValues?.postgres?.poolMaxPerApiPod;
     assert.ok(
@@ -128,6 +142,9 @@ export function qualificationOperation({
     previous,
     installed,
     policy: normalized,
+    ...(approval.requestContinuityProfile
+      ? { requestContinuityProfile: assertRequestContinuityProfile(approval.requestContinuityProfile) }
+      : {}),
     ...(approval.developerOverlapProfile
       ? { developerOverlapProfile: overlapQualificationProfile(approval.developerOverlapProfile) }
       : {}),
@@ -206,6 +223,7 @@ function inventory(items, operation) {
 }
 
 export function assertOrdinaryProviderReport(report, operation) {
+  assertContinuityProviderFacts(report, operation, 'upgrade');
   window(report, operation);
   assert.equal(report.qualification, 'isolated-provider');
   assert.equal(report.purpose, 'ordinary-upgrade');
@@ -288,6 +306,7 @@ export function assertOrdinaryProviderReport(report, operation) {
 
 /** Compile from completed probe facts, never a submitted array of check names. */
 export function assertProviderAutoscalingReport(report, operation) {
+  assertContinuityProviderFacts(report, operation, 'autoscaling');
   window(report, operation);
   assertPublicTraffic(report);
   assert.equal(report.source, operation.candidate.source.sha);
@@ -485,6 +504,9 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
     inputHash: operation.inputHash,
     control: declaration(facts.upgrade, {
       ...common,
+      ...(operation.requestContinuityProfile
+        ? { requestContinuity: compileRequestContinuityEvidence(operation, facts.upgrade, facts.autoscaling) }
+        : {}),
       protocol: operation.developerOverlapProfile ? 3 : 2,
       purpose: 'ordinary-upgrade',
       controlPlaneMode: operation.developerOverlapProfile ? 'singleton-overlap' : 'singleton',

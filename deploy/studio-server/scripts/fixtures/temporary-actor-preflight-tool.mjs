@@ -26,5 +26,8 @@ else {
       sourceSha: mode === 'wrong-source' ? 'f'.repeat(40) : packet.sourceSha,
     }),
   );
-  if (mode === 'failed-late') setTimeout(() => process.exit(7), 30);
+  if (mode === 'failed-late') {
+    process.stderr.write('private fixture media-tool failure');
+    setTimeout(() => process.exit(7), 30);
+  }
 }

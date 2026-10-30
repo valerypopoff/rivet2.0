@@ -196,6 +196,23 @@ test('runtime isolation ignores discovery endpoints but requires explicit public
   assert.equal(hasRuntimeControlPublicEndpoint([slice('public', { ready: true })], services, 'other'), false);
 });
 
+test('temporary proxy floors retain the existing autoscaler policies and execution settings', () => {
+  const values = {
+    autoscaling: {
+      execution: { enabled: false, minReplicas: 2, maxReplicas: 7 },
+      executionController: { enabled: true, suspended: false, pollSeconds: 15 },
+      proxy: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
+    },
+  };
+  const merged = mergeRuntimeControlGuards(values, {
+    autoscaling: { executionController: { suspended: false }, proxy: { minReplicas: 4, scaleDownPaused: true } },
+  });
+  assert.deepEqual(merged.autoscaling.execution, values.autoscaling.execution);
+  assert.deepEqual(merged.autoscaling.executionController, values.autoscaling.executionController);
+  assert.deepEqual(merged.autoscaling.proxy, { ...values.autoscaling.proxy, minReplicas: 4, scaleDownPaused: true });
+  assert.equal(values.autoscaling.proxy.minReplicas, 2);
+});
+
 test('active-controller evidence requires fresh numeric samples and the exact policy and image', async () => {
   const gate = Object.create(RuntimeControlLocalGate.prototype);
   gate.config = { release: 'fixture', deploymentTimeoutSeconds: 3, images: { api: { digest: 'exact-image' } } };

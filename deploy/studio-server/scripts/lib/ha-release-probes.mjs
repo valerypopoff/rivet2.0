@@ -69,7 +69,9 @@ export class HaReleaseProbes {
     ]);
     return JSON.parse(result.stdout.trim());
   }
-  async prepare({ embeddedMaintenance = false } = {}) {
+  async prepare({ embeddedMaintenance = false, retirementDelayMs = haRetirementProbeDelayMs } = {}) {
+    assert.ok(Number.isSafeInteger(retirementDelayMs) && retirementDelayMs >= haRetirementProbeDelayMs);
+    this.retirementDelayMs = retirementDelayMs;
     const state = JSON.parse(
       await fs.readFile(path.join(this.gate.config.artifactsDir, 'ha-persisted-state.json'), 'utf8'),
     );
@@ -98,7 +100,7 @@ export class HaReleaseProbes {
         visualData: '200/0/300/null//',
       },
       '[tail]:delay "Tail"': {
-        data: { delay: haRetirementProbeDelayMs, useDelayInput: false },
+        data: { delay: retirementDelayMs, useDelayInput: false },
         visualData: '400/0/300/null//',
       },
     };
@@ -211,6 +213,7 @@ export class HaReleaseProbes {
       assert.equal(response.body.output.value, JSON.stringify({ input: 'preserved' }));
       assert.ok(response.correlationId);
       this.background.push({
+        ...(this.retirementDelayMs !== haRetirementProbeDelayMs ? { retirementDelayMs: this.retirementDelayMs } : {}),
         pod: pod.name,
         uid: pod.uid,
         workflowId: this.backgroundWorkflowId,

@@ -25,6 +25,7 @@ import {
   waitForOrdinaryRuntime,
 } from './lib/runtime-upgrade-qualification.mjs';
 import { HaReleaseProbes } from './lib/ha-release-probes.mjs';
+import { qualifyProtectedProxyRoll } from './qualification/provider-request-continuity.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 import {
@@ -50,6 +51,16 @@ export const mergeRuntimeControlGuards = (values, guards) => ({
   ha: { ...values.ha, ...guards.ha },
   replicaCount: { ...values.replicaCount, ...guards.replicaCount },
   workflowSchema: { ...values.workflowSchema, ...guards.workflowSchema },
+  ...(guards.autoscaling
+    ? {
+        autoscaling: Object.fromEntries(
+          Object.keys({ ...values.autoscaling, ...guards.autoscaling }).map((role) => [
+            role,
+            { ...values.autoscaling?.[role], ...guards.autoscaling[role] },
+          ]),
+        ),
+      }
+    : {}),
 });
 export const hasRuntimeControlPublicEndpoint = (slices, services, uid) => {
   const publicNames = new Set(services.filter((s) => !s.spec.publishNotReadyAddresses).map((s) => s.metadata.name));
@@ -699,37 +710,40 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       async () => !(await this.pods()).some((p) => ['backend', 'web'].includes(role(p))),
     );
     const developersAbsentAt = Date.now();
-    const before = (await this.pods()).filter((p) => role(p) === 'proxy').map((p) => p.metadata.uid);
     this.coldProxyMarker = randomUUID();
-    const proxy = JSON.parse(
-      (await this.kube(['get', 'deployment', `${this.config.release}-proxy`, '-o', 'json'])).stdout,
-    );
-    await this.kube([
-      'patch',
-      'deployment',
-      `${this.config.release}-proxy`,
-      '--type=json',
-      '-p',
-      JSON.stringify([
-        { op: 'test', path: '/metadata/uid', value: proxy.metadata.uid },
-        { op: 'test', path: '/metadata/resourceVersion', value: proxy.metadata.resourceVersion },
-        {
-          op: 'add',
-          path: '/spec/template/metadata/annotations',
-          value: {
-            ...proxy.spec.template.metadata.annotations,
-            'rivet.dev/runtime-control-cold': this.coldProxyMarker,
+    if (this.continuityProbes) await qualifyProtectedProxyRoll(this, this.continuityProbes);
+    else {
+      const before = (await this.pods()).filter((p) => role(p) === 'proxy').map((p) => p.metadata.uid);
+      const proxy = JSON.parse(
+        (await this.kube(['get', 'deployment', `${this.config.release}-proxy`, '-o', 'json'])).stdout,
+      );
+      await this.kube([
+        'patch',
+        'deployment',
+        `${this.config.release}-proxy`,
+        '--type=json',
+        '-p',
+        JSON.stringify([
+          { op: 'test', path: '/metadata/uid', value: proxy.metadata.uid },
+          { op: 'test', path: '/metadata/resourceVersion', value: proxy.metadata.resourceVersion },
+          {
+            op: 'add',
+            path: '/spec/template/metadata/annotations',
+            value: {
+              ...proxy.spec.template.metadata.annotations,
+              'rivet.dev/runtime-control-cold': this.coldProxyMarker,
+            },
           },
-        },
-      ]),
-    ]);
-    await this.kube([
-      'rollout',
-      'status',
-      `deployment/${this.config.release}-proxy`,
-      `--timeout=${(this.independenceTimeoutMs ?? 180000) / 1000}s`,
-    ]);
-    await waitForRuntimeControlColdProxies(() => this.pods(), before, this.independenceTimeoutMs);
+        ]),
+      ]);
+      await this.kube([
+        'rollout',
+        'status',
+        `deployment/${this.config.release}-proxy`,
+        `--timeout=${(this.independenceTimeoutMs ?? 180000) / 1000}s`,
+      ]);
+      await waitForRuntimeControlColdProxies(() => this.pods(), before, this.independenceTimeoutMs);
+    }
     await this.verifyPublishedBrowser(base);
     await until(
       'published schedule with control absent',

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { role, ready, until } from './provider-gate.mjs';
 import { proxyFixtureProcessCommand } from '../lib/staging-proxy-fixture-process.mjs';
+import { continuityTimeoutMs } from '../lib/request-continuity.mjs';
 export function processStartTicks(stat) {
   const end = stat.lastIndexOf(')');
   assert.ok(end > 0);
@@ -24,6 +25,33 @@ while [ ! -e "$stop" ] && [ "$(date +%s)" -lt "$end" ]; do
 done
 printf '{"stopped":true,"pid":%s,"startTicks":"%s","podUid":"%s"}\n' "$$" "$ticks" "$uid"
 `;
+export async function observeHpaContinuity(
+  probes,
+  { pressureStoppedAt, proxies, readProxies, hpaUid, now = Date.now },
+) {
+  if (!probes) return;
+  const observedAt = now();
+  const departing = proxies.filter((p) => p.metadata.deletionTimestamp);
+  if (!probes.cohorts.has('hpa-removal') && observedAt - Date.parse(pressureStoppedAt) >= 240000) {
+    assert.equal(departing.length, 0, 'HPA removed a proxy before protected requests were admitted');
+    await probes.startCohort('hpa-removal');
+    const confirmed = await readProxies();
+    assert.ok(
+      proxies.every((p) => confirmed.some((c) => c.metadata.uid === p.metadata.uid && !c.metadata.deletionTimestamp)),
+      'HPA withdrawal raced protected request admission',
+    );
+    probes.hpaAdmissionConfirmedAt = new Date(now()).toISOString();
+  }
+  if (departing.length && !probes.removal) {
+    assert.ok(probes.cohorts.has('hpa-removal'), 'No protected requests preceded HPA removal');
+    probes.removal = {
+      hpaUid,
+      admissionConfirmedAt: probes.hpaAdmissionConfirmedAt,
+      observedAt: new Date(observedAt).toISOString(),
+      podUids: departing.map((p) => p.metadata.uid),
+    };
+  }
+}
 export async function runProviderProxyHpa(gate, owned) {
   assert.equal(gate.controllerEnabled, true);
   assert.equal(gate.profile, 'compact');
@@ -175,9 +203,21 @@ export async function runProviderProxyHpa(gate, owned) {
       const actual = JSON.parse((await gate.kube(['get', 'hpa', name, '-o', 'json'])).stdout);
       assert.equal(actual.metadata.uid, hpa.metadata.uid);
       const current = await proxies();
+      // The real HPA retains high recommendations for 300 seconds. Admit the
+      // protected cohort late in that window, before any observed withdrawal.
+      // Missing the window fails; requests begun on survivors cannot prove drain.
+      await observeHpaContinuity(gate.continuityProbes, {
+        pressureStoppedAt: report.pressureStoppedAt,
+        proxies: current,
+        readProxies: proxies,
+        hpaUid: hpa.metadata.uid,
+      });
       return actual.status.desiredReplicas === 2 && current.length === 2 && current.every(ready);
     },
-    1200000,
+    gate.operation?.requestContinuityProfile
+      ? continuityTimeoutMs(gate.operation.requestContinuityProfile) +
+          hpa.spec.behavior.scaleDown.stabilizationWindowSeconds * 1000
+      : 1200000,
   );
   await gate.frontendAvailability();
   const developers = (await gate.pods()).filter((p) => ['web', 'backend'].includes(role(p)));

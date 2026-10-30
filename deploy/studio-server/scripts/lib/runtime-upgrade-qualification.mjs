@@ -177,13 +177,18 @@ export async function runOrdinaryRuntimeUpgrade({
       report.outcomes.overlapPreparation = await prepareDeveloperOverlap();
       checkpoint();
     }
-    await probes.prepare({ embeddedMaintenance: startDeveloperOverlap ? true : 'singleton' });
+    await probes.prepare({
+      embeddedMaintenance: startDeveloperOverlap ? true : 'singleton',
+      ...(gate.continuityProbes ? { retirementDelayMs: 315000 } : {}),
+    });
+    await gate.continuityProbes?.prepare(probes.template);
     if (startDeveloperOverlap) developer = await startDeveloperOverlap(probes);
     checkpoint();
     phase = 'ordinary-seven-to-seven-upgrade';
     const callbacks = {
-      beforeRetirement: (pod) => {
+      beforeRetirement: async (pod) => {
         checkpoint();
+        if (/-ha-execution-[01]$/.test(pod.name)) await gate.continuityProbes?.startCohort('execution-retirement');
         return /-ha-execution-[01]$/.test(pod.name) ? probes.beforeRetirement(pod) : undefined;
       },
       afterWithdrawal: (pod) => (/-ha-execution-[01]$/.test(pod.name) ? probes.afterWithdrawal(pod) : undefined),
@@ -237,10 +242,12 @@ export async function runOrdinaryRuntimeUpgrade({
     report.phases.push('candidate-runtime-without-developers');
     await waitForOrdinaryRuntime(gate, candidate.images, wait);
     report.outcomes.finalAutoscaler = await gate.assertAutoscalerActive(Date.now());
+    if (gate.continuityProbes) report.requestContinuity = await gate.continuityProbes.finish();
     checkpoint();
   } catch (error) {
     failure = error;
   } finally {
+    await gate.continuityProbes?.close();
     if (developer) {
       try {
         await developer.close();

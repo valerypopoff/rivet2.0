@@ -32,6 +32,68 @@ Keep logs private. Stop only that exact simulation process.
 
 <!-- begin:observations -->
 
+- Source-admission reassessment, 2026-10-30: the existing real-Git source fixture
+  reproduced acceptance of an untracked source file hidden by a status-display
+  preference. The fix rejects it before cloning and during actor verification,
+  and a working filesystem-monitor fixture proves that verification no longer
+  invokes the configured hook. Both source/installer tests passed on Windows
+  and Linux (Linux used three reviewed read-only source/test overlays).
+  The adjacent actor/provider/dependency suite passed 66 tests on Windows;
+  its one Linux-only process case separately passed on Linux. The unchanged
+  real CLI trusted-TLS/HTTP2/no-replay probe and seven security-policy regressions
+  passed. The headless built-frontend save/Evaluations journey passed again.
+  No new Postman server, cloud request or image qualification is implied.
+
+- Final security acceptance, 2026-10-30: exact Linux-amd64 image
+  `sha256:9dedcb136e4dd71cda5a519162a563474008c59cac331f6f50441c1895783b25`
+  passed the unchanged full-image gate with zero High/Critical findings;
+  56 Medium, 11 Low and 10 Unknown findings remain visible. It also passed
+  offline browser/video admission, 78 Linux transport/chart, two source/installer
+  and 27 kernel-lock/process tests with no skips and no host source overlay.
+  The required headless runner passed a save/editing/Evaluations journey against
+  its actual built frontend with controlled API responses. These are local
+  fixtures, not live GCP, a new Postman run or provider qualification. Evidence:
+  `artifacts/staging-security-20261030/acceptance/`. This supersedes the earlier
+  failing actor scan below without changing its retained report or scan policy.
+
+- Security follow-up, 2026-10-30: the byte-exact source projection passed actual
+  offline browser/video admission, 78 Linux transport/chart checks, two
+  source/installer checks and 27 kernel-lock/process checks, without skips.
+  These used the maintained direct HTTPS/WebSocket fixtures and local mock
+  handler, not live GCP or a new Postman server run. The separate patched
+  toolchain target passed actual kubectl TLS/HTTP2, file-backed mutation,
+  lost-acknowledgement/no-resend and stale-identity checks. Intermediate images
+  are not a passing final-image scan or provider qualification. The original
+  247-finding report below remains historical evidence, not suppressed output.
+
+- Additional 2026-10-30 full-actor security scan failed with 247 High/Critical
+  findings across Helm, kubectl, esbuild binaries, npm's bundled dependencies
+  and desktop Cargo metadata. Foreign-platform copies repeat some findings.
+  The passing functional simulation/browser checks do not override this gate;
+  that earlier actor was not ready for publication or provider qualification. No scanner
+  policy or source-integrity check was relaxed.
+
+- Final 2026-10-30 local verification: all 41 staging client tests passed with
+  direct HTTP stand-ins, followed by 20 Linux actor/bootstrap tests against
+  authenticated HTTPS/WebSockets. The Linux bootstrap mounted only the reviewed
+  current tooling files read-only; this is not an immutable-provider report.
+  Separately, the clean actor snapshot passed its actual network-disabled
+  browser preflight with a nonempty video. The full-image gate caught a missing
+  FFmpeg dependency that the host-only browser check could not expose. Docker
+  runtime checks that timed out during concurrent image building passed unchanged
+  after building finished. No timeout or assertion was relaxed. No real CA order,
+  cloud activation, production operation or history upload occurred.
+
+- Observed 2026-10-30 deployment-tool repair: the complete staging client suite
+  passed 34 tests with no failures/skips against Postman CLI 1.75.0 on an
+  automatically allocated localhost port. Both `gcp` and `registry` route keys
+  served real requests; the exact simulation process was stopped afterward.
+  Local certificate-worker uncertainty tests used disposable files and a Docker
+  command stand-in, never a real ACME order. The separate authenticated
+  HTTPS/WebSocket bootstrap exercised IP-hostname setup, exact JSON-patch guards
+  and lost HTTPS acknowledgements through teardown. These results establish
+  local client behavior, not DNS/CA availability, GKE timing or qualification.
+
 - 2026-10-29 full-plan audit: both `gcp` and `registry` served the lifecycle
   suite successfully. The separate concrete HTTPS/WebSocket fixture proved
   lost/corrupt terminal exports fail qualification without blocking safely

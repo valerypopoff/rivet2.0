@@ -27,7 +27,11 @@ for (let i = 0; i < original.length; i++) {
   if (original[i].startsWith('--request-timeout=')) continue;
   args.push(original[i]);
 }
-const readInput = () => JSON.parse(fs.readFileSync(0, 'utf8'));
+const readInput = () => {
+  const file = args[args.indexOf('-f') + 1];
+  if (state.fault === 'rejectPipedInput' && file === '-') throw Error('Piped management input is unavailable');
+  return JSON.parse(fs.readFileSync(file === '-' ? 0 : file, 'utf8'));
+};
 const clone = structuredClone;
 const component = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
 const touch = (r) => {

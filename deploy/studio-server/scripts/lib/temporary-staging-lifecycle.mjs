@@ -120,6 +120,8 @@ export async function cleanupTemporaryEnvironment(store, cloud, runtime, { wait,
   store.assertLocked();
   const before = (await store.read()).record;
   if (before.complete) return completedTemporaryCleanup(before);
+  // Local issuance must settle even when the provider/cluster API is unavailable.
+  await runtime.settleCertificate?.(store, { wait });
   await cloud.project();
   if (!before.resources.length && before.phase === 'planned') {
     const receipt = temporaryCleanupReceipt(before, new Date(now()).toISOString());
@@ -187,6 +189,7 @@ export async function cleanupTemporaryEnvironment(store, cloud, runtime, { wait,
   await runtime.removePermissions(store, cloud);
   const current = await cloud.snapshot();
   record = (await store.read()).record;
+  assert.ok(!record.certificateWorker || record.certificateWorker.removed, 'Certificate worker cleanup is unverified');
   assert.ok(Array.isArray(record.baseline), 'Missing original cloud inventory blocks cleanup certification');
   const previous = new Set(record.baseline.map((x) => `${x.kind}:${x.id}`));
   const remaining = current.filter((x) => !previous.has(`${x.kind}:${x.id}`));

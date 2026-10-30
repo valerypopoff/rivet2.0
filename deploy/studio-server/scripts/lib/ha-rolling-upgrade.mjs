@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { runDeploymentOperation } from './deployment-operation.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
 import { haPreparationSettled } from './release-operation-journal.mjs';
+import { proxyContinuitySettled } from './proxy-continuity-transition.mjs';
 
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const ownerRoles = new Set(['backend', 'execution', 'evaluation', 'maintenance']);
@@ -91,6 +92,7 @@ export async function runHaRollingUpgrade({
   settle,
   handoverHousekeeping,
   verifyPoolPreparationTemplates,
+  proxyContinuity,
 }) {
   requireDeploymentSafety(safety, 'rolling', identity);
   settle = safety.requireSettlement(settle);
@@ -131,6 +133,8 @@ export async function runHaRollingUpgrade({
       throw Error('HA recovery pool preparation authority changed.');
     if (JSON.stringify(record.poolPreparationControllers) !== JSON.stringify(identity.poolPreparationControllers))
       throw Error('HA recovery pool preparation controllers changed.');
+    if (JSON.stringify(record.proxyContinuityIdentity) !== JSON.stringify(identity.proxyContinuityIdentity))
+      throw Error('HA recovery ingress continuity configuration changed.');
     safety.assertRecovery(record);
     if (JSON.stringify(record.workloads) !== JSON.stringify(workloads))
       throw new Error('HA recovery inventory changed.');
@@ -179,7 +183,12 @@ export async function runHaRollingUpgrade({
     clearHeartbeat,
     onFailure: async (_error, operation) => {
       // Preflight has not issued a template command. Never abandon later phases.
-      if (operation.record.phase === 'preflight' && !operation.failure && haPreparationSettled(operation.record)) {
+      if (
+        operation.record.phase === 'preflight' &&
+        !operation.failure &&
+        haPreparationSettled(operation.record) &&
+        proxyContinuitySettled(operation.record)
+      ) {
         operation.assertLease();
         await operation.complete({ abortedBeforeTemplates: true });
       }
@@ -211,6 +220,7 @@ export async function runHaRollingUpgrade({
           );
       };
       const startRetirement = async (pod, workload) => {
+        await proxyContinuity?.verify(operation);
         const owner = operation.record.owner;
         if (workload.role === 'backend' && controlPlaneMode === 'singleton-overlap' && !owner.withdrawIssued) {
           const target = await observePod(`${workload.name}-${pod.name.endsWith('-0') ? 1 : 0}`);
@@ -243,6 +253,7 @@ export async function runHaRollingUpgrade({
           // owners at the admission fence even when no autoscaler supplies metrics.
           await checkRetirementCapacity(pod, workload);
           await checkHeadroom({ stage: 'retirement', departing: pod, workload });
+          await proxyContinuity?.verify(operation);
           await checkpoint({ owner: { ...operation.record.owner, beginIssued: true } });
           assertLease();
           await begin(pod, owner.operationId, owner.incarnation);
@@ -251,13 +262,14 @@ export async function runHaRollingUpgrade({
 
       if (operation.record.phase === 'preflight') {
         await safety.checkOwnedBaseline(operation.record, runner, now);
+        await proxyContinuity?.prepare(operation);
         await prepareReplacements(operation);
         await safety.checkOwnedBaseline(operation.record, runner, now);
         await checkHeadroom({ stage: 'preflight' });
         await checkpoint({ phase: 'templates' });
         assertLease();
         safety.assertReadyForTemplates();
-        await applyTemplates(); // Applies the owned scaling policy; never replaces OnDelete owners.
+        await applyTemplates(operation); // Applies the owned scaling policy; never replaces OnDelete owners.
       } else if (operation.record.phase === 'templates') {
         // Helm may have committed without its acknowledgement. Template install is
         // declarative, but migrations are not replayed by recovery.
@@ -269,6 +281,7 @@ export async function runHaRollingUpgrade({
           throw new Error('HA template acknowledgement is unknown. Verify Helm/schema state before recovery.');
       }
       await checkpoint({ phase: 'owners' });
+      await proxyContinuity?.verify(operation);
       for (const workload of workloads) {
         const w = workload;
         const elastic = w.role === 'execution' && identity.cooperativeScaling?.workload === w.name;
@@ -413,9 +426,13 @@ export async function runHaRollingUpgrade({
       };
       await verifyCompletedOwners();
       assertLease();
-      await restoreAutoscalers();
+      await proxyContinuity?.beforeRestoreAutoscalers?.(operation);
+      await restoreAutoscalers(operation);
+      await proxyContinuity?.afterRestoreAutoscalers?.(operation);
       await verifyCompletedOwners();
       safety.confirmSettlement(await settle());
+      await proxyContinuity?.finish(operation);
+      if (proxyContinuity) safety.confirmSettlement(await settle());
       assertLease();
       await verifyCompletedOwners();
       await operation.complete();

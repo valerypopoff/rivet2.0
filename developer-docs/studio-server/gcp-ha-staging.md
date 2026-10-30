@@ -1,5 +1,11 @@
 # Isolated GCP HA qualification plan
 
+The opt-in [production request-continuity suite](production-update-continuity.md)
+adds version-2 evidence for admitted full-body requests spanning proxy replacement,
+both first-transition handoffs and HPA removal, plus the duration matrix. Reserve
+the bridge/floor overlap and extended termination time in a fresh operation budget.
+Its repository tests do not close this plan's regional qualification gates.
+
 ## Compact-runtime attempt closure (2026-10-21)
 
 Operation `rivet-runtime-ha-20261021-a0d233f` is closed with **provider qualification
@@ -295,15 +301,15 @@ complete, but the regional follow-up found a real shared-DNS availability gap.
 Freeze the candidate and both operations' evidence; do not rebuild, republish or
 repeat a paid rehearsal merely to finish documentation or reconcile cleanup.
 
-| Step | Status and exit condition |
-| --- | --- |
-| Implementation, regressions, local qualification and normal main image CI | Complete for the qualified source below. |
-| Real mixed-image GKE upgrade, retained browsers and fault recovery | Earlier global-edge proof passed; regional primary/browser proof passed, but DNS outage and runner transport failure prevented regional recovery qualification. |
-| Isolated-resource cleanup | Latest regional operation has zero billables with exact preservation/absence receipt. Non-billable VPC/connection/range await producer release; old automation is absent. |
-| DNS mitigation | Native proxy upstream retention implemented and tested locally; historical regional receipts remain incomplete and new images are not provider-qualified. |
-| Production preparation | Read-only inventory and four-hop pinned release/render plan prepared separately. No production mutation. Do not claim regional availability qualification from the local DNS regression. |
-| First production adoption | Prepare the supported release-command sequence and rollback/stop criteria. Obtain explicit maintenance approval before any singleton/older-contract conversion that can interrupt Rivet; preserve other applications. |
-| Later HA upgrades | Use the qualified policy and supported, source/image-bound release path. Reconnecting sockets are allowed; lost or repeated accepted executions are not. |
+| Step                                                                      | Status and exit condition                                                                                                                                                                                             |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Implementation, regressions, local qualification and normal main image CI | Complete for the qualified source below.                                                                                                                                                                              |
+| Real mixed-image GKE upgrade, retained browsers and fault recovery        | Earlier global-edge proof passed; regional primary/browser proof passed, but DNS outage and runner transport failure prevented regional recovery qualification.                                                       |
+| Isolated-resource cleanup                                                 | Latest regional operation has zero billables with exact preservation/absence receipt. Non-billable VPC/connection/range await producer release; old automation is absent.                                             |
+| DNS mitigation                                                            | Native proxy upstream retention implemented and tested locally; historical regional receipts remain incomplete and new images are not provider-qualified.                                                             |
+| Production preparation                                                    | Read-only inventory and four-hop pinned release/render plan prepared separately. No production mutation. Do not claim regional availability qualification from the local DNS regression.                              |
+| First production adoption                                                 | Prepare the supported release-command sequence and rollback/stop criteria. Obtain explicit maintenance approval before any singleton/older-contract conversion that can interrupt Rivet; preserve other applications. |
+| Later HA upgrades                                                         | Use the qualified policy and supported, source/image-bound release path. Reconnecting sockets are allowed; lost or repeated accepted executions are not.                                                              |
 
 Finish in that order. Reopen implementation only for a reproduced defect or an
 unmet deployment prerequisite, with a bounded test at the owning seam. A source

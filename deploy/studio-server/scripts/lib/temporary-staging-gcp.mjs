@@ -258,8 +258,14 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
       available(project.quotas, 'CPUS_ALL_REGIONS', plan.estimate.cpus);
       available(region.quotas, 'SSD_TOTAL_GB', plan.estimate.ssdGb);
       available(region.quotas, 'IN_USE_ADDRESSES', plan.estimate.externalAddresses);
-      const zone = await request('dns', 'GET', `projects/${plan.projectId}/managedZones/${plan.managedZone}`);
-      assert.ok(`${plan.domain}.`.endsWith(zone.dnsName));
+      if (!plan.hostnameMode) {
+        const zone = await request('dns', 'GET', `projects/${plan.projectId}/managedZones/${plan.managedZone}`);
+        assert.ok(
+          typeof zone?.dnsName === 'string' &&
+            (`${plan.domain}.` === zone.dnsName || `${plan.domain}.`.endsWith(`.${zone.dnsName}`)),
+          'Staging hostname is outside the managed DNS zone',
+        );
+      }
       const accounts = [];
       for (const email of [plan.nodeServiceAccount, plan.janitorServiceAccount, plan.operatorServiceAccount]) {
         const account = await request('iam', 'GET', `projects/-/serviceAccounts/${email}`);

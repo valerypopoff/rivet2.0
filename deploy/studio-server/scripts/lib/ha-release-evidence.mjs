@@ -1,4 +1,5 @@
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
+import { assertContinuityUpgrade, assertRequestContinuityEvidence } from './request-continuity.mjs';
 import { assertSchemaCompatibilityEvidence } from './schema-compatibility-probe.mjs';
 import {
   overlapQualificationProfile,
@@ -193,8 +194,13 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     throw new Error(
       'Singleton runtime HA requires its own exact mixed-image qualification; full-HA evidence does not suffice.',
     );
+  const requestContinuity =
+    value.requestContinuity === undefined
+      ? undefined
+      : assertRequestContinuityEvidence(value.requestContinuity, release, value.requestContinuity.profile);
   return {
     protocol: value.protocol,
+    ...(requestContinuity ? { requestContinuity } : {}),
     ...(ordinary
       ? {
           purpose: 'ordinary-upgrade',
@@ -515,6 +521,7 @@ export function assertHaReleaseEvidence(value, release) {
 }
 
 export function assertHaUpgradeEvidence(manifest, installed) {
+  assertContinuityUpgrade(manifest, installed);
   const evidence = assertHaReleaseEvidence(manifest.evidence?.ha, manifest);
   if (evidence.protocol !== 3)
     throw new Error(

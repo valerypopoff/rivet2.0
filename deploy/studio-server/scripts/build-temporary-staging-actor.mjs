@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { actorSparsePatterns, verifyActorSource } from '../images/qualification/verify-source.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 export async function prepareTemporaryActorContext(source, sha, context) {
@@ -12,13 +13,13 @@ export async function prepareTemporaryActorContext(source, sha, context) {
   // template files or execute its hooks while assembling the image context.
   const template = path.join(context, 'empty-git-template');
   await fs.mkdir(template, { mode: 0o700 });
-  const git = (args, options) => execFileSync('git', ['-c', `core.hooksPath=${template}`, ...args], options);
-  assert.equal(git(['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim(), sha);
-  assert.equal(
-    git(['status', '--porcelain'], { cwd: source, encoding: 'utf8' }).trim(),
-    '',
-    'Build an exact clean published candidate',
-  );
+  const git = (args, options) =>
+    execFileSync(
+      'git',
+      ['--no-replace-objects', '-c', `core.hooksPath=${template}`, '-c', 'core.fsmonitor=false', ...args],
+      options,
+    );
+  await verifyActorSource(source, sha);
   const checkout = path.join(context, 'source');
   // The context is consumed on Linux even when prepared on Windows. Do not let
   // the control host's autocrlf preference rewrite the exact committed bytes.
@@ -38,8 +39,12 @@ export async function prepareTemporaryActorContext(source, sha, context) {
   );
   git(['checkout', '--detach', sha], { cwd: checkout, stdio: 'pipe' });
   git(['config', '--remove-section', 'remote.origin'], { cwd: checkout, stdio: 'pipe' });
+  // Keep the original commit/tree identity, but do not ship a native desktop
+  // backend as part of the server test actor. No source file is edited.
+  git(['sparse-checkout', 'init', '--no-cone', '--no-sparse-index'], { cwd: checkout, stdio: 'pipe' });
+  git(['sparse-checkout', 'set', '--no-cone', ...actorSparsePatterns], { cwd: checkout, stdio: 'pipe' });
+  await verifyActorSource(checkout, sha);
   assert.equal(git(['rev-list', '--count', 'HEAD'], { cwd: checkout, encoding: 'utf8' }).trim(), '1');
-  assert.equal(git(['status', '--porcelain'], { cwd: checkout, encoding: 'utf8' }).trim(), '');
   await fs.copyFile(
     path.join(checkout, 'deploy/studio-server/images/qualification/Dockerfile'),
     path.join(context, 'Dockerfile'),

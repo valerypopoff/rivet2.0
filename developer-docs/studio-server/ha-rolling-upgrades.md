@@ -1,5 +1,10 @@
 # HA rolling-upgrade implementation status
 
+The opt-in [300-second request continuity contract](production-update-continuity.md)
+adds a journal-owned first proxy transition and exact regional evidence gate.
+Its [delivery plan](production-update-continuity-plan.md) retains provider
+qualification and production activation as separate, unfinished release gates.
+
 The optional [developer-backend overlap protocol](developer-backend-overlap.md)
 adds `singleton-overlap` without changing serial `singleton` or replicated-control
 defaults. It retains seven normal compact pods and temporarily adds one backend,

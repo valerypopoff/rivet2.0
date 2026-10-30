@@ -1,0 +1,13 @@
+{{- if .Values.requestContinuity.enabled }}
+{{- $proxy := include "rivet.proxyLifecycle" . | fromJson -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rivet.fullname" . }}-request-continuity
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: request-continuity
+data:
+  profile: {{ dict "protocol" 1 "maxProtectedRequestSeconds" .Values.requestContinuity.maxProtectedRequestSeconds "backendServiceDrainSeconds" .Values.requestContinuity.backendServiceDrainSeconds "propagationSeconds" .Values.requestContinuity.propagationSeconds "proxyPreStopDelaySeconds" $proxy.preStopDelaySeconds "proxyTerminationGracePeriodSeconds" $proxy.terminationGracePeriodSeconds | toJson | quote }}
+  network: {{ dict "routeName" .Values.requestContinuity.routeName "backendPolicyName" .Values.requestContinuity.backendPolicyName "gatewayName" .Values.requestContinuity.gatewayName "gcpProject" .Values.requestContinuity.gcpProject "gcpRegion" .Values.requestContinuity.gcpRegion | toJson | quote }}
+{{- end }}

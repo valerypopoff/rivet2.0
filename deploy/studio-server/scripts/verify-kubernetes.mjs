@@ -204,6 +204,10 @@ async function main() {
     await spawnProgram(nodeBin, ['deploy/studio-server/scripts/verify-housekeeping-linux.mjs']);
     await spawnProgram(nodeBin, [
       '--test',
+      // Real CLI fixtures have bounded leases and metrics freshness. Spawning a
+      // file per host CPU can starve their local API processes on large Windows
+      // workstations; each deployment-journey file already bounds its overlap.
+      '--test-concurrency=4',
       'deploy/studio-server/scripts/studio-server-release-manifest.test.mjs',
       'deploy/studio-server/scripts/managed-release-cutover.test.mjs',
       'deploy/studio-server/scripts/maintenance-deployment-plan.test.mjs',
@@ -226,6 +230,11 @@ async function main() {
       'deploy/studio-server/scripts/ha-proof-scenarios.test.mjs',
       'deploy/studio-server/scripts/ha-gke-availability.test.mjs',
       'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
+      'deploy/studio-server/scripts/request-continuity.test.mjs',
+      'deploy/studio-server/scripts/proxy-continuity-transition.test.mjs',
+      'deploy/studio-server/scripts/request-continuity-evidence.test.mjs',
+      'deploy/studio-server/scripts/request-continuity-transport.test.mjs',
+      'deploy/studio-server/scripts/request-continuity-provider.test.mjs',
       'deploy/studio-server/scripts/ha-rollout-preparation.test.mjs',
       'deploy/studio-server/scripts/ha-rollout-headroom.test.mjs',
       'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
@@ -236,6 +245,8 @@ async function main() {
       'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',
       'deploy/studio-server/scripts/reusable-staging.test.mjs',
       'deploy/studio-server/scripts/temporary-staging.test.mjs',
+      'deploy/studio-server/scripts/temporary-staging-actor.test.mjs',
+      'deploy/studio-server/scripts/qualification-browser-tools.test.mjs',
       'deploy/studio-server/scripts/temporary-staging-bootstrap.test.mjs',
       'deploy/studio-server/scripts/provider-overlap.test.mjs',
       'deploy/studio-server/scripts/reusable-staging-transport.test.mjs',

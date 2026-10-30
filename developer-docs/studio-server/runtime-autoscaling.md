@@ -2,6 +2,13 @@
 
 ## Scope and delivery status
 
+The optional [300-second request-continuity profile](production-update-continuity.md)
+also qualifies long requests admitted during real proxy HPA removal. On first
+adoption the deployment journal pauses proxy scale-down before creating its
+ingress bridge, retains scale-up, and lets the owning Helm rollout restore the
+original policy after protected normal pods settle. Execution retirement and
+accepted-work guards are unchanged.
+
 Opt-in implementation, not a general GKE capacity certificate. One installation
 was enabled through the explicitly approved operation-scoped maintenance waiver
 recorded in [runtime qualification](runtime-ha-qualification.md); that exception
