@@ -15,8 +15,10 @@ Evaluates one shared state and optional images against a batch of independent ty
 In **Inline** mode, expand **Token pricing** to see **Default rates** and optionally use
 your own flat input/output **USD per million tokens** prices. Both are required
 when enabled; zero is valid. Unknown system rates are not zero. Optional cached
-read/write rates can be stored, but current Decision AI responses lack the cache
-breakdown needed to apply them. Prices use reported usage, not guessed token counts.
+read/write rates apply to OpenAI's reported cache counts. Those counts are part
+of total input, so Rivet charges each input token once at its applicable rate.
+Blank cache rates use your input rate. Other Decision AI providers currently use
+aggregate input/output pricing. Prices use reported usage, not guessed token counts.
 Overrides affect future Cost/Usage estimates and Run statistics, not old recordings.
 Leave overrides off to use default estimates when available; missing costs stay
 unknown. Folding the section does not change saved prices.
@@ -30,7 +32,7 @@ With automatic suspension enabled and supported by the host, each profile has a 
 **Provider**, **Model** and **API key source**, together with configured-key-name options, are inside the collapsible **Model** section. It is initially expanded, like LLM Chat; click its heading to fold or unfold it. Folding preserves your settings, and the editor remembers your section preference.
 
 - **Provider**: choose **Jev**, **Liquid AI**, **OpenAI**, **OpenRouter**, **Perplexity**, **SubQ**, or **Baseten**. All use the same Choice, Score, and Noul question definitions. Bounding Box additionally requires a verified Jev 1.14 model. OpenRouter defaults to Microsoft Decision-1.
-- **Model**: defaults to `jev-latest` for Jev, `d1` for Liquid AI, `gpt-6-luna` for OpenAI, `microsoft/microsoft-decision-1` for OpenRouter, `pplx-decider-v1.1-27b` for Perplexity, `subq-snap-1.1` for SubQ, and Elephant-1 for Baseten. Select **Default** to follow the selected provider's default. An explicit saved model or Model input is preserved when you switch providers. Pin a version when downstream thresholds were calibrated against it, and recheck those thresholds when changing models.
+- **Model**: defaults to `jev-latest` for Jev, `d1` for Liquid AI, `gpt-6-luna` for OpenAI, `microsoft/microsoft-decision-1` for OpenRouter, `pplx-decider-v1.1-27b` for Perplexity, `subq-snap-1.1` for SubQ, and Elephant-1 for Baseten. When no model is saved, the provider's default is selected automatically. An explicit saved model or Model input is preserved when you switch providers. Pin a version when downstream thresholds were calibrated against it, and recheck those thresholds when changing models.
 - **API key source**: **Automatic** checks the named programmatic key, then environment credentials, then the saved Decision AI key when using default names. Existing graphs retain this mode. **Decision AI settings** uses only Settings → Decision AI's key for the selected provider and fails if missing; it never falls back to a general OpenAI key or environment credentials. **Input port** uses only the API Key input. Jev defaults to `typesafeApiKey` / `TYPESAFE_API_KEY`; Liquid AI to `liquidApiKey` / `LIQUID_API_KEY`; OpenAI to `openAiApiKey` / `OPENAI_API_KEY` (with legacy `openAiKey` checked before environment credentials in Automatic). OpenRouter uses `openRouterApiKey` / `OPENROUTER_API_KEY`; Perplexity uses `perplexityApiKey` / `PERPLEXITY_API_KEY`; SubQ uses `subqApiKey` / `SUBQ_API_KEY`. Custom key names are provider-scoped and available in Automatic. Credentials are resolved on the executor, which may be remote.
 - **Timeouts**: configured only in [Decision AI Profile](./classifier-profile.mdx), not on this node. There is no overall node or fallback-chain time limit. Old saved overall-timeout values are ignored. Inline calls and profiles without active automatic suspension wait until completion, provider failure or cancellation.
 - **Outputs**: enable **Output usage details** to add estimated cost to Usage. Rivet uses base rates of **$0.042 / MTok input** for Jev, **$0.02 / MTok input** for Liquid AI d1, **$0.04 / MTok input** for SubQ Snap, **$0.10 / MTok input** for OpenAI Decisions, **$0.042 / MTok input** for Microsoft Decision-1 via OpenRouter, and **$0.02 / MTok input** for Perplexity Decisions, with **free output tokens**. Liquid d1.1 remains unpriced until its rate is verified. Provider premiums are not included. Enable **Output request body** or **Output response body** when you need to inspect the provider exchange. These are off by default.
@@ -38,8 +40,9 @@ With automatic suspension enabled and supported by the host, each profile has a 
 
 Changing Provider is an authored graph setting, not an input port. Providers added later use this same node and question contract.
 
-The **Model** dropdown lists the provider's known models. **Default (model ID)**
-follows its default; selecting a model pins that exact version or alias. Choose
+The **Model** dropdown lists the provider's known models once. When no model is
+saved, the provider's default model is selected automatically; there is no extra
+Default option. Selecting a model pins that exact version or alias. Choose
 **Custom model…** to enter your own name. The text field initially keeps the
 current name, and unlisted saved names open in Custom mode automatically.
 Switching providers does not replace a saved name. The same selector is used in
@@ -114,13 +117,13 @@ say **retained evidence only**, not a complete total.
 
 Rivet limits each evaluation to 32 MiB of expanded request content, 8 MiB of response data, JSON nesting depth 64, 100,000 expanded values, 1,000 questions, 1,024 messages and 4,096 content parts. Native images count at their base64-encoded size. Stricter provider limits still apply. Oversized input is rejected, not truncated or split; reduce the evidence upstream. Repeated references count each time they would appear in JSON.
 
-The always-available **Cost** output is estimated USD cost and contributes to the graph's normal cost total even when **Output usage details** is off. Enabling that setting additionally puts the same estimate in `Usage.totalCost`. Cost is excluded when pricing or safe token counts are unavailable; a genuine zero-token result produces zero. Graph totals sum known costs and may be incomplete when any cost is unavailable. Estimates use successful-response usage and base rates, not an invoice for failed attempts or provider premiums.
+The always-available **Cost** output is estimated USD cost and contributes to the graph's normal cost total even when **Output usage details** is off. Enabling that setting additionally puts the same estimate in `Usage.totalCost`. Cost is excluded when pricing or safe token counts are unavailable; a genuine zero-token result produces zero. Graph totals sum known costs and may be incomplete when any cost is unavailable. The Cost output describes the selected successful response; run statistics also include usable paid usage from failed attempts before fallback. Estimates do not include provider premiums and are not invoices.
 
 Input and response processing retain byte, depth and work limits and check caller cancellation. Enabled profile response timeouts cover provider preparation, retries and response receipt. Individual bounded JSON/base64 operations remain synchronous and cannot be interrupted mid-operation.
 
-For OpenAI `gpt-6-luna` Decisions, requests with more than 272,000 input tokens use $0.20/MTok input for the whole request; smaller requests use $0.10/MTok. Output tokens remain free. Regional and account-specific premiums are not included. See [OpenAI's model pricing details](https://developers.openai.com/api/docs/models/gpt-6-luna).
+For OpenAI `gpt-6-luna` Decisions, standard rates are $0.10/MTok uncached input, $0.01/MTok cached reads and $0.125/MTok cache writes. Requests with more than 272,000 total input tokens double all three rates for the whole request. Output tokens remain free. Regional and account-specific premiums are not included. See [OpenAI's model pricing details](https://developers.openai.com/api/docs/models/gpt-6-luna).
 
-Cost uses the provider's reported input tokens for the complete request, including billed image tokens and all questions. It does not multiply that total by the question count or add images again. Liquid d1 bills each question's image evidence, but already includes those tokens in Usage. OpenAI Decisions has no separate cache-read, cache-write or output charges; its pricing differs from ordinary Chat/Responses requests using the same model.
+Cost uses the provider's reported input tokens for the complete request, including billed image tokens and all questions. It does not multiply that total by the question count or add images again. Liquid d1 bills each question's image evidence, but already includes those tokens in Usage. OpenAI's reported cache reads and writes are subsets of total input, so Rivet subtracts both before pricing uncached input. A reported breakdown must include both counters, including explicit zeros; partial or invalid breakdowns leave cost unknown while preserving answers and native usage. Legacy responses without a breakdown retain aggregate input pricing.
 
 ## Error behavior
 
@@ -136,7 +139,7 @@ All providers require Node execution, Studio Server, the CLI/desktop sidecar, or
 
 ## Using Liquid AI d1
 
-Create a key in [Liquid Console](https://console.liquid.ai), then supply it through Settings → Decision AI → Liquid AI API Key, the `LIQUID_API_KEY` environment variable, the `liquidApiKey` processor setting, or the API Key input port. Select **Liquid AI** in Decision AI run and choose **Default (d1)** or **d1** in Model. Existing Decision AI Question nodes and their connections do not need changes. See [Liquid's decision-model documentation](https://docs.liquid.ai/lfm/models/decision-models).
+Create a key in [Liquid Console](https://console.liquid.ai), then supply it through Settings → Decision AI → Liquid AI API Key, the `LIQUID_API_KEY` environment variable, the `liquidApiKey` processor setting, or the API Key input port. Select **Liquid AI** in Decision AI run and choose **d1** in Model. Existing Decision AI Question nodes and their connections do not need changes. See [Liquid's decision-model documentation](https://docs.liquid.ai/lfm/models/decision-models).
 
 For **d1.1**, select `d1.1` in **Model**, either inline or in a Decision AI Profile.
 Rivet keeps `d1` as its default and never silently replaces a saved model. Both
@@ -152,13 +155,20 @@ Answers and raw Usage still work. See the [hosted model guide](https://docs.liqu
 
 ## Using OpenAI Decisions
 
-Select **OpenAI** and choose **Default (gpt-6-luna)** or **gpt-6-luna** in Model. Supply the key through Settings → Decision AI → OpenAI API Key, `OPENAI_API_KEY`, the `openAiApiKey` processor setting (legacy `openAiKey` also works), or API Key input. OpenAI's native predicate answers become Rivet Noul probabilities; Choice/Score outputs retain the existing maps and zero-based levels. Structured instructions/criteria and JSON State are serialized as text for OpenAI, preserving their contents. Refusals fail the node rather than supplying fake answers. Base estimated cost is $0.10 / MTok input, excluding provider premiums. See [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions).
+Select **OpenAI** and choose **gpt-6-luna** in Model. Supply the key through Settings → Decision AI → OpenAI API Key, `OPENAI_API_KEY`, the `openAiApiKey` processor setting (legacy `openAiKey` also works), or API Key input. OpenAI's native predicate answers become Rivet Noul probabilities; Choice/Score outputs retain the existing maps and zero-based levels. Structured instructions/criteria and JSON State are serialized as text for OpenAI, preserving their contents. Refusals fail the node rather than supplying fake answers. Base estimated cost is $0.10 / MTok input, excluding provider premiums. See [OpenAI Decisions](https://developers.openai.com/api/docs/guides/decisions).
+
+Automatic OpenAI estimates use $0.10 per million uncached input tokens, $0.01
+for cache reads, $0.125 for cache writes and free output. Above 272,000 total
+input tokens, input and cache rates double for the whole request. Manual prices
+replace those automatic rates and tiers. Invalid cache counts leave cost unknown;
+valid answers and native usage remain available. See the
+[OpenAI cache guide](https://developers.openai.com/api/docs/guides/decisions#reuse-shared-input-with-prompt-caching).
 
 ## Using Microsoft Decision-1 on OpenRouter
 
 1. Create an [OpenRouter API key](https://openrouter.ai/settings/keys).
 2. On the executor, set Settings → Decision AI → **OpenRouter API Key**, or use `OPENROUTER_API_KEY` / programmatic `openRouterApiKey`. API Key input and custom credential names also work.
-3. Select **OpenRouter** in Decision AI run or Decision AI Profile. Choose **Default (microsoft/microsoft-decision-1)** or **Microsoft Decision-1** in Model.
+3. Select **OpenRouter** in Decision AI run or Decision AI Profile. Choose **Microsoft Decision-1 (9b)** in Model.
 
 No Azure deployment or endpoint configuration is needed. Rivet uses OpenRouter's native Decisions API (currently alpha), not chat completions. Microsoft Decision-1 accepts text and structured JSON, not images. It supports the existing profile fallback, suspension and diagnostic outputs.
 
@@ -166,8 +176,10 @@ Estimated base cost is $0.042 / MTok input with free output for the recognized M
 
 ## Using Perplexity Decisions
 
-Select **Perplexity** in Decision AI run or Decision AI Profile. Choose Default or
-`pplx-decider-v1.1-27b` in Model, or select `pplx-decider-v1-27b` for the older version.
+Select **Perplexity** in Decision AI run or Decision AI Profile. Choose
+**pplx-decider-v1.1 (27b)** in Model, or select **pplx-decider-v1 (27b)** for the
+older version. These labels keep the API IDs `pplx-decider-v1.1-27b` and
+`pplx-decider-v1-27b` unchanged.
 Supply your key on the executor through Settings → Decision AI → **Perplexity API
 Key**, `PERPLEXITY_API_KEY`, programmatic `perplexityApiKey`, or API Key input.
 
@@ -186,7 +198,7 @@ for key creation, availability and current limits.
 
 ## Using SubQ Snap
 
-Choose **SubQ** and select **Default (subq-snap-1.1)** or **subq-snap-1.1** in Model. Supply an executor key
+Choose **SubQ** and select **subq-snap-1.1** in Model. Supply an executor key
 through **Settings → Decision AI → SubQ API Key**, `SUBQ_API_KEY`, programmatic
 `subqApiKey`, or the API Key input. It works in inline and Profile modes.
 `subq-preview` is a chat model, not a Decision AI model.
@@ -214,9 +226,13 @@ zero retention requires provider-side organization settings.
 
 ## Using Elephant-1 and Mammoth-1 on Baseten
 
-Choose **Baseten** in Decision AI run or Decision AI Profile. Select **Elephant-1**
-(`decision-models/baseten-elephant-9b-latest`) or **Mammoth-1**
-(`decision-models/baseten-mammoth-27b-latest`) in Model. Default uses Elephant-1.
+Choose **Baseten** in Decision AI run or Decision AI Profile. Select **Elephant-1 (9b)**
+(`decision-models/baseten-elephant-9b-latest`), **Mammoth-1 (27b)**
+(`decision-models/baseten-mammoth-27b-latest`) or **Joey-1 (2b)**
+(`decision-models/baseten-joey-2b-latest`) in Model. Elephant-1 is the default.
+Known model sizes appear after their names in both inline and Profile settings,
+including the automatically selected default. Models without a verified size
+keep their existing names. Display labels do not change saved model IDs.
 Set **Settings → Decision AI → Baseten API Key** on the executor, or use
 `BASETEN_API_KEY`, programmatic `basetenApiKey`, or the API Key input.
 Use Node execution, not Browser execution.

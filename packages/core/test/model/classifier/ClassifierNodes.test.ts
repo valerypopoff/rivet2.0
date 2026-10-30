@@ -836,10 +836,15 @@ test('Decision AI model catalogs contain unique real IDs and defaults without re
     classifierProviders.find(({ id }) => id === 'liquid')!.modelOptions!.map(({ value }) => value),
     ['d1', 'd1.1'],
   );
-  assert.deepEqual(
-    classifierProviders.find(({ id }) => id === 'baseten')!.modelOptions!.map(({ label }) => label),
-    ['Elephant-1', 'Mammoth-1'],
-  );
+  assert.deepEqual(classifierProviders.find(({ id }) => id === 'baseten')!.modelOptions, [
+    { value: 'decision-models/baseten-elephant-9b-latest', label: 'Elephant-1 (9b)', aggregateTokenUsageOnly: true },
+    { value: 'decision-models/baseten-mammoth-27b-latest', label: 'Mammoth-1 (27b)', aggregateTokenUsageOnly: true },
+    { value: 'decision-models/baseten-joey-2b-latest', label: 'Joey-1 (2b)', aggregateTokenUsageOnly: true },
+  ]);
+  assert.deepEqual(classifierProviders.find(({ id }) => id === 'perplexity')!.modelOptions, [
+    { value: 'pplx-decider-v1.1-27b', label: 'pplx-decider-v1.1 (27b)', aggregateTokenUsageOnly: true },
+    { value: 'pplx-decider-v1-27b', label: 'pplx-decider-v1 (27b)', aggregateTokenUsageOnly: true },
+  ]);
 });
 
 test('Liquid AI configured keys are provider-scoped and authored models are preserved', async () => {

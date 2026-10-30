@@ -1,5 +1,10 @@
 import { css } from '@emotion/react';
-import { classifierProviders, type ChartNode, type CustomEditorDefinition } from '@valerypopoff/rivet2-core';
+import {
+  classifierProviders,
+  type ChartNode,
+  type ClassifierProvider,
+  type CustomEditorDefinition,
+} from '@valerypopoff/rivet2-core';
 import { useState, type FC } from 'react';
 import { useNodeEditorDataChange } from '../../nodeEditor/NodeEditorSessionContext.js';
 import { DropdownEditor } from '../DropdownEditor.js';
@@ -13,28 +18,31 @@ const styles = css`
   width: 100%;
 `;
 
-export const ClassifierModelEditor: FC<SharedEditorProps & { editor: CustomEditorDefinition<ChartNode> }> = ({
+type ClassifierModelEditorProps = SharedEditorProps & { editor: CustomEditorDefinition<ChartNode> };
+
+export const ClassifierModelEditor: FC<ClassifierModelEditorProps> = (props) => {
+  const providerId = (props.node.data as { provider?: string }).provider;
+  const provider = classifierProviders.find(({ id }) => id === providerId) ?? classifierProviders[0]!;
+  // Provider changes retire transient editing intent, while saved model names remain intact.
+  return <ClassifierModelFields {...props} provider={provider} key={JSON.stringify([props.node.id, provider.id])} />;
+};
+
+const ClassifierModelFields: FC<ClassifierModelEditorProps & { provider: ClassifierProvider }> = ({
   node,
   onChange,
   isDisabled,
   isReadonly,
   onClose,
   editor,
+  provider,
 }) => {
-  const data = node.data as { provider?: string; model?: string };
-  const provider = classifierProviders.find(({ id }) => id === data.provider) ?? classifierProviders[0]!;
   const models = provider.modelOptions ?? [{ value: provider.defaultModel, label: provider.defaultModel }];
-  const model = data.model ?? '';
-  const scope = JSON.stringify([node.id, provider.id]);
-  const [customScope, setCustomScope] = useState<string>();
-  const isCustom =
-    customScope === scope || (model.trim() !== '' && !models.some(({ value }) => value === model.trim()));
+  const model = (node.data as { model?: string }).model ?? '';
+  const modelId = model.trim();
+  const [editingCustom, setEditingCustom] = useState(false);
+  const isCustom = editingCustom || (modelId !== '' && !models.some(({ value }) => value === modelId));
   const changeData = useNodeEditorDataChange(node, onChange);
-  const options = [
-    { value: '', label: `Default (${provider.defaultModel})` },
-    ...models,
-    { value: CUSTOM_MODEL, label: 'Custom model…' },
-  ];
+  const options = [...models, { value: CUSTOM_MODEL, label: 'Custom model…' }];
   return (
     <div
       css={styles}
@@ -54,16 +62,16 @@ export const ClassifierModelEditor: FC<SharedEditorProps & { editor: CustomEdito
       <DropdownEditor
         label={editor.label}
         name="classifierModel"
-        value={isCustom ? CUSTOM_MODEL : model.trim()}
+        value={isCustom ? CUSTOM_MODEL : modelId || provider.defaultModel}
         options={options}
         helperMessage={provider.modelHelp}
         isDisabled={isDisabled}
         isReadonly={isReadonly}
         onChange={(value) => {
           if (isDisabled || isReadonly || value === undefined) return;
-          if (value === CUSTOM_MODEL) setCustomScope(scope);
+          if (value === CUSTOM_MODEL) setEditingCustom(true);
           else {
-            setCustomScope(undefined);
+            setEditingCustom(false);
             changeData('model', value);
           }
         }}
@@ -81,7 +89,7 @@ export const ClassifierModelEditor: FC<SharedEditorProps & { editor: CustomEdito
             if (!isDisabled && !isReadonly) {
               // An unlisted saved value also enters Custom implicitly. Keep
               // that editing intent when it becomes empty or matches a known ID.
-              setCustomScope(scope);
+              setEditingCustom(true);
               changeData('model', value ?? '');
             }
           }}

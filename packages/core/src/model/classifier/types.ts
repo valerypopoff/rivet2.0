@@ -100,5 +100,7 @@ export type ClassifierEvaluationResponse = {
   usage: {
     input_tokens: number;
     output_tokens: number;
+    /** OpenAI's native cache counts are subsets of input_tokens, not additional tokens. */
+    input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
   };
 };

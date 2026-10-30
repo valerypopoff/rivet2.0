@@ -741,7 +741,11 @@ outputs, terminal events and duplicate starts cannot steal selection. Switching
 views sends no runtime controls and never resumes the old run. Selection
 reconstructs a view through canonical snapshot reducers; it never dispatches
 execution, records/uploads a run or substitutes another root's outputs. Eviction/gap notices make retained
-views explicitly incomplete. Root `done`/`error` and physical `latest-settled`
+views explicitly incomplete. The editor consumes `history-truncated` diagnostics
+without a toast: the server-wide retention flag can describe old, unrelated
+traffic. Typed and exact legacy notices still mark history incomplete and never
+become graph-terminal errors. History-gap, oversized-event and owner-unavailable
+warnings remain visible. Root `done`/`error` and physical `latest-settled`
 remain separate; control ownership is removed only at physical settlement.
 
 `useManagedLatestExecution` captures original tab binding tokens at root admission.

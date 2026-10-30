@@ -320,7 +320,26 @@ Kubernetes rehearsal or a new browser run.
 
 Classifier providers are Core-owned and shared by desktop and hosted execution.
 Their curated `modelOptions` also drive the shared Decision AI Model dropdown in
-run/Profile inspectors: Default, known model IDs and Custom model text entry.
+run/Profile inspectors: known model IDs and Custom model text entry. An absent
+or blank saved model shows the provider default as selected, with no duplicate
+Default entry or write during rendering. Selecting a model saves its exact ID.
+The Token pricing aggregate-usage notice follows the selected catalog model's
+`aggregateTokenUsageOnly` metadata. It is hidden for OpenAI, unverified custom
+names and Model-input selections; inline and Profile editors use the same rule.
+This UI metadata describes the upstream model contract. OpenAI's native cache
+counts feed the shared Core cost calculator for inline/Profile outputs and
+attempt receipts, including failed paid responses. Default and authored cache
+prices apply before run-ledger aggregation; no hosted adapter or storage schema
+change is needed. The pricing panel previews automatic long-context cache rates
+and copies known cache rates with Use default rates. See the
+[cache accounting contract](../CLASSIFIER-NODES.md#inline-and-profile-token-pricing).
+Provider changes remount the model fields to discard transient Custom editing
+intent. Returning to a provider derives the selection from saved data, so a
+cleared custom name shows the default and an authored custom name stays editable.
+Known parameter counts appear in model labels (for example `Joey-1 (2b)`),
+including the automatically selected default. A size already encoded in a known
+model ID appears once in the display label (`pplx-decider-v1.1 (27b)`). Unknown
+sizes stay unlabeled; saved IDs and executor requests do not contain display suffixes.
 There is no hosted override or network catalog fetch. Keep saved custom names and
 Model-input connections intact; see the [model-selection contract](../CLASSIFIER-NODES.md#model-selection-ui).
 Microsoft Decision-1 uses the `openrouter` provider and the native OpenRouter
@@ -347,7 +366,9 @@ Do not expose its environment key to the browser; Browser execution is rejected.
 
 Baseten uses the same registry with provider `baseten`, executor credential
 `BASETEN_API_KEY` / programmatic `basetenApiKey`, and saved **Baseten API Key**.
-Elephant-1 is the default; select Mammoth-1 in the shared Model dropdown. The
+Elephant-1 (9b) is the default; select Mammoth-1 (27b) or Joey-1 (2b) in the
+shared Model dropdown. Joey-1 uses `decision-models/baseten-joey-2b-latest`
+through the existing adapter and shared-State image path. The
 stored value remains its full Model API slug, not the friendly display label.
 See the [Baseten contract and local HTTP checks](../CLASSIFIER-NODES.md#baseten-elephant-1-and-mammoth-1).
 There is no separate hosted adapter, browser-exposed key or GCP resource.

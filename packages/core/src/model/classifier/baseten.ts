@@ -2,10 +2,11 @@ import type { PreparedClassifierEvaluation } from './providers.js';
 import type { PreparedClassifierState } from './state.js';
 import { inspectClassifierImage } from './images.js';
 
-/** Native Model API slugs, not Hugging Face or gateway IDs. Verified 2026-10-26. */
+/** Native Model API slugs, not Hugging Face or gateway IDs. Verified 2026-10-30. */
 export const BASETEN_DECISION_MODELS = [
   'decision-models/baseten-elephant-9b-latest',
   'decision-models/baseten-mammoth-27b-latest',
+  'decision-models/baseten-joey-2b-latest',
 ] as const;
 
 /** Baseten uses inline user-message image parts, never top-level images/placeholders. */

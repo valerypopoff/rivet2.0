@@ -1,0 +1,5 @@
+simulation: rivet-openai-cache
+routing: path
+mocks:
+  - routeKey: openai
+    path: ../mocks/openai-decisions/config.yaml

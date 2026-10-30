@@ -69,8 +69,6 @@ export const LIQUID_TOKEN_PRICING = {
   outputPerMillionTokens: 0,
 } as const;
 
-const TOKENS_PER_MILLION = 1_000_000;
-
 const MAX_AUTOMATIC_ATTEMPTS = 3;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const RETRYABLE_STATUSES = new Set([429, 529]);
@@ -83,11 +81,18 @@ export type ClassifierProvider = {
   label: string;
   defaultModel: string;
   /** Curated UI choices, not a runtime allowlist or a pricing/capability promise. */
-  modelOptions?: readonly { value: string; label: string }[];
+  modelOptions?: readonly {
+    value: string;
+    label: string;
+    /** UI notice for this verified model's upstream usage contract; absent means no claim. */
+    aggregateTokenUsageOnly?: boolean;
+  }[];
   /** Provider-owned model guidance shared by inline and Profile editors. */
   modelHelp?: string;
   credentialNames: ClassifierCredentialNames;
   browserExecutionSupported: boolean;
+  /** Opt in only for a verified native input_tokens_details cache contract. */
+  cacheTokenUsageSupported?: boolean;
   supportsImages?: (model: string) => boolean;
   supportsQuestionImages?: (model: string) => boolean;
   supportsBoxQuestions?: (model: string) => boolean;
@@ -106,11 +111,9 @@ export type ClassifierProvider = {
   evaluateInput?(args: ClassifierProviderEvaluateArgs): Promise<ClassifierProviderEvaluationResult>;
 };
 
-export type ClassifierTokenPricing = {
-  inputPerMillionTokens: number;
-  outputPerMillionTokens: number;
+export type ClassifierTokenPricing = TokenPricing & {
   /** The full request uses these rates above the documented context threshold. */
-  longContext?: { aboveInputTokens: number; inputPerMillionTokens: number; outputPerMillionTokens: number };
+  longContext?: TokenPricing & { aboveInputTokens: number };
 };
 
 export type ClassifierModelPricing = {
@@ -218,7 +221,11 @@ export const jevClassifierProvider = createClassifierProvider({
   id: 'jev',
   label: 'Jev',
   defaultModel: 'jev-latest',
-  modelOptions: ['jev-latest', 'jev-preview', 'jev-1.14.0', 'jev-1.13.0'].map((value) => ({ value, label: value })),
+  modelOptions: ['jev-latest', 'jev-preview', 'jev-1.14.0', 'jev-1.13.0'].map((value) => ({
+    value,
+    label: value,
+    aggregateTokenUsageOnly: true,
+  })),
   modelHelp:
     'Jev images are experimental: use still PNG/JPEG, 280–1568 pixels per side. Image requests enable TypeSafe’s experimental image API.',
   credentialNames: JEV_DEFAULT_CREDENTIAL_NAMES,
@@ -253,7 +260,7 @@ export const liquidClassifierProvider = createApiCompatibleClassifierProvider({
   id: 'liquid',
   label: 'Liquid AI',
   defaultModel: 'd1',
-  modelOptions: ['d1', 'd1.1'].map((value) => ({ value, label: value })),
+  modelOptions: ['d1', 'd1.1'].map((value) => ({ value, label: value, aggregateTokenUsageOnly: true })),
   modelHelp: 'Images belong in shared State, not Question Instructions.',
   credentialNames: LIQUID_DEFAULT_CREDENTIAL_NAMES,
   endpoint: LIQUID_SYSTEM_ONE_ENDPOINT,
@@ -272,7 +279,9 @@ export const openrouterClassifierProvider = createApiCompatibleClassifierProvide
   id: 'openrouter',
   label: 'OpenRouter',
   defaultModel: 'microsoft/microsoft-decision-1',
-  modelOptions: [{ value: 'microsoft/microsoft-decision-1', label: 'Microsoft Decision-1' }],
+  modelOptions: [
+    { value: 'microsoft/microsoft-decision-1', label: 'Microsoft Decision-1 (9b)', aggregateTokenUsageOnly: true },
+  ],
   credentialNames: OPENROUTER_DEFAULT_CREDENTIAL_NAMES,
   endpoint: OPENROUTER_DECISIONS_ENDPOINT,
   modelPricing: [
@@ -283,7 +292,7 @@ export const openrouterClassifierProvider = createApiCompatibleClassifierProvide
   ],
 });
 
-/** Decisions-specific rates, not GPT-6 Luna's Chat/Responses cache/output rates.
+/** Decisions-specific rates; cache reads/writes follow standard Luna ratios (verified 2026-10-30).
  * https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability
  */
 export const openaiClassifierProvider: ClassifierProvider = createClassifierProvider({
@@ -293,6 +302,7 @@ export const openaiClassifierProvider: ClassifierProvider = createClassifierProv
   modelOptions: [{ value: 'gpt-6-luna', label: 'gpt-6-luna' }],
   credentialNames: OPENAI_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
+  cacheTokenUsageSupported: true,
   endpoint: OPENAI_DECISIONS_ENDPOINT,
   supportsImages: (model) => model === 'gpt-6-luna',
   supportsQuestionImages: (model) => model === 'gpt-6-luna',
@@ -302,7 +312,15 @@ export const openaiClassifierProvider: ClassifierProvider = createClassifierProv
       pricing: {
         inputPerMillionTokens: 0.1,
         outputPerMillionTokens: 0,
-        longContext: { aboveInputTokens: 272_000, inputPerMillionTokens: 0.2, outputPerMillionTokens: 0 },
+        cacheReadPerMillionTokens: 0.01,
+        cacheWritePerMillionTokens: 0.125,
+        longContext: {
+          aboveInputTokens: 272_000,
+          inputPerMillionTokens: 0.2,
+          outputPerMillionTokens: 0,
+          cacheReadPerMillionTokens: 0.02,
+          cacheWritePerMillionTokens: 0.25,
+        },
       },
     },
   ],
@@ -315,7 +333,11 @@ export const perplexityClassifierProvider: ClassifierProvider = createClassifier
   id: 'perplexity',
   label: 'Perplexity',
   defaultModel: 'pplx-decider-v1.1-27b',
-  modelOptions: PERPLEXITY_DECISION_MODELS.map((value) => ({ value, label: value })),
+  modelOptions: PERPLEXITY_DECISION_MODELS.map((value) => ({
+    value,
+    label: value.replace(/-27b$/, ' (27b)'),
+    aggregateTokenUsageOnly: true,
+  })),
   credentialNames: PERPLEXITY_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: PERPLEXITY_DECISIONS_ENDPOINT,
@@ -342,7 +364,7 @@ export const subqClassifierProvider: ClassifierProvider = createClassifierProvid
   id: 'subq',
   label: 'SubQ',
   defaultModel: 'subq-snap-1.1',
-  modelOptions: SUBQ_DECISION_MODELS.map((value) => ({ value, label: value })),
+  modelOptions: SUBQ_DECISION_MODELS.map((value) => ({ value, label: value, aggregateTokenUsageOnly: true })),
   credentialNames: SUBQ_DEFAULT_CREDENTIAL_NAMES,
   browserExecutionSupported: false,
   endpoint: SUBQ_DECISIONS_ENDPOINT,
@@ -364,8 +386,9 @@ export const basetenClassifierProvider: ClassifierProvider = createClassifierPro
   label: 'Baseten',
   defaultModel: BASETEN_DECISION_MODELS[0],
   modelOptions: [
-    { value: BASETEN_DECISION_MODELS[0], label: 'Elephant-1' },
-    { value: BASETEN_DECISION_MODELS[1], label: 'Mammoth-1' },
+    { value: BASETEN_DECISION_MODELS[0], label: 'Elephant-1 (9b)', aggregateTokenUsageOnly: true },
+    { value: BASETEN_DECISION_MODELS[1], label: 'Mammoth-1 (27b)', aggregateTokenUsageOnly: true },
+    { value: BASETEN_DECISION_MODELS[2], label: 'Joey-1 (2b)', aggregateTokenUsageOnly: true },
   ],
   modelHelp: 'Images belong in shared State, not Question Instructions.',
   credentialNames: BASETEN_DEFAULT_CREDENTIAL_NAMES,
@@ -577,23 +600,35 @@ export function getClassifierProviderEnvironmentVariableNames(): string[] {
 }
 
 /**
- * Returns a USD cost only for a recognized requested/returned model pair and
- * the token counts are safe non-negative integers. Provider input_tokens already
+ * Returns a USD cost for safe non-negative integer token counts using authored
+ * rates or a recognized requested/returned model pair. Provider input_tokens already
  * includes billed text/image work across questions; never multiply by question
- * count or add image tokens again. Decisions has no separate cache charges.
+ * count or add image tokens again. Verified cache reads/writes are input subsets.
  * Callers must not treat an unpriced provider as free.
  */
 export function calculateClassifierUsageCost(
-  provider: Pick<ClassifierProvider, 'pricing' | 'modelPricing'> & Partial<Pick<ClassifierProvider, 'defaultModel'>>,
+  provider: Pick<ClassifierProvider, 'pricing' | 'modelPricing'> &
+    Partial<Pick<ClassifierProvider, 'defaultModel' | 'cacheTokenUsageSupported'>>,
   usage: ClassifierEvaluationResponse['usage'],
   models?: { requestedModel: string; responseModel: string },
   tokenPricing?: TokenPricing,
 ): number | undefined {
-  if (tokenPricing !== undefined)
-    return calculateTokenUsageCost(tokenPricing, {
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-    });
+  let inputTokenDetails: { cacheReadTokens: number; cacheWriteTokens: number } | undefined;
+  if (provider.cacheTokenUsageSupported && usage.input_tokens_details !== undefined) {
+    const details = usage.input_tokens_details;
+    // A reported breakdown must be complete; missing counters are not known zeros.
+    if (
+      details === null ||
+      typeof details !== 'object' ||
+      Array.isArray(details) ||
+      !isReportedTokenCount(details.cached_tokens) ||
+      !isReportedTokenCount(details.cache_write_tokens)
+    )
+      return undefined;
+    inputTokenDetails = { cacheReadTokens: details.cached_tokens, cacheWriteTokens: details.cache_write_tokens };
+  }
+  const reportedUsage = { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, inputTokenDetails };
+  if (tokenPricing !== undefined) return calculateTokenUsageCost(tokenPricing, reportedUsage);
   if (!models) return undefined;
   const entries = normalizeModelPricing(provider);
   const entry = entries.find(
@@ -601,26 +636,15 @@ export function calculateClassifierUsageCost(
   );
   const base = entry?.pricing;
   const tier = base?.longContext;
-  const validRates = (rates: Pick<ClassifierTokenPricing, 'inputPerMillionTokens' | 'outputPerMillionTokens'>) =>
-    Number.isFinite(rates.inputPerMillionTokens) &&
-    rates.inputPerMillionTokens >= 0 &&
-    Number.isFinite(rates.outputPerMillionTokens) &&
-    rates.outputPerMillionTokens >= 0;
-  if (
-    base == null ||
-    !validRates(base) ||
-    (tier != null &&
-      (!Number.isSafeInteger(tier.aboveInputTokens) || tier.aboveInputTokens < 0 || !validRates(tier))) ||
-    !isReportedTokenCount(usage.input_tokens) ||
-    !isReportedTokenCount(usage.output_tokens)
-  ) {
+  if (base == null || (tier != null && !isReportedTokenCount(tier.aboveInputTokens))) return undefined;
+  try {
+    validateTokenPricing(base);
+    if (tier != null) validateTokenPricing(tier);
+  } catch {
     return undefined;
   }
   const pricing = tier && usage.input_tokens > tier.aboveInputTokens ? tier : base;
-  const totalCost =
-    (usage.input_tokens * pricing.inputPerMillionTokens + usage.output_tokens * pricing.outputPerMillionTokens) /
-    TOKENS_PER_MILLION;
-  return Number.isFinite(totalCost) && totalCost >= 0 ? totalCost : undefined;
+  return calculateTokenUsageCost(pricing, reportedUsage);
 }
 
 async function callClassifierHttp(
@@ -634,6 +658,7 @@ async function callClassifierHttp(
     | 'defaultModel'
     | 'pricing'
     | 'modelPricing'
+    | 'cacheTokenUsageSupported'
     | 'requestHeaders'
   >,
   prepared: PreparedClassifierEvaluation,
@@ -932,7 +957,7 @@ async function callClassifierHttp(
 /** The bounded reader produced plain JSON; do not require valid answers to retain usable usage. */
 function classifierAttemptUsage(
   body: unknown,
-  provider: Pick<ClassifierProvider, 'defaultModel' | 'pricing' | 'modelPricing'>,
+  provider: Pick<ClassifierProvider, 'defaultModel' | 'pricing' | 'modelPricing' | 'cacheTokenUsageSupported'>,
   requestedModel: string,
   tokenPricing?: TokenPricing,
 ): ClassifierAttemptUsage | undefined {

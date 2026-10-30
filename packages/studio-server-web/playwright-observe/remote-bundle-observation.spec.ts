@@ -324,7 +324,7 @@ for (const outcome of [
         await expect(infoButton).toHaveAttribute('aria-expanded', 'false');
         await expect(details).toHaveCount(0);
       }
-      if (ha) await expect(editor.getByText(/Latest debugger history was truncated/)).toBeVisible();
+      if (ha) await expect(editor.getByText(/Latest debugger history was truncated/)).toHaveCount(0);
       const members =
         outcome === 'outside caller' ? ['b', 'c'] : outcome === 'external dependency' ? ['a', 'b'] : ['a', 'b', 'c'];
       for (const id of members) {

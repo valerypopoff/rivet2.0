@@ -239,6 +239,9 @@ for (const nodeName of ['LLM Profile', 'Decision AI Profile', 'LLM Chat', 'Decis
     await expect(editor.locator(`[id="${labelledBy}"]`)).toHaveCount(1);
     await expect(pricing.getByLabel('Default token prices')).toContainText('Default rates: Input: $');
     await expect(pricing).toContainText('Price overrides are optional.');
+    const usageNotice = pricing.getByText(/This model reports aggregate input\/output tokens only/);
+    if (nodeName.startsWith('Decision AI')) await expect(usageNotice).toBeVisible();
+    else await expect(usageNotice).toHaveCount(0);
     await expect(pricing).not.toContainText('Rivet rates');
     const toggle = pricing.getByRole('checkbox', { name: 'Override token prices', exact: true });
     await expect(toggle).not.toBeChecked();
@@ -339,5 +342,62 @@ for (const nodeName of ['LLM Profile', 'Decision AI Profile', 'LLM Chat', 'Decis
       await expect(input).toHaveValue('6');
       await expect(output).toHaveValue('9');
     }
+  });
+}
+
+for (const nodeName of ['Decision AI run', 'Decision AI Profile']) {
+  test(`${nodeName} scopes the aggregate usage notice to verified static models`, async ({ page }) => {
+    const editor = await openEmptyProject(page, `usage-notice-${nodeName.replaceAll(' ', '-')}`);
+    await addNode(editor, nodeName);
+    await editor.getByRole('button', { name: 'Token pricing', exact: true }).and(editor.locator('button')).click();
+    const pricing = editor.getByRole('region', { name: 'Token pricing', exact: true });
+    const usageNotice = pricing.getByText(/This model reports aggregate input\/output tokens only/);
+    await expect(usageNotice).toBeVisible(); // An unset model resolves to Jev's default.
+    for (const [providerName, modelLabel, showNotice] of [
+      ['Jev', 'jev-1.13.0', true],
+      ['Liquid AI', 'd1.1', true],
+      ['OpenRouter', 'Microsoft Decision-1 (9b)', true],
+      ['OpenAI', 'gpt-6-luna', false],
+      ['Perplexity', 'pplx-decider-v1.1 (27b)', true],
+      ['SubQ', 'subq-snap-1.1', true],
+      ['Baseten', 'Joey-1 (2b)', true],
+    ] as const) {
+      await selectProvider(editor, providerName);
+      const model = editor.getByRole('combobox', { name: 'Model', exact: true });
+      await model.fill(modelLabel);
+      await model.press('Enter');
+      if (showNotice) await expect(usageNotice).toBeVisible();
+      else await expect(usageNotice).toHaveCount(0);
+      if (providerName === 'OpenAI') {
+        await expect(pricing.getByLabel('Default token prices')).toContainText('Cached input (read): $0.01');
+        await expect(pricing.getByLabel('Default token prices')).toContainText('Cache write: $0.125');
+        await expect(pricing).toContainText('Cached input (read) $0.02. Cache write $0.25.');
+        const toggle = pricing.getByRole('checkbox', { name: 'Override token prices', exact: true });
+        await toggle.check();
+        const read = pricing.getByLabel('Cached input (read) USD / 1M tokens', { exact: true });
+        const write = pricing.getByLabel('Cache write USD / 1M tokens', { exact: true });
+        await expect(read).toHaveValue('0.01');
+        await expect(write).toHaveValue('0.125');
+        await read.fill('0.5');
+        await write.fill('3');
+        await pricing.getByRole('button', { name: 'Use default rates', exact: true }).click();
+        await expect(read).toHaveValue('0.01');
+        await expect(write).toHaveValue('0.125');
+        await toggle.uncheck();
+      }
+    }
+    const inputToggle = editor.getByRole('button', { name: 'Use an input port for Model', exact: true });
+    await inputToggle.click();
+    await expect(usageNotice).toHaveCount(0);
+    await inputToggle.click();
+    await expect(usageNotice).toBeVisible();
+    const model = editor.getByRole('combobox', { name: 'Model', exact: true });
+    await model.fill('Custom model…');
+    await model.press('Enter');
+    const custom = editor.getByRole('textbox', { name: 'Custom model', exact: true });
+    await custom.fill('unverified-future-model');
+    await expect(usageNotice).toHaveCount(0);
+    await custom.fill('');
+    await expect(usageNotice).toBeVisible(); // Clearing returns to the provider default.
   });
 }

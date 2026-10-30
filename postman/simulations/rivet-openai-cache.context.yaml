@@ -1,0 +1,30 @@
+purpose:
+  stands_in_for: OpenAI POST /v1/decisions cache-usage responses using the existing repo-owned mock.
+  unblocks: Verify Rivet inline/Profile cache accounting over real local HTTP without credentials or paid inference.
+assumptions:
+  - id: openai-cache-counts-are-input-subsets
+    status: supported
+    claim: OpenAI Decisions reports cached_tokens and cache_write_tokens inside usage.input_tokens_details as subsets of input_tokens.
+    reason: The official Decisions guide and create reference specify both fields and their inclusion in total input.
+    verification: Read the official schema and cache guide on 2026-10-30. Live provider requests were not made.
+    source: https://developers.openai.com/api/docs/guides/decisions#reuse-shared-input-with-prompt-caching
+    updated_at: "2026-10-30"
+  - id: local-cache-accounting
+    status: supported
+    claim: In the modeled 1000-input/400-read/100-write responses, Rivet prices input subsets once using either catalog or authored rates in inline and Profile modes.
+    reason: The real HTTP client exercises actual Decision AI and Profile nodes, checks their outputs, native diagnostics and physical-attempt run ledger.
+    verification: On 2026-10-30 CLI 1.75.0 served twelve requests; all twelve local HTTP scenarios passed. Catalog cost was USD 0.0000665; authored rates produced USD 0.0015. Impossible cache sums and partial breakdowns retained valid answers but excluded cost and marked ledger coverage unknown.
+    source: packages/core/scripts/check-openai-cache-simulation.mts; postman/mocks/openai-decisions/default.cjs; artifacts/cache-review-simulation.ndjson
+    updated_at: "2026-10-30"
+  - id: live-provider-behavior
+    status: unknown
+    claim: Cache hit frequency, actual provider invoices and model/account availability match the local stand-in.
+    reason: A local fixture establishes client behavior under configured responses, not live service behavior.
+    verification: No live credentials or paid inference were used. Orbit discovery was unavailable due DNS; owner mock discovery required Postman login. The existing repo-owned mock and official OpenAI documentation were reused; no workspace binding or shared resource was changed.
+    source: postman/mocks/openai-decisions/config.yaml; https://developers.openai.com/api/docs/models/gpt-6-luna
+    updated_at: "2026-10-30"
+fingerprints:
+  - id: openai-cache-local-2026-10-30
+    date: "2026-10-30"
+    commit: working-tree
+    cli: Postman CLI 1.75.0; Node 22
