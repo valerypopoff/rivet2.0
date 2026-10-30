@@ -146,6 +146,14 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
       throw Error('Staging cloud returned invalid JSON; acknowledgement is uncertain');
     }
   }
+  const readerPolicy = async (expectedAccountId) => {
+    const base = `projects/-/serviceAccounts/${plan.janitorServiceAccount}`;
+    const account = await request('iam', 'GET', base);
+    assert.equal(account?.uniqueId, expectedAccountId, 'Staging reader account identity changed');
+    const policy = await request('iam', 'POST', `${base}:getIamPolicy?options.requestedPolicyVersion=3`);
+    assert.ok(policy?.etag, 'Staging reader policy must include its current etag');
+    return { base, policy };
+  };
   return {
     request,
     simulation,
@@ -305,6 +313,7 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
         assert.ok(account.uniqueId && !account.disabled);
         accounts.push({ email, id: account.uniqueId, preexisting: true });
       }
+      await readerPolicy(accounts.find((account) => account.email === plan.janitorServiceAccount).id);
       return accounts;
     },
     async get(spec) {
@@ -391,21 +400,13 @@ export function temporaryGcp(plan, { origins = defaults, simulation = false, tok
       return data.rrsets;
     },
     async readBinding(member, expectedAccountId) {
-      const base = `projects/-/serviceAccounts/${plan.janitorServiceAccount}`;
-      const account = await request('iam', 'GET', base);
-      assert.equal(account.uniqueId, expectedAccountId);
-      const policy = await request('iam', 'GET', `${base}:getIamPolicy?options.requestedPolicyVersion=3`);
-      assert.ok(policy.etag);
+      const { policy } = await readerPolicy(expectedAccountId);
       return !!policy.bindings?.some(
         (b) => b.role === 'roles/iam.workloadIdentityUser' && !b.condition && b.members?.includes(member),
       );
     },
     async iamBinding(member, remove, expectedAccountId) {
-      const base = `projects/-/serviceAccounts/${plan.janitorServiceAccount}`;
-      const account = await request('iam', 'GET', base);
-      assert.equal(account.uniqueId, expectedAccountId);
-      const policy = await request('iam', 'GET', `${base}:getIamPolicy?options.requestedPolicyVersion=3`);
-      assert.ok(policy.etag);
+      const { base, policy } = await readerPolicy(expectedAccountId);
       const role = 'roles/iam.workloadIdentityUser',
         before = policy.bindings?.find((b) => b.role === role && !b.condition);
       const exists = !!before?.members?.includes(member);

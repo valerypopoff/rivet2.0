@@ -59,6 +59,23 @@ certificate deletion; an approved narrowly scoped custom role can supply those
 permissions without granting Compute Security Admin. Named-account IAM access,
 quotas, service availability and later live ownership checks remain separate.
 
+The preflight also reads the exact reader service account's IAM policy before
+infrastructure creation. Google's `serviceAccounts.getIamPolicy` REST method
+requires **POST**, an empty body and `options.requestedPolicyVersion=3`.
+The response must contain an etag. Member inspection, addition and removal use
+the same identity-checked read, preserving that etag and unrelated bindings.
+A denied or incomplete policy response therefore fails before billable intent.
+See the [official IAM method](https://docs.cloud.google.com/iam/docs/reference/rest/v1/projects.serviceAccounts/getIamPolicy).
+
+Bootstrap inventory obtains item kinds from API discovery when Kubernetes
+omits them from typed List entries. An explicit conflicting kind fails closed.
+This allows genuine default service accounts and cluster-CA ConfigMaps to be
+recognized while preserving namespace UID, exact CA, controller-reference and
+unknown-object checks. `temporary-staging-inventory.test.mjs` covers the real
+omitted-kind response shape and rejection of replacement namespaces, unrelated
+CAs and conflicting kinds. Cleanup still requires the original operation's
+locked journal and immutable resource identities.
+
 ## Owners and sequence
 
 1. Validate exact main build/artifacts and the freshly observed installed
