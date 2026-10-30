@@ -67,6 +67,28 @@ const outside = (directory) => {
   );
 };
 
+/** Keep bounded diagnostics private for both direct and workflow callers. */
+export async function retainTemporaryFailure(directory, mode, error) {
+  try {
+    outside(directory);
+    const stat = await fs.lstat(directory);
+    assert.ok(stat.isDirectory() && !stat.isSymbolicLink());
+    outside(await fs.realpath(directory));
+    await fs.writeFile(
+      path.join(directory, `terminal-error-${randomUUID()}.json`),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        mode: String(mode).slice(0, 64),
+        name: String(error?.name ?? 'Error').slice(0, 128),
+        message: String(error?.message ?? 'Unknown failure').slice(0, 8192),
+      }),
+      { flag: 'wx', mode: 0o600 },
+    );
+  } catch {
+    // Diagnostic failure cannot change cleanup authority or hide the exit.
+  }
+}
+
 export async function runTemporaryCommand(mode, directory, { inputs, refreshInstalled, env = process.env } = {}) {
   outside(directory);
   const store = new TemporaryStagingStore(directory);
@@ -357,9 +379,15 @@ export async function executeTemporaryQualification({ packet, inputs, refreshIns
     planFile = path.join(packet, 'private-temporary-plan.json');
   await fs.writeFile(planFile, JSON.stringify(plan), { flag: 'wx', mode: 0o600 });
   env = { ...env, RIVET_TEMPORARY_STAGING_PLAN: planFile };
-  await runTemporaryCommand('initialize', directory, { inputs, env });
-  await runTemporaryCommand('arm', directory, { env });
-  const result = await runTemporaryCommand('run', directory, { inputs, refreshInstalled, env });
+  let result;
+  try {
+    await runTemporaryCommand('initialize', directory, { inputs, env });
+    await runTemporaryCommand('arm', directory, { env });
+    result = await runTemporaryCommand('run', directory, { inputs, refreshInstalled, env });
+  } catch (error) {
+    await retainTemporaryFailure(directory, 'execute', error);
+    throw error;
+  }
   assert.equal(result.status, 'qualified');
   assert.equal(result.environmentCleanup.cleanupVerified, true);
   const { record } = await new TemporaryStagingStore(directory).read();
@@ -398,24 +426,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === entry) {
     .catch(async (error) => {
       // Keep operational failure reasons in private state, not Actions output.
       // Do not serialize arbitrary error properties (HTTP bodies or credentials).
-      try {
-        const directory = process.argv[3];
-        outside(directory);
-        const stat = await fs.lstat(directory);
-        assert.ok(stat.isDirectory() && !stat.isSymbolicLink());
-        await fs.writeFile(
-          path.join(directory, `terminal-error-${randomUUID()}.json`),
-          JSON.stringify({
-            at: new Date().toISOString(),
-            mode: process.argv[2],
-            name: String(error?.name ?? 'Error').slice(0, 128),
-            message: String(error?.message ?? 'Unknown failure').slice(0, 8192),
-          }),
-          { flag: 'wx', mode: 0o600 },
-        );
-      } catch {
-        // Diagnostic failure cannot change cleanup authority or hide the exit.
-      }
+      await retainTemporaryFailure(process.argv[3], process.argv[2], error);
       if (process.argv[2] === 'watch')
         await fs
           .writeFile(

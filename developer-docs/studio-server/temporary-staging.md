@@ -43,6 +43,14 @@ This closes repository implementation, not release qualification. Separately:
 
 No local passing result substitutes for these gates or authorizes production.
 
+Image admission accepts both Docker Hub shorthand and explicit registry names.
+For example, `postgres:16.8-alpine@sha256:...` and
+`docker.io/library/postgres:16.8-alpine@sha256:...` resolve to the same repository.
+A dot in an image tag is not a registry hostname; a registry component must
+precede a slash. Private pull credentials are scoped to that resolved host too.
+The registry allowlist, anonymous digest check and Actions-token exclusion still
+apply before provider creation.
+
 ## Owners and sequence
 
 1. Validate exact main build/artifacts and the freshly observed installed
@@ -204,7 +212,8 @@ collected by the control host's operational alerting. If the host powers off,
 credentials expire, or the frozen checkout changes, cleanup can be blocked; no
 local process is an independent cloud-enforced billing cap. Keep that host,
 checkout and credentials available until verified cleanup.
-CLI failures retain a bounded reason in private `terminal-error-*.json` files;
+CLI and automated workflow failures retain a bounded reason in private
+`terminal-error-*.json` files, including failures before cloud activation;
 they do not print cloud responses, private settings or credentials to Actions.
 Diagnostic export never changes cleanup authority or replaces the failed exit.
 Unchanged blocked observations do not append duplicate journal snapshots or

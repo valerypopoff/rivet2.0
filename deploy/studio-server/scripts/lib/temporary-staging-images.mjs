@@ -13,8 +13,8 @@ export async function stagingRegistryConfig(plan, file, images) {
   assert.deepEqual(Object.keys(config), ['auths']);
   const hosts = new Set(
     images.map((image) => {
-      const first = image.split('/')[0];
-      return first.includes('.') ? first : 'docker.io';
+      const parts = image.split('/');
+      return parts.length > 1 && parts[0].includes('.') ? parts[0] : 'docker.io';
     }),
   );
   assert.ok(Object.keys(config.auths).length > 0);
@@ -63,7 +63,7 @@ export async function verifyAnonymousStagingImage(reference, { fetchImpl = fetch
   const [image, digest] = reference.split('@');
   assert.match(digest ?? '', /^sha256:[a-f0-9]{64}$/);
   const parts = image.split('/');
-  let registry = parts[0].includes('.') ? parts.shift() : 'docker.io';
+  let registry = parts.length > 1 && parts[0].includes('.') ? parts.shift() : 'docker.io';
   if (registry === 'docker.io') registry = 'registry-1.docker.io';
   assert.ok(['ghcr.io', 'registry-1.docker.io', 'quay.io'].includes(registry), 'Unsupported anonymous image registry');
   if (registry === 'registry-1.docker.io' && parts.length === 1) parts.unshift('library');
