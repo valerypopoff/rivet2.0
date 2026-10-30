@@ -17,7 +17,7 @@ import {
   assertStudioServerReleaseManifest,
   assertReleaseManifestMatchesCurrentChart,
   assertReleaseManifestMatchesCurrentSource,
-  assertStudioServerReleasePredecessor,
+  assertStudioServerReleaseInstalledPredecessor,
 } from './lib/studio-server-release-manifest.mjs';
 import { selectHaBrowserContract, HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
@@ -61,7 +61,7 @@ export function validateHaCertificationManifest(manifest, { rootDir, sourceSha, 
   assertReleaseManifestMatchesCurrentSource(candidate, sourceSha, { requirePromoted: false });
   assertReleaseManifestMatchesCurrentChart(candidate, rootDir, { requirePromoted: false });
   if (!isDeepStrictEqual(candidate.images, images)) throw Error('HA images must match the candidate manifest');
-  assertStudioServerReleasePredecessor(candidate, previous);
+  assertStudioServerReleaseInstalledPredecessor(candidate, previous);
   const mode = selectHaCertificationMode(candidate, previous);
   return { candidate, mode, browserContract: selectHaBrowserContract(candidate, previous) };
 }

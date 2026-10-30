@@ -21,7 +21,7 @@ import {
 } from './lib/container-server-lifecycle.mjs';
 import {
   assertStudioServerReleaseManifest,
-  assertStudioServerReleasePredecessor,
+  assertStudioServerReleaseInstalledPredecessor,
   getStudioServerReleaseManifestDigest,
   assertReleaseManifestMatchesCurrentChart,
 } from './lib/studio-server-release-manifest.mjs';
@@ -189,7 +189,7 @@ async function main() {
         )
           throw new Error('Manifest schema policy does not match this launcher checkout.');
         if (stage === 'prod' && (!installed || getStudioServerReleaseManifestDigest(installed) !== digest))
-          assertStudioServerReleasePredecessor({ ...manifest, state: 'candidate' }, installed);
+          assertStudioServerReleaseInstalledPredecessor({ ...manifest, state: 'candidate' }, installed);
       }
       images = Object.fromEntries(
         Object.entries(manifest.images).map(([name, image]) => [name, `${image.repository}@${image.digest}`]),
