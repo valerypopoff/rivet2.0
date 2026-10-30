@@ -32,6 +32,33 @@ Keep logs private. Stop only that exact simulation process.
 
 <!-- begin:observations -->
 
+- Supported, 2026-10-30: the real infrastructure client rejects missing project
+  create/cleanup permissions before any infrastructure write. All 48 staging
+  tests passed through Postman CLI 1.75.0 using the existing local path-routed
+  simulation with history disabled. Its log contains 2,006 `gcp` and nine
+  `registry` requests, including 19 read-only Resource Manager
+  `testIamPermissions` calls. The four firewall/certificate permission omissions
+  each left an empty resource journal and no billable intent. Twelve focused
+  direct-HTTP tests additionally passed, preserving the actual socket-loss and
+  timeout checks that the Postman response shim cannot reproduce. The exact
+  simulation server/workers stopped and its local port was released. Evidence:
+  `artifacts/continuity-release-20261030/project-permission-postman-proof.json`,
+  the adjacent private request/test logs, and `temporary-staging.test.mjs`.
+  This supports caller behavior under these scenarios, not GKE qualification.
+
+- Supported, 2026-10-30: Network Admin alone does not cover the maintained
+  firewall and SSL-certificate cleanup paths. A real pre-billing staging attempt
+  received an explicit `compute.firewalls.create` denial; its exact network and
+  subnets were subsequently removed with verified cleanup. The approved
+  operator's actual project `testIamPermissions` response omitted firewall
+  create/delete and regional/global SSL-certificate delete from the 24 checked
+  lifecycle permissions. Google documents these exclusions and the read-only
+  inspection endpoint. Sources: [Compute roles](https://docs.cloud.google.com/iam/docs/roles-permissions/compute),
+  [Resource Manager API](https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/testIamPermissions),
+  and the private continuity operation packet. No role name, passing simulation
+  or successful quota check establishes effective cloud privileges; check the
+  actual principal before creating resources.
+
 - Source-admission reassessment, 2026-10-30: the existing real-Git source fixture
   reproduced acceptance of an untracked source file hidden by a status-display
   preference. The fix rejects it before cloning and during actor verification,

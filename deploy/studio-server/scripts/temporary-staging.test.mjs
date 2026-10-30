@@ -1012,9 +1012,34 @@ test('managed DNS admission requires a complete label boundary, not a lookalike 
       if (domain === 'notexample.net') await assert.rejects(f.cloud.preflight(), /outside the managed DNS zone/);
       else assert.equal((await f.cloud.preflight()).length, 3);
       assert.equal(
-        (await f.control('_requests')).some((r) => r.method === 'POST'),
+        (await f.control('_requests')).some((r) => r.method === 'POST' && !r.resource.endsWith(':testIamPermissions')),
         false,
       );
+    });
+});
+
+test('missing firewall or certificate cleanup privileges block before any infrastructure write', async (t) => {
+  for (const permission of [
+    'compute.firewalls.create',
+    'compute.firewalls.delete',
+    'compute.regionSslCertificates.delete',
+    'compute.sslCertificates.delete',
+  ])
+    await t.test(permission, async (child) => {
+      const f = await fixture(child, { fault: { type: 'missing-permission', permission } });
+      await assert.rejects(
+        f.store.locked(() => provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard })),
+        (error) => error.message.includes(permission),
+      );
+      const requests = await f.control('_requests');
+      assert.equal(requests.filter((request) => request.resource.endsWith(':testIamPermissions')).length, 1);
+      assert.equal(
+        requests.some((request) => request.method !== 'GET' && !request.resource.endsWith(':testIamPermissions')),
+        false,
+      );
+      const { record } = await f.store.read();
+      assert.equal(record.firstBillableIntentAt, null);
+      assert.deepEqual(record.resources, []);
     });
 });
 
@@ -1209,7 +1234,12 @@ test('unknown HTML/timeout outcomes never authorize retries or assumed absence',
       const f = await fixture(child, { fault: { type, kind: 'networks' } });
       await f.store.locked(async () => {
         await assert.rejects(provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard }));
-        assert.equal((await f.control('_requests')).filter((r) => r.method === 'POST').length, 1);
+        assert.equal(
+          (await f.control('_requests')).filter(
+            (r) => r.method === 'POST' && !r.resource.endsWith(':testIamPermissions'),
+          ).length,
+          1,
+        );
         if (type === 'html')
           await assert.rejects(cleanupTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait }), /unknown/);
         else {
