@@ -54,6 +54,10 @@ const registryHandler = createRequire(import.meta.url)(
   '../../../postman/mocks/anonymous-registry/contract.cjs',
 ).handler;
 const fixtureLock = async () => ({ close: async () => {} });
+const cloudWrite = (request) =>
+  request.method !== 'GET' &&
+  !request.resource.endsWith(':testIamPermissions') &&
+  !request.resource.endsWith(':getIamPolicy');
 const ipPlan = (changes = {}) =>
   temporaryPlan({
     hostnameMode: 'ip-encoded-http01',
@@ -1011,10 +1015,7 @@ test('managed DNS admission requires a complete label boundary, not a lookalike 
       });
       if (domain === 'notexample.net') await assert.rejects(f.cloud.preflight(), /outside the managed DNS zone/);
       else assert.equal((await f.cloud.preflight()).length, 3);
-      assert.equal(
-        (await f.control('_requests')).some((r) => r.method === 'POST' && !r.resource.endsWith(':testIamPermissions')),
-        false,
-      );
+      assert.equal((await f.control('_requests')).some(cloudWrite), false);
     });
 });
 
@@ -1033,10 +1034,40 @@ test('missing firewall or certificate cleanup privileges block before any infras
       );
       const requests = await f.control('_requests');
       assert.equal(requests.filter((request) => request.resource.endsWith(':testIamPermissions')).length, 1);
-      assert.equal(
-        requests.some((request) => request.method !== 'GET' && !request.resource.endsWith(':testIamPermissions')),
-        false,
+      assert.equal(requests.some(cloudWrite), false);
+      const { record } = await f.store.read();
+      assert.equal(record.firstBillableIntentAt, null);
+      assert.deepEqual(record.resources, []);
+    });
+});
+
+test('reader IAM policy reads use POST before infrastructure and preserve exact member changes', async (t) => {
+  const f = await fixture(t);
+  const accounts = await f.cloud.preflight();
+  const id = accounts.find((account) => account.email === f.plan.janitorServiceAccount).id;
+  const member = `serviceAccount:${f.plan.projectId}.svc.id.goog[${f.plan.operationId}-ctl/janitor]`;
+  assert.equal(await f.cloud.readBinding(member, id), false);
+  await f.cloud.iamBinding(member, false, id);
+  assert.equal(await f.cloud.readBinding(member, id), true);
+  await f.cloud.iamBinding(member, true, id);
+  assert.equal(await f.cloud.readBinding(member, id), false);
+  const requests = await f.control('_requests');
+  const reads = requests.filter((request) => request.resource.endsWith(':getIamPolicy'));
+  assert.equal(reads.length, 6);
+  assert.ok(reads.every((request) => request.method === 'POST'));
+  assert.equal(requests.filter(cloudWrite).length, 2);
+  await assert.rejects(f.cloud.iamBinding(member, false, 'replaced-account'), /identity changed/);
+  assert.equal((await f.control('_requests')).filter(cloudWrite).length, 2);
+});
+
+test('unreadable reader policy or missing etag stops before any infrastructure write', async (t) => {
+  for (const type of ['policy-read-denied', 'policy-without-etag'])
+    await t.test(type, async (child) => {
+      const f = await fixture(child, { fault: { type } });
+      await assert.rejects(
+        f.store.locked(() => provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard })),
       );
+      assert.equal((await f.control('_requests')).some(cloudWrite), false);
       const { record } = await f.store.read();
       assert.equal(record.firstBillableIntentAt, null);
       assert.deepEqual(record.resources, []);
@@ -1235,9 +1266,7 @@ test('unknown HTML/timeout outcomes never authorize retries or assumed absence',
       await f.store.locked(async () => {
         await assert.rejects(provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard }));
         assert.equal(
-          (await f.control('_requests')).filter(
-            (r) => r.method === 'POST' && !r.resource.endsWith(':testIamPermissions'),
-          ).length,
+          (await f.control('_requests')).filter((request) => request.method === 'POST' && cloudWrite(request)).length,
           1,
         );
         if (type === 'html')

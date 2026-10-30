@@ -16,7 +16,7 @@ exports.handler = () => {
       const chunks = [];
       if (typeof req[Symbol.asyncIterator] === 'function') for await (const chunk of req) chunks.push(chunk);
       const body =
-        req.body !== undefined
+        req.body !== undefined && req.body !== ''
           ? typeof req.body === 'string'
             ? JSON.parse(req.body)
             : req.body
@@ -96,8 +96,14 @@ exports.handler = () => {
         resources.set('dns', body.additions ?? []);
         return respond(200, { id: String(++seq), status: 'done' });
       }
-      if (service === 'iam' && resource.endsWith(':getIamPolicy'))
+      if (service === 'iam' && resource.endsWith(':getIamPolicy')) {
+        if (req.method !== 'POST') return respond(405, { error: 'Policy reads require POST' });
+        if (body !== undefined || url.searchParams.get('options.requestedPolicyVersion') !== '3')
+          return respond(400, { error: 'Empty body and policy version 3 required' });
+        if (fault?.type === 'policy-read-denied') return respond(403, { error: 'Policy read denied' });
+        if (fault?.type === 'policy-without-etag') return respond(200, { bindings: [] });
         return respond(200, resources.get('policy') ?? { etag: 'local-etag', bindings: [] });
+      }
       if (service === 'iam' && resource.endsWith(':setIamPolicy') && req.method === 'POST') {
         resources.set('policy', body.policy);
         return respond(200, body.policy);

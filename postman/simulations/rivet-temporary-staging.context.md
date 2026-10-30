@@ -32,6 +32,18 @@ Keep logs private. Stop only that exact simulation process.
 
 <!-- begin:observations -->
 
+- Supported, 2026-10-30: the corrected Google IAM policy client passed all 52
+  lifecycle tests through Postman CLI 1.75.0 with history disabled. A focused
+  wire inspection observed six POST `getIamPolicy` reads, including preflight
+  and exact-member add/remove. The mock now requires an empty body and policy
+  version 3, and rejects GET; denied reads and missing etags prevent any
+  infrastructure write or billable intent. The direct HTTP and authenticated
+  HTTPS/WebSocket bootstrap suites passed all 62 tests, including the separate
+  discovery-kind inventory regressions. Exact simulation processes stopped and
+  port 60796 was released. Private evidence is under
+  `artifacts/continuity-release-20261030/gcp-contract-*`. These are client and
+  teardown-contract results, not a successful regional GKE qualification.
+
 - Supported, 2026-10-30: the real infrastructure client rejects missing project
   create/cleanup permissions before any infrastructure write. All 48 staging
   tests passed through Postman CLI 1.75.0 using the existing local path-routed
