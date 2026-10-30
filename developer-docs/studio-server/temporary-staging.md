@@ -312,6 +312,11 @@ not workflow-dispatch command strings:
   Credentials and uses the staging project for quota. The short-lived operator
   token—not the source credential—is used for resource requests. Required APIs
   and token-creation permission must already exist; this code grants neither.
+  IAM time conditions must contain an RFC 3339 UTC timestamp. PowerShell JSON
+  conversion can materialize a `DateTime`; preserve the original string or format
+  it explicitly rather than interpolating a locale-dependent date. Verify the
+  actual control-host metadata identity can mint the exact operator token and
+  read the named prerequisites; a successful policy write alone is insufficient.
 
 The template contains all fields accepted by `temporaryStagingPlan`, **except**
 `protocol`, `operationId`, `sourceSha`, `candidateDigest`, `predecessorDigest` and
