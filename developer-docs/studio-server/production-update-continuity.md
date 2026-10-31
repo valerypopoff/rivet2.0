@@ -127,6 +127,8 @@ Frontend preparation, proxy HPA, bridge handoff and optional control-topology
 transfer share this check. Readiness polls wait for a complete endpoint set;
 ambiguous backend discovery and denied Compute reads fail before handoff.
 See [standalone NEG readiness](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/standalone-neg).
+Provider-gate construction requires the staging project's region even for a
+local render-only fixture, so tests must supply that installation identity too.
 GCP observations are authenticated separately from Kubernetes. Local
 operators use `gcloud auth print-access-token` (optionally a reviewed
 `RIVET_GCLOUD_BIN` launcher); in-cluster staging uses its existing metadata
