@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import tls from 'node:tls';
 import { isIP } from 'node:net';
+import { stagingHostname } from './reusable-staging-state.mjs';
 
 /** TLS/SNI only: no credentials, HTTP requests, redirects or application writes. */
 export async function verifyStagingTls(origin, { ca, lookup, timeoutMs = 15000 } = {}) {
@@ -52,7 +53,7 @@ export async function inspectStagingPrerequisites(state, { verifyTls = verifySta
     Number.isSafeInteger(generation) && condition(gateway.status?.conditions, 'Programmed'),
     'Shared staging Gateway is not freshly Programmed',
   );
-  const hostname = `${operation.operationId}.${settings.domain}`;
+  const hostname = stagingHostname(settings, operation);
   const listener = gateway.spec?.listeners?.find(
     (l) =>
       l.protocol === 'HTTPS' && l.port === 443 && (l.hostname === `*.${settings.domain}` || l.hostname === hostname),

@@ -6,6 +6,49 @@ production has not been changed by this implementation. The
 [delivery plan](production-update-continuity-plan.md) retains the exact-image
 qualification, publication and production activation gates.
 
+The October 31 essential rollout scope is one successful regional qualification,
+the first observed protected production update, the documented ordinary update
+path, and verified cleanup. A manufactured second source release and second
+cloud campaign are deferred until a real subsequent release. This changes the
+delivery scope, not the 300-second qualification or production preflight gates.
+
+The latest staging attempt failed before application deployment: PostgreSQL
+initialized at the CSI mount root and rejected its `lost+found` directory.
+The fixture now sets `PGDATA` to a child directory. Cleanup also distinguishes
+GKE's automatic `ingress:true` annotation on a ClusterIP dependency Service
+from an explicit pending NEG: it permits the status-less automatic annotation
+only when a fresh namespace Ingress list is empty. Explicit ports, existing NEG
+status, unknown intent, failed reads and any Ingress still require the complete
+NEG inventory. Actor and janitor roles include read-only Ingress discovery.
+These repairs do not qualify the failed images or authorize a production update.
+Private terminal diagnostics retain up to four error causes (names/messages
+only), so qualification wrappers preserve the underlying transport failure.
+Command-output/environment fields and other error properties are not serialized.
+
+The narrowed campaign closed after three failed staging attempts, with zero
+successful qualifications and zero production serving updates. Child and parent
+resource cleanup, temporary access removal, evidence transfer and restoration of
+the original quota were verified. The repaired source still needs review/CI,
+exact-image qualification and the first observed production transition.
+
+## Normal release process
+
+Use **Release Rivet** with an existing successful main Build Images run. CI
+qualifies those immutable images in a reusable isolated staging cluster, publishes
+the exact certificate and invokes the normal production command once through
+the protected production environment. That command owns fresh live checks, the
+online recovery checkpoint, rollout, short application acceptance and journaled
+recovery. There is no separate production-readiness job or repeated cloud setup.
+See [automated qualification](automated-runtime-qualification.md) for runner
+configuration and automatically selected full/focused test depth. A recurring
+staging budget and one-time installation are still needed; the closed temporary
+campaign grants no new cloud authority.
+
+First activation still requires a successful full GKE qualification and the
+observed temporary proxy bridge below. After that, ordinary updates omit the
+bridge. No manufactured second release or second campaign is required to finish
+the first rollout. Requests beyond 300 seconds may be interrupted as agreed.
+
 ## Contract and configuration
 
 The protected envelope is a published product request completing within 300
@@ -96,17 +139,24 @@ change templates:
    continuous propagation window through the bridge probe route.
 4. Change route weights while retaining both backend references and the old
    normal pods. Confirm public routing and provider drain continuously for a
-   full 600-second quiet window. Only then prepare/apply candidate templates and
+   full protected-request-plus-propagation quiet window (300 + 60 = 360 seconds
+   for the starting profile). Lost routing or drain confirmation resets that
+   window. Only then prepare/apply candidate templates and
    execute the existing accepted-work retirement protocol.
 5. After normal candidate settlement, confirm four healthy protected normal
    proxies. Keep the temporary HPA floor and scale-down pause through Helm's
    template update. Return route weights to normal and observe
-   another full 600-second quiet window. Restore the original route specification,
+   another full 360-second quiet window. Restore the original route specification,
    retain the longer backend drain, then let Helm restore the original HPA policy
    before removing only exact owned bridge UIDs. This prevents idle normal-pool
    metrics from shrinking capacity just before traffic returns.
 6. Recheck ordinary settlement before completing the release journal. Subsequent
    updates inspect an already protected installation and omit the bridge.
+
+The 600-second backend drain remains a configured upper bound; it is not an
+additional mandatory handoff sleep. Proxy preStop/grace remain 660/900 seconds.
+The shorter handoff is a repository change requiring the first full regional
+qualification, not a measured routing guarantee from the failed campaign.
 
 The bridge adds four temporary proxies; raising the normal pool's minimum can add
 two more, in addition to native rollout surges and execution autoscaling. Size
@@ -162,6 +212,22 @@ agree. An adopted installation requires the same target profile on every exact
 successor qualification; it cannot fall back to the old short-request suite.
 The approved window must be at least two hours and must actually cover the run
 and settlement. No previous budget or expiry is inherited.
+
+For a campaign with several qualifications and production windows, reserve the
+whole remaining sequence before starting its next paid step. Recheck against
+the original approval deadline after any wait for clarification; a later custody
+approval does not restart that clock. Show the next stage's latest permitted
+start in approval questions whenever it falls before the overall expiry.
+If the remaining sequence no longer fits,
+close admission, preserve and verify the actual evidence, then clean up the
+temporary campaign. Successful builds or local checks do not justify shortening
+the approved qualification or cleanup reserves.
+
+The activation request must identify the trusted control host, credential and
+Helm-value payloads, setup/cleanup ledger transfers, permitted readers and local
+operator sudo access. Keep these files out of actor containers and public
+artifacts. Resolve custody questions before starting the bounded cloud window
+where possible; retain the actual reply time and immutable payload hashes.
 
 `ProviderRequestContinuity` publishes a dedicated synthetic duration-controlled fixture.
 It consumes and validates every body byte and correlates each request with one
@@ -289,9 +355,19 @@ one failed, three skipped). The exact case passed in isolation, and the full
 rerun passed. The initial failure log is retained; its cause was not reproduced
 and is not represented as a successful run.
 
-Remaining activation work is the exact clean candidate build and image/toolchain
-verification, separately budgeted isolated regional GKE run, provider cleanup,
-qualified-manifest publication, fresh production preflight/backup, and separately
-approved production transition. Any provider failure remains a failure and may
-require implementation changes before another reviewed run. No rollout or
-publication is started automatically by these repository changes.
+Remaining essential acceptance work includes one successful isolated regional GKE
+qualification, provider cleanup, qualified-manifest publication, fresh production
+preflight and backup, and the first observed production transition.
+Revalidate the exact source, installed predecessor, artifacts and scan freshness
+before reusing an existing build or actor publication. The genuine later source
+change requires its own build and qualification. Any provider failure remains a
+failure and may require implementation changes before another reviewed run.
+These repository changes do not automatically start a rollout or publication.
+
+Operational preparation on 2026-10-31 completed candidate builds, scanned actor
+publication and a local headless production-version continuity check. Its cloud
+window closed with zero regional GKE qualifications and zero production serving
+updates because the full remaining sequence no longer fit the fixed deadline.
+Native preparation evidence was exported and independently verified before
+temporary infrastructure/access cleanup and quota restoration. That was a closed
+earlier window; its receipts do not settle the latest failed staging attempt.

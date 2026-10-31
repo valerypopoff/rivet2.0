@@ -76,6 +76,18 @@ omitted-kind response shape and rejection of replacement namespaces, unrelated
 CAs and conflicting kinds. Cleanup still requires the original operation's
 locked journal and immutable resource identities.
 
+The disposable PostgreSQL fixture uses `PGDATA=/var/lib/postgresql/data/pgdata`
+inside its mounted volume. A CSI disk's mount root can contain `lost+found`;
+initializing PostgreSQL at that root fails before the application can start.
+Do not repair this by deleting disk contents or replaying an admitted preparation.
+
+For an internal ClusterIP Service, GKE's automatic `{"ingress":true}` annotation
+alone does not prove a pending NEG. Inventory may accept its missing NEG status
+only after a fresh, successful namespace Ingress list is empty. Explicit NEG
+ports, existing status, unknown intent or any Ingress preserve the existing
+complete-inventory requirement. Actor and janitor RBAC include only `get/list`
+Ingress discovery for this check. See [GKE's NEG creation rules](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/internal-load-balance-ingress).
+
 ## Owners and sequence
 
 1. Validate exact main build/artifacts and the freshly observed installed
@@ -249,7 +261,15 @@ checkout and credentials available until verified cleanup.
 CLI and automated workflow failures retain a bounded reason in private
 `terminal-error-*.json` files, including failures before cloud activation;
 they do not print cloud responses, private settings or credentials to Actions.
+Wrapped errors retain at most four cause names/messages, each bounded like the
+top-level error. Cycles, stack traces and arbitrary command/environment fields
+are excluded; the underlying failure remains available without dumping output.
 Diagnostic export never changes cleanup authority or replaces the failed exit.
+Certificate workers have Docker identities (full container ID, image ID and
+creation time), while the coordinator/watchdog have Linux process identities.
+Keep those checks separate. A fresh all-container inventory must establish the
+certificate container's ID and name are absent, including stopped containers;
+zero running containers alone does not prove its removal.
 Unchanged blocked observations do not append duplicate journal snapshots or
 repeat settlement already proven with admission closed. The watchdog backs off
 while blocked; it never advances by redispatching an uncertain modifying call.

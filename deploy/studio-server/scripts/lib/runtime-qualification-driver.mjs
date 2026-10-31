@@ -15,6 +15,7 @@ export function qualificationDriverEnvironment(env) {
       const key = name.toUpperCase();
       return (
         !key.startsWith('RIVET_QUALIFICATION_PRODUCTION_') &&
+        !key.startsWith('RIVET_PRODUCTION_') &&
         !key.startsWith('GITHUB_') &&
         !key.startsWith('ACTIONS_') &&
         !['GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'KUBECONFIG'].includes(key)

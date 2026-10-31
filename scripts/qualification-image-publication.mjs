@@ -24,7 +24,10 @@ export function runPublicationCommand(program, args, options = {}) {
 
 export function publicationInputs(env) {
   assert.equal(env.GITHUB_REF, 'refs/heads/main', 'Publication requires main');
-  assert.equal(env.GITHUB_EVENT_NAME, 'workflow_dispatch', 'Publication requires explicit dispatch');
+  assert.ok(
+    ['workflow_dispatch', 'push', 'schedule'].includes(env.GITHUB_EVENT_NAME),
+    'Publication requires a main build or explicit dispatch',
+  );
   assert.match(env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
   assert.match(env.GITHUB_REPOSITORY ?? '', /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/);
   for (const key of ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) assert.match(env[key] ?? '', /^[1-9][0-9]*$/);
@@ -55,16 +58,27 @@ export async function preparePublicationOutput(root) {
   return output;
 }
 
-export async function publishQualificationImages(env = process.env) {
+export async function publishQualificationImages(env = process.env, { directory = inputRoot } = {}) {
   const input = publicationInputs(env);
   assert.equal(process.platform, 'linux');
   assert.ok(process.getuid() > 0, 'Use the non-root external runner');
   const run = runPublicationCommand;
-  assert.equal(run('git', ['rev-parse', 'HEAD']), input.sourceSha);
-  assert.equal(run('git', ['status', '--porcelain']), '', 'Publication checkout must be clean');
-  assert.equal(await fs.realpath(inputRoot), inputRoot, 'Publication input root cannot be redirected');
-  const actorArchive = path.join(inputRoot, 'actor.tar');
-  const minioArchive = path.join(inputRoot, 'minio.tar');
+  assert.equal(run('git', ['--no-replace-objects', 'rev-parse', 'HEAD']), input.sourceSha);
+  assert.equal(
+    run('git', [
+      '--no-replace-objects',
+      '-c',
+      'core.fsmonitor=false',
+      'status',
+      '--porcelain',
+      '--untracked-files=all',
+    ]),
+    '',
+    'Publication checkout must be clean',
+  );
+  assert.equal(await fs.realpath(directory), directory, 'Publication input root cannot be redirected');
+  const actorArchive = path.join(directory, 'actor.tar');
+  const minioArchive = path.join(directory, 'minio.tar');
   await verifyPublicationArchive(actorArchive, input.actorArchiveSha256);
   await verifyPublicationArchive(minioArchive, input.minioArchiveSha256);
   for (const archive of [actorArchive, minioArchive]) run('docker', ['load', '--input', archive]);

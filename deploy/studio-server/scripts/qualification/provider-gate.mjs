@@ -24,6 +24,7 @@ import { requestContinuityProfile, continuityTimeoutMs, continuityFromResources 
 import { createKubernetesProxyContinuity, createComputeBackendObserver } from '../lib/proxy-continuity-kubernetes.mjs';
 import { stagingAccessToken, stagingCloudReader } from '../lib/reusable-staging-cloud.mjs';
 import { observeStagingInventory } from '../lib/reusable-staging-cleanup.mjs';
+import { stagingHostname } from '../lib/reusable-staging-state.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -51,7 +52,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       allowedContext: settings.context,
       namespace,
       release,
-      baseUrl: `https://${operation.operationId}.${settings.domain}`,
+      baseUrl: `https://${stagingHostname(settings, operation)}`,
       artifactsDir: privateDirectory,
       images: operation.candidate.images,
       previousManifest: operation.previous,

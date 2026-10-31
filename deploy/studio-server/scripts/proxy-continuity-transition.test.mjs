@@ -197,7 +197,7 @@ test('first transition keeps predecessors through both full drain windows and cl
   assert.deepEqual(f.live.get('HTTPRoute/route').spec, f.baseline.route.spec);
   assert.deepEqual(f.live.get('GCPBackendPolicy/policy').metadata.annotations, {});
   assert.equal(f.live.get('GCPBackendPolicy/policy').spec.default.connectionDraining.drainingTimeoutSec, 600);
-  assert.ok(f.events.find((e) => e[0] === 'remove')[2] >= 1260000);
+  assert.ok(f.events.find((e) => e[0] === 'remove')[2] >= 780000);
 });
 
 test('lost route acknowledgement is observed on recovery without a duplicate patch', async () => {

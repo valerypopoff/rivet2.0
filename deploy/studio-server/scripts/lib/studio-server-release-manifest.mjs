@@ -276,6 +276,16 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
     normalized.evidence.runtimeControl = assertRuntimeControlEvidence(evidence.runtimeControl, normalized);
   if (evidence.runtimeAutoscaling)
     normalized.evidence.runtimeAutoscaling = assertRuntimeAutoscalingEvidence(evidence.runtimeAutoscaling, normalized);
+  const control = normalized.evidence.runtimeControl,
+    scaling = normalized.evidence.runtimeAutoscaling;
+  if (control?.qualification || scaling?.qualification || control?.protocol === 4 || scaling?.protocol === 3) {
+    if (
+      JSON.stringify(control?.qualification) !== JSON.stringify(scaling?.qualification) ||
+      !control?.qualification ||
+      (control.protocol === 4) !== (scaling.protocol === 3)
+    )
+      throw Error('Runtime and autoscaling qualification tiers must describe the same operation');
+  }
   return normalized;
 }
 

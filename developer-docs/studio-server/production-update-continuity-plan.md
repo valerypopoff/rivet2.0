@@ -1,5 +1,17 @@
 # Production update continuity implementation plan
 
+The standard delivery path is now the lighter
+[Release Rivet workflow](automated-runtime-qualification.md): build once, reuse
+isolated staging, select full/focused tests automatically, publish the exact
+manifest and perform live checks/rolling update/acceptance in one production
+action. Shared staging infrastructure and access are configured once under a
+fresh recurring budget; temporary setup campaigns are exceptional. First adoption
+still requires full regional qualification and its observed bridge transition.
+Each first-transition handoff waits the protected request plus propagation
+(360 seconds for the starting profile), while retaining 600-second LB drain and
+660/900-second proxy preStop/grace. The manufactured second release/campaign is
+deferred. Historical milestones below do not grant new cloud activation authority.
+
 Status: **Repository changes implemented; exact-image verification, provider
 qualification and production activation remain open.** See the
 [implemented contract and operator guide](production-update-continuity.md).
@@ -11,6 +23,20 @@ local validation results are recorded in that guide and the implementation
 handoff. Phases F–G still require their operation-specific approvals and actual
 provider evidence; no production guarantee follows from repository tests alone.
 
+The user narrowed the October 31 delivery to one successful regional GKE
+qualification, the first protected production update with external observation,
+the ordinary rolling-update runbook, and verified cleanup. The manufactured
+second Node release, its separate GKE campaign and associated PR work are
+deferred until a real subsequent release. Keep the 300-second checks, production
+preflight and cleanup gates. The latest attempt failed in dependency preparation
+before application deployment, so neither qualification nor activation is closed.
+See the operator guide for the PostgreSQL mount and automatic NEG annotation
+repairs. Rebuild/revalidate the changed source before another qualification.
+The narrowed campaign is now closed: all three attempts failed, cleanup and
+quota restoration were verified, and production serving configuration is
+unchanged. Phases F–G remain open; local repairs and cleanup are not rollout
+acceptance.
+
 The first isolated Autopilot attempt in the October 31 campaign failed before
 application qualification. Live observations exposed an ignored legacy node
 service-account field, managed nodes absent from the customer Compute inventory,
@@ -20,8 +46,8 @@ checks the actual node account before bootstrap writes, validates managed Node
 identity against the pinned cluster/network, and inventories only deletable
 objects without treating Events as ownership authority. The failed attempt does
 not qualify a release. Fresh exact-source image/actor checks, successful regional
-qualifications, their verified cleanup, and both observed production updates
-remain required; production serving configuration is unchanged.
+qualification, its verified cleanup, and the first observed production update
+remain required for essential delivery; production serving configuration is unchanged.
 
 Release preparation began on 2026-10-30 after authorization to carry out the
 remaining sequence. The candidate includes the continuity changes and their
@@ -547,8 +573,10 @@ The required work is complete only when all of the following are true:
 
 - The existing short-lifecycle production installation has been safely converted
   using the exact provider-qualified transition.
-- At least one later mixed-image ordinary update passes the same protected
-  contract without creating a bootstrap bridge.
+- The ordinary update path is documented. A later real mixed-image update must
+  pass the same protected contract without a bootstrap bridge before phase H's
+  live acceptance can be claimed; that subsequent release is deferred from the
+  essential first rollout.
 - Nominal-300-second accepted requests finish with complete correct bodies during
   real proxy/NEG replacement and HPA removal; short traffic has zero failures.
 - Public web-app journeys, schedule occurrence claims and recording preservation

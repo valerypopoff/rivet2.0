@@ -6,6 +6,7 @@ import {
   assertProtectedProxyTemplate,
   assertRequestContinuityProfile,
   continuityProfileDigest,
+  continuityHandoffSeconds,
 } from './request-continuity.mjs';
 
 const marker = 'rivet.dev/continuity-operation';
@@ -356,7 +357,7 @@ export function createProxyContinuityTransition({
       else since = undefined;
       const duration = probe
         ? config.profile.propagationSeconds * 1000
-        : config.profile.backendServiceDrainSeconds * 1000;
+        : continuityHandoffSeconds(config.profile) * 1000;
       if (since !== undefined && now() - since >= duration) return;
       assert.ok(now() < deadline, 'Ingress propagation/drain was not confirmed; no serving owners removed');
       await wait();

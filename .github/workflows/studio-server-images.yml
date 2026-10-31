@@ -9,6 +9,9 @@ on:
       - '.github/actions/setup-yarn/**'
       - '.github/workflows/studio-server-images.yml'
       - '.github/workflows/studio-server-verify.yml'
+      - '.github/workflows/studio-server-publish-qualification-images.yml'
+      - 'scripts/build-and-publish-qualification-images.mjs'
+      - 'scripts/qualification-image-publication.mjs'
       - '.pnp.cjs'
       - '.pnp.loader.mjs'
       - '.yarn/**'
@@ -84,6 +87,11 @@ env:
   IMAGE_NAMESPACE: ghcr.io/valerypopoff/rivet2.0-studio-server
 
 jobs:
+  qualification-actor:
+    name: Build and scan the exact-source qualification actor
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/studio-server-publish-qualification-images.yml
+
   changes:
     name: Classify image release
     runs-on: ubuntu-latest

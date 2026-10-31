@@ -59,7 +59,7 @@ export async function qualifyProtectedProxyRoll(gate, probes, { waitFor = waitFo
         !p.metadata.deletionTimestamp && p.status.conditions.some((c) => c.type === 'Ready' && c.status === 'True'),
     ),
   );
-  for (const stage of Object.keys(CONTINUITY_DURATION_STAGES)) {
+  for (const stage of gate.operation.qualification?.tier === 'focused' ? [] : Object.keys(CONTINUITY_DURATION_STAGES)) {
     await probes.startCohort(stage);
     await probes.settleCohort(stage);
   }
@@ -532,6 +532,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     for (const stage of continuityStages(
       this.bootstrap === 'already-protected',
       this.hpaOnly ? 'autoscaling' : 'upgrade',
+      this.gate.operation.qualification?.tier ?? 'full',
     ))
       await this.settleCohort(stage);
     if (!this.hpaOnly) {
@@ -557,7 +558,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     }
     assert.equal(this.failures.length, 0);
     return {
-      protocol: 2,
+      protocol: this.gate.operation.qualification?.tier === 'focused' ? 3 : 2,
       profile: this.gate.operation.requestContinuityProfile,
       bootstrap: this.bootstrap,
       bridgeCleaned: true,

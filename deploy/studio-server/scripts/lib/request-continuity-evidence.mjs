@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   REQUEST_CONTINUITY_CHECKS,
+  FOCUSED_CONTINUITY_CHECKS,
   requestContinuityProfile,
   continuityProfileDigest,
   CONTINUITY_DURATION_STAGES,
@@ -28,13 +29,18 @@ export function assertContinuityProviderFacts(report, operation, kind) {
     assert.equal(report.requestContinuity, undefined);
     return;
   }
+  const focused = operation.qualification?.tier === 'focused';
+  if (focused && kind === 'autoscaling') {
+    assert.equal(report.requestContinuity, undefined);
+    return;
+  }
   const facts = report.requestContinuity;
-  assert.equal(facts?.protocol, 2, 'Missing complete version-2 request continuity observations');
+  assert.equal(facts?.protocol, focused ? 3 : 2, 'Missing complete request continuity observations');
   assert.deepEqual(facts.profile, operation.requestContinuityProfile);
   const adopted = !!requestContinuityProfile(operation.installed.qualificationValues);
   assert.equal(facts.bootstrap, adopted ? 'already-protected' : 'passed');
   assert.deepEqual(facts.failures, []);
-  const stages = continuityStages(adopted, kind);
+  const stages = continuityStages(adopted, kind, focused ? 'focused' : 'full');
   assert.equal(facts.requests.length, stages.length * 3);
   for (const stage of stages) {
     const requests = facts.requests.filter((r) => r.stage === stage);
@@ -113,11 +119,12 @@ export function compileRequestContinuityEvidence(operation, upgrade, autoscaling
   if (!operation.requestContinuityProfile) return undefined;
   assertContinuityProviderFacts(upgrade, operation, 'upgrade');
   assertContinuityProviderFacts(autoscaling, operation, 'autoscaling');
-  const reports = [upgrade.requestContinuity, autoscaling.requestContinuity],
+  const focused = operation.qualification?.tier === 'focused';
+  const reports = [upgrade.requestContinuity, ...(!focused ? [autoscaling.requestContinuity] : [])],
     requests = reports.flatMap((r) => r.requests);
   for (const key of ['requestId', 'correlationId', 'recordingId']) unique(requests.map((r) => r[key]));
   return {
-    protocol: 2,
+    protocol: focused ? 3 : 2,
     provider: 'gke',
     gatewayClass: 'gke-l7-regional-external-managed',
     candidateSourceSha: operation.candidate.source.sha,
@@ -129,7 +136,7 @@ export function compileRequestContinuityEvidence(operation, upgrade, autoscaling
     failedRequests: 0,
     completedRequests: requests.length,
     maximumCompletedDurationMs: Math.max(...requests.map((r) => r.elapsedMs)),
-    checks: [...REQUEST_CONTINUITY_CHECKS],
+    checks: [...(focused ? FOCUSED_CONTINUITY_CHECKS : REQUEST_CONTINUITY_CHECKS)],
     reportSha256: hash(reports),
     bootstrap: upgrade.requestContinuity.bootstrap,
   };

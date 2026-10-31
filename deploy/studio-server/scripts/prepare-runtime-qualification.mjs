@@ -11,6 +11,7 @@ import {
   prepareRuntimeQualification,
   assertRuntimeQualificationPointer,
 } from './lib/runtime-qualification-publication.mjs';
+import { qualificationSafetyDigest } from './lib/release-qualification-policy.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const dir = path.join(root, 'artifacts/runtime-qualification-publication');
@@ -44,6 +45,7 @@ async function main() {
   } else if (mode === 'prepare') {
     const result = prepareRuntimeQualification({
       ...context(),
+      safetyDigest: await qualificationSafetyDigest(root, process.env.GITHUB_SHA),
       build: await read('build-identity.json'),
       candidate: await read('candidate/candidate-release-manifest.json'),
       promoted: await read('original/promoted-release-manifest.json'),

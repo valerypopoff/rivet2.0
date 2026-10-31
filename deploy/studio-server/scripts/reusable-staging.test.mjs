@@ -11,7 +11,12 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { parseAllDocuments } from 'yaml';
 import { createKubernetesTransport } from './lib/execution-autoscaler-kubernetes.mjs';
-import { ReusableStagingState, reusableStagingSettings, stagingOwner } from './lib/reusable-staging-state.mjs';
+import {
+  ReusableStagingState,
+  reusableStagingSettings,
+  stagingOwner,
+  stagingHostname,
+} from './lib/reusable-staging-state.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
 import {
   settleStaging,
@@ -38,6 +43,22 @@ import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autosc
 const { WebSocket, WebSocketServer } = createRequire(
   new URL('../../../packages/studio-server-api/package.json', import.meta.url),
 )('ws');
+
+test('a retained staging endpoint is fixed across releases and cannot escape its non-production domain', () => {
+  const fixed = reusableStagingSettings({ ...settings(), hostname: 'rivet-staging.qualification.example.test' });
+  for (const operationId of ['rivet-q-123-1', 'rivet-q-124-1'])
+    assert.equal(stagingHostname(fixed, { operationId }), fixed.hostname);
+  assert.equal(
+    stagingHostname(settings(), { operationId: 'rivet-q-123-1' }),
+    'rivet-q-123-1.qualification.example.test',
+  );
+  for (const hostname of [
+    'foreign.example.test',
+    'https://rivet-staging.qualification.example.test',
+    'bad\n.qualification.example.test',
+  ])
+    assert.throws(() => reusableStagingSettings({ ...settings(), hostname }));
+});
 
 const digest = 'a'.repeat(64);
 const settings = () =>
@@ -566,6 +587,59 @@ test('cleanup targets the current controller UID while retaining replaced identi
   assert.ok(record.inventory.some((i) => i.uid === old.metadata.uid));
   assert.ok(record.inventory.some((i) => i.uid === current.metadata.uid));
   assert.equal(f.requests.find((r) => r.method === 'PATCH').input[0].value, current.metadata.uid);
+});
+
+test('GKE automatic ingress annotation does not block internal Service cleanup', async (t) => {
+  const f = await fixture(t);
+  await f.state.arm(actor);
+  const ns = await f.state.namespace({ create: true });
+  const servicePath = `/api/v1/namespaces/${ns.metadata.name}/services/postgres`;
+  const service = f.store(servicePath, {
+    metadata: {
+      name: 'postgres',
+      namespace: ns.metadata.name,
+      annotations: { 'cloud.google.com/neg': '{"ingress":true}' },
+    },
+    spec: { type: 'ClusterIP' },
+  });
+  await settleStaging(f.state, cloud, actor, wait);
+  const { record } = await f.state.read();
+  assert.equal(record.phase, 'settled');
+  assert.ok(record.inventory.some((item) => item.uid === service.metadata.uid));
+  assert.ok(!record.inventory.some((item) => item.kind === 'neg'));
+});
+
+test('unfinished explicit or routed NEGs still block cleanup', async (t) => {
+  for (const scenario of ['explicit', 'ingress', 'status', 'unknown']) {
+    await t.test(scenario, async (t) => {
+      const f = await fixture(t);
+      await f.state.arm(actor);
+      const ns = await f.state.namespace({ create: true });
+      f.store(`/api/v1/namespaces/${ns.metadata.name}/services/proxy`, {
+        metadata: {
+          name: 'proxy',
+          namespace: ns.metadata.name,
+          annotations: {
+            'cloud.google.com/neg':
+              scenario === 'explicit'
+                ? '{"exposed_ports":{"80":{}}}'
+                : scenario === 'unknown'
+                  ? '{"ingress":true,"unknown":true}'
+                  : '{"ingress":true}',
+            ...(scenario === 'status' ? { 'cloud.google.com/neg-status': '{}' } : {}),
+          },
+        },
+        spec: { type: 'ClusterIP' },
+      });
+      if (scenario === 'ingress')
+        f.store(`/apis/networking.k8s.io/v1/namespaces/${ns.metadata.name}/ingresses/route`, {
+          metadata: { name: 'route', namespace: ns.metadata.name },
+        });
+      await assert.rejects(settleStaging(f.state, cloud, actor, wait), /NEG creation is uncertain/);
+      assert.notEqual((await f.state.read()).record.phase, 'settled');
+      assert.ok(!f.requests.some((r) => r.method === 'DELETE'));
+    });
+  }
 });
 
 test('settlement is not published if the final inventory read fails', async (t) => {
@@ -1140,6 +1214,14 @@ test('actual package has a closed hash manifest, import-safe CLI boundaries and 
     return d.toJS();
   });
   const deployment = objects.find((o) => o.kind === 'Deployment');
+  const janitorRole = objects.find((o) => o.kind === 'ClusterRole');
+  const code = objects.find((o) => o.kind === 'ConfigMap' && o.immutable === true);
+  assert.equal(code.metadata.name, `rivet-qualification-janitor-${result.driverDigest.slice(0, 12)}`);
+  assert.equal(deployment.spec.template.spec.volumes[0].configMap.name, code.metadata.name);
+  assert.deepEqual(
+    janitorRole.rules.find((rule) => rule.apiGroups.includes('networking.k8s.io')),
+    { apiGroups: ['networking.k8s.io'], resources: ['ingresses'], verbs: ['get', 'list'] },
+  );
   assert.equal(deployment.spec.replicas, 1);
   assert.equal(deployment.spec.strategy.type, 'Recreate');
   const version = path.join(folder, 'configmap-version');

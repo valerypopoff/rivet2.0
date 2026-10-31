@@ -17,7 +17,15 @@ export const CONTINUITY_DURATION_STAGES = {
   'duration-180': 180000,
   'duration-295': 295000,
 };
-export function continuityStages(adopted, kind) {
+export const FOCUSED_CONTINUITY_CHECKS = REQUEST_CONTINUITY_CHECKS.filter(
+  (check) => !['full-body-duration-matrix', 'bridge-return-handoff', 'proxy-hpa-removal'].includes(check),
+);
+export function continuityStages(adopted, kind, tier = 'full') {
+  if (tier === 'focused') {
+    assert.equal(adopted, true, 'Focused qualification cannot adopt request continuity');
+    return kind === 'upgrade' ? ['late-admission', 'execution-retirement', 'protected-roll'] : [];
+  }
+  assert.equal(tier, 'full');
   return kind === 'upgrade'
     ? [
         'late-admission',
@@ -28,6 +36,12 @@ export function continuityStages(adopted, kind) {
       ]
     : ['hpa-removal'];
 }
+// A route handoff needs the complete request lifetime after a propagation
+// allowance. The LB drain timeout is a ceiling, not a mandatory quiet wait.
+export const continuityHandoffSeconds = (profile) => {
+  assertRequestContinuityProfile(profile);
+  return profile.maxProtectedRequestSeconds + profile.propagationSeconds;
+};
 export function continuityTimeoutMs(profile) {
   assertRequestContinuityProfile(profile);
   const timeout = Math.max(
@@ -138,8 +152,8 @@ export function continuityProfileDigest(profile) {
 export function assertRequestContinuityEvidence(proof, release, profile) {
   assertRequestContinuityProfile(profile);
   assert.ok(
-    proof && proof.protocol === 2,
-    '300-second request continuity requires complete version-2 provider evidence',
+    proof && [2, 3].includes(proof.protocol),
+    '300-second request continuity requires complete provider evidence',
   );
   assert.equal(proof.provider, 'gke');
   assert.equal(proof.gatewayClass, 'gke-l7-regional-external-managed');
@@ -150,14 +164,18 @@ export function assertRequestContinuityEvidence(proof, release, profile) {
   assert.deepEqual(proof.profile, profile);
   assert.equal(proof.profileDigest, continuityProfileDigest(profile));
   assert.equal(proof.failedRequests, 0);
-  assert.ok(['passed', 'already-protected'].includes(proof.bootstrap));
-  assert.equal(proof.completedRequests, proof.bootstrap === 'passed' ? 30 : 21);
+  const focused = proof.protocol === 3;
+  assert.ok((focused ? ['already-protected'] : ['passed', 'already-protected']).includes(proof.bootstrap));
+  assert.equal(proof.completedRequests, focused ? 9 : proof.bootstrap === 'passed' ? 30 : 21);
   assert.ok(
     Number.isSafeInteger(proof.maximumCompletedDurationMs) &&
       proof.maximumCompletedDurationMs >= 300_000 &&
       proof.maximumCompletedDurationMs <= 330_000,
   );
-  assert.deepEqual([...proof.checks].sort(), [...REQUEST_CONTINUITY_CHECKS].sort());
+  assert.deepEqual(
+    [...proof.checks].sort(),
+    [...(focused ? FOCUSED_CONTINUITY_CHECKS : REQUEST_CONTINUITY_CHECKS)].sort(),
+  );
   assert.match(proof.reportSha256, /^[a-f0-9]{64}$/);
   return structuredClone(proof);
 }

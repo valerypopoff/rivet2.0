@@ -16,6 +16,7 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
   assert.equal(googleServiceAccount.split('@')[1].split('.')[0], settings.projectId);
   const namespace = settings.controlNamespace,
     name = 'rivet-qualification-janitor';
+  const codeName = `${name}-${driverDigest.slice(0, 12)}`;
   const metadata = { name, namespace };
   return [
     {
@@ -27,7 +28,7 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
     {
       apiVersion: 'v1',
       kind: 'ConfigMap',
-      metadata: { ...metadata, name: `${name}-code` },
+      metadata: { ...metadata, name: codeName },
       immutable: true,
       data: {
         'janitor.mjs': code,
@@ -53,6 +54,7 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
           verbs: ['get', 'list'],
         },
         { apiGroups: [''], resources: ['nodes'], verbs: ['get'] },
+        { apiGroups: ['networking.k8s.io'], resources: ['ingresses'], verbs: ['get', 'list'] },
         { apiGroups: ['apps'], resources: ['statefulsets', 'deployments'], verbs: ['get', 'list', 'patch'] },
         { apiGroups: ['batch'], resources: ['jobs'], verbs: ['get', 'list'] },
         { apiGroups: ['gateway.networking.k8s.io'], resources: ['gateways', 'httproutes'], verbs: ['get', 'list'] },
@@ -127,7 +129,7 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
                 volumeMounts: [{ name: 'code', mountPath: '/qualification', readOnly: true }],
               },
             ],
-            volumes: [{ name: 'code', configMap: { name: `${name}-code` } }],
+            volumes: [{ name: 'code', configMap: { name: codeName } }],
           },
         },
       },

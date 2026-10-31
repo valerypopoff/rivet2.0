@@ -1,5 +1,29 @@
 # Isolated GCP HA qualification plan
 
+The standard release path now uses reusable isolated staging through
+[Release Rivet](automated-runtime-qualification.md). Shared cluster, Gateway/TLS,
+runner, IAM and janitor setup happen once; each release owns and cleans only its
+synthetic namespace and children. Full versus focused qualification is selected
+from source/configuration, with full qualification mandatory for first protected
+adoption and runtime/infrastructure changes. The user approved creating and
+retaining a separate staging cluster on 2026-10-31. Its private regional Autopilot
+foundation is installed; HTTPS egress and a CSI disk read from a separate Job
+passed, and the disposable namespace/disk were removed. Existing GCP resources
+were preserved and production retained the same seven ready pod UIDs. Detailed
+identities and before/after receipts remain in ignored
+`artifacts/reusable-staging-20261031/`.
+
+The cluster is persistent. Its dedicated HTTPS Gateway and automatically renewed
+certificate are installed and trusted TLS passed. The separately approved keyless
+CI identities, main-only environments and namespace permissions are installed;
+all ten live allow/deny authorization probes passed, and production retained the
+same seven Ready pod UIDs. GitHub-hosted coordination needs no permanent runner
+VM. The source-matched janitor/actor still need their image publication and first
+run; no release qualification or production deployment is claimed.
+See [current setup status](automated-runtime-qualification.md)
+for the remaining prerequisites and recurring cost basis. The temporary campaign
+history below is not authority to delete or repurpose this retained foundation.
+
 The opt-in [production request-continuity suite](production-update-continuity.md)
 adds version-2 evidence for admitted full-body requests spanning proxy replacement,
 both first-transition handoffs and HPA removal, plus the duration matrix. Reserve

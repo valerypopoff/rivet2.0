@@ -16,15 +16,49 @@ the qualified lifecycle profile rather than using the shorter legacy default.
 This extension has no provider activation receipt
 yet and cannot be inferred from the existing short-request certificate.
 
-`studio-server-qualify-release.yml` implements Actions orchestration;
-`execute-runtime-qualification.mjs` owns its command boundary. Neither authorizes
-GCP access, enables automation, installs credentials or deploys production. The
-main-only, dispatch-only workflow fails when
+`studio-server-qualify-release.yml` (Actions name **Release Rivet**) implements the
+normal release: validate an existing successful main `Build Images` run, qualify
+its immutable images in reusable staging, publish the certificate, then deploy
+that exact manifest through the protected `rivet-production` environment.
+`deploy_production` defaults to true; false stops after qualification/publication.
+There is no rebuild between staging and production and no separate readiness job.
+`execute-runtime-qualification.mjs` owns the command boundary. The workflow does
+not install credentials, provision shared infrastructure or enable itself. It is
+main-only and dispatch-only and fails when
 `RIVET_AUTOMATED_QUALIFICATION_ENABLED` is not exactly `true`.
 
-The maintained inner fixture uses a **dedicated staging cluster**. The latest
-operator decision is temporary infrastructure, removed after qualification;
-the earlier always-on reusable-cluster proposal is not current spending approval.
+The standard workflow uses a **dedicated reusable staging cluster**. Install its
+cluster, Gateway/TLS, access and independent janitor once. GitHub-hosted
+Linux jobs coordinate short-lived in-cluster actors; no permanent runner VM is
+required. A new operation
+still creates an isolated namespace with synthetic data and deletes its complete
+fixture afterward. The previous temporary campaign is closed. On 2026-10-31,
+after the user's explicit request to create and retain staging, the persistent
+cluster foundation was installed independently of that campaign. It has a
+dedicated VPC/subnet, private Autopilot nodes, outbound NAT, a keyless node account
+with the default-node role, and an authenticated DNS control-plane endpoint with
+IP endpoint access disabled. The same region, GKE version and release channel as
+production were selected at creation. HTTPS egress and CSI persistence across
+separate Jobs passed; their namespace and blank disk were removed afterward.
+Production configuration/network and all seven ready production pod UIDs were
+preserved, as were every pre-existing staging network, subnet, address and firewall.
+Exact identities and receipts remain in ignored
+`artifacts/reusable-staging-20261031/`, outside public source.
+
+This is a usable cluster foundation, **not release qualification or completed CI
+activation**. Its dedicated regional Gateway now has a trusted automatically
+renewed certificate on a fixed staging hostname. HTTP port 80 admits only
+same-namespace ACME challenge routes; HTTPS port 443 admits fixture namespaces
+with the maintained qualification label. Cert-manager leader-election Leases
+must use its own namespace: Autopilot denies their creation in `kube-system`.
+The reviewed CI access installation and independent janitor must finish before
+admission. No full Rivet qualification or production update has passed yet.
+Keep the foundation; release cleanup must never delete it. Its approximate idle
+base is USD 73/month for GKE management plus USD 3.65/month for the retained NAT
+IP before applicable credits and additional usage. Worker workloads, traffic,
+logging and future frontend/runner components are additional; these figures are
+not a provider billing cap. See [GKE pricing](https://cloud.google.com/kubernetes-engine/pricing)
+and [Cloud NAT pricing](https://cloud.google.com/nat).
 Each inner operation creates only its temporary namespace and
 synthetic resources. Keep the shared cluster, network, Gateway, certificate and
 administrative identities out of its cleanup inventory. This removes repeated
@@ -34,7 +68,7 @@ environment is silently repurposed.
 
 The inner fixture's namespace cleanup is **not** full temporary-environment
 cleanup: its cluster, Gateway, certificate, addresses and network remain excluded.
-The maintained outer provision/expiry/teardown route is
+The exceptional outer provision/expiry/teardown route remains
 `scripts/temporary-staging.mjs`, selected explicitly by the qualification CLI.
 It coordinates from a durable external Linux host, creates the new foundation,
 uses a UID-bound actor for the existing inner tests and requires full provider
@@ -141,11 +175,13 @@ image/schema rollouts do not inherit that narrow exception. Template comparison
 is shared with topology recovery and rejects a Secret-derived value in place of
 an empty literal.
 
-Actions readiness on an initial singleton reports `adoption-preflight-passed`
+The optional CLI preview on an initial singleton reports `adoption-preflight-passed`
 and these pending steps, not `deployment-preflight-passed`. It derives private
 sizing values, pulls the predecessor by digest and runs the real read-only
 command. It does not approve or perform the adoption. An already-overlap
-installation continues through the ordinary readiness path.
+installation continues through the ordinary preview path. The standard production
+action currently handles singleton customer-request continuity; use qualification-only
+mode and the explicit ownership procedure for developer overlap adoption.
 If the source pool already matches the profile, readiness starts at ownership
 and the provider skips an unnecessary singleton pool-preparation replacement.
 
@@ -157,7 +193,7 @@ not an Actions `always()` job. Packaging renders installation manifests; it does
 not install them or provision GCP. Archived operation-specific scripts and their
 resource identities remain excluded. Local tests are not provider qualification.
 
-## Three distinct results
+## Release stages
 
 1. **Built:** requested main Build Images run succeeded for this commit. Its
    candidate/promotion agree on exact images, chart, schema, source, creation and
@@ -168,12 +204,54 @@ resource identities remain excluded. Local tests are not provider qualification.
    declarations from completed facts; dispatch inputs cannot supply a list of
    passed check names. Publication reuses the existing guarded workflow. Legacy
    manual publication remains for separately reviewed adoption declarations.
-3. **Production preflight passed:** after publication, the supported deployment
-   command runs with `--preflight-only`. Recheck actual predecessor, namespace,
-   settings and exact operator-value bytes against the qualification input, and
-   inspect the immutable qualified target. This is a timestamped observation,
-   not approval to deploy or a permanent readiness flag. No backup or application
-   journey is run; deployment must repeat ordinary safety/backup checks.
+3. **Deployed:** the protected production runner pulls the published immutable
+   manifest and invokes `deploy-kubernetes-release.mjs` once. Its ordinary path
+   performs current identity/baseline/capacity/routing checks, the existing online
+   recovery checkpoint, rolling update and application acceptance. The settings
+   digest observed for staging qualification is checked against the Helm values
+   already read by that command (`--expected-installed-settings-digest`). Operator
+   values and namespace UID are also bound to the qualification. Drift blocks
+   before writes; no second read-only readiness run is needed. A failed or unknown
+   update retains its journal and serving capacity for exact recovery, with no
+   automatic rollout retry or rollback. Only a sanitized successful deployment
+   summary is uploaded; detailed receipts stay private.
+
+The release concurrency lock spans qualification through deployment and never
+cancels an in-progress operation. A manual `--preflight-only` remains available
+as a preview; it is not part of the standard release and does not grant lasting
+readiness.
+
+## Automatic test depth
+
+`lib/release-qualification-policy.mjs` selects the suite from committed source and
+the installed configuration; dispatch cannot choose a cheaper suite. Unknown
+changes require full qualification. Only changes confined to `packages/app/`,
+`packages/studio-server-web/`, `packages/docs/`, `developer-docs/` and `docs/` can
+reuse an unchanged critical-source fingerprint. Server/core/runtime, dependencies,
+SQL, Helm, CI and this policy itself all change that fingerprint.
+
+The first protected adoption, legacy releases without a fingerprint, changed
+chart/schema/settings/policy/profile and developer overlap always run the full
+suite. It includes growth, retirement, fault injection, HPA and transport-duration
+checks. A full certificate records its source/configuration fingerprints.
+
+Focused qualification requires an already protected singleton installation with
+the same fingerprints, profile, schema and chart. It still upgrades the exact
+predecessor to the new images, observes public workflow/web traffic and two-ready
+floors, preserves recordings/storage, exercises browser OAuth/action/schedule and
+runs fresh five-minute HTTP/1, pooled HTTP/1 and HTTP/2 cohorts spanning execution
+retirement and native proxy replacement, plus accepted action resume. Its separate
+autoscaler phase observes the current policy/floors and at least 100 workflow and
+100 web completions. It omits autoscaling chaos/HPA removal and the separate
+60/180/295-second duration matrix.
+
+Focused runtime-control v4, autoscaling v3 and nested continuity v3 explicitly
+describe those observations; they cannot be relabeled full tests. Both declarations
+carry identical qualification metadata and the immutable original full-baseline
+manifest digest. Further focused releases retain that reference. The provider
+recomputes selection from verified source; publication checks the source digest
+again. Custom legacy drivers without settings remain full-only and establish no
+reusable source baseline. No old pass is rewritten for a new image.
 
 Raw Helm settings may contain credentials. The installation snapshot contains
 only identities, hashes, normalized policy and allowlisted sizing/drain fields,
@@ -197,60 +275,97 @@ must occupy ordered, non-overlapping windows, and **each** must report its own
 workflow/web samples and zero failures. Autoscaling declarations use autoscaling
 traffic totals, never borrowed upgrade totals.
 
-Installation observation rechecks the namespace and cluster lifetimes after
-reading Helm. The production-preflight wrapper checks all installation/settings
-identities before **and after** the supported command, rejecting drift during
-the check rather than claiming production was unchanged from an earlier read.
+Installation observation rechecks namespace and cluster lifetimes after reading
+Helm. Actual deployment checks the qualified settings inside its own fresh live
+preflight; staging cannot prove that production stayed unchanged while it ran.
 
-## Configuration requiring separate approval
+## Hosted CI installation
 
-Use dedicated self-hosted Linux labels `rivet-qualification` and
-`rivet-production-readonly`, never an untrusted-PR/developer runner. Install
-Node24, Corepack/Yarn, native kubectl/Helm, Docker for immutable OCI retrieval and
-the reviewed probe dependencies. Do not persist checkout credentials.
+The normal workflow uses `ubuntu-latest` for orchestration and production deploy.
+`studio-server-publish-qualification-images.yml` is a reusable, main-only workflow:
+it builds an actor from the exact committed source, pulls the pinned MinIO image,
+verifies both archive identities, scans the actor and publishes immutable digests.
+It runs alongside application-image building in main Build Images. The release
+qualification job accepts that exact successful build run's same-source publication
+receipt, without rebuilding the actor at release time. The legacy administrator
+archive publisher remains a CLI; normal CI needs no prebuilt host archive.
 
-Protected `rivet-managed-staging` configuration:
+Google authentication uses pinned `google-github-actions/auth` and `setup-gcloud`
+actions, refreshable Workload Identity Federation credentials and the GKE auth
+plugin. Bind the provider to the exact repository/owner IDs, main ref and release
+workflow ref. Bind each Google service account to its exact protected environment
+subject. No long-lived Google key, untrusted-PR runner or checkout credential is
+required. The generated `gha-creds-*.json` files are Git/Docker ignored.
 
-- `RIVET_AUTOMATED_QUALIFICATION_ENABLED` (also a repository variable for the
-  initial planning job), `RIVET_QUALIFICATION_PROJECT_ID` / `_PROJECT_NUMBER`.
-- `RIVET_QUALIFICATION_MAX_USD` and `_MAX_SECONDS`: explicit approved positive
-  allowance, not a hard billing cap. The Actions path admits at most two hours
-  of tests, leaving an hour of its three-hour timeout for settlement. Never
-  reset/extend the original deadline or first billable-activation clock.
-- `RIVET_QUALIFICATION_DRIVER_DIRECTORY` / `_DRIVER_SHA256`: administrator
-  installed read-only driver bundle and complete manifest hash, not commands
-  chosen by a dispatch input.
-- `RIVET_QUALIFICATION_PRIVATE_STORE`: persistent private directory outside the
-  checkout. It holds exact input, intent records, receipts, stderr and a lock;
-  it must survive checkout cleanup and runner/job loss. Never upload or commit it.
-- `RIVET_QUALIFICATION_STAGING_KUBECONFIG`: private staging-only credential path.
-- `RIVET_QUALIFICATION_CLUSTER_UID` (the approved staging `kube-system` UID),
-  `_CLUSTER_SERVER` (trusted HTTPS origin), `_GATEWAY_UID`: shared infrastructure
-  identities. Staging's cluster UID must differ from the freshly read production
-  cluster UID, even if contexts/project labels look different.
-- Production read-only `RIVET_QUALIFICATION_PRODUCTION_` variables:
-  `KUBECONFIG`, `CONTEXT`, `NAMESPACE`, `NAMESPACE_UID`, `RELEASE`, `VALUES_FILE`.
-  They select fixed read commands, not shell snippets. Production RBAC must not
-  permit the qualification driver to mutate workloads or saved data.
+Set these protected environment variables during the separately approved
+installation:
 
-`rivet-production-readiness` supplies the production variables and the existing
-reviewed `RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE`. Keep its observations and
-credentials narrowly scoped; do not broaden access to make a failed preflight
-pass. Actual credentials/settings remain private files, not variables/artifacts.
-Missing prerequisites fail, rather than create a successful skipped job.
+- Both environments: `RIVET_GOOGLE_WORKLOAD_IDENTITY_PROVIDER`,
+  `RIVET_GOOGLE_SERVICE_ACCOUNT`, and `RIVET_DEPLOYMENT_CONFIGURATION` (JSON).
+- Staging: `RIVET_AUTOMATED_QUALIFICATION_ENABLED=true`, also a repository variable
+  for input validation, and explicit `RIVET_QUALIFICATION_MAX_USD` / `_MAX_SECONDS`.
+  The first approved full test is USD 30 / 7200 seconds, followed by fixture
+  cleanup. This is an allowance, not a provider billing cap. Do not reuse a closed
+  temporary campaign or automatically authorize a second paid attempt.
+- Production: its separately scoped configuration selects a generation-pinned
+  private installation object, never values/scripts supplied by dispatch.
 
-For a fresh runner checkout, that policy file may live in a protected external
-directory alongside its two self-contained, checksum-pinned `.mjs` adapters.
-Only read-only qualification preflight validates the installation and adapter
-bytes, copies them into a new private packet directory and rewrites their local
-paths. Path escapes, redirected directories, changed checksums and retained
-output are rejected. No adapter executes during copying. Keep any private
-prerequisite evidence outside the checkout and pin it in the reviewed adapter.
-When the actual recovery operator uses another OS, its dependency and capacity
-checks must run there; the read-only coordinator may verify their exact bound
-receipt, but cannot claim it ran those tools locally. Actual backup and application
-acceptance remain required on the deployment operator, using its own freshly
-validated policy; this copy step neither delegates writes nor permits deployment.
+`prepare-hosted-release.mjs` materializes these fixed configurations in a fresh
+private directory under `RUNNER_TEMP`. Staging configuration has `protocol:1`,
+`staging` (the validated reusable settings plus `clusterName`/`dnsEndpoint`),
+`production` (cluster identity, context, namespace/release/UID and reviewed
+`valuesDigest`), `janitorServiceAccount`, and `evidenceBucket`. Production
+configuration has `protocol:1`, the same `production` identity, its separate
+`evidenceBucket`, and immutable `installationUri` (`gs://.../NAME.json#GENERATION`).
+That private object contains `valuesBase64`, checksum-pinned installation `policy`,
+and `adapters.backup` / `adapters.acceptance` as base64 files. Never put those
+bytes in a public workflow variable, log, source file or uploaded artifact.
+
+An administrator installs initial ServiceAccounts, RBAC and janitor-health
+ConfigMap once. The coordinator can create/exec/delete Jobs only in the runner
+namespace and update code ConfigMaps/Deployment only in the control namespace.
+It cannot grant RBAC. Cluster connect/read and production namespace Helm-Secret
+reads are separate from production deployment rights. The actor and janitor
+receive staging-only in-cluster identities and staging Compute read access;
+they receive no GitHub credential, production kubeconfig, raw production values
+or evidence-bucket access. The production identity has normal Helm workload and
+exec rights only in the installed namespace plus cluster/network metadata reads.
+Namespace Secret/workload/exec rights can expose credentials; review that scope
+explicitly. Federation identities persist for ordinary releases and require
+explicit installation approval and documented revocation, not an expired campaign.
+
+Before each test, hosted preparation acquires an exclusive generation-bound lock
+in private GCS, packages the source-pinned driver, and updates only the janitor's
+versioned immutable code ConfigMap and Deployment. Its health and approved driver
+hash must pass admission. `lib/reusable-staging-coordinator.mjs` creates one
+non-retrying finite-lifetime actor Job, journals its intent/UID before waiting,
+checks exact source, real offline browser fixture and kubectl version skew, then
+installs the reviewed bundle through WebSocket stdin. Each phase is dispatched
+once with a finite deadline. Lost acknowledgements never replay a write. Cleanup
+must be verified before diagnostics export and UID-bound actor removal. Expiry
+and the independent janitor retain ownership after coordinator loss.
+
+Private journals are content-addressed immutable GCS objects, with checksum and
+generation verification and no overwrite. Recover an uncertain operation from
+its exact `qualification/OPERATION` journal and cluster registry before removing
+the global `qualification/active.lock`. A stale PID or elapsed timeout is not
+cleanup proof. A failed/unknown attempt holds that lock and cannot silently start
+another test. Successful fixture cleanup removes only the exact lock generation;
+the shared cluster, Gateway, certificate and identities remain.
+
+Production uses a separate private bucket and per-operation replay fence. Its
+command persists all online recovery files before admitting workload mutation,
+and persists subsequent journal artifacts as they are acknowledged. Detailed
+values, backups, receipts and errors remain private; only the successful
+sanitized deployment summary is a GitHub artifact. The private local directory
+is outside checkout cleaning; GCS preserves evidence after hosted-runner loss.
+Existing CLI users can still supply durable external directories and explicit
+credential/policy paths without hosted preparation.
+
+Revoke persistent access by disabling release automation/environment access,
+removing federation impersonation and the dedicated Kubernetes/bucket bindings,
+then removing the dedicated identities/provider after inspecting active locks.
+Keep recovery journals and retained serving infrastructure intact.
 
 ## Provider driver contract
 
@@ -267,6 +382,13 @@ through private stdin; stdout is one JSON receipt. Stderr is privately retained
 up to 1MiB per phase. Receipts bind `protocol`, `operationId`, `inputHash`,
 `projectId`, `projectNumber`. The immutable operation freezes manifests, observed
 installation, normalized policy, driver digest, budget and deadline.
+
+The table describes full qualification. Focused operations replace the stress
+matrix in `autoscaling` with current policy/two-ready-floor observations under
+their own public traffic; they do not claim growth, failure injection or HPA tests.
+When qualification tooling changes, repackage/review its pinned bundle and update
+the existing janitor's approved digest. Ordinary image changes reuse that reviewed
+tooling; no cluster, VM, IAM or certificate setup is repeated per release.
 
 | Phase           | Required actual work                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -371,7 +493,7 @@ only a fixture-contract check, not evidence of GKE/TLS readiness.
 
 The qualified runner must be an **ephemeral Pod in the dedicated staging cluster**,
 labelled `rivet.dev/qualification-runner=true`, with Downward API `POD_NAME` and
-`POD_UID`. No general desktop/VM runner is supported by this adapter. It must have
+`POD_UID`. A GitHub-hosted coordinator uses that Pod; a desktop/VM cannot execute the provider phases directly. It must have
 a private persistent operation store, the exact clean candidate checkout and
 immutable Yarn install, native Helm/kubectl, OpenSSL, browser dependencies and
 staging-only credentials. Every CLI command validates the staging kube-system
@@ -449,8 +571,8 @@ cleanup; namespace cleanup is not a claim of zero staging spend.
 
 First separately approve/provision a **dedicated** reusable cluster with metrics,
 CSI Delete-reclaim storage, sufficient node autoscaling in at least two zones,
-a shared Gateway accepting only labelled qualification namespaces, trusted
-wildcard DNS/TLS for a new staging domain, dedicated runner/control namespaces,
+a shared Gateway accepting only labelled qualification namespaces,
+trusted TLS for a dedicated fixed `hostname` (or wildcard per-operation DNS), dedicated runner/control namespaces,
 and Workload Identity. Do not reuse historical resources implicitly.
 Preserve the runner's private operation store on separately approved persistent
 storage; browser traces/reports are directed there, not public Actions artifacts.

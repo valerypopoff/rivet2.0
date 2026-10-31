@@ -40,6 +40,10 @@ export function reusableStagingSettings(value) {
   }
   assert.match(value.domain, /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/);
   assert.ok(!value.domain.includes('litnet.com'), 'Production DNS is excluded');
+  if (value.hostname) {
+    assert.match(value.hostname, /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/);
+    assert.ok(value.hostname.endsWith(`.${value.domain}`), 'Fixed staging hostname must remain under its domain');
+  }
   for (const image of [value.postgresImage, value.objectStorageImage])
     assert.match(image, /^[^\s@]+@sha256:[a-f0-9]{64}$/);
   for (const secret of [value.registrySecret, value.janitorRegistrySecret].filter(Boolean)) {
@@ -56,6 +60,8 @@ export function reusableStagingSettings(value) {
   }
   return Object.freeze(structuredClone(value));
 }
+export const stagingHostname = (settings, operation) =>
+  settings.hostname ?? `${operation.operationId}.${settings.domain}`;
 const namespacePath = (name) => `/api/v1/namespaces/${encodeURIComponent(name)}`;
 export const stagingRecordPath = (settings, id) => `${namespacePath(settings.controlNamespace)}/configmaps/${id}`;
 export function assertStagingRecord(object, operation, settings) {

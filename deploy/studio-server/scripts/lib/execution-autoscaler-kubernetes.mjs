@@ -139,7 +139,11 @@ export function createKubernetesTransport({
         }
       }
     },
-    exec(path, command, { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr } = {}) {
+    exec(
+      path,
+      command,
+      { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr, keepAliveMs = 30000 } = {},
+    ) {
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(container)) throw new Error('Kubernetes exec container is invalid.');
       if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 32 * 1024 * 1024)
         throw new Error('Kubernetes exec output bound is invalid.');
@@ -147,6 +151,8 @@ export function createKubernetesTransport({
         throw new Error('Kubernetes exec input is invalid.');
       if (onStderr !== undefined && typeof onStderr !== 'function')
         throw new Error('Kubernetes diagnostic sink is invalid.');
+      if (!Number.isSafeInteger(keepAliveMs) || keepAliveMs < 1)
+        throw new Error('Kubernetes exec keepalive interval is invalid.');
       return new Promise((resolve, reject) => {
         const url = new URL(path, base);
         url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -168,10 +174,15 @@ export function createKubernetesTransport({
         let output = '',
           bytes = 0,
           status,
-          stderr = false;
+          stderr = false,
+          settled = false,
+          heartbeat;
         const decoder = new StringDecoder('utf8');
         const finish = (error, result) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
+          clearInterval(heartbeat);
           socket.removeAllListeners();
           socket.on('error', () => {});
           socket.terminate();
@@ -182,6 +193,16 @@ export function createKubernetesTransport({
           timeoutMs,
         );
         socket.once('open', () => {
+          // Keep silent long-running setup commands alive through idle proxies.
+          // This does not extend their absolute deadline or retry the command.
+          heartbeat = setInterval(() => {
+            try {
+              socket.ping();
+            } catch {
+              finish(new Error('Kubernetes exec keepalive failed; command outcome is unknown.'));
+            }
+          }, keepAliveMs);
+          heartbeat.unref();
           if (stdin === undefined) return;
           // v5 supports explicit stdin EOF without closing stdout/status. A
           // connection loss remains uncertain and is never retried here.
@@ -210,10 +231,14 @@ export function createKubernetesTransport({
           }
         });
         socket.once('error', () => finish(new Error('Kubernetes exec connection failed; command outcome is unknown.')));
-        socket.once('close', () =>
+        socket.once('close', (code) =>
           status?.status === 'Success' && (!stderr || onStderr)
             ? finish(null, output + decoder.end())
-            : finish(new Error('Kubernetes exec did not confirm a successful exit.')),
+            : finish(
+                new Error(
+                  `Kubernetes exec did not confirm a successful exit (close code ${code}); command outcome is unknown.`,
+                ),
+              ),
         );
       });
     },
