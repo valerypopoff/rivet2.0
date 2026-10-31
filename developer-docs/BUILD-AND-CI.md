@@ -1158,12 +1158,10 @@ exception was removed on 2026-10-24 because the current registry report no longe
 contains that finding; an unused exception fails the gate. Removing the unused
 waiver does not remove the independently regression-tested protection.
 
-Yarn still reports the underlying versions for patched packages. The remaining
-exception is restricted to its existing docs/build ancestry, records the actual
-mitigation, and expires on 2026-11-01 for upstream re-review. The unchanged audit
-gate still rejects new runtime consumers, expired or unused exceptions, and
-every critical finding. Remove a patch and its exception together only when a
-replacement passes the same consumer-level regression tests.
+Yarn still reports the underlying versions for locally patched packages. No
+current exception waives those versions: the audit gate still rejects new high
+findings, expired or unused exceptions, and every critical finding. Remove a
+local patch only when its replacement passes the same consumer-level regression tests.
 Patch files retain LF endings. Their unified-diff format requires a single
 context-marker space on empty context lines; the path-scoped Git whitespace
 attribute recognizes that format without relaxing source-file whitespace checks.
@@ -1187,6 +1185,20 @@ resolution with `node .yarn/releases/yarn-4.17.1.cjs up -R <package>` instead of
 adding an exception. Commit the resulting `yarn.lock`, `.pnp.cjs`, and
 replacement `.yarn/cache` archive together so zero-install CI resolves the same
 patched dependency as local development.
+
+The 2026-10-31 refresh advances the existing `follow-redirects` pin to 1.16.2
+([cross-realm sensitive-header advisory](https://github.com/follow-redirects/follow-redirects/security/advisories/GHSA-mrwp-f3q8-3g9p))
+and the scoped `joi@npm:^17.9.2` pin to 17.13.9
+([multiple-email splitting advisory](https://github.com/hapijs/joi/security/advisories/GHSA-4528-x5fx-h6hg)).
+These compatible patches preserve Axios and Docusaurus versions and add no audit
+exception. The redirect regression resolves through Gentrace's Axios dependency
+and exercises follow-redirects directly with real cross-realm option arrays,
+object/array headers, ordinary same-origin requests and cross-host credential
+stripping. This validates the underlying library without claiming Axios itself
+reproduces the cross-realm issue. The Joi regression resolves through Docusaurus
+Types and bounds malicious whitespace splitting in a disposable child, including
+custom separators and validation after a length error with `abortEarly:false`,
+while retaining valid multi-address input.
 
 The 2026-10-24 refresh uses body-parser 1.20.9/2.4.0
 ([compressed-body advisory](https://github.com/advisories/GHSA-27r3-jxmh-p828)),

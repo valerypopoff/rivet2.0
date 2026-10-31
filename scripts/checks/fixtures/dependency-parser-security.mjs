@@ -7,7 +7,30 @@ import { join } from 'node:path';
 const docsRequire = createRequire(new URL('../../../packages/docs/package.json', import.meta.url));
 const coreRequire = createRequire(docsRequire.resolve('@docusaurus/core/package.json'));
 const vector = process.argv[2];
-assert.ok(['braces', 'http-cache', 'image-size'].includes(vector));
+assert.ok(['braces', 'http-cache', 'image-size', 'joi'].includes(vector));
+
+if (vector === 'joi') {
+  const typesRequire = createRequire(docsRequire.resolve('@docusaurus/types/package.json'));
+  const Joi = typesRequire('joi');
+  const spaces = ' '.repeat(100000);
+  for (const options of [{}, { separator: ';' }]) {
+    const schema = Joi.string().email({ multiple: true, tlds: false, ...options });
+    for (const value of [spaces, `first@example.com${spaces}second@example.org`]) {
+      const started = Date.now();
+      assert.equal(schema.validate(value).error.details[0].type, 'string.email');
+      assert.ok(Date.now() - started < 1000, 'Multiple-email splitting must not block the documentation process');
+    }
+    const separator = options.separator ?? ',';
+    assert.equal(schema.validate(`first@example.com ${separator} second@example.org`).error, undefined);
+  }
+  const started = Date.now();
+  const result = Joi.string().max(10).email({ multiple: true, tlds: false }).validate(spaces, { abortEarly: false });
+  assert.ok(Date.now() - started < 1000, 'An earlier length error must not hide quadratic email validation');
+  assert.deepEqual(
+    result.error.details.map((detail) => detail.type),
+    ['string.max', 'string.email'],
+  );
+}
 
 if (vector === 'braces') {
   const consumers = [createRequire(coreRequire.resolve('chokidar'))];
