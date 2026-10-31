@@ -60,6 +60,7 @@ export async function verifyTemporaryChallenge(
   );
   const response = await fetchImpl(`http://${hostname}/.well-known/acme-challenge/${token}`, {
     redirect: 'error',
+    headers: { Connection: 'close' },
     signal: AbortSignal.timeout(10000),
   });
   if (response.status !== 200) {

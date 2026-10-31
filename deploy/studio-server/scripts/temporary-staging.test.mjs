@@ -146,6 +146,48 @@ test('IP hostname admission is explicit and public HTTP serves only the current 
   assert.equal(await (await fetch(origin + '/health')).text(), 'ready');
 });
 
+test('public challenge readiness leaves a stale keep-alive frontend on its next poll', async (t) => {
+  const validation = 'challenge-validation';
+  const upstreamAtConnection = new WeakMap();
+  let healthy = false;
+  let connections = 0;
+  const server = http.createServer((request, response) => {
+    assert.equal(request.url, '/.well-known/acme-challenge/challenge-token');
+    const ready = upstreamAtConnection.get(request.socket);
+    response.writeHead(ready ? 200 : 503, { 'Content-Type': 'text/plain' });
+    response.end(ready ? validation : 'no healthy upstream');
+    healthy = true;
+  });
+  server.on('connection', (socket) => {
+    upstreamAtConnection.set(socket, healthy);
+    connections++;
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        server.closeAllConnections();
+        server.close(resolve);
+      }),
+  );
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const packet = {
+    hostname: 'challenge.staging.example.net',
+    address: '203.0.113.10',
+    token: 'challenge-token',
+    validation,
+  };
+  const options = {
+    resolve: async () => [packet.address],
+    fetchImpl: (url, init) => fetch(origin + new URL(url).pathname, init),
+  };
+  assert.equal(await verifyTemporaryChallenge(packet, options), false);
+  // Let fetch return the first connection to its idle pool before polling again.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await verifyTemporaryChallenge(packet, options), true);
+  assert.equal(connections, 2);
+});
+
 test('real network-disabled certificate hook enforces hostname, exchange bytes and its original deadline', async (t) => {
   const image =
     process.env.RIVET_CERTIFICATE_TEST_IMAGE ||
@@ -1005,6 +1047,49 @@ async function fixture(t, { fault, plan = temporaryPlan() } = {}) {
   });
   return { plan, store, cloud, runtime, calls, control, base, guard: async () => {} };
 }
+
+test('stopped foundation admission leaves its accepted create inspectable and cleanup waits usable', async (t) => {
+  const f = await fixture(t);
+  const stopError = new Error('Synthetic foundation admission stopped');
+  let stopped = false;
+  let stoppedRequestCount;
+  const create = f.cloud.create;
+  f.cloud.create = async (spec) => {
+    const accepted = await create(spec);
+    stopped = true;
+    stoppedRequestCount = (await f.control('_requests')).length;
+    return accepted;
+  };
+  const guard = async () => {
+    if (stopped) throw stopError;
+  };
+  await f.store.locked(async () => {
+    await assert.rejects(
+      provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard }),
+      (error) => error === stopError,
+    );
+    assert.ok(stopped);
+    const beforeCleanup = await f.control('_requests');
+    assert.equal(
+      beforeCleanup.slice(stoppedRequestCount).some((request) => request.resource.includes('/operations/')),
+      false,
+      'Stopped admission must leave operation polling for inspection/cleanup',
+    );
+    assert.equal(f.calls.includes('bootstrap'), false);
+    const partial = (await f.store.read()).record;
+    assert.equal(partial.resources.length, 1);
+    assert.ok(partial.resources[0].createOperation);
+    assert.equal(partial.operation, undefined);
+    await cleanupTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait });
+    assert.equal((await f.store.read()).record.complete, true);
+    assert.ok(
+      (await f.control('_requests'))
+        .slice(stoppedRequestCount)
+        .some((request) => request.resource.includes('/operations/')),
+      'Cleanup must still poll accepted deletion operations after admission stopped',
+    );
+  });
+});
 
 test('managed DNS admission requires a complete label boundary, not a lookalike suffix', async (t) => {
   for (const domain of ['example.net', 'staging.example.net', 'notexample.net'])

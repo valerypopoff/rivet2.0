@@ -169,6 +169,14 @@ The Actions coordinator allows 300 minutes for a reviewed four-hour operation an
 its setup overhead; this does not extend the operation's frozen deadline. The
 separate production-readiness job allows 45 minutes because continuity preflight
 can itself take at least 20 minutes, in addition to checkout, dependencies and pulls.
+Bootstrap admission checks stop requests before each foundation-operation poll,
+actor installation and janitor-health poll, and after installed-state and final
+prerequisite reads before admitting a qualification operation or ready environment.
+The pre-billable watchdog-health admission wait also stops at its next poll when
+the CLI receives SIGTERM or SIGINT. A stopped bootstrap leaves accepted creates
+inspectable; settlement and deletion waits continue independently so cancellation
+cannot disable cleanup.
+
 Management tokens use IAM Credentials' returned expiry, a five-minute safety
 margin and a maximum 50-minute single-flight cache for requested one-hour
 impersonated credentials. A printed source token is never assumed newly minted.
@@ -320,6 +328,13 @@ the scanner or ACME worker from resolving their public services. Apply host
 configuration while no operation or container is active, and retain failed scan
 evidence outside the runner checkout before a fresh publication attempt.
 
+The generated janitor command uses `node --preserve-symlinks-main` because
+ConfigMap volumes project their visible files through symlinks. Preserving the
+logical main path lets the import-safe CLI guard recognize the mounted entrypoint;
+it does not change the identity of other imported modules. The package test runs
+the actual rendered command through a projected path and requires CLI execution,
+while importing the generated module remains side-effect free.
+
 The real network-disabled ACME hook test runs with the same host UID/GID mapping
 as the certificate worker. Dropping container capabilities does not let a root
 container write a non-root runner's private exchange directory; the test must
@@ -451,6 +466,10 @@ A successful public probe is mandatory **before** creating a certificate order.
 Only transient DNS/connect errors and the real fetch timeout may wait within
 the original bounded readiness window. Redirects, contradictory DNS ownership
 and programming errors are not hidden behind a generic `TypeError` retry.
+Each public challenge readiness request closes its HTTP connection so the next
+poll can reach a fresh load-balancer frontend instead of staying on a stale
+keep-alive route while backends converge. DNS ownership, exact response bytes
+and the original probe/readiness deadlines remain required.
 
 The external, restricted Certbot container mounts only private certificate and
 hook-exchange directories. No Docker socket or cloud, Kubernetes, GitHub or

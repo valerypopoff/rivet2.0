@@ -870,6 +870,7 @@ export function temporaryStagingRuntime({
       };
       const kubeBytes = Buffer.from(JSON.stringify(kubeconfig));
       files['kubeconfig.json'] = { bytes: kubeBytes.toString('base64'), hash: temporaryHash(kubeBytes) };
+      await guard(plan);
       await store.change((r) => {
         r.actorInstallIssued = true;
         r.settings = settings;
@@ -886,14 +887,18 @@ export function temporaryStagingRuntime({
         Object.fromEntries(Object.entries(files).map(([name, value]) => [name, value.hash])),
       );
       await wait('fresh janitor health', async () => {
+        await guard(plan);
         const h = await api.json('GET', `${ns(control)}/configmaps/rivet-qualification-janitor-health`);
+        await guard(plan);
         const v = JSON.parse(h?.data?.health ?? '{}');
         return v.driverDigest === driverDigest && Date.now() - v.observedAt < 60000;
       });
       record = (await store.read()).record;
+      await guard(plan);
       const observedInstalled = await refreshInstalled();
       const { assertQualificationInstallationMatches } = await import('./runtime-qualification-installation.mjs');
       assertQualificationInstallationMatches(observedInstalled, inputs.installed);
+      await guard(plan);
       operation = qualificationOperation({
         ...inputs,
         installed: observedInstalled,

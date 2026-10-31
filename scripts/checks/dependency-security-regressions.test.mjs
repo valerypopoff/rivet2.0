@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 // Resolve through the actual consumer, not a coincidentally patched root copy.
 const apiRequire = createRequire(new URL('../../packages/studio-server-api/package.json', import.meta.url));
@@ -40,7 +41,7 @@ test('documentation middleware cannot escape a non-slash-terminated asset prefix
 });
 
 test(
-  'redirects strip array and literal-metacharacter credential headers only across hosts',
+  'redirects strip cross-realm, array and literal-metacharacter credential headers only across hosts',
   { timeout: 15_000 },
   async (t) => {
     const gentraceRequire = createRequire(webRequire.resolve('@gentrace/core'));
@@ -72,7 +73,11 @@ test(
     };
     const ordinary = { 'X-Public': 'kept', 'X-ApiKey': 'no-caret', 'X-Token': 'prefix-only', Secret: 'suffix-only' };
     const allHeaders = { ...credentials, ...ordinary };
-    const request = (path, headers) =>
+    const sameRealm = ['X-Api^Key', 'X-Token|Secret'];
+    const crossRealm = runInNewContext("['X-Api^Key', 'X-Token|Secret']");
+    assert.equal(Array.isArray(crossRealm), true);
+    assert.equal(crossRealm instanceof Array, false);
+    const request = (path, headers, sensitiveHeaders) =>
       new Promise((resolve, reject) => {
         const req = redirects.http.get(
           {
@@ -82,8 +87,9 @@ test(
             family: 4,
             // Keep the host-change test independent of machine DNS/hosts configuration.
             lookup: (_hostname, _options, callback) => callback(null, '127.0.0.1', 4),
-            headers,
-            sensitiveHeaders: ['X-Api^Key', 'X-Token|Secret'],
+            // Redirect stripping mutates its header container; isolate every request.
+            headers: Array.isArray(headers) ? [...headers] : { ...headers },
+            sensitiveHeaders,
           },
           (res) => {
             let body = '';
@@ -104,15 +110,17 @@ test(
         req.on('error', reject);
         req.setTimeout(5000, () => req.destroy(new Error('Local redirect fixture timed out.')));
       });
-    for (const headers of [allHeaders, Object.entries(allHeaders).flat()]) {
-      for (const path of ['/', '/same-origin']) {
-        const response = await request(path, headers);
-        for (const [name, value] of Object.entries(allHeaders)) assert.equal(response[name.toLowerCase()], value);
+    for (const sensitiveHeaders of [sameRealm, crossRealm]) {
+      for (const headers of [allHeaders, Object.entries(allHeaders).flat()]) {
+        for (const path of ['/', '/same-origin']) {
+          const response = await request(path, headers, sensitiveHeaders);
+          for (const [name, value] of Object.entries(allHeaders)) assert.equal(response[name.toLowerCase()], value);
+        }
+        const redirected = await request('/cross-host', headers, sensitiveHeaders);
+        for (const name of Object.keys(credentials))
+          assert.equal(redirected[name.toLowerCase()], undefined, `${name} must not cross hosts`);
+        for (const [name, value] of Object.entries(ordinary)) assert.equal(redirected[name.toLowerCase()], value);
       }
-      const redirected = await request('/cross-host', headers);
-      for (const name of Object.keys(credentials))
-        assert.equal(redirected[name.toLowerCase()], undefined, `${name} must not cross hosts`);
-      for (const [name, value] of Object.entries(ordinary)) assert.equal(redirected[name.toLowerCase()], value);
     }
   },
 );
@@ -182,7 +190,7 @@ for (const vector of ['env', 'execArgv', 'filename']) {
   });
 }
 
-for (const vector of ['braces', 'http-cache', 'image-size']) {
+for (const vector of ['braces', 'http-cache', 'image-size', 'joi']) {
   test(`build tool consumers reject malicious ${vector} input and preserve ordinary behavior`, () => {
     execFileSync(
       process.execPath,
