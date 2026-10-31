@@ -93,8 +93,9 @@ jobs:
     needs: built
     runs-on: ubuntu-latest
     environment: rivet-managed-staging
-    # Existing reusable infrastructure; each isolated fixture retains expiry cleanup.
-    timeout-minutes: 180
+    # A full first qualification may use 4h, followed by 1h cleanup and 30m setup.
+    # The separately approved operation deadline still limits actual test work.
+    timeout-minutes: 330
     permissions:
       contents: read
       actions: read

@@ -21,14 +21,14 @@ const values = () => ({
   requestContinuity: {
     enabled: true,
     maxProtectedRequestSeconds: 300,
-    backendServiceDrainSeconds: 600,
+    backendServiceDrainSeconds: 360,
     propagationSeconds: 60,
   },
   lifecycle: {
     shutdownGraceSeconds: 120,
     preStopDelaySeconds: 120,
     terminationGracePeriodSeconds: 270,
-    proxy: { preStopDelaySeconds: 660, terminationGracePeriodSeconds: 900 },
+    proxy: { preStopDelaySeconds: 420, terminationGracePeriodSeconds: 600 },
   },
 });
 test('qualification deadlines retain grace and cleanup headroom for the selected profile', () => {
@@ -138,17 +138,30 @@ test('protected proxy lifecycle renders without extending the other serving tier
     const previous = baseline.find((b) => b.kind === r.kind && b.metadata.name === r.metadata.name);
     assert.equal(
       r.spec.template.spec.terminationGracePeriodSeconds,
-      proxy ? 900 : previous.spec.template.spec.terminationGracePeriodSeconds,
+      proxy ? 600 : previous.spec.template.spec.terminationGracePeriodSeconds,
     );
   }
   assert.equal(continuityFromResources(render([], false)), undefined);
-  assert.throws(() => render(['requestContinuity.backendServiceDrainSeconds=60']), /600/);
-  assert.throws(() => render(['lifecycle.proxy.preStopDelaySeconds=659']), /preStop/);
-  assert.throws(() => render(['lifecycle.proxy.terminationGracePeriodSeconds=800']), /grace/);
+  assert.throws(() => render(['requestContinuity.backendServiceDrainSeconds=359']), /LB drain/);
+  assert.throws(() => render(['requestContinuity.propagationSeconds=120']), /LB drain/);
+  assert.throws(() => render(['lifecycle.proxy.preStopDelaySeconds=419']), /preStop/);
+  assert.throws(() => render(['lifecycle.proxy.terminationGracePeriodSeconds=564']), /grace/);
   assert.throws(() => render(['requestContinuity.routeName=']), /installation identity/);
   assert.throws(() => render(['requestContinuity.enabled=banana']), /boolean/);
 });
 test('incomplete or unsafe timing profiles fail instead of falling back to a shorter global lifecycle', () => {
+  for (const change of [
+    (v) => {
+      v.requestContinuity.backendServiceDrainSeconds = 359;
+    },
+    (v) => {
+      v.requestContinuity.propagationSeconds = 120;
+    },
+  ]) {
+    const v = values();
+    change(v);
+    assert.throws(() => requestContinuityProfile(v), /LB drain/);
+  }
   for (const n of [null, undefined, -1, 0, 0.5, '660', Number.MAX_SAFE_INTEGER + 1]) {
     const v = values();
     v.lifecycle.proxy.preStopDelaySeconds = n;

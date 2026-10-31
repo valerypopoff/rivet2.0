@@ -44,6 +44,33 @@ provider reads the authenticated current-request diagnostic and checks that the
 actual resolved client belongs to its frozen public-client allowlist. Forwarding
 peer addresses cannot stand in for that client. See [client provenance](trusted-clients.md).
 
+First-transition bridge creation dry-runs its Deployment through the actual
+Kubernetes admission chain before creating any bridge resources or changing HPA.
+Provider mutations to the requested specification block that transition. This
+uses the existing actor/deployer create permission and persists no dry-run
+resource. Read-only installation inspection remains read-only. The GKE profile
+uses 360-second LB drain, 420-second preStop and 600-second termination grace;
+the previous 900-second grace was capped to 600 by Autopilot. A successful dry
+run does not replace exact-image upgrade/autoscaling or cleanup evidence.
+
+Cleanup waits within its existing deadline for a newly discovered NEG's pending
+Gateway backend to appear before withdrawing routes. Only the typed pending
+backend condition is polled; denied, partial, ambiguous or rebound inventories
+still stop immediately. Previously this normal controller delay could stop
+settlement before route withdrawal.
+
+If the controller stopped during an owned execution withdrawal, settlement
+requires inspected recovery. Match the exact Pod UID, process incarnation and
+retirement operation to the stopped controller's journal. Verify controller
+absence and continuously observe the actual execution Service's ready endpoints
+for the full withdrawal interval; headless discovery endpoints are not dispatch
+routing evidence. Then the existing `retire-backend.mjs OPERATION INCARNATION
+--begin-only` command can complete that same withdrawal. Preserve a private
+intent and acknowledgement, and continue the original cleanup after accepted
+work drains. Unknown owners, replaced processes and lost modifying acknowledgements
+retain their existing fences. Never clear the registry, cancel work or force
+Pod deletion to make cleanup appear successful.
+
 The previous temporary campaign is closed. On 2026-10-31,
 after the user's explicit request to create and retain staging, the persistent
 cluster foundation was installed independently of that campaign. It has a
@@ -324,8 +351,17 @@ installation:
   `RIVET_GOOGLE_SERVICE_ACCOUNT`, and `RIVET_DEPLOYMENT_CONFIGURATION` (JSON).
 - Staging: `RIVET_AUTOMATED_QUALIFICATION_ENABLED=true`, also a repository variable
   for input validation, and explicit `RIVET_QUALIFICATION_MAX_USD` / `_MAX_SECONDS`.
-  The first approved full test is USD 30 / 7200 seconds, followed by fixture
-  cleanup. This is an allowance, not a provider billing cap. Do not reuse a closed
+  Historical retained attempts used USD 30 / 7200 seconds. That time limit is
+  too tight for the full suite's sequential real stabilization windows: returning
+  seven workers to two alone requires five separate five-minute low-load windows,
+  after its 15-minute fixture. Cooperative growth, busy retirement, missing/stale
+  metrics, CPU growth and the update probes add further serial work. Prepare a
+  separately approved full-test window of up to four hours; the workflow allows
+  another hour for cleanup plus 30 minutes for setup (330 minutes total).
+  A longer workflow timeout grants no additional test allowance. Fixture OAuth
+  sessions cover at least the frozen operation window, so a longer full test
+  cannot outlive the old three-hour fixture session limit.
+  The explicit spend allowance is not a provider billing cap. Do not reuse a closed
   temporary campaign or automatically authorize a second paid attempt.
 - Production: its separately scoped configuration selects a generation-pinned
   private installation object, never values/scripts supplied by dispatch.

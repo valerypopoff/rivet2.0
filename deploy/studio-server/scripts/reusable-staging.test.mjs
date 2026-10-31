@@ -24,7 +24,7 @@ import {
   verifyStagingCleanup,
   observeStagingInventory,
 } from './lib/reusable-staging-cleanup.mjs';
-import { stagingCloudReader } from './lib/reusable-staging-cloud.mjs';
+import { stagingCloudReader, PendingGatewayBackendError } from './lib/reusable-staging-cloud.mjs';
 import { proxyFixtureProcessCommand } from './lib/staging-proxy-fixture-process.mjs';
 import { inspectStagingPrerequisites } from './lib/reusable-staging-prerequisites.mjs';
 import { stagingJanitorPass } from './reusable-staging-janitor.mjs';
@@ -532,6 +532,7 @@ test('Gateway discovery rejects partial inventories and backend replacement betw
   ])
     await assert.rejects(reader.children(inventory, { requiredNegIds: [] }), /Incomplete|changed|replaced/);
   scenario = 'empty';
+  await assert.rejects(reader.children(inventory), PendingGatewayBackendError);
   assert.deepEqual(await reader.children(inventory, { requiredNegIds: [] }), []);
   assert.ok(requests.every((r) => r.method === 'GET'));
 });
@@ -768,7 +769,7 @@ test('route teardown permits already inventoried Gateway children to disappear w
       [...inventory, { id: 'new-neg', kind: 'neg', resource: `${prefix}/zones/zone-a/networkEndpointGroups/new-neg` }],
       { requiredNegIds: ['new-neg'] },
     ),
-    /creation is uncertain/,
+    PendingGatewayBackendError,
   );
 });
 
@@ -1040,6 +1041,39 @@ test('provider preflight checks the actual resolved public client over HTTP befo
     requests.every((r) => r.method === 'GET' && r.path === '/api/app-settings/trusted-clients/current-request'),
   );
 });
+test('real fixture OAuth configuration cannot expire before its approved full-test window', async (t) => {
+  const observed = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    assert.equal(req.method, 'PUT');
+    assert.equal(req.url, '/api/app-settings/web-app-auth');
+    observed.push(JSON.parse(Buffer.concat(chunks)));
+    // Stop at this real HTTP boundary; the fixture must not seed/login here.
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const gate = Object.create(ReusableProviderGate.prototype);
+  gate.config = { baseUrl: `http://127.0.0.1:${server.address().port}` };
+  gate.secrets = { rivetKey: 'fixture-only-key' };
+  gate.uiCookie = 'rivet_ui_token=fixture';
+  const startedAt = '2026-01-01T00:00:00Z';
+  for (const [expiresAt, expectedTtl] of [
+    ['2026-01-01T02:00:00Z', 10800],
+    ['2026-01-01T04:00:00Z', 14400],
+  ]) {
+    gate.operation = { startedAt, expiresAt };
+    await assert.rejects(gate.enableOAuth(gate.config.baseUrl, 'fixture'));
+    assert.equal(observed.at(-1).sessionTtlSeconds, expectedTtl);
+  }
+  assert.equal(observed.length, 2);
+});
+
 test('normal cleanup proves exact absence and retains shared Gateway, runner and control registry', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);
@@ -1081,6 +1115,53 @@ test('paused cleanup owner and unacknowledged DELETE block takeover/replay rathe
   await assert.rejects(cleanupStaging(f.state, actor));
   assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 1);
 });
+test('settlement waits only for pending Gateway backend creation before withdrawing routes', async (t) => {
+  const f = await fixture(t);
+  await f.state.arm(actor);
+  await f.state.namespace({ create: true });
+  let reads = 0,
+    pendingObserved = false;
+  const pendingCloud = {
+    ...cloud,
+    async children() {
+      if (++reads === 1) throw new PendingGatewayBackendError();
+      return [];
+    },
+  };
+  await settleStaging(f.state, pendingCloud, actor, async (name, check) => {
+    if (name.includes('Gateway backend discovery')) {
+      assert.equal(await check(), null);
+      pendingObserved = true;
+      assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 0);
+    }
+    return wait(name, check);
+  });
+  assert.equal(pendingObserved, true);
+  assert.equal((await f.state.read()).record.phase, 'settled');
+
+  const denied = await fixture(t);
+  await denied.state.arm(actor);
+  await denied.state.namespace({ create: true });
+  let deniedReads = 0;
+  await assert.rejects(
+    settleStaging(
+      denied.state,
+      {
+        ...cloud,
+        children: async () => {
+          deniedReads++;
+          throw Error('denied discovery');
+        },
+      },
+      actor,
+      wait,
+    ),
+    /denied discovery/,
+  );
+  assert.equal(deniedReads, 1, 'Permission and ambiguous discovery failures are not pending-state retries');
+  assert.equal(denied.requests.filter((r) => r.method === 'DELETE').length, 0);
+});
+
 test('actual HTTP/WebSocket settlement drains the exact backend container, never aborts, and incomplete CSI blocks deletion', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);

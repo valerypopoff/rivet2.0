@@ -8,13 +8,20 @@ action. Shared staging infrastructure and access are configured once under a
 fresh recurring budget; temporary setup campaigns are exceptional. First adoption
 still requires full regional qualification and its observed bridge transition.
 Each first-transition handoff waits the protected request plus propagation
-(360 seconds for the starting profile), while retaining 600-second LB drain and
-660/900-second proxy preStop/grace. The manufactured second release/campaign is
+(360 seconds for the starting profile), with 360-second LB drain and
+420/600-second proxy preStop/grace. The manufactured second release/campaign is
 deferred. Historical milestones below do not grant new cloud activation authority.
 
 Status: **Repository changes implemented; exact-image verification, provider
 qualification and production activation remain open.** See the
 [implemented contract and operator guide](production-update-continuity.md).
+
+The third retained test passed frontend/authentication preparation, then exposed
+an incompatible timing assumption: Autopilot reduced bridge grace from 900 to
+600 seconds while retaining the 660-second preStop. The replacement settings
+below fit that limit. Server-side dry-run admission now rejects such mutations
+before any bridge resource or HPA freeze is created. Actual full qualification,
+cleanup and the first observed production rollout remain open.
 
 The implementation adds the opt-in Helm profile, journal-owned ingress bridge,
 early HPA capacity floor and scale-down fence, live regional backend inspection, full-body/HTTP2/
@@ -28,7 +35,7 @@ qualification, the first protected production update with external observation,
 the ordinary rolling-update runbook, and verified cleanup. The manufactured
 second Node release, its separate GKE campaign and associated PR work are
 deferred until a real subsequent release. Keep the 300-second checks, production
-preflight and cleanup gates. The latest attempt failed in dependency preparation
+preflight and cleanup gates. The closed temporary campaign's last attempt failed in dependency preparation
 before application deployment, so neither qualification nor activation is closed.
 See the operator guide for the PostgreSQL mount and automatic NEG annotation
 repairs. Rebuild/revalidate the changed source before another qualification.
@@ -209,9 +216,9 @@ Use the following **proposed starting settings**, then qualify them on GKE:
 | Setting                            |            Proposed target | Purpose                                                 |
 | ---------------------------------- | -------------------------: | ------------------------------------------------------- |
 | Protected product request duration |                       300s | User's required request envelope                        |
-| Proxy backend-service drain        |                       600s | Conservative 2x request-duration allowance              |
-| Proxy preStop                      |                       660s | Drain window plus initial 60s NEG propagation allowance |
-| Proxy termination grace            |                       900s | preStop plus shutdown/finalization headroom             |
+| Proxy backend-service drain        |                       360s | Request duration plus propagation allowance             |
+| Proxy preStop                      |                       420s | Drain window plus initial 60s NEG propagation allowance |
+| Proxy termination grace            |                       600s | Fits observed Autopilot admission; covers 565s minimum  |
 | Proxy/web minReadySeconds          |      Retain 120s initially | Independent readiness stabilization                     |
 | Ordinary request timeout           |    Preserve existing 3600s | No new blanket 300s timeout                             |
 | Non-proxy lifecycle settings       | Preserve existing settings | Accepted-work drain still precedes owner deletion       |
@@ -221,9 +228,11 @@ propagation allowance if provider observations require it; a failed trial does
 not pass by excluding its failures. Keep a documented relationship between the
 protected duration, LB drain, observed propagation and pod lifetime.
 
-Google recommends a drain interval of 1.5–2 times request processing time,
-preStop covering drain plus propagation, and termination grace covering preStop
-plus shutdown. See [GKE draining guidance](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/load-balancing)
+The earlier 2x drain proposal could not fit Autopilot's observed 600-second
+grace limit with the existing shutdown budget. The replacement uses the explicit
+300-second envelope plus propagation, then preserves the relationships between
+drain, preStop and shutdown. These values require real provider qualification;
+server admission alone is insufficient. See [GKE draining guidance](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/load-balancing)
 and [Gateway policy configuration](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/configure-gateway-resources).
 
 ### Helm and installation configuration

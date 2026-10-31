@@ -53,6 +53,17 @@ The exec status channel now terminates that wait. This failed test produced no
 qualification certificate or production update. A new paid operation needs its
 own allowance after the repaired source/image gates.
 
+The third retained test passed preparation, including real regional health,
+client provenance and dummy OAuth. Upgrade then stopped before public handoff:
+Autopilot admitted the requested 900-second bridge termination grace as 600
+seconds while preserving its 660-second preStop. The strict specification check
+correctly rejected that unsafe combination. The replacement profile below fits
+600 seconds, and bridge creation now performs server-side dry-run admission
+before freezing HPA or creating any bridge resources. This check needs the
+deployer's existing namespace create permission; read-only inspection does not
+invoke it. A dry run is admission evidence, not request-continuity qualification.
+New exact-image GKE qualification remains required; production was not updated.
+
 ## Normal release process
 
 Use **Release Rivet** with an existing successful main Build Images run. CI
@@ -84,10 +95,20 @@ The optional `helm/overlays/gke-proxy-continuity.yaml` selects:
 | Setting                       |       Value |
 | ----------------------------- | ----------: |
 | Protected request             | 300 seconds |
-| Actual regional backend drain | 600 seconds |
+| Actual regional backend drain | 360 seconds |
 | Initial propagation allowance |  60 seconds |
-| Proxy preStop                 | 660 seconds |
-| Proxy pod termination grace   | 900 seconds |
+| Proxy preStop                 | 420 seconds |
+| Proxy pod termination grace   | 600 seconds |
+
+The LB drain must cover the 300-second request plus the propagation allowance;
+preStop covers drain plus propagation. Grace also covers the existing
+120-second proxy shutdown budget and 25-second finalization margin (565 seconds
+minimum for this profile). The 600-second setting leaves additional headroom
+and fits the observed Autopilot admission limit. Google's [Autopilot upgrade
+documentation](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-upgrades-autopilot)
+also describes a 600-second termination limit during node draining. Increasing
+propagation requires rechecking every timing inequality and actual admission;
+do not accept a provider-shortened lifetime or omit failed probe results.
 
 `lifecycle.proxy.preStopDelaySeconds` and
 `lifecycle.proxy.terminationGracePeriodSeconds` inherit their global fields only
@@ -189,7 +210,7 @@ change templates:
    updates inspect an already protected installation and omit the bridge.
 
 The 600-second backend drain remains a configured upper bound; it is not an
-additional mandatory handoff sleep. Proxy preStop/grace remain 660/900 seconds.
+additional mandatory handoff sleep. Proxy preStop/grace remain 420/600 seconds.
 The shorter handoff is a repository change requiring the first full regional
 qualification, not a measured routing guarantee from the failed campaign.
 
@@ -198,7 +219,7 @@ two more, in addition to native rollout surges and execution autoscaling. Size
 the reviewed staging/production capacity allowance for that overlap. A scheduling
 or readiness timeout retains serving owners rather than deleting capacity to
 make space. Per-stage deployment deadlines and the external staging expiry must
-cover the two drain windows, image preparation, 900-second pod termination,
+cover the two drain windows, image preparation, 600-second pod termination,
 accepted work, qualification requests and cleanup.
 Use **`--timeout 20m` or longer** for this profile. The legacy 15-minute default
 equals the protected pod grace and is rejected before ingress writes; each stage
@@ -234,10 +255,10 @@ Put `requestContinuityProfile` in the private settings supplied to
 {
   "protocol": 1,
   "maxProtectedRequestSeconds": 300,
-  "backendServiceDrainSeconds": 600,
+  "backendServiceDrainSeconds": 360,
   "propagationSeconds": 60,
-  "proxyPreStopDelaySeconds": 660,
-  "proxyTerminationGracePeriodSeconds": 900
+  "proxyPreStopDelaySeconds": 420,
+  "proxyTerminationGracePeriodSeconds": 600
 }
 ```
 
