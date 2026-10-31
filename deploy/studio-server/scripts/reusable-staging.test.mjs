@@ -1041,6 +1041,39 @@ test('provider preflight checks the actual resolved public client over HTTP befo
     requests.every((r) => r.method === 'GET' && r.path === '/api/app-settings/trusted-clients/current-request'),
   );
 });
+test('real fixture OAuth configuration cannot expire before its approved full-test window', async (t) => {
+  const observed = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    assert.equal(req.method, 'PUT');
+    assert.equal(req.url, '/api/app-settings/web-app-auth');
+    observed.push(JSON.parse(Buffer.concat(chunks)));
+    // Stop at this real HTTP boundary; the fixture must not seed/login here.
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const gate = Object.create(ReusableProviderGate.prototype);
+  gate.config = { baseUrl: `http://127.0.0.1:${server.address().port}` };
+  gate.secrets = { rivetKey: 'fixture-only-key' };
+  gate.uiCookie = 'rivet_ui_token=fixture';
+  const startedAt = '2026-01-01T00:00:00Z';
+  for (const [expiresAt, expectedTtl] of [
+    ['2026-01-01T02:00:00Z', 10800],
+    ['2026-01-01T04:00:00Z', 14400],
+  ]) {
+    gate.operation = { startedAt, expiresAt };
+    await assert.rejects(gate.enableOAuth(gate.config.baseUrl, 'fixture'));
+    assert.equal(observed.at(-1).sessionTtlSeconds, expectedTtl);
+  }
+  assert.equal(observed.length, 2);
+});
+
 test('normal cleanup proves exact absence and retains shared Gateway, runner and control registry', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);

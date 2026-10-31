@@ -537,7 +537,14 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     });
   }
   async enableOAuth(base, relativePath) {
-    return super.enableOAuth(base, relativePath, { allowNonLocalhost: true, sessionTtlSeconds: 10800 });
+    const windowSeconds = Math.ceil(
+      (Date.parse(this.operation.expiresAt) - Date.parse(this.operation.startedAt)) / 1000,
+    );
+    assert.ok(Number.isSafeInteger(windowSeconds) && windowSeconds > 0 && windowSeconds <= 86400);
+    return super.enableOAuth(base, relativePath, {
+      allowNonLocalhost: true,
+      sessionTtlSeconds: Math.max(10800, windowSeconds),
+    });
   }
   async frontendAvailability() {
     return waitForGkeFrontendAvailability(this);

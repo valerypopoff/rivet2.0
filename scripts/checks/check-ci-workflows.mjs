@@ -87,7 +87,7 @@ assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_ENVIR
 assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.type, 'boolean');
 assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.default, true);
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
-assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 180);
+assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 4 * 60 + 60 + 30);
 assert.equal(automaticQualification.jobs.deploy['timeout-minutes'], 90);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');

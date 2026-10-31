@@ -351,8 +351,17 @@ installation:
   `RIVET_GOOGLE_SERVICE_ACCOUNT`, and `RIVET_DEPLOYMENT_CONFIGURATION` (JSON).
 - Staging: `RIVET_AUTOMATED_QUALIFICATION_ENABLED=true`, also a repository variable
   for input validation, and explicit `RIVET_QUALIFICATION_MAX_USD` / `_MAX_SECONDS`.
-  The first approved full test is USD 30 / 7200 seconds, followed by fixture
-  cleanup. This is an allowance, not a provider billing cap. Do not reuse a closed
+  Historical retained attempts used USD 30 / 7200 seconds. That time limit is
+  too tight for the full suite's sequential real stabilization windows: returning
+  seven workers to two alone requires five separate five-minute low-load windows,
+  after its 15-minute fixture. Cooperative growth, busy retirement, missing/stale
+  metrics, CPU growth and the update probes add further serial work. Prepare a
+  separately approved full-test window of up to four hours; the workflow allows
+  another hour for cleanup plus 30 minutes for setup (330 minutes total).
+  A longer workflow timeout grants no additional test allowance. Fixture OAuth
+  sessions cover at least the frozen operation window, so a longer full test
+  cannot outlive the old three-hour fixture session limit.
+  The explicit spend allowance is not a provider billing cap. Do not reuse a closed
   temporary campaign or automatically authorize a second paid attempt.
 - Production: its separately scoped configuration selects a generation-pinned
   private installation object, never values/scripts supplied by dispatch.
