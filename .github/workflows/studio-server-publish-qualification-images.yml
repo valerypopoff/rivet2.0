@@ -26,6 +26,21 @@ jobs:
           node-version: 24
       - name: Install pinned workspace dependencies
         run: corepack yarn install --immutable
+      - name: Use configuration digests for local publication image IDs
+        # Docker 29 defaults to containerd IDs (manifest/index digests). This
+        # archive/scanner contract uses configuration digests on its fresh host.
+        run: |
+          sudo python3 - <<'PY'
+          import json
+          from pathlib import Path
+          config = Path('/etc/docker/daemon.json')
+          settings = json.loads(config.read_text()) if config.exists() else {}
+          settings.setdefault('features', {})['containerd-snapshotter'] = False
+          config.parent.mkdir(parents=True, exist_ok=True)
+          config.write_text(json.dumps(settings))
+          PY
+          sudo systemctl restart docker
+          docker info
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io

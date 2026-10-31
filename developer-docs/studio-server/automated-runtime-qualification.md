@@ -286,8 +286,12 @@ The normal workflow uses `ubuntu-latest` for orchestration and production deploy
 it builds an actor from the exact committed source, pulls the pinned MinIO image,
 verifies both archive identities, scans the actor and publishes immutable digests.
 MinIO is pulled from the maintained immutable GHCR mirror because the original
-Quay digest rejects anonymous downloads. The publisher still checks the exact
-vendor image ID and release version, retains the original vendor provenance,
+Quay digest rejects anonymous downloads. Its disposable hosted runner explicitly
+uses Docker's classic image store before any build or pull: Docker 29's default
+containerd store reports manifest/index IDs, while this archive and scanner
+contract compares configuration digests. This setting affects only the publication
+job's fresh Docker daemon; cluster runtimes and application image jobs are unchanged.
+The publisher still checks the exact vendor image ID and release version, retains the original vendor provenance,
 and refuses changed bytes; it adds no registry credential to a test Pod.
 It runs alongside application-image building in main Build Images. The release
 qualification job accepts that exact successful build run's same-source publication
