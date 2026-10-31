@@ -63,6 +63,7 @@ export async function adoptProviderOverlap(gate) {
     namespace: gate.config.namespace,
     manifestDigest: digest,
     resources: await gate.resources(target, 'provider-overlap-adoption'),
+    observeProxyBackend: gate.observeProxyBackend,
     timeoutMs: 1200000,
     artifact: (...args) => gate.artifact(...args),
     applyTemplates: (guards) => gate.apply(mergeRuntimeControlGuards(target, guards), 'provider-overlap-enable.json'),

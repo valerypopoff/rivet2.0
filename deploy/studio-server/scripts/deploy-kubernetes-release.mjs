@@ -35,7 +35,7 @@ import {
   requestContinuityProfile,
   continuityRecoveryLayout,
 } from './lib/request-continuity.mjs';
-import { createKubernetesProxyContinuity } from './lib/proxy-continuity-kubernetes.mjs';
+import { createKubernetesProxyContinuity, createComputeBackendObserver } from './lib/proxy-continuity-kubernetes.mjs';
 import { installedSettingsDigest } from './lib/runtime-qualification-installation.mjs';
 import { privateCloudEvidence, persistDeploymentArtifact } from './lib/private-cloud-evidence.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
@@ -1353,6 +1353,9 @@ async function main() {
             const rollout = controlTransition ? runHaKubernetesControlTopology : runHaKubernetesRollout;
             return await rollout({
               kube,
+              ...(controlTransition && continuityTarget
+                ? { observeProxyBackend: createComputeBackendObserver(continuityTarget.network) }
+                : {}),
               release,
               namespace,
               manifestDigest: candidateDigest,

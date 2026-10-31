@@ -353,6 +353,17 @@ once with a finite deadline. Lost acknowledgements never replay a write. Cleanup
 must be verified before diagnostics export and UID-bound actor removal. Expiry
 and the independent janitor retain ownership after coordinator loss.
 
+The actor Pod requests Autopilot extended-duration protection with
+`cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so voluntary node
+scale-down does not normally evict a silent test runner. This preserves the
+existing absolute Job deadline and zero retries; it is not a guarantee against
+node failure. See [GKE extended-duration Pods](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/extended-duration-pods).
+During each exec the coordinator checks the exact actor UID/readiness every five
+seconds. Loss or an unreadable liveness observation aborts the local wait, records
+an unknown outcome privately and never replays the phase. Independent cleanup
+still requires writer absence and exact resource inventory, rather than treating
+the interrupted connection as proof of deletion.
+
 Private journals are content-addressed immutable GCS objects, with checksum and
 generation verification and no overwrite. Recover an uncertain operation from
 its exact `qualification/OPERATION` journal and cluster registry before removing
@@ -367,6 +378,11 @@ and persists subsequent journal artifacts as they are acknowledged. Detailed
 values, backups, receipts and errors remain private; only the successful
 sanitized deployment summary is a GitHub artifact. The private local directory
 is outside checkout cleaning; GCS preserves evidence after hosted-runner loss.
+An installation adapter that keeps a live external observer must also keep its
+mutable files outside the checkpoint upload tree. Persist phase acknowledgements
+directly, then copy observer history into final evidence only after the exact
+observer process has exited and owned fixtures are cleaned. This prevents a
+concurrent append from invalidating checkpoint size/checksum verification.
 Existing CLI users can still supply durable external directories and explicit
 credential/policy paths without hosted preparation.
 

@@ -80,6 +80,10 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.identity = { clusterServer: settings.clusterServer, expiresAt: operation.expiresAt };
     this.journalName = releaseOperationJournalName(release);
     this.runRollout = runRollout;
+    this.observeProxyBackend = createComputeBackendObserver(
+      { gcpProject: settings.projectId, gcpRegion: settings.region },
+      { accessToken: stagingAccessToken, minimumRequestSeconds: 0 },
+    );
   }
   async assertLocalContext() {
     await this.assertProofContext();

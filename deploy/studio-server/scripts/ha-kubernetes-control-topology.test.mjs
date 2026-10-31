@@ -18,6 +18,7 @@ const runHaKubernetesControlTopology = (options) =>
   });
 import { hasSameHaOwnerIdentity } from './lib/ha-kubernetes-rollout.mjs';
 import { deploymentRecoveryIdentity } from './lib/deployment-workflow.mjs';
+import { assertGkeProxyBackendHealth } from './lib/gke-proxy-health.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const component = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
@@ -78,11 +79,12 @@ function fixture(from = false, compact = false, overlap = false) {
         metadata: {
           name,
           uid: randomUUID(),
+          namespace: 'fixture',
           labels: r.spec.template.metadata.labels,
           ownerReferences: [{ uid: r.metadata.uid }],
         },
         spec: r.spec.template.spec,
-        status: { conditions: [{ type: 'Ready', status: 'True' }] },
+        status: { podIP: `10.0.0.${i + 1}`, conditions: [{ type: 'Ready', status: 'True' }] },
       };
       pods.set(name, p);
       const incarnation = randomUUID();
@@ -664,4 +666,50 @@ for (const fault of ['edgeUnhealthy', 'edgeControllerStale', 'edgeNegUnready'])
     await assert.rejects(runHaKubernetesControlTopology(f.options), /Execution-owned proxy health/);
     assert.ok(f.commands.some((c) => c.startsWith('patch deployment')));
     assert.ok(!f.commands.some((c) => /--withdraw-only|scale statefulset/.test(c)));
+  });
+
+for (const unhealthy of [false, true])
+  test(`standalone Gateway topology edge ${unhealthy ? 'blocks an unhealthy current endpoint' : 'accepts exact regional health before withdrawal'}`, async () => {
+    const f = fixture();
+    f.options.edgeNegUnready = true;
+    const service = f.live.find((r) => r.kind === 'Service' && component(r) === 'proxy');
+    service.metadata.namespace = 'fixture';
+    service.metadata.annotations ??= {};
+    service.metadata.annotations['cloud.google.com/neg-status'] = JSON.stringify({
+      zones: ['zone-a', 'zone-b'],
+      network_endpoint_groups: { [service.spec.ports[0].port]: 'proxy-neg' },
+    });
+    let observed = 0;
+    f.options.observeProxyBackend = async (current) => {
+      assert.equal(current.metadata.uid, service.metadata.uid);
+      assert.ok(!f.commands.some((c) => /--withdraw-only|scale statefulset/.test(c)));
+      observed++;
+      const proxies = [...f.pods.values()].filter((p) => component(p) === 'proxy');
+      const port = proxies[0].spec.containers
+        .find((c) => c.name === 'proxy')
+        .ports.find((p) => p.name === 'proxy-http').containerPort;
+      const backend = {
+        healthy: true,
+        serviceUid: service.metadata.uid,
+        backendService: 'regional-backend',
+        backendServiceId: '123',
+        observedAt: Date.now(),
+        healthyEndpoints: proxies.map((p, i) => ({
+          ipAddress: unhealthy && i === 0 ? '10.0.0.99' : p.status.podIP,
+          port,
+          zone: i % 2 ? 'zone-b' : 'zone-a',
+          neg: 'proxy-neg',
+        })),
+      };
+      if (!unhealthy) assertGkeProxyBackendHealth(proxies, current, backend);
+      return backend;
+    };
+    if (unhealthy) {
+      await assert.rejects(runHaKubernetesControlTopology(f.options), /Execution-owned proxy health/);
+      assert.ok(!f.commands.some((c) => /--withdraw-only|scale statefulset/.test(c)));
+    } else {
+      await runHaKubernetesControlTopology(f.options);
+      assert.ok(f.commands.some((c) => /--withdraw-only/.test(c)));
+    }
+    assert.ok(observed > 0);
   });
