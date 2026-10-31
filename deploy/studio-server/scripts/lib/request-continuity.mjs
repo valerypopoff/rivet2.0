@@ -75,8 +75,12 @@ export function assertRequestContinuityProfile(profile, shutdownSeconds = 120) {
   );
   assert.equal(profile.protocol, 1);
   assert.equal(profile.maxProtectedRequestSeconds, 300);
-  assert.ok(profile.backendServiceDrainSeconds >= 600 && profile.backendServiceDrainSeconds <= 3600);
   assert.ok(profile.propagationSeconds >= 60);
+  assert.ok(
+    profile.backendServiceDrainSeconds >= profile.maxProtectedRequestSeconds + profile.propagationSeconds &&
+      profile.backendServiceDrainSeconds <= 3600,
+    'LB drain must cover the protected request plus propagation and remain at most 3600 seconds',
+  );
   assert.ok(profile.proxyPreStopDelaySeconds >= profile.backendServiceDrainSeconds + profile.propagationSeconds);
   assert.ok(whole(shutdownSeconds) && shutdownSeconds > 0);
   assert.ok(profile.proxyTerminationGracePeriodSeconds >= profile.proxyPreStopDelaySeconds + shutdownSeconds + 25);

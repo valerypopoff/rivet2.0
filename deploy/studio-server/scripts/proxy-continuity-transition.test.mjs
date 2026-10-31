@@ -118,6 +118,10 @@ function fixture() {
       if (!found && !optional) throw Error('NotFound');
       return found && structuredClone(found);
     },
+    async admit(r) {
+      events.push(['admit', r.kind]);
+      return structuredClone(r);
+    },
     async create(r) {
       assert.ok(!live.has(key(r)));
       const v = structuredClone(r);
@@ -184,6 +188,19 @@ function fixture() {
   };
 }
 
+test('provider admission cannot silently shorten bridge lifetime or leave partial bridge resources', async () => {
+  const f = fixture();
+  f.io.admit = async (desired) => {
+    const admitted = structuredClone(desired);
+    admitted.spec.template.spec.terminationGracePeriodSeconds = 600;
+    return admitted;
+  };
+  await assert.rejects(f.transition().prepare(f.operation), /Provider admission/);
+  assert.equal(f.operation.record.proxyContinuity, undefined);
+  assert.equal(f.live.size, 6);
+  assert.ok(!f.events.some(([action]) => ['create', 'patch', 'beforeCreate'].includes(action)));
+});
+
 test('first transition keeps predecessors through both full drain windows and cleans only its bridge', async () => {
   const f = fixture(),
     t = f.transition();
@@ -191,6 +208,7 @@ test('first transition keeps predecessors through both full drain windows and cl
   assert.equal(f.operation.record.proxyContinuity.phase, 'bridge-serving');
   assert.equal(proxyContinuitySettled(f.operation.record), false);
   assert.ok(f.events.some((e) => e[0] === 'beforeCreate' && e[1] === 'Deployment'));
+  assert.equal(f.events[0][0], 'admit');
   assert.ok(!f.events.some((e) => e[0] === 'remove'));
   assert.equal(f.events.filter((e) => e[0] === 'patch' && e[1] === 'HTTPRoute')[0][2], 60000);
   await assert.rejects(t.finish(f.operation), /HPA must be restored/);
@@ -451,7 +469,8 @@ test('actual backend observation binds the exact regional NEG groups and checks 
 test('Kubernetes adapter runs the full owned handoff with NEG admission, live policy observations and UID-preconditioned cleanup', async () => {
   const f = fixture(),
     commands = [];
-  let clock = 0;
+  let clock = 0,
+    clampAdmissionGrace = true;
   const types = {
     services: 'Service',
     'deployments.apps': 'Deployment',
@@ -560,6 +579,11 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     } else if (action === 'create') {
       const desired = JSON.parse(options.input),
         key = `${desired.kind}/${desired.metadata.name}`;
+      if (args.includes('--dry-run=server')) {
+        assert.equal(desired.kind, 'Deployment');
+        if (clampAdmissionGrace) desired.spec.template.spec.terminationGracePeriodSeconds = 600;
+        return { stdout: JSON.stringify(desired) };
+      }
       assert.ok(!f.live.has(key));
       desired.metadata.uid = `new-${key}`;
       desired.metadata.resourceVersion = '1';
@@ -636,6 +660,14 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
   const before = commands.length;
   assert.equal((await adapter.inspect()).actualBackendServiceDrainSeconds, 60);
   assert.ok(commands.slice(before).every((a) => ['get', 'exec'].includes(a[0] === '--namespace' ? a[2] : a[0])));
+  await assert.rejects(adapter.prepare(f.operation), /Provider admission/);
+  assert.equal(f.live.size, 6, 'Rejected admission must not create a partial bridge');
+  assert.equal(f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec.minReplicas, 2);
+  assert.equal(f.operation.record.proxyContinuity, undefined);
+  const attemptedCreates = commands.filter((a) => a.includes('create'));
+  assert.equal(attemptedCreates.length, 1);
+  assert.ok(attemptedCreates[0].includes('--dry-run=server'));
+  clampAdmissionGrace = false;
   await adapter.prepare(f.operation);
   assert.equal(f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec.behavior.scaleDown.selectPolicy, 'Disabled');
   assert.equal(f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec.minReplicas, 4);
@@ -695,8 +727,9 @@ test('deadlines that cannot cover a protected phase fail before any mutation', (
     profile: {
       ...profile,
       propagationSeconds: 1200,
-      proxyPreStopDelaySeconds: 1800,
-      proxyTerminationGracePeriodSeconds: 1945,
+      backendServiceDrainSeconds: 1500,
+      proxyPreStopDelaySeconds: 2700,
+      proxyTerminationGracePeriodSeconds: 2845,
     },
   };
   assert.throws(

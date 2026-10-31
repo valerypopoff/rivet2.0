@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
 
+export class PendingGatewayBackendError extends Error {
+  constructor() {
+    super('Gateway backend creation is pending; retain the namespace until complete discovery');
+  }
+}
+
 export async function stagingAccessToken(fetchImpl = fetch) {
   const response = await fetchImpl(
     'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
@@ -118,10 +124,8 @@ export function stagingCloudReader(settings, { fetchImpl = fetch, token } = {}) 
         }
       }
       for (const neg of negs.filter((i) => required.has(i.id)))
-        assert.ok(
-          children.some((c) => c.value.backends?.some((b) => b.group?.endsWith(`/compute/v1/${neg.resource}`))),
-          'Gateway backend creation is uncertain; retain the namespace',
-        );
+        if (!children.some((c) => c.value.backends?.some((b) => b.group?.endsWith(`/compute/v1/${neg.resource}`))))
+          throw new PendingGatewayBackendError();
       return children;
     },
   };

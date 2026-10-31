@@ -3,9 +3,9 @@
 requestContinuity:
   enabled: true
   maxProtectedRequestSeconds: 300
-  backendServiceDrainSeconds: 600
+  backendServiceDrainSeconds: 360
   propagationSeconds: 60
 lifecycle:
   proxy:
-    preStopDelaySeconds: 660
-    terminationGracePeriodSeconds: 900
+    preStopDelaySeconds: 420
+    terminationGracePeriodSeconds: 600

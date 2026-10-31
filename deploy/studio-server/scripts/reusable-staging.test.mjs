@@ -24,7 +24,7 @@ import {
   verifyStagingCleanup,
   observeStagingInventory,
 } from './lib/reusable-staging-cleanup.mjs';
-import { stagingCloudReader } from './lib/reusable-staging-cloud.mjs';
+import { stagingCloudReader, PendingGatewayBackendError } from './lib/reusable-staging-cloud.mjs';
 import { proxyFixtureProcessCommand } from './lib/staging-proxy-fixture-process.mjs';
 import { inspectStagingPrerequisites } from './lib/reusable-staging-prerequisites.mjs';
 import { stagingJanitorPass } from './reusable-staging-janitor.mjs';
@@ -532,6 +532,7 @@ test('Gateway discovery rejects partial inventories and backend replacement betw
   ])
     await assert.rejects(reader.children(inventory, { requiredNegIds: [] }), /Incomplete|changed|replaced/);
   scenario = 'empty';
+  await assert.rejects(reader.children(inventory), PendingGatewayBackendError);
   assert.deepEqual(await reader.children(inventory, { requiredNegIds: [] }), []);
   assert.ok(requests.every((r) => r.method === 'GET'));
 });
@@ -768,7 +769,7 @@ test('route teardown permits already inventoried Gateway children to disappear w
       [...inventory, { id: 'new-neg', kind: 'neg', resource: `${prefix}/zones/zone-a/networkEndpointGroups/new-neg` }],
       { requiredNegIds: ['new-neg'] },
     ),
-    /creation is uncertain/,
+    PendingGatewayBackendError,
   );
 });
 
@@ -1081,6 +1082,53 @@ test('paused cleanup owner and unacknowledged DELETE block takeover/replay rathe
   await assert.rejects(cleanupStaging(f.state, actor));
   assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 1);
 });
+test('settlement waits only for pending Gateway backend creation before withdrawing routes', async (t) => {
+  const f = await fixture(t);
+  await f.state.arm(actor);
+  await f.state.namespace({ create: true });
+  let reads = 0,
+    pendingObserved = false;
+  const pendingCloud = {
+    ...cloud,
+    async children() {
+      if (++reads === 1) throw new PendingGatewayBackendError();
+      return [];
+    },
+  };
+  await settleStaging(f.state, pendingCloud, actor, async (name, check) => {
+    if (name.includes('Gateway backend discovery')) {
+      assert.equal(await check(), null);
+      pendingObserved = true;
+      assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 0);
+    }
+    return wait(name, check);
+  });
+  assert.equal(pendingObserved, true);
+  assert.equal((await f.state.read()).record.phase, 'settled');
+
+  const denied = await fixture(t);
+  await denied.state.arm(actor);
+  await denied.state.namespace({ create: true });
+  let deniedReads = 0;
+  await assert.rejects(
+    settleStaging(
+      denied.state,
+      {
+        ...cloud,
+        children: async () => {
+          deniedReads++;
+          throw Error('denied discovery');
+        },
+      },
+      actor,
+      wait,
+    ),
+    /denied discovery/,
+  );
+  assert.equal(deniedReads, 1, 'Permission and ambiguous discovery failures are not pending-state retries');
+  assert.equal(denied.requests.filter((r) => r.method === 'DELETE').length, 0);
+});
+
 test('actual HTTP/WebSocket settlement drains the exact backend container, never aborts, and incomplete CSI blocks deletion', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);

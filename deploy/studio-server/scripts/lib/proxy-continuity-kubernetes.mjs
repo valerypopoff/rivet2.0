@@ -305,6 +305,12 @@ export function createKubernetesProxyContinuity({
       }
       return { namespaceUid: await nsUid(), route, gateway, policy, service, deployment, hpa, proxyPods, ...backend };
     },
+    async admit(resource) {
+      return JSON.parse(
+        (await kube(['create', '--dry-run=server', '-f', '-', '-o', 'json'], { input: JSON.stringify(resource) }))
+          .stdout,
+      );
+    },
     async create(resource) {
       await kube(['create', '-f', '-'], { input: JSON.stringify(resource) });
     },

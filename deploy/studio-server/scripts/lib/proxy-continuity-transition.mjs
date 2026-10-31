@@ -464,6 +464,16 @@ export function createProxyContinuityTransition({
           });
           return;
         }
+        // Verify provider admission before creating any pool or freezing HPA.
+        // Autopilot can reduce a requested Pod termination budget on admission.
+        if (io.admit) {
+          const desired = bridge.entries.find((e) => e.desired.kind === 'Deployment').desired;
+          const admitted = await io.admit(desired);
+          assert.ok(
+            subset(admitted.spec, desired.spec),
+            'Provider admission changes the protected bridge specification; no bridge resources were created',
+          );
+        }
         await save(operation, {
           ...bridge,
           protocol: 1,

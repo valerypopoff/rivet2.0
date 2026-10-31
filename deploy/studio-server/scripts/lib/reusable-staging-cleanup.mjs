@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { qualificationHash } from './runtime-qualification-execution.mjs';
 import { proxyFixtureProcessCommand } from './staging-proxy-fixture-process.mjs';
+import { PendingGatewayBackendError } from './reusable-staging-cloud.mjs';
 
 const nsPath = (name) => `/api/v1/namespaces/${encodeURIComponent(name)}`;
 const lists = [
@@ -304,7 +305,14 @@ export async function settleStaging(state, cloud, owner, wait) {
   await settleStagingProcesses(state, wait);
   // Disable the public test route before draining, without altering the shared
   // Gateway/listener/certificate. Snapshot creation outcomes before deletion.
-  const inventory = await observeStagingInventory(state, cloud);
+  const inventory = await wait('complete staging Gateway backend discovery before route withdrawal', async () => {
+    try {
+      return await observeStagingInventory(state, cloud);
+    } catch (error) {
+      if (error instanceof PendingGatewayBackendError) return null;
+      throw error;
+    }
+  });
   await state.change((r) => {
     r.retiringNegIds = inventory.filter((i) => i.kind === 'neg').map((i) => i.id);
   });
