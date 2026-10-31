@@ -65,41 +65,45 @@ const automaticQualification = parseWorkflow('.github/workflows/studio-server-qu
 const qualificationPublisher = parseWorkflow(
   '.github/workflows/studio-server-publish-qualification-images.yml',
 ).workflow;
-assert.deepEqual(Object.keys(qualificationPublisher.on), ['workflow_dispatch']);
+assert.deepEqual(Object.keys(qualificationPublisher.on).sort(), ['workflow_call', 'workflow_dispatch']);
 assert.deepEqual(qualificationPublisher.permissions, { contents: 'read', packages: 'write' });
 assert.equal(qualificationPublisher.concurrency['cancel-in-progress'], false);
 assert.equal(qualificationPublisher.jobs.publish.if, "${{ github.ref == 'refs/heads/main' }}");
-assert.deepEqual(qualificationPublisher.jobs.publish['runs-on'], [
-  'self-hosted',
-  'linux',
-  'x64',
-  'rivet-qualification-control',
-]);
-assert.equal(qualificationPublisher.jobs.publish.environment, 'rivet-managed-staging');
+assert.equal(qualificationPublisher.jobs.publish['runs-on'], 'ubuntu-latest');
+assert.equal(qualificationPublisher.jobs.publish.permissions?.['id-token'], undefined);
 assert.ok(qualificationPublisher.jobs.publish.steps.every((s) => !s.uses || /@[a-f0-9]{40}$/.test(s.uses)));
 assert.deepEqual(Object.keys(automaticQualification.on), ['workflow_dispatch']);
-assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), ['build_run_id']);
+assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), [
+  'build_run_id',
+  'deploy_production',
+]);
 assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);
 assert.equal(automaticQualification.jobs.built.if, undefined);
 assert.equal(automaticQualification.jobs.built.steps[0].run, 'test "$GITHUB_REF" = refs/heads/main');
 assert.equal(automaticQualification.jobs.qualified.environment, 'rivet-managed-staging');
-assert.equal(
-  automaticQualification.jobs.qualified['runs-on'],
-  '${{ vars.RIVET_QUALIFICATION_ENVIRONMENT_MODE == \'temporary\' && fromJSON(\'["self-hosted","linux","x64","rivet-qualification-control"]\') || fromJSON(\'["self-hosted","linux","x64","rivet-qualification"]\') }}',
-);
+assert.equal(automaticQualification.jobs.qualified['runs-on'], 'ubuntu-latest');
+assert.equal(automaticQualification.jobs.qualified.permissions['id-token'], 'write');
+assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE, 'reusable-cluster');
+assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.type, 'boolean');
+assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.default, true);
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
-assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 300);
-assert.equal(automaticQualification.jobs.preflight['timeout-minutes'], 45);
+assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 180);
+assert.equal(automaticQualification.jobs.deploy['timeout-minutes'], 90);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');
 assert.equal(
   automaticQualification.jobs.publish.with.runtime_control_declaration,
   '${{ needs.qualified.outputs.control }}',
 );
-assert.deepEqual(automaticQualification.jobs.preflight.needs, ['qualified', 'publish']);
-assert.equal(automaticQualification.jobs.preflight.environment, 'rivet-production-readiness');
+assert.deepEqual(automaticQualification.jobs.deploy.needs, ['qualified', 'publish']);
+assert.equal(automaticQualification.jobs.preflight, undefined);
+assert.equal(automaticQualification.jobs.deploy.if, '${{ inputs.deploy_production }}');
+assert.equal(automaticQualification.jobs.deploy['runs-on'], 'ubuntu-latest');
+assert.equal(automaticQualification.jobs.deploy.permissions['id-token'], 'write');
+assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_COORDINATOR_MODE, 'external');
+assert.equal(automaticQualification.jobs.deploy.environment, 'rivet-production');
 assert.equal(
-  automaticQualification.jobs.preflight.env.QUALIFIED_MANIFEST_DIGEST,
+  automaticQualification.jobs.deploy.env.QUALIFIED_MANIFEST_DIGEST,
   '${{ needs.publish.outputs.manifest_digest }}',
 );
 for (const job of Object.values(automaticQualification.jobs)) {
@@ -114,8 +118,8 @@ assert.ok(
   ),
 );
 assert.ok(
-  automaticQualification.jobs.preflight.steps.some((step) =>
-    step.run?.includes('execute-runtime-qualification.mjs preflight'),
+  automaticQualification.jobs.deploy.steps.some((step) =>
+    step.run?.includes('execute-runtime-qualification.mjs deploy'),
   ),
 );
 assert.equal(

@@ -110,6 +110,20 @@ export async function observeStagingInventory(state, cloud, { settlement } = {})
       }
       if (kind === 'service' && object.metadata.annotations?.['cloud.google.com/neg']) {
         const status = JSON.parse(object.metadata.annotations['cloud.google.com/neg-status'] ?? '{}');
+        // GKE injects ingress:true into internal dependency Services too. With
+        // no Ingress and no explicit ports, that is not a pending NEG creation.
+        // Existing status always remains inventory-owned, even after withdrawal.
+        if (!object.metadata.annotations['cloud.google.com/neg-status']) {
+          const intent = JSON.parse(object.metadata.annotations['cloud.google.com/neg']);
+          if (object.spec?.type === 'ClusterIP' && intent.ingress === true && Object.keys(intent).length === 1) {
+            const ingresses = await state.api.json(
+              'GET',
+              `/apis/networking.k8s.io/v1/namespaces/${record.namespace}/ingresses`,
+            );
+            assert.ok(Array.isArray(ingresses?.items));
+            if (ingresses.items.length === 0) continue;
+          }
+        }
         assert.ok(
           status.zones?.length && Object.keys(status.network_endpoint_groups ?? {}).length,
           'NEG creation is uncertain; preserve its Service',

@@ -105,6 +105,16 @@ test('lost native-roll acknowledgement never retries or certifies replacement', 
   assert.equal(f.events.filter((e) => e === 'patch').length, 1);
   assert.equal(f.probes.replacement, undefined);
 });
+
+test('focused native rollout still spans proxy retirement without running the separate duration matrix', async () => {
+  const f = fixture();
+  f.gate.operation.qualification = { tier: 'focused' };
+  await qualifyProtectedProxyRoll(f.gate, f.probes, { waitFor: f.waitFor });
+  assert.ok(!f.events.some((event) => event.startsWith('accepted:duration-')));
+  assert.ok(f.events.indexOf('accepted:protected-roll') < f.events.indexOf('patch'));
+  assert.ok(f.events.indexOf('patch') < f.events.indexOf('complete:protected-roll'));
+  assert.deepEqual(f.probes.replacement.after, ['new1', 'new2']);
+});
 test('unsafe native rollout policy fails before requests or mutation', async () => {
   const f = fixture();
   f.deployment.spec.strategy.rollingUpdate.maxUnavailable = 1;

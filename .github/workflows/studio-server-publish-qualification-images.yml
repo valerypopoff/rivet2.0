@@ -2,19 +2,7 @@ name: Publish qualification images
 
 on:
   workflow_dispatch:
-    inputs:
-      actor_archive_sha256:
-        description: Reviewed SHA-256 of /srv/rivet-private/image-publication/actor.tar
-        required: true
-        type: string
-      actor_image_id:
-        description: Exact local actor image ID built from this main commit
-        required: true
-        type: string
-      minio_archive_sha256:
-        description: Reviewed SHA-256 of /srv/rivet-private/image-publication/minio.tar
-        required: true
-        type: string
+  workflow_call:
 
 permissions:
   contents: read
@@ -27,9 +15,8 @@ concurrency:
 jobs:
   publish:
     if: ${{ github.ref == 'refs/heads/main' }}
-    runs-on: [self-hosted, linux, x64, rivet-qualification-control]
-    environment: rivet-managed-staging
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -37,17 +24,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+      - name: Install pinned workspace dependencies
+        run: corepack yarn install --immutable
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Validate, scan and publish exact reviewed archives
-        env:
-          ACTOR_ARCHIVE_SHA256: ${{ inputs.actor_archive_sha256 }}
-          ACTOR_IMAGE_ID: ${{ inputs.actor_image_id }}
-          MINIO_ARCHIVE_SHA256: ${{ inputs.minio_archive_sha256 }}
-        run: node scripts/qualification-image-publication.mjs
+      - name: Build exact source, verify archives, scan and publish immutable images
+        run: corepack yarn node scripts/build-and-publish-qualification-images.mjs
       - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: qualification-image-publication-${{ github.run_id }}-${{ github.run_attempt }}

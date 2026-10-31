@@ -36,6 +36,8 @@ import {
   continuityRecoveryLayout,
 } from './lib/request-continuity.mjs';
 import { createKubernetesProxyContinuity } from './lib/proxy-continuity-kubernetes.mjs';
+import { installedSettingsDigest } from './lib/runtime-qualification-installation.mjs';
+import { privateCloudEvidence, persistDeploymentArtifact } from './lib/private-cloud-evidence.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 import {
@@ -108,6 +110,7 @@ const supportedOptions = new Set([
   '--maintenance-cutover',
   '--maintenance-plan',
   '--deployment-policy',
+  '--expected-installed-settings-digest',
   '--plan-only',
   '--acceptance-only',
   '--preflight-only',
@@ -331,10 +334,18 @@ let selectedContext;
 let selectedKubectl;
 let selectedHelm;
 let failureArtifactsDirectory;
+let cloudEvidence;
 
 async function writeArtifact(artifactsDir, fileName, contents) {
   await fs.mkdir(artifactsDir, { recursive: true, mode: 0o700 });
   await fs.writeFile(path.join(artifactsDir, fileName), contents, { encoding: 'utf8', mode: 0o600 });
+  if (process.env.RIVET_PRODUCTION_EVIDENCE_BUCKET) {
+    cloudEvidence ??= privateCloudEvidence({
+      bucket: process.env.RIVET_PRODUCTION_EVIDENCE_BUCKET,
+      prefix: process.env.RIVET_PRODUCTION_EVIDENCE_PREFIX,
+    });
+    await persistDeploymentArtifact(cloudEvidence, artifactsDir, fileName, contents);
+  }
 }
 
 /** Release selection is a preflight-only boundary: it has no cluster mutation capabilities. */
@@ -742,6 +753,13 @@ async function main() {
           ).stdout,
         )
       : null;
+    if (options.has('--expected-installed-settings-digest')) {
+      const expected = required(options, '--expected-installed-settings-digest');
+      if (!/^sha256:[a-f0-9]{64}$/.test(expected) || !installed || installedSettingsDigest(installed) !== expected)
+        throw Error(
+          'Installed production settings changed since qualification; qualify the current baseline before deploying.',
+        );
+    }
     const kubectl = selectedKubectl;
     if (!kubectl) throw new Error('kubectl is required to inspect release cutover ownership.');
     const journalName = releaseOperationJournalName(release);

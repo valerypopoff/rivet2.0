@@ -6,11 +6,13 @@ import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler
 import {
   HA_ORDINARY_RUNTIME_CHECKS,
   HA_COOPERATIVE_AUTOSCALING_CHECKS,
+  HA_FOCUSED_AUTOSCALING_CHECKS,
   HA_PROVIDER_OVERLAP_CHECKS,
 } from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
 import { assertRequestContinuityProfile, requestContinuityProfile } from './request-continuity.mjs';
 import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './request-continuity-evidence.mjs';
+import { releaseQualificationPlan } from './release-qualification-policy.mjs';
 
 export const qualificationHash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const time = (value) => {
@@ -142,6 +144,20 @@ export function qualificationOperation({
     previous,
     installed,
     policy: normalized,
+    ...(approval.safetyDigest
+      ? {
+          qualification: releaseQualificationPlan({
+            safetyDigest: approval.safetyDigest,
+            previous,
+            predecessorDigest: predecessorManifestDigest,
+            candidate,
+            installed,
+            policy: normalized,
+            profile: approval.requestContinuityProfile,
+            overlap: approval.developerOverlapProfile,
+          }),
+        }
+      : {}),
     ...(approval.requestContinuityProfile
       ? { requestContinuityProfile: assertRequestContinuityProfile(approval.requestContinuityProfile) }
       : {}),
@@ -313,6 +329,21 @@ export function assertProviderAutoscalingReport(report, operation) {
   assert.deepEqual(report.policy, operation.policy);
   assert.equal(report.policyDigest, operation.policyDigest);
   assert.equal(report.finalApplicationPods, 7);
+  if (operation.qualification?.tier === 'focused') {
+    assert.equal(report.purpose, 'focused-policy-observation');
+    assert.ok(report.observations.length >= 2);
+    for (const observation of report.observations) {
+      assert.equal(observation.autoscaler.policyDigest, operation.policyDigest);
+      assert.ok(Number.isSafeInteger(observation.autoscaler.sampleAt));
+      assert.ok(observation.autoscaler.sampleAt >= time(report.startedAt));
+      assert.ok(observation.autoscaler.sampleAt <= time(report.finishedAt));
+      for (const role of ['execution', 'proxy']) assert.ok(count(observation.ready[role]) >= 2);
+    }
+    assert.ok(report.observations.at(-1).autoscaler.sampleAt > report.observations[0].autoscaler.sampleAt);
+    for (const key of ['cooperative', 'capacity', 'cpu', 'drain', 'metrics', 'proxyHpa'])
+      assert.equal(report[key], undefined, 'Focused evidence cannot claim unexecuted stress tests');
+    return;
+  }
   const cooperative = report.cooperative;
   for (const mode of ['active', 'paused']) {
     assert.ok(count(cooperative[mode].to) > count(cooperative[mode].from));
@@ -478,6 +509,7 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
       { cause: failure },
     );
   const common = {
+    ...(operation.qualification ? { qualification: operation.qualification } : {}),
     protocol: 1,
     candidateSourceSha: operation.candidate.source.sha,
     candidateImages: operation.candidate.images,
@@ -507,7 +539,7 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
       ...(operation.requestContinuityProfile
         ? { requestContinuity: compileRequestContinuityEvidence(operation, facts.upgrade, facts.autoscaling) }
         : {}),
-      protocol: operation.developerOverlapProfile ? 3 : 2,
+      protocol: operation.qualification?.tier === 'focused' ? 4 : operation.developerOverlapProfile ? 3 : 2,
       purpose: 'ordinary-upgrade',
       controlPlaneMode: operation.developerOverlapProfile ? 'singleton-overlap' : 'singleton',
       ...(operation.developerOverlapProfile
@@ -533,11 +565,15 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
     autoscaling: {
       ...declaration(facts.autoscaling, {
         ...common,
-        protocol: 2,
+        protocol: operation.qualification?.tier === 'focused' ? 3 : 2,
         provider: 'gke',
         policyDigest: operation.policyDigest,
         requestSamples: facts.autoscaling.workflow.samples + facts.autoscaling.web.samples,
-        checks: [...HA_COOPERATIVE_AUTOSCALING_CHECKS],
+        checks: [
+          ...(operation.qualification?.tier === 'focused'
+            ? HA_FOCUSED_AUTOSCALING_CHECKS
+            : HA_COOPERATIVE_AUTOSCALING_CHECKS),
+        ],
       }),
       policy: operation.policy,
     },

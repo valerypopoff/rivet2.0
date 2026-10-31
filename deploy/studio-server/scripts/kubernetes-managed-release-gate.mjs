@@ -280,6 +280,7 @@ spec:
           env:
             - { name: POSTGRES_DB, value: rivet }
             - { name: POSTGRES_USER, value: rivet }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: rivet-release-gate-postgres, key: password } }
           readinessProbe:

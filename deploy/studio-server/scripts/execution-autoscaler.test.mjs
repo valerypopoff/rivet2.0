@@ -828,7 +828,10 @@ test('runtime autoscaling evidence is bound to exact source, images, chart and p
     checks: [...HA_AUTOSCALING_CHECKS],
   };
   assert.doesNotThrow(() => assertRuntimeAutoscalingEvidence(evidence, release, evidence.policyDigest));
-  assert.throws(() => assertCooperativeAutoscalingEvidence(evidence, release, evidence.policyDigest), /v2/);
+  assert.throws(
+    () => assertCooperativeAutoscalingEvidence(evidence, release, evidence.policyDigest),
+    /requires full or certified focused/,
+  );
   const cooperative = { ...evidence, protocol: 2, checks: [...HA_COOPERATIVE_AUTOSCALING_CHECKS] };
   assert.equal(assertCooperativeAutoscalingEvidence(cooperative, release, evidence.policyDigest).protocol, 2);
   assert.throws(

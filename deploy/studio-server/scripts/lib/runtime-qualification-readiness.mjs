@@ -9,16 +9,17 @@ const inside = (root, file) => {
   return relative && !relative.startsWith('..') && !path.isAbsolute(relative);
 };
 
-/** Only the qualification's read-only preflight uses this private copy. Actual
- * production deployment still requires its own in-checkout installation policy. */
-export async function prepareQualificationReadinessPolicy({ policyFile, root, packet, identity }) {
+/** Materialize configured, checksum-pinned installation policy in a fresh private
+ * checkout directory. Copying executes no adapter; the caller owns authorization
+ * for either a read-only preview or the protected production deployment. */
+export async function prepareQualificationPolicy({ policyFile, root, packet, identity }) {
   policyFile = path.resolve(policyFile);
   if (inside(root, policyFile)) return policyFile;
   const bundle = path.dirname(policyFile);
-  assert.equal(await fs.realpath(bundle), bundle, 'Readiness policy directory cannot be redirected');
+  assert.equal(await fs.realpath(bundle), bundle, 'Installation policy directory cannot be redirected');
   const approval = await readDeploymentPolicy(policyFile, bundle, identity);
-  assert.ok(inside(await fs.realpath(root), await fs.realpath(packet)), 'Readiness packet escaped checkout');
-  const output = path.join(packet, 'private-readiness-policy');
+  assert.ok(inside(await fs.realpath(root), await fs.realpath(packet)), 'Private policy packet escaped checkout');
+  const output = path.join(packet, 'private-installation-policy');
   await fs.mkdir(output, { mode: 0o700 }); // A second attempt cannot inherit prior policy bytes.
   const policy = structuredClone(approval.policy);
   for (const name of ['backup', 'acceptance']) {
@@ -26,7 +27,7 @@ export async function prepareQualificationReadinessPolicy({ policyFile, root, pa
     assert.equal(
       `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
       policy[name].sha256,
-      'Readiness adapter changed during preparation',
+      'Installation adapter changed during preparation',
     );
     const file = path.join(output, `${name}.mjs`);
     await fs.writeFile(file, bytes, { flag: 'wx', mode: 0o600 });
@@ -37,3 +38,4 @@ export async function prepareQualificationReadinessPolicy({ policyFile, root, pa
   await readDeploymentPolicy(file, root, identity);
   return file;
 }
+export const prepareQualificationReadinessPolicy = prepareQualificationPolicy;

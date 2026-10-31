@@ -10,6 +10,12 @@ import {
 } from './lib/request-continuity.mjs';
 import { qualificationSizing } from './lib/runtime-qualification-installation.mjs';
 import { collectContinuityResponse } from './qualification/provider-request-continuity.mjs';
+import {
+  assertRuntimeControlEvidence,
+  assertRuntimeAutoscalingEvidence,
+  HA_ORDINARY_RUNTIME_CHECKS,
+  HA_FOCUSED_AUTOSCALING_CHECKS,
+} from './lib/ha-release-evidence.mjs';
 
 const profile = {
   protocol: 1,
@@ -230,4 +236,98 @@ test('a response counts only after every body byte arrives; a closed partial bod
   partial.write('first');
   partial.destroy();
   await assert.rejects(failed, /complete body/);
+});
+
+function focusedFacts() {
+  const f = facts();
+  f.operation.qualification = {
+    protocol: 1,
+    tier: 'focused',
+    safetyDigest: 'b'.repeat(64),
+    configurationDigest: 'c'.repeat(64),
+    fullBaselineManifestDigest: `sha256:${'d'.repeat(64)}`,
+  };
+  f.operation.installed.qualificationValues = {
+    requestContinuity: {
+      enabled: true,
+      maxProtectedRequestSeconds: 300,
+      backendServiceDrainSeconds: 600,
+      propagationSeconds: 60,
+    },
+    lifecycle: { shutdownGraceSeconds: 120, proxy: { preStopDelaySeconds: 660, terminationGracePeriodSeconds: 900 } },
+  };
+  f.upgrade.requestContinuity.protocol = 3;
+  f.upgrade.requestContinuity.bootstrap = 'already-protected';
+  const stages = continuityStages(true, 'upgrade', 'focused');
+  f.upgrade.requestContinuity.requests = f.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage));
+  delete f.autoscaling.requestContinuity;
+  return f;
+}
+
+test('focused continuity proves fresh full five-minute bodies across real upgrade stages without claiming HPA or duration-matrix tests', () => {
+  const f = focusedFacts();
+  const proof = compileRequestContinuityEvidence(f.operation, f.upgrade, f.autoscaling);
+  assert.equal(proof.completedRequests, 9);
+  assert.equal(proof.protocol, 3);
+  assert.ok(!proof.checks.includes('proxy-hpa-removal'));
+  const release = {
+    ...f.operation.candidate,
+    lineage: { predecessor: { manifestDigest: 'previous', sourceSha: 'e'.repeat(40), images: { api: 'old' } } },
+  };
+  const control = {
+    protocol: 4,
+    qualification: f.operation.qualification,
+    requestContinuity: proof,
+    purpose: 'ordinary-upgrade',
+    controlPlaneMode: 'singleton',
+    edgeProfiles: ['compact'],
+    predecessorManifestDigest: 'previous',
+    predecessorSourceSha: 'e'.repeat(40),
+    predecessorImages: { api: 'old' },
+    autoscalerPolicyDigest: 'f'.repeat(64),
+    candidateSourceSha: release.source.sha,
+    candidateImages: release.images,
+    chartDigest: release.chart.contentDigest,
+    failedRequests: 0,
+    requestSamples: 200,
+    checks: [...HA_ORDINARY_RUNTIME_CHECKS],
+  };
+  assert.equal(assertRuntimeControlEvidence(control, release, 'compact').protocol, 4);
+  assert.throws(() => assertRuntimeControlEvidence({ ...control, protocol: 2 }, release));
+  const scaling = {
+    ...control,
+    protocol: 3,
+    policyDigest: 'f'.repeat(64),
+    provider: 'gke',
+    checks: [...HA_FOCUSED_AUTOSCALING_CHECKS],
+  };
+  assert.equal(assertRuntimeAutoscalingEvidence(scaling, release).protocol, 3);
+  assert.throws(() => assertRuntimeAutoscalingEvidence({ ...scaling, protocol: 2 }, release));
+  for (const change of [
+    (x) => {
+      x.upgrade.requestContinuity.requests[0].fullBody = false;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.requests[0].elapsedMs = 200;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.replacement.observedAt = x.upgrade.finishedAt;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.bootstrap = 'passed';
+    },
+    (x) => {
+      x.upgrade.requestContinuity.action.persisted.starts = 2;
+    },
+    (x) => {
+      x.autoscaling.requestContinuity = { inventedHpa: true };
+    },
+    (x) => {
+      x.operation.qualification.tier = 'full';
+    },
+  ]) {
+    const changed = focusedFacts();
+    change(changed);
+    assert.throws(() => compileRequestContinuityEvidence(changed.operation, changed.upgrade, changed.autoscaling));
+  }
 });

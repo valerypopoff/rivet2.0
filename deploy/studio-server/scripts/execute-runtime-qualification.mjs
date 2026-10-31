@@ -25,6 +25,10 @@ import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
 import { assertReleaseManifestMatchesCurrentChart } from './lib/studio-server-release-manifest.mjs';
 import { continuityTimeoutMs } from './lib/request-continuity.mjs';
 import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
+import { qualificationSafetyDigest } from './lib/release-qualification-policy.mjs';
+import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
+import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
+import { coordinatorKubernetes, prepareStagingActor } from './lib/reusable-staging-coordinator.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const packet = path.resolve(
@@ -46,7 +50,9 @@ const inspect = async () =>
     namespace: process.env.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE,
     release: process.env.RIVET_QUALIFICATION_PRODUCTION_RELEASE,
     expectedNamespaceUid: process.env.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE_UID,
-    valuesText: await fs.readFile(process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE, 'utf8'),
+    ...(process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256
+      ? { valuesDigest: process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256 }
+      : { valuesText: await fs.readFile(process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE, 'utf8') }),
     helm: resolveHelmBinOrThrow(root),
     kubectl: process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl',
     run: (bin, args, options) =>
@@ -98,6 +104,28 @@ async function main(mode) {
   }
   if (mode === 'inspect') {
     await write(path.join(packet, 'installed.json'), await inspect());
+    return;
+  }
+  if (mode === 'deploy') {
+    const result = await deployQualifiedRelease({
+      root,
+      packet,
+      operation: await read(path.join(packet, 'operation-public.json')),
+      manifest: await read(path.join(packet, 'qualified-manifest.json')),
+      digest: process.env.QUALIFIED_MANIFEST_DIGEST,
+      sourceSha: process.env.GITHUB_SHA,
+      valuesFile: process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE,
+      policyFile: process.env.RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE,
+      privateStore: process.env.RIVET_PRODUCTION_PRIVATE_STORE,
+      evidenceBucket: process.env.RIVET_PRODUCTION_EVIDENCE_BUCKET,
+      identity: {
+        context: process.env.RIVET_QUALIFICATION_PRODUCTION_CONTEXT,
+        namespace: process.env.RIVET_QUALIFICATION_PRODUCTION_NAMESPACE,
+        release: process.env.RIVET_QUALIFICATION_PRODUCTION_RELEASE,
+      },
+      run,
+    });
+    await write(path.join(packet, 'deployment-summary.json'), result);
     return;
   }
   if (mode === 'preflight') {
@@ -245,6 +273,9 @@ async function main(mode) {
     policy: installed.policy,
     operationId: `rivet-q-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`,
     approval: {
+      ...(driverManifest.files['settings.json']
+        ? { safetyDigest: await qualificationSafetyDigest(root, candidate.source.sha) }
+        : {}),
       developerOverlapProfile: settings.developerOverlapProfile,
       requestContinuityProfile: settings.requestContinuityProfile,
       enabled: process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED === 'true',
@@ -284,22 +315,58 @@ async function main(mode) {
     await fs.mkdir(privateDirectory, { mode: 0o700 }); // Existing operation is never restarted/replayed.
     await write(path.join(privateDirectory, 'operation.json'), { operation, bundleDigest });
     let sequence = 0;
+    let lastState, actor;
+    const cloud = process.env.RIVET_QUALIFICATION_EVIDENCE_BUCKET
+      ? privateCloudEvidence({
+          bucket: process.env.RIVET_QUALIFICATION_EVIDENCE_BUCKET,
+          prefix: 'qualification',
+        })
+      : undefined;
+    const owner = Buffer.from(JSON.stringify({ operationId: operation.operationId, sourceSha: candidate.source.sha }));
+    const cloudGeneration = process.env.RIVET_QUALIFICATION_LOCK_GENERATION;
+    if (cloud) await cloud.assertOwner(cloudGeneration, owner);
+    const journal = cloud
+      ? privateCloudEvidence({
+          bucket: process.env.RIVET_QUALIFICATION_EVIDENCE_BUCKET,
+          prefix: `qualification/${operation.operationId}`,
+        })
+      : undefined;
+    const persist = async () => {
+      await journal?.saveDirectory(privateDirectory);
+    };
     const signal = new AbortController();
     const stop = () => signal.abort(Error('Qualification admission stopped'));
     process.once('SIGTERM', stop);
     process.once('SIGINT', stop);
     try {
+      if (process.env.RIVET_QUALIFICATION_COORDINATOR_MODE === 'external') {
+        actor = await prepareStagingActor(operation, {
+          api: coordinatorKubernetes(settings),
+          settings,
+          bundle,
+          digest: bundleDigest,
+          privateDirectory,
+          persist,
+        });
+      }
       const result = await executeRuntimeQualification(
         operation,
-        qualificationDriver(bundle, bundleDigest, {
-          cwd: root,
-          privateDirectory,
-          timeoutMs: 7_200_000,
-          env: { ...process.env, RIVET_QUALIFICATION_SOURCE_ROOT: root },
-        }),
-        (state) => write(path.join(privateDirectory, `${String(sequence++).padStart(3, '0')}-state.json`), state),
+        actor?.driver ??
+          qualificationDriver(bundle, bundleDigest, {
+            cwd: root,
+            privateDirectory,
+            timeoutMs: 7_200_000,
+            env: { ...process.env, RIVET_QUALIFICATION_SOURCE_ROOT: root },
+          }),
+        async (state) => {
+          lastState = state;
+          await write(path.join(privateDirectory, `${String(sequence++).padStart(3, '0')}-state.json`), state);
+          await persist();
+        },
         { signal: signal.signal },
       );
+      await actor?.close({ cleanupVerified: lastState?.cleanupVerified });
+      actor = undefined;
       await write(path.join(packet, 'qualification-result.json'), result);
       // No project data, credentials, raw Helm settings, provider logs or prompts.
       await write(path.join(packet, 'operation-public.json'), {
@@ -317,11 +384,14 @@ async function main(mode) {
       });
       await emit('control', result.control);
       await emit('autoscaling', result.autoscaling);
+      await persist();
+      if (cloud) await cloud.release(cloudGeneration);
       succeeded = true;
       console.log(
         `Qualified ${operation.candidate.source.sha}; cleanup verified. Production deployment was not started.`,
       );
     } finally {
+      await actor?.close({ cleanupVerified: lastState?.cleanupVerified });
       process.removeListener('SIGTERM', stop);
       process.removeListener('SIGINT', stop);
     }
@@ -334,7 +404,7 @@ async function main(mode) {
 }
 main(process.argv[2]).catch(() => {
   console.error(
-    '[runtime-qualification-execution] Phase failed. Inspect private operation inventory; no uncertain write was retried and no receipt contents were logged.',
+    '[runtime-qualification-execution] Phase failed. Inspect private qualification/deployment receipts; no uncertain write was retried and no receipt contents were logged.',
   );
   process.exitCode = 1;
 });

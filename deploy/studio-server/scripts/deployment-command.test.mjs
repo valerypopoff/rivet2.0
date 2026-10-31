@@ -29,6 +29,7 @@ import {
 } from './lib/ha-release-evidence.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
+import { installedSettingsDigest } from './lib/runtime-qualification-installation.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 test('fresh operator inputs reject stale rollout guards without rewriting bound recovery inputs', () => {
@@ -590,6 +591,25 @@ const clone = structuredClone;
 // Bound overlap rather than serialize all real CLI recovery journeys into one
 // CI timeout. Operations inside an individual journey remain strictly ordered.
 describe('isolated deployment command journeys', { concurrency: 3 }, () => {
+  test(
+    'qualification baseline is checked inside the real deployment command before any write or adapter',
+    { timeout: 330000 },
+    async (t) => {
+      const f = await fixture(t, 'rolling');
+      const baseline = installedSettingsDigest((await f.state()).installed);
+      const failed = await f.invoke(['--expected-installed-settings-digest', `sha256:${'0'.repeat(64)}`]);
+      assert.equal(failed.code, 1, failed.stdout + failed.stderr);
+      assert.match(failed.stderr, /settings changed since qualification/);
+      assert.ok(
+        !(await f.calls()).some((c) =>
+          ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(c.args[0]),
+        ),
+      );
+      assert.equal((await f.state()).journal, undefined);
+      const passed = await f.invoke(['--preflight-only', '--expected-installed-settings-digest', baseline]);
+      assert.equal(passed.code, 0, passed.stdout + passed.stderr);
+    },
+  );
   test(
     'maintenance uses private file-backed management documents without piped write acknowledgements',
     { timeout: 330000 },

@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { parse } from 'yaml';
 import { createKubernetesTransport } from './execution-autoscaler-kubernetes.mjs';
+import { stagingActorRole } from './reusable-staging-coordinator.mjs';
 import { packageReusableStaging } from '../package-reusable-staging.mjs';
 import { qualificationOperation, executeRuntimeQualification } from './runtime-qualification-execution.mjs';
 import { ReusableStagingState, stagingRecordPath } from './reusable-staging-state.mjs';
@@ -703,70 +704,7 @@ export function temporaryStagingRuntime({
           annotations: { 'iam.gke.io/gcp-service-account': plan.janitorServiceAccount },
         },
       });
-      const role = {
-        apiVersion: 'rbac.authorization.k8s.io/v1',
-        kind: 'ClusterRole',
-        metadata: { name: `${plan.operationId}-actor` },
-        rules: [
-          {
-            apiGroups: [''],
-            resources: [
-              'namespaces',
-              'pods',
-              'pods/exec',
-              'pods/log',
-              'services',
-              'endpoints',
-              'secrets',
-              'configmaps',
-              'persistentvolumeclaims',
-              'persistentvolumes',
-              'events',
-              'serviceaccounts',
-            ],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          { apiGroups: [''], resources: ['nodes'], verbs: ['get', 'list', 'watch'] },
-          {
-            apiGroups: ['apps'],
-            resources: ['statefulsets', 'deployments', 'replicasets'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          { apiGroups: ['batch'], resources: ['jobs'], verbs: ['get', 'list', 'watch', 'create', 'delete'] },
-          {
-            apiGroups: ['rbac.authorization.k8s.io'],
-            resources: ['roles', 'rolebindings'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['gateway.networking.k8s.io'],
-            resources: ['gateways', 'httproutes'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['networking.gke.io'],
-            resources: ['healthcheckpolicies', 'gcpbackendpolicies'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['autoscaling'],
-            resources: ['horizontalpodautoscalers'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['policy'],
-            resources: ['poddisruptionbudgets'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['storage.k8s.io'],
-            resources: ['storageclasses', 'volumeattachments'],
-            verbs: ['get', 'list', 'watch'],
-          },
-          { apiGroups: ['discovery.k8s.io'], resources: ['endpointslices'], verbs: ['get', 'list', 'watch'] },
-          { apiGroups: ['metrics.k8s.io'], resources: ['nodes', 'pods'], verbs: ['get', 'list'] },
-        ],
-      };
+      const role = stagingActorRole(`${plan.operationId}-actor`);
       await created(store, 'actor-role', '/apis/rbac.authorization.k8s.io/v1/clusterroles', role);
       await created(store, 'actor-binding', '/apis/rbac.authorization.k8s.io/v1/clusterrolebindings', {
         apiVersion: role.apiVersion,

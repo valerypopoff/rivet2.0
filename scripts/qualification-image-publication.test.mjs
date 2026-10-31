@@ -37,6 +37,8 @@ test('real subprocesses support captured or inherited output while preserving fa
 
 test('publication refuses branch/event confusion and command-shaped dispatch inputs before Docker access', () => {
   assert.equal(publicationInputs(env).namespace, 'ghcr.io/owner/repo-studio-server');
+  for (const GITHUB_EVENT_NAME of ['push', 'schedule'])
+    assert.equal(publicationInputs({ ...env, GITHUB_EVENT_NAME }).sourceSha, env.GITHUB_SHA);
   for (const change of [
     { GITHUB_REF: 'refs/heads/staging' },
     { GITHUB_EVENT_NAME: 'pull_request' },

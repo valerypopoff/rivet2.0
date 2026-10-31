@@ -150,9 +150,17 @@ export function prepareRuntimeQualification(input) {
   );
   const policy = autoscalerPolicy(a.policy);
   const runtimeAutoscaling = (
-    [2, 3].includes(runtimeControl.protocol) ? assertCooperativeAutoscalingEvidence : assertRuntimeAutoscalingEvidence
+    [2, 3, 4].includes(runtimeControl.protocol)
+      ? assertCooperativeAutoscalingEvidence
+      : assertRuntimeAutoscalingEvidence
   )(a.evidence, candidate, autoscalerPolicyDigest(policy));
-  if ([2, 3].includes(runtimeControl.protocol))
+  if (runtimeControl.qualification)
+    assert.equal(
+      runtimeControl.qualification.safetyDigest,
+      input.safetyDigest,
+      'Qualification does not match the committed runtime and infrastructure source',
+    );
+  if ([2, 3, 4].includes(runtimeControl.protocol))
     assert.equal(
       runtimeControl.autoscalerPolicyDigest,
       runtimeAutoscaling.policyDigest,

@@ -5,6 +5,14 @@ adds a journal-owned first proxy transition and exact regional evidence gate.
 Its [delivery plan](production-update-continuity-plan.md) retains provider
 qualification and production activation as separate, unfinished release gates.
 
+The standard [release workflow](automated-runtime-qualification.md) now reuses
+staging and deploys the qualified immutable manifest through one production
+action. Full qualification is automatic for runtime/infrastructure or unknown
+changes; eligible UI/docs-only releases on an unchanged protected baseline run
+fresh focused upgrade/300-second continuity checks. Focused certificates describe
+their own observations and retain the original full-baseline manifest reference.
+They cannot authorize first adoption, configuration changes or developer overlap.
+
 The optional [developer-backend overlap protocol](developer-backend-overlap.md)
 adds `singleton-overlap` without changing serial `singleton` or replicated-control
 defaults. It retains seven normal compact pods and temporarily adds one backend,

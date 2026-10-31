@@ -12,6 +12,7 @@ export function acquireFixtureFileLock(
   } = {},
 ) {
   const started = now();
+  let absentSince;
   while (true) {
     try {
       return io.openSync(file, 'wx');
@@ -23,8 +24,13 @@ export function acquireFixtureFileLock(
       } catch (readError) {
         if (readError.code !== 'ENOENT') throw readError;
       }
-      // EPERM is contention only while the expected regular lock exists.
-      if (error.code === 'EPERM' && !stat) throw error;
+      // Windows can deny open while another handle finishes deleting the lock,
+      // then report ENOENT to lstat. Bound that grace; persistent denial retains
+      // its original error and never authorizes stealing/deleting a lock.
+      if (error.code === 'EPERM' && !stat) {
+        absentSince ??= now();
+        if (now() - absentSince >= Math.min(100, timeoutMs)) throw error;
+      } else absentSince = undefined;
       if (stat && (!stat.isFile() || stat.isSymbolicLink())) throw Error('Unsafe fixture lock path.');
       if (now() - started >= timeoutMs) throw Error('Timed out waiting for fixture state lock; owner retained.');
       wait();

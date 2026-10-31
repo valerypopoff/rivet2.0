@@ -1,10 +1,26 @@
 # Deployment operation contracts
 
 The deployment command is `deploy/studio-server/scripts/deploy-kubernetes-release.mjs`.
-It never automatically starts a provider rehearsal or deploys after tests. An
+It never automatically starts a provider rehearsal. An
 operator must explicitly select the context, release and namespace and confirm
 the release name. The clean tracked checkout, exact promoted manifest source,
 chart fingerprint, immutable images and schema controls remain mandatory.
+
+The **Release Rivet** Actions workflow supplies those fixed inputs from an
+existing Build Images run and successful reusable-staging qualification. Its
+protected production action runs this command once; `deploy_production=false`
+stops at publication. See [automated qualification](automated-runtime-qualification.md).
+There is no separate readiness job. `--expected-installed-settings-digest`
+compares the canonical live Helm settings already read by the command with the
+qualification baseline, rejecting drift before adapters or Kubernetes writes.
+The action also binds namespace UID, operator values, source, images and manifest.
+Private policy/adapters are materialized outside the checkout from a protected,
+generation-pinned installation object on hosted CI. Private GCS keeps the
+operation replay fence and journal after runner loss; the command durably saves
+online recovery payloads before workload mutation. The staging actor receives
+only its in-cluster identity and sanitized operation. See
+[hosted CI installation](automated-runtime-qualification.md#hosted-ci-installation)
+for exact federation, namespace permissions, evidence and revocation boundaries.
 
 ## Ordinary seven-pod qualification and headroom
 
@@ -15,12 +31,19 @@ Nginx timeouts and exact network identities. It pauses proxy HPA scale-down befo
 warming the bridge and requires both quiet windows plus owned cleanup before
 journal completion. Existing short-request evidence cannot authorize this profile.
 
-See [automated qualification](automated-runtime-qualification.md) for the separate
-Built, Qualified and Production-preflight statuses. Qualification does not start
-a deployment or waive live backup/identity checks. The maintained reusable fixture
+See [automated qualification](automated-runtime-qualification.md) for Built,
+Qualified and Deployed results. Qualification-only mode does not start deployment;
+the production action retains live backup/identity checks. The maintained reusable fixture
 and independent expiry janitor are implemented locally; their infrastructure,
 runner/IAM installation and first approved provider run remain activation gates.
 Local command tests are not GKE evidence and cannot activate cloud access.
+
+Ordinary compatible releases use the existing installation-owned online recovery
+adapter, with no separate manual backup audit or frozen database export. Schema
+incompatibility/destructive migration keeps the explicit maintenance procedure
+and consistent backup. Acceptance failure preserves serving owners and private
+receipts; recover the exact operation or repair forward instead of retrying an
+unknown update or automatically rolling back a potentially changed database.
 
 The default local runtime qualification is an installed-to-candidate upgrade of
 the compact singleton seven-pod baseline, not a replay of historical topology
@@ -224,6 +247,10 @@ The gate's JavaScript configuration and its adjacent TypeScript declaration
 must both describe the predecessor schema version. Run `yarn studio-server:build`
 as well as the focused release-gate tests: the test runner alone does not
 type-check that declaration.
+The command fixture's private file lock allows at most 100 ms for Windows
+delete-pending handles to disappear between open and stat. Persistent permission
+failure retains its original error; the fixture never steals a lock. This retry
+is test-only and does not replay an uncertain deployment command.
 When the predecessor is below that floor, the HA gate tests the candidate
 against itself and records bootstrap evidence, not a mixed-version certificate.
 That evidence cannot authorize a rolling upgrade from the old installation;

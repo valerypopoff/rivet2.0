@@ -136,8 +136,9 @@ export async function planInstalledUpgrade({
       images: next.images,
       ...(autoscalingPolicyDigest
         ? {
-            autoscalingDuringUpgrade:
-              next.evidence.runtimeAutoscaling?.protocol === 2 ? 'scale-up-only' : 'legacy-frozen',
+            autoscalingDuringUpgrade: [2, 3].includes(next.evidence.runtimeAutoscaling?.protocol)
+              ? 'scale-up-only'
+              : 'legacy-frozen',
           }
         : {}),
     });
