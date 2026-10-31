@@ -184,7 +184,10 @@ async function fixture(t, fault, selectedResources = resources) {
       await new Promise((resolve) => setTimeout(resolve, 10));
       activeCreates--;
       if (faults.has('namespace-change-response')) namespaceUid = 'replacement-ns';
-      if (faults.has('lease-loss')) operation.expired = true;
+      // This recovery case owns accepted Jobs. Do not let response timing
+      // expire the lease while another CREATE is still only a saved intent;
+      // that genuinely uncertain case must stay fenced instead of recovering.
+      if (faults.has('lease-loss') && jobs.size === record.preparation.jobs.length) operation.expired = true;
       if (faults.has('lost-create') && !consumed) {
         consumed = true;
         unknownJobUid = job.metadata.uid;
@@ -500,6 +503,7 @@ test('lease loss fences cleanup; exact recovery observes accepted Jobs without c
   await assert.rejects(f.run());
   const creates = f.calls.filter((c) => c.method === 'POST').length;
   assert.ok(creates > 0 && f.jobs.size > 0);
+  assert.equal(f.jobs.size, f.operation.record.preparation.jobs.length, 'Recovery fixture must accept every CREATE');
   assert.equal(f.calls.filter((c) => c.method === 'DELETE').length, 0);
   f.operation.expired = false; // Stand-in for explicit recovery of this same token.
   await f.run();
