@@ -13,9 +13,9 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  assert.match(value.region, /^[a-z]+-[a-z]+[0-9]+$/, 'Staging requires the actual regional Compute scope');
   if (value.requestContinuityProfile) {
     assertRequestContinuityProfile(value.requestContinuityProfile);
-    assert.match(value.region, /^[a-z]+-[a-z]+[0-9]+$/, 'Continuity requires the actual regional Compute scope');
   }
   if (value.developerOverlapProfile) overlapQualificationProfile(value.developerOverlapProfile);
   assert.equal(value.protocol, 1);
@@ -50,13 +50,24 @@ export function reusableStagingSettings(value) {
     dns(secret.name);
     assert.ok(typeof secret.uid === 'string' && secret.uid);
   }
-  assert.ok(Array.isArray(value.trustedClients) && value.trustedClients.length);
-  for (const client of value.trustedClients) {
-    const [ip, bits, extra] = client.split('/');
-    const family = isIP(ip);
-    assert.ok(family && !extra);
-    if (bits !== undefined)
-      assert.ok(/^\d+$/.test(bits) && Number(bits) > 0 && Number(bits) <= (family === 4 ? 32 : 128));
+  for (const field of ['trustedClients', 'trustedForwardingProxies']) {
+    const minimum = field === 'trustedForwardingProxies' ? 2 : 1;
+    assert.ok(
+      Array.isArray(value[field]) && value[field].length >= minimum && value[field].length <= 100,
+      `Staging ${field} must be explicit`,
+    );
+    assert.equal(new Set(value[field]).size, value[field].length, `Duplicate staging ${field}`);
+    for (const client of value[field]) {
+      assert.equal(typeof client, 'string', `Invalid staging ${field} address`);
+      const [ip, bits, extra] = client.split('/');
+      const family = isIP(ip);
+      assert.ok(family && !extra, `Invalid staging ${field} address`);
+      if (bits !== undefined)
+        assert.ok(
+          /^\d+$/.test(bits) && Number(bits) > 0 && Number(bits) <= (family === 4 ? 32 : 128),
+          `Invalid staging ${field} prefix`,
+        );
+    }
   }
   return Object.freeze(structuredClone(value));
 }

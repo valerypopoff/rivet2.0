@@ -79,6 +79,7 @@ const settings = () =>
     storageClassName: 'standard-rwo',
     domain: 'qualification.example.test',
     trustedClients: ['10.128.0.0/20'],
+    trustedForwardingProxies: ['172.30.32.0/23', '192.0.2.200/32'],
     postgresImage: `registry.test/postgres@sha256:${digest}`,
     objectStorageImage: `registry.test/minio@sha256:${digest}`,
   });
@@ -322,6 +323,7 @@ test('shared staging prerequisites reject setup failures before namespace or dep
       ],
     },
     status: {
+      addresses: [{ type: 'IPAddress', value: '192.0.2.200' }],
       conditions: [positive('Programmed')],
       listeners: [{ name: 'https', conditions: [positive('Accepted'), positive('ResolvedRefs')] }],
     },
@@ -368,6 +370,12 @@ test('shared staging prerequisites reject setup failures before namespace or dep
   );
   assert.equal(f.requests.length, 0, 'A broken local browser must fail before any cluster request');
   const cases = [
+    [
+      () => {
+        f.objects.get(gatewayPath).status.addresses[0].value = '192.0.2.201';
+      },
+      /frontend IP/,
+    ],
     [
       () => {
         f.objects.get(gatewayPath).status.conditions[0].observedGeneration = 2;
@@ -769,6 +777,14 @@ test('reusable fixture validates infrastructure scope and exports only runtime s
   for (const patch of [
     { projectId: 'wartime-storyteller' },
     { trustedClients: ['0.0.0.0/0'] },
+    { region: undefined },
+    { trustedForwardingProxies: undefined },
+    { trustedForwardingProxies: [] },
+    { trustedForwardingProxies: ['192.0.2.200/32'] },
+    { trustedForwardingProxies: ['192.0.2.200/32', '192.0.2.200/32'] },
+    { trustedForwardingProxies: ['0.0.0.0/0'] },
+    { trustedForwardingProxies: ['::/0'] },
+    { trustedForwardingProxies: ['proxy.example.test'] },
     { domain: 'storyteller-rivet.litnet.com' },
     { runnerNamespace: 'default' },
   ])
@@ -834,6 +850,8 @@ test('concrete provider Helm render retains installed production timing, real ma
   assert.equal(values.release.production.manifestDigest, getStudioServerReleaseManifestDigest(candidate));
   assert.equal(values.env.RIVET_REQUIRE_UI_GATE_KEY, 'true');
   assert.equal(values.env.RIVET_TRUST_INCOMING_FORWARDED_HEADERS, 'true');
+  assert.equal(values.env.RIVET_TRUSTED_FORWARDING_PROXIES, settings().trustedForwardingProxies.join(','));
+  assert.equal(values.env.RIVET_DEVELOPMENT_AUTH_CLIENTS, settings().trustedClients.join(','));
   assert.equal(values.legacyRestore.storageClassName, settings().storageClassName);
   const rendered = await gate.resources(values, 'provider');
   const owners = rendered.filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind));
@@ -842,6 +860,91 @@ test('concrete provider Helm render retains installed production timing, real ma
     7,
   );
   assert.ok(!owners.some((r) => r.spec.template.spec.volumes?.some((v) => v.hostPath)));
+  const proxies = Array.from({ length: 2 }, (_, i) => ({
+    metadata: {
+      name: `proxy-${i}`,
+      uid: `proxy-${i}`,
+      namespace: gate.config.namespace,
+      labels: { 'app.kubernetes.io/instance': gate.config.release, 'app.kubernetes.io/component': 'proxy' },
+    },
+    spec: {
+      nodeName: `node-${i}`,
+      readinessGates: [{ conditionType: 'cloud.google.com/load-balancer-neg-ready' }],
+      topologySpreadConstraints: [
+        {
+          topologyKey: 'topology.kubernetes.io/zone',
+          nodeTaintsPolicy: 'Honor',
+          whenUnsatisfiable: 'DoNotSchedule',
+          minDomains: 2,
+          maxSkew: 1,
+        },
+      ],
+      containers: [{ ports: [{ name: 'http', containerPort: 8080 }] }],
+    },
+    status: {
+      podIP: `10.0.0.${i + 1}`,
+      conditions: [
+        { type: 'Ready', status: 'True' },
+        {
+          type: 'cloud.google.com/load-balancer-neg-ready',
+          status: 'True',
+          reason: 'LoadBalancerNegWithoutHealthCheck',
+        },
+      ],
+    },
+  }));
+  const web = structuredClone(proxies[0]);
+  web.metadata.uid = 'web-0';
+  web.metadata.labels['app.kubernetes.io/component'] = 'web';
+  const nodes = proxies.map((p, i) => ({
+    metadata: {
+      name: p.spec.nodeName,
+      uid: `node-uid-${i}`,
+      labels: { 'kubernetes.io/hostname': p.spec.nodeName, 'topology.kubernetes.io/zone': `zone-${i}` },
+    },
+  }));
+  const service = {
+    metadata: {
+      uid: 'proxy-service',
+      namespace: gate.config.namespace,
+      annotations: {
+        'cloud.google.com/neg-status': JSON.stringify({
+          zones: ['zone-0', 'zone-1'],
+          network_endpoint_groups: { 80: 'proxy-neg' },
+        }),
+      },
+    },
+    spec: { selector: { 'app.kubernetes.io/component': 'proxy' }, ports: [{ port: 80, targetPort: 'http' }] },
+  };
+  gate.assertProofContext = async () => {};
+  gate.kubectl = async (args) => ({
+    stdout: JSON.stringify(
+      args.includes('service') ? service : { items: args.includes('pods') ? [...proxies, web] : nodes },
+    ),
+  });
+  gate.observeProxyBackend = async (current) => {
+    assert.equal(current.metadata.uid, service.metadata.uid);
+    return {
+      healthy: true,
+      serviceUid: service.metadata.uid,
+      backendService: 'regional',
+      backendServiceId: '123',
+      observedAt: Date.now(),
+      healthyEndpoints: proxies.map((p, i) => ({
+        ipAddress: p.status.podIP,
+        port: 8080,
+        zone: `zone-${i}`,
+        neg: 'proxy-neg',
+      })),
+    };
+  };
+  gate.config.deploymentTimeoutSeconds = 1;
+  assert.ok(
+    (await gate.frontendAvailability())
+      .filter((p) => p.component === 'proxy')
+      .every((p) => p.negHealth === 'ComputeHealthy'),
+    'The provider HPA frontend caller must use actual Compute health too',
+  );
   const edgeWrites = [];
   gate.assertProofContext = async () => {};
   gate.kube = async (args, options) => {
@@ -908,6 +1011,34 @@ test('real HTTP lost CREATE acknowledgement reconciles exact nonce once; replace
     r.namespaceCreateIssued = true;
   });
   await assert.rejects(second.state.namespace(), /uncertain/);
+});
+
+test('provider preflight checks the actual resolved public client over HTTP before dummy OAuth', async (t) => {
+  let clientAddress = '198.51.100.18';
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ clientAddress, trusted: false }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const gate = Object.create(ReusableProviderGate.prototype);
+  gate.config = { baseUrl: `http://127.0.0.1:${server.address().port}` };
+  gate.settings = { trustedClients: ['198.51.100.0/24'] };
+  gate.secrets = { rivetKey: 'fixture-only-key' };
+  gate.uiCookie = 'rivet_ui_token=fixture';
+  assert.deepEqual(await gate.verifyClientProvenance(), { verifiedPublicTestClient: true });
+  for (const address of ['172.30.32.7', '192.0.2.200', '127.0.0.1', null, 'not-an-address']) {
+    clientAddress = address;
+    await assert.rejects(gate.verifyClientProvenance(), /allowed public test client/);
+  }
+  assert.ok(
+    requests.every((r) => r.method === 'GET' && r.path === '/api/app-settings/trusted-clients/current-request'),
+  );
 });
 test('normal cleanup proves exact absence and retains shared Gateway, runner and control registry', async (t) => {
   const f = await fixture(t);

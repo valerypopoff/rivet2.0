@@ -32,7 +32,19 @@ cluster, Gateway/TLS, access and independent janitor once. GitHub-hosted
 Linux jobs coordinate short-lived in-cluster actors; no permanent runner VM is
 required. A new operation
 still creates an isolated namespace with synthetic data and deletes its complete
-fixture afterward. The previous temporary campaign is closed. On 2026-10-31,
+fixture afterward. Staging settings require `region` and a reviewed
+`trustedForwardingProxies` list containing the proxy-only subnet CIDR and exact
+Gateway frontend IP. The provider passes this to
+`RIVET_TRUSTED_FORWARDING_PROXIES`; `trustedClients` remains the separate allowlist
+of actual public test clients. Shared admission checks the live Gateway frontend
+against that list before namespace creation. Missing lists, too few peers,
+duplicates or universal ranges fail packaging/admission. The temporary factory derives both
+hops from its owned subnet/address. Before fixture seeding or dummy OAuth, the
+provider reads the authenticated current-request diagnostic and checks that the
+actual resolved client belongs to its frozen public-client allowlist. Forwarding
+peer addresses cannot stand in for that client. See [client provenance](trusted-clients.md).
+
+The previous temporary campaign is closed. On 2026-10-31,
 after the user's explicit request to create and retain staging, the persistent
 cluster foundation was installed independently of that campaign. It has a
 dedicated VPC/subnet, private Autopilot nodes, outbound NAT, a keyless node account
@@ -363,6 +375,13 @@ seconds. Loss or an unreadable liveness observation aborts the local wait, recor
 an unknown outcome privately and never replays the phase. Independent cleanup
 still requires writer absence and exact resource inventory, rather than treating
 the interrupted connection as proof of deletion.
+
+Kubernetes exec completes on its explicit status-channel result, matching the
+[official JavaScript client](https://github.com/kubernetes-client/javascript/blob/main/src/exec.ts).
+It does not wait for a forwarding socket to close afterward. Failure status,
+missing status, malformed status, cancellation and deadlines remain failures;
+no uncertain command is replayed. Real HTTP/WebSocket regressions keep the socket
+open after success/failure to exercise this boundary through actor cleanup.
 
 Private journals are content-addressed immutable GCS objects, with checksum and
 generation verification and no overwrite. Recover an uncertain operation from

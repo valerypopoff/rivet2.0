@@ -46,6 +46,15 @@ export async function inspectStagingPrerequisites(state, { verifyTls = verifySta
   );
   assert.equal(gateway?.metadata.uid, settings.gatewayUid);
   assert.ok(!gateway.metadata.deletionTimestamp);
+  const frontends = gateway.status?.addresses?.filter((a) => a.type === 'IPAddress' && isIP(a.value));
+  assert.ok(frontends?.length === 1, 'Shared staging Gateway requires one verified frontend IP');
+  const frontend = frontends[0].value;
+  assert.ok(
+    settings.trustedForwardingProxies.some(
+      (peer) => peer === frontend || peer === `${frontend}/${isIP(frontend) === 4 ? 32 : 128}`,
+    ),
+    'Staging forwarding trust must include the exact Gateway frontend IP',
+  );
   const generation = gateway.metadata.generation;
   const condition = (conditions, type) =>
     conditions?.some((c) => c.type === type && c.status === 'True' && c.observedGeneration === generation);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
@@ -16,7 +17,7 @@ import { runHaKubernetesRollout, haRolloutAutoscalingValues } from '../lib/ha-ku
 import { createDeploymentSafety } from '../lib/deployment-safety.mjs';
 import { releaseOperationJournalName } from '../lib/release-operation-journal.mjs';
 import { getStudioServerReleaseManifestDigest } from '../lib/studio-server-release-manifest.mjs';
-import { assertGkeFrontendAvailability, waitForGkeFrontendAvailability } from '../lib/ha-gke-availability.mjs';
+import { waitForGkeFrontendAvailability } from '../lib/ha-gke-availability.mjs';
 import { resolveHelmBinOrThrow } from '../lib/k8s-tools.mjs';
 import { inspectStagingPrerequisites } from '../lib/reusable-staging-prerequisites.mjs';
 import { applyOverlapQualificationProfile } from '../lib/qualification-overlap-profile.mjs';
@@ -28,6 +29,7 @@ import { stagingHostname } from '../lib/reusable-staging-state.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
+const ipaddr = createRequire(path.join(root, 'packages/studio-server-api/package.json'))('ipaddr.js');
 export const role = (p) => p.metadata?.labels?.['app.kubernetes.io/component'];
 export const ready = (p) =>
   !!p && !p.metadata.deletionTimestamp && p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
@@ -190,6 +192,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         RIVET_REQUIRE_UI_GATE_KEY: 'true',
         RIVET_ENABLE_DEVELOPMENT_AUTH: 'true',
         RIVET_DEVELOPMENT_AUTH_CLIENTS: this.settings.trustedClients.join(','),
+        RIVET_TRUSTED_FORWARDING_PROXIES: this.settings.trustedForwardingProxies.join(','),
         RIVET_CORS_ALLOWED_ORIGINS: this.config.baseUrl,
         RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'true', // Only the approved Gateway reaches this ClusterIP edge.
       },
@@ -502,12 +505,14 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       ?.split(';')[0];
     assert.ok(this.uiCookie);
     await response.body?.cancel();
-    if (webAppSession)
+    if (webAppSession) {
+      await this.verifyClientProvenance();
       this.publicAppCookie = await createReleaseGateWebAppOAuthSession(
         this.config.baseUrl,
         'release-gate-web-app',
         'runtime-control@example.test',
       );
+    }
   }
   get probeHeaders() {
     return { authorization: `Bearer ${this.secrets.rivetKey}`, cookie: this.uiCookie };
@@ -535,13 +540,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     return super.enableOAuth(base, relativePath, { allowNonLocalhost: true, sessionTtlSeconds: 10800 });
   }
   async frontendAvailability() {
-    return assertGkeFrontendAvailability(
-      await this.pods(),
-      JSON.parse((await this.kubectl(['get', 'nodes', '-o', 'json'], { capture: true })).stdout).items,
-      this.config.release,
-      'singleton',
-      'compact',
-    );
+    return waitForGkeFrontendAvailability(this);
   }
   async verifyProtectedProxyAvailability() {
     const resources = await this.resources(this.values(this.config.images), 'protected-proxy-acceptance');
@@ -565,6 +564,30 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     await waitForGkeFrontendAvailability(this);
     await this.loadWorkflowKey();
     await this.waitForDeveloperRoute(this.config.baseUrl);
+    await this.verifyClientProvenance();
+  }
+  async verifyClientProvenance() {
+    const observed = await this.requestWorkflow(
+      this.config.baseUrl,
+      '/api/app-settings/trusted-clients/current-request',
+    );
+    let allowed = false;
+    try {
+      const address = ipaddr.process(observed.clientAddress);
+      allowed = this.settings.trustedClients.some((network) => {
+        const [range, prefix] = network.includes('/')
+          ? ipaddr.parseCIDR(network)
+          : [ipaddr.process(network), ipaddr.process(network).kind() === 'ipv4' ? 32 : 128];
+        return address.kind() === range.kind() && address.match(range, prefix);
+      });
+    } catch {
+      /* Invalid or unavailable provenance never authorizes test login. */
+    }
+    assert.ok(
+      allowed,
+      'Staging forwarding did not resolve an allowed public test client; check proxy subnet, frontend hop and NAT allowlist before OAuth',
+    );
+    return { verifiedPublicTestClient: true };
   }
   async verifyPublishedBrowser(base) {
     await run(

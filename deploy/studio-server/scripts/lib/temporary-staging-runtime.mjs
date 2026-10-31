@@ -661,6 +661,7 @@ export function temporaryStagingRuntime({
         mode: 'reusable-cluster',
         projectId: plan.projectId,
         projectNumber: plan.projectNumber,
+        region: plan.region,
         clusterUid,
         clusterServer: `https://${record.resources.find((i) => i.key === 'cluster').identity.endpoint}/`,
         inClusterServer: `https://${kubernetesService.spec.clusterIP}/`,
@@ -673,12 +674,12 @@ export function temporaryStagingRuntime({
         gatewayUid: gateway.metadata.uid,
         domain: hostname.slice(plan.operationId.length + 1),
         trustedClients: plan.trustedClients,
+        trustedForwardingProxies: [plan.cidrs.proxy, `${address.address}/32`],
         postgresImage: plan.postgresImage,
         objectStorageImage: plan.objectStorageImage,
         storageClassName: 'standard-rwo',
         ...(inputs.developerOverlapProfile ? { developerOverlapProfile: inputs.developerOverlapProfile } : {}),
         ...(inputs.requestContinuityProfile ? { requestContinuityProfile: inputs.requestContinuityProfile } : {}),
-        ...(inputs.requestContinuityProfile ? { region: plan.region } : {}),
       };
       if (plan.registrySecretSha256) {
         const bytes = await stagingRegistryConfig(plan, registryFile, requiredImages(plan)),

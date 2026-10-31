@@ -176,7 +176,6 @@ export function createKubernetesTransport({
         );
         let output = '',
           bytes = 0,
-          status,
           stderr = false,
           settled = false,
           heartbeat;
@@ -234,7 +233,12 @@ export function createKubernetesTransport({
           }
           if (data[0] === 3) {
             try {
-              status = JSON.parse(data.subarray(1).toString('utf8'));
+              const status = JSON.parse(data.subarray(1).toString('utf8'));
+              // Kubernetes' status channel terminates the command streams.
+              // A proxy can retain the socket after the process has exited.
+              // Match the official JS client's status callback completion.
+              if (status?.status === 'Success' && (!stderr || onStderr)) finish(null, output + decoder.end());
+              else finish(new Error('Kubernetes exec did not report a successful exit.'));
             } catch {
               finish(new Error('Kubernetes exec status is invalid.'));
             }
@@ -242,13 +246,11 @@ export function createKubernetesTransport({
         });
         socket.once('error', () => finish(new Error('Kubernetes exec connection failed; command outcome is unknown.')));
         socket.once('close', (code) =>
-          status?.status === 'Success' && (!stderr || onStderr)
-            ? finish(null, output + decoder.end())
-            : finish(
-                new Error(
-                  `Kubernetes exec did not confirm a successful exit (close code ${code}); command outcome is unknown.`,
-                ),
-              ),
+          finish(
+            new Error(
+              `Kubernetes exec did not confirm a successful exit (close code ${code}); command outcome is unknown.`,
+            ),
+          ),
         );
       });
     },
