@@ -517,7 +517,10 @@ while preparation ownership remains unresolved.
 Local checks: `ha-rollout-preparation.test.mjs`, `ha-rolling-upgrade.test.mjs`,
 `execution-autoscaler.test.mjs`, and the real rolling deployment-command regression
 cover parallelism, image/capacity failures, response loss, replacement identities,
-cleanup and preservation of routing/drain behavior. HTTP/Helm stand-ins are not
+cleanup and preservation of routing/drain behavior. The lease-loss recovery
+fixture waits until every CREATE is accepted, so response timing cannot conflate
+accepted Jobs with uncertain saved intents. Separate unknown-CREATE checks keep
+the latter fenced. HTTP/Helm stand-ins are not
 native scheduling or GKE throughput evidence; provider qualification must exercise
 the exact candidate's new preparation path before a production rolling release.
 
