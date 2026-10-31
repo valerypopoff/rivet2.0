@@ -111,6 +111,10 @@ async function fixture(t) {
         socket.close(1012);
         return;
       }
+      if (state.hangPhase && phase === 'prepare') {
+        state.deleted = true; // The API loses the exact actor while exec stays open.
+        return;
+      }
       const result =
         phase === 'preflight'
           ? { sourceSha: state.preflightSha, offlineFixturePassed: true }
@@ -149,6 +153,7 @@ async function fixture(t) {
     bundle,
     digest: qualificationHash(manifest),
     privateDirectory,
+    actorWatchIntervalMs: 10,
     wait: async (label, check) => {
       if (label.includes('Ready'))
         assert.equal(
@@ -219,6 +224,8 @@ test('actor manifest has only in-cluster identity, pinned image and finite lifet
   const job = stagingActorJob(operation, settings),
     container = job.spec.template.spec.containers[0];
   assert.equal(container.image, settings.actorImage);
+  assert.equal(job.spec.template.metadata.annotations['cluster-autoscaler.kubernetes.io/safe-to-evict'], 'false');
+  assert.equal(job.spec.activeDeadlineSeconds, 10800, 'Eviction protection never extends the absolute lifetime');
   assert.deepEqual(container.env.map((e) => e.name).sort(), [
     'KUBECONFIG',
     'POD_NAME',
@@ -229,4 +236,27 @@ test('actor manifest has only in-cluster identity, pinned image and finite lifet
   assert.ok(rules.some((r) => r.resources.includes('deployments/scale') && r.verbs.includes('patch')));
   assert.ok(rules.some((r) => r.resources.includes('pods/eviction') && r.verbs.includes('create')));
   assert.throws(() => stagingActorJob(operation, { ...settings, actorImage: 'actor:latest' }));
+});
+
+test('actor loss closes a silent real exec promptly and never replays the phase or deletes an unverified actor', async (t) => {
+  const f = await fixture(t),
+    actor = await f.prepare();
+  f.state.hangPhase = true;
+  await assert.rejects(actor.driver.prepare(), /aborted/);
+  assert.equal(f.state.commands.filter((c) => c.phase === 'prepare').length, 1);
+  await assert.rejects(actor.driver.prepare(), /Never replay/);
+  await actor.close({ cleanupVerified: false });
+  assert.equal(f.state.creates, 1);
+  const logs = await fs.readdir(f.options.privateDirectory);
+  const loss = JSON.parse(
+    await fs.readFile(
+      path.join(
+        f.options.privateDirectory,
+        logs.find((n) => n.startsWith('actor-loss-')),
+      ),
+      'utf8',
+    ),
+  );
+  assert.equal(loss.expectedPodUid, 'actor-pod');
+  assert.equal(loss.outcome, 'unknown-no-replay');
 });

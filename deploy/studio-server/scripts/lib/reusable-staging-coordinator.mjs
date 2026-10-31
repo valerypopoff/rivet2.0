@@ -119,7 +119,12 @@ export function stagingActorJob(operation, settings) {
         Math.ceil((Date.parse(operation.expiresAt) - Date.parse(operation.startedAt)) / 1000) + 3600,
       ttlSecondsAfterFinished: 300,
       template: {
-        metadata: { labels: { 'rivet.dev/qualification-runner': 'true' } },
+        metadata: {
+          labels: { 'rivet.dev/qualification-runner': 'true' },
+          // This non-retrying Job must survive voluntary Autopilot scale-down.
+          // Its existing active deadline still bounds test plus cleanup time.
+          annotations: { 'cluster-autoscaler.kubernetes.io/safe-to-evict': 'false' },
+        },
         spec: {
           serviceAccountName: 'rivet-qualification-actor',
           restartPolicy: 'Never',
@@ -162,8 +167,18 @@ export function stagingActorJob(operation, settings) {
 
 export async function prepareStagingActor(
   operation,
-  { api, settings, bundle, digest, privateDirectory, wait = waitForStagingActor, persist = async () => {} },
+  {
+    api,
+    settings,
+    bundle,
+    digest,
+    privateDirectory,
+    wait = waitForStagingActor,
+    persist = async () => {},
+    actorWatchIntervalMs = 5000,
+  },
 ) {
+  assert.ok(Number.isSafeInteger(actorWatchIntervalMs) && actorWatchIntervalMs > 0 && actorWatchIntervalMs <= 30000);
   await verifyQualificationDriver(bundle, digest);
   const system = await api.json('GET', '/api/v1/namespaces/kube-system');
   assert.equal(system.metadata.uid, settings.clusterUid);
@@ -207,13 +222,39 @@ export async function prepareStagingActor(
   async function rpc(command, payload, timeoutMs = 600000) {
     assert.equal((await api.json('GET', actorPath))?.metadata.uid, pod.metadata.uid, 'Actor was replaced');
     const stderr = [];
-    let size = 0;
+    const signal = new AbortController();
+    let size = 0,
+      finished = false,
+      checking,
+      actorLoss;
+    const monitor = setInterval(() => {
+      if (checking || finished) return;
+      checking = api
+        .json('GET', actorPath)
+        .then((current) => {
+          if (!finished && (current?.metadata.uid !== pod.metadata.uid || !ready(current))) {
+            actorLoss = 'Exact actor disappeared, was replaced or stopped being ready';
+            signal.abort();
+          }
+        })
+        .catch(() => {
+          if (!finished) {
+            actorLoss = 'Actor liveness could not be observed';
+            signal.abort();
+          }
+        })
+        .finally(() => {
+          checking = undefined;
+        });
+    }, actorWatchIntervalMs);
+    monitor.unref();
     try {
       const client = api.withTimeout ? api.withTimeout(timeoutMs) : api;
       return JSON.parse(
         await client.exec(`${actorPath}/exec`, command, {
           container: 'actor',
           stdin: Buffer.from(JSON.stringify(payload)),
+          signal: signal.signal,
           maxOutputBytes: 32 * 1024 * 1024,
           onStderr: (part) => {
             if ((size += part.length) <= 1024 * 1024) stderr.push(part);
@@ -221,6 +262,15 @@ export async function prepareStagingActor(
         }),
       );
     } finally {
+      finished = true;
+      clearInterval(monitor);
+      await checking;
+      if (actorLoss)
+        await fs.writeFile(
+          path.join(privateDirectory, `actor-loss-${Date.now()}-${randomUUID()}.json`),
+          JSON.stringify({ expectedPodUid: pod.metadata.uid, reason: actorLoss, outcome: 'unknown-no-replay' }),
+          { flag: 'wx', mode: 0o600 },
+        );
       await fs.writeFile(
         path.join(privateDirectory, `actor-${Date.now()}-${randomUUID()}.log`),
         Buffer.concat(stderr),

@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { assertProtectedProxyTemplate } from './request-continuity.mjs';
 import { createProxyContinuityTransition, buildProxyBridge } from './proxy-continuity-transition.mjs';
+import { hasReadyGkeNegGate, assertGkeProxyBackendHealth, isGkeProxyBackendReady } from './gke-proxy-health.mjs';
 
 const exec = promisify(execFile);
 const marker = 'rivet.dev/continuity-operation';
@@ -27,17 +28,7 @@ const paths = {
   HealthCheckPolicy: '/apis/networking.gke.io/v1',
   PodDisruptionBudget: '/apis/policy/v1',
 };
-const ready = (p) =>
-  !p.metadata.deletionTimestamp && p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
-const negReady = (p) =>
-  ready(p) &&
-  p.spec.readinessGates?.some((g) => g.conditionType === 'cloud.google.com/load-balancer-neg-ready') &&
-  p.status.conditions.some(
-    (c) =>
-      c.type === 'cloud.google.com/load-balancer-neg-ready' &&
-      c.status === 'True' &&
-      c.reason === 'LoadBalancerNegReady',
-  );
+const negReady = (p) => hasReadyGkeNegGate(p, { allowStandalone: true });
 
 async function defaultAccessToken() {
   const bin = process.env.RIVET_GCLOUD_BIN || 'gcloud';
@@ -59,8 +50,9 @@ async function defaultAccessToken() {
  * getHealth is a read-only Compute operation despite its HTTP POST verb. */
 export function createComputeBackendObserver(
   network,
-  { fetchImpl = fetch, accessToken = defaultAccessToken, now = Date.now } = {},
+  { fetchImpl = fetch, accessToken = defaultAccessToken, now = Date.now, minimumRequestSeconds = 300 } = {},
 ) {
+  assert.ok(Number.isSafeInteger(minimumRequestSeconds) && minimumRequestSeconds >= 0);
   const project = network.gcpProject,
     region = network.gcpRegion;
   for (const value of [project, region]) assert.match(value, /^[a-z][a-z0-9-]{0,62}$/);
@@ -81,7 +73,9 @@ export function createComputeBackendObserver(
     assert.equal(response.status, 200, 'Compute backend observation failed');
     return response.json();
   };
-  return async (service) => {
+  return async (service, { allowPending = false } = {}) => {
+    const observedAt = now();
+    assert.ok(service.metadata.uid, 'Service identity missing');
     const status = JSON.parse(service.metadata.annotations?.['cloud.google.com/neg-status'] ?? '{}');
     assert.ok(
       status.zones?.length >= 2 &&
@@ -108,23 +102,48 @@ export function createComputeBackendObserver(
       (b) =>
         b.backends?.length === groups.length && groups.every((g) => b.backends.some((v) => v.group.endsWith(`/${g}`))),
     );
+    assert.ok(matches.length <= 1, 'Service must resolve to exactly one actual regional backend');
+    const pending = () => ({
+      healthy: false,
+      serviceUid: service.metadata.uid,
+      observedAt,
+      healthyEndpoints: [],
+      backendServiceDrainSeconds: 0,
+    });
+    if (allowPending && (!matches.length || !matches[0].healthChecks?.length)) return pending();
     assert.equal(matches.length, 1, 'Service must resolve to exactly one actual regional backend');
     const backend = matches[0];
     assert.match(backend.name, /^[a-z0-9-]+$/);
+    assert.match(String(backend.id), /^[1-9][0-9]*$/);
+    assert.ok(backend.healthChecks?.length, 'Regional backend health checks are not attached');
     assert.equal(backend.loadBalancingScheme, 'EXTERNAL_MANAGED');
-    assert.ok(backend.timeoutSec >= 300, 'Provider request timeout is shorter than the protected request');
+    assert.ok(
+      backend.timeoutSec >= minimumRequestSeconds,
+      'Provider request timeout is shorter than the protected request',
+    );
     const health = await Promise.all(
       groups.map(async (group) => {
         const result = await request(`regions/${region}/backendServices/${backend.name}/getHealth`, {
           group: `https://www.googleapis.com/compute/v1/${group}`,
         });
-        return result.healthStatus?.some((h) => h.healthState === 'HEALTHY') === true;
+        return (result.healthStatus ?? [])
+          .filter((h) => h.healthState === 'HEALTHY')
+          .map((h) => ({
+            ipAddress: h.ipAddress,
+            port: h.port,
+            zone: group.split('/')[3],
+            neg,
+          }));
       }),
     );
     return {
       backendServiceDrainSeconds: backend.connectionDraining?.drainingTimeoutSec ?? 0,
-      healthy: health.filter(Boolean).length >= 2,
+      healthy: health.filter((endpoints) => endpoints.length).length >= 2,
       backendService: backend.name,
+      backendServiceId: String(backend.id),
+      serviceUid: service.metadata.uid,
+      observedAt,
+      healthyEndpoints: health.flat(),
     };
   };
 }
@@ -211,6 +230,9 @@ export function createKubernetesProxyContinuity({
     );
     if (zones.some((z) => !z) || new Set(zones).size < 2) return false;
     if (protectedPool) for (const p of selected) assertProtectedProxyTemplate(p, profile);
+    const service = await read({ kind: 'Service', name });
+    const backend = await observeBackend(service, { allowPending: true });
+    if (!isGkeProxyBackendReady(selected, service, backend)) return false;
     return (
       deployment.status?.observedGeneration >= deployment.metadata.generation &&
       deployment.status.availableReplicas >= minimum &&
@@ -267,6 +289,7 @@ export function createKubernetesProxyContinuity({
       }
       const backend = await observeBackend(service);
       assert.equal(backend.healthy, true, 'Original provider backend is unhealthy');
+      assertGkeProxyBackendHealth(proxyPods, service, backend);
       if (config.configName) {
         const existing = await read({ kind: 'ConfigMap', name: config.configName }, { optional: true });
         if (existing) {
@@ -307,6 +330,10 @@ export function createKubernetesProxyContinuity({
     async observe({ state, target, probe, token }) {
       const service = await read({ kind: 'Service', name: target === 'bridge' ? state.name : proxyName });
       const backend = await observeBackend(service);
+      const selected = (await pods(target === 'bridge' ? state.name : config.release)).filter((p) =>
+        Object.entries(service.spec.selector).every(([key, value]) => p.metadata.labels?.[key] === value),
+      );
+      assertGkeProxyBackendHealth(selected, service, backend);
       // The old backend must have received its longer drain before switching.
       const original =
         target === 'bridge' ? await observeBackend(await read({ kind: 'Service', name: proxyName })) : backend;

@@ -66,6 +66,7 @@ const settings = () =>
     protocol: 1,
     mode: 'reusable-cluster',
     projectId: 'isolated-staging',
+    region: 'europe-central2',
     projectNumber: '601520844163',
     clusterUid: 'staging-cluster',
     gatewayUid: 'shared-gateway',

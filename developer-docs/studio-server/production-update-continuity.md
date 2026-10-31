@@ -12,7 +12,7 @@ path, and verified cleanup. A manufactured second source release and second
 cloud campaign are deferred until a real subsequent release. This changes the
 delivery scope, not the 300-second qualification or production preflight gates.
 
-The latest staging attempt failed before application deployment: PostgreSQL
+An earlier temporary staging attempt failed before application deployment: PostgreSQL
 initialized at the CSI mount root and rejected its `lost+found` directory.
 The fixture now sets `PGDATA` to a child directory. Cleanup also distinguishes
 GKE's automatic `ingress:true` annotation on a ClusterIP dependency Service
@@ -30,6 +30,17 @@ successful qualifications and zero production serving updates. Child and parent
 resource cleanup, temporary access removal, evidence transfer and restoration of
 the original quota were verified. The repaired source still needs review/CI,
 exact-image qualification and the first observed production transition.
+
+The first retained-cluster test then failed during frontend preparation, before
+upgrade/autoscaling or production deployment. Regional Compute reported healthy
+proxy endpoints while the Gateway's standalone NEG Pod gates remained
+`True/LoadBalancerNegWithoutHealthCheck`. Requiring the different
+`LoadBalancerNegReady` reason rejected that valid regional attachment. The
+repair below requires actual endpoint health instead. The actor was subsequently
+evicted during scale-down; normal fixture deletion had completed, and independent
+resource/writer absence plus the retained janitor verified cleanup before the
+failed workflow and its exact lock were closed. This attempt produced no
+qualification certificate. Admissions remain disabled until a new approved test.
 
 ## Normal release process
 
@@ -107,7 +118,18 @@ rewritten in production. The isolated fixture sets it to 3600 using its own
 revision-aware settings API and waits for all original proxies to reload it.
 
 Compute observations require read access to regional backend services and their
-health. GCP observations are authenticated separately from Kubernetes. Local
+health. Every current proxy must match a unique healthy endpoint IP/target-port
+in its exact Service NEG, with a fresh observation, backend identity and zonal
+redundancy. Healthy old/surplus endpoints cannot cover an unhealthy replacement.
+`LoadBalancerNegWithoutHealthCheck` is accepted only with this independent
+Compute proof; Pod readiness alone and `LoadBalancerNegTimeout` never suffice.
+Frontend preparation, proxy HPA, bridge handoff and optional control-topology
+transfer share this check. Readiness polls wait for a complete endpoint set;
+ambiguous backend discovery and denied Compute reads fail before handoff.
+See [standalone NEG readiness](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/standalone-neg).
+Provider-gate construction requires the staging project's region even for a
+local render-only fixture, so tests must supply that installation identity too.
+GCP observations are authenticated separately from Kubernetes. Local
 operators use `gcloud auth print-access-token` (optionally a reviewed
 `RIVET_GCLOUD_BIN` launcher); in-cluster staging uses its existing metadata
 identity. Credentials and raw templates are not included in preflight reports.

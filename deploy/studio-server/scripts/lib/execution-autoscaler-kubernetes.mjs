@@ -142,8 +142,11 @@ export function createKubernetesTransport({
     exec(
       path,
       command,
-      { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr, keepAliveMs = 30000 } = {},
+      { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr, keepAliveMs = 30000, signal } = {},
     ) {
+      if (signal !== undefined && !(signal instanceof AbortSignal))
+        throw new Error('Kubernetes exec abort signal is invalid.');
+      if (signal?.aborted) return Promise.reject(new Error('Kubernetes exec aborted before dispatch.'));
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(container)) throw new Error('Kubernetes exec container is invalid.');
       if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 32 * 1024 * 1024)
         throw new Error('Kubernetes exec output bound is invalid.');
@@ -183,15 +186,22 @@ export function createKubernetesTransport({
           settled = true;
           clearTimeout(timer);
           clearInterval(heartbeat);
+          signal?.removeEventListener('abort', abort);
           socket.removeAllListeners();
           socket.on('error', () => {});
           socket.terminate();
           error ? reject(error) : resolve(result);
         };
+        const abort = () => finish(new Error('Kubernetes exec aborted; command outcome is unknown.'));
         const timer = setTimeout(
           () => finish(new Error('Kubernetes exec deadline exceeded; command outcome is unknown.')),
           timeoutMs,
         );
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
         socket.once('open', () => {
           // Keep silent long-running setup commands alive through idle proxies.
           // This does not extend their absolute deadline or retry the command.

@@ -5,6 +5,7 @@ import { releaseOperationJournalName, journalForReleaseOperation } from './relea
 import { waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
 import { matchesKubernetesTemplate as matchesTopologyTemplate } from './kubernetes-template-match.mjs';
+import { hasReadyGkeNegGate, isGkeProxyBackendReady } from './gke-proxy-health.mjs';
 export { matchesKubernetesTemplate as matchesTopologyTemplate } from './kubernetes-template-match.mjs';
 
 const role = (r) => r.metadata?.labels?.['app.kubernetes.io/component'];
@@ -34,6 +35,7 @@ export async function runHaKubernetesControlTopology({
   routingWithdrawalClock,
   safety,
   settle,
+  observeProxyBackend,
 }) {
   requireDeploymentSafety(safety, 'topology', { release, namespace, manifestDigest });
   settle = safety.requireSettlement(settle);
@@ -283,15 +285,15 @@ export async function runHaKubernetesControlTopology({
         proxies.some(
           (p) =>
             p.spec.readinessGates?.some((g) => g.conditionType === 'cloud.google.com/load-balancer-neg-ready') &&
-            !p.status.conditions?.some(
-              (c) =>
-                c.type === 'cloud.google.com/load-balancer-neg-ready' &&
-                c.status === 'True' &&
-                c.reason === 'LoadBalancerNegReady',
-            ),
+            !hasReadyGkeNegGate(p, { allowStandalone: Boolean(observeProxyBackend) }),
         )
       )
         return false;
+      if (observeProxyBackend) {
+        const service = await json(['get', 'service', sourceProxy.metadata.name, '-o', 'json']);
+        const backend = await observeProxyBackend(service, { allowPending: true });
+        if (!isGkeProxyBackendReady(proxies, service, backend)) return false;
+      }
       for (const proxy of proxies) {
         const health = await kube(
           [

@@ -2,15 +2,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './ha-workflow-traffic.mjs';
+import { hasReadyGkeNegGate, assertGkeProxyBackendHealth } from './gke-proxy-health.mjs';
 
 const component = (pod) => pod.metadata?.labels?.['app.kubernetes.io/component'];
 const ready = (pod) => !pod.metadata?.deletionTimestamp &&
   pod.status?.conditions?.some(c => c.type === 'Ready' && c.status === 'True');
 
-/** A Pod Ready bit alone is not load-balancer health evidence on GKE. This
- * preflight rejects the known no-health-check and timed-out NEG-ready cases.
+/** A Pod Ready bit alone is not load-balancer health evidence on GKE. Standalone
+ * NEG gates require fresh regional Compute endpoint health; timeouts fail.
  * It is an observation, not a custom readiness controller or a PDB substitute. */
-export function assertGkeFrontendAvailability(pods, nodes, release, controlPlaneMode = 'replicated', edgeProfile = 'regional') {
+export function assertGkeFrontendAvailability(pods, nodes, release, controlPlaneMode = 'replicated', edgeProfile = 'regional', regionalHealth) {
   assert.ok(['replicated', 'singleton', 'singleton-overlap'].includes(controlPlaneMode), 'unknown control availability policy');
   assert.ok(['regional', 'compact'].includes(edgeProfile), 'unknown GKE edge profile');
   const compact = edgeProfile === 'compact';
@@ -44,19 +45,20 @@ export function assertGkeFrontendAvailability(pods, nodes, release, controlPlane
       if (component(pod) !== 'proxy') continue;
       assert.ok(pod.spec.readinessGates?.some(g => g.conditionType === 'cloud.google.com/load-balancer-neg-ready'),
         'GKE proxy is missing its NEG readiness gate');
-      assert.ok(pod.status.conditions.some(c => c.type === 'cloud.google.com/load-balancer-neg-ready' &&
-        c.status === 'True' && c.reason === 'LoadBalancerNegReady'), 'proxy NEG has no positive load-balancer health observation');
+      assert.ok(hasReadyGkeNegGate(pod, { allowStandalone: Boolean(regionalHealth) }), 'proxy NEG has no positive load-balancer health observation');
       zones.set(zone, (zones.get(zone) ?? 0) + 1);
     }
   }
   assert.ok(compact ? zones.size >= 2 : zones.size === 3 && [...zones.values()].every(n => n >= 2),
     compact ? 'Compact GKE proof requires healthy proxies in at least two zones'
       : 'GKE proof requires at least two healthy proxy endpoints in each of exactly three zones');
+  if (regionalHealth) assertGkeProxyBackendHealth(proxies, regionalHealth.service, regionalHealth.backend, { minimumZones: zoneMinimum });
   return frontend.map(p => {
     const node = nodes.find(n => n.metadata.name === p.spec.nodeName);
     return { name: p.metadata.name, uid: p.metadata.uid, component: component(p), node: p.spec.nodeName,
       nodeUid: node.metadata.uid, zone: node.metadata.labels['topology.kubernetes.io/zone'],
-      ...(component(p) === 'proxy' ? { negHealth: 'LoadBalancerNegReady' } : {}) };
+      ...(component(p) === 'proxy' ? { negHealth: regionalHealth ? 'ComputeHealthy' : 'LoadBalancerNegReady',
+        ...(regionalHealth ? { backendService: regionalHealth.backend.backendService, backendObservedAt: regionalHealth.backend.observedAt } : {}) } : {}) };
   });
 }
 
@@ -76,9 +78,14 @@ export async function waitForGkeFrontendAvailability(gate, removed = []) {
     await gate.assertProofContext();
     try {
       assert.ok(!pods.some(p => removed.includes(p.metadata.uid)), 'evicted frontend UID still exists');
+      let regionalHealth;
+      if (gate.observeProxyBackend) {
+        const service = JSON.parse((await gate.kubectl(['-n', namespace, 'get', 'service', `${gate.config.release}-proxy`, '-o', 'json'], { capture: true })).stdout);
+        regionalHealth = { service, backend: await gate.observeProxyBackend(service, { allowPending: true }) };
+      }
       return assertGkeFrontendAvailability(pods, nodes, gate.config.release,
         gate.providerValues?.ha?.controlPlane?.mode ?? 'replicated',
-        gate.providerValues?.availability?.gkeGatewayProfile ?? 'regional');
+        gate.providerValues?.availability?.gkeGatewayProfile ?? 'regional', regionalHealth);
     } catch (error) { last = error; }
     await new Promise(resolve => setTimeout(resolve, 1000));
   } while (Date.now() < deadline);

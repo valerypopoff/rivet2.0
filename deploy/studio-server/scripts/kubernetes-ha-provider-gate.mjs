@@ -18,6 +18,7 @@ import { assertCandidateManifestImages } from './lib/kubernetes-candidate-manife
 import { verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { verifyGkeFrontendEvictions, waitForGkeFrontendAvailability } from './lib/ha-gke-availability.mjs';
 import { startHaWebAppTraffic } from './lib/ha-workflow-traffic.mjs';
+import { createComputeBackendObserver } from './lib/proxy-continuity-kubernetes.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const chart = path.join(rootDir, 'deploy/studio-server/helm');
@@ -92,6 +93,8 @@ export class ProviderHaReleaseGate extends ManagedReleaseGate {
     this.identity = identity;
     this.providerValues = values;
     this.config.proofValuesFiles = [config.valuesFile];
+    if (identity.provider === 'gke' && values.requestContinuity?.enabled)
+      this.observeProxyBackend = createComputeBackendObserver(values.requestContinuity);
   }
   kubectl(args, options) {
     return withProviderReadRetry(args, () => super.kubectl(args, options));

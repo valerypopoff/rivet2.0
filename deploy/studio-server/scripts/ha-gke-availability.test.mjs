@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
-import { assertGkeFrontendAvailability, verifyGkeFrontendEvictions } from './lib/ha-gke-availability.mjs';
+import { assertGkeFrontendAvailability, waitForGkeFrontendAvailability, verifyGkeFrontendEvictions } from './lib/ha-gke-availability.mjs';
 import { startHaWebAppTraffic, startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';
 import { ManagedReleaseGate } from './kubernetes-managed-release-gate.mjs';
 import { assertProviderHaFrontendPolicy } from './kubernetes-ha-provider-gate.mjs';
@@ -148,6 +148,44 @@ test('a compact minimum-capacity proof cannot borrow the headroom of six healthy
   const f = fixture();
   for (const p of f.pods) p.spec.topologySpreadConstraints[0].minDomains = 2;
   assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'compact'), /exactly two/);
+});
+
+test('regional Gateway standalone gates wait for every current endpoint and preserve topology checks', async () => {
+  const f = fixture(), proxies = f.pods.filter(p => p.metadata.name.startsWith('proxy'));
+  const service = { metadata: { uid: 'service-uid', namespace, annotations: {
+    'cloud.google.com/neg-status': JSON.stringify({ zones: ['zone-0', 'zone-1', 'zone-2'], network_endpoint_groups: { 80: 'proxy-neg' } }),
+  } }, spec: { selector: { 'app.kubernetes.io/component': 'proxy', 'app.kubernetes.io/instance': release }, ports: [{ port: 80, targetPort: 'http' }] } };
+  for (const [i, p] of proxies.entries()) {
+    p.status.podIP = `10.0.0.${i + 1}`;
+    p.spec.containers = [{ ports: [{ name: 'http', containerPort: 8080 }] }];
+    p.status.conditions[1].reason = 'LoadBalancerNegWithoutHealthCheck';
+  }
+  const backend = { healthy: true, serviceUid: service.metadata.uid, backendService: 'regional-backend', backendServiceId: '123', observedAt: Date.now(),
+    healthyEndpoints: proxies.map((p, i) => ({ ipAddress: p.status.podIP, port: 8080, zone: `zone-${i % 3}`, neg: 'proxy-neg' })) };
+  const proof = { service, backend };
+  assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release));
+  assert.ok(assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'regional', proof).filter(p => p.component === 'proxy').every(p => p.negHealth === 'ComputeHealthy'));
+  for (const change of [
+    proof => { proof.backend.healthyEndpoints.pop(); },
+    proof => { proof.backend.observedAt -= 60001; },
+    proof => { proof.backend.serviceUid = 'another-service'; },
+  ]) {
+    const bad = structuredClone(proof); change(bad);
+    assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'regional', bad));
+  }
+  let reads = 0;
+  const gate = { config: { namespace, release, deploymentTimeoutSeconds: 4 }, providerValues: {},
+    assertProofContext: async () => {},
+    kubectl: async args => ({ stdout: JSON.stringify(args.includes('service') ? service : { items: args.includes('pods') ? f.pods : f.nodes }) }),
+    observeProxyBackend: async observed => {
+      assert.deepEqual(observed, service);
+      const current = structuredClone(backend); current.observedAt = Date.now();
+      if (++reads === 1) current.healthyEndpoints.pop();
+      return current;
+    },
+  };
+  assert.equal((await waitForGkeFrontendAvailability(gate)).length, 8);
+  assert.equal(reads, 2, 'Ready Pods must wait for complete Compute health rather than failing or borrowing old endpoints');
 });
 
 test('GKE frontend HPA bounds cannot drop below the declared minimum', () => {
