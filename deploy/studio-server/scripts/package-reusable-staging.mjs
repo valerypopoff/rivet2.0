@@ -110,7 +110,7 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
               {
                 name: 'janitor',
                 image,
-                command: ['node', '/qualification/janitor.mjs'],
+                command: ['node', '--preserve-symlinks-main', '/qualification/janitor.mjs'],
                 env: [
                   { name: 'RIVET_QUALIFICATION_SETTINGS_FILE', value: '/qualification/settings.json' },
                   ...['NAME', 'UID'].map((k) => ({

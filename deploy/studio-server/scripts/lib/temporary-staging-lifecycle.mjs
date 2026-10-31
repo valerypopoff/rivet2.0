@@ -56,7 +56,7 @@ export async function provisionTemporaryEnvironment(store, cloud, runtime, { wai
     await store.change((r) => {
       r.resources.find((x) => x.key === spec.key).createOperation = operation;
     });
-    await cloud.wait(spec, operation, { wait });
+    await cloud.wait(spec, operation, { wait, checkpoint: () => guard(plan) });
     const actual = await cloud.get(spec),
       identity = cloud.identity(spec, actual);
     assert.ok(identity);
@@ -72,6 +72,7 @@ export async function provisionTemporaryEnvironment(store, cloud, runtime, { wai
   }
   temporaryAdmission(record, { now: now(), tests: true });
   await runtime.bootstrap(store, cloud, { wait, guard });
+  await guard(plan);
   record = await store.change((r) => {
     r.phase = 'environment-ready';
   });

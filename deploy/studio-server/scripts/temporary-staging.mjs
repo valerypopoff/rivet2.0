@@ -219,6 +219,7 @@ export async function runTemporaryCommand(mode, directory, { inputs, refreshInst
         });
       });
       await wait('external watchdog health', async () => {
+        signal.signal.throwIfAborted();
         try {
           await assertTemporaryWatchdog(store);
           return true;

@@ -36,6 +36,9 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
   for (const mode of [
     'normal bootstrap',
     'opaque Autopilot bootstrap',
+    'stopped janitor admission',
+    'stopped installed refresh admission',
+    'stopped final bootstrap admission',
     'lost actor acknowledgement',
     'lost export',
     'corrupt export',
@@ -47,7 +50,14 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
       const lostActor = mode === 'lost actor acknowledgement',
         failedExport = mode === 'lost export' || mode === 'corrupt export',
         ipHostname = mode === 'IP hostname bootstrap' || mode === 'lost HTTPS acknowledgement',
-        lostHttps = mode === 'lost HTTPS acknowledgement';
+        lostHttps = mode === 'lost HTTPS acknowledgement',
+        stoppedAdmission = mode.startsWith('stopped ');
+      const stopController = new AbortController(),
+        stopError = new Error('Synthetic bootstrap admission stopped');
+      let stopRequestCount;
+      const admissionGuard = async () => {
+        if (stopController.signal.aborted) throw stopController.signal.reason;
+      };
       const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-bootstrap-'));
       child.after(() => fs.rm(temp, { recursive: true, force: true }));
       const certFile = path.join(temp, 'cert.pem'),
@@ -78,6 +88,10 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
       const objects = new Map(),
         requests = [],
         packets = [];
+      const stopAdmission = () => {
+        stopRequestCount = requests.length;
+        stopController.abort(stopError);
+      };
       let serial = 1;
       let exportCalls = 0;
       let cloudBase;
@@ -172,6 +186,7 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
           if (objects.has(resource) && resource.endsWith('/configmaps/rivet-qualification-janitor-health')) {
             const code = [...objects.values()].find((v) => v.metadata.name === 'rivet-qualification-janitor-code');
             if (!code) return send(200, objects.get(resource));
+            if (mode === 'stopped janitor admission') stopAdmission();
             const settings = JSON.parse(code.data['settings.json']);
             return send(200, {
               ...objects.get(resource),
@@ -411,9 +426,14 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
         keyFile,
         registryFile,
         inputs: { candidate, previous, installed, policy },
-        refreshInstalled: async () => ({ ...installed, observedAt: new Date().toISOString() }),
+        signal: stopController.signal,
+        refreshInstalled: async () => {
+          if (mode === 'stopped installed refresh admission') stopAdmission();
+          return { ...installed, observedAt: new Date().toISOString() };
+        },
         verifyPrerequisites: async (state) => {
           await state.cluster();
+          if (mode === 'stopped final bootstrap admission') stopAdmission();
           return { publicTlsVerified: true };
         },
         ...(ipHostname
@@ -552,10 +572,27 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
             : value,
         );
       await store.locked(async () => {
-        if (lostActor || lostHttps)
-          await assert.rejects(provisionTemporaryEnvironment(store, cloud, runtime, { wait, guard: async () => {} }));
+        if (stoppedAdmission) {
+          await assert.rejects(
+            provisionTemporaryEnvironment(store, cloud, runtime, { wait, guard: admissionGuard }),
+            (error) => error === stopError,
+          );
+          const record = (await store.read()).record;
+          assert.ok(stopController.signal.aborted);
+          assert.equal(record.phase, 'provisioning');
+          assert.equal(record.qualificationIssued, undefined);
+          assert.equal(record.remotePhases, undefined);
+          if (mode !== 'stopped final bootstrap admission') assert.equal(record.operation, undefined);
+          assert.ok(Number.isInteger(stopRequestCount));
+          assert.equal(
+            requests.slice(stopRequestCount).some((request) => request.method !== 'GET'),
+            false,
+            'Admission stop must not dispatch new bootstrap work',
+          );
+        } else if (lostActor || lostHttps)
+          await assert.rejects(provisionTemporaryEnvironment(store, cloud, runtime, { wait, guard: admissionGuard }));
         else {
-          await provisionTemporaryEnvironment(store, cloud, runtime, { wait, guard: async () => {} });
+          await provisionTemporaryEnvironment(store, cloud, runtime, { wait, guard: admissionGuard });
           const record = (await store.read()).record;
           assert.equal(record.operation.expiresAt, record.expiresAt);
           assert.equal(record.settings.inClusterServer, 'https://10.13.0.1/');

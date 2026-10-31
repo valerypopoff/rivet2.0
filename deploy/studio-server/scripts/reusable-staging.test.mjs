@@ -1142,6 +1142,39 @@ test('actual package has a closed hash manifest, import-safe CLI boundaries and 
   const deployment = objects.find((o) => o.kind === 'Deployment');
   assert.equal(deployment.spec.replicas, 1);
   assert.equal(deployment.spec.strategy.type, 'Recreate');
+  const version = path.join(folder, 'configmap-version');
+  await fs.mkdir(version);
+  await fs.writeFile(
+    path.join(version, 'janitor.mjs'),
+    objects.find((object) => object.kind === 'ConfigMap' && object.data?.['janitor.mjs']).data['janitor.mjs'],
+  );
+  const mount = path.join(folder, 'configmap-mount');
+  if (process.platform === 'win32') await fs.symlink(version, mount, 'junction');
+  else {
+    await fs.mkdir(mount);
+    await fs.symlink('../configmap-version', path.join(mount, '..data'));
+    await fs.symlink('..data/janitor.mjs', path.join(mount, 'janitor.mjs'));
+  }
+  const projectedEntry = path.join(mount, 'janitor.mjs');
+  assert.equal(typeof (await import(pathToFileURL(projectedEntry))).stagingJanitorPass, 'function');
+  const missingSettings = path.join(folder, 'deliberately-missing-settings.json');
+  const command = deployment.spec.template.spec.containers[0].command;
+  const environment = { ...process.env, RIVET_QUALIFICATION_SETTINGS_FILE: missingSettings };
+  // The deployed node-modules actor uses bare Node, without the test runner's loader.
+  delete environment.NODE_OPTIONS;
+  const started = spawnSync(
+    process.execPath,
+    command.slice(1).map((argument) => (argument === '/qualification/janitor.mjs' ? projectedEntry : argument)),
+    {
+      env: environment,
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+    },
+  );
+  assert.equal(started.error, undefined);
+  assert.equal(started.status, 1, 'Projected janitor must execute its CLI instead of silently exiting');
+  assert.ok(started.stderr.includes('ENOENT') && started.stderr.includes(missingSettings));
   assert.ok(!objects.some((o) => ['Gateway', 'Namespace', 'PersistentVolumeClaim'].includes(o.kind)));
   await assert.rejects(packageReusableStaging({ settings: settings(), output }));
   const overlapSettings = {
