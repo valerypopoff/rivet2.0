@@ -129,7 +129,7 @@ async function fixture(t) {
               : { phase };
       socket.send(Buffer.concat([Buffer.from([1]), Buffer.from(JSON.stringify(result))]));
       socket.send(Buffer.concat([Buffer.from([3]), Buffer.from('{"status":"Success"}')]));
-      socket.close();
+      if (!state.keepSocketOpen) socket.close();
     });
   });
   server.listen(0, '127.0.0.1');
@@ -195,6 +195,18 @@ test('lost remote phase acknowledgement is never replayed or treated as safe del
   await actor.close({ cleanupVerified: false });
   assert.equal(f.state.commands.filter((c) => c.phase === 'prepare').length, 1);
   assert.equal(f.state.deleted, false);
+});
+
+test('a successful Kubernetes status completes each real RPC without waiting for a retained socket', async (t) => {
+  const f = await fixture(t);
+  f.state.keepSocketOpen = true;
+  const actor = await f.prepare();
+  assert.deepEqual(await actor.driver.prepare(), { phase: 'prepare' });
+  assert.deepEqual(await actor.driver.verifyCleanup(), { phase: 'verifyCleanup' });
+  await actor.close({ cleanupVerified: true });
+  assert.equal(f.state.deleted, true);
+  assert.equal(f.state.commands.filter((c) => c.phase === 'prepare').length, 1);
+  assert.equal(f.state.commands.filter((c) => c.phase === 'verifyCleanup').length, 1);
 });
 
 test('source mismatch and actor replacement stop before another remote action', async (t) => {

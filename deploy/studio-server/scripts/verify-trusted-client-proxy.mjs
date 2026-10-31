@@ -29,9 +29,9 @@ try {
     '--entrypoint', '/bin/sh', 'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951', '-c',
     '. /client-address.sh && write_client_address_include /tmp/client-address.inc && exec nginx -c /fixture/nginx.conf -g "daemon off;"');
   containers.push(proxy);
-  const request = (from, headers = []) => docker('run', '--rm', '--network', `container:${from}`,
+  const request = (from, headers = [], target = proxy) => docker('run', '--rm', '--network', `container:${from}`,
     'curlimages/curl:8.10.1', '-fsS', '--retry', '5', '--retry-connrefused', '--retry-delay', '1',
-    ...headers.flatMap((header) => ['-H', header]), `http://${proxy}:8080/`);
+    ...headers.flatMap((header) => ['-H', header]), `http://${target}:8080/`);
   assert.equal(request(containers[0]), client);
   assert.equal(request(containers[0], ['Host: localhost', 'X-Forwarded-For: 127.0.0.1', 'X-Rivet-Client-IP: 127.0.0.1']), client);
   assert.equal(request(containers[1], [`X-Forwarded-For: ${client}`]), client);
@@ -42,6 +42,21 @@ try {
   assert.equal(request(containers[1], ['X-Forwarded-For: 2001:db8:ffff::1']), '');
   assert.equal(request(containers[1], [`X-Forwarded-For: ${client}, 192.0.2.200`]), client);
   assert.equal(request(containers[1], ['X-Forwarded-For: 2001:db8:1234::1, 192.0.2.200']), '2001:db8:1234::1');
+  // A regional Gateway appends its frontend IP after the real client. Both
+  // that hop and the transport proxy must be trusted; neither is a bypass client.
+  for (const [label, peers, expected] of [['missing', '', edge], ['partial', `${edge}/32`, '192.0.2.200']]) {
+    const id = `${name}-${label}`;
+    containers.push(id);
+    docker('run', '-d', '--name', id, '--network', name,
+      '-e', `RIVET_TRUSTED_FORWARDING_PROXIES=${peers}`,
+      '--mount', `type=bind,source=${path.resolve('deploy/studio-server/images/proxy/client-address.sh')},target=/client-address.sh,readonly`,
+      '--mount', `type=bind,source=${root},target=/fixture,readonly`,
+      '--entrypoint', '/bin/sh', 'nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951', '-c',
+      '. /client-address.sh && write_client_address_include /tmp/client-address.inc && exec nginx -c /fixture/nginx.conf -g "daemon off;"');
+    assert.equal(request(containers[1], [`X-Forwarded-For: 127.0.0.1, ${client}, 192.0.2.200`], id), expected);
+    assert.notEqual(expected, client, 'Incomplete forwarding trust must not authorize the public test client');
+  }
+  assert.equal(request(containers[1], [`X-Forwarded-For: 127.0.0.1, ${client}, 192.0.2.200`]), client);
   console.log('PASS: real nginx preserved direct client identity, ignored spoofing, accepted the trusted edge, rejected missing/malformed provenance, and selected the nearest untrusted hop.');
 
   const fixtures = path.resolve('deploy/studio-server/scripts/fixtures');
@@ -64,7 +79,7 @@ try {
     const port = index === 0 ? 8080 : 80;
     docker('run', '-d', '--name', fullProxy, '--network', name,
       '-e', 'RIVET_KEY=fixture-key', '-e', 'RIVET_PROXY_RESOLVER=127.0.0.11',
-      '-e', `RIVET_TRUSTED_FORWARDING_PROXIES=${edge}/32`,
+      '-e', `RIVET_TRUSTED_FORWARDING_PROXIES=${edge}/32,192.0.2.200/32`,
       ...['WEB', 'API', 'EXECUTION', 'EXECUTOR'].flatMap((service) => [
         '-e', `RIVET_${service}_UPSTREAM_HOST=${service === 'EXECUTION' ? 'api' : service.toLowerCase()}`,
         '-e', `RIVET_${service}_UPSTREAM_PORT=${service === 'EXECUTOR' ? 21889 : service === 'WEB' ? 3000 : 8080}`,
@@ -78,6 +93,10 @@ try {
       `http://${fullProxy}:${port}/api/inspect`);
     assert.equal(JSON.parse(inspect)['x-rivet-client-ip'], client);
     assert.equal(JSON.parse(inspect)['x-rivet-token-free-host'], undefined);
+    const forwarded = docker('run', '--rm', '--network', `container:${containers[1]}`,
+      'curlimages/curl:8.10.1', '-fsS', '-H', `X-Forwarded-For: 127.0.0.1, ${client}, 192.0.2.200`,
+      `http://${fullProxy}:${port}/api/inspect`);
+    assert.equal(JSON.parse(forwarded)['x-rivet-client-ip'], client);
     docker('exec', fullProxy, 'nginx', '-t');
     const websocket = (from, endpoint, mode) => docker('run', '--rm', '--network', `container:${from}`,
       '--mount', `type=bind,source=${fixtures},target=/fixture,readonly`,

@@ -42,6 +42,17 @@ resource/writer absence plus the retained janitor verified cleanup before the
 failed workflow and its exact lock were closed. This attempt produced no
 qualification certificate. Admissions remain disabled until a new approved test.
 
+The second retained test verified regional frontend health and seeded its
+synthetic project, then failed the staging dummy-OAuth login with HTTP403. The
+provider omitted its deployment-owned forwarding peers, so the load balancer's
+address was not resolved to the allowed public test client. This is repaired by
+explicit proxy-subnet/frontend trust, without broadening the client allowlist.
+Its50 tracked resources were verified absent; an idle actor was closed after
+diagnostics preservation because the old exec client waited beyond process exit.
+The exec status channel now terminates that wait. This failed test produced no
+qualification certificate or production update. A new paid operation needs its
+own allowance after the repaired source/image gates.
+
 ## Normal release process
 
 Use **Release Rivet** with an existing successful main Build Images run. CI
@@ -129,6 +140,8 @@ ambiguous backend discovery and denied Compute reads fail before handoff.
 See [standalone NEG readiness](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/standalone-neg).
 Provider-gate construction requires the staging project's region even for a
 local render-only fixture, so tests must supply that installation identity too.
+The provider's HPA frontend snapshot uses the same regional wait/check as initial
+admission, including standalone NEG conditions and exact current endpoints.
 GCP observations are authenticated separately from Kubernetes. Local
 operators use `gcloud auth print-access-token` (optionally a reviewed
 `RIVET_GCLOUD_BIN` launcher); in-cluster staging uses its existing metadata
