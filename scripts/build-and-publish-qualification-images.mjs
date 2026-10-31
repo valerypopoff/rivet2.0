@@ -5,7 +5,11 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { buildTemporaryStagingActor } from '../deploy/studio-server/scripts/build-temporary-staging-actor.mjs';
-import { publishQualificationImages, runPublicationCommand as run } from './qualification-image-publication.mjs';
+import {
+  publishQualificationImages,
+  minioSourceImage,
+  runPublicationCommand as run,
+} from './qualification-image-publication.mjs';
 
 // Hosted CI builds the same committed source that the in-cluster actor verifies.
 assert.equal(process.env.GITHUB_REF, 'refs/heads/main');
@@ -15,7 +19,7 @@ const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-publish-'));
 try {
   const actor = `rivet-qualification:${process.env.GITHUB_SHA}`;
   await buildTemporaryStagingActor(process.env.GITHUB_SHA, actor);
-  const minio = 'quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e';
+  const minio = minioSourceImage;
   run('docker', ['pull', '--platform=linux/amd64', minio], { stdio: 'inherit' });
   for (const [name, image] of [
     ['actor', actor],

@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const inputRoot = '/srv/rivet-private/image-publication';
 export const minioImageId = 'sha256:9d668e47f1fc60ea49af4203deee87a657eb1aa0e2761fee2c7c2d1df282c880';
+// Maintained mirror of the verified vendor bytes; the original Quay pin now
+// rejects anonymous pulls. Runtime image-ID/version checks remain mandatory.
+export const minioSourceImage =
+  'ghcr.io/valerypopoff/rivet2.0-studio-server/qualification-minio@sha256:e4cfd69993796b860f18a72eee502c1f8a12f2e0ed00ee1b78ddc53dffa5146e';
 const minioRelease = 'RELEASE.2025-04-22T22-12-26Z';
 
 export function runPublicationCommand(program, args, options = {}) {

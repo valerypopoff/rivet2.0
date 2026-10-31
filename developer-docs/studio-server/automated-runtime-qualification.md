@@ -285,6 +285,10 @@ The normal workflow uses `ubuntu-latest` for orchestration and production deploy
 `studio-server-publish-qualification-images.yml` is a reusable, main-only workflow:
 it builds an actor from the exact committed source, pulls the pinned MinIO image,
 verifies both archive identities, scans the actor and publishes immutable digests.
+MinIO is pulled from the maintained immutable GHCR mirror because the original
+Quay digest rejects anonymous downloads. The publisher still checks the exact
+vendor image ID and release version, retains the original vendor provenance,
+and refuses changed bytes; it adds no registry credential to a test Pod.
 It runs alongside application-image building in main Build Images. The release
 qualification job accepts that exact successful build run's same-source publication
 receipt, without rebuilding the actor at release time. The legacy administrator
