@@ -249,7 +249,7 @@ export async function executeProviderPhase({
   return bind(result);
 }
 
-export async function assertProviderCheckout(operation) {
+export async function assertProviderCheckout(operation, settings = {}) {
   await verifyActorSource(root, operation.candidate.source.sha);
   if (operation.qualification)
     assert.deepEqual(
@@ -263,9 +263,58 @@ export async function assertProviderCheckout(operation) {
         policy: operation.policy,
         profile: operation.requestContinuityProfile,
         overlap: operation.developerOverlapProfile,
+        suite: settings.qualificationSuite,
       }),
     );
   assertReleaseManifestMatchesCurrentChart(operation.candidate, root, { requirePromoted: false });
+}
+
+/** Publish only after gate/child cleanup has finished. This durable result lets
+ * the coordinator recover a lost final exec status without replaying a phase. */
+export async function acknowledgeProviderPhase(state, phase, id, result) {
+  await state.change((r) => {
+    const worker = r.workers.find((w) => w.id === id);
+    assert.ok(worker && worker.phase === phase && !worker.closed, 'Exact phase worker is required');
+    worker.closed = true;
+    if (phase === 'verifyCleanup') {
+      assert.ok(r.closed && r.phase === 'cleaned' && r.cleanupVerified);
+      for (const key of ['operationId', 'inputHash', 'projectId', 'projectNumber'])
+        assert.equal(result[key], r.operation[key]);
+      assert.equal(result.protocol, 1);
+      assert.ok(!r.cleanupReceipt, 'Cleanup receipt is never overwritten');
+      r.cleanupReceipt = { workerId: id, result };
+    }
+  });
+}
+
+export async function registerProviderWorker(
+  state,
+  actor,
+  worker,
+  readStat = (pid) => fs.readFile(`/proc/${pid}/stat`, 'utf8'),
+) {
+  const { record } = await state.read();
+  assert.deepEqual(record.actor, actor);
+  const pending = record.workers.filter((w) => !w.closed);
+  for (const prior of pending) {
+    let stat;
+    try {
+      stat = await readStat(prior.pid);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    assert.ok(!stat || processStartTicks(stat) !== prior.startTicks, 'A prior phase process still exists');
+  }
+  await state.change((r) => {
+    assert.deepEqual(r.actor, actor);
+    assert.deepEqual(
+      r.workers.filter((w) => !w.closed),
+      pending,
+      'Phase ownership changed during process inspection',
+    );
+    for (const prior of r.workers.filter((w) => !w.closed)) prior.closed = true;
+    r.workers.push(worker);
+  });
 }
 async function main() {
   process.env.RIVET_QUALIFICATION_RECEIPT_STDOUT = '1';
@@ -281,10 +330,10 @@ async function main() {
   const { operation, privateDirectory } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   const { inputHash, ...input } = operation;
   assert.equal(qualificationHash(input), inputHash);
-  await assertProviderCheckout(operation);
   const settings = reusableStagingSettings(
     JSON.parse(await fs.readFile(new URL('./settings.json', import.meta.url), 'utf8')),
   );
+  await assertProviderCheckout(operation, settings);
   assert.deepEqual(
     settings.developerOverlapProfile,
     operation.developerOverlapProfile,
@@ -315,22 +364,14 @@ async function main() {
   process.once('SIGINT', stop);
   const phase = process.argv[2],
     id = `${process.pid}:${processStartTicks(await fs.readFile('/proc/self/stat', 'utf8'))}`;
-  if (phase !== 'armExpiry') {
-    const { record } = await state.read();
-    assert.deepEqual(record.actor, actor);
-    for (const worker of record.workers.filter((w) => !w.closed)) {
-      let stat;
-      try {
-        stat = await fs.readFile(`/proc/${worker.pid}/stat`, 'utf8');
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-      }
-      assert.ok(!stat || processStartTicks(stat) !== worker.startTicks, 'A prior phase process still exists');
-    }
-    await state.change((r) => {
-      r.workers.push({ id, pid: process.pid, startTicks: id.split(':')[1], phase, closed: false });
+  if (phase !== 'armExpiry')
+    await registerProviderWorker(state, actor, {
+      id,
+      pid: process.pid,
+      startTicks: id.split(':')[1],
+      phase,
+      closed: false,
     });
-  }
   const gate = new ReusableProviderGate(operation, settings, state, privateDirectory);
   let result;
   try {
@@ -344,10 +385,7 @@ async function main() {
     process.removeListener('SIGTERM', stop);
     process.removeListener('SIGINT', stop);
   }
-  if (phase !== 'armExpiry')
-    await state.change((r) => {
-      r.workers.find((w) => w.id === id).closed = true;
-    });
+  if (phase !== 'armExpiry') await acknowledgeProviderPhase(state, phase, id, result);
   process.stdout.write(JSON.stringify(result));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

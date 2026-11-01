@@ -22,6 +22,22 @@ only its in-cluster identity and sanitized operation. See
 [hosted CI installation](automated-runtime-qualification.md#hosted-ci-installation)
 for exact federation, namespace permissions, evidence and revocation boundaries.
 
+The ordinary release gate is focused request continuity, including first adoption
+with its temporary proxy handoff. Full autoscaler stress is a reviewed private
+`qualificationSuite: "full"` selection for relevant changes, rather than a
+prerequisite inherited by every release. Both paths require new exact-image
+evidence and verified cleanup. A missing final exec status can be reconciled
+from the exact registry's durable cleanup receipt after all phase writers close;
+it never replays a command or supplies missing upgrade evidence.
+
+Shared operation checkpoints separate durable journal CAS writes from the
+`afterCheckpoint` observation barrier. Slow observations retain lease renewal
+while blocking the next operation step; heartbeat writes skip that barrier.
+Observation failure stops mutations after a confirmed write. Lost write
+acknowledgements retain the existing exact-token recovery fence. The live
+Kubernetes journal is authoritative for lease state; private artifacts capture
+transition snapshots rather than every heartbeat.
+
 ## Ordinary seven-pod qualification and headroom
 
 The opt-in [bounded request-continuity profile](production-update-continuity.md)

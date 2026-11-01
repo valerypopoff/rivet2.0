@@ -12,6 +12,14 @@ path, and verified cleanup. A manufactured second source release and second
 cloud campaign are deferred until a real subsequent release. This changes the
 delivery scope, not the 300-second qualification or production preflight gates.
 
+The ordinary release gate now uses focused request-continuity qualification even
+for first adoption. That first test still covers policy adoption, the temporary
+bridge and return handoff, plus the ordinary rolling update, accepted work and
+complete 300-second responses. Full autoscaling stress and the extra duration
+matrix are separately configured tests; developer overlap retains its own full
+suite. See [test depth](automated-runtime-qualification.md#automatic-test-depth).
+Local regressions do not qualify a release or authorize a cloud attempt.
+
 An earlier temporary staging attempt failed before application deployment: PostgreSQL
 initialized at the CSI mount root and rejected its `lost+found` directory.
 The fixture now sets `PGDATA` to a child directory. Cleanup also distinguishes
@@ -73,7 +81,8 @@ the protected production environment. That command owns fresh live checks, the
 online recovery checkpoint, rollout, short application acceptance and journaled
 recovery. There is no separate production-readiness job or repeated cloud setup.
 See [automated qualification](automated-runtime-qualification.md) for runner
-configuration and automatically selected full/focused test depth. A recurring
+configuration and focused continuity gate (or explicitly configured full stress
+test). A recurring
 staging budget and one-time installation are still needed; the closed temporary
 campaign grants no new cloud authority.
 
@@ -232,6 +241,17 @@ bridge specs and public health while progressing. A lost acknowledged write is
 resolved by reading its exact result. An unapplied/foreign/unknown write is not
 replayed. An interrupted deletion is observed; a same-name replacement is never
 deleted. An unfinished bridge prevents automatic preflight abandonment.
+Thirty-second heartbeats renew the 120-second journal lease while five-minute
+request observations wait. These observations run after the durable checkpoint
+acknowledges, outside the serialized journal-write queue; the next routing,
+template or retirement command still waits for them. Heartbeats do not start
+duplicate request cohorts, and remain active through initial and completion
+observations. Autoscaler preflight recovery requires the proxy handoff to be
+settled as well as replacement preparation.
+If an older installed controller already marked an untouched preflight complete
+with a pending handoff, admission retains it as recovery-only. The original
+`--resume-ha` token and unchanged configuration are required to reclaim it;
+competing operation modes cannot replace the journal or its bridge identities.
 Lost return-route acknowledgements recover from the latest recorded write intent
 even if the phase checkpoint was not saved. If Helm stores the temporary
 four-proxy minimum, ordinary-layout admission normalizes a copy only for an

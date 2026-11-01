@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { createKubernetesTransport } from './lib/execution-autoscaler-kubernetes.mjs';
 import { prepareStagingActor, stagingActorJob, stagingActorRole } from './lib/reusable-staging-coordinator.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
+import { acknowledgeProviderPhase, registerProviderWorker } from './qualification/provider-entry.mjs';
 const { WebSocket, WebSocketServer } = createRequire(
   new URL('../../../packages/studio-server-api/package.json', import.meta.url),
 )('ws');
@@ -20,10 +21,17 @@ const operation = {
   startedAt: new Date().toISOString(),
   expiresAt: new Date(Date.now() + 7200000).toISOString(),
   candidate: { source: { sha: 'a'.repeat(40) } },
+  projectId: 'staging-project',
+  projectNumber: '123456789',
+  staging: { clusterUid: 'staging-cluster' },
 };
+operation.inputHash = qualificationHash(operation);
 const settings = {
   actorImage: `ghcr.io/example/actor@sha256:${'b'.repeat(64)}`,
   runnerNamespace: 'staging-runners',
+  controlNamespace: 'staging-control',
+  projectId: operation.projectId,
+  projectNumber: operation.projectNumber,
   clusterUid: 'staging-cluster',
   inClusterServer: 'https://10.1.0.1/',
   context: 'isolated-staging',
@@ -56,6 +64,17 @@ async function fixture(t) {
     losePhase: false,
     loseCreate: false,
     creates: 0,
+    registry: {
+      protocol: 1,
+      operation,
+      actor: { namespace: settings.runnerNamespace, name: 'actor', uid: 'actor-pod' },
+      namespace: `rivet-staging-${operation.operationId}`,
+      release: 'rivet-qualification',
+      closed: true,
+      phase: 'cleaned',
+      cleanupVerified: true,
+      workers: [],
+    },
   };
   const pod = () => ({
     metadata: { name: 'actor', uid: state.uid, ownerReferences: [{ uid: 'job-uid' }] },
@@ -68,6 +87,16 @@ async function fixture(t) {
     };
     if (req.url === '/version') return json(200, { gitVersion: 'v1.36.4' });
     if (req.url === '/api/v1/namespaces/kube-system') return json(200, { metadata: { uid: settings.clusterUid } });
+    if (req.url === `/api/v1/namespaces/${settings.controlNamespace}/configmaps/${operation.operationId}`)
+      return json(200, {
+        metadata: {
+          uid: state.registryUid ?? 'operation-registry',
+          resourceVersion: '1',
+          namespace: settings.controlNamespace,
+          labels: { 'rivet.dev/qualification-operation': operation.operationId },
+        },
+        data: { record: JSON.stringify(state.registry) },
+      });
     if (req.url.includes('/jobs')) {
       if (req.method === 'POST') {
         const parts = [];
@@ -97,7 +126,7 @@ async function fixture(t) {
   const sockets = new WebSocketServer({ server });
   sockets.on('connection', (socket, req) => {
     const chunks = [];
-    socket.on('message', (data) => {
+    socket.on('message', async (data) => {
       if (data[0] === 0) {
         chunks.push(data.subarray(1));
         return;
@@ -115,18 +144,43 @@ async function fixture(t) {
         state.deleted = true; // The API loses the exact actor while exec stays open.
         return;
       }
+      if (phase === 'verifyCleanup' && state.loseCleanupStatus) {
+        const result = {
+          protocol: 1,
+          ...Object.fromEntries(
+            ['operationId', 'inputHash', 'projectId', 'projectNumber'].map((k) => [k, operation[k]]),
+          ),
+          inventoryComplete: true,
+          inventoryHash: qualificationHash([]),
+          resources: [],
+          uncertainWrites: 0,
+        };
+        state.registry.workers.push({ id: '123:456', phase, closed: false });
+        // Cross the same acknowledgement boundary used by the real provider.
+        await acknowledgeProviderPhase({ change: async (fn) => fn(state.registry) }, phase, '123:456', result);
+        state.mutateReceipt?.(state.registry);
+        socket.send(Buffer.concat([Buffer.from([1]), Buffer.from(JSON.stringify(result))]));
+        if (state.closeCleanupSocket) socket.close(1012);
+        return; // Command finished; the status channel never acknowledges it.
+      }
       const result =
         phase === 'preflight'
           ? { sourceSha: state.preflightSha, offlineFixturePassed: true }
           : phase === 'install'
             ? { installed: true, files: Object.fromEntries(Object.entries(payload.files).map(([n, f]) => [n, f.hash])) }
-            : phase === 'export'
-              ? {
-                  files: [
-                    { name: 'receipt.json', hash: sha(Buffer.from('{}')), bytes: Buffer.from('{}').toString('base64') },
-                  ],
-                }
-              : { phase };
+            : phase === 'armExpiry'
+              ? { identity: 'operation-registry' }
+              : phase === 'export'
+                ? {
+                    files: [
+                      {
+                        name: 'receipt.json',
+                        hash: sha(Buffer.from('{}')),
+                        bytes: Buffer.from('{}').toString('base64'),
+                      },
+                    ],
+                  }
+                : { phase };
       socket.send(Buffer.concat([Buffer.from([1]), Buffer.from(JSON.stringify(result))]));
       socket.send(Buffer.concat([Buffer.from([3]), Buffer.from('{"status":"Success"}')]));
       if (!state.keepSocketOpen) socket.close();
@@ -207,6 +261,104 @@ test('a successful Kubernetes status completes each real RPC without waiting for
   assert.equal(f.state.deleted, true);
   assert.equal(f.state.commands.filter((c) => c.phase === 'prepare').length, 1);
   assert.equal(f.state.commands.filter((c) => c.phase === 'verifyCleanup').length, 1);
+});
+
+test('lost final exec status uses the exact durable cleanup receipt without replaying the command', async (t) => {
+  for (const closeCleanupSocket of [false, true]) {
+    const f = await fixture(t),
+      actor = await f.prepare();
+    await actor.driver.armExpiry();
+    f.state.loseCleanupStatus = true;
+    f.state.closeCleanupSocket = closeCleanupSocket;
+    const result = await actor.driver.verifyCleanup();
+    assert.equal(result.inventoryComplete, true);
+    assert.equal(result.inputHash, operation.inputHash);
+    await actor.close({ cleanupVerified: true });
+    assert.equal(f.state.commands.filter((c) => c.phase === 'verifyCleanup').length, 1);
+    assert.equal(f.state.deleted, true);
+  }
+});
+
+test('cleanup receipt recovery rejects rebound identity, active writers and foreign results', async (t) => {
+  for (const mutate of [
+    (r, state) => {
+      state.registryUid = 'replacement';
+    },
+    (r) => {
+      r.actor.uid = 'other-actor';
+    },
+    (r) => {
+      r.cleanupReceipt.result.inputHash = 'foreign';
+    },
+    (r) => {
+      r.workers[0].closed = false;
+    },
+    (r) => {
+      r.workers[0].phase = 'upgrade';
+    },
+    (r) => {
+      r.cleanupVerified = false;
+    },
+  ]) {
+    const f = await fixture(t),
+      actor = await f.prepare();
+    await actor.driver.armExpiry();
+    f.state.loseCleanupStatus = true;
+    f.state.mutateReceipt = (r) => mutate(r, f.state);
+    await assert.rejects(actor.driver.verifyCleanup());
+    await assert.rejects(actor.driver.verifyCleanup(), /Never replay/);
+    await actor.close({ cleanupVerified: false });
+    assert.equal(f.state.deleted, false);
+  }
+});
+
+test('a lost cleanup status without a durable receipt remains unknown and cannot delete the actor', async (t) => {
+  const f = await fixture(t),
+    actor = await f.prepare();
+  await actor.driver.armExpiry();
+  f.state.loseCleanupStatus = true;
+  f.state.closeCleanupSocket = true;
+  f.state.mutateReceipt = (r) => {
+    delete r.cleanupReceipt;
+  };
+  await assert.rejects(actor.driver.verifyCleanup(), /unknown/);
+  await assert.rejects(actor.driver.verifyCleanup(), /Never replay/);
+  await actor.close({ cleanupVerified: false });
+  assert.equal(f.state.deleted, false);
+});
+
+test('a failed phase closes only after exact process absence; concurrent workers and denied reads remain fenced', async () => {
+  const actor = { uid: 'actor' },
+    prior = { id: '123:456', pid: 123, startTicks: '456', phase: 'upgrade', closed: false },
+    worker = { id: '124:457', pid: 124, startTicks: '457', phase: 'settle', closed: false };
+  const stat = (ticks) => `123 (phase process) ${[...Array(19).fill('0'), ticks].join(' ')}`;
+  for (const mode of ['absent', 'reused', 'alive', 'denied', 'raced']) {
+    let record = { actor, workers: [structuredClone(prior)] };
+    const state = {
+      read: async () => ({ record: structuredClone(record) }),
+      change: async (fn) => {
+        if (mode === 'raced') record.workers.push({ ...worker, id: 'concurrent' });
+        const next = structuredClone(record);
+        fn(next);
+        record = next;
+      },
+    };
+    const read = async () => {
+      if (mode === 'absent') throw Object.assign(Error('gone'), { code: 'ENOENT' });
+      if (mode === 'denied') throw Object.assign(Error('denied'), { code: 'EACCES' });
+      return stat(['reused', 'raced'].includes(mode) ? '999' : '456');
+    };
+    const running = registerProviderWorker(state, actor, worker, read);
+    if (['absent', 'reused'].includes(mode)) {
+      await running;
+      assert.equal(record.workers[0].closed, true);
+      assert.deepEqual(record.workers[1], worker);
+    } else {
+      await assert.rejects(running);
+      assert.equal(record.workers[0].closed, false);
+      assert.ok(!record.workers.some((w) => w.id === worker.id));
+    }
+  }
 });
 
 test('source mismatch and actor replacement stop before another remote action', async (t) => {

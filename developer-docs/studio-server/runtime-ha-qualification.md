@@ -5,10 +5,15 @@ provider evidence in addition to ordinary replicated-HA qualification. Local
 functional tests are not a GKE certificate.
 
 The optional [bounded request-continuity profile](production-update-continuity.md)
-requires version-2 request evidence alongside those runtime and autoscaling
-certificates. Its native proxy rollout, return handoff, duration matrix and
-pre-removal admission observations are executable gates; missing or non-overlapping
-observations reject publication. Exact-image qualification and a later protected
+uses focused runtime-control v4, autoscaling v3 and request-continuity v3 for
+ordinary releases, including the first protected proxy handoff. This gate proves
+complete five-minute requests during execution/proxy replacement, accepted-action
+resume and recording durability. First protection additionally proves bridge
+adoption and return handoff. Separately configured full tests retain request
+evidence v2 with the duration matrix and HPA removal. Missing or non-overlapping
+observations reject publication in either tier. See
+[test selection](automated-runtime-qualification.md#automatic-test-depth).
+Exact-image qualification and a later protected
 mixed-image update remain distinct live acceptance steps.
 
 For a schema-changing pair, HA release creation and rolling admission additionally

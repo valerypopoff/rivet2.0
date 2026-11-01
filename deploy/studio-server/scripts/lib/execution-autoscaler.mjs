@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { journalForReleaseOperation, haPreparationSettled } from './release-operation-journal.mjs';
 import { assertFenceIntent } from './execution-autoscaler-fence.mjs';
+import { proxyContinuitySettled } from './proxy-continuity-transition.mjs';
 
 export function autoscalerPolicy(input) {
   const policy = {
@@ -118,6 +119,7 @@ async function scaleUpDuringRollout({
     record.phase === 'preflight' &&
     record.leaseExpiresAt <= now() &&
     haPreparationSettled(record) &&
+    proxyContinuitySettled(record) &&
     !record.owner &&
     record.completed?.length === 0 &&
     record.previousManifestDigest === manifestDigest &&

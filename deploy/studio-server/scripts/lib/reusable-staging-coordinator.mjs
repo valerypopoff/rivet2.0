@@ -8,6 +8,7 @@ import { createKubernetesTransport } from './execution-autoscaler-kubernetes.mjs
 import { deploymentGoogleToken } from './private-cloud-evidence.mjs';
 import { verifyQualificationDriver } from './runtime-qualification-driver.mjs';
 import { verifyTemporaryActorExport } from './temporary-staging-actor.mjs';
+import { assertStagingRecord, stagingRecordPath } from './reusable-staging-state.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const ready = (pod) =>
@@ -219,7 +220,7 @@ export async function prepareStagingActor(
     { flag: 'wx', mode: 0o600 },
   );
   await persist();
-  async function rpc(command, payload, timeoutMs = 600000) {
+  async function rpc(command, payload, timeoutMs = 600000, observeCompletion) {
     assert.equal((await api.json('GET', actorPath))?.metadata.uid, pod.metadata.uid, 'Actor was replaced');
     const stderr = [];
     const signal = new AbortController();
@@ -227,19 +228,30 @@ export async function prepareStagingActor(
       finished = false,
       checking,
       actorLoss;
+    const completion = observeCompletion && Promise.withResolvers();
     const monitor = setInterval(() => {
       if (checking || finished) return;
       checking = api
         .json('GET', actorPath)
-        .then((current) => {
+        .then(async (current) => {
           if (!finished && (current?.metadata.uid !== pod.metadata.uid || !ready(current))) {
             actorLoss = 'Exact actor disappeared, was replaced or stopped being ready';
             signal.abort();
+            return;
+          }
+          if (!finished && observeCompletion) {
+            const result = await observeCompletion();
+            if (!finished && result) {
+              completion.resolve(result);
+              // Abort only the transport. No process signal or phase replay.
+              signal.abort();
+            }
           }
         })
-        .catch(() => {
+        .catch((error) => {
           if (!finished) {
-            actorLoss = 'Actor liveness could not be observed';
+            actorLoss = 'Actor liveness or final cleanup receipt could not be confirmed';
+            completion?.reject(error);
             signal.abort();
           }
         })
@@ -250,8 +262,8 @@ export async function prepareStagingActor(
     monitor.unref();
     try {
       const client = api.withTimeout ? api.withTimeout(timeoutMs) : api;
-      return JSON.parse(
-        await client.exec(`${actorPath}/exec`, command, {
+      const executing = client
+        .exec(`${actorPath}/exec`, command, {
           container: 'actor',
           stdin: Buffer.from(JSON.stringify(payload)),
           signal: signal.signal,
@@ -259,8 +271,17 @@ export async function prepareStagingActor(
           onStderr: (part) => {
             if ((size += part.length) <= 1024 * 1024) stderr.push(part);
           },
-        }),
-      );
+        })
+        .then(JSON.parse)
+        .catch(async (error) => {
+          if (!observeCompletion || signal.signal.aborted) throw error;
+          const current = await api.json('GET', actorPath);
+          assert.ok(current?.metadata.uid === pod.metadata.uid && ready(current), 'Original actor is no longer ready');
+          const result = await observeCompletion();
+          if (!result) throw error;
+          return result;
+        });
+      return await (completion ? Promise.race([executing, completion.promise]) : executing);
     } finally {
       finished = true;
       clearInterval(monitor);
@@ -318,6 +339,30 @@ export async function prepareStagingActor(
     Object.fromEntries(Object.entries(files).map(([name, value]) => [name, value.hash])),
   );
   const issued = new Set();
+  let registryUid;
+  const cleanupCompletion = async () => {
+    if (!registryUid) return;
+    const object = await api.json('GET', stagingRecordPath(settings, operation.operationId));
+    assert.equal(object?.metadata.uid, registryUid, 'Operation registry was replaced');
+    const record = assertStagingRecord(object, operation, settings);
+    assert.deepEqual(record.actor, {
+      namespace: settings.runnerNamespace,
+      name: pod.metadata.name,
+      uid: pod.metadata.uid,
+    });
+    if (!record.cleanupReceipt) return;
+    const { workerId, result } = record.cleanupReceipt;
+    assert.ok(record.closed && record.phase === 'cleaned' && record.cleanupVerified);
+    assert.ok(record.workers.length > 0 && record.workers.every((w) => w.closed), 'Cleanup still has active writers');
+    assert.ok(
+      record.workers.some((w) => w.id === workerId && w.phase === 'verifyCleanup'),
+      'Cleanup worker changed',
+    );
+    for (const key of ['operationId', 'inputHash', 'projectId', 'projectNumber'])
+      assert.equal(result[key], operation[key]);
+    assert.equal(result.protocol, 1);
+    return result;
+  };
   const driver = Object.fromEntries(
     ['armExpiry', 'prepare', 'upgrade', 'autoscaling', 'settle', 'cleanup', 'verifyCleanup'].map((phase) => [
       phase,
@@ -336,7 +381,12 @@ export async function prepareStagingActor(
           ['armExpiry', 'prepare', 'upgrade', 'autoscaling'].includes(phase)
             ? Math.max(1, Date.parse(operation.expiresAt) - Date.now())
             : 3600000,
+          phase === 'verifyCleanup' ? cleanupCompletion : undefined,
         );
+        if (phase === 'armExpiry') {
+          assert.ok(typeof result.identity === 'string' && result.identity);
+          registryUid = result.identity;
+        }
         await fs.writeFile(path.join(privateDirectory, `${phase}-receipt.json`), JSON.stringify(result), {
           flag: 'wx',
           mode: 0o600,

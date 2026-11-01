@@ -1,8 +1,17 @@
 # Production update continuity implementation plan
 
+The current essential gate supersedes the broad first-adoption stress requirement
+in the original phases below: one focused staging update proves bounded request
+continuity and the initial proxy handoff, then the ordinary production command
+owns live checks, recovery checkpoint, rollout and acceptance. Maximum-capacity,
+autoscaler chaos and extra duration matrices remain separately configured full
+tests. No second manufactured release is required. See
+[current test depth](automated-runtime-qualification.md#automatic-test-depth).
+
 The standard delivery path is now the lighter
 [Release Rivet workflow](automated-runtime-qualification.md): build once, reuse
-isolated staging, select full/focused tests automatically, publish the exact
+isolated staging, run focused request-continuity tests including first adoption,
+publish the exact
 manifest and perform live checks/rolling update/acceptance in one production
 action. Shared staging infrastructure and access are configured once under a
 fresh recurring budget; temporary setup campaigns are exceptional. First adoption

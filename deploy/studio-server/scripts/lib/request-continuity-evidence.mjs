@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
-  REQUEST_CONTINUITY_CHECKS,
-  FOCUSED_CONTINUITY_CHECKS,
+  continuityChecks,
   requestContinuityProfile,
   continuityProfileDigest,
   CONTINUITY_DURATION_STAGES,
@@ -136,7 +135,7 @@ export function compileRequestContinuityEvidence(operation, upgrade, autoscaling
     failedRequests: 0,
     completedRequests: requests.length,
     maximumCompletedDurationMs: Math.max(...requests.map((r) => r.elapsedMs)),
-    checks: [...(focused ? FOCUSED_CONTINUITY_CHECKS : REQUEST_CONTINUITY_CHECKS)],
+    checks: continuityChecks(upgrade.requestContinuity.bootstrap === 'already-protected', focused ? 'focused' : 'full'),
     reportSha256: hash(reports),
     bootstrap: upgrade.requestContinuity.bootstrap,
   };

@@ -20,10 +20,20 @@ export const CONTINUITY_DURATION_STAGES = {
 export const FOCUSED_CONTINUITY_CHECKS = REQUEST_CONTINUITY_CHECKS.filter(
   (check) => !['full-body-duration-matrix', 'bridge-return-handoff', 'proxy-hpa-removal'].includes(check),
 );
+export const continuityChecks = (adopted, tier = 'full') =>
+  tier === 'focused'
+    ? [...FOCUSED_CONTINUITY_CHECKS, ...(!adopted ? ['bridge-return-handoff'] : [])]
+    : [...REQUEST_CONTINUITY_CHECKS];
 export function continuityStages(adopted, kind, tier = 'full') {
   if (tier === 'focused') {
-    assert.equal(adopted, true, 'Focused qualification cannot adopt request continuity');
-    return kind === 'upgrade' ? ['late-admission', 'execution-retirement', 'protected-roll'] : [];
+    return kind === 'upgrade'
+      ? [
+          'late-admission',
+          'execution-retirement',
+          'protected-roll',
+          ...(!adopted ? ['policy-adoption', 'bootstrap', 'return-handoff'] : []),
+        ]
+      : [];
   }
   assert.equal(tier, 'full');
   return kind === 'upgrade'
@@ -169,17 +179,15 @@ export function assertRequestContinuityEvidence(proof, release, profile) {
   assert.equal(proof.profileDigest, continuityProfileDigest(profile));
   assert.equal(proof.failedRequests, 0);
   const focused = proof.protocol === 3;
-  assert.ok((focused ? ['already-protected'] : ['passed', 'already-protected']).includes(proof.bootstrap));
-  assert.equal(proof.completedRequests, focused ? 9 : proof.bootstrap === 'passed' ? 30 : 21);
+  assert.ok(['passed', 'already-protected'].includes(proof.bootstrap));
+  const adopted = proof.bootstrap === 'already-protected';
+  assert.equal(proof.completedRequests, focused ? (adopted ? 9 : 18) : adopted ? 21 : 30);
   assert.ok(
     Number.isSafeInteger(proof.maximumCompletedDurationMs) &&
       proof.maximumCompletedDurationMs >= 300_000 &&
       proof.maximumCompletedDurationMs <= 330_000,
   );
-  assert.deepEqual(
-    [...proof.checks].sort(),
-    [...(focused ? FOCUSED_CONTINUITY_CHECKS : REQUEST_CONTINUITY_CHECKS)].sort(),
-  );
+  assert.deepEqual([...proof.checks].sort(), continuityChecks(adopted, focused ? 'focused' : 'full').sort());
   assert.match(proof.reportSha256, /^[a-f0-9]{64}$/);
   return structuredClone(proof);
 }

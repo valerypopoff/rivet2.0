@@ -17,8 +17,8 @@ const hash = (value) =>
     .update(JSON.stringify(canonical(value)))
     .digest('hex');
 
-// Deliberately small allowlist. Unknown/server/runtime/dependency/infra changes
-// require the full suite. Editing this policy itself also changes the digest.
+// This fingerprint binds evidence to the critical source. It does not select
+// the duration of the cloud test or imply that earlier stress tests ran again.
 export function routineSourcePath(file) {
   return ['packages/app/', 'packages/studio-server-web/', 'packages/docs/', 'developer-docs/', 'docs/'].some((prefix) =>
     file.startsWith(prefix),
@@ -70,67 +70,46 @@ export function qualificationConfigurationDigest(installed, policy, profile, ove
 }
 
 export function assertQualificationPlan(plan) {
+  assert.ok([1, 2].includes(plan.protocol));
   assert.deepEqual(
     Object.keys(plan).sort(),
-    ['protocol', 'tier', 'safetyDigest', 'configurationDigest', 'fullBaselineManifestDigest'].sort(),
+    [
+      'protocol',
+      'tier',
+      'safetyDigest',
+      'configurationDigest',
+      ...(plan.protocol === 1 ? ['fullBaselineManifestDigest'] : []),
+    ].sort(),
   );
-  assert.equal(plan.protocol, 1);
   assert.ok(['full', 'focused'].includes(plan.tier));
   for (const key of ['safetyDigest', 'configurationDigest']) assert.match(plan[key], /^[a-f0-9]{64}$/);
-  if (plan.tier === 'full') assert.equal(plan.fullBaselineManifestDigest, null);
-  else assert.match(plan.fullBaselineManifestDigest, /^sha256:[a-f0-9]{64}$/);
+  if (plan.protocol === 1) {
+    if (plan.tier === 'full') assert.equal(plan.fullBaselineManifestDigest, null);
+    else assert.match(plan.fullBaselineManifestDigest, /^sha256:[a-f0-9]{64}$/);
+  }
   return {
-    protocol: 1,
+    protocol: plan.protocol,
     tier: plan.tier,
     safetyDigest: plan.safetyDigest,
     configurationDigest: plan.configurationDigest,
-    fullBaselineManifestDigest: plan.fullBaselineManifestDigest,
+    ...(plan.protocol === 1 ? { fullBaselineManifestDigest: plan.fullBaselineManifestDigest } : {}),
   };
 }
 
-/** Select automatically; dispatch inputs cannot waive first adoption or choose
- * a cheaper suite. Every focused release still runs a real mixed-image upgrade.
- * Its certificate describes current observations, never invented chaos passes. */
-export function releaseQualificationPlan({
-  safetyDigest,
-  previous,
-  predecessorDigest,
-  candidate,
-  installed,
-  policy,
-  profile,
-  overlap,
-}) {
+/** Request continuity is the ordinary release gate, including first adoption.
+ * Full autoscaler stress is a separate protected configuration choice; overlap
+ * and releases without the bounded continuity contract retain the full suite.
+ * Neither tier reuses test results from a predecessor. */
+export function releaseQualificationPlan({ safetyDigest, installed, policy, profile, overlap, suite }) {
   assert.match(safetyDigest, /^[a-f0-9]{64}$/);
+  assert.ok(suite === undefined || ['focused', 'full'].includes(suite), 'Unknown qualification suite');
   const configurationDigest = qualificationConfigurationDigest(installed, policy, profile, overlap);
-  const prior = previous.evidence?.runtimeControl;
-  const basis = prior?.qualification;
-  if (basis) assertQualificationPlan(basis);
-  const scaling = previous.evidence?.runtimeAutoscaling;
-  const focused =
-    !overlap &&
-    !!installed.qualificationValues.requestContinuity?.enabled &&
-    !!profile &&
-    [2, 4].includes(prior?.protocol) &&
-    [2, 3].includes(previous.evidence?.runtimeAutoscaling?.protocol) &&
-    JSON.stringify(canonical(basis)) === JSON.stringify(canonical(scaling?.qualification)) &&
-    (basis?.tier === 'focused'
-      ? prior.protocol === 4 && scaling.protocol === 3
-      : prior.protocol === 2 && scaling.protocol === 2) &&
-    basis?.safetyDigest === safetyDigest &&
-    basis?.configurationDigest === configurationDigest &&
-    candidate.chart.contentDigest === previous.chart.contentDigest &&
-    candidate.database.managedWorkflowSchema.version === previous.database.managedWorkflowSchema.version &&
-    JSON.stringify(canonical(prior.requestContinuity?.profile)) === JSON.stringify(canonical(profile));
+  const focused = installed.controlPlaneMode === 'singleton' && !overlap && !!profile && suite !== 'full';
+  if (suite === 'focused') assert.ok(focused, 'Focused qualification requires singleton request continuity');
   return assertQualificationPlan({
-    protocol: 1,
+    protocol: 2,
     tier: focused ? 'focused' : 'full',
     safetyDigest,
     configurationDigest,
-    fullBaselineManifestDigest: focused
-      ? basis.tier === 'full'
-        ? predecessorDigest
-        : basis.fullBaselineManifestDigest
-      : null,
   });
 }

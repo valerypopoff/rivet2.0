@@ -6,6 +6,7 @@ import { runManagedReleaseCutover } from './lib/managed-release-cutover.mjs';
 import { runHaControlTopologyTransition } from './lib/ha-control-topology.mjs';
 import { fixtureDeploymentSafety } from './fixtures/deployment-safety.mjs';
 import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
+import { runDeploymentOperation } from './lib/deployment-operation.mjs';
 
 test('private deployment diagnostics preserve bounded causes without copying arbitrary process/request data', () => {
   const primary = new Error('management observation failed', { cause: new Error('underlying read failure') });
@@ -68,6 +69,9 @@ function fixture(mode) {
     },
     expire() {
       clock += 200_000;
+    },
+    advance(ms) {
+      clock += ms;
     },
     tick() {
       assert.equal(typeof tick, 'function');
@@ -213,6 +217,132 @@ const failureMessages = (error) =>
     ...(error?.cause ? [failureMessages(error.cause)] : []),
     ...(error?.errors ?? []).map(failureMessages),
   ].join('\n');
+
+for (const phase of ['preflight', 'templates', 'complete'])
+  test(
+    `rolling: a five-minute ${phase} observer retains the lease without advancing mutations`,
+    { timeout: 5000 },
+    async (t) => {
+      const f = fixture('rolling'),
+        entered = Promise.withResolvers(),
+        release = Promise.withResolvers();
+      let held = false,
+        notifications = 0;
+      const running = f.run({
+        timeoutMs: 1_200_000,
+        afterCheckpoint: async (record) => {
+          notifications++;
+          if (record.phase === phase && !held) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+        },
+      });
+      running.catch(() => {});
+      t.after(async () => {
+        release.resolve();
+        await running.catch(() => {});
+      });
+      await entered.promise;
+      const before = [...f.mutations],
+        notificationCount = notifications;
+      assert.equal(f.state.stopped, false, 'Heartbeat must remain active through completion observation');
+      for (let sample = 0; sample < 10; sample++) {
+        f.state.advance(30_000);
+        f.state.tick();
+        await new Promise(setImmediate);
+        assert.equal(f.state.journal.leaseExpiresAt, f.options.now() + 120_000);
+        assert.deepEqual(f.mutations, before, 'No workload mutation may bypass the pending observation');
+        assert.equal(notifications, notificationCount, 'Heartbeats must not launch duplicate request cohorts');
+      }
+      release.resolve();
+      await running;
+      assert.equal(f.state.journal.phase, 'complete');
+      assert.equal(f.state.journal.leaseExpiresAt, f.options.now());
+    },
+  );
+
+test('rolling: a checkpoint observation failure fences mutations after a confirmed journal write', async () => {
+  const f = fixture('rolling'),
+    failure = Error('request continuity observation failed');
+  await assert.rejects(
+    f.run({
+      afterCheckpoint: async (record) => {
+        if (record.phase === 'templates') throw failure;
+      },
+    }),
+    (error) => {
+      assert.equal(error, failure);
+      assert.equal(error.deploymentOperation.acknowledgement, 'confirmed');
+      return true;
+    },
+  );
+  assert.ok(!f.mutations.includes('templates'));
+  assert.equal(f.state.journal.phase, 'templates');
+  assert.equal(f.state.stopped, true);
+});
+
+test(
+  'concurrent checkpoints retain observation order while heartbeat writes bypass the barrier',
+  { timeout: 5000 },
+  async (t) => {
+    let journal,
+      tick,
+      version = 0,
+      clock = 1000;
+    const entered = Promise.withResolvers(),
+      release = Promise.withResolvers(),
+      observed = [];
+    const running = runDeploymentOperation({
+      name: 'fixture',
+      runner: 'fixture-runner',
+      initial: { token: 'fixture-token', phase: 'preflight' },
+      safety: { assertRecovery: (record) => assert.equal(record.token, 'fixture-token') },
+      readJournal: async () => structuredClone(journal),
+      saveJournal: async (next, rv) => {
+        assert.equal(rv, journal?.resourceVersion);
+        journal = structuredClone({ ...next, resourceVersion: String(++version) });
+        return structuredClone(journal);
+      },
+      now: () => clock,
+      setHeartbeat: (callback) => {
+        tick = callback;
+        return {};
+      },
+      clearHeartbeat: () => {},
+      afterCheckpoint: async (record) => {
+        if (record.phase === 'complete' || !record.step) return;
+        observed.push(record.step);
+        if (record.step === 'first') {
+          entered.resolve();
+          await release.promise;
+        }
+      },
+      run: async (operation) => {
+        await Promise.all([operation.checkpoint({ step: 'first' }), operation.checkpoint({ step: 'second' })]);
+        await operation.complete();
+      },
+    });
+    running.catch(() => {});
+    t.after(async () => {
+      release.resolve();
+      await running.catch(() => {});
+    });
+    await entered.promise;
+    for (let sample = 0; sample < 10; sample++) {
+      clock += 30_000;
+      tick();
+      await new Promise(setImmediate);
+      assert.equal(journal.step, 'first', 'The second checkpoint must not overtake the first observation');
+      assert.equal(journal.leaseExpiresAt, clock + 120_000);
+      assert.deepEqual(observed, ['first']);
+    }
+    release.resolve();
+    await running;
+    assert.deepEqual(observed, ['first', 'second']);
+  },
+);
 
 for (const mode of modes) {
   test(`${mode}: a completed journal retains its protocol and releases the shared lease`, async () => {

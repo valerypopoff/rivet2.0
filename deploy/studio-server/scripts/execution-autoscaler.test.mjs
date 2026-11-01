@@ -338,9 +338,16 @@ test('the installed controller can close only an expired untouched preflight bef
   assert.equal(f.calls.length, 0);
   assert.equal((await f.tick()).state, 'observing');
   const completed = f.journal();
-  for (const preparation of [
-    { protocol: 1, state: 'preparing', jobs: [{ createIssued: true, uid: 'job' }] },
-    { protocol: 1, state: 'complete', jobs: [{ createIssued: true, absent: false }] },
+  for (const pending of [
+    { preparation: { protocol: 1, state: 'preparing', jobs: [{ createIssued: true, uid: 'job' }] } },
+    { preparation: { protocol: 1, state: 'complete', jobs: [{ createIssued: true, absent: false }] } },
+    { proxyContinuity: { phase: 'creating' } },
+    { proxyContinuity: { phase: 'bridge-serving' } },
+    { proxyContinuity: { phase: 'complete', routeRestored: false } },
+    {
+      proxyContinuity: { phase: 'complete', routeRestored: true, hpaFreezeIntent: {}, hpaReleased: false, entries: [] },
+    },
+    { proxyContinuity: { phase: 'complete', routeRestored: true, entries: [{ intent: true, absent: false }] } },
   ]) {
     f.setJournal({
       ...completed,
@@ -350,7 +357,7 @@ test('the installed controller can close only an expired untouched preflight bef
       leaseExpiresAt: 0,
       manifestDigest: 'next-digest',
       previousManifestDigest: 'digest',
-      preparation,
+      ...pending,
       workloads: [{ name: 'exec', uid: 'sts', role: 'execution' }],
       completed: [],
       owner: null,
@@ -366,8 +373,17 @@ test('the installed controller can close only an expired untouched preflight bef
     });
     const before = structuredClone(f.journal());
     assert.equal((await f.tick({ workload: 'exec', image: 'installed-image' })).state, 'rollout-observing');
-    assert.deepEqual(f.journal(), before, 'Pending preparation cannot be erased by abandoned-preflight recovery');
+    assert.deepEqual(
+      f.journal(),
+      before,
+      'Pending preparation or proxy handoff cannot be erased by preflight recovery',
+    );
   }
+  f.setJournal({
+    ...f.journal(),
+    proxyContinuity: { phase: 'complete', routeRestored: true, entries: [{ intent: true, absent: true }] },
+  });
+  assert.equal((await f.tick({ workload: 'exec', image: 'installed-image' })).state, 'rollout-preflight-released');
 });
 
 test('waiting LLM slots scale up even with zero CPU; CPU scales independently; caps apply', async () => {

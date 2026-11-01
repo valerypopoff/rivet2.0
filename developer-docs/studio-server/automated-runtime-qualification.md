@@ -71,6 +71,27 @@ work drains. Unknown owners, replaced processes and lost modifying acknowledgeme
 retain their existing fences. Never clear the registry, cancel work or force
 Pod deletion to make cleanup appear successful.
 
+If a failed operation's final exec acknowledgement is lost after its command
+exits, the coordinator can read the final cleanup receipt from the original
+control-namespace registry. The provider saves it only after gate/child cleanup
+and exact worker closure. The coordinator pins the registry UID returned by
+`armExpiry`, operation hash, actor UID and verification worker, requires all
+workers closed, and applies the usual complete-inventory/absence validation.
+It then closes only the exec transport, without replaying or signalling the
+command. Prior failed workers are marked closed only after `/proc` confirms
+their original PID/start-time incarnation is gone; denied or racing observations
+remain fenced. This receipt proves cleanup, never upgrade success.
+
+If no exact receipt can be confirmed, preserve bounded private diagnostics and
+verify cleanup independently.
+Require the exact namespace and every journaled Kubernetes/cloud resource absent,
+no live test writers in the original actor, and the same actor/Job UIDs. Close
+only that idle Job using normal termination grace, then confirm actor removal
+and terminal workflow failure with publication/deployment skipped before releasing
+the exact owner/generation lock. Record the unreceived coordinator acknowledgement
+separately from independent absence proof; this recovery cannot qualify a release
+or authorize another paid operation. Preserve the retained foundation.
+
 The previous temporary campaign is closed. On 2026-10-31,
 after the user's explicit request to create and retain staging, the persistent
 cluster foundation was installed independently of that campaign. It has a
@@ -262,35 +283,52 @@ readiness.
 
 ## Automatic test depth
 
-`lib/release-qualification-policy.mjs` selects the suite from committed source and
-the installed configuration; dispatch cannot choose a cheaper suite. Unknown
-changes require full qualification. Only changes confined to `packages/app/`,
-`packages/studio-server-web/`, `packages/docs/`, `developer-docs/` and `docs/` can
-reuse an unchanged critical-source fingerprint. Server/core/runtime, dependencies,
-SQL, Helm, CI and this policy itself all change that fingerprint.
+`lib/release-qualification-policy.mjs` defaults to focused qualification for a
+singleton release with the bounded request-continuity profile, including its
+first protected rollout. Source/chart/settings changes and the absence of an
+older stress certificate do not automatically add hours of stress testing.
+Exact-source/chart/image, schema compatibility and live configuration checks
+still apply; a changed or unsafe contract cannot bypass those validators.
 
-The first protected adoption, legacy releases without a fingerprint, changed
-chart/schema/settings/policy/profile and developer overlap always run the full
-suite. It includes growth, retirement, fault injection, HPA and transport-duration
-checks. A full certificate records its source/configuration fingerprints.
-
-Focused qualification requires an already protected singleton installation with
-the same fingerprints, profile, schema and chart. It still upgrades the exact
+Focused qualification upgrades the exact
 predecessor to the new images, observes public workflow/web traffic and two-ready
 floors, preserves recordings/storage, exercises browser OAuth/action/schedule and
 runs fresh five-minute HTTP/1, pooled HTTP/1 and HTTP/2 cohorts spanning execution
 retirement and native proxy replacement, plus accepted action resume. Its separate
 autoscaler phase observes the current policy/floors and at least 100 workflow and
 100 web completions. It omits autoscaling chaos/HPA removal and the separate
-60/180/295-second duration matrix.
+60/180/295-second duration matrix. First adoption additionally tests the temporary
+bridge, policy adoption and return handoff: 18 complete five-minute requests
+instead of the nine for an already protected installation. It retains the same
+safe shutdown/admission checks and bridge cleanup requirement.
+
+For autoscaler capacity/fault-policy changes, select `qualificationSuite: "full"`
+in the reviewed private staging settings and approve the appropriate test window.
+The full suite remains available for growth, retirement, metrics faults, HPA and
+duration-matrix tests. Developer overlap and releases without the bounded profile
+also retain full qualification. An explicit incompatible focused selection or an
+unknown suite fails before actor admission. Dispatch inputs cannot waive checks.
 
 Focused runtime-control v4, autoscaling v3 and nested continuity v3 explicitly
 describe those observations; they cannot be relabeled full tests. Both declarations
-carry identical qualification metadata and the immutable original full-baseline
-manifest digest. Further focused releases retain that reference. The provider
-recomputes selection from verified source; publication checks the source digest
-again. Custom legacy drivers without settings remain full-only and establish no
-reusable source baseline. No old pass is rewritten for a new image.
+carry identical version-2 qualification metadata with source/configuration
+fingerprints. There is no inherited full-baseline requirement. Version-1 metadata
+remains readable as historical evidence. The provider recomputes selection from
+verified source and its hash-pinned private settings; publication checks the
+source digest again. Custom legacy drivers without settings remain full-only.
+No old pass is rewritten for a new image.
+
+Before another provider attempt, run the local operation, continuity, coordinator
+and publication regressions through the real command/HTTP/WebSocket boundaries.
+`yarn studio-server:verify:kubernetes` includes these tests, Linux process/lock
+checks and Helm renders; it does not deploy a cluster or start qualification.
+On Windows, set `RIVET_STAGING_PROCESS_TEST_IMAGE=node:24-alpine` to include the
+network-disabled Linux fixture-process check with a locally available image.
+The clock-driven five-minute observer regression must renew the two-minute lease
+without admitting the next mutation. The cleanup tests deliberately withhold the
+final exec status, retain or close the socket, and reject foreign receipts,
+active workers and missing evidence. Local success remains distinct from a GKE
+certificate; no failed/expired test grants an automatic paid retry.
 
 Raw Helm settings may contain credentials. The installation snapshot contains
 only identities, hashes, normalized policy and allowlisted sizing/drain fields,
@@ -352,7 +390,7 @@ installation:
 - Staging: `RIVET_AUTOMATED_QUALIFICATION_ENABLED=true`, also a repository variable
   for input validation, and explicit `RIVET_QUALIFICATION_MAX_USD` / `_MAX_SECONDS`.
   Historical retained attempts used USD 30 / 7200 seconds. That time limit is
-  too tight for the full suite's sequential real stabilization windows: returning
+  too tight for the optional full suite's sequential real stabilization windows: returning
   seven workers to two alone requires five separate five-minute low-load windows,
   after its 15-minute fixture. Cooperative growth, busy retirement, missing/stale
   metrics, CPU growth and the update probes add further serial work. Prepare a
