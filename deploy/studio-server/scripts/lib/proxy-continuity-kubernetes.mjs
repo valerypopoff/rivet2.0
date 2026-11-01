@@ -101,7 +101,7 @@ export function createComputeBackendObserver(
     } while (page);
     const matches = all.filter(
       (b) =>
-        b.backends?.length === groups.length && groups.every((g) => b.backends.some((v) => v.group.endsWith(`/${g}`))),
+        b.backends?.length >= groups.length && groups.every((g) => b.backends.some((v) => v.group.endsWith(`/${g}`))),
     );
     assert.ok(matches.length <= 1, 'Service must resolve to exactly one actual regional backend');
     const pending = () => ({
@@ -114,6 +114,21 @@ export function createComputeBackendObserver(
     if (allowPending && (!matches.length || !matches[0].healthChecks?.length)) return pending();
     assert.equal(matches.length, 1, 'Service must resolve to exactly one actual regional backend');
     const backend = matches[0];
+    // Regional Gateways may retain an empty zone beyond the Service's active
+    // NEG zones. Accept only additional groups for this same Service identity.
+    const groupIdentity = new RegExp(
+      `(?:^|/)(projects/${project}/zones/${region}-[a-z]/networkEndpointGroups/${neg})$`,
+    );
+    const attachedGroups = backend.backends.map(({ group }) => {
+      const identity = group.match(groupIdentity)?.[1];
+      assert.ok(identity, 'Regional backend contains a foreign endpoint group');
+      return identity;
+    });
+    assert.equal(
+      new Set(attachedGroups).size,
+      attachedGroups.length,
+      'Regional backend contains a duplicate endpoint group',
+    );
     assert.match(backend.name, /^[a-z0-9-]+$/);
     assert.match(String(backend.id), /^[1-9][0-9]*$/);
     assert.ok(backend.healthChecks?.length, 'Regional backend health checks are not attached');
@@ -123,7 +138,7 @@ export function createComputeBackendObserver(
       'Provider request timeout is shorter than the protected request',
     );
     const health = await Promise.all(
-      groups.map(async (group) => {
+      attachedGroups.map(async (group) => {
         const result = await request(`regions/${region}/backendServices/${backend.name}/getHealth`, {
           group: `https://www.googleapis.com/compute/v1/${group}`,
         });

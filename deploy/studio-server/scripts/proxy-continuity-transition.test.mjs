@@ -463,7 +463,7 @@ test('actual backend observation binds the exact regional NEG groups and checks 
   await assert.rejects(observe(service), /timeout/);
   backend.timeoutSec = 3600;
   backend.backends.push({ group: 'foreign' });
-  await assert.rejects(observe(service), /exactly one/);
+  await assert.rejects(observe(service), /foreign endpoint group/);
 });
 
 test('Kubernetes adapter runs the full owned handoff with NEG admission, live policy observations and UID-preconditioned cleanup', async () => {
@@ -895,6 +895,7 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
     (z) =>
       `https://www.googleapis.com/compute/v1/projects/fixture-project/zones/europe-central2-${z}/networkEndpointGroups/current-neg`,
   );
+  const extraGroup = groups[0].replace('central2-a/', 'central2-c/');
   let mode = 'healthy';
   const server = createServer(async (request, response) => {
     assert.equal(request.headers.authorization, 'Bearer local-only');
@@ -910,17 +911,20 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
     }
     if (request.url.endsWith('/getHealth')) {
       assert.equal(request.method, 'POST');
-      assert.ok(groups.includes(body.group));
+      assert.ok([...groups, extraGroup].includes(body.group));
       const i = groups.indexOf(body.group);
       response.end(
         JSON.stringify({
-          healthStatus: [
-            {
-              healthState: mode === 'unhealthy' && i === 1 ? 'UNHEALTHY' : 'HEALTHY',
-              ipAddress: mode === 'old-endpoint' && i === 1 ? '10.0.0.99' : f.pods[i].status.podIP,
-              port: 8080,
-            },
-          ],
+          healthStatus:
+            i < 0
+              ? []
+              : [
+                  {
+                    healthState: mode === 'unhealthy' && i === 1 ? 'UNHEALTHY' : 'HEALTHY',
+                    ipAddress: mode === 'old-endpoint' && i === 1 ? '10.0.0.99' : f.pods[i].status.podIP,
+                    port: 8080,
+                  },
+                ],
         }),
       );
     } else {
@@ -931,7 +935,16 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
         loadBalancingScheme: 'EXTERNAL_MANAGED',
         timeoutSec: 3600,
         healthChecks: mode === 'no-check' ? [] : ['regional-check'],
-        backends: groups.map((group) => ({ group })),
+        backends: (mode === 'extra-empty-zone'
+          ? [...groups, extraGroup]
+          : mode === 'foreign-group'
+            ? [...groups, extraGroup.replace('current-neg', 'foreign-neg')]
+            : mode === 'duplicate-group'
+              ? [...groups, groups[0]]
+              : mode === 'missing-zone'
+                ? [groups[0], extraGroup]
+                : groups
+        ).map((group) => ({ group })),
       };
       response.end(
         JSON.stringify({
@@ -952,6 +965,18 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
       fetch(`http://127.0.0.1:${server.address().port}${new URL(url).pathname}${new URL(url).search}`, options),
   });
   assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, await observe(f.service)).length, 2);
+  mode = 'extra-empty-zone';
+  assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, await observe(f.service)).length, 2);
+  assert.ok(
+    calls.some((c) => c.body?.group === extraGroup),
+    'Observe all actual same-Service backend groups',
+  );
+  mode = 'foreign-group';
+  await assert.rejects(observe(f.service, { allowPending: true }), /foreign endpoint group/);
+  mode = 'duplicate-group';
+  await assert.rejects(observe(f.service, { allowPending: true }), /duplicate endpoint group/);
+  mode = 'missing-zone';
+  assert.equal((await observe(f.service, { allowPending: true })).healthy, false);
   for (const pending of ['missing', 'no-check']) {
     mode = pending;
     assert.equal((await observe(f.service, { allowPending: true })).healthy, false);

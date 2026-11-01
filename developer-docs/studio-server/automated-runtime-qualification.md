@@ -73,16 +73,60 @@ work drains. Unknown owners, replaced processes and lost modifying acknowledgeme
 retain their existing fences. Never clear the registry, cancel work or force
 Pod deletion to make cleanup appear successful.
 
-If a failed operation's final exec acknowledgement is lost after its command
-exits, the coordinator can read the final cleanup receipt from the original
-control-namespace registry. The provider saves it only after gate/child cleanup
-and exact worker closure. The coordinator pins the registry UID returned by
-`armExpiry`, operation hash, actor UID and verification worker, requires all
-workers closed, and applies the usual complete-inventory/absence validation.
-It then closes only the exec transport, without replaying or signalling the
-command. Prior failed workers are marked closed only after `/proc` confirms
-their original PID/start-time incarnation is gone; denied or racing observations
-remain fenced. This receipt proves cleanup, never upgrade success.
+Long provider phases save their successful JSON result privately in the original
+actor before acknowledging exact worker closure in the control-namespace registry.
+The coordinator can retrieve that immutable result if exec loses its final status.
+It pins the registry UID returned by `armExpiry`, operation hash, actor UID, phase
+and worker identity, then checks the stored byte count and SHA-256. The normal
+phase evidence validators still decide success. A disconnected, registered worker
+is observed within the original phase deadline; its modifying command is never
+replayed. Failed or missing results cannot qualify a release. Failure is recorded
+only after the provider's managed commands and gate have closed.
+The immutable receipt transfer can retry once for an unknown transport outcome,
+within the same original deadline. Failed commands, changed contents and rebound
+identities stop immediately. The modifying phase is never retried. Receipt files
+are bounded to 31 MiB, leaving framing/status headroom below exec's 32 MiB limit.
+
+The provider records its current step before performing it in the exact worker's
+registry entry. The coordinator prints an allowlisted status on step changes and
+every 30 seconds: phase, expected condition, last observed progress and expected
+step deadline, capped by the original phase deadline. Polling and heartbeats do
+not count as step progress. Protected rollout/autoscaling steps retain their
+original phase allowance; a diagnostic never shortens five-minute requests or
+draining waits.
+
+Two minutes without a step change, or an overdue expected step deadline, captures
+one private snapshot for that step and immediately reports the reason. Phase
+failure captures a fresh snapshot too. Snapshots compare the original actor,
+registry, worker and phase acknowledgement and read fixture Pod readiness only
+after namespace UID confirmation. They exclude Pod environment/command contents
+and never read Secrets. Existing private evidence persistence saves these files;
+public CI output contains source-owned conditions, never raw diagnostics.
+Snapshot read failure is reported without changing qualification or cleanup
+authority. Status and diagnostics add no release gate or automatic retry.
+Snapshot reads run independently of the liveness/completion monitor. The phase
+waits for outstanding snapshots before its final private evidence save, keeping
+their collection from hiding a completed result or causing a false phase timeout.
+Command completion/failure is reported before evidence upload can wait. Actor
+identity reads consume the existing RPC deadline; dispatch cannot reset it.
+If command execution and private evidence handling both fail, retain both errors
+with the command failure first so storage errors cannot conceal the original cause.
+
+On the first alert, compare the saved phase result with its exact worker and the
+coordinator's wait. Recover a completed result through the existing read-only
+path. For an active worker, identify its actual readiness/drain condition and
+bounded deadline before continuing to wait. Report the specific blocker promptly;
+the overall test allowance is not a reason to spend hours exploring unrelated
+symptoms. Unknown or failed work follows existing settlement and cleanup. Before
+another cloud attempt, reproduce the observed automation failure locally and
+require its regression to pass; neither an alert nor a diagnostic grants a retry.
+
+Final cleanup keeps its complete receipt directly in the original registry. It
+requires all workers closed and the usual complete-inventory/absence validation;
+this receipt proves cleanup, never upgrade success. Receipt recovery closes only
+the exec transport without signalling the command. Prior unacknowledged workers
+are marked closed only after `/proc` confirms their original PID/start-time
+incarnation is gone; denied or racing observations remain fenced.
 
 If no exact receipt can be confirmed, preserve bounded private diagnostics and
 verify cleanup independently.
@@ -356,9 +400,13 @@ On Windows, set `RIVET_STAGING_PROCESS_TEST_IMAGE=node:24-alpine` to include the
 network-disabled Linux fixture-process check with a locally available image.
 The clock-driven five-minute observer regression must renew the two-minute lease
 without admitting the next mutation. The cleanup tests deliberately withhold the
-final exec status, retain or close the socket, and reject foreign receipts,
-active workers and missing evidence. Local success remains distinct from a GKE
+final exec status, retain or close the socket, and recover delayed phase results
+without replay. They reject altered bytes, foreign identities and missing evidence,
+and keep disconnected active workers bounded by the original deadline. Final
+cleanup still requires every worker closed. Local success remains distinct from a GKE
 certificate; no failed/expired test grants an automatic paid retry.
+Coordinator fixture start/expiry timestamps share one clock read, keeping
+rounding of the actor's finite lifetime independent of process scheduling.
 
 Raw Helm settings may contain credentials. The installation snapshot contains
 only identities, hashes, normalized policy and allowlisted sizing/drain fields,
@@ -640,6 +688,13 @@ the specific unmet condition. Preflight and handoff waits also identify missing
 availability, Pod/NEG readiness, node/zone spread or backend health instead of
 reporting every failure as missing two-zone placement. Ownership and protected
 shutdown checks retain their existing fences.
+
+Regional Gateways can attach an empty additional zone while the Service NEG
+annotation lists only active zones. Backend discovery requires every advertised
+group and permits additional groups only for the same NEG, project and region.
+It rejects duplicate/foreign groups and reads health from every actual attached
+group. The current proxy endpoints and required healthy zone floor must still
+pass; an empty extra zone cannot substitute for a healthy expected endpoint.
 
 The fixture trusts that approved Gateway's forwarded HTTPS host/protocol so
 OAuth redirects and Secure cookies retain the public origin. Restrict edge access

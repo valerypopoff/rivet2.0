@@ -32,6 +32,7 @@ import { qualificationSizing } from './lib/runtime-qualification-installation.mj
 import { packageReusableStaging } from './package-reusable-staging.mjs';
 import { verifyQualificationDriver } from './lib/runtime-qualification-driver.mjs';
 import { executeProviderPhase } from './qualification/provider-entry.mjs';
+import { providerProgressStep } from './lib/provider-progress.mjs';
 import { ManagedReleaseGate, createReleaseGateWebAppOAuthSession } from './kubernetes-managed-release-gate.mjs';
 import { ReusableProviderGate } from './qualification/provider-gate.mjs';
 import {
@@ -1276,18 +1277,38 @@ test('concrete phase boundary records intent before seed work and never replays 
   const f = await fixture(t),
     op = f.state.operation;
   await f.state.arm(actor);
+  await f.state.change((record) => {
+    record.workers.push({ id: '123:456', phase: 'prepare', closed: false });
+  });
   let writes = 0;
   const gate = {
     verifySharedPrerequisites: async () => {},
     installDependencies: async () => {
+      assert.equal(
+        (await f.state.read()).record.workers[0].progress.step,
+        'dependencies',
+        'Progress must precede the actual operation',
+      );
       writes++;
       throw Error('lost fixture write acknowledgement');
     },
   };
-  const input = { phase: 'prepare', operation: op, state: f.state, cloud, actor, gate, wait };
+  const input = {
+    phase: 'prepare',
+    operation: op,
+    state: f.state,
+    cloud,
+    actor,
+    gate,
+    wait,
+    step: providerProgressStep(f.state, 'prepare', '123:456', Date.parse(op.expiresAt)),
+  };
   await assert.rejects(executeProviderPhase(input), /lost fixture/);
   await assert.rejects(executeProviderPhase(input), /Never replay/);
   assert.equal(writes, 1);
+  const progress = (await f.state.read()).record.workers[0].progress;
+  assert.equal(progress.sequence, 3);
+  assert.ok(progress.deadlineAt <= Date.parse(op.expiresAt));
 });
 test('provider absence must be an actual 404, not JSON/HTML 5xx or a disconnected API', async (t) => {
   let status = 503;
