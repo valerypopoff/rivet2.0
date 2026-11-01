@@ -29,17 +29,16 @@ export function assertContinuityProviderFacts(report, operation, kind) {
     return;
   }
   const focused = operation.qualification?.tier === 'focused';
-  if (focused && kind === 'autoscaling') {
-    assert.equal(report.requestContinuity, undefined);
-    return;
-  }
+  if (focused) assert.equal(kind, 'upgrade', 'Focused continuity is observed in the real rollout');
   const facts = report.requestContinuity;
-  assert.equal(facts?.protocol, focused ? 3 : 2, 'Missing complete request continuity observations');
+  assert.equal(facts?.protocol, focused ? 4 : 2, 'Missing complete request continuity observations');
   assert.deepEqual(facts.profile, operation.requestContinuityProfile);
   const adopted = !!requestContinuityProfile(operation.installed.qualificationValues);
   assert.equal(facts.bootstrap, adopted ? 'already-protected' : 'passed');
   assert.deepEqual(facts.failures, []);
-  const stages = continuityStages(adopted, kind, focused ? 'focused' : 'full');
+  if (focused)
+    assert.equal(typeof facts.replacement?.changed, 'boolean', 'Actual proxy template observation is missing');
+  const stages = continuityStages(adopted, kind, focused ? 'focused' : 'full', facts.replacement?.changed);
   assert.equal(facts.requests.length, stages.length * 3);
   for (const stage of stages) {
     const requests = facts.requests.filter((r) => r.stage === stage);
@@ -67,22 +66,31 @@ export function assertContinuityProviderFacts(report, operation, kind) {
       'Both original execution owners must retain accepted five-minute work',
     );
     assert.equal(facts.bridgeCleaned, true);
-    const a = facts.action;
-    nonempty(a.runId);
-    nonempty(a.requestId);
-    assert.equal(a.resumed, true);
-    assert.equal(a.browserResume, true);
-    assert.equal(a.starts, 1);
-    assert.equal(a.completions, 1);
-    assert.deepEqual(a.persisted, { runs: 1, starts: 1, completions: 1 });
-    assert.ok(timestamp(a.idleOpenedAt) < timestamp(a.acceptedAt) && timestamp(a.acceptedAt) < timestamp(a.finishedAt));
-    const late = facts.requests.filter((r) => r.stage === 'late-admission');
-    assert.ok(timestamp(a.acceptedAt) >= Math.min(...late.map((r) => timestamp(r.startedAt))));
-    assert.ok(Number.isSafeInteger(a.terminalSequence) && a.terminalSequence > 1);
+    if (focused) {
+      assert.equal(facts.action, undefined, 'Focused rollout cannot claim browser resume');
+      assert.equal(facts.removal, undefined, 'Focused rollout cannot claim HPA removal');
+      nonempty(facts.replacement.deploymentUid);
+    } else {
+      const a = facts.action;
+      nonempty(a.runId);
+      nonempty(a.requestId);
+      assert.equal(a.resumed, true);
+      assert.equal(a.browserResume, true);
+      assert.equal(a.starts, 1);
+      assert.equal(a.completions, 1);
+      assert.deepEqual(a.persisted, { runs: 1, starts: 1, completions: 1 });
+      assert.ok(
+        timestamp(a.idleOpenedAt) < timestamp(a.acceptedAt) && timestamp(a.acceptedAt) < timestamp(a.finishedAt),
+      );
+      const late = facts.requests.filter((r) => r.stage === 'late-admission');
+      assert.ok(timestamp(a.acceptedAt) >= Math.min(...late.map((r) => timestamp(r.startedAt))));
+      assert.ok(Number.isSafeInteger(a.terminalSequence) && a.terminalSequence > 1);
+    }
     const replacement = facts.replacement;
-    assert.equal(replacement.before.length, 2);
+    assert.ok(focused ? replacement.before.length >= 2 : replacement.before.length === 2);
     assert.equal(replacement.after.length, 2);
-    unique([...replacement.before, ...replacement.after].map(nonempty));
+    unique(replacement.before.map(nonempty));
+    unique(replacement.after.map(nonempty));
     const overlaps = (stage, dispatchedAt, observedAt) => {
       const dispatched = timestamp(dispatchedAt),
         observed = timestamp(observedAt);
@@ -94,8 +102,47 @@ export function assertContinuityProviderFacts(report, operation, kind) {
         'Protected requests must be accepted before and complete after the disruption',
       );
     };
-    overlaps('protected-roll', replacement.dispatchedAt, replacement.observedAt);
+    if (!focused || replacement.changed) {
+      unique([...replacement.before, ...replacement.after]);
+      if (!focused || adopted) overlaps('protected-roll', replacement.dispatchedAt, replacement.observedAt);
+    } else {
+      assert.ok(adopted, 'First adoption cannot omit proxy replacement');
+      assert.deepEqual(operation.previous.images.proxy, operation.candidate.images.proxy);
+      assert.deepEqual([...replacement.after].sort(), [...replacement.before].sort());
+      assert.equal(replacement.dispatchedAt, undefined);
+      assert.equal(replacement.observedAt, undefined);
+    }
+    if (focused) {
+      nonempty(facts.executionWithdrawal?.podUid);
+      assert.ok(
+        report.outcomes.acceptedWork.some((r) => r.uid === facts.executionWithdrawal?.podUid),
+        'Execution withdrawal must belong to an accepted-work owner',
+      );
+      overlaps('execution-retirement', facts.executionWithdrawal.dispatchedAt, facts.executionWithdrawal.observedAt);
+    }
     if (!adopted) overlaps('return-handoff', facts.returnHandoff.dispatchedAt, facts.returnHandoff.observedAt);
+    if (focused && !adopted) {
+      const dispatched = timestamp(facts.bootstrapHandoff.dispatchedAt),
+        settled = timestamp(facts.bootstrapHandoff.settledAt);
+      assert.ok(dispatched < settled && settled <= timestamp(report.finishedAt));
+      assert.ok(
+        timestamp(replacement.dispatchedAt) >= settled &&
+          timestamp(replacement.observedAt) >= timestamp(replacement.dispatchedAt) &&
+          timestamp(replacement.observedAt) < timestamp(facts.returnHandoff.dispatchedAt),
+        'First-adoption proxies must be replaced behind the protected bridge before return handoff',
+      );
+      assert.ok(
+        facts.requests
+          .filter((r) => r.stage === 'bootstrap')
+          .every(
+            (r) =>
+              timestamp(r.acceptedAt) <= dispatched &&
+              timestamp(r.finishedAt) > dispatched &&
+              timestamp(r.finishedAt) <= settled,
+          ),
+        'Bridge traffic must finish inside the real handoff drain window',
+      );
+    }
   } else {
     nonempty(facts.removal.hpaUid);
     assert.ok(facts.removal.podUids.length >= 1);
@@ -117,13 +164,14 @@ export function assertContinuityProviderFacts(report, operation, kind) {
 export function compileRequestContinuityEvidence(operation, upgrade, autoscaling) {
   if (!operation.requestContinuityProfile) return undefined;
   assertContinuityProviderFacts(upgrade, operation, 'upgrade');
-  assertContinuityProviderFacts(autoscaling, operation, 'autoscaling');
   const focused = operation.qualification?.tier === 'focused';
+  if (!focused) assertContinuityProviderFacts(autoscaling, operation, 'autoscaling');
   const reports = [upgrade.requestContinuity, ...(!focused ? [autoscaling.requestContinuity] : [])],
     requests = reports.flatMap((r) => r.requests);
   for (const key of ['requestId', 'correlationId', 'recordingId']) unique(requests.map((r) => r[key]));
   return {
-    protocol: focused ? 3 : 2,
+    protocol: focused ? 4 : 2,
+    ...(focused ? { proxyReplaced: upgrade.requestContinuity.replacement.changed } : {}),
     provider: 'gke',
     gatewayClass: 'gke-l7-regional-external-managed',
     candidateSourceSha: operation.candidate.source.sha,
@@ -135,7 +183,11 @@ export function compileRequestContinuityEvidence(operation, upgrade, autoscaling
     failedRequests: 0,
     completedRequests: requests.length,
     maximumCompletedDurationMs: Math.max(...requests.map((r) => r.elapsedMs)),
-    checks: continuityChecks(upgrade.requestContinuity.bootstrap === 'already-protected', focused ? 'focused' : 'full'),
+    checks: continuityChecks(
+      upgrade.requestContinuity.bootstrap === 'already-protected',
+      focused ? 'focused' : 'full',
+      upgrade.requestContinuity.replacement?.changed,
+    ),
     reportSha256: hash(reports),
     bootstrap: upgrade.requestContinuity.bootstrap,
   };

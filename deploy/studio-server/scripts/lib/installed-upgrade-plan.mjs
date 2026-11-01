@@ -136,7 +136,7 @@ export async function planInstalledUpgrade({
       images: next.images,
       ...(autoscalingPolicyDigest
         ? {
-            autoscalingDuringUpgrade: [2, 3].includes(next.evidence.runtimeAutoscaling?.protocol)
+            autoscalingDuringUpgrade: [2, 3, 4].includes(next.evidence.runtimeAutoscaling?.protocol)
               ? 'scale-up-only'
               : 'legacy-frozen',
           }

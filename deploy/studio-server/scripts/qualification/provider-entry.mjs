@@ -16,11 +16,7 @@ import {
   cleanupStaging,
   verifyStagingCleanup,
 } from '../lib/reusable-staging-cleanup.mjs';
-import {
-  runOrdinaryRuntimeUpgrade,
-  waitForOrdinaryRuntime,
-  assertOrdinaryRuntimePods,
-} from '../lib/runtime-upgrade-qualification.mjs';
+import { runOrdinaryRuntimeUpgrade, waitForOrdinaryRuntime } from '../lib/runtime-upgrade-qualification.mjs';
 import { HaReleaseProbes } from '../lib/ha-release-probes.mjs';
 import { assertReleaseManifestMatchesCurrentChart } from '../lib/studio-server-release-manifest.mjs';
 import { qualificationHash } from '../lib/runtime-qualification-execution.mjs';
@@ -72,7 +68,7 @@ export async function executeProviderPhase({
   if (phase === 'armExpiry') {
     if (operation.developerOverlapProfile) await gate.verifyOverlapCapacity();
     await cloud.project();
-    await gate.verifyLocalBrowserFixture();
+    if (operation.qualification?.tier !== 'focused') await gate.verifyLocalBrowserFixture();
     await gate.verifySharedPrerequisites();
     return bind(await state.arm(actor));
   }
@@ -88,6 +84,10 @@ export async function executeProviderPhase({
     const result = await wait('exact namespace/CSI/NEG garbage collection', () => verifyStagingCleanup(state, cloud));
     return bind(result);
   }
+  assert.ok(
+    phase !== 'autoscaling' || operation.qualification?.tier !== 'focused',
+    'Focused policy observations belong to the actual upgrade, not a separate phase',
+  );
   await state.admission();
   await state.change((r) => {
     r.testPhases ??= {};
@@ -154,83 +154,44 @@ export async function executeProviderPhase({
       const workflow = startHaWorkflowTraffic(gate, gate.config.baseUrl, () => subphase);
       const web = startHaWebAppTraffic(gate, gate.config.baseUrl, () => subphase);
       try {
-        if (operation.qualification?.tier === 'focused') {
-          const observe = async () => {
-            await state.admission();
-            const pods = await gate.pods();
-            assertOrdinaryRuntimePods(pods, operation.candidate.images, { baseline: true });
-            return {
-              autoscaler: await gate.assertAutoscalerActive(Date.now()),
-              ready: Object.fromEntries(
-                ['execution', 'proxy'].map((role) => [
-                  role,
-                  pods.filter(
-                    (p) =>
-                      p.metadata.labels?.['app.kubernetes.io/component'] === role &&
-                      !p.metadata.deletionTimestamp &&
-                      p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
-                  ).length,
-                ]),
-              ),
-            };
-          };
-          const observations = [await observe()];
-          await wait(
-            'one hundred focused public completions',
-            async () => workflow.report.samples >= 100 && web.report.samples >= 100,
+        if (operation.requestContinuityProfile) {
+          gate.continuityProbes = new ProviderRequestContinuity(gate, { hpaOnly: true });
+          const seed = JSON.parse(
+            await fs.readFile(path.join(gate.config.artifactsDir, 'ha-persisted-state.json'), 'utf8'),
           );
-          observations.push(await observe());
-          result = {
-            purpose: 'focused-policy-observation',
-            observations,
-            source: operation.candidate.source.sha,
-            policy: operation.policy,
-            policyDigest: operation.policyDigest,
-            finalApplicationPods: 7,
-            startedAt,
-            finishedAt: new Date().toISOString(),
-            outcome: 'passed',
-          };
-        } else {
-          if (operation.requestContinuityProfile) {
-            gate.continuityProbes = new ProviderRequestContinuity(gate, { hpaOnly: true });
-            const seed = JSON.parse(
-              await fs.readFile(path.join(gate.config.artifactsDir, 'ha-persisted-state.json'), 'utf8'),
-            );
-            const template = await gate.requestWorkflow(gate.config.baseUrl, '/api/workflows/projects/download', {
-              method: 'POST',
-              body: JSON.stringify({ relativePath: seed.relativePath, version: 'live' }),
-            });
-            await gate.continuityProbes.prepare(template);
-          }
-          const owned = new FixtureJournal(state);
-          const raw = await runProviderAutoscaling(gate, owned, {
-            phase: (name) => {
-              subphase = name;
-            },
-            checkpoint: async (item) => {
-              await state.admission();
-              assert.deepEqual(workflow.report.failures, []);
-              assert.deepEqual(web.report.failures, []);
-              await gate.artifact('autoscaling-checkpoint.json', JSON.stringify(item));
-            },
+          const template = await gate.requestWorkflow(gate.config.baseUrl, '/api/workflows/projects/download', {
+            method: 'POST',
+            body: JSON.stringify({ relativePath: seed.relativePath, version: 'live' }),
           });
-          subphase = 'proxy-hpa';
-          const hpa = await runProviderProxyHpa(gate, owned);
-          const requestContinuity = gate.continuityProbes ? await gate.continuityProbes.finish() : undefined;
-          await waitForOrdinaryRuntime(gate, operation.candidate.images, wait);
-          await wait(
-            'one hundred independent autoscaling completions',
-            async () => workflow.report.samples >= 100 && web.report.samples >= 100,
-          );
-          result = {
-            ...normalizeProviderAutoscaling(raw, hpa),
-            ...(requestContinuity ? { requestContinuity } : {}),
-            startedAt,
-            finishedAt: new Date().toISOString(),
-            outcome: 'passed',
-          };
+          await gate.continuityProbes.prepare(template);
         }
+        const owned = new FixtureJournal(state);
+        const raw = await runProviderAutoscaling(gate, owned, {
+          phase: (name) => {
+            subphase = name;
+          },
+          checkpoint: async (item) => {
+            await state.admission();
+            assert.deepEqual(workflow.report.failures, []);
+            assert.deepEqual(web.report.failures, []);
+            await gate.artifact('autoscaling-checkpoint.json', JSON.stringify(item));
+          },
+        });
+        subphase = 'proxy-hpa';
+        const hpa = await runProviderProxyHpa(gate, owned);
+        const requestContinuity = gate.continuityProbes ? await gate.continuityProbes.finish() : undefined;
+        await waitForOrdinaryRuntime(gate, operation.candidate.images, wait);
+        await wait(
+          'one hundred independent autoscaling completions',
+          async () => workflow.report.samples >= 100 && web.report.samples >= 100,
+        );
+        result = {
+          ...normalizeProviderAutoscaling(raw, hpa),
+          ...(requestContinuity ? { requestContinuity } : {}),
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          outcome: 'passed',
+        };
       } finally {
         await gate.continuityProbes?.close();
         await Promise.all([workflow.stop(), web.stop()]);

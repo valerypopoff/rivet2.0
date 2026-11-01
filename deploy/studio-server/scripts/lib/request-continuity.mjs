@@ -17,21 +17,30 @@ export const CONTINUITY_DURATION_STAGES = {
   'duration-180': 180000,
   'duration-295': 295000,
 };
-export const FOCUSED_CONTINUITY_CHECKS = REQUEST_CONTINUITY_CHECKS.filter(
+const LEGACY_FOCUSED_CONTINUITY_CHECKS = REQUEST_CONTINUITY_CHECKS.filter(
   (check) => !['full-body-duration-matrix', 'bridge-return-handoff', 'proxy-hpa-removal'].includes(check),
 );
-export const continuityChecks = (adopted, tier = 'full') =>
+export const FOCUSED_CONTINUITY_CHECKS = [
+  'full-body-300-second-requests',
+  'connection-reuse',
+  'proxy-pod-and-neg-replacement',
+  'execution-owner-300-second-drain',
+  'request-recording-and-no-duplicates',
+];
+export const continuityChecks = (adopted, tier = 'full', proxyReplaced = true) =>
   tier === 'focused'
-    ? [...FOCUSED_CONTINUITY_CHECKS, ...(!adopted ? ['bridge-return-handoff'] : [])]
+    ? [
+        ...FOCUSED_CONTINUITY_CHECKS.filter((c) => proxyReplaced || c !== 'proxy-pod-and-neg-replacement'),
+        ...(!adopted ? ['bridge-return-handoff'] : []),
+      ]
     : [...REQUEST_CONTINUITY_CHECKS];
-export function continuityStages(adopted, kind, tier = 'full') {
+export function continuityStages(adopted, kind, tier = 'full', proxyReplaced = true) {
   if (tier === 'focused') {
     return kind === 'upgrade'
       ? [
-          'late-admission',
           'execution-retirement',
-          'protected-roll',
-          ...(!adopted ? ['policy-adoption', 'bootstrap', 'return-handoff'] : []),
+          ...(adopted && proxyReplaced ? ['protected-roll'] : []),
+          ...(!adopted ? ['bootstrap', 'return-handoff'] : []),
         ]
       : [];
   }
@@ -166,7 +175,7 @@ export function continuityProfileDigest(profile) {
 export function assertRequestContinuityEvidence(proof, release, profile) {
   assertRequestContinuityProfile(profile);
   assert.ok(
-    proof && [2, 3].includes(proof.protocol),
+    proof && [2, 3, 4].includes(proof.protocol),
     '300-second request continuity requires complete provider evidence',
   );
   assert.equal(proof.provider, 'gke');
@@ -178,16 +187,42 @@ export function assertRequestContinuityEvidence(proof, release, profile) {
   assert.deepEqual(proof.profile, profile);
   assert.equal(proof.profileDigest, continuityProfileDigest(profile));
   assert.equal(proof.failedRequests, 0);
-  const focused = proof.protocol === 3;
+  const focused = proof.protocol === 4;
   assert.ok(['passed', 'already-protected'].includes(proof.bootstrap));
   const adopted = proof.bootstrap === 'already-protected';
-  assert.equal(proof.completedRequests, focused ? (adopted ? 9 : 18) : adopted ? 21 : 30);
+  if (focused) {
+    assert.equal(typeof proof.proxyReplaced, 'boolean');
+    if (!proof.proxyReplaced) {
+      assert.ok(adopted, 'First adoption must replace the unprotected proxies');
+      assert.deepEqual(
+        release.images.proxy,
+        release.lineage.predecessor.images.proxy,
+        'Changed proxy images require actual replacement observations',
+      );
+    }
+  }
+  assert.equal(
+    proof.completedRequests,
+    focused
+      ? continuityStages(adopted, 'upgrade', 'focused', proof.proxyReplaced).length * 3
+      : proof.protocol === 3
+        ? adopted
+          ? 9
+          : 18
+        : adopted
+          ? 21
+          : 30,
+  );
   assert.ok(
     Number.isSafeInteger(proof.maximumCompletedDurationMs) &&
       proof.maximumCompletedDurationMs >= 300_000 &&
       proof.maximumCompletedDurationMs <= 330_000,
   );
-  assert.deepEqual([...proof.checks].sort(), continuityChecks(adopted, focused ? 'focused' : 'full').sort());
+  const checks =
+    proof.protocol === 3
+      ? [...LEGACY_FOCUSED_CONTINUITY_CHECKS, ...(!adopted ? ['bridge-return-handoff'] : [])]
+      : continuityChecks(adopted, focused ? 'focused' : 'full', proof.proxyReplaced);
+  assert.deepEqual([...proof.checks].sort(), checks.sort());
   assert.match(proof.reportSha256, /^[a-f0-9]{64}$/);
   return structuredClone(proof);
 }

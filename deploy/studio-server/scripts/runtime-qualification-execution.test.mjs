@@ -19,6 +19,7 @@ import {
   qualificationHash,
   assertQualificationPreflight,
   assertProviderAutoscalingReport,
+  assertOrdinaryProviderReport,
   assertActionsQualificationWindow,
 } from './lib/runtime-qualification-execution.mjs';
 import {
@@ -33,12 +34,12 @@ import {
 } from './lib/runtime-qualification-installation.mjs';
 import { prepareRuntimeQualification } from './lib/runtime-qualification-publication.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
-import { HA_REQUIRED_CHECKS } from './lib/ha-release-evidence.mjs';
+import { HA_REQUIRED_CHECKS, HA_ORDINARY_RUNTIME_CHECKS } from './lib/ha-release-evidence.mjs';
 import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
 import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
 import { readDeploymentPolicy } from './lib/deployment-workflow.mjs';
 import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
-import { continuityProviderFacts } from './fixtures/continuity-provider-facts.mjs';
+import { continuityProviderFacts, focusedContinuityProviderFacts } from './fixtures/continuity-provider-facts.mjs';
 import { continuityStages, assertContinuityUpgrade } from './lib/request-continuity.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sha = 'a'.repeat(40),
@@ -1126,7 +1127,7 @@ test('source safety basis survives compilation/publication and cannot be mixed a
 
 test('first focused adoption compiles and publishes fresh continuity evidence without a full baseline', async () => {
   const f = fixture(),
-    continuity = continuityProviderFacts();
+    continuity = focusedContinuityProviderFacts();
   f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
   f.input.installed.observedAt = new Date(f.input.now).toISOString();
   f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
@@ -1140,8 +1141,12 @@ test('first focused adoption compiles and publishes fresh continuity evidence wi
   const stages = continuityStages(false, 'upgrade', 'focused');
   const requestContinuity = {
     ...continuity.upgrade.requestContinuity,
-    protocol: 3,
+    protocol: 4,
     requests: continuity.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage)),
+    executionWithdrawal: {
+      ...continuity.upgrade.requestContinuity.executionWithdrawal,
+      podUid: f.facts.upgrade.outcomes.acceptedWork[0].uid,
+    },
   };
   Object.assign(f.facts.upgrade, {
     startedAt: continuity.upgrade.startedAt,
@@ -1150,33 +1155,21 @@ test('first focused adoption compiles and publishes fresh continuity evidence wi
   });
   for (const run of f.facts.upgrade.outcomes.acceptedWork) run.retirementDelayMs = 315000;
   const start = Date.parse(f.facts.upgrade.startedAt);
-  for (const key of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'])
-    f.facts.upgrade.outcomes[key].sampleAt = start + 1500;
+  for (const [i, key] of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'].entries())
+    f.facts.upgrade.outcomes[key] = { policyDigest: f.operation.policyDigest, sampleAt: start + 1500 + i * 1000 };
+  delete f.facts.upgrade.outcomes.independence;
   const scalingStart = Date.parse(f.facts.upgrade.finishedAt) + 1000;
-  f.facts.autoscaling = {
-    protocol: 1,
-    purpose: 'focused-policy-observation',
-    source: sha,
-    policy: f.operation.policy,
-    policyDigest: f.operation.policyDigest,
-    finalApplicationPods: 7,
-    startedAt: new Date(scalingStart).toISOString(),
-    finishedAt: new Date(scalingStart + 3000).toISOString(),
-    outcome: 'passed',
-    workflow: { samples: 100, failures: [] },
-    web: { samples: 100, failures: [] },
-    observations: [1000, 2000].map((n) => ({
-      autoscaler: { policyDigest: f.operation.policyDigest, sampleAt: scalingStart + n },
-      ready: { execution: 2, proxy: 2 },
-    })),
-  };
   for (const report of Object.values(f.facts))
     Object.assign(
       report,
       Object.fromEntries(['operationId', 'inputHash', 'projectId', 'projectNumber'].map((k) => [k, f.operation[k]])),
     );
   const persisted = [];
-  const result = await executeRuntimeQualification(f.operation, driver(f).api, async (r) => persisted.push(r), {
+  const d = driver(f);
+  d.api.autoscaling = async () => {
+    throw Error('A focused rollout must not dispatch a separate autoscaling phase');
+  };
+  const result = await executeRuntimeQualification(f.operation, d.api, async (r) => persisted.push(r), {
     now: () => scalingStart + 3000,
   }).catch((error) => {
     throw error.cause ?? error;
@@ -1192,9 +1185,69 @@ test('first focused adoption compiles and publishes fresh continuity evidence wi
     build: { runId: '123', runAttempt: 1 },
     safetyDigest: f.input.approval.safetyDigest,
   });
-  assert.equal(packet.candidate.evidence.runtimeControl.protocol, 4);
-  assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 3);
-  assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 18);
+  assert.equal(packet.candidate.evidence.runtimeControl.protocol, 5);
+  assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 4);
+  assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 9);
+  for (const key of ['startedAt', 'finishedAt', 'reportSha256'])
+    assert.equal(result.control[key], result.autoscaling[key]);
+  assert.ok(!d.calls.includes('autoscaling'));
+  for (const change of [
+    (proof) => {
+      proof.requestSamples++;
+    },
+    (proof) => {
+      proof.policyDigest = 'f'.repeat(64);
+    },
+  ]) {
+    const mismatched = structuredClone(packet.candidate);
+    change(mismatched.evidence.runtimeAutoscaling);
+    assert.throws(() => assertStudioServerReleaseManifest(mismatched), /same operation/);
+  }
+  const historical = structuredClone(packet.candidate);
+  const oldControl = historical.evidence.runtimeControl;
+  oldControl.protocol = 4;
+  oldControl.checks = [...HA_ORDINARY_RUNTIME_CHECKS];
+  oldControl.requestContinuity.protocol = 3;
+  oldControl.requestContinuity.completedRequests = 18;
+  oldControl.requestContinuity.checks = [
+    'full-body-300-second-requests',
+    'late-admission-and-connection-reuse',
+    'proxy-pod-and-neg-replacement',
+    'execution-owner-300-second-drain',
+    'accepted-action-resume',
+    'request-recording-and-no-duplicates',
+    'bridge-return-handoff',
+  ];
+  delete oldControl.requestContinuity.proxyReplaced;
+  historical.evidence.runtimeAutoscaling.protocol = 3;
+  assertStudioServerReleaseManifest(historical);
+  historical.evidence.runtimeAutoscaling.protocol = 4;
+  assert.throws(() => assertStudioServerReleaseManifest(historical), /same operation/);
+  for (const mutate of [
+    (a) => {
+      a.reportSha256 = 'f'.repeat(64);
+    },
+    (a) => {
+      a.startedAt = new Date(Date.parse(a.startedAt) + 1).toISOString();
+    },
+  ]) {
+    const separate = structuredClone(result.autoscaling);
+    mutate(separate);
+    assert.throws(
+      () =>
+        prepareRuntimeQualification({
+          candidate: f.operation.candidate,
+          promoted: f.promoted,
+          control: result.control,
+          autoscaling: separate,
+          repository,
+          sourceSha: sha,
+          build: { runId: '123', runAttempt: 1 },
+          safetyDigest: f.input.approval.safetyDigest,
+        }),
+      /same observed rollout/,
+    );
+  }
   assertContinuityUpgrade(packet.candidate, f.input.installed.qualificationValues, {
     profile: f.operation.requestContinuityProfile,
   });
@@ -1214,31 +1267,31 @@ test('first focused adoption compiles and publishes fresh continuity evidence wi
   );
 });
 
-test('focused policy observation requires fresh independent controller samples, ready floors and its own successful traffic', () => {
+test('focused policy evidence is validated inside the real rollout with fresh samples, ready floors and successful traffic', () => {
   const f = fixture();
   const operation = { ...f.operation, qualification: { tier: 'focused' } };
   const report = {
-    ...f.facts.autoscaling,
-    purpose: 'focused-policy-observation',
-    observations: [2200, 2800].map((offset) => ({
-      ready: { execution: 2, proxy: 2 },
-      autoscaler: { policyDigest: operation.policyDigest, sampleAt: Date.parse(operation.startedAt) + offset },
-    })),
+    ...structuredClone(f.facts.upgrade),
   };
-  for (const key of ['cooperative', 'capacity', 'cpu', 'drain', 'metrics', 'proxyHpa']) delete report[key];
-  assert.doesNotThrow(() => assertProviderAutoscalingReport(report, operation));
+  delete report.outcomes.independence;
+  report.outcomes.finalAutoscaler = {
+    ...report.outcomes.initialAutoscaler,
+    sampleAt: report.outcomes.initialAutoscaler.sampleAt + 1,
+  };
+  assert.doesNotThrow(() => assertOrdinaryProviderReport(report, operation));
+  assert.throws(() => assertProviderAutoscalingReport(report, operation), /with its rollout/);
   for (const change of [
     (x) => {
-      x.observations[1].autoscaler.sampleAt = x.observations[0].autoscaler.sampleAt;
+      x.outcomes.finalAutoscaler.sampleAt = x.outcomes.initialAutoscaler.sampleAt;
     },
     (x) => {
-      x.observations[0].ready.proxy = 1;
+      x.readiness.minimumReady.proxy = 1;
     },
     (x) => {
-      x.observations[0].autoscaler.sampleAt = String(x.observations[0].autoscaler.sampleAt);
+      x.outcomes.initialAutoscaler.sampleAt = String(x.outcomes.initialAutoscaler.sampleAt);
     },
     (x) => {
-      x.observations[0].autoscaler.policyDigest = 'changed';
+      x.outcomes.initialAutoscaler.policyDigest = 'changed';
     },
     (x) => {
       x.workflow.samples = 0;
@@ -1247,12 +1300,12 @@ test('focused policy observation requires fresh independent controller samples, 
       x.web.failures.push('unavailable');
     },
     (x) => {
-      x.proxyHpa = { invented: true };
+      x.outcomes.independence = { invented: true };
     },
   ]) {
     const invalid = structuredClone(report);
     change(invalid);
-    assert.throws(() => assertProviderAutoscalingReport(invalid, operation));
+    assert.throws(() => assertOrdinaryProviderReport(invalid, operation));
   }
 });
 

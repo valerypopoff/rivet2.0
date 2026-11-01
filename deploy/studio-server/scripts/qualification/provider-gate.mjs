@@ -253,6 +253,10 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     if (probes.ownerPoolTransition)
       values.workflowSchema = { ...values.workflowSchema, migrationJob: { enabled: false } };
     const resources = await this.resources(values, `roll-${Date.now()}`);
+    if (this.operation.qualification?.tier === 'focused' && this.continuityProbes)
+      this.continuityProbes.proxyTemplate = resources.find(
+        (r) => r.kind === 'Deployment' && r.metadata.name === `${this.config.release}-proxy`,
+      ).spec.template;
     const target = [this.operation.previous, this.operation.candidate].find((m) => isDeepStrictEqual(m.images, images));
     const { artifact: observeArtifact, ...rolloutProbes } = probes;
     const result = await this.runRollout({

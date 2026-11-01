@@ -4,16 +4,17 @@ import { PassThrough } from 'node:stream';
 import {
   continuityProviderFacts as facts,
   continuityFixtureProfile as profile,
+  focusedContinuityProviderFacts,
 } from './fixtures/continuity-provider-facts.mjs';
 import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './lib/request-continuity-evidence.mjs';
-import { assertRequestContinuityEvidence, continuityStages } from './lib/request-continuity.mjs';
+import { assertRequestContinuityEvidence } from './lib/request-continuity.mjs';
 import { qualificationSizing } from './lib/runtime-qualification-installation.mjs';
 import { collectContinuityResponse } from './qualification/provider-request-continuity.mjs';
 import {
   assertRuntimeControlEvidence,
   assertRuntimeAutoscalingEvidence,
-  HA_ORDINARY_RUNTIME_CHECKS,
   HA_FOCUSED_AUTOSCALING_CHECKS,
+  HA_FOCUSED_RUNTIME_CHECKS,
 } from './lib/ha-release-evidence.mjs';
 
 test('continuity certificates compile only from all exact transport/lifecycle/recording facts', () => {
@@ -155,43 +156,21 @@ test('a response counts only after every body byte arrives; a closed partial bod
 });
 
 function focusedFacts() {
-  const f = facts();
-  f.operation.qualification = {
-    protocol: 1,
-    tier: 'focused',
-    safetyDigest: 'b'.repeat(64),
-    configurationDigest: 'c'.repeat(64),
-    fullBaselineManifestDigest: `sha256:${'d'.repeat(64)}`,
-  };
-  f.operation.installed.qualificationValues = {
-    requestContinuity: {
-      enabled: true,
-      maxProtectedRequestSeconds: 300,
-      backendServiceDrainSeconds: 600,
-      propagationSeconds: 60,
-    },
-    lifecycle: { shutdownGraceSeconds: 120, proxy: { preStopDelaySeconds: 660, terminationGracePeriodSeconds: 900 } },
-  };
-  f.upgrade.requestContinuity.protocol = 3;
-  f.upgrade.requestContinuity.bootstrap = 'already-protected';
-  const stages = continuityStages(true, 'upgrade', 'focused');
-  f.upgrade.requestContinuity.requests = f.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage));
-  delete f.autoscaling.requestContinuity;
-  return f;
+  return focusedContinuityProviderFacts({ adopted: true });
 }
 
 test('focused continuity proves fresh full five-minute bodies across real upgrade stages without claiming HPA or duration-matrix tests', () => {
   const f = focusedFacts();
   const proof = compileRequestContinuityEvidence(f.operation, f.upgrade, f.autoscaling);
-  assert.equal(proof.completedRequests, 9);
-  assert.equal(proof.protocol, 3);
+  assert.equal(proof.completedRequests, 6);
+  assert.equal(proof.protocol, 4);
   assert.ok(!proof.checks.includes('proxy-hpa-removal'));
   const release = {
     ...f.operation.candidate,
     lineage: { predecessor: { manifestDigest: 'previous', sourceSha: 'e'.repeat(40), images: { api: 'old' } } },
   };
   const control = {
-    protocol: 4,
+    protocol: 5,
     qualification: f.operation.qualification,
     requestContinuity: proof,
     purpose: 'ordinary-upgrade',
@@ -206,18 +185,18 @@ test('focused continuity proves fresh full five-minute bodies across real upgrad
     chartDigest: release.chart.contentDigest,
     failedRequests: 0,
     requestSamples: 200,
-    checks: [...HA_ORDINARY_RUNTIME_CHECKS],
+    checks: [...HA_FOCUSED_RUNTIME_CHECKS],
   };
-  assert.equal(assertRuntimeControlEvidence(control, release, 'compact').protocol, 4);
+  assert.equal(assertRuntimeControlEvidence(control, release, 'compact').protocol, 5);
   assert.throws(() => assertRuntimeControlEvidence({ ...control, protocol: 2 }, release));
   const scaling = {
     ...control,
-    protocol: 3,
+    protocol: 4,
     policyDigest: 'f'.repeat(64),
     provider: 'gke',
     checks: [...HA_FOCUSED_AUTOSCALING_CHECKS],
   };
-  assert.equal(assertRuntimeAutoscalingEvidence(scaling, release).protocol, 3);
+  assert.equal(assertRuntimeAutoscalingEvidence(scaling, release).protocol, 4);
   assert.throws(() => assertRuntimeAutoscalingEvidence({ ...scaling, protocol: 2 }, release));
   for (const change of [
     (x) => {
@@ -230,13 +209,22 @@ test('focused continuity proves fresh full five-minute bodies across real upgrad
       x.upgrade.requestContinuity.replacement.observedAt = x.upgrade.finishedAt;
     },
     (x) => {
+      x.upgrade.requestContinuity.executionWithdrawal.observedAt = x.upgrade.finishedAt;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.executionWithdrawal.podUid = 'foreign-worker';
+    },
+    (x) => {
+      x.upgrade.requestContinuity.replacement.after[0] = x.upgrade.requestContinuity.replacement.before[0];
+    },
+    (x) => {
       x.upgrade.requestContinuity.bootstrap = 'passed';
     },
     (x) => {
-      x.upgrade.requestContinuity.action.persisted.starts = 2;
+      x.upgrade.requestContinuity.action = { inventedResume: true };
     },
     (x) => {
-      x.autoscaling.requestContinuity = { inventedHpa: true };
+      x.upgrade.requestContinuity.removal = { inventedHpa: true };
     },
     (x) => {
       x.operation.qualification.tier = 'full';
@@ -249,25 +237,15 @@ test('focused continuity proves fresh full five-minute bodies across real upgrad
 });
 
 test('focused first adoption proves the bridge and return handoff without autoscaling stress claims', () => {
-  const f = facts();
-  f.operation.qualification = {
-    protocol: 2,
-    tier: 'focused',
-    safetyDigest: 'b'.repeat(64),
-    configurationDigest: 'c'.repeat(64),
-  };
-  const stages = continuityStages(false, 'upgrade', 'focused');
-  f.upgrade.requestContinuity.protocol = 3;
-  f.upgrade.requestContinuity.requests = f.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage));
-  delete f.autoscaling.requestContinuity;
+  const f = focusedContinuityProviderFacts();
   const proof = compileRequestContinuityEvidence(f.operation, f.upgrade, f.autoscaling);
-  assert.equal(proof.completedRequests, 18);
+  assert.equal(proof.completedRequests, 9);
   assert.equal(proof.bootstrap, 'passed');
   assert.ok(proof.checks.includes('bridge-return-handoff'));
   assert.ok(!proof.checks.includes('proxy-hpa-removal'));
   const release = { ...f.operation.candidate, lineage: { predecessor: { manifestDigest: 'previous' } } };
   assertRequestContinuityEvidence(proof, release, profile);
-  assert.throws(() => assertRequestContinuityEvidence({ ...proof, completedRequests: 9 }, release, profile));
+  assert.throws(() => assertRequestContinuityEvidence({ ...proof, completedRequests: 6 }, release, profile));
   assert.throws(() =>
     assertRequestContinuityEvidence(
       { ...proof, checks: proof.checks.filter((c) => c !== 'bridge-return-handoff') },
@@ -287,9 +265,62 @@ test('focused first adoption proves the bridge and return handoff without autosc
     (x) => {
       x.upgrade.requestContinuity.returnHandoff.observedAt = x.upgrade.finishedAt;
     },
+    (x) => {
+      x.upgrade.requestContinuity.bootstrapHandoff.dispatchedAt = x.upgrade.finishedAt;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.bootstrapHandoff.settledAt = x.upgrade.startedAt;
+    },
   ]) {
     const changed = structuredClone(f);
     mutate(changed);
     assert.throws(() => compileRequestContinuityEvidence(changed.operation, changed.upgrade, changed.autoscaling));
   }
+});
+
+test('an unchanged adopted proxy template needs no manufactured replacement or extra request batch', () => {
+  const f = focusedContinuityProviderFacts({ adopted: true, proxyReplaced: false });
+  const image = { repository: 'example/proxy', digest: `sha256:${'a'.repeat(64)}` };
+  f.operation.candidate.images.proxy = image;
+  f.operation.previous.images.proxy = structuredClone(image);
+  const proof = compileRequestContinuityEvidence(f.operation, f.upgrade);
+  assert.equal(proof.completedRequests, 3);
+  assert.equal(proof.proxyReplaced, false);
+  assert.ok(!proof.checks.includes('proxy-pod-and-neg-replacement'));
+  const release = {
+    ...f.operation.candidate,
+    lineage: {
+      predecessor: {
+        manifestDigest: 'previous',
+        images: f.operation.previous.images,
+      },
+    },
+  };
+  assertRequestContinuityEvidence(proof, release, profile);
+  f.operation.previous.images.proxy.digest = `sha256:${'b'.repeat(64)}`;
+  assert.throws(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  assert.throws(() => assertRequestContinuityEvidence(proof, release, profile));
+});
+
+test('historical focused certificates remain readable without being relabeled as the narrower rollout', () => {
+  const f = focusedFacts();
+  const proof = compileRequestContinuityEvidence(f.operation, f.upgrade);
+  const old = {
+    ...proof,
+    protocol: 3,
+    completedRequests: 9,
+    checks: [
+      'full-body-300-second-requests',
+      'late-admission-and-connection-reuse',
+      'proxy-pod-and-neg-replacement',
+      'execution-owner-300-second-drain',
+      'accepted-action-resume',
+      'request-recording-and-no-duplicates',
+    ],
+  };
+  delete old.proxyReplaced;
+  const release = { ...f.operation.candidate, lineage: { predecessor: { manifestDigest: 'previous' } } };
+  assertRequestContinuityEvidence(old, release, profile);
+  assert.throws(() => assertRequestContinuityEvidence({ ...old, protocol: 4 }, release, profile));
+  assert.throws(() => assertRequestContinuityEvidence({ ...proof, protocol: 3 }, release, profile));
 });

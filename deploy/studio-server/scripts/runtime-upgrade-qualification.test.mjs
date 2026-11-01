@@ -212,19 +212,40 @@ test('real Helm render keeps seven owners, live autoscalers and installed schema
     registry: { secretName: 'registry' },
   };
   gate.helmBin = resolveHelmBinOrThrow(rootDir);
-  const proof = { protocol: 2, autoscalerPolicyDigest: autoscalerPolicyDigest({}) };
   for (const manifest of [previous, candidate]) {
     const resources = await gate.resources(gate.values(manifest.images), manifest.source.sha);
-    assertOrdinaryRuntimeResources(proof, resources);
+    for (const protocol of [2, 5]) {
+      const proof = { protocol, autoscalerPolicyDigest: autoscalerPolicyDigest({}) };
+      assertOrdinaryRuntimeResources(proof, resources);
+      const invalid = structuredClone(resources);
+      invalid.find(
+        (r) => r.kind === 'Deployment' && r.metadata.labels['app.kubernetes.io/component'] === 'proxy',
+      ).spec.replicas = 1;
+      assert.throws(() => assertOrdinaryRuntimeResources(proof, invalid), /seven|replica|runtime|workload/i);
+    }
   }
 });
 
 // This crosses real HTTP plus the rollout/probe adapter boundary, not real
 // Kubernetes. The local cluster command remains the separate continuity proof.
-for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'aborted', 'overlap', 'overlap-failure']) {
+for (const scenario of [
+  'pass',
+  '502',
+  'missing-recording',
+  'storage-drift',
+  'aborted',
+  'overlap',
+  'overlap-failure',
+  'focused',
+  'focused-502',
+  'focused-missing-recording',
+  'focused-slow-web',
+]) {
   test(`ordinary observation keeps a single truthful window: ${scenario}`, async (t) => {
     const { previous, candidate } = pair();
     const overlap = scenario.startsWith('overlap'),
+      focused = scenario.startsWith('focused'),
+      variant = focused ? (scenario === 'focused' ? 'pass' : scenario.slice(8)) : scenario,
       developerCalls = [];
     const archive = Buffer.from('immutable-fixture-archive');
     let failing = false,
@@ -236,9 +257,17 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       artifacts = new Map(),
       captures = [];
     const controller = new AbortController();
+    // Keep real HTTP and request deadlines; shorten only the one-second web
+    // sampling pause so the complete 100-response window is testable locally.
+    const nativeSetTimeout = globalThis.setTimeout;
+    t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) =>
+      nativeSetTimeout(callback, ms === 1000 ? 1 : ms, ...args),
+    );
     const server = createServer((req, res) => {
       requests.push({ id: req.headers['x-rivet-ha-probe-id'], method: req.method, route: req.url });
       if (req.url.endsWith('/download')) return res.end(archive);
+      if (variant === 'slow-web' && req.url === '/apps/release-gate-web-app')
+        return nativeSetTimeout(() => res.end('Managed release gate app'), 60);
       if (failing && req.method === 'POST') {
         res.writeHead(502, { server: 'nginx', 'content-type': 'text/html' });
         return res.end('<html>Bad gateway</html>');
@@ -258,7 +287,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       prepare: async (options) => assert.equal(options.embeddedMaintenance, overlap ? true : 'singleton'),
       beforeRetirement: async (pod) => probes.background.push({ uid: pod.uid }),
       afterWithdrawal: async (pod) => {
-        if (scenario !== 'missing-recording') probes.background.find((p) => p.uid === pod.uid).recordingId = pod.uid;
+        if (variant !== 'missing-recording') probes.background.find((p) => p.uid === pod.uid).recordingId = pod.uid;
       },
     };
     const gate = {
@@ -277,7 +306,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       roll: async (_images, singleton, hooks) => {
         rolls++;
         assert.equal(singleton, true);
-        failing = scenario === '502';
+        failing = variant === '502';
         if (failing) await new Promise((r) => setTimeout(r, 60));
         for (const ordinal of [0, 1]) {
           const pod = { name: `fixture-ha-execution-${ordinal}`, uid: `owner-${ordinal}` };
@@ -291,6 +320,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       assertAutoscalerActive: async () => ({ policyDigest: autoscalerPolicyDigest({}) }),
       waitForDeveloperRoute: async () => {},
       isolateRuntime: async () => {
+        assert.equal(focused, false, 'Focused rollout must not remove developer services or force another proxy roll');
         if (overlap) assert.deepEqual(developerCalls, ['adopt', 'roll', 'finish', 'close']);
         independence++;
         return { browser: true, schedule: true };
@@ -298,8 +328,17 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       artifact: async (name, value) => artifacts.set(name, value),
       capture: async (name) => captures.push(name),
     };
+    if (focused) {
+      gate.operation = { qualification: { tier: 'focused' } };
+      gate.continuityProbes = {
+        prepare: async () => {},
+        startCohort: async (stage) => assert.equal(stage, 'execution-retirement'),
+        finish: async () => ({ protocol: 4 }),
+        close: async () => {},
+      };
+    }
     const until = async (_name, check) => {
-      for (let i = 0; i < 1000; i++) {
+      for (let i = 0; i < 2000; i++) {
         if (await check()) return;
         await new Promise((r) => setTimeout(r, 5));
       }
@@ -336,13 +375,19 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
           }
         : {}),
     });
-    if (scenario === 'pass' || scenario === 'overlap') {
+    if (variant === 'pass' || variant === 'slow-web' || scenario === 'overlap') {
       const report = await work;
       assert.equal(report.outcome, 'passed');
       assert.equal(report.qualification, 'local-functional-only');
       assert.ok(report.workflow.samples >= 100);
+      assert.ok(report.web.samples >= 100, 'Workflow completions cannot stand in for the independent web samples');
       assert.equal(report.workflow.failures.length, 0);
-      assert.equal(independence, 1);
+      assert.equal(independence, focused ? 0 : 1);
+      assert.equal(rolls, 1);
+      if (focused) {
+        assert.equal(report.outcomes.independence, undefined);
+        assert.ok(!report.phases.includes('candidate-runtime-without-developers'));
+      }
       assert.ok(report.readiness.samples > 0);
       assert.deepEqual(report.readiness.minimumReady, { execution: 2, proxy: 2 });
       assert.equal(probes.background.length, 2);
@@ -355,7 +400,7 @@ for (const scenario of ['pass', '502', 'missing-recording', 'storage-drift', 'ab
       assert.equal(independence, 0);
       assert.ok(captures.includes('ordinary-upgrade-failure'));
       if (overlap) assert.deepEqual(developerCalls, ['adopt', 'roll', 'finish', 'close']);
-      if (scenario === '502') {
+      if (variant === '502') {
         assert.ok(report.workflow.failedRequests.some((r) => r.error.status === 502));
         assert.ok(report.workflow.failedRequests.some((r) => r.http?.server === 'nginx' && r.http.format === 'html'));
         assert.ok(report.firstFailureDiagnosticsCaptured);
