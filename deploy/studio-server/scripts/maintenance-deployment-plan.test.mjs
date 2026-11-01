@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
+import { spawn } from 'node:child_process';
 import test from 'node:test';
 import {
   assertMaintenancePlan,
@@ -780,7 +781,7 @@ net.createServer(socket => socket.destroy()).listen(0, '127.0.0.1', function () 
   setInterval(() => { if (fs.existsSync(recovery)) fs.writeFileSync(marker, 'late'); }, 10);
   fs.writeFileSync(started, String(this.address().port));
 });
-setTimeout(() => process.exit(0), 10000);
+setTimeout(() => process.exit(0), 60000);
 `;
   const script = `import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -794,7 +795,48 @@ setInterval(() => {}, 1000);
 `;
   const state = await fixture(t, script);
   await assert.rejects(
-    captureMaintenanceCheckpoint(state.approval, state.context, { artifactsDir: state.artifactsDir, timeoutMs: 1_500 }),
+    captureMaintenanceCheckpoint(state.approval, state.context, {
+      artifactsDir: state.artifactsDir,
+      timeoutMs: 1_500,
+      async runHook(script, request, receipt, options) {
+        const child = spawn(process.execPath, [script, '--request', request, '--receipt', receipt], {
+          detached: process.platform !== 'win32',
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        let startupError;
+        child.once('error', (error) => {
+          startupError = error;
+        });
+        // Exercise shutdown of a live child, independently of CI startup load.
+        try {
+          const deadline = performance.now() + 15000;
+          for (;;) {
+            if (startupError) throw startupError;
+            try {
+              await fs.access(path.join(options.directory, 'child-started'));
+              break;
+            } catch (error) {
+              if (error.code !== 'ENOENT') throw error;
+            }
+            assert.ok(performance.now() < deadline, 'Adapter child did not become ready');
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        } catch (error) {
+          startupError = error;
+        }
+        // Supervise this same process even when readiness fails; never leave a
+        // failed fixture's adapter or descendant alive for another test.
+        return executeMaintenanceBackupAdapter(script, request, receipt, {
+          ...options,
+          timeoutMs: startupError ? 1 : options.timeoutMs,
+          spawnProcess: (command, args, spawnOptions) =>
+            command === process.execPath ? child : spawn(command, args, spawnOptions),
+        }).finally(() => {
+          if (startupError) throw startupError;
+        });
+      },
+    }),
     /did not complete successfully/,
   );
   const [directory] = await fs.readdir(state.artifactsDir);

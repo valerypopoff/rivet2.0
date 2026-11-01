@@ -22,6 +22,7 @@ export const executionSampleCommand = (port) => [
   `const r=await fetch('http://127.0.0.1:${port}/metrics',{signal:AbortSignal.timeout(5000)});if(!r.ok)process.exit(1);process.stdout.write(await r.text());`,
 ];
 export class PendingExecutionCpuSample extends Error {}
+export class KubernetesExecOutcomeUnknown extends Error {}
 
 export function cpuQuantity(value) {
   const match = /^(\d+(?:\.\d+)?)(n|u|m)?$/.exec(String(value));
@@ -191,9 +192,11 @@ export function createKubernetesTransport({
           socket.terminate();
           error ? reject(error) : resolve(result);
         };
-        const abort = () => finish(new Error('Kubernetes exec aborted; command outcome is unknown.'));
+        const abort = () =>
+          finish(new KubernetesExecOutcomeUnknown('Kubernetes exec aborted; command outcome is unknown.'));
         const timer = setTimeout(
-          () => finish(new Error('Kubernetes exec deadline exceeded; command outcome is unknown.')),
+          () =>
+            finish(new KubernetesExecOutcomeUnknown('Kubernetes exec deadline exceeded; command outcome is unknown.')),
           timeoutMs,
         );
         signal?.addEventListener('abort', abort, { once: true });
@@ -208,7 +211,7 @@ export function createKubernetesTransport({
             try {
               socket.ping();
             } catch {
-              finish(new Error('Kubernetes exec keepalive failed; command outcome is unknown.'));
+              finish(new KubernetesExecOutcomeUnknown('Kubernetes exec keepalive failed; command outcome is unknown.'));
             }
           }, keepAliveMs);
           heartbeat.unref();
@@ -244,10 +247,12 @@ export function createKubernetesTransport({
             }
           }
         });
-        socket.once('error', () => finish(new Error('Kubernetes exec connection failed; command outcome is unknown.')));
+        socket.once('error', () =>
+          finish(new KubernetesExecOutcomeUnknown('Kubernetes exec connection failed; command outcome is unknown.')),
+        );
         socket.once('close', (code) =>
           finish(
-            new Error(
+            new KubernetesExecOutcomeUnknown(
               `Kubernetes exec did not confirm a successful exit (close code ${code}); command outcome is unknown.`,
             ),
           ),

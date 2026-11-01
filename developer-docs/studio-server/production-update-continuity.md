@@ -418,6 +418,12 @@ registry check runs with workspace dependencies; the Linux kernel ownership
 container remains dependency-free. The published web-app Playwright assertions
 use the current Decision AI labels.
 
+The backup-adapter timeout regression waits for its real child listener before
+starting the timeout under test. Slow CI process startup cannot substitute for
+the shutdown proof: the same supervised process group must stop, its exact port
+must be reusable, and no child may write after recovery begins. Fixture readiness
+has its own bounded wait and failed setup still supervises that process tree.
+
 Plan-audit verification on 2026-10-30 passed:
 
 - Full Kubernetes command: main suite 840 passed, three expected skips; initial

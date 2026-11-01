@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { verifyActorSource } from '../../images/qualification/verify-source.mjs';
 import { assertKubectlVersionSkew } from '../lib/temporary-staging-actor.mjs';
+import { readProviderPhaseReceipt } from '../lib/provider-phase-receipt.mjs';
 
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const base = '/qualification/private';
@@ -63,6 +64,16 @@ export async function actorMain(mode) {
   }
   assert.match(packet.operationId, /^rivet-q-[1-9][0-9]*-[1-9][0-9]*$/);
   const directory = path.join(base, packet.operationId);
+  if (mode === 'receipt') {
+    assert.ok(process.env.POD_UID && packet.actorUid === process.env.POD_UID, 'Receipt actor identity changed');
+    const bytes = await readProviderPhaseReceipt(
+      path.join(directory, 'results'),
+      packet.phase,
+      packet.workerId,
+      packet.receipt,
+    );
+    return JSON.parse(bytes);
+  }
   if (mode === 'install') {
     assert.ok(process.env.POD_NAME && process.env.POD_UID);
     assert.ok(packet.files && Object.keys(packet.files).length <= 32);
