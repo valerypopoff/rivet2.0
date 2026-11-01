@@ -165,6 +165,7 @@ export function qualificationOperation({
             policy: normalized,
             profile: approval.requestContinuityProfile,
             overlap: approval.developerOverlapProfile,
+            suite: approval.qualificationSuite,
           }),
         }
       : {}),

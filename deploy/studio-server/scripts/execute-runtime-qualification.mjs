@@ -282,6 +282,7 @@ async function main(mode) {
         : {}),
       developerOverlapProfile: settings.developerOverlapProfile,
       requestContinuityProfile: settings.requestContinuityProfile,
+      qualificationSuite: settings.qualificationSuite,
       enabled: process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED === 'true',
       projectId: process.env.RIVET_QUALIFICATION_PROJECT_ID,
       projectNumber: process.env.RIVET_QUALIFICATION_PROJECT_NUMBER,

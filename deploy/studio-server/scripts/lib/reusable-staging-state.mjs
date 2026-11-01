@@ -13,6 +13,10 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  assert.ok(
+    value.qualificationSuite === undefined || ['focused', 'full'].includes(value.qualificationSuite),
+    'Unknown qualification suite',
+  );
   assert.match(value.region, /^[a-z]+-[a-z]+[0-9]+$/, 'Staging requires the actual regional Compute scope');
   if (value.requestContinuityProfile) {
     assertRequestContinuityProfile(value.requestContinuityProfile);

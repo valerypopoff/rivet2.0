@@ -528,8 +528,11 @@ export async function runHaKubernetesRollout({
         (await kube([expectedVersion ? 'replace' : 'create', '-f', '-', '-o', 'json'], { input: JSON.stringify(cm) }))
           .stdout,
       );
-      await artifact('ha-rollout.json', JSON.stringify(data, null, 2));
       return { ...data, resourceVersion: saved.metadata.resourceVersion };
+    },
+    afterCheckpoint: async ({ resourceVersion: _version, ...data }) => {
+      // Five-minute request observations must not block lease renewal.
+      await artifact('ha-rollout.json', JSON.stringify(data, null, 2));
     },
     snapshotCapacity: async () => {
       const old = inventory.filter((w) =>

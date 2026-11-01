@@ -45,18 +45,19 @@ function fixture() {
       },
     },
   };
-  const basis = releaseQualificationPlan(input);
+  const basis = releaseQualificationPlan({ ...input, suite: 'full' });
   assert.equal(basis.tier, 'full');
   input.previous.evidence.runtimeControl.qualification = basis;
   input.previous.evidence.runtimeAutoscaling.qualification = basis;
   return input;
 }
 
-test('focused qualification needs an unchanged protected full baseline; unknown changes fail closed', () => {
+test('ordinary continuity qualification is focused even for first adoption and changed source/configuration', () => {
   const f = fixture();
   const plan = releaseQualificationPlan(f);
   assert.equal(plan.tier, 'focused');
-  assert.equal(plan.fullBaselineManifestDigest, f.predecessorDigest);
+  assert.equal(plan.protocol, 2);
+  assert.equal(plan.fullBaselineManifestDigest, undefined);
   for (const mutate of [
     (x) => {
       x.safetyDigest = 'c'.repeat(64);
@@ -88,29 +89,36 @@ test('focused qualification needs an unchanged protected full baseline; unknown 
     (x) => {
       x.profile = { ...x.profile, propagationSeconds: 90 };
     },
-    (x) => {
-      x.overlap = { poolMaxPerApiPod: 9, backendResources: {} };
-    },
   ]) {
     const changed = structuredClone(f);
     mutate(changed);
-    assert.equal(releaseQualificationPlan(changed).tier, 'full');
+    assert.equal(releaseQualificationPlan(changed).tier, 'focused');
   }
   f.previous.evidence.runtimeControl = { ...f.previous.evidence.runtimeControl, protocol: 4, qualification: plan };
   f.previous.evidence.runtimeAutoscaling = { protocol: 3, qualification: plan };
   f.predecessorDigest = `sha256:${'d'.repeat(64)}`;
-  assert.equal(releaseQualificationPlan(f).fullBaselineManifestDigest, plan.fullBaselineManifestDigest);
+  assert.equal(releaseQualificationPlan(f).fullBaselineManifestDigest, undefined);
   assert.throws(() => assertQualificationPlan({ ...plan, waiver: true }));
   assert.throws(() => assertQualificationPlan({ ...plan, fullBaselineManifestDigest: null }));
+  assert.equal(releaseQualificationPlan({ ...f, suite: 'full' }).tier, 'full');
+  assert.equal(releaseQualificationPlan({ ...f, profile: undefined }).tier, 'full');
+  assert.equal(releaseQualificationPlan({ ...f, overlap: { poolMaxPerApiPod: 9, backendResources: {} } }).tier, 'full');
+  assert.throws(() => releaseQualificationPlan({ ...f, suite: 'skip' }), /suite/);
+  assert.throws(() => releaseQualificationPlan({ ...f, profile: undefined, suite: 'focused' }), /requires/);
+  // Existing full/focused certificates remain readable without rewriting history.
+  assert.equal(
+    assertQualificationPlan({ ...plan, protocol: 1, fullBaselineManifestDigest: f.predecessorDigest }).protocol,
+    1,
+  );
 });
 
-test('first adoption fingerprints target settings so later protected releases can reuse its full baseline', () => {
+test('first adoption fingerprints target settings without requiring a stress-test baseline', () => {
   const f = fixture();
   const target = qualificationConfigurationDigest(f.installed, f.policy, profile);
   f.installed.qualificationValues.requestContinuity = { enabled: false };
   f.installed.qualificationValues.lifecycle.proxy = { preStopDelaySeconds: 30, terminationGracePeriodSeconds: 60 };
   assert.equal(qualificationConfigurationDigest(f.installed, f.policy, profile), target);
-  assert.equal(releaseQualificationPlan(f).tier, 'full');
+  assert.equal(releaseQualificationPlan(f).tier, 'focused');
 });
 
 test('committed critical source fingerprint ignores only UI/docs and rejects hidden or dirty checkout changes', async (t) => {

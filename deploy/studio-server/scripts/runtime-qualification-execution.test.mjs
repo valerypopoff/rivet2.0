@@ -37,6 +37,8 @@ import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
 import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
 import { readDeploymentPolicy } from './lib/deployment-workflow.mjs';
 import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
+import { continuityProviderFacts } from './fixtures/continuity-provider-facts.mjs';
+import { continuityStages, assertContinuityUpgrade } from './lib/request-continuity.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sha = 'a'.repeat(40),
   repository = 'example/rivet';
@@ -1074,6 +1076,96 @@ test('source safety basis survives compilation/publication and cannot be mixed a
   const invalid = structuredClone(packet.candidate);
   delete invalid.evidence.runtimeAutoscaling.qualification;
   assert.throws(() => assertStudioServerReleaseManifest(invalid), /same operation/);
+});
+
+test('first focused adoption compiles and publishes fresh continuity evidence without a full baseline', async () => {
+  const f = fixture(),
+    continuity = continuityProviderFacts();
+  f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
+  f.input.installed.observedAt = new Date(f.input.now).toISOString();
+  f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
+  f.input.approval.safetyDigest = '9'.repeat(64);
+  f.input.approval.requestContinuityProfile = continuity.operation.requestContinuityProfile;
+  f.operation = qualificationOperation(f.input);
+  assert.equal(f.operation.qualification.tier, 'focused');
+  assert.equal(f.operation.qualification.protocol, 2);
+  assert.equal(f.operation.qualification.fullBaselineManifestDigest, undefined);
+  f.facts.armExpiry.expiresAt = f.operation.expiresAt;
+  const stages = continuityStages(false, 'upgrade', 'focused');
+  const requestContinuity = {
+    ...continuity.upgrade.requestContinuity,
+    protocol: 3,
+    requests: continuity.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage)),
+  };
+  Object.assign(f.facts.upgrade, {
+    startedAt: continuity.upgrade.startedAt,
+    finishedAt: continuity.upgrade.finishedAt,
+    requestContinuity,
+  });
+  for (const run of f.facts.upgrade.outcomes.acceptedWork) run.retirementDelayMs = 315000;
+  const start = Date.parse(f.facts.upgrade.startedAt);
+  for (const key of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'])
+    f.facts.upgrade.outcomes[key].sampleAt = start + 1500;
+  const scalingStart = Date.parse(f.facts.upgrade.finishedAt) + 1000;
+  f.facts.autoscaling = {
+    protocol: 1,
+    purpose: 'focused-policy-observation',
+    source: sha,
+    policy: f.operation.policy,
+    policyDigest: f.operation.policyDigest,
+    finalApplicationPods: 7,
+    startedAt: new Date(scalingStart).toISOString(),
+    finishedAt: new Date(scalingStart + 3000).toISOString(),
+    outcome: 'passed',
+    workflow: { samples: 100, failures: [] },
+    web: { samples: 100, failures: [] },
+    observations: [1000, 2000].map((n) => ({
+      autoscaler: { policyDigest: f.operation.policyDigest, sampleAt: scalingStart + n },
+      ready: { execution: 2, proxy: 2 },
+    })),
+  };
+  for (const report of Object.values(f.facts))
+    Object.assign(
+      report,
+      Object.fromEntries(['operationId', 'inputHash', 'projectId', 'projectNumber'].map((k) => [k, f.operation[k]])),
+    );
+  const persisted = [];
+  const result = await executeRuntimeQualification(f.operation, driver(f).api, async (r) => persisted.push(r), {
+    now: () => scalingStart + 3000,
+  }).catch((error) => {
+    throw error.cause ?? error;
+  });
+  assert.equal(persisted.at(-1).cleanupVerified, true);
+  const packet = prepareRuntimeQualification({
+    candidate: f.operation.candidate,
+    promoted: f.promoted,
+    control: result.control,
+    autoscaling: result.autoscaling,
+    repository,
+    sourceSha: sha,
+    build: { runId: '123', runAttempt: 1 },
+    safetyDigest: f.input.approval.safetyDigest,
+  });
+  assert.equal(packet.candidate.evidence.runtimeControl.protocol, 4);
+  assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 3);
+  assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 18);
+  assertContinuityUpgrade(packet.candidate, f.input.installed.qualificationValues, {
+    profile: f.operation.requestContinuityProfile,
+  });
+  const falseClaim = structuredClone(result.control);
+  falseClaim.evidence.requestContinuity.checks.push('proxy-hpa-removal');
+  assert.throws(() =>
+    prepareRuntimeQualification({
+      candidate: f.operation.candidate,
+      promoted: f.promoted,
+      control: falseClaim,
+      autoscaling: result.autoscaling,
+      repository,
+      sourceSha: sha,
+      build: { runId: '123', runAttempt: 1 },
+      safetyDigest: f.input.approval.safetyDigest,
+    }),
+  );
 });
 
 test('focused policy observation requires fresh independent controller samples, ready floors and its own successful traffic', () => {

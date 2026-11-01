@@ -93,7 +93,8 @@ jobs:
     needs: built
     runs-on: ubuntu-latest
     environment: rivet-managed-staging
-    # A full first qualification may use 4h, followed by 1h cleanup and 30m setup.
+    # Focused continuity is the default, including first adoption. Separately
+    # configured stress/overlap tests may use 4h, plus 1h cleanup and 30m setup.
     # The separately approved operation deadline still limits actual test work.
     timeout-minutes: 330
     permissions:
