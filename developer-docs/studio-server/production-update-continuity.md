@@ -15,8 +15,12 @@ delivery scope, not the 300-second qualification or production preflight gates.
 The ordinary release gate now uses focused request-continuity qualification even
 for first adoption. That first test still covers policy adoption, the temporary
 bridge and return handoff, plus the ordinary rolling update, accepted work and
-complete 300-second responses. Full autoscaling stress and the extra duration
-matrix are separately configured tests; developer overlap retains its own full
+complete 300-second responses. The focused test observes proxy replacement in
+that actual update, omits the developer-service shutdown/browser-recovery
+experiment and folds policy/floor evidence into the same rollout. It uses nine
+long requests for first adoption and six for an ordinary protected proxy update
+(three when the proxy template is unchanged). Full autoscaling stress and the
+extra duration matrix are separately configured tests; developer overlap retains its own full
 suite. See [test depth](automated-runtime-qualification.md#automatic-test-depth).
 Local regressions do not qualify a release or authorize a cloud attempt.
 
@@ -86,7 +90,7 @@ test). A recurring
 staging budget and one-time installation are still needed; the closed temporary
 campaign grants no new cloud authority.
 
-First activation still requires a successful full GKE qualification and the
+First activation still requires a successful focused GKE qualification and the
 observed temporary proxy bridge below. After that, ordinary updates omit the
 bridge. No manufactured second release or second campaign is required to finish
 the first rollout. Requests beyond 300 seconds may be interrupted as agreed.

@@ -63,6 +63,12 @@ export const HA_ORDINARY_RUNTIME_CHECKS = [
   'published-schedule-claims',
   'autoscaler-active-through-upgrade',
 ];
+export const HA_FOCUSED_RUNTIME_CHECKS = HA_ORDINARY_RUNTIME_CHECKS.filter(
+  (check) =>
+    !['published-runtime-without-developers', 'published-browser-oauth-actions', 'published-schedule-claims'].includes(
+      check,
+    ),
+);
 export const HA_AUTOSCALING_CHECKS = [
   'slot-and-cpu-scale-up',
   'stabilized-scale-down',
@@ -81,7 +87,7 @@ export const HA_COOPERATIVE_AUTOSCALING_CHECKS = [
 ];
 export const HA_FOCUSED_AUTOSCALING_CHECKS = ['autoscaler-policy-and-two-ready-floor', 'continuous-public-traffic'];
 export function assertRuntimeAutoscalingEvidence(value, release, policyDigest) {
-  const focused = value?.protocol === 3;
+  const focused = [3, 4].includes(value?.protocol);
   const qualification = value?.qualification === undefined ? undefined : assertQualificationPlan(value.qualification);
   if (focused ? qualification?.tier !== 'focused' : qualification && qualification.tier !== 'full')
     throw Error('Autoscaling qualification tier is missing or inconsistent');
@@ -91,7 +97,7 @@ export function assertRuntimeAutoscalingEvidence(value, release, policyDigest) {
       ? HA_COOPERATIVE_AUTOSCALING_CHECKS
       : HA_AUTOSCALING_CHECKS;
   if (
-    ![1, 2, 3].includes(value?.protocol) ||
+    ![1, 2, 3, 4].includes(value?.protocol) ||
     value.candidateSourceSha !== release.source.sha ||
     !equal(value.candidateImages, release.images) ||
     value.chartDigest !== release.chart.contentDigest ||
@@ -125,7 +131,7 @@ export function assertRuntimeAutoscalingEvidence(value, release, policyDigest) {
 
 export function assertCooperativeAutoscalingEvidence(value, release, policyDigest) {
   const proof = assertRuntimeAutoscalingEvidence(value, release, policyDigest);
-  if (![2, 3].includes(proof.protocol))
+  if (![2, 3, 4].includes(proof.protocol))
     throw Error('Scale-up during upgrades requires full or certified focused autoscaling qualification.');
   return proof;
 }
@@ -139,7 +145,7 @@ export const HA_DEVELOPER_OVERLAP_CHECKS = [
 ];
 export const HA_PROVIDER_OVERLAP_CHECKS = [...HA_DEVELOPER_OVERLAP_CHECKS, 'retained-browser-editing'];
 export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile, requireDeveloperOverlap = false) {
-  const focused = value?.protocol === 4;
+  const focused = [4, 5].includes(value?.protocol);
   const qualification = value?.qualification === undefined ? undefined : assertQualificationPlan(value.qualification);
   if (focused ? qualification?.tier !== 'focused' : qualification && qualification.tier !== 'full')
     throw Error('Runtime qualification tier is missing or inconsistent');
@@ -173,7 +179,7 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
       overlap.sourcePool < overlap.profile.poolMaxPerApiPod)
   )
     throw Error('Provider overlap source preparation is missing or changed.');
-  const ordinary = [2, 3, 4].includes(value?.protocol);
+  const ordinary = [2, 3, 4, 5].includes(value?.protocol);
   if (
     ordinary &&
     (value.purpose !== 'ordinary-upgrade' ||
@@ -187,10 +193,12 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
       'Ordinary runtime evidence is limited to the exact compact singleton predecessor and autoscaler policy.',
     );
   const required = ordinary
-    ? HA_ORDINARY_RUNTIME_CHECKS
+    ? value.protocol === 5
+      ? HA_FOCUSED_RUNTIME_CHECKS
+      : HA_ORDINARY_RUNTIME_CHECKS
     : [...HA_RUNTIME_CONTROL_CHECKS, ...(profiles.includes('compact') ? HA_COMPACT_EDGE_CHECKS : [])];
   if (
-    ![1, 2, 3, 4].includes(value?.protocol) ||
+    ![1, 2, 3, 4, 5].includes(value?.protocol) ||
     value.candidateSourceSha !== release.source.sha ||
     !equal(value.candidateImages, release.images) ||
     value.chartDigest !== release.chart.contentDigest ||
@@ -213,9 +221,9 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     value.requestContinuity === undefined
       ? undefined
       : assertRequestContinuityEvidence(value.requestContinuity, release, value.requestContinuity.profile);
-  if (focused && requestContinuity?.protocol !== 3)
+  if (focused && requestContinuity?.protocol !== (value.protocol === 5 ? 4 : 3))
     throw Error('Focused runtime qualification requires its exact five-minute upgrade observations');
-  if (!focused && requestContinuity?.protocol === 3)
+  if (!focused && [3, 4].includes(requestContinuity?.protocol))
     throw Error('Focused continuity observations cannot qualify a full runtime suite');
   return {
     protocol: value.protocol,
@@ -549,7 +557,7 @@ export function assertHaUpgradeEvidence(manifest, installed) {
     );
   if (!installed) return;
   assertOrdinaryRuntimeLayout(manifest.evidence?.runtimeControl, installed);
-  if ([2, 3, 4].includes(manifest.evidence?.runtimeControl?.protocol))
+  if ([2, 3, 4, 5].includes(manifest.evidence?.runtimeControl?.protocol))
     assertCooperativeAutoscalingEvidence(
       manifest.evidence.runtimeAutoscaling,
       manifest,
@@ -593,7 +601,7 @@ export function assertHaUpgradeEvidence(manifest, installed) {
 
 /** A routine certificate never grants first adoption or a different tier layout. */
 export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
-  if (![2, 3, 4].includes(proof?.protocol)) return;
+  if (![2, 3, 4, 5].includes(proof?.protocol)) return;
   const overlap = proof.protocol === 3;
   if (overlap && values.ha?.controlPlane?.mode === 'singleton-overlap')
     assertOverlapQualificationValues(values, proof.developerOverlap.profile);
@@ -644,7 +652,7 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
 }
 
 export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizing = false } = {}) {
-  if (![2, 3, 4].includes(proof?.protocol)) return;
+  if (![2, 3, 4, 5].includes(proof?.protocol)) return;
   const workloads = resources.filter((r) => ['StatefulSet', 'Deployment'].includes(r.kind));
   const counts = { backend: 1, web: 1, proxy: 2, execution: 2, autoscaler: 1 };
   if (

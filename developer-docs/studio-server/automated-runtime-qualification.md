@@ -3,12 +3,14 @@
 ## Implementation versus activation
 
 The optional [bounded request-continuity extension](production-update-continuity.md)
-adds real five-minute HTTP/1 and HTTP/2 bodies, late WebSocket admission/resume,
-proxy replacement and HPA removal to either compact suite. Select its reviewed
+checks real five-minute HTTP/1 and HTTP/2 bodies across rollout and handoff
+boundaries. The full suite additionally covers late WebSocket admission/resume,
+the independent cold-proxy roll and HPA removal. Select its reviewed
 `requestContinuityProfile` in the hash-pinned private driver settings (and staging
 `region`), or `RIVET_QUALIFICATION_CONTINUITY_PROFILE` for temporary staging.
 Its nested runtime-control certificate is compiled only after validated upgrade,
-autoscaling and cleanup facts. Version 2 additionally requires the duration
+policy/floor observations and cleanup facts. The full suite also requires separate
+autoscaling facts. Version 2 additionally requires the duration
 matrix, return handoff, real pre-removal admissions and native-roll timing.
 Long HTTP cohorts run one at a time to keep fixture demand within the compact
 runtime's admitted capacity. Qualification preflight derives its timeout from
@@ -290,17 +292,41 @@ older stress certificate do not automatically add hours of stress testing.
 Exact-source/chart/image, schema compatibility and live configuration checks
 still apply; a changed or unsafe contract cannot bypass those validators.
 
-Focused qualification upgrades the exact
-predecessor to the new images, observes public workflow/web traffic and two-ready
-floors, preserves recordings/storage, exercises browser OAuth/action/schedule and
-runs fresh five-minute HTTP/1, pooled HTTP/1 and HTTP/2 cohorts spanning execution
-retirement and native proxy replacement, plus accepted action resume. Its separate
-autoscaler phase observes the current policy/floors and at least 100 workflow and
-100 web completions. It omits autoscaling chaos/HPA removal and the separate
-60/180/295-second duration matrix. First adoption additionally tests the temporary
-bridge, policy adoption and return handoff: 18 complete five-minute requests
-instead of the nine for an already protected installation. It retains the same
-safe shutdown/admission checks and bridge cleanup requirement.
+Focused qualification runs the actual predecessor-to-candidate update once while
+observing public workflow/web traffic, two-ready floors, fresh controller policy
+samples, accepted work, recordings and storage. It does not shut down developer
+services, force a second proxy rollout or run browser-resume/schedule journeys.
+Basic authentication and public-route checks remain part of fixture preparation.
+Its policy evidence comes from this same rollout/report; there is no separate
+autoscaling phase or second 100-workflow/100-web traffic window.
+Both streams must collect their own 100 successful completions before observation
+ends; a faster workflow stream cannot stand in for slower web traffic.
+
+Three concurrent transport variants (fresh HTTP/1, pooled HTTP/1 and HTTP/2)
+consume full five-minute response bodies at each relevant boundary. An already
+protected update normally has two batches: actual proxy template replacement and
+execution-owner retirement, six requests total. An unchanged proxy template is
+observed without manufacturing a restart or proxy batch, leaving three requests.
+First adoption covers the real outbound bridge handoff, execution retirement and
+return handoff: three batches/nine requests. The normal proxies are replaced
+behind the protected bridge, so that replacement does not create another batch.
+Policy adoption and late admission do not create extra five-minute batches.
+Batches remain sequential to fit the admitted worker capacity. Request time is
+at least fifteen minutes for first adoption, ten for a protected proxy update and
+five with an unchanged proxy; setup, rollout/drain waits and cleanup are additional.
+
+The proxy probe captures the normal pool immediately before the real template
+apply and observes retiring and replacement UIDs during that update. An adopted
+proxy's termination is timed from a positively observed deletion marker, not
+missing IDs in a possibly older snapshot. Final replacement identities are read
+again at acceptance rather than retained from an earlier poll. An adopted
+proxy must actually be replaced while its protected requests are in flight;
+first-adoption replacement must occur between the confirmed outbound and return
+bridge handoffs. Execution requests must span a real accepted-work owner's
+routing withdrawal. An unchanged template must retain its proxy identities; changed images or first
+adoption cannot be relabeled unchanged. Final live Deployment/NEG/backend health
+and protected shutdown acceptance remain required. The first bridge and its
+cleanup retain the same ownership, admission and drain protections.
 
 For autoscaler capacity/fault-policy changes, select `qualificationSuite: "full"`
 in the reviewed private staging settings and approve the appropriate test window.
@@ -309,8 +335,12 @@ duration-matrix tests. Developer overlap and releases without the bounded profil
 also retain full qualification. An explicit incompatible focused selection or an
 unknown suite fails before actor admission. Dispatch inputs cannot waive checks.
 
-Focused runtime-control v4, autoscaling v3 and nested continuity v3 explicitly
-describe those observations; they cannot be relabeled full tests. Both declarations
+Focused runtime-control v5, policy evidence v4 and nested continuity v4 explicitly
+describe the narrower observations; they cannot be relabeled full tests. The
+control and policy declarations must share the same window and report hash.
+Their normalized request counts and policy digests must also agree.
+Historical focused v4/v3/v3 certificates remain readable with their original
+requirements and are not rewritten as the narrower test. Both declarations
 carry identical version-2 qualification metadata with source/configuration
 fingerprints. There is no inherited full-baseline requirement. Version-1 metadata
 remains readable as historical evidence. The provider recomputes selection from

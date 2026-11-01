@@ -44,6 +44,40 @@ const { WebSocket, WebSocketServer } = createRequire(
   new URL('../../../packages/studio-server-api/package.json', import.meta.url),
 )('ws');
 
+test('focused admission checks shared prerequisites without requiring an unused browser runtime', async () => {
+  const events = [];
+  const operation = { qualification: { tier: 'focused' } };
+  await executeProviderPhase({
+    phase: 'armExpiry',
+    operation,
+    cloud: { project: async () => events.push('project') },
+    gate: {
+      verifyLocalBrowserFixture: async () => {
+        throw Error('Focused rollout must not launch browser tests');
+      },
+      verifySharedPrerequisites: async () => events.push('shared'),
+    },
+    state: {
+      arm: async () => {
+        events.push('expiry');
+        return {};
+      },
+    },
+  });
+  assert.deepEqual(events, ['project', 'shared', 'expiry']);
+  await assert.rejects(
+    executeProviderPhase({
+      phase: 'autoscaling',
+      operation,
+      state: {
+        admission: async () => {
+          throw Error('Must reject before admission or writes');
+        },
+      },
+    }),
+    /actual upgrade/,
+  );
+});
 test('a retained staging endpoint is fixed across releases and cannot escape its non-production domain', () => {
   const fixed = reusableStagingSettings({ ...settings(), hostname: 'rivet-staging.qualification.example.test' });
   for (const operationId of ['rivet-q-123-1', 'rivet-q-124-1'])

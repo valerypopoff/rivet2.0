@@ -150,7 +150,7 @@ export function prepareRuntimeQualification(input) {
   );
   const policy = autoscalerPolicy(a.policy);
   const runtimeAutoscaling = (
-    [2, 3, 4].includes(runtimeControl.protocol)
+    [2, 3, 4, 5].includes(runtimeControl.protocol)
       ? assertCooperativeAutoscalingEvidence
       : assertRuntimeAutoscalingEvidence
   )(a.evidence, candidate, autoscalerPolicyDigest(policy));
@@ -160,12 +160,17 @@ export function prepareRuntimeQualification(input) {
       input.safetyDigest,
       'Qualification does not match the committed runtime and infrastructure source',
     );
-  if ([2, 3, 4].includes(runtimeControl.protocol))
+  if ([2, 3, 4, 5].includes(runtimeControl.protocol))
     assert.equal(
       runtimeControl.autoscalerPolicyDigest,
       runtimeAutoscaling.policyDigest,
       'Ordinary upgrade policy differs from autoscaling qualification',
     );
+  if (runtimeControl.protocol === 5) {
+    assert.equal(runtimeAutoscaling.protocol, 4, 'Focused rollout policy evidence version differs');
+    for (const key of ['startedAt', 'finishedAt', 'reportSha256'])
+      assert.equal(c[key], a[key], 'Focused policy evidence must describe the same observed rollout');
+  }
   return {
     candidate: assertStudioServerReleaseManifest({
       ...candidate,

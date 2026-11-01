@@ -5,6 +5,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { parse, stringify } from 'yaml';
 import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
+import { matchesKubernetesTemplate } from '../lib/kubernetes-template-match.mjs';
 import { extractWebAppRevisionKey, openWebSocketAction } from '../kubernetes-managed-release-gate.mjs';
 import {
   requestContinuityProfile,
@@ -41,6 +42,11 @@ async function waitForProxyRoll(label, check, timeoutMs) {
 /** Exercise the native RollingUpdate controller on the isolated candidate,
  * retaining images, replicas and HPA policy. Never manually remove a proxy. */
 export async function qualifyProtectedProxyRoll(gate, probes, { waitFor = waitForProxyRoll } = {}) {
+  assert.notEqual(
+    gate.operation?.qualification?.tier,
+    'focused',
+    'Focused qualification observes the actual update instead of forcing another proxy roll',
+  );
   await gate.assertProofContext();
   const name = gate.config.release + '-proxy';
   const deployment = JSON.parse((await gate.kube(['get', 'deployment', name, '-o', 'json'])).stdout);
@@ -59,7 +65,7 @@ export async function qualifyProtectedProxyRoll(gate, probes, { waitFor = waitFo
         !p.metadata.deletionTimestamp && p.status.conditions.some((c) => c.type === 'Ready' && c.status === 'True'),
     ),
   );
-  for (const stage of gate.operation.qualification?.tier === 'focused' ? [] : Object.keys(CONTINUITY_DURATION_STAGES)) {
+  for (const stage of Object.keys(CONTINUITY_DURATION_STAGES)) {
     await probes.startCohort(stage);
     await probes.settleCohort(stage);
   }
@@ -292,7 +298,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
         },
       }),
     });
-    if (this.hpaOnly) {
+    if (this.hpaOnly || gate.operation.qualification?.tier === 'focused') {
       this.prepared = true;
       return;
     }
@@ -405,6 +411,47 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     assert.ok(cohort, `Missing continuity stage ${stage}`);
     await cohort.completion;
   }
+  async beforeProxyTemplates() {
+    await this.gate.assertProofContext();
+    assert.ok(this.proxyTemplate, 'The actual candidate proxy template is required');
+    assertProtectedProxyTemplate(this.proxyTemplate, this.gate.operation.requestContinuityProfile);
+    const deployment = JSON.parse(
+      (await this.gate.kube(['get', 'deployment', this.gate.config.release + '-proxy', '-o', 'json'])).stdout,
+    );
+    assert.equal(deployment.metadata.labels?.['app.kubernetes.io/instance'], this.gate.config.release);
+    assert.equal(deployment.spec.strategy.type, 'RollingUpdate');
+    assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
+    const pods = (await this.gate.pods()).filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy');
+    assert.ok(
+      pods.length >= 2 &&
+        pods.every(
+          (p) =>
+            !p.metadata.deletionTimestamp &&
+            p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
+        ),
+    );
+    this.replacement = {
+      changed: !matchesKubernetesTemplate(deployment.spec.template, this.proxyTemplate),
+      deploymentUid: deployment.metadata.uid,
+      before: pods.map((p) => p.metadata.uid),
+    };
+    if (this.replacement.changed) {
+      // First adoption replaces the normal pool behind the serving bridge.
+      // Its outbound/return cohorts cover that traffic, without an extra batch.
+      if (this.bootstrap === 'already-protected') await this.startCohort('protected-roll');
+      this.replacement.dispatchedAt = new Date().toISOString();
+    }
+  }
+  observeProxyPods(pods) {
+    const replacement = this.replacement;
+    if (!replacement || !replacement.changed || !replacement.dispatchedAt) return;
+    const proxies = pods.filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy');
+    if (
+      !replacement.observedAt &&
+      proxies.some((p) => replacement.before.includes(p.metadata.uid) && p.metadata.deletionTimestamp)
+    )
+      replacement.observedAt = new Date().toISOString();
+  }
   async waitForAcceptance(stage) {
     const receipts = this.cohorts.get(stage).requests,
       deadline = performance.now() + 30000;
@@ -451,8 +498,27 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     if (!this.prepared) return;
     const state = record.proxyContinuity;
     if (!state) return;
-    if (state.mutations?.policy && !this.cohorts.has('policy-adoption')) await this.startCohort('policy-adoption');
-    if (state.mutations?.bridge && !this.cohorts.has('bootstrap')) await this.startCohort('bootstrap');
+    const focused = this.gate.operation.qualification?.tier === 'focused';
+    if (focused && record.owner?.withdrawIssued && /-ha-execution-[01]$/.test(record.owner.name)) {
+      this.executionWithdrawal ??= { podUid: record.owner.uid, dispatchedAt: new Date().toISOString() };
+      if (
+        record.owner.uid === this.executionWithdrawal.podUid &&
+        record.owner.beginIssued &&
+        !this.executionWithdrawal.observedAt
+      )
+        this.executionWithdrawal.observedAt = new Date().toISOString();
+    }
+    if (focused && record.phase === 'templates' && !this.replacement) await this.beforeProxyTemplates();
+    if (!focused && state.mutations?.policy && !this.cohorts.has('policy-adoption'))
+      await this.startCohort('policy-adoption');
+    if (state.mutations?.bridge && !this.cohorts.has('bootstrap')) {
+      await this.startCohort('bootstrap');
+      if (focused) this.bootstrapHandoff = { dispatchedAt: new Date().toISOString() };
+    }
+    if (focused && state.phase === 'bridge-serving' && !this.bootstrapHandoff?.settledAt) {
+      assert.ok(this.bootstrapHandoff, 'Bridge handoff admission was not observed');
+      this.bootstrapHandoff.settledAt = new Date().toISOString();
+    }
     if (state.mutations?.normal && !this.cohorts.has('return-handoff')) {
       await this.startCohort('return-handoff');
       this.returnHandoff = { dispatchedAt: new Date().toISOString() };
@@ -460,6 +526,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     if (state.phase === 'normal-serving' && !this.returnHandoff?.observedAt)
       this.returnHandoff.observedAt = new Date().toISOString();
     if (
+      !focused &&
       (state.phase === 'bridge-serving' || (state.phase === 'complete' && record.phase === 'templates')) &&
       !this.cohorts.has('late-admission')
     ) {
@@ -529,17 +596,45 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     }
   }
   async finish() {
+    const focused = this.gate.operation.qualification?.tier === 'focused';
+    if (focused) assert.ok(this.replacement, 'The actual rollout must observe the proxy template');
     for (const stage of continuityStages(
       this.bootstrap === 'already-protected',
       this.hpaOnly ? 'autoscaling' : 'upgrade',
       this.gate.operation.qualification?.tier ?? 'full',
+      this.replacement?.changed,
     ))
       await this.settleCohort(stage);
     if (!this.hpaOnly) {
-      assert.ok(this.actionCompletion, 'No late WebSocket action was exercised');
-      await this.actionCompletion;
-      assert.equal(this.browserResume, true, 'The published browser must automatically resume its accepted action');
-      this.action.browserResume = true;
+      if (focused) {
+        const pods = await this.gate.pods();
+        this.observeProxyPods(pods);
+        this.replacement.after = pods
+          .filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy')
+          .map((p) => p.metadata.uid);
+        assert.equal(this.replacement.after.length, 2, 'Final proxy observation must retain the two-pod floor');
+        if (this.replacement.changed) {
+          assert.ok(this.replacement.observedAt, 'Actual proxy termination was not observed');
+          assert.ok(
+            this.replacement.after.every((uid) => !this.replacement.before.includes(uid)),
+            'An original proxy still exists in the final observation',
+          );
+        } else {
+          assert.deepEqual(
+            [...this.replacement.after].sort(),
+            [...this.replacement.before].sort(),
+            'An unplanned proxy replacement cannot be certified as an unchanged template',
+          );
+        }
+        const live = await this.gate.verifyProtectedProxyAvailability();
+        assertContinuityAcceptance(live, this.gate.operation.requestContinuityProfile);
+        assert.equal(live.proxyUid, this.replacement.deploymentUid, 'Proxy Deployment identity changed');
+      } else {
+        assert.ok(this.actionCompletion, 'No late WebSocket action was exercised');
+        await this.actionCompletion;
+        assert.equal(this.browserResume, true, 'The published browser must automatically resume its accepted action');
+        this.action.browserResume = true;
+      }
       assert.ok(this.bridgeCleaned, 'Temporary bridge settlement was not observed');
     }
     const page = await this.gate.requestWorkflow(
@@ -558,7 +653,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     }
     assert.equal(this.failures.length, 0);
     return {
-      protocol: this.gate.operation.qualification?.tier === 'focused' ? 3 : 2,
+      protocol: focused ? 4 : 2,
       profile: this.gate.operation.requestContinuityProfile,
       bootstrap: this.bootstrap,
       bridgeCleaned: true,
@@ -567,6 +662,8 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       ...(this.removal ? { removal: this.removal } : {}),
       ...(this.replacement ? { replacement: this.replacement } : {}),
       ...(this.returnHandoff ? { returnHandoff: this.returnHandoff } : {}),
+      ...(this.bootstrapHandoff ? { bootstrapHandoff: this.bootstrapHandoff } : {}),
+      ...(this.executionWithdrawal ? { executionWithdrawal: this.executionWithdrawal } : {}),
       failures: this.failures,
     };
   }

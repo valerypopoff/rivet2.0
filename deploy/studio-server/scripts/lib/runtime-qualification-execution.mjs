@@ -7,6 +7,7 @@ import {
   HA_ORDINARY_RUNTIME_CHECKS,
   HA_COOPERATIVE_AUTOSCALING_CHECKS,
   HA_FOCUSED_AUTOSCALING_CHECKS,
+  HA_FOCUSED_RUNTIME_CHECKS,
   HA_PROVIDER_OVERLAP_CHECKS,
 } from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
@@ -327,12 +328,20 @@ export function assertOrdinaryProviderReport(report, operation) {
     assert.deepEqual(observed.developerTraffic.failures, []);
   }
   assert.equal(report.storageIdentityPreserved, true);
-  for (const field of ['coldProxyReplacement', 'browserOAuthAction', 'publishedScheduleRecording'])
-    assert.equal(report.outcomes.independence[field], true);
+  if (operation.qualification?.tier === 'focused') {
+    assert.equal(report.outcomes.independence, undefined, 'Focused rollout must not claim architecture/fault tests');
+    assert.ok(
+      report.outcomes.finalAutoscaler.sampleAt > report.outcomes.initialAutoscaler.sampleAt,
+      'Focused policy observations must advance during the actual rollout',
+    );
+  } else
+    for (const field of ['coldProxyReplacement', 'browserOAuthAction', 'publishedScheduleRecording'])
+      assert.equal(report.outcomes.independence[field], true);
 }
 
 /** Compile from completed probe facts, never a submitted array of check names. */
 export function assertProviderAutoscalingReport(report, operation) {
+  assert.notEqual(operation.qualification?.tier, 'focused', 'Focused policy evidence is validated with its rollout');
   assertContinuityProviderFacts(report, operation, 'autoscaling');
   window(report, operation);
   assertPublicTraffic(report);
@@ -340,21 +349,6 @@ export function assertProviderAutoscalingReport(report, operation) {
   assert.deepEqual(report.policy, operation.policy);
   assert.equal(report.policyDigest, operation.policyDigest);
   assert.equal(report.finalApplicationPods, 7);
-  if (operation.qualification?.tier === 'focused') {
-    assert.equal(report.purpose, 'focused-policy-observation');
-    assert.ok(report.observations.length >= 2);
-    for (const observation of report.observations) {
-      assert.equal(observation.autoscaler.policyDigest, operation.policyDigest);
-      assert.ok(Number.isSafeInteger(observation.autoscaler.sampleAt));
-      assert.ok(observation.autoscaler.sampleAt >= time(report.startedAt));
-      assert.ok(observation.autoscaler.sampleAt <= time(report.finishedAt));
-      for (const role of ['execution', 'proxy']) assert.ok(count(observation.ready[role]) >= 2);
-    }
-    assert.ok(report.observations.at(-1).autoscaler.sampleAt > report.observations[0].autoscaler.sampleAt);
-    for (const key of ['cooperative', 'capacity', 'cpu', 'drain', 'metrics', 'proxyHpa'])
-      assert.equal(report[key], undefined, 'Focused evidence cannot claim unexecuted stress tests');
-    return;
-  }
   const cooperative = report.cooperative;
   for (const mode of ['active', 'paused']) {
     assert.ok(count(cooperative[mode].to) > count(cooperative[mode].from));
@@ -475,9 +469,15 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
     assert.equal(facts.prepared.expiryIdentity, facts.guard.identity);
     facts.upgrade = await phase('upgrade');
     assertOrdinaryProviderReport(facts.upgrade, operation);
-    facts.autoscaling = await phase('autoscaling');
-    assertProviderAutoscalingReport(facts.autoscaling, operation);
-    assert.ok(time(facts.autoscaling.startedAt) >= time(facts.upgrade.finishedAt), 'Protected phase windows overlap');
+    if (operation.qualification?.tier === 'focused') {
+      // The policy/floor observations already span the actual update. Both
+      // declarations describe this same report, not a second traffic window.
+      facts.autoscaling = facts.upgrade;
+    } else {
+      facts.autoscaling = await phase('autoscaling');
+      assertProviderAutoscalingReport(facts.autoscaling, operation);
+      assert.ok(time(facts.autoscaling.startedAt) >= time(facts.upgrade.finishedAt), 'Protected phase windows overlap');
+    }
   } catch (error) {
     failure = error;
   } finally {
@@ -550,7 +550,7 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
       ...(operation.requestContinuityProfile
         ? { requestContinuity: compileRequestContinuityEvidence(operation, facts.upgrade, facts.autoscaling) }
         : {}),
-      protocol: operation.qualification?.tier === 'focused' ? 4 : operation.developerOverlapProfile ? 3 : 2,
+      protocol: operation.qualification?.tier === 'focused' ? 5 : operation.developerOverlapProfile ? 3 : 2,
       purpose: 'ordinary-upgrade',
       controlPlaneMode: operation.developerOverlapProfile ? 'singleton-overlap' : 'singleton',
       ...(operation.developerOverlapProfile
@@ -571,12 +571,14 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
       predecessorImages: operation.previous.images,
       autoscalerPolicyDigest: operation.policyDigest,
       requestSamples: facts.upgrade.workflow.samples + facts.upgrade.web.samples,
-      checks: [...HA_ORDINARY_RUNTIME_CHECKS],
+      checks: [
+        ...(operation.qualification?.tier === 'focused' ? HA_FOCUSED_RUNTIME_CHECKS : HA_ORDINARY_RUNTIME_CHECKS),
+      ],
     }),
     autoscaling: {
       ...declaration(facts.autoscaling, {
         ...common,
-        protocol: operation.qualification?.tier === 'focused' ? 3 : 2,
+        protocol: operation.qualification?.tier === 'focused' ? 4 : 2,
         provider: 'gke',
         policyDigest: operation.policyDigest,
         requestSamples: facts.autoscaling.workflow.samples + facts.autoscaling.web.samples,

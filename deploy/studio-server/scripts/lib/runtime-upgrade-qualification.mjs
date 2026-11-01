@@ -92,6 +92,7 @@ export async function runOrdinaryRuntimeUpgrade({
   await gate.assertLocalContext(); // Provider adapters override with their exact isolated-operation guard.
   assert.equal(gate.edgeProfile, 'compact');
   assert.equal(gate.purpose, 'ordinary-upgrade');
+  const focused = gate.operation?.qualification?.tier === 'focused';
   // Fixture preparation can legitimately cause temporary scale-up. Wait for
   // the controller to settle it; never shrink replicas just to satisfy a test.
   await waitForOrdinaryRuntime(gate, previous.images, (name, check) =>
@@ -142,6 +143,7 @@ export async function runOrdinaryRuntimeUpgrade({
   const observe = (async () => {
     while (observing) {
       const pods = await gate.pods();
+      gate.continuityProbes?.observeProxyPods?.(pods);
       // Singleton developer availability is intentionally not promised.
       for (const role of ['execution', 'proxy']) {
         const count = pods.filter(
@@ -235,11 +237,16 @@ export async function runOrdinaryRuntimeUpgrade({
     );
     report.outcomes.acceptedWork = probes.background;
     report.outcomes.maintenanceArchivePreserved = true;
-    await wait('at least one hundred protected workflow completions', async () => workflow.report.samples >= 100);
+    await wait(
+      'at least one hundred protected workflow and web completions',
+      async () => workflow.report.samples >= 100 && web.report.samples >= 100,
+    );
     checkpoint();
-    phase = 'candidate-runtime-without-developers';
-    report.outcomes.independence = await gate.isolateRuntime(baseUrl, probes.projectId);
-    report.phases.push('candidate-runtime-without-developers');
+    if (!focused) {
+      phase = 'candidate-runtime-without-developers';
+      report.outcomes.independence = await gate.isolateRuntime(baseUrl, probes.projectId);
+      report.phases.push('candidate-runtime-without-developers');
+    }
     await waitForOrdinaryRuntime(gate, candidate.images, wait);
     report.outcomes.finalAutoscaler = await gate.assertAutoscalerActive(Date.now());
     if (gate.continuityProbes) report.requestContinuity = await gate.continuityProbes.finish();
