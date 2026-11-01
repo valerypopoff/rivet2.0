@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { parseAllDocuments, stringify } from 'yaml';
 import { packageReusableStaging } from './package-reusable-staging.mjs';
 import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
+import { assertActionsQualificationWindow } from './lib/runtime-qualification-execution.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const run = (bin, args, env = process.env) =>
@@ -22,6 +23,7 @@ async function main() {
   assert.ok(['staging', 'production'].includes(mode));
   assert.match(process.env.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
   assert.match(process.env.GITHUB_RUN_ATTEMPT ?? '', /^[1-9][0-9]*$/);
+  if (mode === 'staging') assertActionsQualificationWindow(Number(process.env.RIVET_QUALIFICATION_MAX_SECONDS));
   const configuration = JSON.parse(process.env.RIVET_DEPLOYMENT_CONFIGURATION);
   delete process.env.RIVET_DEPLOYMENT_CONFIGURATION;
   assert.equal(configuration.protocol, 1);
