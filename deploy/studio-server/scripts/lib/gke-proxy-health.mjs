@@ -3,6 +3,30 @@ import { isIP } from 'node:net';
 
 const condition = 'cloud.google.com/load-balancer-neg-ready';
 
+/** Pod Ready precedes Deployment Available when minReadySeconds is positive. */
+export function assertGkeProxyDeploymentAvailable(deployment, minimum = 2) {
+  const name = deployment.metadata.name;
+  assert.ok(!deployment.metadata.deletionTimestamp, `Proxy Deployment ${name} is terminating`);
+  assert.ok(
+    deployment.status?.observedGeneration >= deployment.metadata.generation,
+    `Proxy Deployment ${name} has not observed generation ${deployment.metadata.generation}`,
+  );
+  assert.ok(
+    deployment.status.updatedReplicas === deployment.spec.replicas,
+    `Proxy Deployment ${name} has ${deployment.status.updatedReplicas ?? 0}/${deployment.spec.replicas} updated replicas`,
+  );
+  assert.ok(
+    deployment.status.availableReplicas >= minimum,
+    `Proxy Deployment ${name} has ${deployment.status.availableReplicas ?? 0}/${minimum} required available replicas (minReadySeconds=${deployment.spec.minReadySeconds ?? 0})`,
+  );
+}
+
+/** Setup and handoff use the same Deployment and actual endpoint criteria. */
+export function assertGkeProxyPoolReady(pods, service, backend, { deployment, minimum = 2, ...options }) {
+  assertGkeProxyDeploymentAvailable(deployment, minimum);
+  return assertGkeProxyBackendHealth(pods, service, backend, options);
+}
+
 /** Gateway-managed standalone NEGs can remain WithoutHealthCheck even when
  * regional Compute getHealth reports HEALTHY. That condition is never itself
  * health evidence: callers allowing it must join a fresh backend observation. */
