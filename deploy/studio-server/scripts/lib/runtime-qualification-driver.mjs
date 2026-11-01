@@ -141,8 +141,23 @@ export function providerPhaseProcess(
   });
 }
 
+/** One cleanup allowance spans settlement, deletion, verification and export.
+ * An expired wait never proves writer absence or authorizes a phase replay. */
+export function qualificationTimeouts({ timeoutMs, now = Date.now } = {}) {
+  let cleanupDeadline;
+  return (operation, phase) => {
+    const testing = ['armExpiry', 'prepare', 'upgrade', 'autoscaling'].includes(phase);
+    const current = now();
+    const deadline = testing ? Date.parse(operation.expiresAt) : (cleanupDeadline ??= current + 3_600_000);
+    const remaining = deadline - current;
+    assert.ok(remaining > 0, testing ? 'Provider admission expired' : 'Qualification cleanup deadline exceeded');
+    return Math.min(timeoutMs ?? remaining, remaining);
+  };
+}
+
 export function qualificationDriver(directory, digest, { cwd, privateDirectory, timeoutMs, env } = {}) {
   const childEnv = qualificationDriverEnvironment(env ?? process.env);
+  const timeoutFor = qualificationTimeouts({ timeoutMs: timeoutMs ?? 7_200_000 });
   return Object.fromEntries(
     ['armExpiry', 'prepare', 'upgrade', 'autoscaling', 'settle', 'cleanup', 'verifyCleanup'].map((phase) => [
       phase,
@@ -153,20 +168,13 @@ export function qualificationDriver(directory, digest, { cwd, privateDirectory, 
           manifest.suite,
           operation.developerOverlapProfile ? 'compact-seven-overlap-v1' : 'compact-seven-v1',
         );
-        if (['armExpiry', 'prepare', 'upgrade', 'autoscaling'].includes(phase))
-          assert.ok(
-            Date.now() < Date.parse(operation.expiresAt),
-            'Provider admission expired during bundle verification',
-          );
         const result = await providerPhaseProcess(
           entrypoint,
           phase,
           { operation, privateDirectory },
           {
             cwd,
-            timeoutMs: ['armExpiry', 'prepare', 'upgrade', 'autoscaling'].includes(phase)
-              ? Math.min(timeoutMs ?? 7_200_000, Math.max(1, Date.parse(operation.expiresAt) - Date.now()))
-              : Math.min(timeoutMs ?? 3_600_000, 3_600_000),
+            timeoutMs: timeoutFor(operation, phase),
             env: childEnv,
             privateDirectory,
           },

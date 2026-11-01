@@ -64,6 +64,7 @@ async function fixture(t) {
     losePhase: false,
     loseCreate: false,
     creates: 0,
+    deletes: 0,
     registry: {
       protocol: 1,
       operation,
@@ -114,6 +115,8 @@ async function fixture(t) {
         const parts = [];
         for await (const part of req) parts.push(part);
         assert.equal(JSON.parse(Buffer.concat(parts)).preconditions.uid, 'job-uid');
+        state.deletes++;
+        if (state.failDelete) return json(500, { message: 'actor deletion failed' });
         state.deleted = true;
         return json(200, {});
       }
@@ -136,6 +139,10 @@ async function fixture(t) {
         command = new URL(req.url, 'http://local').searchParams.getAll('command');
       const phase = command.at(-1);
       state.commands.push({ phase, payload });
+      if (state.loseExport && phase === 'export') {
+        socket.close(1012);
+        return;
+      }
       if (state.losePhase && phase === 'prepare') {
         socket.close(1012);
         return;
@@ -249,6 +256,83 @@ test('lost remote phase acknowledgement is never replayed or treated as safe del
   await actor.close({ cleanupVerified: false });
   assert.equal(f.state.commands.filter((c) => c.phase === 'prepare').length, 1);
   assert.equal(f.state.deleted, false);
+});
+
+test('verified cleanup removes the exact actor even if export or persistence fails, without replay', async (t) => {
+  for (const fault of ['export', 'persist', 'export-and-delete']) {
+    const f = await fixture(t);
+    let persistFailed = false;
+    f.options.persist = async () => {
+      if (fault === 'persist' && f.state.commands.some((c) => c.phase === 'export')) {
+        persistFailed = true;
+        throw Error('diagnostic persistence failed');
+      }
+    };
+    const actor = await f.prepare();
+    f.state.loseExport = fault.startsWith('export');
+    f.state.failDelete = fault === 'export-and-delete';
+    const closing = actor.close({ cleanupVerified: true });
+    await assert.rejects(closing, (error) => {
+      if (f.state.failDelete) {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, 2);
+        assert.match(error.errors[0].message, /unknown/);
+        assert.match(error.errors[1].message, /500/);
+      } else assert.match(error.message, fault === 'persist' ? /diagnostic persistence failed/ : /unknown/);
+      return true;
+    });
+    assert.equal(actor.close({ cleanupVerified: true }), closing);
+    assert.equal(f.state.commands.filter((c) => c.phase === 'export').length, 1);
+    assert.equal(f.state.deletes, 1);
+    assert.equal(f.state.deleted, !f.state.failDelete);
+    assert.equal(persistFailed, fault === 'persist');
+  }
+});
+
+test('actor removal refuses a replacement Job after verified cleanup', async (t) => {
+  const f = await fixture(t),
+    actor = await f.prepare();
+  f.state.job.metadata.uid = 'replacement-job';
+  await assert.rejects(actor.close({ cleanupVerified: true }));
+  assert.equal(f.state.deletes, 0);
+});
+
+test('remote cleanup shares one deadline through export; expiry fences dispatch but still removes a verified actor', async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  for (const expiry of ['none', 'verifyCleanup', 'export']) {
+    const f = await fixture(t),
+      actor = await f.prepare(),
+      timeouts = [];
+    f.options.api.withTimeout = (timeoutMs) => {
+      timeouts.push(timeoutMs);
+      return f.options.api;
+    };
+    await actor.driver.settle();
+    now += 59 * 60000;
+    await actor.driver.cleanup();
+    if (expiry === 'verifyCleanup') {
+      now += 60000;
+      await assert.rejects(actor.driver.verifyCleanup(), /cleanup deadline exceeded/);
+      assert.ok(!f.state.commands.some((c) => c.phase === 'verifyCleanup'));
+      await actor.close({ cleanupVerified: false });
+      assert.ok(!f.state.commands.some((c) => c.phase === 'export'));
+      assert.deepEqual(timeouts, [3600000, 60000]);
+    } else {
+      await actor.driver.verifyCleanup();
+      if (expiry === 'export') {
+        now += 60000;
+        await assert.rejects(actor.close({ cleanupVerified: true }), /cleanup deadline exceeded/);
+        assert.ok(!f.state.commands.some((c) => c.phase === 'export'));
+        assert.deepEqual(timeouts, [3600000, 60000, 60000]);
+      } else {
+        await actor.close({ cleanupVerified: true });
+        assert.deepEqual(timeouts, [3600000, 60000, 60000, 60000]);
+      }
+    }
+    assert.equal(f.state.deletes, expiry === 'verifyCleanup' ? 0 : 1);
+    assert.equal(f.state.deleted, expiry !== 'verifyCleanup');
+  }
 });
 
 test('a successful Kubernetes status completes each real RPC without waiting for a retained socket', async (t) => {
