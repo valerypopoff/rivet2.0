@@ -24,6 +24,7 @@ import {
 import {
   verifyQualificationDriver,
   qualificationDriverEnvironment,
+  qualificationDriver,
   providerPhaseProcess,
 } from './lib/runtime-qualification-driver.mjs';
 import {
@@ -756,6 +757,51 @@ test('driver credential boundary is case-insensitive and process startup failure
       { cwd: path.join(os.tmpdir(), `absent-rivet-${process.pid}-${Date.now()}`) },
     ),
     /process failed/,
+  );
+});
+
+test('local provider processes share a cleanup deadline and never launch an expired phase', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-driver-deadline-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const bundle = path.join(directory, 'bundle'),
+    privateDirectory = path.join(directory, 'private');
+  await fs.mkdir(bundle);
+  await fs.mkdir(privateDirectory);
+  const code = Buffer.from(`import fs from 'node:fs/promises';
+import path from 'node:path';
+let input = '';
+for await (const part of process.stdin) input += part;
+const request = JSON.parse(input), phase = process.argv[2];
+await fs.appendFile(path.join(request.privateDirectory, 'calls.jsonl'), JSON.stringify(phase) + '\\n');
+process.stdout.write(JSON.stringify({ phase }));
+`);
+  const manifest = {
+    protocol: 1,
+    suite: 'compact-seven-v1',
+    provider: 'gke',
+    scope: 'isolated-provider',
+    entrypoint: 'provider.mjs',
+    files: { 'provider.mjs': createHash('sha256').update(code).digest('hex') },
+  };
+  await fs.writeFile(path.join(bundle, 'provider.mjs'), code);
+  await fs.writeFile(path.join(bundle, 'driver.json'), JSON.stringify(manifest));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const operation = { expiresAt: new Date(now + 7200000).toISOString() };
+  const driver = qualificationDriver(bundle, qualificationHash(manifest), {
+    privateDirectory,
+    env: { ...process.env, RIVET_QUALIFICATION_STAGING_KUBECONFIG: 'unused-local-test-context' },
+  });
+  assert.deepEqual(await driver.settle(operation), { phase: 'settle' });
+  now += 59 * 60000;
+  assert.deepEqual(await driver.cleanup(operation), { phase: 'cleanup' });
+  now += 60000;
+  await assert.rejects(driver.verifyCleanup(operation), /cleanup deadline exceeded/);
+  now = Date.parse(operation.expiresAt);
+  await assert.rejects(driver.prepare(operation), /Provider admission expired/);
+  assert.deepEqual(
+    (await fs.readFile(path.join(privateDirectory, 'calls.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse),
+    ['settle', 'cleanup'],
   );
 });
 

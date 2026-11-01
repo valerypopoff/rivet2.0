@@ -443,6 +443,16 @@ once with a finite deadline. Lost acknowledgements never replay a write. Cleanup
 must be verified before diagnostics export and UID-bound actor removal. Expiry
 and the independent janitor retain ownership after coordinator loss.
 
+Local and remote phase drivers share one hour across settlement, cleanup,
+verification and diagnostics export, starting at the first settlement dispatch.
+Each phase receives only the remaining time; an exhausted allowance prevents
+another command from starting. Timeout is not writer-absence or cleanup proof:
+unverified work remains owned by the independent janitor. Once cleanup is
+verified, normal UID-bound actor removal is still attempted if diagnostic
+export, local persistence or upload fails. Diagnostic failure still blocks
+publication, and a simultaneous removal failure preserves both errors. Neither
+export nor deletion is replayed. Timers do not impose a hard cloud billing cap.
+
 The actor Pod requests Autopilot extended-duration protection with
 `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so voluntary node
 scale-down does not normally evict a silent test runner. This preserves the

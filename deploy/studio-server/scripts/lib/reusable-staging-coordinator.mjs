@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createKubernetesTransport } from './execution-autoscaler-kubernetes.mjs';
 import { deploymentGoogleToken } from './private-cloud-evidence.mjs';
-import { verifyQualificationDriver } from './runtime-qualification-driver.mjs';
+import { qualificationTimeouts, verifyQualificationDriver } from './runtime-qualification-driver.mjs';
 import { verifyTemporaryActorExport } from './temporary-staging-actor.mjs';
 import { assertStagingRecord, stagingRecordPath } from './reusable-staging-state.mjs';
 
@@ -180,6 +180,7 @@ export async function prepareStagingActor(
   },
 ) {
   assert.ok(Number.isSafeInteger(actorWatchIntervalMs) && actorWatchIntervalMs > 0 && actorWatchIntervalMs <= 30000);
+  const timeoutFor = qualificationTimeouts();
   await verifyQualificationDriver(bundle, digest);
   const system = await api.json('GET', '/api/v1/namespaces/kube-system');
   assert.equal(system.metadata.uid, settings.clusterUid);
@@ -378,9 +379,7 @@ export async function prepareStagingActor(
         const result = await rpc(
           ['node', `/qualification/private/${operation.operationId}/provider.mjs`, phase],
           { operation, privateDirectory: `/qualification/private/${operation.operationId}/results` },
-          ['armExpiry', 'prepare', 'upgrade', 'autoscaling'].includes(phase)
-            ? Math.max(1, Date.parse(operation.expiresAt) - Date.now())
-            : 3600000,
+          timeoutFor(operation, phase),
           phase === 'verifyCleanup' ? cleanupCompletion : undefined,
         );
         if (phase === 'armExpiry') {
@@ -402,23 +401,40 @@ export async function prepareStagingActor(
     close({ cleanupVerified }) {
       if (!cleanupVerified) return; // Independent expiry cleanup owns an uncertain writer.
       return (closing ??= (async () => {
-        const exported = verifyTemporaryActorExport(
-          await rpc(['node', actorFile, 'export'], { operationId: operation.operationId }),
-        );
-        await fs.writeFile(path.join(privateDirectory, 'actor-export.json'), JSON.stringify(exported), {
-          flag: 'wx',
-          mode: 0o600,
-        });
-        await persist();
-        const current = await api.json('GET', `${collection}/${operation.operationId}`);
-        assert.equal(current?.metadata.uid, job.metadata.uid);
-        await api.json('DELETE', `${collection}/${operation.operationId}`, {
-          apiVersion: 'v1',
-          kind: 'DeleteOptions',
-          propagationPolicy: 'Foreground',
-          preconditions: { uid: job.metadata.uid },
-        });
-        await wait('actor removal', async () => !(await api.json('GET', actorPath)));
+        let failure;
+        try {
+          const exported = verifyTemporaryActorExport(
+            await rpc(
+              ['node', actorFile, 'export'],
+              { operationId: operation.operationId },
+              Math.min(600000, timeoutFor(operation, 'export')),
+            ),
+          );
+          await fs.writeFile(path.join(privateDirectory, 'actor-export.json'), JSON.stringify(exported), {
+            flag: 'wx',
+            mode: 0o600,
+          });
+          await persist();
+        } catch (error) {
+          failure = error;
+        }
+        // Cleanup already proved writer absence. Failed diagnostics must not
+        // retain the paid actor, but still prevent qualification publication.
+        try {
+          const current = await api.json('GET', `${collection}/${operation.operationId}`);
+          assert.equal(current?.metadata.uid, job.metadata.uid);
+          await api.json('DELETE', `${collection}/${operation.operationId}`, {
+            apiVersion: 'v1',
+            kind: 'DeleteOptions',
+            propagationPolicy: 'Foreground',
+            preconditions: { uid: job.metadata.uid },
+          });
+          await wait('actor removal', async () => !(await api.json('GET', actorPath)));
+        } catch (error) {
+          if (failure) throw new AggregateError([failure, error], 'Actor diagnostics and removal both failed');
+          throw error;
+        }
+        if (failure) throw failure;
       })());
     },
   };
