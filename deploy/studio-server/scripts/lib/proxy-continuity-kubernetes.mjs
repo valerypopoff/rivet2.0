@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { assertProtectedProxyTemplate } from './request-continuity.mjs';
 import { createProxyContinuityTransition, buildProxyBridge } from './proxy-continuity-transition.mjs';
-import { hasReadyGkeNegGate, assertGkeProxyBackendHealth, isGkeProxyBackendReady } from './gke-proxy-health.mjs';
+import { hasReadyGkeNegGate, assertGkeProxyBackendHealth, assertGkeProxyPoolReady } from './gke-proxy-health.mjs';
 
 const exec = promisify(execFile);
 const marker = 'rivet.dev/continuity-operation';
@@ -29,6 +29,7 @@ const paths = {
   PodDisruptionBudget: '/apis/policy/v1',
 };
 const negReady = (p) => hasReadyGkeNegGate(p, { allowStandalone: true });
+class ProxyPoolNotReady extends Error {}
 
 async function defaultAccessToken() {
   const bin = process.env.RIVET_GCLOUD_BIN || 'gcloud';
@@ -180,9 +181,18 @@ export function createKubernetesProxyContinuity({
       .items;
   const until = async (label, check) => {
     const deadline = now() + timeoutMs;
+    let pending;
     do {
-      if (await check()) return;
-      assert.ok(now() < deadline, `Timed out waiting for ${label}; serving capacity retained`);
+      try {
+        if (await check()) return;
+      } catch (error) {
+        if (!(error instanceof ProxyPoolNotReady)) throw error;
+        pending = error;
+      }
+      assert.ok(
+        now() < deadline,
+        `Timed out waiting for ${label}; serving capacity retained${pending ? `: ${pending.message}` : ''}`,
+      );
       await wait();
     } while (true);
   };
@@ -206,8 +216,12 @@ export function createKubernetesProxyContinuity({
     const selected = (await pods(deployment.spec.template.metadata.labels['app.kubernetes.io/instance'])).filter((p) =>
       Object.entries(deployment.spec.selector.matchLabels).every(([k, v]) => p.metadata.labels?.[k] === v),
     );
-    if (selected.length < minimum || selected.some((p) => !negReady(p))) return false;
-    if (new Set(selected.map((p) => p.spec.nodeName)).size < 2) return false;
+    if (selected.length < minimum)
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} has ${selected.length}/${minimum} required Pods`);
+    if (selected.some((p) => !negReady(p)))
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} has Pods without Ready/NEG readiness`);
+    if (new Set(selected.map((p) => p.spec.nodeName)).size < 2)
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} is not spread across two nodes`);
     const sets = JSON.parse((await kube(['get', 'replicasets.apps', '-o', 'json'])).stdout).items;
     const owned = new Set(
       sets
@@ -228,17 +242,18 @@ export function createKubernetesProxyContinuity({
     const zones = selected.map(
       (p) => nodes.find((n) => n.metadata.name === p.spec.nodeName)?.metadata.labels?.['topology.kubernetes.io/zone'],
     );
-    if (zones.some((z) => !z) || new Set(zones).size < 2) return false;
+    if (zones.some((z) => !z) || new Set(zones).size < 2)
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} is not spread across two provider zones`);
     if (protectedPool) for (const p of selected) assertProtectedProxyTemplate(p, profile);
     const service = await read({ kind: 'Service', name });
     const backend = await observeBackend(service, { allowPending: true });
-    if (!isGkeProxyBackendReady(selected, service, backend)) return false;
-    return (
-      deployment.status?.observedGeneration >= deployment.metadata.generation &&
-      deployment.status.availableReplicas >= minimum &&
-      deployment.status.updatedReplicas === deployment.spec.replicas &&
-      !deployment.metadata.deletionTimestamp
-    );
+    try {
+      assertGkeProxyPoolReady(selected, service, backend, { deployment, minimum });
+    } catch (error) {
+      if (error.code !== 'ERR_ASSERTION') throw error;
+      throw new ProxyPoolNotReady(error.message, { cause: error });
+    }
+    return true;
   };
   const io = {
     namespaceUid: nsUid,
@@ -272,11 +287,7 @@ export function createKubernetesProxyContinuity({
       const proxyPods = (await pods(config.release)).filter((p) =>
         Object.entries(deployment.spec.selector.matchLabels).every(([k, v]) => p.metadata.labels?.[k] === v),
       );
-      assert.ok(proxyPods.length >= 2 && proxyPods.every(negReady), 'Original proxy pool lacks positive NEG health');
-      assert.ok(
-        await healthyPool(proxyName, false),
-        'Original proxy Deployment is not settled across two provider zones',
-      );
+      await healthyPool(proxyName, false);
       for (const p of proxyPods) {
         const include = (
           await kube(['exec', p.metadata.name, '-c', 'proxy', '--', 'cat', '/tmp/nginx/rivet-proxy-timeout.inc'])

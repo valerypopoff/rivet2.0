@@ -920,7 +920,15 @@ test('concrete provider Helm render retains installed production timing, real ma
   gate.assertProofContext = async () => {};
   gate.kubectl = async (args) => ({
     stdout: JSON.stringify(
-      args.includes('service') ? service : { items: args.includes('pods') ? [...proxies, web] : nodes },
+      args.includes('deployment')
+        ? {
+            metadata: { name: `${gate.config.release}-proxy`, generation: 1 },
+            spec: { replicas: 2, minReadySeconds: 120 },
+            status: { observedGeneration: 1, updatedReplicas: 2, availableReplicas: 2 },
+          }
+        : args.includes('service')
+          ? service
+          : { items: args.includes('pods') ? [...proxies, web] : nodes },
     ),
   });
   gate.observeProxyBackend = async (current) => {

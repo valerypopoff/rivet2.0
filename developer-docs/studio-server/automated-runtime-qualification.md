@@ -598,6 +598,19 @@ ownership, then its HTTPRoute/health policy, and waits for two-zone NEG discover
 **before** installing proxy Pods. Otherwise those Pods may miss GKE's injected
 readiness gate. Helm adopts that Service without replacing it. This bootstrap
 ordering never weakens the later positive load-balancer-health check.
+
+Fixture setup and proxy-handoff preflight share the same Deployment-availability
+and regional endpoint-health checks in `lib/gke-proxy-health.mjs`. Pod `Ready`
+alone does not complete setup: the proxy Deployment must observe its current
+generation, update its desired replicas and report the required available floor.
+This honors its configured `minReadySeconds` through Kubernetes status, without
+adding a separate sleep. Setup polls within its existing proof/operation deadline;
+normal startup settling does not fail the test immediately. Deadline errors retain
+the specific unmet condition. Preflight and handoff waits also identify missing
+availability, Pod/NEG readiness, node/zone spread or backend health instead of
+reporting every failure as missing two-zone placement. Ownership and protected
+shutdown checks retain their existing fences.
+
 The fixture trusts that approved Gateway's forwarded HTTPS host/protocol so
 OAuth redirects and Secure cookies retain the public origin. Restrict edge access
 to the shared Gateway in the dedicated cluster/network setup; no extra public

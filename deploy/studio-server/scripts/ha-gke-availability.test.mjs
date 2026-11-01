@@ -162,21 +162,34 @@ test('regional Gateway standalone gates wait for every current endpoint and pres
   }
   const backend = { healthy: true, serviceUid: service.metadata.uid, backendService: 'regional-backend', backendServiceId: '123', observedAt: Date.now(),
     healthyEndpoints: proxies.map((p, i) => ({ ipAddress: p.status.podIP, port: 8080, zone: `zone-${i % 3}`, neg: 'proxy-neg' })) };
-  const proof = { service, backend };
+  const deployment = { metadata: { name: `${release}-proxy`, generation: 1 }, spec: { replicas: 6, minReadySeconds: 120 },
+    status: { observedGeneration: 1, updatedReplicas: 6, availableReplicas: 6 } };
+  const proof = { deployment, service, backend };
   assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release));
   assert.ok(assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'regional', proof).filter(p => p.component === 'proxy').every(p => p.negHealth === 'ComputeHealthy'));
   for (const change of [
     proof => { proof.backend.healthyEndpoints.pop(); },
     proof => { proof.backend.observedAt -= 60001; },
     proof => { proof.backend.serviceUid = 'another-service'; },
+    proof => { proof.deployment.status.availableReplicas = 0; },
+    proof => { proof.deployment.status.updatedReplicas = 5; },
+    proof => { proof.deployment.status.observedGeneration = 0; },
+    proof => { proof.deployment.metadata.deletionTimestamp = new Date().toISOString(); },
   ]) {
     const bad = structuredClone(proof); change(bad);
     assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'regional', bad));
   }
-  let reads = 0;
+  let reads = 0, deploymentReads = 0;
   const gate = { config: { namespace, release, deploymentTimeoutSeconds: 4 }, providerValues: {},
     assertProofContext: async () => {},
-    kubectl: async args => ({ stdout: JSON.stringify(args.includes('service') ? service : { items: args.includes('pods') ? f.pods : f.nodes }) }),
+    kubectl: async args => {
+      if (args.includes('deployment')) {
+        const current = structuredClone(deployment);
+        if (++deploymentReads <= 2) current.status.availableReplicas = 0;
+        return { stdout: JSON.stringify(current) };
+      }
+      return { stdout: JSON.stringify(args.includes('service') ? service : { items: args.includes('pods') ? f.pods : f.nodes }) };
+    },
     observeProxyBackend: async observed => {
       assert.deepEqual(observed, service);
       const current = structuredClone(backend); current.observedAt = Date.now();
@@ -185,7 +198,18 @@ test('regional Gateway standalone gates wait for every current endpoint and pres
     },
   };
   assert.equal((await waitForGkeFrontendAvailability(gate)).length, 8);
-  assert.equal(reads, 2, 'Ready Pods must wait for complete Compute health rather than failing or borrowing old endpoints');
+  assert.equal(reads, 3, 'Ready Pods and healthy endpoints must still wait for Deployment availability');
+  assert.equal(deploymentReads, 3);
+
+  gate.config.deploymentTimeoutSeconds = 0.02;
+  gate.kubectl = async args => ({ stdout: JSON.stringify(args.includes('deployment')
+    ? { ...deployment, status: { ...deployment.status, availableReplicas: 0 } }
+    : args.includes('service') ? service : { items: args.includes('pods') ? f.pods : f.nodes }) });
+  await assert.rejects(waitForGkeFrontendAvailability(gate), error => {
+    assert.match(error.message, /proof deadline.*0\/6 required available replicas.*minReadySeconds=120/);
+    assert.match(error.cause.message, /0\/6 required available replicas/);
+    return true;
+  });
 });
 
 test('GKE frontend HPA bounds cannot drop below the declared minimum', () => {
@@ -384,6 +408,10 @@ async function proofFixture(t, failure) {
       let value;
       if (args.includes('nodes')) value = { items: state.nodes };
       else if (args.includes('pods')) value = { items: state.pods };
+      else if (args.includes('deployment')) value = {
+        metadata: { name: `${release}-proxy`, generation: 1 }, spec: { replicas: 6, minReadySeconds: 120 },
+        status: { observedGeneration: 1, updatedReplicas: 6, availableReplicas: 6 },
+      };
       else {
         const p = state.pods.find(p => p.metadata.name === args[4]);
         value = failure === 'changed-uid' ? { ...p, metadata: { ...p.metadata, uid: 'different' } } : p;

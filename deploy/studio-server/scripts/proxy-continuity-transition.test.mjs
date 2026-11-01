@@ -470,7 +470,9 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
   const f = fixture(),
     commands = [];
   let clock = 0,
-    clampAdmissionGrace = true;
+    clampAdmissionGrace = true,
+    available = true,
+    backendHealthy = true;
   const types = {
     services: 'Service',
     'deployments.apps': 'Deployment',
@@ -493,7 +495,12 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       };
     if (r.kind === 'Deployment') {
       r.metadata.generation = 1;
-      r.status = { observedGeneration: 1, availableReplicas: r.spec.replicas, updatedReplicas: r.spec.replicas };
+      r.status = {
+        observedGeneration: 1,
+        availableReplicas: available ? r.spec.replicas : 0,
+        updatedReplicas: r.spec.replicas,
+      };
+      r.spec.minReadySeconds = 120;
     }
     return r;
   };
@@ -632,7 +639,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       clock += 60000;
     },
     observeBackend: async (service) => ({
-      healthy: true,
+      healthy: backendHealthy,
       serviceUid: service.metadata.uid,
       observedAt: Date.now(),
       backendService: `backend-${service.metadata.name}`,
@@ -660,6 +667,12 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
   const before = commands.length;
   assert.equal((await adapter.inspect()).actualBackendServiceDrainSeconds, 60);
   assert.ok(commands.slice(before).every((a) => ['get', 'exec'].includes(a[0] === '--namespace' ? a[2] : a[0])));
+  available = false;
+  await assert.rejects(adapter.inspect(), /0\/2 required available replicas.*minReadySeconds=120/);
+  available = true;
+  backendHealthy = false;
+  await assert.rejects(adapter.inspect(), /Regional backend is not healthy/);
+  backendHealthy = true;
   await assert.rejects(adapter.prepare(f.operation), /Provider admission/);
   assert.equal(f.live.size, 6, 'Rejected admission must not create a partial bridge');
   assert.equal(f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec.minReplicas, 2);
@@ -675,9 +688,24 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     autoscaling: { proxy: { minReplicas: 4, scaleDownPaused: true } },
   });
   await adapter.verify(f.operation);
+  const beforeProfileFailure = clock;
+  await assert.rejects(adapter.beforeRestoreAutoscalers(f.operation), /Proxy pod grace is too short/);
+  assert.equal(clock, beforeProfileFailure, 'An invalid shutdown profile must fail without readiness retries');
   const template = f.live.get('Deployment/rivet-proxy').spec.template;
   template.spec.terminationGracePeriodSeconds = 900;
   template.spec.containers[0].lifecycle.preStop.exec.command = ['/bin/sh', '-c', 'sleep 660'];
+  available = false;
+  const routeBeforeTimeout = structuredClone(f.live.get('HTTPRoute/route').spec);
+  await assert.rejects(
+    adapter.beforeRestoreAutoscalers(f.operation),
+    /Timed out waiting for protected current normal proxy capacity.*0\/4 required available replicas/,
+  );
+  assert.deepEqual(
+    f.live.get('HTTPRoute/route').spec,
+    routeBeforeTimeout,
+    'Keep bridge traffic while normal availability is pending',
+  );
+  available = true;
   await adapter.beforeRestoreAutoscalers(f.operation);
   assert.deepEqual(f.live.get('HTTPRoute/route').spec, f.baseline.route.spec, 'Traffic returns before HPA restoration');
   assert.deepEqual(adapter.templateValues(f.operation), {});

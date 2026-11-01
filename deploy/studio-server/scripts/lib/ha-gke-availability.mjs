@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './ha-workflow-traffic.mjs';
-import { hasReadyGkeNegGate, assertGkeProxyBackendHealth } from './gke-proxy-health.mjs';
+import { hasReadyGkeNegGate, assertGkeProxyDeploymentAvailable, assertGkeProxyPoolReady } from './gke-proxy-health.mjs';
 
 const component = (pod) => pod.metadata?.labels?.['app.kubernetes.io/component'];
 const ready = (pod) => !pod.metadata?.deletionTimestamp &&
@@ -52,7 +52,9 @@ export function assertGkeFrontendAvailability(pods, nodes, release, controlPlane
   assert.ok(compact ? zones.size >= 2 : zones.size === 3 && [...zones.values()].every(n => n >= 2),
     compact ? 'Compact GKE proof requires healthy proxies in at least two zones'
       : 'GKE proof requires at least two healthy proxy endpoints in each of exactly three zones');
-  if (regionalHealth) assertGkeProxyBackendHealth(proxies, regionalHealth.service, regionalHealth.backend, { minimumZones: zoneMinimum });
+  if (regionalHealth) assertGkeProxyPoolReady(proxies, regionalHealth.service, regionalHealth.backend, {
+    deployment: regionalHealth.deployment, minimum: proxyMinimum, minimumZones: zoneMinimum,
+  });
   return frontend.map(p => {
     const node = nodes.find(n => n.metadata.name === p.spec.nodeName);
     return { name: p.metadata.name, uid: p.metadata.uid, component: component(p), node: p.spec.nodeName,
@@ -75,21 +77,22 @@ export async function waitForGkeFrontendAvailability(gate, removed = []) {
     const read = async (args) => JSON.parse((await gate.kubectl(args, { capture: true })).stdout).items;
     const pods = await read(['-n', namespace, 'get', 'pods', '-l', `app.kubernetes.io/instance=${gate.config.release}`, '-o', 'json']);
     const nodes = await read(['get', 'nodes', '-o', 'json']);
+    const deployment = JSON.parse((await gate.kubectl(['-n', namespace, 'get', 'deployment', `${gate.config.release}-proxy`, '-o', 'json'], { capture: true })).stdout);
     await gate.assertProofContext();
     try {
       assert.ok(!pods.some(p => removed.includes(p.metadata.uid)), 'evicted frontend UID still exists');
       let regionalHealth;
       if (gate.observeProxyBackend) {
         const service = JSON.parse((await gate.kubectl(['-n', namespace, 'get', 'service', `${gate.config.release}-proxy`, '-o', 'json'], { capture: true })).stdout);
-        regionalHealth = { service, backend: await gate.observeProxyBackend(service, { allowPending: true }) };
-      }
+        regionalHealth = { deployment, service, backend: await gate.observeProxyBackend(service, { allowPending: true }) };
+      } else assertGkeProxyDeploymentAvailable(deployment, gate.providerValues?.availability?.gkeGatewayProfile === 'compact' ? 2 : 6);
       return assertGkeFrontendAvailability(pods, nodes, gate.config.release,
         gate.providerValues?.ha?.controlPlane?.mode ?? 'replicated',
         gate.providerValues?.availability?.gkeGatewayProfile ?? 'regional', regionalHealth);
     } catch (error) { last = error; }
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(1000, deadline - Date.now()))));
   } while (Date.now() < deadline);
-  throw Error('GKE frontends did not reach load-balancer health before the proof deadline', { cause: last });
+  throw Error(`GKE frontends did not become available before the proof deadline: ${last?.message ?? 'readiness not confirmed'}`, { cause: last });
 }
 
 /** Namespace- and UID-fenced voluntary evictions of the frontend pods on two
