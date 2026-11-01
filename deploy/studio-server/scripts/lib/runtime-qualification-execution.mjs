@@ -14,6 +14,16 @@ import { assertRequestContinuityProfile, requestContinuityProfile } from './requ
 import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './request-continuity-evidence.mjs';
 import { releaseQualificationPlan } from './release-qualification-policy.mjs';
 
+// The hosted workflow reserves another hour for cleanup and 30 minutes for setup.
+export const ACTIONS_QUALIFICATION_MAX_SECONDS = 4 * 60 * 60;
+export function assertActionsQualificationWindow(seconds) {
+  assert.ok(
+    Number.isSafeInteger(seconds) && seconds > 0 && seconds <= ACTIONS_QUALIFICATION_MAX_SECONDS,
+    'Actions qualification requires a whole-second test window from 1 to 14400 seconds',
+  );
+  return seconds;
+}
+
 export const qualificationHash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const time = (value) => {
   assert.equal(typeof value, 'string');

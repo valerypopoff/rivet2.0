@@ -209,7 +209,7 @@ change templates:
 6. Recheck ordinary settlement before completing the release journal. Subsequent
    updates inspect an already protected installation and omit the bridge.
 
-The 600-second backend drain remains a configured upper bound; it is not an
+The 360-second backend drain remains a configured upper bound; it is not an
 additional mandatory handoff sleep. Proxy preStop/grace remain 420/600 seconds.
 The shorter handoff is a repository change requiring the first full regional
 qualification, not a measured routing guarantee from the failed campaign.
@@ -221,9 +221,10 @@ or readiness timeout retains serving owners rather than deleting capacity to
 make space. Per-stage deployment deadlines and the external staging expiry must
 cover the two drain windows, image preparation, 600-second pod termination,
 accepted work, qualification requests and cleanup.
-Use **`--timeout 20m` or longer** for this profile. The legacy 15-minute default
-equals the protected pod grace and is rejected before ingress writes; each stage
-deadline must exceed drain, propagation and pod termination grace.
+Use **`--timeout 20m` or longer** for this profile to allow scheduling and stage
+headroom. Each stage deadline must exceed drain, propagation and pod termination
+grace. The legacy 15-minute default satisfies that minimum with the 600-second
+grace; the qualification workflow derives its longer deadline from the profile.
 
 The journal records creation, route/policy/HPA writes and deletion intents before
 dispatch. It verifies namespace and owner lifetimes, latest owned network state,

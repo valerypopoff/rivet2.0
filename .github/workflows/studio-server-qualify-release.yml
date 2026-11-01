@@ -119,6 +119,8 @@ jobs:
           node-version: 24
       - run: corepack yarn install --immutable
 
+      - name: Validate approved test window before cloud access
+        run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-window
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.RIVET_GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}

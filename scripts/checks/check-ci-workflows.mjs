@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseDocument } from 'yaml';
 import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
+import { ACTIONS_QUALIFICATION_MAX_SECONDS } from '../../deploy/studio-server/scripts/lib/runtime-qualification-execution.mjs';
 
 const rootDir = process.cwd();
 
@@ -87,7 +88,16 @@ assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_ENVIR
 assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.type, 'boolean');
 assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.default, true);
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
-assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 4 * 60 + 60 + 30);
+assert.equal(
+  automaticQualification.jobs.qualified['timeout-minutes'],
+  ACTIONS_QUALIFICATION_MAX_SECONDS / 60 + 60 + 30,
+);
+const qualifiedSteps = automaticQualification.jobs.qualified.steps;
+const windowCheck = qualifiedSteps.findIndex((s) =>
+  s.run?.endsWith('execute-runtime-qualification.mjs validate-window'),
+);
+const googleAuth = qualifiedSteps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));
+assert.ok(windowCheck >= 0 && windowCheck < googleAuth, 'Validate qualification window before cloud credentials');
 assert.equal(automaticQualification.jobs.deploy['timeout-minutes'], 90);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');

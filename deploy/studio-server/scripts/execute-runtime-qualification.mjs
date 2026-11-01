@@ -10,6 +10,7 @@ import {
   qualificationOperation,
   executeRuntimeQualification,
   assertQualificationPreflight,
+  assertActionsQualificationWindow,
 } from './lib/runtime-qualification-execution.mjs';
 import {
   assertRuntimeQualificationBuild,
@@ -70,6 +71,13 @@ async function main(mode) {
   assert.match(process.env.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
   assert.match(process.env.GITHUB_RUN_ATTEMPT ?? '', /^[1-9][0-9]*$/);
   await fs.mkdir(packet, { recursive: true, mode: 0o700 });
+  if (
+    mode === 'validate-window' ||
+    (mode === 'execute' && process.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE !== 'temporary')
+  ) {
+    assertActionsQualificationWindow(Number(process.env.RIVET_QUALIFICATION_MAX_SECONDS));
+    if (mode === 'validate-window') return;
+  }
   if (mode === 'validate-run-id') {
     assert.equal(process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED, 'true');
     assert.match(process.env.BUILD_RUN_ID ?? '', /^[1-9][0-9]*$/);
@@ -258,10 +266,6 @@ async function main(mode) {
   }
   const bundle = process.env.RIVET_QUALIFICATION_DRIVER_DIRECTORY;
   const bundleDigest = process.env.RIVET_QUALIFICATION_DRIVER_SHA256;
-  assert.ok(
-    Number(process.env.RIVET_QUALIFICATION_MAX_SECONDS) <= 7200,
-    'Actions qualification must leave an hour for settlement before the job limit',
-  );
   assert.ok(process.env.RIVET_QUALIFICATION_STAGING_KUBECONFIG, 'An isolated staging credential context is required');
   await verifyQualificationDriver(bundle, bundleDigest); // Before provisioning or creating an operation.
   const driverManifest = await read(path.join(bundle, 'driver.json'));

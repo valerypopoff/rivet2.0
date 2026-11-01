@@ -358,6 +358,10 @@ installation:
   metrics, CPU growth and the update probes add further serial work. Prepare a
   separately approved full-test window of up to four hours; the workflow allows
   another hour for cleanup plus 30 minutes for setup (330 minutes total).
+  The shared hosted-command limit accepts whole-second windows through 14400.
+  The workflow validates it before Google authentication; both preparation and
+  execution enforce the same limit. Real CLI regressions cover two/four-hour execution and over-limit
+  rejection before private setup. A failed setup grants no retry allowance.
   A longer workflow timeout grants no additional test allowance. Fixture OAuth
   sessions cover at least the frozen operation window, so a longer full test
   cannot outlive the old three-hour fixture session limit.

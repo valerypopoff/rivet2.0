@@ -19,6 +19,7 @@ import {
   qualificationHash,
   assertQualificationPreflight,
   assertProviderAutoscalingReport,
+  assertActionsQualificationWindow,
 } from './lib/runtime-qualification-execution.mjs';
 import {
   verifyQualificationDriver,
@@ -871,7 +872,54 @@ test('installation observation reads exact context and never returns raw credent
     );
 });
 
-test('real CLI runs a fully hash-pinned local driver once, strips credential environment and blocks publication on failure', async (t) => {
+test('hosted qualification rejects invalid windows before private setup and accepts the four-hour CLI boundary', async (t) => {
+  for (const seconds of [1, 7200, 14400]) assert.equal(assertActionsQualificationWindow(seconds), seconds);
+  for (const seconds of [NaN, Infinity, 0, -1, 1.5, 14401])
+    assert.throws(() => assertActionsQualificationWindow(seconds), /whole-second test window/);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-window-'));
+  const packet = await fs.mkdtemp(path.join(root, 'artifacts/qualification-window-'));
+  t.after(() => Promise.all([directory, packet].map((p) => fs.rm(p, { recursive: true, force: true }))));
+  const env = {
+    ...process.env,
+    GITHUB_REF: 'refs/heads/main',
+    GITHUB_RUN_ID: '123',
+    GITHUB_RUN_ATTEMPT: '1',
+    RUNNER_TEMP: directory,
+    RIVET_DEPLOYMENT_CONFIGURATION: '{}',
+    RIVET_QUALIFICATION_MAX_SECONDS: '14401',
+    RIVET_QUALIFICATION_PACKET: packet,
+  };
+  const prepare = spawnSync(
+    process.execPath,
+    ['.yarn/releases/yarn-4.17.1.cjs', 'node', 'deploy/studio-server/scripts/prepare-hosted-release.mjs', 'staging'],
+    { cwd: root, env, encoding: 'utf8', timeout: 30000 },
+  );
+  assert.equal(prepare.status, 1, prepare.stderr);
+  assert.deepEqual(await fs.readdir(directory), [], 'Window validation must precede private setup and cloud access');
+  for (const [value, status] of [
+    ['7200', 0],
+    ['14400', 0],
+    ['14401', 1],
+    ['', 1],
+    ['NaN', 1],
+    ['1.5', 1],
+  ]) {
+    const validation = spawnSync(
+      process.execPath,
+      [
+        '.yarn/releases/yarn-4.17.1.cjs',
+        'node',
+        'deploy/studio-server/scripts/execute-runtime-qualification.mjs',
+        'validate-window',
+      ],
+      { cwd: root, env: { ...env, RIVET_QUALIFICATION_MAX_SECONDS: value }, encoding: 'utf8', timeout: 30000 },
+    );
+    assert.equal(validation.status, status, validation.stderr);
+    assert.deepEqual(await fs.readdir(packet), [], 'Standalone window check must not create an operation');
+  }
+});
+
+test('real CLI runs two/four-hour hash-pinned drivers once, rejects over-limit windows and blocks publication on failure', async (t) => {
   const directory = await fs.mkdtemp(path.join(root, 'artifacts/qualification-command-'));
   const privateStore = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-private-'));
   const bundle = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-driver-'));
@@ -899,9 +947,11 @@ test('real CLI runs a fully hash-pinned local driver once, strips credential env
     await fs.writeFile(path.join(bundle, 'driver.json'), JSON.stringify(manifest));
     return qualificationHash(manifest);
   };
-  for (const [attempt, failure] of [
-    [1, undefined],
-    [2, 'upgrade'],
+  for (const [attempt, failure, maxSeconds] of [
+    [1, undefined, 7200],
+    [2, undefined, 14400],
+    [3, 'window', 14401],
+    [4, 'upgrade', 14400],
   ]) {
     const target = path.join(directory, String(attempt));
     await fs.mkdir(path.join(target, 'candidate'), { recursive: true });
@@ -932,7 +982,10 @@ test('real CLI runs a fully hash-pinned local driver once, strips credential env
       RIVET_QUALIFICATION_PROJECT_ID: 'isolated-project',
       RIVET_QUALIFICATION_PROJECT_NUMBER: '123456789',
       RIVET_QUALIFICATION_MAX_USD: '50',
-      RIVET_QUALIFICATION_MAX_SECONDS: '7200',
+      RIVET_QUALIFICATION_MAX_SECONDS: String(maxSeconds),
+      RIVET_QUALIFICATION_ENVIRONMENT_MODE: 'reusable-cluster',
+      RIVET_QUALIFICATION_COORDINATOR_MODE: '',
+      RIVET_QUALIFICATION_EVIDENCE_BUCKET: '',
       RIVET_QUALIFICATION_DRIVER_DIRECTORY: bundle,
       RIVET_QUALIFICATION_DRIVER_SHA256: driverDigest,
       RIVET_QUALIFICATION_PRIVATE_STORE: privateStore,
@@ -959,6 +1012,13 @@ test('real CLI runs a fully hash-pinned local driver once, strips credential env
     );
     assert.ok(!(result.stdout + result.stderr).includes('PRIVATE-TEST-CREDENTIAL'));
     const privateDirectory = path.join(privateStore, `rivet-q-456-${attempt}`);
+    if (failure === 'window') {
+      await assert.rejects(fs.stat(privateDirectory), { code: 'ENOENT' });
+      await assert.rejects(fs.stat(path.join(privateStore, 'active.lock')), { code: 'ENOENT' });
+      continue;
+    }
+    const frozen = JSON.parse(await fs.readFile(path.join(privateDirectory, 'operation.json'), 'utf8')).operation;
+    assert.equal(Date.parse(frozen.expiresAt) - Date.parse(frozen.startedAt), maxSeconds * 1000);
     const calls = (await fs.readFile(path.join(privateDirectory, 'calls.jsonl'), 'utf8'))
       .trim()
       .split('\n')
