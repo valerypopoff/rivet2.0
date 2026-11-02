@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './ha-workflow-traffic.mjs';
+import { ordinaryRuntimeReplicaBounds } from './ha-release-evidence.mjs';
 import {
   assertStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
@@ -37,16 +38,36 @@ export function runtimeQualificationPurpose(value = 'ordinary-upgrade') {
   return value;
 }
 
-export function assertOrdinaryRuntimePods(pods, images, { baseline = false } = {}) {
+export function assertOrdinaryRuntimePods(pods, images, { baseline = false, replicaBounds } = {}) {
   const counts = { proxy: 2, web: 1, backend: 1, execution: 2, autoscaler: 1 };
   const live = pods.filter((p) => !p.metadata.deletionTimestamp);
-  if (baseline) assert.equal(live.length, pods.length, 'A terminating owner still prevents a settled baseline');
+  if (baseline || replicaBounds)
+    assert.equal(live.length, pods.length, 'A terminating owner still prevents runtime settlement');
+  if (replicaBounds) {
+    assert.ok(
+      live.every((p) => Object.hasOwn(counts, p.metadata.labels?.['app.kubernetes.io/component'])),
+      'Unexpected runtime workload',
+    );
+    assert.ok(
+      live.every((p) => typeof p.metadata.uid === 'string' && p.metadata.uid.length > 0),
+      'Runtime owner identity missing',
+    );
+    assert.equal(new Set(live.map((p) => p.metadata.uid)).size, live.length, 'Duplicate runtime owner identity');
+  }
   for (const [role, count] of Object.entries(counts)) {
     const owners = live.filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === role);
     assert.ok(owners.length >= count, `${role} capacity is below its floor`);
-    if (baseline) assert.equal(owners.length, count, 'Ordinary proof must start and finish at the seven-pod floor');
+    if (replicaBounds) {
+      const bound = replicaBounds[role];
+      assert.ok(
+        owners.length >= bound.min && owners.length <= bound.max,
+        `${role} capacity is outside its approved bounds`,
+      );
+    } else if (baseline)
+      assert.equal(owners.length, count, 'Ordinary proof must start and finish at the seven-pod floor');
     assert.ok(
-      owners.filter((p) => p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True')).length >= count,
+      owners.filter((p) => p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True')).length >=
+        (replicaBounds ? owners.length : count),
       `${role} owners are not ready`,
     );
     if (images)
@@ -59,18 +80,33 @@ export function assertOrdinaryRuntimePods(pods, images, { baseline = false } = {
         );
       }
   }
-  if (baseline) assert.equal(live.length, 7, 'Unclassified owners cannot be hidden in the baseline');
+  if (baseline && !replicaBounds) assert.equal(live.length, 7, 'Unclassified owners cannot be hidden in the baseline');
+  return Object.fromEntries(
+    Object.keys(counts).map((role) => [
+      role,
+      live.filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === role).length,
+    ]),
+  );
 }
 
-export function waitForOrdinaryRuntime(gate, images, until) {
-  return until('seven ready exact-image application owners', async () => {
-    try {
-      assertOrdinaryRuntimePods(await gate.pods(), images, { baseline: true });
-      return true;
-    } catch {
-      return false;
-    }
-  });
+export async function waitForOrdinaryRuntime(gate, images, until) {
+  const replicaBounds =
+    gate.operation?.qualification?.tier === 'focused' ? ordinaryRuntimeReplicaBounds(gate.operation.policy) : undefined;
+  let observed;
+  await until(
+    replicaBounds
+      ? 'ready exact-image application owners within approved capacity'
+      : 'seven ready exact-image application owners',
+    async () => {
+      try {
+        observed = assertOrdinaryRuntimePods(await gate.pods(), images, { baseline: true, replicaBounds });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  );
+  return observed;
 }
 
 /** Real gate transport, roll and accepted-work probes; no provisioning or
@@ -93,9 +129,9 @@ export async function runOrdinaryRuntimeUpgrade({
   assert.equal(gate.edgeProfile, 'compact');
   assert.equal(gate.purpose, 'ordinary-upgrade');
   const focused = gate.operation?.qualification?.tier === 'focused';
-  // Fixture preparation can legitimately cause temporary scale-up. Wait for
-  // the controller to settle it; never shrink replicas just to satisfy a test.
-  await waitForOrdinaryRuntime(gate, previous.images, (name, check) =>
+  // Focused qualification accepts healthy autoscaler-grown capacity. Full
+  // regression fixtures retain their deliberately fixed initial/final layout.
+  const initialCapacity = await waitForOrdinaryRuntime(gate, previous.images, (name, check) =>
     until(name, async () => {
       signal?.throwIfAborted();
       return check();
@@ -110,6 +146,8 @@ export async function runOrdinaryRuntimeUpgrade({
     predecessorManifestDigest: getStudioServerReleaseManifestDigest(previous, { requirePromoted: true }),
     candidateImages: candidate.images,
     chartDigest: candidate.chart.contentDigest,
+    initialApplicationPods: Object.values(initialCapacity).reduce((a, b) => a + b, 0),
+    ...(focused ? { capacity: { initial: initialCapacity } } : {}),
     phases: [],
     // Retain even partially accepted probes on failure for exact settlement.
     outcomes: { acceptedWork: probes.background },
@@ -122,7 +160,7 @@ export async function runOrdinaryRuntimeUpgrade({
       .sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`));
   };
   const before = await inventory();
-  let phase = 'predecessor-seven-preparation';
+  let phase = focused ? 'predecessor-runtime-preparation' : 'predecessor-seven-preparation';
   const workflow = startHaWorkflowTraffic(gate, baseUrl, () => phase);
   const web = startHaWebAppTraffic(gate, baseUrl, () => phase);
   let observing = true,
@@ -186,7 +224,7 @@ export async function runOrdinaryRuntimeUpgrade({
     await gate.continuityProbes?.prepare(probes.template);
     if (startDeveloperOverlap) developer = await startDeveloperOverlap(probes);
     checkpoint();
-    phase = 'ordinary-seven-to-seven-upgrade';
+    phase = focused ? 'ordinary-runtime-upgrade' : 'ordinary-seven-to-seven-upgrade';
     const callbacks = {
       beforeRetirement: async (pod) => {
         checkpoint();
@@ -202,7 +240,7 @@ export async function runOrdinaryRuntimeUpgrade({
       await developer.close();
       developer = undefined;
     }
-    report.phases.push('exact-seven-to-seven-mixed-image-upgrade');
+    report.phases.push(focused ? 'bounded-capacity-mixed-image-upgrade' : 'exact-seven-to-seven-mixed-image-upgrade');
     if (previous.database.managedWorkflowSchema.version !== candidate.database.managedWorkflowSchema.version) {
       report.schemaCompatibility = await gate.verifyMixedSchemaRepositories({
         previousApiImage: { ...previous.images.api, schemaVersion: previous.database.managedWorkflowSchema.version },
@@ -211,7 +249,7 @@ export async function runOrdinaryRuntimeUpgrade({
       });
     }
     checkpoint();
-    phase = 'candidate-seven-acceptance';
+    phase = focused ? 'candidate-runtime-acceptance' : 'candidate-seven-acceptance';
     gate.config.images = candidate.images;
     report.outcomes.autoscaler = await gate.assertAutoscalerActive(Date.now());
     checkpoint();
@@ -247,9 +285,14 @@ export async function runOrdinaryRuntimeUpgrade({
       report.outcomes.independence = await gate.isolateRuntime(baseUrl, probes.projectId);
       report.phases.push('candidate-runtime-without-developers');
     }
-    await waitForOrdinaryRuntime(gate, candidate.images, wait);
-    report.outcomes.finalAutoscaler = await gate.assertAutoscalerActive(Date.now());
     if (gate.continuityProbes) report.requestContinuity = await gate.continuityProbes.finish();
+    checkpoint();
+    // Long responses may finish after an HPA change. Validate and report the
+    // settled runtime after those completions, not an earlier capacity snapshot.
+    const finalCapacity = await waitForOrdinaryRuntime(gate, candidate.images, wait);
+    report.finalApplicationPods = Object.values(finalCapacity).reduce((a, b) => a + b, 0);
+    if (focused) report.capacity.final = finalCapacity;
+    report.outcomes.finalAutoscaler = await gate.assertAutoscalerActive(Date.now());
     checkpoint();
   } catch (error) {
     failure = error;

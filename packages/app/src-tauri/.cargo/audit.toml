@@ -14,4 +14,8 @@ ignore = [
   "RUSTSEC-2026-0367",
   "RUSTSEC-2026-0368",
   "RUSTSEC-2026-0369",
+  # The declared-size symlink allocation is absent from pinned zip 0.6.6;
+  # Tauri's signed updater uses its own copy loop, not ZipArchive::extract.
+  # Same exact dependency/consumer guard and 2026-11-16 re-review deadline.
+  "RUSTSEC-2026-0429",
 ]

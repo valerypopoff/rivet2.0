@@ -1152,6 +1152,10 @@ test('first focused adoption compiles and publishes fresh continuity evidence wi
     startedAt: continuity.upgrade.startedAt,
     finishedAt: continuity.upgrade.finishedAt,
     requestContinuity,
+    capacity: {
+      initial: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+      final: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+    },
   });
   for (const run of f.facts.upgrade.outcomes.acceptedWork) run.retirementDelayMs = 315000;
   const start = Date.parse(f.facts.upgrade.startedAt);
@@ -1272,6 +1276,11 @@ test('focused policy evidence is validated inside the real rollout with fresh sa
   const operation = { ...f.operation, qualification: { tier: 'focused' } };
   const report = {
     ...structuredClone(f.facts.upgrade),
+    capacity: {
+      initial: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+      final: { proxy: 4, execution: 3, backend: 1, web: 1, autoscaler: 1 },
+    },
+    finalApplicationPods: 10,
   };
   delete report.outcomes.independence;
   report.outcomes.finalAutoscaler = {
@@ -1281,6 +1290,24 @@ test('focused policy evidence is validated inside the real rollout with fresh sa
   assert.doesNotThrow(() => assertOrdinaryProviderReport(report, operation));
   assert.throws(() => assertProviderAutoscalingReport(report, operation), /with its rollout/);
   for (const change of [
+    (x) => {
+      x.capacity.final.proxy = 5;
+      x.finalApplicationPods = 11;
+    },
+    (x) => {
+      x.capacity.final.execution = 5;
+      x.finalApplicationPods = 12;
+    },
+    (x) => {
+      delete x.capacity.final;
+    },
+    (x) => {
+      x.finalApplicationPods = 7;
+    },
+    (x) => {
+      x.capacity.final.foreign = 1;
+      x.finalApplicationPods = 11;
+    },
     (x) => {
       x.outcomes.finalAutoscaler.sampleAt = x.outcomes.initialAutoscaler.sampleAt;
     },

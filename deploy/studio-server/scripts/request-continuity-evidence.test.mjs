@@ -278,6 +278,32 @@ test('focused first adoption proves the bridge and return handoff without autosc
   }
 });
 
+test('focused proxy evidence accepts healthy growth or shrinkage inside its approved bounds', () => {
+  for (const [beforeCount, afterCount] of [
+    [2, 3],
+    [4, 4],
+    [4, 2],
+  ]) {
+    const f = focusedContinuityProviderFacts({ adopted: true });
+    f.upgrade.requestContinuity.replacement.before = Array.from({ length: beforeCount }, (_, i) => `old-${i}`);
+    f.upgrade.requestContinuity.replacement.after = Array.from({ length: afterCount }, (_, i) => `new-${i}`);
+    assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  }
+  for (const [side, count] of [
+    ['before', 1],
+    ['before', 5],
+    ['after', 1],
+    ['after', 5],
+  ]) {
+    const f = focusedContinuityProviderFacts({ adopted: true });
+    f.upgrade.requestContinuity.replacement[side] = Array.from({ length: count }, (_, i) => `${side}-${i}`);
+    assert.throws(() => compileRequestContinuityEvidence(f.operation, f.upgrade), /bounds/);
+  }
+  const full = facts();
+  full.upgrade.requestContinuity.replacement.after.push('extra');
+  assert.throws(() => compileRequestContinuityEvidence(full.operation, full.upgrade, full.autoscaling));
+});
+
 test('an unchanged adopted proxy template needs no manufactured replacement or extra request batch', () => {
   const f = focusedContinuityProviderFacts({ adopted: true, proxyReplaced: false });
   const image = { repository: 'example/proxy', digest: `sha256:${'a'.repeat(64)}` };
@@ -297,6 +323,11 @@ test('an unchanged adopted proxy template needs no manufactured replacement or e
     },
   };
   assertRequestContinuityEvidence(proof, release, profile);
+  f.upgrade.requestContinuity.replacement.after.push('scaled-3');
+  assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  f.upgrade.requestContinuity.replacement.before.push('scaled-3');
+  f.upgrade.requestContinuity.replacement.after = ['old1', 'old2'];
+  assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
   f.operation.previous.images.proxy.digest = `sha256:${'b'.repeat(64)}`;
   assert.throws(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
   assert.throws(() => assertRequestContinuityEvidence(proof, release, profile));

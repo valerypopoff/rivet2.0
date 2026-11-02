@@ -9,6 +9,7 @@ import {
   HA_FOCUSED_AUTOSCALING_CHECKS,
   HA_FOCUSED_RUNTIME_CHECKS,
   HA_PROVIDER_OVERLAP_CHECKS,
+  ordinaryRuntimeReplicaBounds,
 } from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
 import { assertRequestContinuityProfile, requestContinuityProfile } from './request-continuity.mjs';
@@ -260,8 +261,27 @@ export function assertOrdinaryProviderReport(report, operation) {
   assert.deepEqual(report.candidateImages, operation.candidate.images);
   assert.equal(report.chartDigest, operation.candidate.chart.contentDigest);
   assert.equal(report.policyDigest, operation.policyDigest);
-  assert.equal(report.initialApplicationPods, 7);
-  assert.equal(report.finalApplicationPods, 7);
+  if (operation.qualification?.tier === 'focused') {
+    const bounds = ordinaryRuntimeReplicaBounds(operation.policy);
+    for (const stage of ['initial', 'final']) {
+      const observed = report.capacity?.[stage];
+      assert.ok(observed && typeof observed === 'object', 'Observed runtime capacity is missing');
+      assert.deepEqual(Object.keys(observed).sort(), Object.keys(bounds).sort(), 'Unexpected runtime workload');
+      for (const [role, { min, max }] of Object.entries(bounds))
+        assert.ok(
+          Number.isSafeInteger(observed[role]) && observed[role] >= min && observed[role] <= max,
+          `${role} capacity is outside its approved bounds`,
+        );
+      assert.equal(
+        report[`${stage}ApplicationPods`],
+        Object.values(observed).reduce((a, b) => a + b, 0),
+        'Observed Pod total differs from its capacity report',
+      );
+    }
+  } else {
+    assert.equal(report.initialApplicationPods, 7);
+    assert.equal(report.finalApplicationPods, 7);
+  }
   assertPublicTraffic(report);
   assert.ok(count(report.readiness.samples) > 0);
   for (const role of ['execution', 'proxy']) assert.ok(count(report.readiness.minimumReady[role]) >= 2);

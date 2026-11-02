@@ -67,8 +67,11 @@ adoptions. See [runtime qualification](runtime-ha-qualification.md) for its
 separate ordinary/adoption evidence contracts and exact local command.
 Execution/proxy capacity already grown by the approved autoscalers is preserved
 within the same policy bounds; it must not be manually reduced merely to satisfy
-a seven-pod qualification. The test itself starts/ends at a naturally settled
-baseline and records temporary growth separately from topology changes.
+a seven-pod qualification. Focused qualification starts/ends at healthy capacity
+within the approved policy bounds and records the actual per-role counts. It
+does not wait for idle scale-down to return to exactly seven Pods. Fixed
+singletons, all final Pod readiness/images, complete replacement and policy
+ceilings still apply; full regression fixtures keep their fixed baseline.
 
 After proxy replacement, Pod Ready may precede the next metrics-server CPU
 sample. A new execution owner can similarly have no CPU sample yet; absence must
@@ -405,140 +408,54 @@ waiver. This procedure does not enable backend overlap or change DB capacity.
 
 ## Rolling versus maintenance
 
-### Prepare before replacement
+### Replacement readiness without warmup Jobs
 
-`lib/ha-rollout-preparation.mjs` is the rolling runner's bounded preparation
-stage. It executes under the existing shared release lease, after baseline and
-backup acceptance but **before candidate Helm templates**, routing withdrawal or
-admission fencing. It does not introduce another deployment controller or enable
-a different control-plane mode.
+The shared HA rolling runner no longer creates synthetic scheduler/image-warmup
+Jobs. They ran an exit-only command, released their temporary reservations before
+replacement and could warm a different node from the eventual application Pod.
+They did not prove that the replacement application would start successfully.
+They also added admission, placement, ownership and cleanup failure modes.
 
-For each application workload it creates a short-lived, immutable-image Job.
-At most three independent Jobs run concurrently; retirement remains serial.
-The first preparation failure closes the queue to new Jobs. Already accepted
-children still settle, and cleanup continues across every recorded intent.
-The invocation deadline also closes new admission, including a final check after
-the intent checkpoint and namespace read, immediately before CREATE. Expiry does
-not authorize replay of an already recorded intent or abandon accepted children.
-Each Job uses the candidate's node selectors, tolerations, scheduler, required
-affinity and topology policy, with a non-serving `prepare-ROLE` component label.
-The topology selector includes that probe label alongside real peers so the
-scheduler counts its additional slot. Any rendered Service/controller selector
-that would select a probe is rejected before creation. Execution discovery, HPA
-and public routing do not treat these Jobs as serving capacity.
+In the November 2 staging attempt, Autopilot raised a serial backend warmup
+Job's requests from 10m CPU/16Mi memory to 50m CPU/52Mi memory. The configuration
+guard rejected that amount change, and the probe could not fit on its pinned
+original backend node. This blocked the update before application retirement.
+[Autopilot can raise requests to its minimums](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-resource-requests).
+Increasing the probe's minimum or accepting arbitrary admission mutations would
+retain an unnecessary parallel readiness mechanism.
 
-Non-serial probes request a conservative declared candidate footprint, including
-init-container peaks, restartable init sidecars and pod overhead. The native
-scheduler checks CPU, memory, ephemeral storage and pod slots while healthy old
-pods continue serving; normal cluster autoscaling may provision capacity within
-its existing limits. This does not change quota, node-pool policy, replica ceilings
-or database connection budgets. During preparation, budget up to **three temporary
-candidate-sized reservations**, not three executing application replicas. These
-reservations disappear after preparation and are not a permanent pod-count change.
+Normal updates use the application Pods themselves:
 
-Serial singleton/maintenance owners instead warm images on their existing node
-with only the positive increase in replacement requests (minimum 10m CPU/16Mi
-memory/16Mi ephemeral storage): they cannot pretend to test a second storage owner.
-This optimization does not make singleton backend
-replacement uninterrupted. That requires the separately approved bridge/adoption
-procedure in [developer backend overlap](developer-backend-overlap.md), including
-its claim, ownership and connection-budget checks. The deployment command must
-not silently switch modes or overlap an ownership-unaware backend.
-The serial source is ordinal zero of the exact captured controller UID/kind,
-not the first Pod whose owner's mutable name happens to match.
+- Frontend Deployments keep zero unavailable Pods and bounded surge, with actual
+  readiness and regional proxy endpoint health. Kubernetes
+  [rolling updates](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#rolling-update-deployment)
+  manage the replacement Pods.
+- Replicated owners wait for the actual candidate surge to become ready before
+  retiring an original owner, within the approved replica ceiling. Execution
+  retirement still requires two other ready, serving owners and fresh measured
+  headroom, including when the execution pool is already at its ceiling.
+- Routing withdrawal, accepted-work drain, exact Pod UID deletion and
+  current-image/revision readiness remain serial. A pending or image-pull-failing
+  surge leaves the original workers serving and retains exact-token recovery.
+- Singleton backend and maintenance owners retain their serial ownership rules.
+  Removing image warming does not make those singletons uninterrupted; developer
+  backend continuity still uses the separately approved
+  [overlap procedure](developer-backend-overlap.md).
 
-The Jobs run only `/bin/sh -ec 'exit 0'` in the release's digest-pinned images,
-including sidecar/init images. They copy registry pull-secret **references**, not
-credentials or application settings. They mount no saved-data volumes and copy
-no application env, Vault injection annotations or ServiceAccount token. Custom
-runtime classes, host networking/ports, extended resources and unknown topology
-selectors require an explicit reviewed policy rather than an optimistic guess.
+The temporary first-adoption proxy bridge and its draining windows are unchanged.
+Image pulls run as part of actual Pod startup under the existing rollout timeout.
+No optional warmup mode, additional controller or replacement cloud test is added.
 
-Success requires the exact Job UID, a successful owned Pod with the requested
-configuration, and an identified Ready node. CPU/memory quantities compare by
-meaning, not their API spelling (`1000m` and `1` are equal). Kubernetes also omits
-empty lists when serializing Jobs and Pods: a requested `initContainers: []`
-may be absent in the response. Comparison accepts only that empty-list/absent
-equivalence, not `null`, a missing nonempty list, an extra member, changed images,
-commands or resource amounts. Job ownership, namespace lifetime, exact UIDs and
-resourceVersion-bound cleanup remain mandatory. The submitted Job representation,
-preparation protocol and journal digest do not change, including during recovery.
-Image warming is a cache optimization and the scheduling check is **not a future reservation**:
-node loss, eviction, later competing demand, or a replacement scheduled elsewhere
-can still cause cold startup. Actual candidate readiness and fresh headroom remain
-mandatory before old-owner withdrawal. Long accepted work still delays retirement;
-no timeout aborts it to satisfy a deployment-speed target.
+Older journals can still contain a `preparation` receipt. The compatibility fence
+requires complete or cleaned-failed state and recorded absence for every created
+Job. Unresolved legacy cleanup blocks recovery before writes; use the original
+tooling and inspected cleanup rather than forgetting the Jobs or replaying their
+creation/deletion. New operations create no warmup receipts.
 
-Preparation is journaled in `preparation:{protocol:1,digest,namespaceUid,state,jobs}`.
-Every CREATE/DELETE intent precedes its command. Cleanup uses Job UID plus
-resourceVersion and foreground garbage collection, then separately verifies
-recorded Pod UIDs/Job-owned children absent; known identities remain in
-the journal. Job retry is disabled, execution is bounded at five minutes and a
-ten-minute post-finish TTL is an independent orphan backstop, not cleanup evidence.
-No templates are applied until acknowledged preparation and verified cleanup.
-Recovery validates the complete required Job set and completion facts, not just
-a `complete` state or digest. A completed receipt is rechecked against actual Job
-absence as well as child absence, without deleting an unexpected surviving Job.
-Prepared-node identity/readiness is checked after cleanup, including on recovery,
-before preparation may report success; pre-cleanup readiness alone is insufficient.
-Child checks always use the latest journal row:
-when an uncertain CREATE is inspected and its UID recovered, that UID immediately
-becomes part of orphan detection. A lost response plus an orphaned Pod therefore
-cannot be mistaken for completed cleanup.
-
-Before and after each preparation CREATE/DELETE, the runner rereads the namespace
-and requires the original UID and non-terminating lifetime. Kubernetes does not
-provide an atomic namespace-UID precondition for child CREATE; replacement during
-the request is detected afterwards and blocks continuation/cleanup in the changed
-namespace. This is detection, not permission to adopt or delete foreign resources.
-
-On a lost response, exact-token recovery observes that Job and its recorded
-ownership/configuration. It never resends an uncertain CREATE or DELETE, retargets
-a same-name replacement, or infers image readiness from a Job name. An unfinished
-cleanup retains the operation for inspected recovery; neither the new controller
-nor the runner may auto-close such a preflight. A cleaned failed preparation can
-close as aborted-before-templates, leaving the installed version serving. Older
-installed controllers may release an expired preflight without understanding this
-field; bounded Jobs/TTL and private retained journal artifacts remain backstops,
-not permission for the expired runner to keep writing.
-
-The 2026-10-28 main-branch upgrade and lost-acknowledgement gates exposed this
-empty-list mismatch in both preparation and inspected cleanup. The original HTTP
-fixture echoed empty lists, unlike the real API. It now models their omission in
-every Job/Pod response, and covers mixed empty/nonempty init lists, lost CREATE
-cleanup without replay and rejection/retention of changed configurations. The
-captured upgrade diagnostics contain three preparation Pods without an
-`initContainers` property; this is real API evidence, not a claim of a fresh
-provider qualification. Branch unit checks do not replace the real Kubernetes
-release gates that run during image publication.
-Local verification: the preparation, headroom, rolling-upgrade and deployment
-operation set passes 125 tests on Windows and offline Linux Node 24.21.0, with
-no skips (`artifacts/ha-preparation-support-windows.log` and
-`artifacts/ha-preparation-support-linux.log`). The pre-fix reproduction is retained
-locally in `artifacts/ha-preparation-before-fix.log`; no cloud resources or
-production rollout are involved in this check.
-The new controller also accepts monotonic growth against the journal's exact
-installed-predecessor image/manifest while preparation is in `preflight`, retaining
-the same workload UID, policy digest and approved cap. It never claims or erases
-the deployment journal. Older installed controllers do not gain this behavior from
-a tooling update; retain that limitation in the exact-predecessor qualification.
-
-Operators need namespace-scoped batch Job create/get/delete, Pod get/list and Node
-get permissions in addition to existing rollout capabilities. Inspect exact Job
-names/UIDs from the private `ha-rollout.json`, then their scheduler/image-pull
-conditions and owned Pod/node. Preserve unknown writes and resume using the exact
-deployment token; do not delete by prefix or restart the upgrade under a new token
-while preparation ownership remains unresolved.
-
-Local checks: `ha-rollout-preparation.test.mjs`, `ha-rolling-upgrade.test.mjs`,
-`execution-autoscaler.test.mjs`, and the real rolling deployment-command regression
-cover parallelism, image/capacity failures, response loss, replacement identities,
-cleanup and preservation of routing/drain behavior. The lease-loss recovery
-fixture waits until every CREATE is accepted, so response timing cannot conflate
-accepted Jobs with uncertain saved intents. Separate unknown-CREATE checks keep
-the latter fenced. HTTP/Helm stand-ins are not
-native scheduling or GKE throughput evidence; provider qualification must exercise
-the exact candidate's new preparation path before a production rolling release.
+Local regressions exercise the actual deployment command with Job creation
+unsupported, an unready candidate surge retaining original workers, settled and
+unsettled legacy journals, measured headroom and existing drain/recovery behavior.
+These checks do not constitute GKE qualification.
 
 Ordinary rolling upgrades retain exact installed-predecessor qualification.
 `release-manifest:production` is a publication pointer, **not a record of what a

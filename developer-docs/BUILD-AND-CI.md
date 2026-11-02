@@ -1292,12 +1292,21 @@ reachability exceptions until **2026-11-16**, not patched dependencies or blanke
 permission to extract untrusted archives. Do not disable the audit, broaden the
 version pins or remove the updater merely to make CI green.
 
-The refreshed unfiltered audit still reports only the existing h2 finding and
-these three ZIP findings. The re-review verified the cached crate archive
+The refreshed unfiltered audit reports the existing h2 finding and four ZIP
+findings, including newly reported
+[RUSTSEC-2026-0429](https://github.com/rustsec/advisory-db/blob/main/crates/zip/RUSTSEC-2026-0429.md).
+The re-review verified the cached crate archive
 checksums against the pinned lockfile, signature verification before installation,
 the Windows-only ZIP updater branch and its regular-file extraction loop. The
-new date is a bounded re-review window; it adds no ignored advisory, consumer,
-version or archive entry point. The planned dependency migration remains needed.
+new date is a bounded re-review window. The additional 0429 reachability exception
+uses that same expiry and exact dependency/consumer guard; no version or archive
+entry point changes. The planned dependency migration remains needed.
+
+0429 concerns `ZipArchive::extract` reserving a symlink-target buffer from an
+untrusted declared file size. The checksum-pinned `zip 0.6.6` implementation has
+no such symlink allocation, and Tauri's updater does not call that bulk API.
+Its own extraction loop streams bytes into regular files. This review does not
+generalize to other ZIP versions, callers or unrelated archive vulnerabilities.
 
 RustSec [0367](https://rustsec.org/advisories/RUSTSEC-2026-0367.html),
 [0368](https://rustsec.org/advisories/RUSTSEC-2026-0368.html) and

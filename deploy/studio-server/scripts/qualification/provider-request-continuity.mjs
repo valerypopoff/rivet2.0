@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import https from 'node:https';
 import http2 from 'node:http2';
 import { randomUUID, createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { parse, stringify } from 'yaml';
 import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
 import { matchesKubernetesTemplate } from '../lib/kubernetes-template-match.mjs';
+import { ordinaryRuntimeReplicaBounds } from '../lib/ha-release-evidence.mjs';
 import { extractWebAppRevisionKey, openWebSocketAction } from '../kubernetes-managed-release-gate.mjs';
 import {
   requestContinuityProfile,
@@ -422,8 +424,10 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     assert.equal(deployment.spec.strategy.type, 'RollingUpdate');
     assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
     const pods = (await this.gate.pods()).filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy');
+    const { min, max } = ordinaryRuntimeReplicaBounds(this.gate.operation.policy).proxy;
     assert.ok(
-      pods.length >= 2 &&
+      pods.length >= min &&
+        pods.length <= max &&
         pods.every(
           (p) =>
             !p.metadata.deletionTimestamp &&
@@ -435,6 +439,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       deploymentUid: deployment.metadata.uid,
       before: pods.map((p) => p.metadata.uid),
     };
+    if (!this.replacement.changed) this.unchangedProxyTemplate = structuredClone(deployment.spec.template);
     if (this.replacement.changed) {
       // First adoption replaces the normal pool behind the serving bridge.
       // Its outbound/return cohorts cover that traffic, without an extra batch.
@@ -609,21 +614,40 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       if (focused) {
         const pods = await this.gate.pods();
         this.observeProxyPods(pods);
-        this.replacement.after = pods
-          .filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy')
-          .map((p) => p.metadata.uid);
-        assert.equal(this.replacement.after.length, 2, 'Final proxy observation must retain the two-pod floor');
+        const proxies = pods.filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy');
+        const { min, max } = ordinaryRuntimeReplicaBounds(this.gate.operation.policy).proxy;
+        assert.ok(
+          proxies.length >= min && proxies.length <= max,
+          'Final proxy observation is outside its approved bounds',
+        );
+        assert.ok(
+          proxies.every(
+            (p) =>
+              !p.metadata.deletionTimestamp &&
+              p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
+          ),
+          'Every final proxy must be ready and settled',
+        );
+        this.replacement.after = proxies.map((p) => p.metadata.uid);
+        assert.equal(
+          new Set(this.replacement.after).size,
+          this.replacement.after.length,
+          'Duplicate final proxy identity',
+        );
+        const deployment = JSON.parse(
+          (await this.gate.kube(['get', 'deployment', this.gate.config.release + '-proxy', '-o', 'json'])).stdout,
+        );
+        assert.equal(deployment.metadata.uid, this.replacement.deploymentUid, 'Proxy Deployment identity changed');
+        if (!this.replacement.changed)
+          assert.ok(
+            isDeepStrictEqual(deployment.spec.template, this.unchangedProxyTemplate),
+            'An unchanged proxy template changed during the rollout',
+          );
         if (this.replacement.changed) {
           assert.ok(this.replacement.observedAt, 'Actual proxy termination was not observed');
           assert.ok(
             this.replacement.after.every((uid) => !this.replacement.before.includes(uid)),
             'An original proxy still exists in the final observation',
-          );
-        } else {
-          assert.deepEqual(
-            [...this.replacement.after].sort(),
-            [...this.replacement.before].sort(),
-            'An unplanned proxy replacement cannot be certified as an unchanged template',
           );
         }
         const live = await this.gate.verifyProtectedProxyAvailability();

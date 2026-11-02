@@ -63,6 +63,8 @@ export const HA_ORDINARY_RUNTIME_CHECKS = [
   'published-schedule-claims',
   'autoscaler-active-through-upgrade',
 ];
+// Keep stored certificate identifiers: the compact layout has a seven-Pod
+// minimum, while focused observations may retain approved autoscaler growth.
 export const HA_FOCUSED_RUNTIME_CHECKS = HA_ORDINARY_RUNTIME_CHECKS.filter(
   (check) =>
     !['published-runtime-without-developers', 'published-browser-oauth-actions', 'published-schedule-claims'].includes(
@@ -649,6 +651,29 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
   );
   if (autoscalerPolicyDigest(policy) !== proof.autoscalerPolicyDigest)
     throw Error('Ordinary runtime evidence autoscaler policy differs from the installed configuration.');
+}
+
+// The ordinary layout fixes singleton roles and proxy HPA policy; execution's
+// ceiling comes from the frozen installation policy, not the observed Pod count.
+export function ordinaryRuntimeReplicaBounds(policy) {
+  if (
+    !policy ||
+    typeof policy !== 'object' ||
+    Array.isArray(policy) ||
+    !Number.isSafeInteger(policy.minReplicas) ||
+    !Number.isSafeInteger(policy.maxReplicas)
+  )
+    throw Error('Ordinary runtime scaling policy is missing explicit replica bounds.');
+  const execution = autoscalerPolicy(policy);
+  if (execution.minReplicas !== 2 || execution.maxReplicas < 3)
+    throw Error('Ordinary runtime scaling policy must preserve its floor and surge capacity.');
+  return {
+    proxy: { min: 2, max: 4 },
+    execution: { min: execution.minReplicas, max: execution.maxReplicas },
+    backend: { min: 1, max: 1 },
+    web: { min: 1, max: 1 },
+    autoscaler: { min: 1, max: 1 },
+  };
 }
 
 export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizing = false } = {}) {

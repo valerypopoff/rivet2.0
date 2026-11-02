@@ -55,6 +55,13 @@ uses 360-second LB drain, 420-second preStop and 600-second termination grace;
 the previous 900-second grace was capped to 600 by Autopilot. A successful dry
 run does not replace exact-image upgrade/autoscaling or cleanup evidence.
 
+The ordinary deployment path uses real replacement readiness rather than
+short-lived image-warmup/scheduler Jobs. Autopilot resource mutation and placement
+of those synthetic Jobs no longer create an extra release gate. Existing
+headroom, actual candidate readiness, accepted-work drain, routing health and
+cleanup checks remain required. See
+[replacement readiness](deployment-operations.md#replacement-readiness-without-warmup-jobs).
+
 Route verification accepts documented HTTPRoute backend-reference defaults
 throughout handoff, recovery and cleanup. Meaningful routing changes still stop
 the rollout; see [routing verification](production-update-continuity.md#routing-verification-during-updates).
@@ -350,6 +357,17 @@ autoscaling phase or second 100-workflow/100-web traffic window.
 Both streams must collect their own 100 successful completions before observation
 ends; a faster workflow stream cannot stand in for slower web traffic.
 
+Focused settlement accepts healthy autoscaler-grown capacity instead of waiting
+for exactly seven Pods. Proxy capacity stays within the certified HPA range of
+two to four; execution stays between two and the frozen policy ceiling. Backend,
+web and autoscaler remain singletons. Every final application Pod must be ready,
+non-terminating and on the expected image; unknown roles and duplicate identities
+fail. Reports retain observed initial/final per-role counts and matching totals,
+which the evidence validator checks against the same bounds. The existing final
+runtime and controller checks run after protected responses finish, so growth or
+image drift during request completion cannot leave a stale final snapshot.
+Full regression fixtures retain their fixed seven-Pod layout.
+
 Three concurrent transport variants (fresh HTTP/1, pooled HTTP/1 and HTTP/2)
 consume full five-minute response bodies at each relevant boundary. An already
 protected update normally has two batches: actual proxy template replacement and
@@ -371,8 +389,9 @@ again at acceptance rather than retained from an earlier poll. An adopted
 proxy must actually be replaced while its protected requests are in flight;
 first-adoption replacement must occur between the confirmed outbound and return
 bridge handoffs. Execution requests must span a real accepted-work owner's
-routing withdrawal. An unchanged template must retain its proxy identities; changed images or first
-adoption cannot be relabeled unchanged. Final live Deployment/NEG/backend health
+routing withdrawal. With an unchanged template, HPA growth or shrinkage may change
+Pod membership; the Deployment and observed template identities must remain the
+same. Changed images or first adoption cannot be relabeled unchanged. Final live Deployment/NEG/backend health
 and protected shutdown acceptance remain required. The first bridge and its
 cleanup retain the same ownership, admission and drain protections.
 

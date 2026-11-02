@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { autoscalerPolicy } from '../lib/execution-autoscaler.mjs';
 import { CONTINUITY_DURATION_STAGES, continuityStages } from '../lib/request-continuity.mjs';
 
 export const continuityFixtureProfile = {
@@ -94,6 +95,7 @@ export function continuityProviderFacts() {
 
 export function focusedContinuityProviderFacts({ adopted = false, proxyReplaced = true } = {}) {
   const f = continuityProviderFacts();
+  f.operation.policy = autoscalerPolicy({});
   f.operation.qualification = {
     protocol: 2,
     tier: 'focused',
