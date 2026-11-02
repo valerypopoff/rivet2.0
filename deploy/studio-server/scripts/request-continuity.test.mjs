@@ -130,9 +130,13 @@ function render(extra = [], enabled = true) {
   ).map((d) => d.toJS());
 }
 test('protected proxy lifecycle renders without extending the other serving tiers', () => {
-  const resources = render();
+  const resources = render([
+    'images.proxy.repository=fixture.example/proxy',
+    `images.proxy.digest=sha256:${'b'.repeat(64)}`,
+  ]);
   const baseline = render([], false);
   assert.deepEqual(continuityFromResources(resources).profile, requestContinuityProfile(values()));
+  assert.equal(continuityFromResources(resources).proxyImage, `fixture.example/proxy@sha256:${'b'.repeat(64)}`);
   for (const r of resources.filter((x) => ['Deployment', 'StatefulSet'].includes(x.kind))) {
     const proxy = r.metadata.labels['app.kubernetes.io/component'] === 'proxy';
     const previous = baseline.find((b) => b.kind === r.kind && b.metadata.name === r.metadata.name);

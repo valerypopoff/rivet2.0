@@ -248,6 +248,11 @@ change templates:
    raise its minimum to the approved maximum (four). Wait for that normal capacity.
 2. Create a distinct four-proxy bridge at the same approved HPA ceiling, Service, backend policy, health policy,
    narrow probe route and PDB. Rebind peer placement selectors to bridge labels.
+   Keep the captured installation settings but use the exact candidate proxy
+   image from the rendered release, pinned by digest. Cloning the predecessor's
+   image would leave its old connection policy serving throughout API retirement
+   and bypass the candidate's rollout fix. The candidate image is part of the
+   transition configuration digest; recovery cannot substitute another image.
    Wait for the bridge Service's regional NEGs **before creating its pods**, then
    require all four proxies ready, positive NEG health, at least two nodes/zones
    and the protected lifecycle. Preserve unrelated placement selector constraints.
@@ -434,6 +439,24 @@ The qualification command derives its read-only production preflight timeout
 from the qualified profile (at least 20 minutes), including termination headroom.
 
 ## Verification and activation gates
+
+API and execution upstream groups explicitly use `keepalive 0` in production,
+Compose and development proxies. Nginx 1.29.7+ enables upstream connection caching
+by default. The API's withdrawal protocol closes idle connections while it still
+accepts requests during routing propagation; reusing one of those connections
+can race its closure and return a 502 for a workflow POST. The proxy therefore
+opens a fresh internal TCP connection for each API/execution request. This also
+protects retirement of existing API images with that withdrawal behavior.
+The policy changes idle upstream reuse, not active response, SSE or WebSocket
+lifetimes. It does not enable POST retries or relax the zero-failure traffic gate.
+Shared DNS peer zones and background resolution remain required independently.
+See [Nginx upstream keepalive](https://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive).
+
+The fast proxy-image contract guards this explicit policy on PRs. The existing
+local Docker proxy fixture also checks actual backend connection identities
+through all three rendered templates using POST bodies and exact acceptance
+counts. Socket identities do not depend on OS source-port allocation. Its existing
+outage no-replay and browser checks remain required.
 
 Image-CI retirement probes use a separate synthetic latest workflow with an
 explicit file admission/release barrier. A 300 ms workflow can complete before

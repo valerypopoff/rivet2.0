@@ -70,6 +70,7 @@ const subset = (actual, expected) =>
 export function buildProxyBridge(baseline, config, token) {
   const { profile, network, namespace, release } = config;
   assertRequestContinuityProfile(profile);
+  assert.match(config.proxyImage ?? '', /^[^\s@]+@sha256:[a-f0-9]{64}$/, 'A pinned candidate proxy image is required');
   identity(baseline.hpa);
   assert.equal(baseline.hpa.spec.scaleTargetRef.kind, 'Deployment');
   assert.equal(baseline.hpa.spec.scaleTargetRef.name, baseline.deployment.metadata.name);
@@ -140,6 +141,9 @@ export function buildProxyBridge(baseline, config, token) {
   assert.ok(template.spec.containers?.length === 1, 'Only the reviewed single-container proxy is supported');
   for (const c of template.spec.containers) {
     assert.match(c.image, /@sha256:[a-f0-9]{64}$/);
+    // The bridge serves throughout API retirement, so it must carry the
+    // candidate's connection policy while preserving installation settings.
+    c.image = config.proxyImage;
     assert.ok(
       !c.env?.some((e) => /KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL/.test(e.name) && e.value),
       'Plaintext proxy credentials must not enter the operation journal',
