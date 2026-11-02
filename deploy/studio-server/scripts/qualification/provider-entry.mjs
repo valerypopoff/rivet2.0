@@ -151,8 +151,6 @@ export async function executeProviderPhase({
       result = {
         ...report,
         qualification: 'isolated-provider',
-        initialApplicationPods: 7,
-        finalApplicationPods: 7,
         storageIdentityPreserved: true,
         policyDigest: operation.policyDigest,
       };

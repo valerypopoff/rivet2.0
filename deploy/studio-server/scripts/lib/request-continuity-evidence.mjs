@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { ordinaryRuntimeReplicaBounds } from './ha-release-evidence.mjs';
 import {
   continuityChecks,
   requestContinuityProfile,
@@ -87,8 +88,14 @@ export function assertContinuityProviderFacts(report, operation, kind) {
       assert.ok(Number.isSafeInteger(a.terminalSequence) && a.terminalSequence > 1);
     }
     const replacement = facts.replacement;
-    assert.ok(focused ? replacement.before.length >= 2 : replacement.before.length === 2);
-    assert.equal(replacement.after.length, 2);
+    if (focused) {
+      const { min, max } = ordinaryRuntimeReplicaBounds(operation.policy).proxy;
+      for (const uids of [replacement.before, replacement.after])
+        assert.ok(uids.length >= min && uids.length <= max, 'Proxy observation is outside its approved bounds');
+    } else {
+      assert.equal(replacement.before.length, 2);
+      assert.equal(replacement.after.length, 2);
+    }
     unique(replacement.before.map(nonempty));
     unique(replacement.after.map(nonempty));
     const overlaps = (stage, dispatchedAt, observedAt) => {
@@ -108,7 +115,6 @@ export function assertContinuityProviderFacts(report, operation, kind) {
     } else {
       assert.ok(adopted, 'First adoption cannot omit proxy replacement');
       assert.deepEqual(operation.previous.images.proxy, operation.candidate.images.proxy);
-      assert.deepEqual([...replacement.after].sort(), [...replacement.before].sort());
       assert.equal(replacement.dispatchedAt, undefined);
       assert.equal(replacement.observedAt, undefined);
     }

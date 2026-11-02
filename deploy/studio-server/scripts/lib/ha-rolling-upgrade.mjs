@@ -89,7 +89,6 @@ export async function runHaRollingUpgrade({
   isCurrentPod = (pod, workload) => pod.image === workload.image,
   prepareRetirement = async () => {},
   checkHeadroom = async () => {},
-  prepareReplacements = async () => {},
   settle,
   handoverHousekeeping,
   verifyPoolPreparationTemplates,
@@ -140,6 +139,10 @@ export async function runHaRollingUpgrade({
     safety.assertRecovery(record);
     if (JSON.stringify(record.workloads) !== JSON.stringify(workloads))
       throw new Error('HA recovery inventory changed.');
+    if (!haPreparationSettled(record))
+      throw new Error(
+        'Legacy rollout warmup Jobs have unresolved cleanup; inspect the original operation before recovery.',
+      );
   } else {
     if (resumeToken) throw new Error('No unfinished HA rollout matches the recovery token.');
     // Verify every original owner BEFORE modifying Helm, autoscalers or admission.
@@ -266,7 +269,6 @@ export async function runHaRollingUpgrade({
       if (operation.record.phase === 'preflight') {
         await safety.checkOwnedBaseline(operation.record, runner, now);
         await proxyContinuity?.prepare(operation);
-        await prepareReplacements(operation);
         await safety.checkOwnedBaseline(operation.record, runner, now);
         await checkHeadroom({ stage: 'preflight' });
         await checkpoint({ phase: 'templates' });

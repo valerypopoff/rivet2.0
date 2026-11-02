@@ -236,7 +236,6 @@ async function main() {
       'deploy/studio-server/scripts/kubernetes-exec-continuity.test.mjs',
       'deploy/studio-server/scripts/request-continuity-transport.test.mjs',
       'deploy/studio-server/scripts/request-continuity-provider.test.mjs',
-      'deploy/studio-server/scripts/ha-rollout-preparation.test.mjs',
       'deploy/studio-server/scripts/ha-rollout-headroom.test.mjs',
       'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
       'deploy/studio-server/scripts/ha-control-topology.test.mjs',

@@ -449,7 +449,7 @@ Extend existing tests rather than creating a parallel deployer test framework:
 
 - `ha-gke-availability.test.mjs`, relevant Helm/API contract tests.
 - `ha-release-evidence.test.mjs`, `ha-rolling-upgrade.test.mjs`,
-  `ha-rollout-preparation.test.mjs`, `ha-rollout-headroom.test.mjs`.
+  `ha-rollout-headroom.test.mjs`.
 - `deployment-command.test.mjs`, `deployment-operation.test.mjs`.
 - `runtime-upgrade-qualification.test.mjs`,
   `runtime-qualification-execution.test.mjs`,

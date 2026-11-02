@@ -30,32 +30,64 @@ import {
 } from './lib/ha-kubernetes-rollout.mjs';
 const runHaKubernetesRollout = (options) =>
   runKubernetesRollingStrategy({
-    // This suite isolates retirement plumbing. Real preparation runs in its
-    // HTTP suite and in the actual deployment-command stand-in tests.
-    prepareReplacements: async () => {},
     ...options,
     safety:
       options.safety ?? fixtureDeploymentSafety('rolling', options, { baseline: options.assertInstalledBaseline }),
   });
 
-test('preparation finishes before templates or any old owner retirement, and unresolved cleanup keeps recovery ownership', async () => {
-  for (const fault of [false, true]) {
+test('legacy warmup cleanup must be settled before exact-token recovery can change the rollout', async () => {
+  for (const preparation of [
+    { protocol: 1, state: 'preparing', jobs: [{ createIssued: true, uid: 'job' }] },
+    { protocol: 1, state: 'complete', jobs: [{ createIssued: true, absent: false }] },
+    { protocol: 1, state: 'cleaned-failed' },
+  ]) {
     const f = fixture();
-    f.options.prepareReplacements = async (operation) => {
-      f.operations.push('prepare');
-      await operation.checkpoint({ preparation: { state: fault ? 'preparing' : 'complete' } });
-      if (fault) throw Error('preparation cleanup unknown');
-    };
-    if (fault) {
-      await assert.rejects(runHaRollingUpgrade(f.options), /preparation cleanup unknown/);
-      assert.equal(f.journal.phase, 'preflight');
-      assert.ok(!f.operations.includes('templates'));
-      assert.ok(!f.operations.some((v) => v.startsWith('withdraw-command:')));
-    } else {
-      await runHaRollingUpgrade(f.options);
-      assert.ok(f.operations.indexOf('prepare') < f.operations.indexOf('templates'));
-    }
+    await runHaRollingUpgrade(f.options);
+    f.advance(2000);
+    await f.options.saveJournal(
+      { ...f.journal, phase: 'preflight', completed: [], preparation },
+      f.journal.resourceVersion,
+    );
+    f.operations.length = 0;
+    const original = structuredClone(f.journal);
+    await assert.rejects(
+      runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token }),
+      /warmup Jobs.*unresolved cleanup/,
+    );
+    assert.deepEqual(f.journal, original, 'An unresolved legacy Job must not lose its original journal');
+    assert.deepEqual(f.operations, [], 'No templates, scaling or retirement before inspected legacy cleanup');
   }
+});
+
+test('settled legacy warmup receipts do not require another warmup during recovery', async () => {
+  for (const state of ['complete', 'cleaned-failed']) {
+    const f = fixture();
+    await runHaRollingUpgrade(f.options);
+    f.advance(2000);
+    const preparation = { protocol: 1, state, jobs: [{ createIssued: true, absent: true }] };
+    await f.options.saveJournal(
+      { ...f.journal, phase: 'preflight', completed: [], preparation },
+      f.journal.resourceVersion,
+    );
+    await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
+    assert.equal(f.journal.phase, 'complete');
+    assert.deepEqual(f.journal.preparation, preparation, 'Existing cleanup facts remain intact');
+  }
+});
+
+test('a candidate surge that cannot become ready retains every original serving owner', async () => {
+  const f = fixture(),
+    original = structuredClone([...f.pods.values()]);
+  f.options.waitForReady = async (name) => {
+    assert.equal(name, 'fixture-backend-2');
+    f.pods.get(name).ready = false;
+    throw Error('Candidate image or scheduling did not become ready');
+  };
+  await assert.rejects(runHaRollingUpgrade(f.options), /did not become ready/);
+  for (const pod of original) assert.deepEqual(f.pods.get(pod.name), pod);
+  assert.ok(!f.operations.some((v) => /^(withdraw-command|begin|delete):/.test(v)));
+  assert.equal(f.journal.phase, 'owners');
+  assert.equal(f.journal.preparation, undefined);
 });
 
 test('HA template updates preserve HPA-grown frontend capacity with UID and resourceVersion fencing', async () => {

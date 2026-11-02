@@ -9,7 +9,7 @@ export const providerSteps = Object.freeze({
   dependencies: 'database and object-storage readiness',
   routing: 'public route and Service NEG discovery',
   installation: 'exact predecessor installation',
-  owners: 'seven ready exact-image application owners',
+  owners: 'ready exact-image application owners within approved capacity',
   frontend: 'public load-balancer health and authenticated routing',
   persistence: 'fixture data and recording preparation',
   oauth: 'synthetic application authentication',

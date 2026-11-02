@@ -95,6 +95,21 @@ observed temporary proxy bridge below. After that, ordinary updates omit the
 bridge. No manufactured second release or second campaign is required to finish
 the first rollout. Requests beyond 300 seconds may be interrupted as agreed.
 
+Ordinary updates do not create image-warmup or synthetic scheduler Jobs. Actual
+replacement Pods supply the scheduling, image-pull and readiness checks; serving
+headroom and drain checks still gate retirement. See
+[replacement readiness](deployment-operations.md#replacement-readiness-without-warmup-jobs).
+Legacy warmup Jobs with unresolved cleanup still block recovery. Removing this
+optimization does not change the proxy bridge or the 300-second protection.
+
+Focused acceptance retains healthy autoscaler growth within approved bounds,
+rather than requiring exactly two final proxies or seven total Pods. The test
+and provider evidence validate observed per-role counts, complete replacement,
+current images and readiness. Unchanged proxy templates may have HPA-driven Pod
+membership changes while retaining their Deployment/template identity and live
+regional health. This removes an idle scale-down wait, not a request-drain or
+serving-capacity check.
+
 ### Routing verification during updates
 
 HTTPRoute comparisons accept equivalent backend references: omitted `group`,
@@ -257,7 +272,7 @@ two more, in addition to native rollout surges and execution autoscaling. Size
 the reviewed staging/production capacity allowance for that overlap. A scheduling
 or readiness timeout retains serving owners rather than deleting capacity to
 make space. Per-stage deployment deadlines and the external staging expiry must
-cover the two drain windows, image preparation, 600-second pod termination,
+cover the two drain windows, candidate image pulls, 600-second pod termination,
 accepted work, qualification requests and cleanup.
 Use **`--timeout 20m` or longer** for this profile to allow scheduling and stage
 headroom. Each stage deadline must exceed drain, propagation and pod termination

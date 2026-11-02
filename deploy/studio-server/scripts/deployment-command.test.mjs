@@ -1188,20 +1188,7 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
         );
         assert.ok(journal.workflowIdentity.beforeVerified);
         if (mode === 'rolling') {
-          assert.equal(journal.preparation.state, 'complete');
-          assert.ok(
-            journal.preparation.jobs.length && journal.preparation.jobs.every((j) => j.warmed && j.absent && j.nodeUid),
-          );
-          const calls = await f.calls();
-          const firstHelm = calls.findIndex((c) => c.kind === 'helm' && c.args[0] === 'upgrade');
-          const cleanup = calls
-            .map((c, i) => (c.args[0] === 'delete' && c.args[2]?.includes('/jobs/') ? i : -1))
-            .filter((i) => i >= 0);
-          assert.equal(cleanup.length, journal.preparation.jobs.length);
-          assert.ok(
-            cleanup.every((i) => i < firstHelm),
-            'Preparation must finish before templates can retire any frontend',
-          );
+          assert.equal(journal.preparation, undefined, 'Normal updates need no scheduler/image warmup Jobs');
         }
         const begins = (await f.calls()).filter((r) => r.args.includes('--begin-only')).length;
         const token = await f.expireLease();

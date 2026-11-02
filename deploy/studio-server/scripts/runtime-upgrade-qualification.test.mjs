@@ -21,8 +21,8 @@ import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
 } from './lib/studio-server-release-manifest.mjs';
-import { assertOrdinaryRuntimeResources } from './lib/ha-release-evidence.mjs';
-import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import { assertOrdinaryRuntimeResources, ordinaryRuntimeReplicaBounds } from './lib/ha-release-evidence.mjs';
+import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 function pair() {
@@ -44,20 +44,21 @@ function pair() {
   });
   return { previous, candidate: make('b', previous) };
 }
-function pods(images) {
-  return Object.entries({ proxy: 2, web: 1, backend: 1, execution: 2, autoscaler: 1 }).flatMap(([role, count]) =>
-    Array.from({ length: count }, (_, ordinal) => ({
-      metadata: { uid: `${role}-${ordinal}`, labels: { 'app.kubernetes.io/component': role } },
-      status: { conditions: [{ type: 'Ready', status: 'True' }] },
-      spec: {
-        containers: [
-          {
-            name: role === 'execution' ? 'api' : role,
-            image: `${images[['backend', 'execution', 'autoscaler'].includes(role) ? 'api' : role].repository}@${images[['backend', 'execution', 'autoscaler'].includes(role) ? 'api' : role].digest}`,
-          },
-        ],
-      },
-    })),
+function pods(images, replicas = {}) {
+  return Object.entries({ proxy: 2, web: 1, backend: 1, execution: 2, autoscaler: 1, ...replicas }).flatMap(
+    ([role, count]) =>
+      Array.from({ length: count }, (_, ordinal) => ({
+        metadata: { uid: `${role}-${ordinal}`, labels: { 'app.kubernetes.io/component': role } },
+        status: { conditions: [{ type: 'Ready', status: 'True' }] },
+        spec: {
+          containers: [
+            {
+              name: role === 'execution' ? 'api' : role,
+              image: `${images[['backend', 'execution', 'autoscaler'].includes(role) ? 'api' : role].repository}@${images[['backend', 'execution', 'autoscaler'].includes(role) ? 'api' : role].digest}`,
+            },
+          ],
+        },
+      })),
   );
 }
 
@@ -173,6 +174,71 @@ test('rendered ordinary scope rejects topology, suspended controller and proxy H
   }
 });
 
+test('focused settlement accepts approved growth and rejects unhealthy, unfinished or foreign extra owners', async () => {
+  const { previous, candidate } = pair(),
+    policy = autoscalerPolicy({ maxReplicas: 7 });
+  const replicaBounds = ordinaryRuntimeReplicaBounds(policy),
+    grown = () => pods(previous.images, { proxy: 4, execution: 7 });
+  assert.deepEqual(assertOrdinaryRuntimePods(grown(), previous.images, { baseline: true, replicaBounds }), {
+    proxy: 4,
+    web: 1,
+    backend: 1,
+    execution: 7,
+    autoscaler: 1,
+  });
+  let observations = 0;
+  const gate = {
+    operation: { qualification: { tier: 'focused' }, policy },
+    pods: async () => {
+      observations++;
+      return grown();
+    },
+  };
+  const capacity = await waitForOrdinaryRuntime(gate, previous.images, async (_name, check) =>
+    assert.equal(await check(), true),
+  );
+  assert.equal(observations, 1, 'Healthy growth must not wait for scale-down');
+  assert.equal(capacity.execution, 7);
+  for (const replicas of [
+    { proxy: 1 },
+    { proxy: 5 },
+    { execution: 1 },
+    { execution: 8 },
+    { backend: 2 },
+    { autoscaler: 0 },
+  ])
+    assert.throws(
+      () => assertOrdinaryRuntimePods(pods(previous.images, replicas), previous.images, { replicaBounds }),
+      /floor|bounds/,
+    );
+  for (const change of [
+    (p) => {
+      p.at(-1).status.conditions = [];
+    },
+    (p) => {
+      p[3].status.conditions = [];
+    },
+    (p) => {
+      p[3].metadata.deletionTimestamp = new Date().toISOString();
+    },
+    (p) => {
+      p[3].spec.containers[0].image = `${candidate.images.proxy.repository}@${candidate.images.proxy.digest}`;
+    },
+    (p) => {
+      p[3].metadata.uid = p[0].metadata.uid;
+    },
+    (p) => {
+      p[3].metadata.labels['app.kubernetes.io/component'] = 'foreign';
+    },
+  ]) {
+    const invalid = grown();
+    change(invalid);
+    assert.throws(() => assertOrdinaryRuntimePods(invalid, previous.images, { replicaBounds }));
+  }
+  for (const missing of [undefined, [], {}, { minReplicas: 2 }, { minReplicas: 2, maxReplicas: '7' }])
+    assert.throws(() => ordinaryRuntimeReplicaBounds(missing), /policy is missing/);
+});
+
 test('fixture admission waits for the actual predecessor owners, not Helm completion or an unrelated sidecar image', async () => {
   const { previous, candidate } = pair();
   let reads = 0;
@@ -240,19 +306,27 @@ for (const scenario of [
   'focused-502',
   'focused-missing-recording',
   'focused-slow-web',
+  'focused-grown',
+  'focused-late-growth',
+  'focused-late-image-drift',
 ]) {
   test(`ordinary observation keeps a single truthful window: ${scenario}`, async (t) => {
     const { previous, candidate } = pair();
     const overlap = scenario.startsWith('overlap'),
       focused = scenario.startsWith('focused'),
-      variant = focused ? (scenario === 'focused' ? 'pass' : scenario.slice(8)) : scenario,
+      variant = focused
+        ? ['focused', 'focused-grown', 'focused-late-growth'].includes(scenario)
+          ? 'pass'
+          : scenario.slice(8)
+        : scenario,
       developerCalls = [];
     const archive = Buffer.from('immutable-fixture-archive');
     let failing = false,
       images = previous.images,
       storageUid = 'original',
       rolls = 0,
-      independence = 0;
+      independence = 0,
+      continuityFinished = false;
     const requests = [],
       artifacts = new Map(),
       captures = [];
@@ -296,7 +370,13 @@ for (const scenario of [
       config: { images },
       secrets: { rivetKey: 'local-test-only-key' },
       assertLocalContext: async () => {},
-      pods: async () => pods(images),
+      pods: async () => {
+        const grown = scenario === 'focused-grown' || (continuityFinished && scenario.startsWith('focused-late-'));
+        const observed = pods(images, grown ? { proxy: 4, execution: 3 } : {});
+        if (continuityFinished && scenario === 'focused-late-image-drift')
+          observed[3].spec.containers[0].image = `${previous.images.proxy.repository}@${previous.images.proxy.digest}`;
+        return observed;
+      },
       kube: async () => ({
         stdout: JSON.stringify({
           items: [{ kind: 'PersistentVolumeClaim', metadata: { name: 'restore', uid: storageUid }, spec: {} }],
@@ -329,16 +409,20 @@ for (const scenario of [
       capture: async (name) => captures.push(name),
     };
     if (focused) {
-      gate.operation = { qualification: { tier: 'focused' } };
+      gate.operation = { qualification: { tier: 'focused' }, policy: autoscalerPolicy({}) };
       gate.continuityProbes = {
         prepare: async () => {},
         startCohort: async (stage) => assert.equal(stage, 'execution-retirement'),
-        finish: async () => ({ protocol: 4 }),
+        finish: async () => {
+          continuityFinished = true;
+          return { protocol: 4 };
+        },
         close: async () => {},
       };
     }
     const until = async (_name, check) => {
-      for (let i = 0; i < 2000; i++) {
+      const attempts = continuityFinished && scenario === 'focused-late-image-drift' ? 3 : 2000;
+      for (let i = 0; i < attempts; i++) {
         if (await check()) return;
         await new Promise((r) => setTimeout(r, 5));
       }
@@ -387,18 +471,40 @@ for (const scenario of [
       if (focused) {
         assert.equal(report.outcomes.independence, undefined);
         assert.ok(!report.phases.includes('candidate-runtime-without-developers'));
+        assert.ok(report.phases.includes('bounded-capacity-mixed-image-upgrade'));
+        assert.ok(!report.phases.includes('exact-seven-to-seven-mixed-image-upgrade'));
       }
       assert.ok(report.readiness.samples > 0);
-      assert.deepEqual(report.readiness.minimumReady, { execution: 2, proxy: 2 });
+      assert.deepEqual(
+        report.readiness.minimumReady,
+        scenario === 'focused-grown' ? { execution: 3, proxy: 4 } : { execution: 2, proxy: 2 },
+      );
+      if (scenario === 'focused-grown') {
+        assert.equal(report.initialApplicationPods, 10);
+        assert.equal(report.finalApplicationPods, 10);
+        assert.deepEqual(report.capacity.initial, report.capacity.final);
+        assert.equal(report.capacity.final.proxy, 4);
+      }
+      if (scenario === 'focused-late-growth') {
+        assert.equal(report.initialApplicationPods, 7);
+        assert.equal(report.finalApplicationPods, 10);
+        assert.equal(report.capacity.initial.proxy, 2);
+        assert.equal(report.capacity.final.proxy, 4);
+        assert.equal(report.capacity.final.execution, 3);
+      }
       assert.equal(probes.background.length, 2);
       if (overlap) assert.deepEqual(report.outcomes.developerOverlap, { observed: true });
     } else {
-      await assert.rejects(work);
+      await assert.rejects(work, variant === 'late-image-drift' ? /fixture timeout/ : undefined);
       const report = JSON.parse(artifacts.get('runtime-ordinary-upgrade-report.json'));
       assert.equal(report.outcome, 'failed');
       assert.equal(rolls, 1);
       assert.equal(independence, 0);
       assert.ok(captures.includes('ordinary-upgrade-failure'));
+      if (variant === 'late-image-drift') {
+        assert.equal(continuityFinished, true, 'The drift is introduced only after protected requests finish');
+        assert.equal(report.finalApplicationPods, undefined, 'Unsettled capacity cannot be reported as final');
+      }
       if (overlap) assert.deepEqual(developerCalls, ['adopt', 'roll', 'finish', 'close']);
       if (variant === '502') {
         assert.ok(report.workflow.failedRequests.some((r) => r.error.status === 502));
