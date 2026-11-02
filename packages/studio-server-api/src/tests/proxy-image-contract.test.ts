@@ -707,7 +707,10 @@ void test('images and local launchers build directly from the monorepo workspace
     );
   }
   assert.match(apiDockerfile, /yarn build:runtime/);
-  assert.match(apiDockerfile, /yarn workspace @valerypopoff\/rivet-studio-server-api run build/);
+  assert.match(
+    apiDockerfile,
+    /yarn workspace @valerypopoff\/rivet-studio-server-api exec tsc -p tsconfig\.runtime\.json/,
+  );
   assert.match(webDockerfile, /yarn build:hosted-web-deps/);
   assert.match(webDockerfile, /studio-server-web\/production\/server\.mjs --bundle/);
   assert.match(webDockerfile, /--outfile=\/app\/web-server\.mjs/);

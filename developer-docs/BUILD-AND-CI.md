@@ -926,8 +926,10 @@ and Compose wiring under test; it must not require the retired whole-checkout
 copy layout. `prepare-runtime-packages.test.mjs` exercises staged files and
 dependency resolution behavior rather than matching Dockerfile text.
 API production compilation uses `tsconfig.runtime.json` to exclude test-only
-deployment imports. API and executor Dockerfiles copy deployment tooling after
-application compilation, preserving that cache across rollout-only repairs.
+deployment imports; the image contract checks that runtime compiler target.
+The ordinary API build still type-checks tests. API and executor Dockerfiles copy
+deployment tooling after application compilation, preserving that cache across
+rollout-only repairs.
 The API then bundles the autoscaler runtime closure and the fast candidate smoke
 boots its actual packaged command as non-root/read-only without cloud access.
 The separate minimal cleanup-worker image is scanned and published alongside the
