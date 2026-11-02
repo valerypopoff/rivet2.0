@@ -184,6 +184,8 @@ test(
       const before = supervisor.retirement.snapshot();
       supervisor.retirement.withdraw('a45b6a70-912f-4d7c-a4b3-7598f9a94021', before.incarnation);
       await waitForHealthStatus(allocated.healthPort, 503);
+      // Readiness withdraws before the child API acknowledges its command.
+      assert.equal((await supervisor.retirement.wait()).state, 'withdrawing');
       assert.equal(await (await fetch(`http://127.0.0.1:${allocated.apiPort}`)).text(), 'withdrawing');
       assert.equal(await (await fetch(`http://127.0.0.1:${allocated.executorPort}`)).text(), 'serving');
       assert.equal(supervisor.retirement.snapshot().state, 'withdrawing');

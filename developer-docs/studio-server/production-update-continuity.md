@@ -114,6 +114,12 @@ Kubernetes fixtures apply route defaults on create and patch, covering the
 previous GKE failure without a cloud run. This repair does not qualify the failed
 release or authorize another staging attempt.
 
+The local supervisor retirement fixture waits for the API's withdrawal
+acknowledgement before inspecting its state. Supervisor `/readyz` becomes `503`
+before that asynchronous child command finishes; readiness withdrawal alone is
+not an acknowledgement. The fixture still checks that accepted work outlives the
+forced-shutdown grace and that the executor drains before the API.
+
 ## Contract and configuration
 
 The protected envelope is a published product request completing within 300
