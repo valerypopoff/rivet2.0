@@ -28,10 +28,14 @@ export async function runManagedGateCommand(program, args, options = {}) {
     phaseSignal && commandSignal ? AbortSignal.any([phaseSignal, commandSignal]) : phaseSignal ?? commandSignal;
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
+    // Release workers run on Linux. Give each client its own process group so
+    // cancellation also reaches auth helpers that inherited its output pipes.
+    const processGroup = process.platform !== 'win32';
     const child = spawn(program, args, {
       cwd,
       shell: false,
       windowsHide: true,
+      detached: processGroup,
       env,
       stdio: capture ? ['pipe', 'pipe', 'pipe'] : input == null ? 'inherit' : ['pipe', 'inherit', 'inherit'],
     });
@@ -52,10 +56,21 @@ export async function runManagedGateCommand(program, args, options = {}) {
       closed = done;
     });
     active.add(closure);
+    const terminate = (signal) => {
+      try {
+        if (processGroup && child.pid) process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch (error) {
+        if (error.code !== 'ESRCH') {
+          childError ??= error;
+          child.kill(signal);
+        }
+      }
+    };
     const abort = () => {
-      child.kill('SIGTERM');
-      // Only this owned client process is killed; never shorten Pod draining.
-      timer ??= setTimeout(() => child.kill('SIGKILL'), killAfterMs);
+      terminate('SIGTERM');
+      // Only this owned client group is killed; never shorten Pod draining.
+      timer ??= setTimeout(() => terminate('SIGKILL'), killAfterMs);
     };
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
@@ -63,6 +78,9 @@ export async function runManagedGateCommand(program, args, options = {}) {
       childError = error;
     });
     child.once('close', (code) => {
+      // A helper can close/inherit no pipes and outlive the client. Finish its
+      // cancelled group even when the client closes before the escalation timer.
+      if (signal?.aborted && processGroup) terminate('SIGKILL');
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       active.delete(closure);

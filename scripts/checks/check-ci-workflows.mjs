@@ -291,6 +291,22 @@ assert.equal(
   false,
   'Static validation must not hide the network-dependent JavaScript audit.',
 );
+const imageContracts = findStep(
+  buildJobs['static-validation'],
+  'Verify image and launcher contracts',
+  'Static validation',
+);
+assert.equal(
+  imageContracts.run,
+  'yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/proxy-image-contract.test.ts',
+);
+assert.ok(
+  buildJobs['static-validation'].steps.indexOf(imageContracts) <
+    buildJobs['static-validation'].steps.indexOf(
+      findStep(buildJobs['static-validation'], 'Test style', 'Static validation'),
+    ),
+  'Source-only image contracts must fail on PRs before the longer style and image build checks.',
+);
 assertIncludesAll(
   asArray(buildJobs.build.needs),
   [

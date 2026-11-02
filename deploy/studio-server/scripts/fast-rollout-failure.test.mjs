@@ -4,12 +4,108 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { spawnSync } from 'node:child_process';
 import {
   runManagedGateCommand as run,
   withManagedGateSignal,
   waitForManagedGateCommands,
 } from './lib/managed-gate-command.mjs';
 import { fatalStartupReason, monitorFatalStartup } from './lib/fatal-startup-monitor.mjs';
+
+// test-style: fixture-read: runs Node against disposable, deliberately broken packages.
+test('actual Node loader failures are recognized without treating ordinary runtime errors as startup proof', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-loader-failure-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  for (const [code, entry, metadata] of [
+    ['ERR_UNSUPPORTED_DIR_IMPORT', 'import "./directory";'],
+    ['ERR_INVALID_PACKAGE_CONFIG', 'import "fixture";', '{invalid json'],
+    ['ERR_PACKAGE_PATH_NOT_EXPORTED', 'import "fixture";', '{"name":"fixture","exports":{}}'],
+    ['ERR_PACKAGE_IMPORT_NOT_DEFINED', 'import "#missing";'],
+    ['ERR_UNKNOWN_FILE_EXTENSION', 'import "./module.unknown";'],
+  ])
+    await t.test(code, async () => {
+      await fs.mkdir(path.join(directory, 'directory'), { recursive: true });
+      await fs.mkdir(path.join(directory, 'node_modules/fixture'), { recursive: true });
+      await fs.writeFile(path.join(directory, 'package.json'), '{"type":"module"}');
+      await fs.writeFile(path.join(directory, 'module.unknown'), 'export {};');
+      if (metadata) await fs.writeFile(path.join(directory, 'node_modules/fixture/package.json'), metadata);
+      const program = path.join(directory, 'entry.mjs');
+      await fs.writeFile(program, entry);
+      const result = spawnSync(process.execPath, [program], {
+        encoding: 'utf8',
+        timeout: 3000,
+        env: { ...process.env, NODE_OPTIONS: '' },
+      });
+      assert.equal(result.error, undefined);
+      assert.notEqual(result.status, 0);
+      assert.ok(result.stderr.includes(code), result.stderr);
+      assert.equal(fatalStartupReason(result.stderr), 'invalid-program');
+    });
+  for (const log of ['Error: ECONNREFUSED', 'TypeError: Invalid application setting', 'Error [ERR_STREAM_DESTROYED]'])
+    assert.equal(fatalStartupReason(log), undefined);
+});
+
+// test-style: fixture-read: reads only the PID and Linux process state of this test's helper subprocess.
+test(
+  'Linux cancellation closes inherited pipes and stops helpers after their client exits',
+  {
+    skip: process.platform !== 'linux',
+    timeout: 5000,
+  },
+  async (t) => {
+    for (const stdio of ['inherit', 'ignore'])
+      await t.test(stdio, async (t) => {
+        const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-command-helper-'));
+        t.after(() => fs.rm(directory, { recursive: true, force: true }));
+        const marker = path.join(directory, 'helper-pid');
+        const helper =
+          'process.on("SIGTERM",()=>{});require("node:fs").writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)';
+        const parent = `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(helper)},process.argv[1]],{stdio:${JSON.stringify(stdio)}});setInterval(()=>{},1000)`;
+        const stop = new AbortController();
+        const failed = assert.rejects(
+          run(process.execPath, ['-e', parent, marker], {
+            signal: stop.signal,
+            capture: true,
+            killAfterMs: 50,
+          }),
+          /stop helper fixture/,
+        );
+        let pid;
+        t.after(async () => {
+          stop.abort(new Error('stop helper fixture'));
+          if (pid) {
+            try {
+              process.kill(pid, 'SIGKILL');
+            } catch (error) {
+              if (error.code !== 'ESRCH') throw error;
+            }
+          }
+          await failed;
+          await waitForManagedGateCommands();
+        });
+        while (!pid) {
+          t.signal.throwIfAborted();
+          pid = await fs.readFile(marker, 'utf8').then(Number, () => undefined);
+          if (!pid) await sleep(5);
+        }
+        stop.abort(new Error('stop helper fixture'));
+        const completed = await Promise.race([failed.then(() => true), sleep(500).then(() => false)]);
+        assert.equal(completed, true, 'A helper holding the pipes must not strand command shutdown');
+        const deadline = Date.now() + 250;
+        let stopped = false;
+        while (Date.now() < deadline) {
+          const state = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch((error) => {
+            if (error.code !== 'ENOENT') throw error;
+          });
+          // PID 1 may not immediately reap an orphan. A zombie has already stopped.
+          stopped = state === undefined || /\) [ZX] /.test(state);
+          if (stopped) break;
+          await sleep(5);
+        }
+        assert.ok(stopped, 'A cancelled helper without inherited pipes must also stop');
+      });
+  },
+);
 
 test(
   'captured commands receive EOF, preserve input and close after spawn or exit failures',
