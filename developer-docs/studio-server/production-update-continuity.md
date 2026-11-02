@@ -95,6 +95,25 @@ observed temporary proxy bridge below. After that, ordinary updates omit the
 bridge. No manufactured second release or second campaign is required to finish
 the first rollout. Requests beyond 300 seconds may be interrupted as agreed.
 
+### Routing verification during updates
+
+HTTPRoute comparisons accept equivalent backend references: omitted `group`,
+`kind`, `namespace` and `weight` mean the core API group, `Service`, the route's
+namespace and weight `1`. These are the documented
+[Gateway API reference defaults](https://github.com/kubernetes-sigs/gateway-api/blob/v1.4.0/apis/v1/object_reference_types.go)
+and [weight default](https://github.com/kubernetes-sigs/gateway-api/blob/v1.4.0/apis/v1/shared_types.go).
+The same comparison applies after writes, during recovery, on return to the
+normal proxy pool and before bridge cleanup. Recorded intents and submitted
+objects keep their original representation; an uncertain write is observed,
+never replayed to resolve a default-field difference.
+
+Actual destination, API group/kind, namespace, port, traffic weight, match,
+filter and ownership changes still block the transition. Non-route resources,
+health, request completion and draining retain their existing checks. The local
+Kubernetes fixtures apply route defaults on create and patch, covering the
+previous GKE failure without a cloud run. This repair does not qualify the failed
+release or authorize another staging attempt.
+
 ## Contract and configuration
 
 The protected envelope is a published product request completing within 300

@@ -44,17 +44,29 @@ const object = (kind, name, spec) => ({
   metadata: { name, namespace: 'fixture', uid: `uid-${name}`, resourceVersion: '1' },
   spec,
 });
+function admitRouteDefaults(resource) {
+  if (resource.kind === 'HTTPRoute')
+    for (const rule of resource.spec.rules)
+      for (const backend of rule.backendRefs ?? []) {
+        backend.group ??= '';
+        backend.kind ??= 'Service';
+        backend.weight ??= 1;
+      }
+  return resource;
+}
 function fixture() {
-  const route = object('HTTPRoute', 'route', {
-    parentRefs: [{ name: 'gateway' }],
-    hostnames: ['fixture.example.test'],
-    rules: [
-      {
-        matches: [{ path: { type: 'PathPrefix', value: '/' } }],
-        backendRefs: [{ name: 'rivet-proxy', port: 80 }],
-      },
-    ],
-  });
+  const route = admitRouteDefaults(
+    object('HTTPRoute', 'route', {
+      parentRefs: [{ name: 'gateway' }],
+      hostnames: ['fixture.example.test'],
+      rules: [
+        {
+          matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+          backendRefs: [{ name: 'rivet-proxy', port: 80 }],
+        },
+      ],
+    }),
+  );
   const policy = object('GCPBackendPolicy', 'policy', {
     default: { timeoutSec: 3600, connectionDraining: { drainingTimeoutSec: 60 } },
     targetRef: { group: '', kind: 'Service', name: 'rivet-proxy' },
@@ -124,7 +136,7 @@ function fixture() {
     },
     async create(r) {
       assert.ok(!live.has(key(r)));
-      const v = structuredClone(r);
+      const v = admitRouteDefaults(structuredClone(r));
       v.metadata.uid = `new-${key(r)}`;
       v.metadata.resourceVersion = '1';
       live.set(key(r), v);
@@ -142,6 +154,7 @@ function fixture() {
       const v = live.get(key(r));
       assert.equal(v.metadata.resourceVersion, r.metadata.resourceVersion);
       v.spec = structuredClone(spec);
+      admitRouteDefaults(v);
       v.metadata.annotations = structuredClone(annotations);
       v.metadata.resourceVersion = String(Number(v.metadata.resourceVersion) + 1);
       events.push(['patch', r.kind, clock]);
@@ -247,6 +260,78 @@ test('lost route acknowledgement is observed on recovery without a duplicate pat
   await f.restore();
   await f.transition().finish(f.operation);
   assert.ok(proxyContinuitySettled(f.operation.record));
+});
+
+test('equivalent HTTPRoute backend defaults survive handoff, verification and restoration', async () => {
+  const f = fixture(),
+    read = f.io.read;
+  f.io.read = async (...args) => {
+    const resource = await read(...args);
+    if (resource?.kind === 'HTTPRoute')
+      for (const rule of resource.spec.rules)
+        for (const backend of rule.backendRefs ?? []) {
+          if (backend.group === '') delete backend.group;
+          if (backend.kind === 'Service') delete backend.kind;
+          if (backend.weight === 1) delete backend.weight;
+          backend.namespace ??= resource.metadata.namespace;
+        }
+    return resource;
+  };
+  const t = f.transition();
+  await t.prepare(f.operation);
+  await t.verify(f.operation);
+  await f.restore();
+  await t.finish(f.operation);
+  assert.ok(proxyContinuitySettled(f.operation.record));
+});
+
+test('routing comparisons still reject changed destinations, traffic policy and invalid defaults', async () => {
+  const changes = [
+    (r) => {
+      r.spec.rules[0].backendRefs[1].name = 'foreign';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].group = 'foreign.example';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].kind = 'OtherBackend';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].namespace = 'foreign';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].port = 9999;
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].weight = 0;
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].kind = null;
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].namespace = null;
+    },
+    (r) => {
+      r.spec.rules[0].matches[0].path.value = '/foreign';
+    },
+    (r) => {
+      r.spec.rules[0].filters[0].responseHeaderModifier.set[0].value = 'foreign';
+    },
+    (r) => {
+      r.spec.parentRefs[0].name = 'foreign';
+    },
+  ];
+  for (const change of changes) {
+    const f = fixture(),
+      t = f.transition();
+    await t.prepare(f.operation);
+    const before = f.events.length;
+    change(f.live.get('HTTPRoute/route'));
+    await assert.rejects(t.verify(f.operation), /Foreign routing specification/);
+    await assert.rejects(f.restore(), /Foreign routing specification/);
+    await assert.rejects(t.finish(f.operation), /Foreign routing specification/);
+    assert.equal(f.events.length, before, 'Changed routes must not be overwritten or their serving pool removed');
+  }
 });
 test('every bridge creation fences an unapplied intent and observes a committed lost acknowledgement', async () => {
   for (const kind of [
@@ -594,6 +679,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       assert.ok(!f.live.has(key));
       desired.metadata.uid = `new-${key}`;
       desired.metadata.resourceVersion = '1';
+      admitRouteDefaults(desired);
       f.live.set(key, desired);
       result = desired;
     } else if (action === 'patch') {
@@ -602,6 +688,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       assert.equal(current.metadata.uid, patch[0].value);
       assert.equal(current.metadata.resourceVersion, patch[1].value);
       current.spec = patch[2].value;
+      admitRouteDefaults(current);
       current.metadata.annotations = patch[3].value;
       current.metadata.resourceVersion = String(Number(current.metadata.resourceVersion) + 1);
       if (current.kind === 'HorizontalPodAutoscaler') {

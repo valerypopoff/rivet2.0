@@ -48,12 +48,16 @@ peer addresses cannot stand in for that client. See [client provenance](trusted-
 
 First-transition bridge creation dry-runs its Deployment through the actual
 Kubernetes admission chain before creating any bridge resources or changing HPA.
-Provider mutations to the requested specification block that transition. This
+Provider changes to requested shutdown or placement settings block that transition. This
 uses the existing actor/deployer create permission and persists no dry-run
 resource. Read-only installation inspection remains read-only. The GKE profile
 uses 360-second LB drain, 420-second preStop and 600-second termination grace;
 the previous 900-second grace was capped to 600 by Autopilot. A successful dry
 run does not replace exact-image upgrade/autoscaling or cleanup evidence.
+
+Route verification accepts documented HTTPRoute backend-reference defaults
+throughout handoff, recovery and cleanup. Meaningful routing changes still stop
+the rollout; see [routing verification](production-update-continuity.md#routing-verification-during-updates).
 
 Cleanup waits within its existing deadline for a newly discovered NEG's pending
 Gateway backend to appear before withdrawing routes. Only the typed pending
