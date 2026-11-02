@@ -925,6 +925,15 @@ all manifests precede the immutable install, source directories follow it, and
 and Compose wiring under test; it must not require the retired whole-checkout
 copy layout. `prepare-runtime-packages.test.mjs` exercises staged files and
 dependency resolution behavior rather than matching Dockerfile text.
+API production compilation uses `tsconfig.runtime.json` to exclude test-only
+deployment imports. API and executor Dockerfiles copy deployment tooling after
+application compilation, preserving that cache across rollout-only repairs.
+The API then bundles the autoscaler runtime closure and the fast candidate smoke
+boots its actual packaged command as non-root/read-only without cloud access.
+The separate minimal cleanup-worker image is scanned and published alongside the
+qualification actor; changing its mounted driver bundle does not add application
+or browser layers to the cleanup worker. See
+[fast staging failure](studio-server/automated-runtime-qualification.md#fast-failure-before-and-during-staging).
 The shared image-layout guard checks actual instruction order, not just the
 presence of a manifest string: root inputs, Yarn cache, package-manager check
 and every workspace manifest must precede installation; packages, scripts and

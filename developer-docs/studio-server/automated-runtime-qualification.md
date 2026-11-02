@@ -62,6 +62,94 @@ headroom, actual candidate readiness, accepted-work drain, routing health and
 cleanup checks remain required. See
 [replacement readiness](deployment-operations.md#replacement-readiness-without-warmup-jobs).
 
+### Fast failure before and during staging
+
+Build Images starts the **packaged autoscaler command** in the exact API image,
+as UID 10001 with a read-only filesystem and no network or cloud credentials,
+before the existing candidate Compose smoke. It checks health and normal Linux
+SIGTERM exit. Startup eagerly resolves `ws` and acknowledges its own successful
+health-port bind, so a missing dependency or an unrelated healthy listener cannot
+pass the smoke. API/executor/proxy/web startup and workflow traffic remain covered
+by the existing smoke. The autoscaler bundles its runtime dependency closure;
+its journal predicates live in `release-operation-state.mjs`, independently of
+proxy-handoff implementation. A packaging regression test boots the bundle
+outside the checkout and proves a missing import fails this same check.
+
+During provider prepare/upgrade/autoscaling, a read-only observer checks failed,
+non-ready application and init containers using the frozen predecessor/candidate images in the owned
+release namespace. Missing-module and invalid-program errors stop test commands
+early. Logs are bounded and remain private; an unchanged Pod/container state is
+required across the log read, including its owner, image and absence of deletion.
+A fresh running container retains its readiness window even if its predecessor
+crashed. Unreadable/stale logs from one container do not hide other failed
+containers. Image pulls, scheduling delays, probe failures, OOM and
+CrashLoopBackOff alone do not trigger this shortcut.
+
+Provider interruption and fatal startup abort the test command scope. Managed
+Helm/kubectl clients receive SIGTERM, then SIGKILL after five seconds if needed;
+closure is awaited before acknowledging worker termination. This affects only
+the owned local client, never Pod grace periods. Interrupted writes remain
+uncertain and are not retried. Captured commands receive EOF when no input is
+provided, avoiding clients hanging on an open stdin pipe. Settlement and cleanup run in a fresh command
+scope, with the existing ownership, accepted-work and absence checks. CI emits
+an error as soon as the phase fails, while cleanup continues; final job failure
+still waits for cleanup. Rejected or pending notification promises cannot prevent
+cleanup, and observer shutdown failures cannot skip gate/client closure.
+Production deployment remains blocked.
+
+A command-specific cancellation signal is combined with the phase signal; it
+cannot bypass phase shutdown. Hosted staging preparation validates configuration,
+compiles the actual provider/janitor package and serializes the exact ConfigMap
+and Deployment update before obtaining credentials or acquiring the shared lock.
+It then checks the live `kube-system` namespace UID against the configured staging
+cluster UID before any lock acquisition or Kubernetes write. Local mistakes and
+a wrong context therefore stop without claiming the staging lock. Failures after
+acquisition retain the lock for inspection; preparation never retries mutations
+or releases a lock after an uncertain shared update.
+
+Before replacing the cleanup worker, preparation reads the complete operation
+registry under the shared lock and requires existing operations to be closed with
+verified cleanup. An unresolved, malformed or partial inventory keeps the old
+worker in place. Kubernetes Pod readiness is followed by a bounded 60-second wait
+for a fresh heartbeat from the exact new driver and a live, Ready janitor Pod UID;
+denied reads fail immediately. The same health check runs **before** operation
+registry CREATE, so failed janitor admission cannot leave an unacknowledged
+operation record. Missing/old heartbeats are startup conditions, not a reason to
+run the paid test and discover the problem later.
+
+Release Rivet downloads both immutable input packets before cloud credentials or
+shared staging setup. Artifact download failure therefore cannot strand the
+staging lock or interrupt its cleanup worker.
+
+Local TLS fixtures share `fixtures/test-openssl.mjs`. On Windows it prefers Git's
+native `mingw64/bin/openssl.exe`, avoiding MSYS support-runtime startup failures
+before certificate generation; the former location remains a fallback. Linux
+continues to use `openssl` from PATH. These executables generate disposable test
+certificates only and do not change the deployed image or staging certificate path.
+
+The retained janitor now uses the separately scanned `qualification-janitor`
+image: pinned Node, CA certificates and the locked `ws` version, without browser,
+Helm, kubectl or the application checkout. Its actual bundled program remains
+in the immutable, driver-hash-bound ConfigMap. Publication runs an offline,
+non-root/read-only dependency and empty-inventory pass before publishing the
+image. Fresh publication receipts must include this janitor digest; old
+actor-only receipts cannot start a new hosted qualification.
+The janitor probe has its own ten-second watchdog. Both janitor and autoscaler
+probes also run through `images/lib/run-runtime-probe.mjs`, with a host-side
+30-second deadline and a separate ten-second container-removal deadline. The
+host deadline handles synchronous loops that block an in-process watchdog.
+Each probe has a unique container name; cleanup force-removes only that disposable
+container, and unconfirmed removal fails the image gate. This never changes
+Kubernetes request draining or Pod grace periods.
+The shared clean-source admission runs before either qualification image is
+built. Both archives use the same scan-result and exact-image identity checks.
+
+The janitor verifies completed historical records' input hashes and terminal
+cleanup markers, then skips them before checking the current driver digest.
+Verified history from an older driver therefore stays quiet after an update.
+Unresolved records retain the driver fence; inconsistent or malformed completion
+markers require inspection and never authorize cleanup.
+
 Route verification accepts documented HTTPRoute backend-reference defaults
 throughout handoff, recovery and cleanup. Meaningful routing changes still stop
 the rollout; see [routing verification](production-update-continuity.md#routing-verification-during-updates).
@@ -461,8 +549,9 @@ preflight; staging cannot prove that production stayed unchanged while it ran.
 
 The normal workflow uses `ubuntu-latest` for orchestration and production deploy.
 `studio-server-publish-qualification-images.yml` is a reusable, main-only workflow:
-it builds an actor from the exact committed source, pulls the pinned MinIO image,
-verifies both archive identities, scans the actor and publishes immutable digests.
+it builds an actor from the exact committed source and the small janitor image,
+pulls the pinned MinIO image, verifies all three archive identities, scans the
+actor and janitor, and publishes immutable digests.
 MinIO is pulled from the maintained immutable GHCR mirror because the original
 Quay digest rejects anonymous downloads. Its disposable hosted runner explicitly
 uses Docker's classic image store before any build or pull: Docker 29's default

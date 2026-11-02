@@ -49,13 +49,13 @@ RUN --mount=type=cache,target=/root/.cache/yarn \
     YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable
 COPY packages ./packages
 COPY scripts ./scripts
-COPY deploy ./deploy
 COPY tsconfig.base.json LICENSE README.md ./
 RUN YARN_NODE_LINKER=node-modules yarn build:runtime && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-evaluations run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-shared run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-bootstrap run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-executor run build
+COPY deploy ./deploy
 RUN mkdir /runtime && node deploy/studio-server/images/lib/prepare-runtime-packages.mjs /runtime/packages executor
 RUN node deploy/studio-server/images/lib/remove-dependency-test-fixtures.mjs /app/node_modules
 COPY --from=esbuild-security /out/@esbuild /app/node_modules/@esbuild

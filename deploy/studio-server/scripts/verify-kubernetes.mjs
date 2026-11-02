@@ -243,6 +243,8 @@ async function main() {
       'deploy/studio-server/scripts/runtime-control-local.test.mjs',
       'deploy/studio-server/scripts/runtime-upgrade-qualification.test.mjs',
       'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',
+      'deploy/studio-server/scripts/fast-rollout-failure.test.mjs',
+      'deploy/studio-server/scripts/prepare-hosted-release.test.mjs',
       'deploy/studio-server/scripts/release-qualification-policy.test.mjs',
       'deploy/studio-server/scripts/reusable-staging.test.mjs',
       'deploy/studio-server/scripts/reusable-staging-coordinator.test.mjs',

@@ -5,6 +5,8 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { runManagedGateCommand as run } from './lib/managed-gate-command.mjs';
+export { waitForManagedGateCommands } from './lib/managed-gate-command.mjs';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -56,65 +58,6 @@ function randomSecret() {
 
 function resolveKubectlBin(env) {
   return String(env.RIVET_K8S_KUBECTL_BIN ?? '').trim() || (process.platform === 'win32' ? 'kubectl.exe' : 'kubectl');
-}
-
-function commandLine(program, args) {
-  return [program, ...args].map((value) => (/[\s"]/u.test(value) ? JSON.stringify(value) : value)).join(' ');
-}
-
-const activeGateCommands = new Set();
-export async function waitForManagedGateCommands() {
-  await Promise.all([...activeGateCommands]);
-}
-async function run(program, args, options = {}) {
-  const {
-    cwd = rootDir,
-    input,
-    capture = process.env.RIVET_QUALIFICATION_RECEIPT_STDOUT === '1',
-    allowFailure = false,
-    env = process.env,
-  } = options;
-  return new Promise((resolve, reject) => {
-    const child = spawn(program, args, {
-      cwd,
-      shell: false,
-      windowsHide: true,
-      env,
-      stdio: capture ? ['pipe', 'pipe', 'pipe'] : input == null ? 'inherit' : ['pipe', 'inherit', 'inherit'],
-    });
-    let stdout = '';
-    let stderr = '';
-    if (capture) {
-      child.stdout.on('data', (chunk) => {
-        stdout += String(chunk);
-      });
-      child.stderr.on('data', (chunk) => {
-        stderr += String(chunk);
-      });
-    }
-    if (input != null && child.stdin) child.stdin.end(input);
-    let closed;
-    const closure = new Promise((resolveClose) => {
-      closed = resolveClose;
-    });
-    activeGateCommands.add(closure);
-    let childError;
-    child.once('error', (error) => {
-      childError = error;
-    });
-    child.once('close', (code) => {
-      closed();
-      activeGateCommands.delete(closure);
-      if (childError) return reject(childError);
-      const exitCode = code ?? 1;
-      if (exitCode === 0 || allowFailure) return resolve({ exitCode, stdout, stderr });
-      reject(
-        new Error(
-          `Command failed with exit code ${exitCode}: ${commandLine(program, args)}${stderr ? `\n${stderr}` : ''}`,
-        ),
-      );
-    });
-  });
 }
 
 export function renderSecrets(namespace, secrets) {

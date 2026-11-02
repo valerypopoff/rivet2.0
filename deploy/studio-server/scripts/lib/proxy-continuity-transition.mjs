@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { performance } from 'node:perf_hooks';
+export { proxyContinuitySettled } from './release-operation-state.mjs';
 import {
   assertProtectedProxyTemplate,
   assertRequestContinuityProfile,
@@ -63,17 +64,6 @@ const subset = (actual, expected) =>
     : expected && typeof expected === 'object'
       ? actual && typeof actual === 'object' && Object.entries(expected).every(([k, v]) => subset(actual[k], v))
       : equal(actual, expected);
-
-export function proxyContinuitySettled(record) {
-  const state = record.proxyContinuity;
-  return (
-    state === undefined ||
-    (state.phase === 'complete' &&
-      state.routeRestored === true &&
-      (!state.hpaFreezeIntent || state.hpaReleased) &&
-      state.entries.every((e) => !e.intent || e.absent))
-  );
-}
 
 /** Only a new, separately selected ingress pool is created. No serving pod is
  * relabelled, adopted or deleted to retrofit its immutable lifecycle. */

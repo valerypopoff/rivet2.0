@@ -136,51 +136,56 @@ export function stagingJanitorObjects(settings, { image, code, driverDigest, goo
     },
   ];
 }
+const entries = ['qualification/provider-entry.mjs', 'reusable-staging-janitor.mjs'].map((file) =>
+  path.join(root, 'deploy/studio-server/scripts', file),
+);
+const common = {
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node24',
+  banner: {
+    js: "import { createRequire as __createRequire } from 'node:module';import {pathToFileURL as __fileURL} from 'node:url';import {resolve as __resolve} from 'node:path';const require=__createRequire(import.meta.url);const __rivetSourceFile=(file)=>__fileURL(__resolve(process.env.RIVET_QUALIFICATION_SOURCE_ROOT||'.',file)).href;",
+  },
+  plugins: [
+    {
+      name: 'retain-cli-module-identities',
+      setup(context) {
+        context.onLoad({ filter: /\.mjs$/ }, async (args) => {
+          if (entries.includes(args.path) || !args.path.startsWith(root)) return;
+          const relative = path.relative(root, args.path).split(path.sep).join('/');
+          return {
+            loader: 'js',
+            contents: (await fs.readFile(args.path, 'utf8')).replaceAll(
+              'import.meta.url',
+              `__rivetSourceFile(${JSON.stringify(relative)})`,
+            ),
+          };
+        });
+      },
+    },
+  ],
+};
+
+export async function buildStagingJanitorRuntime() {
+  return build({
+    ...common,
+    entryPoints: [path.join(root, 'deploy/studio-server/scripts/reusable-staging-janitor.mjs')],
+    write: false,
+  });
+}
+
 export async function packageReusableStaging({ settings, output, janitorImage, googleServiceAccount }) {
   settings = reusableStagingSettings(settings);
   await fs.mkdir(output, { recursive: false }); // A package is immutable; never replace an existing one.
   const bundle = path.join(output, 'driver');
   await fs.mkdir(bundle);
-  const entries = ['qualification/provider-entry.mjs', 'reusable-staging-janitor.mjs'].map((file) =>
-    path.join(root, 'deploy/studio-server/scripts', file),
-  );
-  const common = {
-    bundle: true,
-    platform: 'node',
-    format: 'esm',
-    target: 'node24',
-    banner: {
-      js: "import { createRequire as __createRequire } from 'node:module';import {pathToFileURL as __fileURL} from 'node:url';import {resolve as __resolve} from 'node:path';const require=__createRequire(import.meta.url);const __rivetSourceFile=(file)=>__fileURL(__resolve(process.env.RIVET_QUALIFICATION_SOURCE_ROOT||'.',file)).href;",
-    },
-    plugins: [
-      {
-        name: 'retain-cli-module-identities',
-        setup(context) {
-          context.onLoad({ filter: /\.mjs$/ }, async (args) => {
-            if (entries.includes(args.path) || !args.path.startsWith(root)) return;
-            const relative = path.relative(root, args.path).split(path.sep).join('/');
-            return {
-              loader: 'js',
-              contents: (await fs.readFile(args.path, 'utf8')).replaceAll(
-                'import.meta.url',
-                `__rivetSourceFile(${JSON.stringify(relative)})`,
-              ),
-            };
-          });
-        },
-      },
-    ],
-  };
   await build({
     ...common,
     entryPoints: [path.join(root, 'deploy/studio-server/scripts/qualification/provider-entry.mjs')],
     outfile: path.join(bundle, 'provider.mjs'),
   });
-  const janitor = await build({
-    ...common,
-    entryPoints: [path.join(root, 'deploy/studio-server/scripts/reusable-staging-janitor.mjs')],
-    write: false,
-  });
+  const janitor = await buildStagingJanitorRuntime();
   await fs.writeFile(path.join(bundle, 'settings.json'), JSON.stringify(settings));
   for (const name of ['fault-transport.mjs', 'fault-transport-entry.mjs'])
     await fs.copyFile(path.join(root, 'deploy/studio-server/scripts/qualification', name), path.join(bundle, name));

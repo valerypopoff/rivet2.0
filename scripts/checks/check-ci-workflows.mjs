@@ -98,6 +98,15 @@ const windowCheck = qualifiedSteps.findIndex((s) =>
 );
 const googleAuth = qualifiedSteps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));
 assert.ok(windowCheck >= 0 && windowCheck < googleAuth, 'Validate qualification window before cloud credentials');
+for (const artifactPath of ['artifacts/automated-runtime-qualification', 'artifacts/qualification-image-publication']) {
+  const download = qualifiedSteps.findIndex(
+    (s) => s.uses?.startsWith('actions/download-artifact@') && s.with?.path === artifactPath,
+  );
+  assert.ok(
+    download >= 0 && download < googleAuth,
+    'Download required release inputs before credentials or shared staging setup',
+  );
+}
 assert.equal(automaticQualification.jobs.deploy['timeout-minutes'], 90);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');
@@ -817,6 +826,11 @@ for (const service of ['api', 'executor', 'web']) {
   }
 }
 assert.match(read('deploy/studio-server/images/api/Dockerfile'), /pnpm@10\.34\.8/);
+const janitorDockerfile = read('deploy/studio-server/images/janitor/Dockerfile');
+const janitorBases = [...janitorDockerfile.matchAll(/^FROM (node:[^\s]+)/gm)];
+assert.ok(janitorBases.length && janitorBases.every((match) => match[1] === runtimeNodeImage));
+assert.match(janitorDockerfile, /USER 10001:10001/);
+assert.match(janitorDockerfile, /ws@8\.21\.0/);
 const actorDockerfile = read('deploy/studio-server/images/qualification/Dockerfile');
 assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
 assert.ok(actorDockerfile.includes(`FROM ${runtimeNodeImage}`));

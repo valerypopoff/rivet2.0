@@ -4,6 +4,7 @@ import { isIP } from 'node:net';
 import { qualificationHash } from './runtime-qualification-execution.mjs';
 import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
 import { assertRequestContinuityProfile } from './request-continuity.mjs';
+import { observeStagingJanitor } from './staging-janitor-health.mjs';
 
 export const stagingOwner = 'rivet.dev/qualification-operation';
 export const stagingRegistry = 'rivet.dev/qualification-registry';
@@ -161,6 +162,17 @@ export class ReusableStagingState {
     assert.ok(node?.metadata.uid && node.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'));
     // An existing record is never a successful create acknowledgement.
     assert.equal(await this.api.json('GET', stagingRecordPath(this.settings, this.operation.operationId)), null);
+    // Validate the independent cleanup worker before recording an admitted
+    // operation. A startup failure must not strand an unacknowledged registry.
+    assert.ok(
+      await observeStagingJanitor(
+        (resource, name) =>
+          this.api.json('GET', `${namespacePath(this.settings.controlNamespace)}/${resource}/${name}`),
+        this.settings,
+        this.operation.driverBundleSha256,
+      ),
+      'Independent janitor is not freshly healthy for this exact driver',
+    );
     const object = {
       apiVersion: 'v1',
       kind: 'ConfigMap',
@@ -189,29 +201,6 @@ export class ReusableStagingState {
       },
     };
     const created = await this.api.json('POST', `${namespacePath(this.settings.controlNamespace)}/configmaps`, object);
-    const janitor = await this.api.json(
-      'GET',
-      `${namespacePath(this.settings.controlNamespace)}/configmaps/rivet-qualification-janitor-health`,
-    );
-    const health = JSON.parse(janitor?.data?.health ?? '{}');
-    assert.equal(health.clusterUid, this.settings.clusterUid);
-    assert.equal(
-      health.driverDigest,
-      this.operation.driverBundleSha256,
-      'Independent janitor has not approved this exact driver',
-    );
-    assert.ok(
-      Number.isFinite(health.observedAt) &&
-        Date.now() - health.observedAt >= 0 &&
-        Date.now() - health.observedAt < 60000,
-      'Independent janitor is not freshly healthy',
-    );
-    const owner = await this.api.json(
-      'GET',
-      `${namespacePath(this.settings.controlNamespace)}/pods/${dns(health.podName)}`,
-    );
-    assert.equal(owner?.metadata.uid, health.podUid);
-    assert.ok(!owner.metadata.deletionTimestamp);
     return {
       identity: created.metadata.uid,
       expiresAt: this.operation.expiresAt,

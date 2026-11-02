@@ -170,7 +170,7 @@ async function fixture(t, op = operation()) {
       spec: { nodeName: 'staging-node' },
     });
   pod(actor);
-  pod(owner);
+  pod(owner).status = { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] };
   const health = `/api/v1/namespaces/${settings().controlNamespace}/configmaps/rivet-qualification-janitor-health`;
   store(health, {
     metadata: { name: 'rivet-qualification-janitor-health', namespace: settings().controlNamespace },
@@ -613,6 +613,41 @@ printf 'exact process stopped; reused PID and wrong nonce untouched\\n'
     assert.match(result.stdout, /exact process stopped; reused PID and wrong nonce untouched/);
   },
 );
+
+test('unhealthy janitor admission never creates an operation registry', async (t) => {
+  for (const change of [
+    'old-driver',
+    'stale',
+    'future',
+    'missing',
+    'unready',
+    'dead',
+    'deleting',
+    'replaced',
+    'malformed',
+  ])
+    await t.test(change, async (t) => {
+      const f = await fixture(t);
+      const healthPath = `/api/v1/namespaces/${settings().controlNamespace}/configmaps/rivet-qualification-janitor-health`;
+      const health = JSON.parse(f.objects.get(healthPath).data.health);
+      if (change === 'old-driver') health.driverDigest = 'b'.repeat(64);
+      if (change === 'stale') health.observedAt = Date.now() - 60000;
+      if (change === 'future') health.observedAt = Date.now() + 60000;
+      f.objects.get(healthPath).data.health = change === 'malformed' ? 'invalid-json' : JSON.stringify(health);
+      if (change === 'missing') f.objects.delete(healthPath);
+      const janitor = f.objects.get(`/api/v1/namespaces/${owner.namespace}/pods/${owner.name}`);
+      if (change === 'unready') janitor.status.conditions[0].status = 'False';
+      if (change === 'dead') janitor.status.phase = 'Failed';
+      if (change === 'deleting') janitor.metadata.deletionTimestamp = new Date().toISOString();
+      if (change === 'replaced') janitor.metadata.uid = 'replacement-janitor';
+      await assert.rejects(f.state.arm(actor));
+      assert.equal(
+        f.requests.some((r) => r.method !== 'GET'),
+        false,
+        'Admission prerequisites must precede registry CREATE',
+      );
+    });
+});
 
 test('cleanup targets the current controller UID while retaining replaced identities in history', async (t) => {
   const f = await fixture(t);
@@ -1130,6 +1165,75 @@ test('normal cleanup proves exact absence and retains shared Gateway, runner and
   assert.ok(f.objects.has(`/api/v1/namespaces/${actor.namespace}/pods/${actor.name}`));
   assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 1);
 });
+test(
+  'provider startup observer matches manifest image objects and rejects stale or recovered log evidence',
+  { timeout: 15000 },
+  async (t) => {
+    for (const change of ['fatal', 'init', 'recovered', 'replaced', 'deleting', 'image-changed', 'starting'])
+      await t.test(change, async () => {
+        const gate = Object.create(ReusableProviderGate.prototype),
+          stop = new AbortController();
+        const image = { repository: 'registry.test/api', digest: `sha256:${'a'.repeat(64)}` };
+        gate.operation = { previous: { images: { api: image } }, candidate: { images: { api: image } } };
+        gate.config = { release: 'rivet-qualification' };
+        const pod = {
+          metadata: {
+            uid: 'original-pod',
+            name: 'autoscaler',
+            ownerReferences: [{ kind: 'ReplicaSet', controller: true }],
+          },
+          spec: { containers: [{ name: 'autoscaler', image: `${image.repository}@${image.digest}` }] },
+          status: {
+            containerStatuses: [
+              {
+                name: 'autoscaler',
+                ready: false,
+                restartCount: 2,
+                state: { waiting: { reason: 'CrashLoopBackOff' } },
+                lastState: { terminated: { exitCode: 1 } },
+              },
+            ],
+          },
+        };
+        if (change === 'init') {
+          pod.spec.initContainers = pod.spec.containers;
+          pod.spec.containers = [];
+          pod.status.initContainerStatuses = pod.status.containerStatuses;
+          pod.status.containerStatuses = [];
+        }
+        let lists = 0,
+          reads = 0,
+          logs = 0;
+        gate.kube = async (args) => {
+          if (args[0] === 'get' && args[1] === 'pods') {
+            assert.ok(args.includes('app.kubernetes.io/instance=rivet-qualification'));
+            if (++lists > 1) stop.abort(new Error('observation completed'));
+            return { exitCode: 0, stdout: JSON.stringify({ items: lists === 1 ? [pod] : [] }) };
+          }
+          if (args[0] === 'get' && args[1] === 'pod') {
+            const current = structuredClone(pod);
+            if (++reads === 2) {
+              setImmediate(() => stop.abort(new Error('observation completed')));
+              if (change === 'recovered') current.status.containerStatuses[0].ready = true;
+              if (change === 'replaced') current.metadata.uid = 'replacement-pod';
+              if (change === 'deleting') current.metadata.deletionTimestamp = 'now';
+              if (change === 'image-changed') current.spec.containers[0].image = 'foreign';
+              if (change === 'starting') current.status.containerStatuses[0].state = { running: {} };
+            }
+            return { exitCode: 0, stdout: JSON.stringify(current) };
+          }
+          assert.equal(args[0], 'logs');
+          assert.ok(args.includes('--previous') && args.includes('--limit-bytes=16384'));
+          logs++;
+          return { exitCode: 0, stdout: 'Error [ERR_MODULE_NOT_FOUND]: private dependency path' };
+        };
+        await gate.observeFatalStartup(stop);
+        assert.equal(logs, 1, 'The real provider adapter must match the manifest image digest');
+        assert.equal(stop.signal.reason.code === 'RIVET_FATAL_STARTUP', ['fatal', 'init'].includes(change));
+      });
+  },
+);
+
 test('independent janitor stays quiet before expiry; after expiry stops exact runner then cleans namespace', async (t) => {
   const op = operation(Date.now() - 1000),
     f = await fixture(t, op);
@@ -1145,6 +1249,38 @@ test('independent janitor stays quiet before expiry; after expiry stops exact ru
   assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 1);
   assert.equal(f.requests.find((r) => r.method === 'DELETE').input.preconditions.uid, actor.uid);
 });
+test('new janitors ignore verified completed history but retain driver fences for unresolved or inconsistent records', async (t) => {
+  for (const mode of ['completed', 'unresolved', 'inconsistent', 'malformed-flag', 'tampered-input'])
+    await t.test(mode, async (t) => {
+      const f = await fixture(t);
+      await f.state.arm(actor);
+      await f.state.change((record) => {
+        record.cleanupVerified = mode !== 'unresolved';
+        if (mode === 'malformed-flag') record.cleanupVerified = 'true';
+        record.closed = mode !== 'inconsistent';
+        record.phase = 'cleaned';
+      });
+      if (mode === 'tampered-input') {
+        const object = f.objects.get(
+          `/api/v1/namespaces/${settings().controlNamespace}/configmaps/${f.state.operation.operationId}`,
+        );
+        const record = JSON.parse(object.data.record);
+        record.operation.inputHash = 'f'.repeat(64);
+        object.data.record = JSON.stringify(record);
+      }
+      const outcomes = await stagingJanitorPass({
+        api: f.api,
+        cloud,
+        settings: { ...settings(), approvedDriverDigest: mode === 'malformed-flag' ? digest : 'b'.repeat(64) },
+        owner,
+        wait,
+      });
+      if (mode === 'completed') assert.deepEqual(outcomes, []);
+      else assert.equal(outcomes[0].status, 'blocked-inspect-private-registry');
+      assert.equal(f.requests.filter((r) => r.method === 'DELETE' || r.method === 'PATCH').length, 0);
+    });
+});
+
 test('paused cleanup owner and unacknowledged DELETE block takeover/replay rather than declaring success', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { createRequire } from 'node:module';
 import { autoscalerPolicy, reconcileExecutionAutoscaling } from './execution-autoscaler.mjs';
 import { createKubernetesTransport, createExecutionAutoscalerIO } from './execution-autoscaler-kubernetes.mjs';
 
@@ -8,6 +9,7 @@ const config = JSON.parse(process.env.RIVET_AUTOSCALER_CONFIG);
 const policy = autoscalerPolicy(config.policy);
 const transport = createKubernetesTransport({
   origin: `https://${process.env.KUBERNETES_SERVICE_HOST}:${process.env.KUBERNETES_SERVICE_PORT_HTTPS ?? '443'}`,
+  WebSocketClass: createRequire(import.meta.url)('ws'),
 });
 const io = createExecutionAutoscalerIO({ ...config, policy, transport });
 const runner = randomUUID();
@@ -17,7 +19,9 @@ const shutdown = new AbortController();
 const server = createServer((req, res) => {
   res.writeHead(Date.now() - lastCompletedAt < Math.max(180000, policy.maxReplicas * 30000) ? 200 : 503);
   res.end('autoscaler\n');
-}).listen(9090, '0.0.0.0');
+}).listen(9090, '0.0.0.0', () => {
+  console.log(JSON.stringify({ component: 'execution-autoscaler', state: 'listening' }));
+});
 for (const signal of ['SIGTERM', 'SIGINT'])
   process.on(signal, () => {
     stopped = true;

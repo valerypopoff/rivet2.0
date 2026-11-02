@@ -368,7 +368,14 @@ async function main(mode) {
           await write(path.join(privateDirectory, `${String(sequence++).padStart(3, '0')}-state.json`), state);
           await persist();
         },
-        { signal: signal.signal },
+        {
+          signal: signal.signal,
+          onFailure: ({ phase }) => {
+            console.error(
+              `::error title=Staging qualification failed::Phase ${phase} failed. Settlement and verified cleanup are running; no release was qualified.`,
+            );
+          },
+        },
       );
       await actor?.close({ cleanupVerified: lastState?.cleanupVerified });
       actor = undefined;
