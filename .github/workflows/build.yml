@@ -226,6 +226,10 @@ jobs:
         run: node scripts/ci/install-dependencies.mjs
       - name: Verify fresh Yarn PnP dependency map
         run: yarn check:pnp:fresh
+      - name: Verify image and launcher contracts
+        # These source-only checks need no compiled workspace exports. Catch
+        # Dockerfile contract drift on the PR, before the main image build.
+        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/proxy-image-contract.test.ts
       - name: Docs typecheck
         run: yarn test:docs
       - name: Test style

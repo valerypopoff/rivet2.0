@@ -64,6 +64,12 @@ cleanup checks remain required. See
 
 ### Fast failure before and during staging
 
+The ordinary Build workflow runs the source-only image/launcher contract tests
+in its existing static-validation job, before docs/style checks. This includes
+PRs targeting `main`, where the full Studio Server verifier is not a PR trigger.
+Dockerfile/build-target drift therefore fails before merge and image publication,
+without compiling the application or starting another environment.
+
 Build Images starts the **packaged autoscaler command** in the exact API image,
 as UID 10001 with a read-only filesystem and no network or cloud credentials,
 before the existing candidate Compose smoke. It checks health and normal Linux
@@ -78,7 +84,10 @@ outside the checkout and proves a missing import fails this same check.
 During provider prepare/upgrade/autoscaling, a read-only observer checks failed,
 non-ready application and init containers using the frozen predecessor/candidate images in the owned
 release namespace. Missing-module and invalid-program errors stop test commands
-early. Logs are bounded and remain private; an unchanged Pod/container state is
+early, including Node loader errors for invalid package configuration, blocked
+package exports/imports, directory imports and unsupported file extensions.
+Ordinary application, connectivity and stream errors remain outside this shortcut.
+Logs are bounded and remain private; an unchanged Pod/container state is
 required across the log read, including its owner, image and absence of deletion.
 A fresh running container retains its readiness window even if its predecessor
 crashed. Unreadable/stale logs from one container do not hide other failed
@@ -88,7 +97,11 @@ CrashLoopBackOff alone do not trigger this shortcut.
 Provider interruption and fatal startup abort the test command scope. Managed
 Helm/kubectl clients receive SIGTERM, then SIGKILL after five seconds if needed;
 closure is awaited before acknowledging worker termination. This affects only
-the owned local client, never Pod grace periods. Interrupted writes remain
+the owned local client, never Pod grace periods. Linux clients run in separate
+process groups so cancellation also stops their auth/helpers, including helpers
+holding output pipes after the client exits. Helpers with no inherited pipes are
+also stopped when a cancelled client closes; unrelated command groups are left
+running. Windows retains direct client termination. Interrupted writes remain
 uncertain and are not retried. Captured commands receive EOF when no input is
 provided, avoiding clients hanging on an open stdin pipe. Settlement and cleanup run in a fresh command
 scope, with the existing ownership, accepted-work and absence checks. CI emits

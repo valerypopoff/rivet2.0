@@ -925,6 +925,9 @@ all manifests precede the immutable install, source directories follow it, and
 and Compose wiring under test; it must not require the retired whole-checkout
 copy layout. `prepare-runtime-packages.test.mjs` exercises staged files and
 dependency resolution behavior rather than matching Dockerfile text.
+Build's existing static-validation job runs the image/launcher contract file
+before docs/style checks, including PRs to `main`. These source-only tests need
+no compiled workspace exports; keep this cheap check ahead of image publication.
 API production compilation uses `tsconfig.runtime.json` to exclude test-only
 deployment imports; the image contract checks that runtime compiler target.
 The ordinary API build still type-checks tests. API and executor Dockerfiles copy
@@ -1429,8 +1432,8 @@ work behind it is parallelized.
    `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
    failure cannot hide failures in other packages.
-4. `static-validation` runs PnP freshness, docs typechecking, `yarn test:style`,
-   and Prettier in parallel with compilation.
+4. `static-validation` runs PnP freshness, source-only image/launcher contracts,
+   docs typechecking, `yarn test:style`, and Prettier in parallel with compilation.
    Graph Builder assets are not checked in a second named step because
    `yarn test:style` already owns that complete gate.
 5. `javascript-audit` runs separately, so an npm registry outage is clearly

@@ -5,6 +5,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 export function fatalStartupReason(log) {
   if (/\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)\b/.test(log)) return 'missing-module';
   if (
+    /\b(?:ERR_UNSUPPORTED_DIR_IMPORT|ERR_PACKAGE_PATH_NOT_EXPORTED|ERR_PACKAGE_IMPORT_NOT_DEFINED|ERR_INVALID_PACKAGE_CONFIG|ERR_UNKNOWN_FILE_EXTENSION)\b/.test(
+      log,
+    )
+  )
+    return 'invalid-program';
+  if (
     /SyntaxError: (?:Unexpected token|Unexpected identifier|Invalid or unexpected token|Cannot use import statement|The requested module .* does not provide an export named)/.test(
       log,
     )
