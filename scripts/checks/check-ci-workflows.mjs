@@ -98,6 +98,30 @@ const windowCheck = qualifiedSteps.findIndex((s) =>
 );
 const googleAuth = qualifiedSteps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));
 assert.ok(windowCheck >= 0 && windowCheck < googleAuth, 'Validate qualification window before cloud credentials');
+const prepareSetup = qualifiedSteps.findIndex((s) => s.id === 'prepare');
+const inspectSetup = qualifiedSteps.findIndex((s) => s.id === 'inspect');
+const executeOperation = qualifiedSteps.findIndex((s) => s.id === 'execute');
+const closeSetup = qualifiedSteps.findIndex((s) => s.run?.endsWith('prepare-hosted-release.mjs cleanup-staging-setup'));
+assert.ok(
+  googleAuth < prepareSetup &&
+    prepareSetup < inspectSetup &&
+    inspectSetup < executeOperation &&
+    executeOperation < closeSetup,
+);
+assert.equal(
+  qualifiedSteps[closeSetup].if,
+  "${{ always() && steps.execute.outcome == 'skipped' && (steps.prepare.outcome == 'failure' || steps.inspect.outcome == 'failure') }}",
+  'Only failed pre-operation setup may use setup lock closure',
+);
+assert.equal(qualifiedSteps[closeSetup]['timeout-minutes'], 10);
+for (const job of [automaticQualification.jobs.qualified, automaticQualification.jobs.deploy]) {
+  const prepare = job.steps.find((s) => s.run?.match(/prepare-hosted-release\.mjs (staging|production)$/));
+  assert.equal(
+    prepare?.env?.RIVET_DEPLOYMENT_CONFIGURATION,
+    '${{ secrets.RIVET_DEPLOYMENT_CONFIGURATION }}',
+    'Deployment configuration must be an environment secret; Actions logs plaintext variables before execution',
+  );
+}
 for (const artifactPath of ['artifacts/automated-runtime-qualification', 'artifacts/qualification-image-publication']) {
   const download = qualifiedSteps.findIndex(
     (s) => s.uses?.startsWith('actions/download-artifact@') && s.with?.path === artifactPath,

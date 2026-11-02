@@ -95,11 +95,13 @@ test('admission locks are exclusive, owner-bound and deleted only by their exact
     owner = Buffer.from('first operation');
   const generation = await f.cloud.acquire(owner);
   await f.cloud.assertOwner(generation, owner);
+  await assert.rejects(f.cloud.assertReleased(), /absence is unconfirmed/);
   await assert.rejects(f.cloud.acquire(Buffer.from('second operation')), /no overwrite/);
   await assert.rejects(f.cloud.assertOwner(generation, Buffer.from('different operation')), /another run/);
   await assert.rejects(f.cloud.release(Number(generation) + 1), /unconfirmed/);
   assert.equal(f.objects.size, 1);
   await f.cloud.release(generation);
+  await f.cloud.assertReleased();
   assert.equal(f.objects.size, 0);
   f.lose();
   await assert.rejects(f.cloud.acquire(owner), /acknowledgement is uncertain/);

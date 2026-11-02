@@ -7,8 +7,17 @@ import { parseAllDocuments, stringify } from 'yaml';
 import { packageReusableStaging } from './package-reusable-staging.mjs';
 import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
 import { assertActionsQualificationWindow } from './lib/runtime-qualification-execution.mjs';
-import { waitForStagingJanitor } from './lib/staging-janitor-health.mjs';
+import { waitForStagingJanitor, observeStagingJanitor } from './lib/staging-janitor-health.mjs';
 import { stagingOwner } from './lib/reusable-staging-state.mjs';
+import { assertStagingSetupAccess } from './lib/staging-coordinator-access.mjs';
+import {
+  setupKubernetes,
+  assertClosedSetupInventory,
+  saveStagingSetup,
+  closeStagingSetup,
+  assertSetupJanitorUpdate,
+} from './lib/hosted-staging-setup.mjs';
+import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const runCommand = (bin, args, env = process.env) =>
@@ -28,13 +37,70 @@ function assertClusterIdentity(identity) {
   for (const name of ['projectId', 'clusterName', 'region']) assert.match(identity[name], /^[a-z][a-z0-9-]+$/);
 }
 
-export async function prepareHostedRelease(
+function failureCode(error) {
+  if (
+    String(error.stdout ?? '').trim() === 'no' ||
+    /forbidden|permission.?denied|denied read/i.test(String(error.stderr ?? error.message))
+  )
+    return 'permission_denied';
+  if (error.code === 'ENOENT') return 'command_unavailable';
+  if (error.code === 'ETIMEDOUT') return 'command_timeout';
+  return 'setup_failed';
+}
+
+export async function prepareHostedRelease(mode, options = {}) {
+  const phase = { name: 'configuration' };
+  try {
+    return await prepareHostedReleaseWork(mode, { ...options, phase });
+  } catch (error) {
+    if (phase.receipt) {
+      phase.receipt.writerClosed = true;
+      try {
+        await saveStagingSetup(phase.directory, phase.receipt, phase.authenticated ? phase.cloud : undefined);
+      } catch (failure) {
+        error = new AggregateError([error, failure], 'Setup and writer receipt persistence failed', { cause: error });
+      }
+    }
+    throw await preparationFailure(error, phase);
+  }
+}
+
+async function preparationFailure(error, phase) {
+  const failures = [error];
+  const primary = error instanceof AggregateError ? error.cause ?? error.errors[0] : error;
+  const detail = { phase: phase.name, code: failureCode(primary), ...deploymentFailureDetails(error) };
+  const filename = phase.name === 'setup-closure' ? 'setup-closure-failure.json' : 'preparation-failure.json';
+  if (phase.directory) {
+    try {
+      await fs.writeFile(path.join(phase.directory, filename), JSON.stringify(detail), { mode: 0o600 });
+    } catch (failure) {
+      failures.push(failure);
+    }
+  }
+  if (phase.authenticated && phase.cloud) {
+    try {
+      await phase.cloud.put(`setup/${phase.operationId}/${filename}`, Buffer.from(JSON.stringify(detail)));
+    } catch (failure) {
+      failures.push(failure);
+    }
+  }
+  const wrapped = new Error(
+    `Hosted release preparation failed at ${phase.name} (${detail.code}); inspect private setup evidence.`,
+    { cause: failures.length === 1 ? error : new AggregateError(failures, 'Setup and diagnostic persistence failed') },
+  );
+  // Only this fixed message is public. Native command errors remain in the private cause/receipt.
+  wrapped.name = 'HostedPreparationError';
+  return wrapped;
+}
+
+async function prepareHostedReleaseWork(
   mode,
   {
     environment = process.env,
     run = runCommand,
     cloudEvidence = privateCloudEvidence,
     publicationFile = path.join(root, 'artifacts/qualification-image-publication/publication.json'),
+    phase,
   } = {},
 ) {
   assert.equal(environment.GITHUB_REF, 'refs/heads/main');
@@ -42,11 +108,14 @@ export async function prepareHostedRelease(
   assert.match(environment.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
   assert.match(environment.GITHUB_RUN_ATTEMPT ?? '', /^[1-9][0-9]*$/);
   if (mode === 'staging') assertActionsQualificationWindow(Number(environment.RIVET_QUALIFICATION_MAX_SECONDS));
-  const configuration = JSON.parse(environment.RIVET_DEPLOYMENT_CONFIGURATION);
+  const rawConfiguration = environment.RIVET_DEPLOYMENT_CONFIGURATION;
   delete environment.RIVET_DEPLOYMENT_CONFIGURATION;
-  assert.equal(configuration.protocol, 1);
   const directory = path.join(environment.RUNNER_TEMP, `rivet-${mode}`);
   await fs.mkdir(directory, { mode: 0o700 });
+  phase.directory = directory;
+  assert.ok(rawConfiguration, 'Protected deployment configuration secret is missing');
+  const configuration = JSON.parse(rawConfiguration);
+  assert.equal(configuration.protocol, 1);
   const variables = {};
   const kubeconfig = path.join(directory, 'kubeconfig');
   const credentialEnvironment = { ...environment, KUBECONFIG: kubeconfig, USE_GKE_GCLOUD_AUTH_PLUGIN: 'True' };
@@ -80,6 +149,8 @@ export async function prepareHostedRelease(
   variables.RIVET_QUALIFICATION_PRODUCTION_KUBECONFIG = kubeconfig;
   assertVariables(variables);
   if (mode === 'staging') {
+    phase.name = 'package';
+    assert.match(environment.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
     const s = configuration.staging;
     assertClusterIdentity(s);
     assert.match(p.valuesDigest, /^sha256:[a-f0-9]{64}$/);
@@ -97,9 +168,12 @@ export async function prepareHostedRelease(
     }
     const settings = { ...s, actorImage: publication.actor.image, objectStorageImage: publication.minio.image };
     const cloud = cloudEvidence({ bucket: configuration.evidenceBucket, prefix: 'qualification' });
+    phase.cloud = cloud;
+    const operationId = `rivet-q-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}`;
+    phase.operationId = operationId;
     const owner = Buffer.from(
       JSON.stringify({
-        operationId: `rivet-q-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}`,
+        operationId,
         sourceSha: environment.GITHUB_SHA,
       }),
     );
@@ -133,59 +207,69 @@ export async function prepareHostedRelease(
       RIVET_QUALIFICATION_PROJECT_NUMBER: s.projectNumber,
     });
     assertVariables(variables);
+    phase.name = 'credentials';
+    // The workflow has already authenticated to Google. Preserve credential-fetch
+    // failures privately too, even if cluster access itself is denied.
+    phase.authenticated = true;
     credentials(p);
     credentials(s);
-    const system = JSON.parse(
-      run('kubectl', [
-        '--kubeconfig',
-        kubeconfig,
-        '--context',
-        s.context,
-        'get',
-        'namespace',
-        'kube-system',
-        '-o',
-        'json',
-        '--request-timeout=15s',
-      ]),
-    );
-    assert.equal(system.metadata?.uid, s.clusterUid, 'Staging context points to another cluster');
+    phase.name = 'cluster-identity';
+    const read = setupKubernetes(s, kubeconfig, run);
+    const system = read('namespace', 'kube-system', null);
+    assert.equal(system?.metadata?.uid, s.clusterUid, 'Staging context points to another cluster');
     assert.ok(!system.metadata.deletionTimestamp, 'Staging cluster identity is terminating');
+    phase.name = 'permissions';
+    assertStagingSetupAccess(s, kubeconfig, run);
+    // Reject a known unresolved operation without taking a new lock. Repeat
+    // under the lock below to cover concurrent admission between these reads.
+    phase.name = 'registry';
+    assertClosedSetupInventory(read('configmaps', undefined, s.controlNamespace, stagingOwner));
+    phase.name = 'baseline-health';
+    const deployment = read('deployments', 'rivet-qualification-janitor');
+    assert.ok(deployment?.metadata.uid && !deployment.metadata.deletionTimestamp, 'Cleanup worker identity is missing');
+    const baselineDigest = JSON.parse(
+      read('configmaps', 'rivet-qualification-janitor-health')?.data?.health ?? '{}',
+    ).driverDigest;
+    assert.match(baselineDigest ?? '', /^[a-f0-9]{64}$/, 'Existing cleanup worker driver is missing');
+    assert.ok(await observeStagingJanitor(read, s, baselineDigest), 'Existing cleanup worker is not freshly healthy');
+    const receipt = (phase.receipt = {
+      protocol: 1,
+      operationId,
+      sourceSha: environment.GITHUB_SHA,
+      bucket: configuration.evidenceBucket,
+      settings: s,
+      deploymentUid: deployment.metadata.uid,
+      baselineSpec: deployment.spec,
+      baselineDriverDigest: baselineDigest,
+      driverDigest: packaged.driverDigest,
+      janitorImage: publication.janitor.image,
+      codeName: update.find((o) => o.kind === 'ConfigMap').metadata.name,
+      updateIssued: false,
+      writerClosed: false,
+    });
+    phase.name = 'lock';
+    await saveStagingSetup(directory, receipt);
     const generation = await cloud.acquire(owner);
+    receipt.generation = generation;
+    await saveStagingSetup(directory, receipt, cloud);
     variables.RIVET_QUALIFICATION_LOCK_GENERATION = generation;
-    const registry = JSON.parse(
-      run('kubectl', [
-        '--kubeconfig',
-        kubeconfig,
-        '--context',
-        s.context,
-        '-n',
-        s.controlNamespace,
-        'get',
-        'configmaps',
-        '-l',
-        stagingOwner,
-        '-o',
-        'json',
-        '--request-timeout=15s',
-      ]),
-    );
-    assert.ok(
-      Array.isArray(registry.items) && !registry.metadata?.continue,
-      'Staging registry inventory is incomplete',
-    );
-    for (const item of registry.items) {
-      const record = JSON.parse(item.data?.record ?? '{}');
-      assert.ok(
-        record.cleanupVerified === true && record.phase === 'cleaned' && record.closed === true,
-        'An existing staging operation needs cleanup; keep its current janitor',
-      );
-    }
+    phase.name = 'registry';
+    assertClosedSetupInventory(read('configmaps', undefined, s.controlNamespace, stagingOwner));
+    phase.name = 'private-evidence';
     await cloudEvidence({
       bucket: configuration.evidenceBucket,
       prefix: `qualification/packages/rivet-q-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}`,
     }).saveDirectory(output);
+    phase.name = 'janitor-update';
+    receipt.updateIssued = true;
+    await saveStagingSetup(directory, receipt, cloud);
     run('kubectl', ['--kubeconfig', kubeconfig, '--context', s.context, 'apply', '-f', updateFile]);
+    const applied = read('deployments', 'rivet-qualification-janitor');
+    assertSetupJanitorUpdate(applied, receipt);
+    receipt.appliedSpec = applied.spec;
+    receipt.updateAcknowledged = true;
+    await saveStagingSetup(directory, receipt, cloud);
+    phase.name = 'janitor-rollout';
     run('kubectl', [
       '--kubeconfig',
       kubeconfig,
@@ -198,29 +282,10 @@ export async function prepareHostedRelease(
       s.controlNamespace,
       '--timeout=10m',
     ]);
-    await waitForStagingJanitor(
-      (resource, name) => {
-        const output = run('kubectl', [
-          '--kubeconfig',
-          kubeconfig,
-          '--context',
-          s.context,
-          '-n',
-          s.controlNamespace,
-          'get',
-          resource,
-          name,
-          '--ignore-not-found',
-          '-o',
-          'json',
-          '--request-timeout=5s',
-        ]);
-        return output ? JSON.parse(output) : null;
-      },
-      s,
-      packaged.driverDigest,
-    );
+    phase.name = 'janitor-health';
+    await waitForStagingJanitor(read, s, packaged.driverDigest);
   } else {
+    phase.name = 'production-installation';
     assert.match(configuration.installationUri, /^gs:\/\/[a-z0-9.-]+\/[a-zA-Z0-9/_-]+\.json#[1-9][0-9]*$/);
     credentials(p);
     const file = path.join(directory, 'installation.json');
@@ -244,14 +309,60 @@ export async function prepareHostedRelease(
     });
   }
   assertVariables(variables);
+  phase.name = 'export';
   for (const [key, value] of Object.entries(variables)) {
     await fs.appendFile(environment.GITHUB_ENV, `${key}=${value}\n`);
   }
+  if (phase.receipt) {
+    phase.receipt.writerClosed = true;
+    await saveStagingSetup(directory, phase.receipt, phase.cloud);
+  }
   console.log(`Prepared ${mode} job; private configuration and credentials were not logged.`);
 }
+
+export async function cleanupHostedStagingSetup({
+  environment = process.env,
+  run = runCommand,
+  cloudEvidence = privateCloudEvidence,
+} = {}) {
+  assert.equal(environment.GITHUB_REF, 'refs/heads/main');
+  assert.match(environment.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
+  assert.match(environment.GITHUB_RUN_ATTEMPT ?? '', /^[1-9][0-9]*$/);
+  assert.match(environment.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
+  const directory = path.join(environment.RUNNER_TEMP, 'rivet-staging');
+  try {
+    return await closeStagingSetup({ directory, environment, run, cloudEvidence });
+  } catch (error) {
+    const phase = { name: 'setup-closure', directory };
+    try {
+      const receipt = JSON.parse(await fs.readFile(path.join(directory, 'staging-setup.json'), 'utf8'));
+      if (
+        receipt.sourceSha === environment.GITHUB_SHA &&
+        receipt.operationId === `rivet-q-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}`
+      ) {
+        Object.assign(phase, {
+          authenticated: true,
+          operationId: receipt.operationId,
+          cloud: cloudEvidence({ bucket: receipt.bucket, prefix: 'qualification' }),
+        });
+      }
+    } catch {
+      /* Preserve the original closure failure even if its receipt cannot be read. */
+    }
+    throw await preparationFailure(error, phase);
+  }
+}
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  prepareHostedRelease(process.argv[2]).catch(() => {
-    console.error('Hosted release preparation failed; inspect private receipts before any retry.');
+  const cleanup = process.argv[2] === 'cleanup-staging-setup';
+  (cleanup
+    ? cleanupHostedStagingSetup().then((result) => console.log(`Staging setup closure: ${result.state}`))
+    : prepareHostedRelease(process.argv[2])
+  ).catch((error) => {
+    console.error(
+      error.name === 'HostedPreparationError'
+        ? error.message
+        : 'Staging setup closure is unconfirmed; retain the lock and inspect private evidence.',
+    );
     process.exitCode = 1;
   });
 }
