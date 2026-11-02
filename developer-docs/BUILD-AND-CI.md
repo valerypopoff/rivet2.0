@@ -1284,13 +1284,20 @@ It also audits the same lockfile without those ignores before the normal audit,
 so a temporary Rust exception that no longer matches an advisory fails CI and
 must be removed. Remove it as soon as a compatible fix is available.
 
-The October 2026 ZIP review is deliberately limited to registry `zip 0.6.6`
+The November 2, 2026 ZIP re-review is deliberately limited to registry `zip 0.6.6`
 with registry `tauri 1.8.3` as its sole consumer. The exception checker pins both
 crate checksums, rejects extra consumers/versions in the generated Cargo lockfile,
 and requires the unfiltered audit's ZIP version to match. These are temporary
-reachability exceptions until **2026-11-01**, not patched dependencies or blanket
+reachability exceptions until **2026-11-16**, not patched dependencies or blanket
 permission to extract untrusted archives. Do not disable the audit, broaden the
 version pins or remove the updater merely to make CI green.
+
+The refreshed unfiltered audit still reports only the existing h2 finding and
+these three ZIP findings. The re-review verified the cached crate archive
+checksums against the pinned lockfile, signature verification before installation,
+the Windows-only ZIP updater branch and its regular-file extraction loop. The
+new date is a bounded re-review window; it adds no ignored advisory, consumer,
+version or archive entry point. The planned dependency migration remains needed.
 
 RustSec [0367](https://rustsec.org/advisories/RUSTSEC-2026-0367.html),
 [0368](https://rustsec.org/advisories/RUSTSEC-2026-0368.html) and
