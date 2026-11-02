@@ -35,14 +35,18 @@ export function publicationInputs(env) {
   assert.match(env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
   assert.match(env.GITHUB_REPOSITORY ?? '', /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/);
   for (const key of ['GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT']) assert.match(env[key] ?? '', /^[1-9][0-9]*$/);
-  for (const key of ['ACTOR_ARCHIVE_SHA256', 'MINIO_ARCHIVE_SHA256']) assert.match(env[key] ?? '', /^[a-f0-9]{64}$/);
+  for (const key of ['ACTOR_ARCHIVE_SHA256', 'JANITOR_ARCHIVE_SHA256', 'MINIO_ARCHIVE_SHA256'])
+    assert.match(env[key] ?? '', /^[a-f0-9]{64}$/);
   assert.match(env.ACTOR_IMAGE_ID ?? '', /^sha256:[a-f0-9]{64}$/);
+  assert.match(env.JANITOR_IMAGE_ID ?? '', /^sha256:[a-f0-9]{64}$/);
   return {
     sourceSha: env.GITHUB_SHA,
     namespace: `ghcr.io/${env.GITHUB_REPOSITORY.toLowerCase()}-studio-server`,
     tag: `${env.GITHUB_SHA}-${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`,
     actorImageId: env.ACTOR_IMAGE_ID,
     actorArchiveSha256: env.ACTOR_ARCHIVE_SHA256,
+    janitorImageId: env.JANITOR_IMAGE_ID,
+    janitorArchiveSha256: env.JANITOR_ARCHIVE_SHA256,
     minioArchiveSha256: env.MINIO_ARCHIVE_SHA256,
   };
 }
@@ -60,6 +64,27 @@ export async function preparePublicationOutput(root) {
   await fs.mkdir(path.dirname(output), { recursive: true });
   await fs.mkdir(output); // Never inherit a scan or publication receipt from an earlier attempt.
   return output;
+}
+
+async function scanPublicationArchive(archive, output, imageId) {
+  runPublicationCommand(
+    process.execPath,
+    [
+      path.join(root, 'scripts/ci/scan-container-images.mjs'),
+      '--archive',
+      archive,
+      '--platform',
+      'linux/amd64',
+      '--output',
+      output,
+    ],
+    { stdio: 'inherit' },
+  );
+  const assessment = JSON.parse(await fs.readFile(path.join(output, 'linux-amd64/assessment.json')));
+  assert.equal(JSON.parse(await fs.readFile(path.join(output, 'result.json'))).passed, true);
+  assert.equal(assessment.imageId, imageId);
+  assert.equal(assessment.blockers.length, 0);
+  return assessment;
 }
 
 export async function publishQualificationImages(env = process.env, { directory = inputRoot } = {}) {
@@ -83,11 +108,14 @@ export async function publishQualificationImages(env = process.env, { directory 
   assert.equal(await fs.realpath(directory), directory, 'Publication input root cannot be redirected');
   const actorArchive = path.join(directory, 'actor.tar');
   const minioArchive = path.join(directory, 'minio.tar');
+  const janitorArchive = path.join(directory, 'janitor.tar');
   await verifyPublicationArchive(actorArchive, input.actorArchiveSha256);
   await verifyPublicationArchive(minioArchive, input.minioArchiveSha256);
-  for (const archive of [actorArchive, minioArchive]) run('docker', ['load', '--input', archive]);
+  await verifyPublicationArchive(janitorArchive, input.janitorArchiveSha256);
+  for (const archive of [actorArchive, minioArchive, janitorArchive]) run('docker', ['load', '--input', archive]);
   const identity = (image) => run('docker', ['image', 'inspect', image, '--format', '{{.Id}}']);
   assert.equal(identity(input.actorImageId), input.actorImageId);
+  assert.equal(identity(input.janitorImageId), input.janitorImageId);
   assert.equal(identity(minioImageId), minioImageId);
   run('docker', [
     'run',
@@ -106,29 +134,17 @@ export async function publishQualificationImages(env = process.env, { directory 
     run('docker', ['run', '--rm', '--pull=never', '--network=none', minioImageId, '--version']).includes(minioRelease),
   );
   const output = await preparePublicationOutput(root);
-  const scan = path.join(output, 'actor-scan');
-  run(
-    process.execPath,
-    [
-      path.join(root, 'scripts/ci/scan-container-images.mjs'),
-      '--archive',
-      actorArchive,
-      '--platform',
-      'linux/amd64',
-      '--output',
-      scan,
-    ],
-    { stdio: 'inherit' },
+  const assessment = await scanPublicationArchive(actorArchive, path.join(output, 'actor-scan'), input.actorImageId);
+  const janitorAssessment = await scanPublicationArchive(
+    janitorArchive,
+    path.join(output, 'janitor-scan'),
+    input.janitorImageId,
   );
-  const assessment = JSON.parse(await fs.readFile(path.join(scan, 'linux-amd64/assessment.json')));
-  const result = JSON.parse(await fs.readFile(path.join(scan, 'result.json')));
-  assert.equal(result.passed, true);
-  assert.equal(assessment.imageId, input.actorImageId);
-  assert.equal(assessment.blockers.length, 0);
   // The private input directory is administrator-owned. Recheck after scanning
   // so changed archives cannot inherit the earlier source/hash admission.
   await verifyPublicationArchive(actorArchive, input.actorArchiveSha256);
   await verifyPublicationArchive(minioArchive, input.minioArchiveSha256);
+  await verifyPublicationArchive(janitorArchive, input.janitorArchiveSha256);
   const publish = (id, name) => {
     const repository = `${input.namespace}/${name}`;
     const tag = `${repository}:${input.tag}`;
@@ -153,6 +169,13 @@ export async function publishQualificationImages(env = process.env, { directory 
       archiveSha256: input.actorArchiveSha256,
       scannerImage: assessment.scannerImage,
       database: assessment.database,
+    },
+    janitor: {
+      image: publish(input.janitorImageId, 'qualification-janitor'),
+      imageId: input.janitorImageId,
+      archiveSha256: input.janitorArchiveSha256,
+      scannerImage: janitorAssessment.scannerImage,
+      database: janitorAssessment.database,
     },
     minio: {
       image: publish(minioImageId, 'qualification-minio'),

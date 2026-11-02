@@ -122,6 +122,16 @@ jobs:
 
       - name: Validate approved test window before cloud access
         run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-window
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/automated-runtime-qualification
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-image-publication-${{ inputs.build_run_id }}-${{ needs.built.outputs.run_attempt }}
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/qualification-image-publication
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.RIVET_GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
@@ -129,20 +139,10 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         with:
           install_components: gke-gcloud-auth-plugin,kubectl
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: qualification-image-publication-${{ inputs.build_run_id }}-${{ needs.built.outputs.run_attempt }}
-          run-id: ${{ inputs.build_run_id }}
-          github-token: ${{ github.token }}
-          path: artifacts/qualification-image-publication
       - name: Prepare private cloud job configuration
         env:
           RIVET_DEPLOYMENT_CONFIGURATION: ${{ vars.RIVET_DEPLOYMENT_CONFIGURATION }}
         run: corepack yarn node deploy/studio-server/scripts/prepare-hosted-release.mjs staging
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: qualification-inputs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/automated-runtime-qualification
       - name: Observe installed predecessor with read-only credentials
         run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs inspect
       - name: Run approved provider operation and compile evidence after cleanup

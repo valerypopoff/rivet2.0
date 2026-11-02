@@ -54,4 +54,5 @@ jobs:
           path: |
             artifacts/qualification-image-publication/publication.json
             artifacts/qualification-image-publication/actor-scan/linux-amd64/assessment.json
+            artifacts/qualification-image-publication/janitor-scan/linux-amd64/assessment.json
           if-no-files-found: error

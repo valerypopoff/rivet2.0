@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { journalForReleaseOperation, haPreparationSettled } from './release-operation-journal.mjs';
 import { assertFenceIntent } from './execution-autoscaler-fence.mjs';
-import { proxyContinuitySettled } from './proxy-continuity-transition.mjs';
+import { proxyContinuitySettled } from './release-operation-state.mjs';
 
 export function autoscalerPolicy(input) {
   const policy = {

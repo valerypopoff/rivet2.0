@@ -1,3 +1,4 @@
+import { testOpenSsl } from './fixtures/test-openssl.mjs';
 import assert from 'node:assert/strict';
 // test-style: fixture-read: Inspect generated private journals, isolated Git/Yarn fixtures and HTTP logs, never repository implementation text.
 import test from 'node:test';
@@ -287,7 +288,7 @@ test('certificate issuance owns one exact local worker and uncertainty never rep
   const cert = path.join(directory, 'cert.pem'),
     key = path.join(directory, 'key.pem');
   execFileSync(
-    process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl',
+    testOpenSsl,
     [
       'req',
       '-x509',

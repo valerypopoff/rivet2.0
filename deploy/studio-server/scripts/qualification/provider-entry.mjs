@@ -22,6 +22,7 @@ import { assertReleaseManifestMatchesCurrentChart } from '../lib/studio-server-r
 import { qualificationHash } from '../lib/runtime-qualification-execution.mjs';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from '../lib/ha-workflow-traffic.mjs';
 import { waitForManagedGateCommands } from '../kubernetes-managed-release-gate.mjs';
+import { withManagedGateSignal } from '../lib/managed-gate-command.mjs';
 import { adoptProviderOverlap, startProviderOverlapProbe } from './provider-overlap.mjs';
 import { verifyActorSource } from '../../images/qualification/verify-source.mjs';
 import { ProviderRequestContinuity } from './provider-request-continuity.mjs';
@@ -63,6 +64,7 @@ export async function executeProviderPhase({
   privateDirectory,
   wait = until,
   step = async (_name, action) => action(),
+  signal,
 }) {
   const bind = (result) => ({
     ...result,
@@ -132,6 +134,7 @@ export async function executeProviderPhase({
         'upgrade',
         () =>
           runOrdinaryRuntimeUpgrade({
+            signal,
             gate,
             previous: operation.previous,
             candidate: operation.candidate,
@@ -345,7 +348,9 @@ async function main() {
   const api = createKubernetesTransport({ origin: settings.inClusterServer ?? settings.clusterServer, WebSocketClass });
   const state = new ReusableStagingState(api, settings, operation),
     cloud = stagingCloudReader(settings);
+  const cancellation = new AbortController();
   const stop = () => {
+    cancellation.abort(new Error('Provider worker interrupted; stopping test commands before settlement'));
     state
       .change((r) => {
         r.closed = true;
@@ -370,21 +375,43 @@ async function main() {
       ? undefined
       : providerProgressStep(state, phase, id, Date.now() + qualificationTimeouts()(operation, phase));
   let result,
-    commandsClosed = false;
+    commandsClosed = false,
+    startupMonitor;
   try {
     try {
-      result = await executeProviderPhase({ phase, operation, state, cloud, actor, gate, privateDirectory, step });
+      result = await withManagedGateSignal(cancellation.signal, async () => {
+        if (['prepare', 'upgrade', 'autoscaling'].includes(phase))
+          startupMonitor = gate.observeFatalStartup(cancellation).catch((error) => cancellation.abort(error));
+        const output = await executeProviderPhase({
+          phase,
+          operation,
+          state,
+          cloud,
+          actor,
+          gate,
+          privateDirectory,
+          step,
+          signal: cancellation.signal,
+        });
+        cancellation.signal.throwIfAborted();
+        return output;
+      });
     } finally {
-      // Observability must never prevent mandatory gate/child shutdown.
-      if (step) await step('finalization', async () => {}).catch(() => {});
+      cancellation.abort();
       try {
-        await gate.close();
+        await startupMonitor;
       } finally {
-        await waitForManagedGateCommands();
+        // Observability must never prevent mandatory gate/child shutdown.
+        if (step) await step('finalization', async () => {}).catch(() => {});
+        try {
+          await gate.close();
+        } finally {
+          await waitForManagedGateCommands();
+        }
+        commandsClosed = true;
+        process.removeListener('SIGTERM', stop);
+        process.removeListener('SIGINT', stop);
       }
-      commandsClosed = true;
-      process.removeListener('SIGTERM', stop);
-      process.removeListener('SIGINT', stop);
     }
     const output = Buffer.from(JSON.stringify(result));
     if (phase !== 'armExpiry') {

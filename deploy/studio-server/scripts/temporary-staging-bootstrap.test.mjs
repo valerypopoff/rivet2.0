@@ -1,3 +1,4 @@
+import { testOpenSsl } from './fixtures/test-openssl.mjs';
 import assert from 'node:assert/strict';
 // test-style: fixture-read: Use generated local certificates, private driver packages and operation journals only.
 import test from 'node:test';
@@ -63,7 +64,7 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
       const certFile = path.join(temp, 'cert.pem'),
         keyFile = path.join(temp, 'key.pem');
       execFileSync(
-        process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl',
+        testOpenSsl,
         [
           'req',
           '-x509',
@@ -485,7 +486,7 @@ test('concrete bootstrap uses real authenticated HTTPS/WebSocket paths and tears
                   });
                 const target = path.join(temp, 'issued.pem');
                 execFileSync(
-                  process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl',
+                  testOpenSsl,
                   [
                     'req',
                     '-x509',

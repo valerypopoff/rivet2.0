@@ -102,6 +102,13 @@ headroom and drain checks still gate retirement. See
 Legacy warmup Jobs with unresolved cleanup still block recovery. Removing this
 optimization does not change the proxy bridge or the 300-second protection.
 
+Deterministic startup errors are caught by packaged-command smoke checks before
+staging, and by a narrow read-only fatal-startup observer during staging. An
+aborted provider phase now stops and awaits its owned Helm/kubectl clients before
+settlement; it does not shorten request draining or replay uncertain changes.
+CI reports the failed phase immediately and continues verified cleanup. See
+[fast failure](automated-runtime-qualification.md#fast-failure-before-and-during-staging).
+
 Focused acceptance retains healthy autoscaler growth within approved bounds,
 rather than requiring exactly two final proxies or seven total Pods. The test
 and provider evidence validate observed per-role counts, complete replacement,

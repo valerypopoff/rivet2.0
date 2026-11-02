@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { proxyContinuitySettled } from './proxy-continuity-transition.mjs';
+import { proxyContinuitySettled } from './release-operation-state.mjs';
 
 // Compatibility fence for Jobs created by older updaters. New rollouts have no warmup stage.
 export function haPreparationSettled(record) {

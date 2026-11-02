@@ -26,6 +26,8 @@ import { createKubernetesProxyContinuity, createComputeBackendObserver } from '.
 import { stagingAccessToken, stagingCloudReader } from '../lib/reusable-staging-cloud.mjs';
 import { observeStagingInventory } from '../lib/reusable-staging-cleanup.mjs';
 import { stagingHostname } from '../lib/reusable-staging-state.mjs';
+import { monitorFatalStartup } from '../lib/fatal-startup-monitor.mjs';
+import { imageReference } from '../lib/kubernetes-managed-release-gate-config.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -141,6 +143,75 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
   }
   async kube(args, extra = {}) {
     return super.kube(args, extra);
+  }
+  async observeFatalStartup(controller) {
+    return monitorFatalStartup({
+      controller,
+      images: [...Object.values(this.operation.previous.images), ...Object.values(this.operation.candidate.images)].map(
+        imageReference,
+      ),
+      listPods: async () => {
+        const result = await this.kube(
+          [
+            'get',
+            'pods',
+            '-l',
+            `app.kubernetes.io/instance=${this.config.release}`,
+            '-o',
+            'json',
+            '--request-timeout=5s',
+          ],
+          { capture: true, allowFailure: true },
+        );
+        return result.exitCode === 0 ? JSON.parse(result.stdout).items : [];
+      },
+      readLog: async (pod, container, previous) => {
+        const statusOf = (current) =>
+          [...(current.status?.initContainerStatuses ?? []), ...(current.status?.containerStatuses ?? [])].find(
+            (c) => c.name === container,
+          );
+        const definitionOf = (current) =>
+          [...(current.spec?.initContainers ?? []), ...(current.spec?.containers ?? [])].find(
+            (c) => c.name === container,
+          );
+        const observed = statusOf(pod);
+        const unchanged = (current) => {
+          assert.equal(current.metadata.uid, pod.metadata.uid);
+          assert.ok(!current.metadata.deletionTimestamp);
+          assert.deepEqual(current.metadata.ownerReferences, pod.metadata.ownerReferences);
+          assert.equal(definitionOf(current)?.image, definitionOf(pod).image);
+          const status = statusOf(current);
+          assert.equal(status.ready, false);
+          assert.equal(status.restartCount, observed.restartCount);
+          assert.deepEqual(status.state, observed.state);
+          assert.deepEqual(status.lastState, observed.lastState);
+        };
+        const current = JSON.parse(
+          (await this.kube(['get', 'pod', pod.metadata.name, '-o', 'json', '--request-timeout=5s'], { capture: true }))
+            .stdout,
+        );
+        unchanged(current);
+        const result = await this.kube(
+          [
+            'logs',
+            pod.metadata.name,
+            '-c',
+            container,
+            '--tail=80',
+            '--limit-bytes=16384',
+            '--request-timeout=5s',
+            ...(previous ? ['--previous'] : []),
+          ],
+          { capture: true, allowFailure: true },
+        );
+        const after = JSON.parse(
+          (await this.kube(['get', 'pod', pod.metadata.name, '-o', 'json', '--request-timeout=5s'], { capture: true }))
+            .stdout,
+        );
+        unchanged(after);
+        return result.exitCode === 0 ? result.stdout : '';
+      },
+    });
   }
   deploymentSafety(mode, digest) {
     return createDeploymentSafety({

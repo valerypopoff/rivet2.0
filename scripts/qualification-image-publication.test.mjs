@@ -21,6 +21,8 @@ const env = {
   GITHUB_RUN_ATTEMPT: '1',
   ACTOR_IMAGE_ID: `sha256:${'b'.repeat(64)}`,
   ACTOR_ARCHIVE_SHA256: 'c'.repeat(64),
+  JANITOR_IMAGE_ID: `sha256:${'e'.repeat(64)}`,
+  JANITOR_ARCHIVE_SHA256: 'f'.repeat(64),
   MINIO_ARCHIVE_SHA256: 'd'.repeat(64),
 };
 
@@ -45,6 +47,8 @@ test('publication refuses branch/event confusion and command-shaped dispatch inp
     { ACTOR_IMAGE_ID: 'sha256:abc; echo injected' },
     { ACTOR_ARCHIVE_SHA256: '../archive' },
     { MINIO_ARCHIVE_SHA256: 'latest' },
+    { JANITOR_IMAGE_ID: 'latest' },
+    { JANITOR_ARCHIVE_SHA256: '' },
     { GITHUB_REPOSITORY: 'other/repo/path' },
     { GITHUB_RUN_ID: '1;id' },
   ])

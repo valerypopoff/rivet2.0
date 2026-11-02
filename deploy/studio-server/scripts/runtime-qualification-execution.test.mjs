@@ -695,6 +695,31 @@ test('failures, unknown writes, expiry and dishonest/missing facts cannot become
   assert.deepEqual(d.calls, ['settle', 'cleanup', 'verifyCleanup']);
 });
 
+test('failure notification cannot delay or interrupt verified cleanup', async (t) => {
+  for (const mode of ['throw', 'reject', 'pending'])
+    await t.test(mode, async () => {
+      const f = fixture(),
+        d = driver(f, 'upgrade'),
+        states = [],
+        notifications = [];
+      await assert.rejects(
+        executeRuntimeQualification(f.operation, d.api, async (state) => states.push(state), {
+          now: f.now,
+          onFailure: ({ phase }) => {
+            notifications.push({ phase, settling: d.calls.includes('settle') });
+            if (mode === 'throw') throw new Error('notification unavailable');
+            return mode === 'reject' ? Promise.reject(new Error('notification unavailable')) : new Promise(() => {});
+          },
+        }),
+        /No release was qualified/,
+      );
+      assert.deepEqual(notifications, [{ phase: 'upgrade', settling: false }]);
+      assert.deepEqual(d.calls.slice(-3), ['settle', 'cleanup', 'verifyCleanup']);
+      assert.equal(states.at(-1).cleanupVerified, true);
+      assert.equal(states.at(-1).failedPhase, 'upgrade');
+    });
+});
+
 test('late cancellation, expiry and driver-owned mutations cannot revise accepted evidence', async () => {
   for (const mode of ['cancel', 'expire']) {
     const f = fixture(),

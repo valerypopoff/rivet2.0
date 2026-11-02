@@ -448,7 +448,12 @@ function assertPublicTraffic(report) {
 /** A failed/expired observation still settles and cleans. Never replay a phase.
  * Durable inventory and the independent janitor belong to the approved provider
  * driver, not an Actions finally block. The latter cannot survive runner loss. */
-export async function executeRuntimeQualification(operation, driver, persist, { now = Date.now, signal } = {}) {
+export async function executeRuntimeQualification(
+  operation,
+  driver,
+  persist,
+  { now = Date.now, signal, onFailure = () => {} } = {},
+) {
   const record = {
     protocol: 1,
     operationId: operation.operationId,
@@ -500,6 +505,12 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
     }
   } catch (error) {
     failure = error;
+    record.failedPhase = record.phase;
+    // Public notification contains source-owned phase names only. Neither a
+    // reporting error nor slow evidence publication may skip settlement.
+    try {
+      Promise.resolve(onFailure({ phase: record.phase })).catch(() => {});
+    } catch {}
   } finally {
     try {
       const settled = await phase('settle', { cleanup: true });
