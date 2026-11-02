@@ -287,8 +287,8 @@ existing pods' short lifecycle. A native rollout could delete one with a protect
 request still active. Raising the LB drain alone does not extend that pod's life.
 
 Implemented mechanism: a temporary, separately labelled four-proxy bridge at the
-approved proxy HPA ceiling, using the
-installed proxy image and the new lifecycle profile. It forwards to the existing
+approved proxy HPA ceiling, using the candidate's pinned proxy image with the
+installed configuration and the new lifecycle profile. It forwards to the existing
 Rivet Services. After the transition it is removed; routine updates retain the
 normal seven-pod baseline.
 
@@ -308,9 +308,12 @@ Sequence to implement and qualify:
    (four), with scale-down paused. Wait for that capacity before creating four
    bridge proxies, their distinct Service and
    their own health/drain policy. Derive their templates from the exact installed
-   proxy template with only the reviewed lifecycle, labels and resource changes.
-   Use installed immutable images and references to existing configuration; do
+   proxy template with the candidate proxy image and reviewed lifecycle, labels
+   and resource changes. Use the candidate's digest-pinned proxy image from the
+   rendered release and references to existing configuration; do
    not copy plaintext credentials or let the normal HPA/Deployment select them.
+   Bind the image into recovery inputs. The bridge serves during API retirement,
+   so retaining the old proxy image would bypass candidate connection-policy fixes.
    Review affinity/topology selectors for the bridge's own peers as well as the
    normal proxies; retain unrelated placement constraints and require distribution
    across at least two nodes/zones.

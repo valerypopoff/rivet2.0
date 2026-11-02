@@ -2061,6 +2061,16 @@ containers with the real templates. The fixture explicitly allocates and verifie
 a private `/24` subnet before assigning fixed mock addresses; it safely retries
 another private range when an existing Docker network overlaps. This is required
 because Docker rejects `--ip` on its automatically addressed bridge networks.
+Before the outage checks, real API/execution POSTs must preserve their bodies,
+increment acceptance exactly once and report distinct backend TCP connections.
+The mock assigns one stable identity per actual socket; OS source-port reuse is
+not a test failure. These upstreams explicitly disable idle socket
+caching with `keepalive 0`: Nginx 1.29.7+ otherwise reuses sockets that API
+withdrawal can close just before a POST arrives, producing a rollout 502.
+The tradeoff is one internal TCP connection per request. Active responses,
+streams and WebSocket upgrades retain their normal lifetimes; no request retry
+is added. Web/executor upstream caching and shared DNS refresh keep their existing
+configuration. The source-only proxy-image contract guards the same policy early.
 It verifies API/web/execution IP replacement without Nginx reload, recovery within
 45 seconds, health failures/recovery, auth, redirects, POST bodies, SSE, and
 WebSocket upgrades. A controlled DNS server induces outages beyond the actual

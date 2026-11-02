@@ -12,10 +12,13 @@ upstream rivet_web {
 }
 upstream rivet_api {
     zone rivet_api 64k;
+    # Withdrawal closes idle API sockets; do not race a POST against that close.
+    keepalive 0;
     server api:80 resolve;
 }
 upstream rivet_execution {
     zone rivet_execution 64k;
+    keepalive 0;
     server api:80 resolve;
 }
 upstream rivet_executor {

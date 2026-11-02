@@ -143,7 +143,9 @@ export function continuityFromResources(resources) {
   );
   assert.ok(proxy, 'Continuity proxy Deployment missing');
   assertProtectedProxyTemplate(proxy.spec.template, profile);
-  return { profile, network, proxyName: proxy.metadata.name, configName: configs[0].metadata.name };
+  const proxyImage = proxy.spec.template.spec.containers.find((c) => c.name === 'proxy')?.image;
+  assert.ok(proxyImage, 'Continuity proxy image missing');
+  return { profile, network, proxyName: proxy.metadata.name, proxyImage, configName: configs[0].metadata.name };
 }
 export function assertProtectedProxyTemplate(template, profile) {
   assert.ok(

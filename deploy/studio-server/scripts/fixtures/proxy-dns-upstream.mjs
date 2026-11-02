@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 const role = process.env.ROLE;
 const identity = process.env.IDENTITY;
 let acceptedPosts = 0;
+let nextConnectionId = 0;
+const connectionIds = new WeakMap();
 const handleRequest = async (req, res) => {
   const url = new URL(req.url, 'http://fixture');
   if (role === 'web' && url.pathname === '/dns-availability') {
@@ -60,8 +62,19 @@ const handleRequest = async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
   if (req.method === 'POST') acceptedPosts++;
+  if (!connectionIds.has(req.socket)) connectionIds.set(req.socket, ++nextConnectionId);
   res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify({ identity, url: req.url, method: req.method, body, host: req.headers.host, acceptedPosts }));
+  res.end(
+    JSON.stringify({
+      identity,
+      url: req.url,
+      method: req.method,
+      body,
+      host: req.headers.host,
+      acceptedPosts,
+      connectionId: connectionIds.get(req.socket),
+    }),
+  );
 };
 const handleUpgrade = (req, socket) => {
   const accept = createHash('sha1')

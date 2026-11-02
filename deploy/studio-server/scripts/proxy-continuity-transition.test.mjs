@@ -31,6 +31,7 @@ const config = {
   release: 'rivet',
   namespace: 'fixture',
   proxyName: 'rivet-proxy',
+  proxyImage: `proxy@sha256:${'b'.repeat(64)}`,
   hpaSpec: {
     scaleTargetRef: { kind: 'Deployment', name: 'rivet-proxy' },
     minReplicas: 2,
@@ -434,6 +435,34 @@ test('a committed return-route write with a lost response resumes without expect
     3,
     'Handoff, return and restoration each dispatch once',
   );
+});
+
+test('bridge uses the candidate proxy image and retains the captured installation configuration', () => {
+  const f = fixture();
+  f.baseline.deployment.spec.template.spec.containers[0].env = [
+    { name: 'RIVET_KEY', valueFrom: { secretKeyRef: { name: 'fixture-auth', key: 'key' } } },
+  ];
+  const original = structuredClone(f.baseline.deployment);
+  const bridge = buildProxyBridge(f.baseline, config, 'token');
+  const deployment = bridge.entries.find((e) => e.desired.kind === 'Deployment').desired;
+  assert.notEqual(original.spec.template.spec.containers[0].image, config.proxyImage);
+  assert.equal(deployment.spec.template.spec.containers[0].image, config.proxyImage);
+  assert.deepEqual(deployment.spec.template.spec.containers[0].ports, original.spec.template.spec.containers[0].ports);
+  assert.deepEqual(deployment.spec.template.spec.containers[0].env, original.spec.template.spec.containers[0].env);
+  assert.deepEqual(f.baseline.deployment, original, 'Building the bridge must not alter the predecessor');
+  for (const proxyImage of [undefined, 'proxy:latest', `proxy@sha256:${'b'.repeat(63)}`])
+    assert.throws(() => buildProxyBridge(f.baseline, { ...config, proxyImage }, 'token'), /candidate proxy image/);
+});
+
+test('bridge recovery refuses a different candidate proxy image', async () => {
+  const f = fixture();
+  await f.transition().prepare(f.operation);
+  const changed = createProxyContinuityTransition({
+    config: { ...config, proxyImage: `proxy@sha256:${'c'.repeat(64)}` },
+    io: f.io,
+    timeoutMs: 1200000,
+  });
+  await assert.rejects(changed.verify(f.operation), /Ingress recovery inputs changed/);
 });
 
 test('bridge placement preserves unrelated peer selector constraints', () => {
