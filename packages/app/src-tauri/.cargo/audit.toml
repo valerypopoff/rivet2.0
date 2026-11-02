@@ -8,7 +8,9 @@ ignore = [
   # Short-lived reachability review for the signed Windows updater, NOT a patched
   # zip release. Exact crate identities and sole consumer are checked in CI.
   # Unix updater archives are tar; Tauri's ZIP loop creates no symlinks and the
-  # Unix permission code is not compiled on Windows. Re-review by 2026-11-01.
+  # Unix permission code is not compiled on Windows. Re-reviewed 2026-11-02
+  # against the current audit and unchanged crate checksums/call paths;
+  # re-review by 2026-11-16.
   "RUSTSEC-2026-0367",
   "RUSTSEC-2026-0368",
   "RUSTSEC-2026-0369",
