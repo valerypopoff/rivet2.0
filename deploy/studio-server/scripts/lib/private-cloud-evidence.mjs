@@ -121,6 +121,11 @@ export function privateCloudEvidence({
       });
       assert.equal(response.status, 204, 'Cloud lock release is unconfirmed; inspect before another operation');
     },
+    async assertReleased() {
+      const response = await request(objectUrl(nameOf('active.lock')), { method: 'GET' });
+      await response.body?.cancel();
+      assert.equal(response.status, 404, 'Cloud lock absence is unconfirmed');
+    },
     async saveDirectory(directory) {
       async function walk(relative = '') {
         for (const entry of await fs.readdir(path.join(directory, relative), { withFileTypes: true })) {

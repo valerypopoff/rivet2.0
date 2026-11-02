@@ -585,11 +585,16 @@ workflow ref. Bind each Google service account to its exact protected environmen
 subject. No long-lived Google key, untrusted-PR runner or checkout credential is
 required. The generated `gha-creds-*.json` files are Git/Docker ignored.
 
-Set these protected environment variables during the separately approved
+Set these protected environment values during the separately approved
 installation:
 
-- Both environments: `RIVET_GOOGLE_WORKLOAD_IDENTITY_PROVIDER`,
-  `RIVET_GOOGLE_SERVICE_ACCOUNT`, and `RIVET_DEPLOYMENT_CONFIGURATION` (JSON).
+- Both environments: variables `RIVET_GOOGLE_WORKLOAD_IDENTITY_PROVIDER` and
+  `RIVET_GOOGLE_SERVICE_ACCOUNT`, plus **environment secret**
+  `RIVET_DEPLOYMENT_CONFIGURATION` (JSON). Migrate any existing configuration
+  variable to that secret before using the updated workflow, then remove the
+  plaintext variable. There is no fallback: Actions prints step environment
+  variables before the script can remove them. This repository change does not
+  migrate live environment settings.
 - Staging: `RIVET_AUTOMATED_QUALIFICATION_ENABLED=true`, also a repository variable
   for input validation, and explicit `RIVET_QUALIFICATION_MAX_USD` / `_MAX_SECONDS`.
   Historical retained attempts used USD 30 / 7200 seconds. That time limit is
@@ -625,7 +630,21 @@ bytes in a public workflow variable, log, source file or uploaded artifact.
 An administrator installs initial ServiceAccounts, RBAC and janitor-health
 ConfigMap once. The coordinator can create/exec/delete Jobs only in the runner
 namespace and update code ConfigMaps/Deployment only in the control namespace.
-It cannot grant RBAC. Cluster connect/read and production namespace Helm-Secret
+It also needs `get pods` in the control namespace to verify that the janitor's
+heartbeat belongs to a live Ready Pod. `lib/staging-coordinator-access.mjs` owns
+that control Role. Render it locally for administrator review with:
+
+```sh
+yarn node deploy/studio-server/scripts/render-staging-coordinator-access.mjs CONTROL_NAMESPACE /private/path/coordinator-role.json
+```
+
+Review the resulting Role with `kubectl diff -f` before an authorized
+`kubectl apply -f`. The only grant added to the previously installed control
+Role is Pod GET; Pod list/watch/exec and Secret access are not added. The existing
+`rivet-release-ci` RoleBinding remains unchanged. Rendering does not apply access.
+The same module owns the existing runner Role; its Job, Pod and exec permissions
+are unchanged. Both definitions are shared by the installer and local tests.
+The coordinator cannot grant RBAC. Cluster connect/read and production namespace Helm-Secret
 reads are separate from production deployment rights. The actor and janitor
 receive staging-only in-cluster identities and staging Compute read access;
 they receive no GitHub credential, production kubeconfig, raw production values
@@ -635,10 +654,47 @@ Namespace Secret/workload/exec rights can expose credentials; review that scope
 explicitly. Federation identities persist for ordinary releases and require
 explicit installation approval and documented revocation, not an expired campaign.
 
-Before each test, hosted preparation acquires an exclusive generation-bound lock
-in private GCS, packages the source-pinned driver, and updates only the janitor's
-versioned immutable code ConfigMap and Deployment. Its health and approved driver
-hash must pass admission. `lib/reusable-staging-coordinator.mjs` creates one
+Before each test, hosted preparation packages the source-pinned driver locally,
+connects to the verified clusters, and checks required permissions with
+`kubectl auth can-i` as the actual CI caller (no impersonation). Missing access
+or an unhealthy existing janitor stops before lock acquisition and shared
+Kubernetes writes. Probes cover actor creation/removal, live Pod reads and exec,
+using the documented [`--subresource=exec` syntax](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_auth/kubectl_auth_can-i/).
+A negative answer identifies the denied verb/resource/namespace privately.
+Local tests exercise permission probes and actual reads against both namespace
+Roles, including denied Pod GET and actor exec/cleanup permissions. Unresolved,
+malformed or incomplete operation inventories fail before taking a new lock;
+the inventory is rechecked under the lock to cover concurrent admission.
+
+Preparation then acquires an exclusive generation-bound lock in private GCS
+and updates only the janitor's versioned immutable code ConfigMap and Deployment.
+The acknowledged Deployment must retain its UID and use the exact published
+image and packaged code ConfigMap mounted by the named janitor container before
+rollout waiting or success export. Container order and an unused code volume
+cannot change that identity check.
+These identity checks are shared with setup closure. Its health and approved
+driver hash must pass admission. A private setup receipt
+records intent before acquiring the lock or applying the update, then records
+acknowledged generation/specification and writer closure. If preparation or
+read-only predecessor inspection fails before execution starts, the workflow's
+bounded `always()` cleanup verifies the exact owner/generation, cluster, unchanged
+acknowledged worker, fresh janitor health and absence of an actor/operation before
+releasing that lock and confirming absence. It does not remove test workloads or
+take over normal execution cleanup. Uncertain acquisition/apply acknowledgements,
+unknown writer closure, admitted work or changed ownership keep the lock for
+inspection; no mutation is replayed. Cancellation without writer-closure proof
+also retains the lock.
+
+Setup failures report a safe phase/code publicly. Bounded underlying error details
+remain in private `RUNNER_TEMP/rivet-staging/preparation-failure.json` (or
+`rivet-production`), and after staging authentication in the private bucket under
+`qualification/setup/OPERATION/`. Closure failures use
+`setup-closure-failure.json`; diagnostic persistence failures preserve the
+original error rather than replacing it. Raw configuration, native command
+output and cause chains are never printed by the CLI or uploaded to public
+Actions artifacts.
+
+`lib/reusable-staging-coordinator.mjs` creates one
 non-retrying finite-lifetime actor Job, journals its intent/UID before waiting,
 checks exact source, real offline browser fixture and kubectl version skew, then
 installs the reviewed bundle through WebSocket stdin. Each phase is dispatched
@@ -678,8 +734,9 @@ Private journals are content-addressed immutable GCS objects, with checksum and
 generation verification and no overwrite. Recover an uncertain operation from
 its exact `qualification/OPERATION` journal and cluster registry before removing
 the global `qualification/active.lock`. A stale PID or elapsed timeout is not
-cleanup proof. A failed/unknown attempt holds that lock and cannot silently start
-another test. Successful fixture cleanup removes only the exact lock generation;
+cleanup proof. An admitted failed/unknown operation holds that lock and cannot
+silently start another test. The verified pre-operation setup closure above is a
+separate bounded case. Successful fixture cleanup removes only the exact lock generation;
 the shared cluster, Gateway, certificate and identities remain.
 
 Production uses a separate private bucket and per-operation replay fence. Its

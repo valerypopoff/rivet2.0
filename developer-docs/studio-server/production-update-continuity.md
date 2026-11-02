@@ -24,6 +24,18 @@ extra duration matrix are separately configured tests; developer overlap retains
 suite. See [test depth](automated-runtime-qualification.md#automatic-test-depth).
 Local regressions do not qualify a release or authorize a cloud attempt.
 
+The latest setup repair adds the missing staging-control Pod GET to a versioned
+administrator Role and probes required access as CI before taking the shared
+lock, including actor creation/exec/cleanup access. Unresolved operation records
+also fail before locking and are rechecked after acquisition. Setup verifies
+the exact applied cleanup-worker image/code before exporting success.
+Pre-operation failures preserve private diagnostics and can close only a
+verified owned lock with no admitted work; uncertain writes stay fenced. The
+workflow now requires deployment configuration as an environment secret. The
+live Role patch and environment-secret migration remain separate installation
+steps; local validation neither applies them nor qualifies an image. See
+[hosted setup](automated-runtime-qualification.md) for rendering and recovery.
+
 An earlier temporary staging attempt failed before application deployment: PostgreSQL
 initialized at the CSI mount root and rejected its `lost+found` directory.
 The fixture now sets `PGDATA` to a child directory. Cleanup also distinguishes
