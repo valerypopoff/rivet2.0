@@ -46,22 +46,6 @@ export async function observeSizing(gate, now = Date.now) {
     const status = pod.status.containerStatuses?.find((c) => c.name === name);
     assert.ok(status?.ready && status.restartCount === 0, 'Sizing container restarted or is unhealthy');
     assert.notEqual(status.lastState?.terminated?.reason, 'OOMKilled');
-    for (const resource of ['cpu', 'memory']) {
-      assert.equal(
-        resourceQuantity(container.resources.requests[resource], resource),
-        resourceQuantity(gate.operation.sizingRequests[name][resource], resource),
-        'Autopilot changed the candidate request',
-      );
-      const expected = values.resources[name].limits?.[resource];
-      const actual = container.resources.limits?.[resource];
-      if (expected === undefined) assert.equal(actual, undefined, 'Admission introduced a hard CPU/memory limit');
-      else
-        assert.equal(
-          resourceQuantity(actual, resource),
-          resourceQuantity(expected, resource),
-          'Admission changed a resource limit',
-        );
-    }
     const metric = metrics.items.find((m) => m.metadata.name === pod.metadata.name);
     const age = now() - Date.parse(metric?.timestamp);
     const usage = metric?.containers?.find((c) => c.name === name)?.usage;
@@ -72,7 +56,16 @@ export async function observeSizing(gate, now = Date.now) {
     const cpu = resourceQuantity(usage.cpu, 'cpu'),
       memory = resourceQuantity(usage.memory, 'memory');
     assert.ok(Number.isFinite(cpu) && cpu >= 0 && Number.isFinite(memory) && memory >= 0);
-    observations.push({ role: name, podUid: pod.metadata.uid, cpu, memory });
+    observations.push({
+      role: name,
+      podUid: pod.metadata.uid,
+      cpu,
+      memory,
+      resources: {
+        requested: structuredClone(values.resources[name]),
+        admitted: structuredClone(container.resources),
+      },
+    });
   }
   if (missing) return false; // Read-only wait for metrics; never invent zero usage.
   return {

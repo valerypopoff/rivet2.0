@@ -117,9 +117,13 @@ export async function executeProviderPhase({
   if (phase === 'prepare') {
     await step('prerequisites', () => gate.verifySharedPrerequisites());
     await step('namespace', () => state.namespace({ create: true }));
+    const images = operation.sizingRequests ? operation.candidate.images : operation.previous.images;
+    await step('admission', async () => {
+      if (!operation.sizingRequests) await gate.verifyAdmission(gate.values(images), 'predecessor');
+      await gate.verifyAdmission(gate.values(operation.candidate.images), 'candidate');
+    });
     await step('dependencies', () => gate.installDependencies());
     await step('routing', () => gate.createPublicRoute());
-    const images = operation.sizingRequests ? operation.candidate.images : operation.previous.images;
     await step('installation', () =>
       gate.apply(
         gate.values(images),

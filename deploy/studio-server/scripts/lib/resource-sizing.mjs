@@ -3,7 +3,7 @@ import { resourceQuantity } from './pod-resource-requests.mjs';
 
 // This input can reserve CPU/RAM for the two edge workloads only. It cannot
 // select images, limits, replicas, credentials, routing or other Helm values.
-export function sizingRequests(value, installed) {
+export function sizingRequests(value) {
   assert.ok(value && typeof value === 'object' && !Array.isArray(value), 'Sizing requests must be an object');
   assert.deepEqual(Object.keys(value).sort(), ['proxy', 'web'], 'Sizing supports web and proxy only');
   const result = {};
@@ -17,11 +17,6 @@ export function sizingRequests(value, installed) {
       assert.ok(typeof quantity === 'string' && quantity.length <= 32, 'Sizing quantities must be strings');
       const amount = resourceQuantity(quantity, resource);
       assert.ok(Number.isFinite(amount) && amount > 0, 'Sizing quantities must be positive and finite');
-      if (installed) {
-        const baseline = installed.resources?.[role]?.requests?.[resource];
-        assert.ok(baseline !== undefined, 'Observed baseline request is missing');
-        assert.ok(amount <= resourceQuantity(baseline, resource), 'Sizing cannot increase an observed request');
-      }
       result[role][resource] = quantity;
     }
   }
@@ -38,7 +33,7 @@ export function sizingInput(env) {
 
 export function applySizingRequests(values, requests) {
   const result = structuredClone(values);
-  for (const [role, overrides] of Object.entries(sizingRequests(requests, values)))
+  for (const [role, overrides] of Object.entries(sizingRequests(requests)))
     result.resources[role].requests = { ...result.resources[role].requests, ...overrides };
   return result;
 }

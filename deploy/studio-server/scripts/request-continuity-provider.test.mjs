@@ -2,11 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import https from 'node:https';
+import http2 from 'node:http2';
+import { EventEmitter } from 'node:events';
+import { Readable, PassThrough } from 'node:stream';
+import { performance } from 'node:perf_hooks';
 import { parse } from 'yaml';
 import { ProviderRequestContinuity, qualifyProtectedProxyRoll } from './qualification/provider-request-continuity.mjs';
 import { observeHpaContinuity } from './qualification/provider-proxy-hpa.mjs';
 import { RuntimeControlLocalGate } from './kubernetes-runtime-control-local.mjs';
-import { continuityStages } from './lib/request-continuity.mjs';
+import { continuityStages, continuityTimeoutMs } from './lib/request-continuity.mjs';
 import { autoscalerPolicy } from './lib/execution-autoscaler.mjs';
 // test-style: fixture-read: Run the serialized test project and generated fixture code, without asserting production source text.
 
@@ -77,6 +82,8 @@ function fixture() {
       protectedProxies: true,
       actualBackendServiceDrainSeconds: 600,
       policyBackendServiceDrainSeconds: 600,
+      proxyUid: deployment.metadata.uid,
+      proxyPodUids: (await gate.pods()).filter((p) => !p.metadata.deletionTimestamp).map((p) => p.metadata.uid),
     }),
   };
   const probes = {
@@ -85,7 +92,7 @@ function fixture() {
   };
   const waitFor = async (_label, check) => {
     for (let i = 0; i < 3; i++) if (await check()) return;
-    throw Error('Fixture did not settle');
+    throw Error(`Fixture did not settle: ${_label}`);
   };
   return { gate, probes, waitFor, events, deployment };
 }
@@ -113,6 +120,111 @@ test('lost native-roll acknowledgement never retries or certifies replacement', 
   assert.equal(f.probes.replacement, undefined);
 });
 
+test('a keep-alive agent may reopen a connection while each protected request still completes once', async (t) => {
+  let starts = 0,
+    issued = 0;
+  t.mock.method(performance, 'now', () => (starts++ < 3 ? 0 : 300000));
+  const payload = (body) => (body ? JSON.stringify({ output: { value: body } }) : 'ready');
+  t.mock.method(https, 'request', (_url, _options, callback) => {
+    const req = new EventEmitter();
+    req.reusedSocket = false;
+    req.end = (body) => {
+      if (body) issued++;
+      queueMicrotask(() => {
+        const response = Readable.from([Buffer.from(payload(body))]);
+        response.statusCode = 200;
+        response.headers = { 'x-rivet-correlation-id': randomUUID() };
+        callback(response);
+      });
+    };
+    return req;
+  });
+  t.mock.method(http2, 'connect', () => {
+    const session = new EventEmitter();
+    session.socket = { alpnProtocol: 'h2' };
+    session.destroy = () => {};
+    session.request = () => {
+      const stream = new PassThrough(),
+        end = stream.end.bind(stream);
+      stream.end = (body) => {
+        if (body) issued++;
+        queueMicrotask(() => {
+          stream.emit('response', { ':status': 200, 'x-rivet-correlation-id': randomUUID() });
+          end(payload(body));
+        });
+      };
+      return stream;
+    };
+    return session;
+  });
+  const f = fixture(),
+    probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
+  f.gate.config.baseUrl = 'https://continuity.invalid';
+  probes.prepared = true;
+  probes.endpoint = 'fixture';
+  probes.waitForAcceptance = async () => {};
+  await probes.startCohort('execution-retirement');
+  await probes.settleCohort('execution-retirement');
+  assert.equal(issued, 3, 'Connection replacement must never replay a protected POST');
+  assert.equal(probes.requests.find((r) => r.transport === 'pooled-http1').reusedConnection, false);
+  assert.ok(probes.requests.every((r) => r.fullBody && r.outcome === 'passed'));
+  await probes.close();
+});
+
+test('starting proxy observation waits for normal HPA growth without another rollout', async () => {
+  const f = fixture();
+  f.gate.operation.qualification = { tier: 'focused' };
+  const probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
+  probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+  let reads = 0;
+  f.gate.pods = async () => {
+    const extra = pod('growing');
+    if (++reads === 1) extra.status.conditions[0].status = 'False';
+    return [pod('old1'), pod('old2'), extra];
+  };
+  await probes.beforeProxyTemplates();
+  assert.equal(reads, 2);
+  assert.deepEqual(probes.replacement.before, ['old1', 'old2', 'growing']);
+  assert.ok(!f.events.includes('patch'));
+});
+
+test('a proxy snapshot completing after its original deadline cannot start a protected request cohort', async (t) => {
+  const f = fixture(),
+    probes = new ProviderRequestContinuity(f.gate);
+  let clock = 0,
+    cohorts = 0;
+  t.mock.method(performance, 'now', () => clock);
+  f.gate.pods = async () => {
+    clock = 300001;
+    return [pod('old1'), pod('old2')];
+  };
+  probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+  probes.startCohort = async () => cohorts++;
+  await assert.rejects(probes.beforeProxyTemplates(), /Timed out/);
+  assert.equal(probes.replacement, undefined);
+  assert.equal(cohorts, 0);
+});
+
+test('final GCP health polling receives only the remaining proxy observation budget', async (t) => {
+  const f = fixture(),
+    probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
+  let clock = 0,
+    budget;
+  t.mock.method(performance, 'now', () => clock);
+  f.gate.pods = async () => {
+    clock = 2000;
+    return [pod('one'), pod('two')];
+  };
+  const inspect = f.gate.verifyProtectedProxyAvailability;
+  f.gate.verifyProtectedProxyAvailability = async (options) => {
+    budget = options?.timeoutMs;
+    return inspect();
+  };
+  await probes.readyProxyPool({ settled: true });
+  assert.equal(budget, continuityTimeoutMs(profile) - 2000);
+  assert.ok(!f.events.includes('patch'));
+});
+
 test('focused qualification cannot invoke the separate cold-proxy rollout', async () => {
   const f = fixture();
   f.gate.operation.qualification = { tier: 'focused' };
@@ -133,7 +245,7 @@ for (const changed of [true, false]) {
       },
       lifecycle: { shutdownGraceSeconds: 120, proxy: { preStopDelaySeconds: 660, terminationGracePeriodSeconds: 900 } },
     };
-    const probes = new ProviderRequestContinuity(f.gate);
+    const probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
     probes.proxyTemplate = structuredClone(f.deployment.spec.template);
     if (changed) probes.proxyTemplate.metadata.annotations.release = 'candidate';
     probes.startCohort = async (stage) => f.events.push(`accepted:${stage}`);
@@ -205,7 +317,7 @@ test('focused admission accepts a healthy pool with draining predecessors withou
     const f = fixture(),
       active = Array.from({ length: count }, (_, index) => pod(`active-${index}`)),
       draining = [pod('already-draining-1', true), pod('already-draining-2', true)],
-      probes = new ProviderRequestContinuity(f.gate);
+      probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
     f.gate.operation.qualification = { tier: 'focused' };
     f.deployment.spec.replicas = count;
     f.gate.pods = async () => [...active, ...draining];
@@ -228,7 +340,7 @@ test('draining predecessors cannot satisfy the starting proxy floor or hide unre
   for (const state of ['below-floor', 'unready', 'above-ceiling']) {
     const f = fixture(),
       active = state === 'below-floor' ? [pod('one')] : [pod('one'), pod('two')],
-      probes = new ProviderRequestContinuity(f.gate);
+      probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
     f.gate.operation.qualification = { tier: 'focused' };
     if (state === 'unready') active[1].status.conditions[0].status = 'False';
     if (state === 'above-ceiling') active.push(pod('three'), pod('four'), pod('five'));
@@ -242,7 +354,7 @@ test('draining predecessors cannot satisfy the starting proxy floor or hide unre
 test('focused acceptance requires observed termination and fresh final proxy identities', async () => {
   const f = fixture();
   f.gate.operation.qualification = { tier: 'focused' };
-  const probes = new ProviderRequestContinuity(f.gate);
+  const probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
   // Exercise acceptance after completed cohorts; their response facts are
   // validated separately by the provider-evidence regressions.
   for (const stage of continuityStages(false, 'upgrade', 'focused'))
@@ -272,6 +384,26 @@ test('focused acceptance requires observed termination and fresh final proxy ide
     f.gate.pods = async () => final;
     assert.equal((await probes.finish()).replacement.after.length, count);
   }
+  let healthReads = 0;
+  const currentHealth = f.gate.verifyProtectedProxyAvailability;
+  f.gate.pods = async () => [pod('late1'), pod('late2')];
+  f.gate.verifyProtectedProxyAvailability = async () => {
+    healthReads++;
+    f.gate.pods = async () => [pod('late1'), pod('late2'), pod('late3')];
+    return currentHealth();
+  };
+  assert.deepEqual((await probes.finish()).replacement.after, ['late1', 'late2', 'late3']);
+  assert.equal(healthReads, 2, 'Growth during GCP inspection must refresh the final evidence, not replay a rollout');
+  f.gate.verifyProtectedProxyAvailability = currentHealth;
+  let reads = 0;
+  f.gate.pods = async () => {
+    const growing = pod('settling3');
+    if (++reads === 1) growing.status.conditions[0].status = 'False';
+    if (reads === 2) return [pod('settled1'), pod('settled2'), pod('draining', true)];
+    return [pod('settled1'), pod('settled2'), growing];
+  };
+  assert.equal((await probes.finish()).replacement.after.length, 3);
+  assert.equal(reads, 4, 'Normal growth and protected termination settle before the matched GCP observation');
   for (const final of [
     [pod('one')],
     Array.from({ length: 5 }, (_, i) => pod(`too-many-${i}`)),
@@ -290,7 +422,7 @@ test('focused acceptance requires observed termination and fresh final proxy ide
 test('an unchanged focused proxy template accepts autoscaler membership changes under the same Deployment', async () => {
   const f = fixture();
   f.gate.operation.qualification = { tier: 'focused' };
-  const probes = new ProviderRequestContinuity(f.gate);
+  const probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
   probes.bootstrap = 'already-protected';
   probes.proxyTemplate = structuredClone(f.deployment.spec.template);
   probes.unchangedProxyTemplate = structuredClone(f.deployment.spec.template);

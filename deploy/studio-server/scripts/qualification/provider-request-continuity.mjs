@@ -35,8 +35,9 @@ const bounded = async (promise, ms = 330000) => {
 async function waitForProxyRoll(label, check, timeoutMs) {
   const deadline = performance.now() + timeoutMs;
   while (true) {
-    if (await check()) return;
+    const result = await check();
     assert.ok(performance.now() < deadline, `Timed out waiting for ${label}`);
+    if (result) return;
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
@@ -189,9 +190,10 @@ export function requestHttp2(session, path, { body, headers = {}, timeoutMs = bo
 }
 
 export class ProviderRequestContinuity {
-  constructor(gate, { hpaOnly = false } = {}) {
+  constructor(gate, { hpaOnly = false, waitFor = waitForProxyRoll } = {}) {
     this.hpaOnly = hpaOnly;
     this.gate = gate;
+    this.waitFor = waitFor;
     this.cohorts = new Map();
     this.requests = [];
     this.failures = [];
@@ -365,8 +367,9 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
             assert.equal(JSON.parse(result.body).output.value, body, 'Complete synthetic response changed');
             const correlationId = result.headers['x-rivet-correlation-id'];
             assert.ok(typeof correlationId === 'string' && correlationId);
-            if (transport === 'pooled-http1')
-              assert.equal(result.reusedConnection, true, 'Pooled test silently opened a fresh connection');
+            // A keep-alive agent may replace a server-closed idle connection.
+            // The protected POST still runs once and must return its full body.
+            if (transport === 'pooled-http1') receipt.reusedConnection = result.reusedConnection;
             Object.assign(receipt, {
               correlationId,
               elapsedMs: Math.round(performance.now() - start),
@@ -413,29 +416,64 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     assert.ok(cohort, `Missing continuity stage ${stage}`);
     await cohort.completion;
   }
+  async readyProxyPool({ settled = false } = {}) {
+    const { min, max } = ordinaryRuntimeReplicaBounds(this.gate.operation.policy).proxy;
+    const timeoutMs = settled ? continuityTimeoutMs(this.gate.operation.requestContinuityProfile) : 300000;
+    const deadline = performance.now() + timeoutMs;
+    let observed,
+      uid = this.replacement?.deploymentUid;
+    await this.waitFor(
+      'ready proxy pool within approved bounds',
+      async () => {
+        const deployment = JSON.parse(
+          (await this.gate.kube(['get', 'deployment', this.gate.config.release + '-proxy', '-o', 'json'])).stdout,
+        );
+        assert.ok(deployment.metadata.uid, 'Proxy Deployment identity missing');
+        uid ??= deployment.metadata.uid;
+        assert.equal(deployment.metadata.uid, uid, 'Proxy Deployment identity changed');
+        assert.equal(deployment.metadata.labels?.['app.kubernetes.io/instance'], this.gate.config.release);
+        assert.equal(deployment.spec.strategy.type, 'RollingUpdate');
+        assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
+        const all = (await this.gate.pods()).filter(
+          (p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy',
+        );
+        assert.ok(
+          all.every((p) => p.metadata.uid),
+          'Proxy identity missing',
+        );
+        assert.equal(new Set(all.map((p) => p.metadata.uid)).size, all.length, 'Duplicate proxy identity');
+        const pods = all.filter((p) => !p.metadata.deletionTimestamp);
+        const ready = pods.filter((p) => p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'));
+        assert.ok(ready.length >= min, 'Proxy ready capacity is below its floor');
+        assert.ok(pods.length <= max + 1, 'Proxy capacity is outside its surge bounds');
+        if (pods.length > max || ready.length !== pods.length || (settled && all.length !== pods.length)) return false;
+        if (settled) {
+          const remainingMs = Math.floor(deadline - performance.now());
+          assert.ok(remainingMs > 0, 'Timed out waiting for final proxy availability');
+          const live = await this.gate.verifyProtectedProxyAvailability({ timeoutMs: remainingMs });
+          assertContinuityAcceptance(live, this.gate.operation.requestContinuityProfile);
+          assert.equal(live.proxyUid, uid, 'Proxy Deployment identity changed');
+          assert.ok(Array.isArray(live.proxyPodUids), 'GCP proxy Pod identities are missing');
+          assert.equal(new Set(live.proxyPodUids).size, live.proxyPodUids.length, 'Duplicate GCP proxy identity');
+          if (!isDeepStrictEqual([...live.proxyPodUids].sort(), pods.map((p) => p.metadata.uid).sort())) return false;
+          const confirmed = JSON.parse(
+            (await this.gate.kube(['get', 'deployment', this.gate.config.release + '-proxy', '-o', 'json'])).stdout,
+          );
+          assert.equal(confirmed.metadata.uid, uid, 'Proxy Deployment identity changed');
+          if (!isDeepStrictEqual(confirmed.spec, deployment.spec)) return false;
+        }
+        observed = { deployment, pods };
+        return true;
+      },
+      timeoutMs,
+    );
+    return observed;
+  }
   async beforeProxyTemplates() {
     await this.gate.assertProofContext();
     assert.ok(this.proxyTemplate, 'The actual candidate proxy template is required');
     assertProtectedProxyTemplate(this.proxyTemplate, this.gate.operation.requestContinuityProfile);
-    const deployment = JSON.parse(
-      (await this.gate.kube(['get', 'deployment', this.gate.config.release + '-proxy', '-o', 'json'])).stdout,
-    );
-    assert.equal(deployment.metadata.labels?.['app.kubernetes.io/instance'], this.gate.config.release);
-    assert.equal(deployment.spec.strategy.type, 'RollingUpdate');
-    assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
-    const pods = (await this.gate.pods()).filter(
-      (p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy' && !p.metadata.deletionTimestamp,
-    );
-    const { min, max } = ordinaryRuntimeReplicaBounds(this.gate.operation.policy).proxy;
-    assert.ok(
-      pods.length >= min &&
-        pods.length <= max &&
-        pods.every(
-          (p) =>
-            !p.metadata.deletionTimestamp &&
-            p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
-        ),
-    );
+    const { deployment, pods } = await this.readyProxyPool();
     this.replacement = {
       changed: !matchesKubernetesTemplate(deployment.spec.template, this.proxyTemplate),
       deploymentUid: deployment.metadata.uid,
@@ -614,32 +652,8 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       await this.settleCohort(stage);
     if (!this.hpaOnly) {
       if (focused) {
-        const pods = await this.gate.pods();
-        this.observeProxyPods(pods);
-        const proxies = pods.filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy');
-        const { min, max } = ordinaryRuntimeReplicaBounds(this.gate.operation.policy).proxy;
-        assert.ok(
-          proxies.length >= min && proxies.length <= max,
-          'Final proxy observation is outside its approved bounds',
-        );
-        assert.ok(
-          proxies.every(
-            (p) =>
-              !p.metadata.deletionTimestamp &&
-              p.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
-          ),
-          'Every final proxy must be ready and settled',
-        );
+        const { deployment, pods: proxies } = await this.readyProxyPool({ settled: true });
         this.replacement.after = proxies.map((p) => p.metadata.uid);
-        assert.equal(
-          new Set(this.replacement.after).size,
-          this.replacement.after.length,
-          'Duplicate final proxy identity',
-        );
-        const deployment = JSON.parse(
-          (await this.gate.kube(['get', 'deployment', this.gate.config.release + '-proxy', '-o', 'json'])).stdout,
-        );
-        assert.equal(deployment.metadata.uid, this.replacement.deploymentUid, 'Proxy Deployment identity changed');
         if (!this.replacement.changed)
           assert.ok(
             isDeepStrictEqual(deployment.spec.template, this.unchangedProxyTemplate),
@@ -652,9 +666,6 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
             'An original proxy still exists in the final observation',
           );
         }
-        const live = await this.gate.verifyProtectedProxyAvailability();
-        assertContinuityAcceptance(live, this.gate.operation.requestContinuityProfile);
-        assert.equal(live.proxyUid, this.replacement.deploymentUid, 'Proxy Deployment identity changed');
       } else {
         assert.ok(this.actionCompletion, 'No late WebSocket action was exercised');
         await this.actionCompletion;

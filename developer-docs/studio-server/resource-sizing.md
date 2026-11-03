@@ -49,10 +49,22 @@ and [Pod-based billing](https://cloud.google.com/kubernetes-engine/pricing#gener
 {"web":{"cpu":"50m","memory":"128Mi"},"proxy":{"cpu":"100m","memory":"128Mi"}}
 ```
 
+This example expresses the proposed reservations, not an accepted GKE profile.
+The November 3 trial was rejected during installation: the existing required
+Pod anti-affinity needs at least **500m CPU and 512Mi memory** on general-purpose
+Autopilot. Resolve that placement/resource choice explicitly; changing or
+removing a staging assertion cannot bypass GKE admission. See the
+[existing availability guidance](production-ha-cutover.md#apply-and-recover).
+
+Effective Helm values, including installation overrides, own the intended
+requests and limits. Staging does not choose them or require a separate sizing
+approval for an ordinary rolling update. This opt-in observation mode is useful
+for investigating resource behavior; its result does not authorize deployment.
+
 Set `deploy_production=false`. A nonempty sizing input selects an observation-only
 trial; production-enabled or invalid input fails before cloud setup. Only these
-four positive quantity strings are accepted, and none can exceed its observed
-production request. Installed facts remain unchanged. The candidate images start
+four positive quantity strings are accepted, with intentional increases and
+decreases both allowed. Installed facts remain unchanged. The candidate images start
 with the requested reservations; there is no rolling update or topology/shutdown
 profile adoption in this mode. The regular release path still copies production
 sizing and retains its existing qualification requirements.
@@ -61,8 +73,10 @@ The trial reuses fixture preparation, authentication, expiry, resource inventory
 private evidence and independent cleanup. The existing observation phase runs the
 browser journey, an 8 MiB valid project upload and four concurrent non-retrying
 workflow streams plus published-app traffic, with at least a minute of resource
-observations. It checks admitted requests/limits, fresh CPU/RAM samples, readiness,
-restarts and HPA bounds. Healthy HPA growth is allowed; reaching the ceiling or
+observations. It records configured and admitted requests/limits as information;
+provider adjustments do not fail the trial or certify the proposed savings.
+Readiness, restarts/OOMs, public traffic, fresh CPU/RAM samples and HPA health
+remain the observation checks. Healthy HPA growth is allowed; reaching the ceiling or
 returning to exactly two proxies is not required. No CPU-burn or separate
 autoscaler stress phase is added. This is a sizing observation, not a measured
 throughput ceiling or a seven-day peak guarantee.
@@ -79,7 +93,7 @@ driver and cleanup-worker gates before cloud use. A previously built actor is
 not evidence for changed runner code. Local implementation does not start a test
 or reuse a closed operation allowance.
 
-This candidate has not been applied or qualified. A local Helm render proves
+This candidate has not been successfully installed or measured. A local Helm render proves
 merge order and generated settings, not performance, Autopilot admission or savings.
 The DevOps estimate of roughly USD57/month is conditional on actual admitted
 requests, prices and replica counts; it is not a measured reduction in billing.

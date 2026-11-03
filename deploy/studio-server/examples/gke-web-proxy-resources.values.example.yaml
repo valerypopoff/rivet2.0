@@ -2,6 +2,10 @@
 # Merge AFTER installation values, which may override the chart's smaller defaults.
 # Staging validation is required before production use; this file applies nothing.
 # Requests reserve capacity; these are not CPU or memory limits.
+# These proposed values require compatible placement. GKE Autopilot rejects
+# them with the current required Pod anti-affinity (500m CPU / 512Mi minimum).
+# Resolve that explicit availability/resource choice before attempting a trial;
+# this example does not disable placement rules or override GKE admission.
 resources:
   web:
     requests:

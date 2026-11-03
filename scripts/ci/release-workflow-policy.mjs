@@ -54,7 +54,11 @@ export function assertFastReleasePolicy({ images, verify, publisher, source, bui
   assert.match(verify.jobs.verify.steps[0].run, /"\$SOURCE_RESULT"/);
   assert.deepEqual(Object.keys(source.on), ['workflow_call']);
   assert.deepEqual(source.permissions, { contents: 'read' });
-  assert.equal(source.jobs.source['timeout-minutes'], 5);
+  assert.equal(source.jobs.source['timeout-minutes'], 8);
+  const checkout = source.jobs.source.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(checkout?.['timeout-minutes'], 5);
+  assert.equal(checkout.env?.GIT_HTTP_LOW_SPEED_LIMIT, '1024');
+  assert.equal(checkout.env?.GIT_HTTP_LOW_SPEED_TIME, '30');
   const commands = source.jobs.source.steps.map((s) => s.run ?? '').join('\n');
   assert.match(commands, /--immutable --immutable-cache/);
   assert.match(commands, /--mode=skip-build\b/);

@@ -586,7 +586,13 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
   let clock = 0,
     clampAdmissionGrace = true,
     available = true,
-    backendHealthy = true;
+    backendHealthy = true,
+    pendingNormalReads = 1,
+    drainingNormal = true,
+    foreignDraining = false,
+    replaceOnWait = false,
+    timeoutReadDelay = 0,
+    staleServiceRead = false;
   const types = {
     services: 'Service',
     'deployments.apps': 'Deployment',
@@ -674,6 +680,19 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
             })),
           ),
       };
+      if (instance === 'rivet') {
+        if (pendingNormalReads-- > 0) result.items[0].status.conditions[0].status = 'False';
+        if (drainingNormal) {
+          const old = structuredClone(result.items[0]);
+          Object.assign(old.metadata, {
+            name: 'old-draining',
+            uid: 'old-draining',
+            deletionTimestamp: '2026-01-01T00:00:00.000Z',
+          });
+          if (foreignDraining) old.metadata.ownerReferences[0].uid = 'foreign';
+          result.items.push(old);
+        }
+      }
     } else if (action === 'get' && type === 'httproutes.gateway.networking.k8s.io' && name === '-o') {
       result = { items: [...f.live.values()].filter((r) => r.kind === 'HTTPRoute') };
     } else if (action === 'get' && type === 'replicasets.apps') {
@@ -694,8 +713,15 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
         return { stdout: '' };
       }
       result = decorate(found);
+      if (found.kind === 'Service' && staleServiceRead) {
+        staleServiceRead = false;
+        const status = JSON.parse(result.metadata.annotations['cloud.google.com/neg-status']);
+        status.network_endpoint_groups[80] = 'outdated-neg';
+        result.metadata.annotations['cloud.google.com/neg-status'] = JSON.stringify(status);
+      }
     } else if (action === 'exec') {
       assert.deepEqual(args.slice(-2), ['cat', '/tmp/nginx/rivet-proxy-timeout.inc']);
+      clock += timeoutReadDelay;
       return { stdout: 'proxy_read_timeout 3600s;' };
     } else if (action === 'create') {
       const desired = JSON.parse(options.input),
@@ -753,6 +779,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     now: () => clock,
     wait: async () => {
       clock += 60000;
+      if (replaceOnWait) f.live.get('Deployment/rivet-proxy').metadata.uid = 'replaced-while-waiting';
     },
     observeBackend: async (service) => ({
       healthy: backendHealthy,
@@ -781,8 +808,39 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     },
   });
   const before = commands.length;
+  for (const timeoutMs of [0, -1, 1.5, 1200001])
+    await assert.rejects(adapter.inspect({ timeoutMs }), /positive timeout/);
+  assert.equal(commands.length, before, 'Invalid inspection bounds cannot start cluster observations');
   assert.equal((await adapter.inspect()).actualBackendServiceDrainSeconds, 60);
+  assert.equal(clock, 60000, 'Observe normal growth without rejecting or crediting the draining predecessor');
+  staleServiceRead = true;
+  assert.equal(
+    (await adapter.inspect()).actualBackendServiceDrainSeconds,
+    60,
+    'Use the current Service NEG snapshot joined to Compute health, retaining its original UID',
+  );
+  timeoutReadDelay = 2;
+  await assert.rejects(adapter.inspect({ timeoutMs: 1 }), /Timed out/);
+  timeoutReadDelay = 0;
+  pendingNormalReads = 1;
+  const beforeExpiredWait = commands.length;
+  await assert.rejects(adapter.inspect({ timeoutMs: 1 }), /Timed out/);
+  assert.equal(
+    commands.slice(beforeExpiredWait).filter((args) => args.includes('pods')).length,
+    1,
+    'An expired nested poll must not begin another observation',
+  );
+  foreignDraining = true;
+  await assert.rejects(adapter.inspect(), /not owned/);
+  drainingNormal = false;
+  foreignDraining = false;
   assert.ok(commands.slice(before).every((a) => ['get', 'exec'].includes(a[0] === '--namespace' ? a[2] : a[0])));
+  const originalUid = f.live.get('Deployment/rivet-proxy').metadata.uid;
+  pendingNormalReads = 1;
+  replaceOnWait = true;
+  await assert.rejects(adapter.inspect(), /Deployment identity changed/);
+  replaceOnWait = false;
+  f.live.get('Deployment/rivet-proxy').metadata.uid = originalUid;
   available = false;
   await assert.rejects(adapter.inspect(), /0\/2 required available replicas.*minReadySeconds=120/);
   available = true;

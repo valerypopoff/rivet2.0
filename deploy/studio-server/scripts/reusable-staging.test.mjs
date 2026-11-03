@@ -79,6 +79,79 @@ test('focused admission checks shared prerequisites without requiring an unused 
     /actual upgrade/,
   );
 });
+
+test('actual workload admission precedes dependency or route creation and checks both sides of an update', async () => {
+  for (const sizing of [false, true]) {
+    const calls = [],
+      previous = { images: { api: 'old' } },
+      candidate = { images: { api: 'new' } };
+    const op = { previous, candidate, ...(sizing ? { sizingRequests: {} } : {}) };
+    const state = {
+      admission: async () => {},
+      change: async () => {},
+      namespace: async () => calls.push('namespace'),
+    };
+    const gate = {
+      verifySharedPrerequisites: async () => {},
+      values: (images) => images,
+      verifyAdmission: async (values) => {
+        calls.push(values.api);
+        if (values.api === 'new') throw Error('GKE rejected candidate resources');
+      },
+      installDependencies: async () => calls.push('dependencies'),
+      createPublicRoute: async () => calls.push('route'),
+    };
+    await assert.rejects(executeProviderPhase({ phase: 'prepare', operation: op, state, gate }), /GKE rejected/);
+    assert.deepEqual(calls, sizing ? ['namespace', 'new'] : ['namespace', 'old', 'new']);
+  }
+});
+
+test('workload admission uses server dry runs and records provider adjustments without enforcing exact resources', async () => {
+  const resources = { requests: { cpu: '50m', memory: '128Mi' } };
+  const desired = ['Deployment', 'StatefulSet', 'Job'].map((kind, i) => ({
+    apiVersion: kind === 'Job' ? 'batch/v1' : 'apps/v1',
+    kind,
+    metadata: { name: `work-${i}` },
+    spec: { template: { spec: { containers: [{ name: 'app', resources }] } } },
+  }));
+  const sent = [];
+  const gate = {
+    config: { namespace: 'fixture' },
+    resources: async () => [...desired, { kind: 'PersistentVolumeClaim', metadata: { name: 'unused' } }],
+    kube: async (args, options) => {
+      assert.ok(args.includes('--dry-run=server'));
+      const packet = JSON.parse(options.input);
+      sent.push(packet);
+      const admitted = structuredClone(packet);
+      for (const item of admitted.items) item.spec.template.spec.containers[0].resources.requests.cpu = '500m';
+      return { stdout: JSON.stringify(admitted) };
+    },
+    artifact: async (_name, contents) => {
+      assert.equal(JSON.parse(contents).admitted[0].containers[0].resources.requests.cpu, '500m');
+    },
+  };
+  await ReusableProviderGate.prototype.verifyAdmission.call(gate, {});
+  assert.deepEqual(sent[0].items, desired);
+  assert.deepEqual(resources.requests, { cpu: '50m', memory: '128Mi' });
+  const validKube = gate.kube;
+  for (const fault of ['missing', 'duplicate', 'name', 'kind', 'namespace']) {
+    gate.kube = async (...args) => {
+      const response = await validKube(...args),
+        result = JSON.parse(response.stdout);
+      if (fault === 'missing') result.items.pop();
+      if (fault === 'duplicate') result.items[1] = structuredClone(result.items[0]);
+      if (fault === 'name') result.items[0].metadata.name = 'foreign';
+      if (fault === 'kind') result.items[0].kind = 'Unexpected';
+      if (fault === 'namespace') result.items[0].metadata.namespace = 'foreign';
+      return { stdout: JSON.stringify(result) };
+    };
+    await assert.rejects(ReusableProviderGate.prototype.verifyAdmission.call(gate, {}), /admission.*workload/i);
+  }
+  gate.kube = async () => {
+    throw Error('Autopilot minimum rejected');
+  };
+  await assert.rejects(ReusableProviderGate.prototype.verifyAdmission.call(gate, {}), /Autopilot minimum/);
+});
 test('a retained staging endpoint is fixed across releases and cannot escape its non-production domain', () => {
   const fixed = reusableStagingSettings({ ...settings(), hostname: 'rivet-staging.qualification.example.test' });
   for (const operationId of ['rivet-q-123-1', 'rivet-q-124-1'])
@@ -937,9 +1010,13 @@ test('concrete provider Helm render retains installed production timing, real ma
   const sizedValues = gate.values();
   const sized = await gate.resources(sizedValues, 'sizing');
   for (const role of ['web', 'proxy']) {
-    const workload = sized.find((r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === role);
-    assert.deepEqual(workload.spec.template.spec.containers.find((c) => c.name === role).resources.requests,
-      gate.operation.sizingRequests[role]);
+    const workload = sized.find(
+      (r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === role,
+    );
+    assert.deepEqual(
+      workload.spec.template.spec.containers.find((c) => c.name === role).resources.requests,
+      gate.operation.sizingRequests[role],
+    );
     assert.equal(envelope.resources[role].requests.cpu, '500m');
   }
   assert.deepEqual(sizedValues.resources.backend, values.resources.backend);
@@ -1434,6 +1511,8 @@ test('concrete phase boundary records intent before seed work and never replays 
   let writes = 0;
   const gate = {
     verifySharedPrerequisites: async () => {},
+    values: () => ({}),
+    verifyAdmission: async () => {},
     installDependencies: async () => {
       assert.equal(
         (await f.state.read()).record.workers[0].progress.step,
@@ -1446,7 +1525,7 @@ test('concrete phase boundary records intent before seed work and never replays 
   };
   const input = {
     phase: 'prepare',
-    operation: op,
+    operation: { ...op, previous: { images: {} }, candidate: { images: {} } },
     state: f.state,
     cloud,
     actor,
@@ -1458,7 +1537,7 @@ test('concrete phase boundary records intent before seed work and never replays 
   await assert.rejects(executeProviderPhase(input), /Never replay/);
   assert.equal(writes, 1);
   const progress = (await f.state.read()).record.workers[0].progress;
-  assert.equal(progress.sequence, 3);
+  assert.equal(progress.sequence, 4);
   assert.ok(progress.deadlineAt <= Date.parse(op.expiresAt));
 });
 test('provider absence must be an actual 404, not JSON/HTML 5xx or a disconnected API', async (t) => {

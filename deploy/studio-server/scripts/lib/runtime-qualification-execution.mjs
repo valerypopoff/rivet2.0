@@ -95,9 +95,7 @@ export function qualificationOperation({
     );
   }
   const normalized = autoscalerPolicy(policy);
-  const sizing = approval.sizingRequests
-    ? sizingRequests(approval.sizingRequests, installed.qualificationValues)
-    : undefined;
+  const sizing = approval.sizingRequests ? sizingRequests(approval.sizingRequests) : undefined;
   if (sizing) {
     assert.ok(installed.qualificationValues, 'Sizing requires observed production reservations');
     assert.ok(

@@ -298,7 +298,7 @@ change templates:
 
 The 360-second backend drain remains a configured upper bound; it is not an
 additional mandatory handoff sleep. Proxy preStop/grace remain 420/600 seconds.
-The shorter handoff is a repository change requiring the first full regional
+The shorter handoff is a repository change requiring the first focused regional
 qualification, not a measured routing guarantee from the failed campaign.
 
 The bridge adds four temporary proxies; raising the normal pool's minimum can add
