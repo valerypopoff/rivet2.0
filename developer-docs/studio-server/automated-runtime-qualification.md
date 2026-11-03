@@ -365,6 +365,16 @@ including its complete immutable manifest identity. They do not substitute the
 newer publication head as the fixture's source. Promotion separately rechecks the
 frozen publication head, so this distinction preserves the freshness fence.
 
+For one merge-triggered main build, set the temporary repository variable
+`RIVET_INSTALLED_PREDECESSOR_DIGEST` to that freshly observed installed digest
+before merging. The same main-only validation applies, and an explicit dispatch
+input takes precedence. Clear the variable after the bound build finishes and its
+artifacts are verified, checking the value still belongs to this operation before
+removal. This lets the automatic build use the correct installed baseline without
+an additional manual build. Staging branches ignore the repository pin. Setting
+this digest does not start qualification or deployment; their fresh installed-state
+and immutable-artifact checks remain required.
+
 First production activation uses the existing deployment command in three
 separately journaled steps, with normal policy, backup, ownership and acceptance
 checks. Obtain approval for the initial developer interruption first.

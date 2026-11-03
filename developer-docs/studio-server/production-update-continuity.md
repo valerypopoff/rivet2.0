@@ -129,6 +129,16 @@ membership changes while retaining their Deployment/template identity and live
 regional health. This removes an idle scale-down wait, not a request-drain or
 serving-capacity check.
 
+The proxy headroom guard also permits terminating predecessors beyond the native
+surge limit. They never count as ready capacity, and their CPU demand remains in
+the headroom calculation. This corrects a guard rejection of normal rolling-update
+overlap without weakening request completion, draining or the ready baseline.
+Known-stopped terminating containers need no further CPU sample, and earlier HPA
+draining is excluded from the focused test's starting pool and retirement proof.
+Live or unknown containers still require metrics, and final acceptance still
+requires every proxy settled and healthy.
+See [headroom semantics](deployment-operations.md#ordinary-seven-pod-qualification-and-headroom).
+
 ### Routing verification during updates
 
 HTTPRoute comparisons accept equivalent backend references: omitted `group`,

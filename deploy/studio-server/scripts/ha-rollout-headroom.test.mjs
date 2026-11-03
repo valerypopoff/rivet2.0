@@ -278,7 +278,7 @@ test('profiles without the execution controller do not acquire an unrelated metr
   assert.equal(f.calls.length, 0);
 });
 
-function proxyFixture() {
+function proxyFixture(replicas = 2) {
   const now = 1_000_000,
     receipts = [],
     calls = [];
@@ -287,7 +287,7 @@ function proxyFixture() {
     kind: 'Deployment',
     metadata: { name: 'proxy', uid: 'proxy-uid', labels },
     spec: {
-      replicas: 2,
+      replicas,
       strategy: { rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } },
       selector: { matchLabels: labels },
     },
@@ -311,7 +311,7 @@ function proxyFixture() {
       },
     },
   ];
-  const pods = Array.from({ length: 2 }, (_, ordinal) => ({
+  const pods = Array.from({ length: replicas }, (_, ordinal) => ({
     metadata: {
       name: `proxy-${ordinal}`,
       uid: `proxy-${ordinal}-uid`,
@@ -347,6 +347,166 @@ function proxyFixture() {
   };
   return { options, receipts, calls, deployment, pods, metrics, sets };
 }
+
+function addProxyPod(f, { terminating = false, cpu = '100m' } = {}) {
+  const pod = structuredClone(f.pods[0]);
+  pod.metadata.name = `proxy-${f.pods.length}`;
+  pod.metadata.uid = `${pod.metadata.name}-uid`;
+  if (terminating) pod.metadata.deletionTimestamp = new Date(f.options.now()).toISOString();
+  f.pods.push(pod);
+  f.metrics.push({
+    metadata: { name: pod.metadata.name },
+    timestamp: new Date(f.options.now()).toISOString(),
+    containers: [{ name: 'proxy', usage: { cpu } }],
+  });
+  return pod;
+}
+
+test('proxy rollout allows four desired pods, one surge and terminating predecessors', async () => {
+  const f = proxyFixture(4);
+  addProxyPod(f);
+  addProxyPod(f, { terminating: true });
+  const guard = createHaProxyHeadroomGuard(f.options);
+  await guard({ stage: 'retirement' });
+  assert.equal(f.receipts.at(-1).availableServingOwners, 4);
+  assert.equal(f.receipts.at(-1).outcome, 'passed');
+  assert.ok(Math.abs(f.receipts.at(-1).totalCpuCores - 0.6) < 1e-9);
+  addProxyPod(f, { terminating: true });
+  await guard({ stage: 'retirement' });
+  assert.equal(f.receipts.at(-1).availableServingOwners, 4);
+  assert.equal(f.receipts.at(-1).owners.length, 7);
+  assert.ok(f.calls.every((args) => args[0] === 'get' && args[1] === '--raw'));
+});
+
+test('terminating proxies cannot supply serving capacity and their CPU demand still counts', async () => {
+  const f = proxyFixture();
+  f.pods[1].metadata.deletionTimestamp = new Date(f.options.now()).toISOString();
+  await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /insufficient/);
+  assert.equal(f.receipts.at(-1).availableServingOwners, 1);
+
+  const busy = proxyFixture();
+  addProxyPod(busy, { terminating: true, cpu: '1400m' });
+  await assert.rejects(createHaProxyHeadroomGuard(busy.options)({ stage: 'retirement' }), /insufficient/);
+  assert.equal(busy.receipts.at(-1).availableServingOwners, 2);
+  assert.equal(busy.receipts.at(-1).requiredServingOwners, 5);
+});
+
+test('proxy rollout still rejects too many non-terminating pods', async () => {
+  const f = proxyFixture();
+  addProxyPod(f);
+  addProxyPod(f);
+  await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), (error) =>
+    /outside the surge bound/.test(error.cause?.message),
+  );
+});
+
+test('terminating proxies retain ownership and CPU checks', async () => {
+  for (const fault of ['foreign-owner', 'duplicate-uid', 'missing-cpu', 'stale-cpu']) {
+    const f = proxyFixture(),
+      pod = addProxyPod(f, { terminating: true });
+    if (fault === 'foreign-owner') pod.metadata.ownerReferences[0].uid = 'foreign';
+    if (fault === 'duplicate-uid') pod.metadata.uid = f.pods[0].metadata.uid;
+    if (fault === 'missing-cpu') f.metrics.pop();
+    if (fault === 'stale-cpu') f.metrics.at(-1).timestamp = new Date(0).toISOString();
+    await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /headroom is unconfirmed/);
+    assert.equal(f.receipts.at(-1).outcome, 'blocked');
+  }
+});
+
+test('fully stopped terminating proxies need no further CPU scrape or serving-capacity credit', async () => {
+  const f = proxyFixture(),
+    stopped = addProxyPod(f, { terminating: true });
+  stopped.status.containerStatuses = [{ name: 'proxy', state: { terminated: { exitCode: 0 } } }];
+  f.metrics.pop();
+  await createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' });
+  assert.equal(f.receipts.at(-1).availableServingOwners, 2);
+  assert.equal(f.receipts.at(-1).totalCpuCores, 0.2);
+  f.pods[1].metadata.deletionTimestamp = new Date(f.options.now()).toISOString();
+  f.pods[1].status.containerStatuses = [{ name: 'proxy', state: { terminated: { exitCode: 0 } } }];
+  f.metrics.pop();
+  await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /insufficient/);
+  assert.equal(f.receipts.at(-1).availableServingOwners, 1);
+});
+
+test('a stopped proxy container cannot hide live or unknown containers from the CPU check', async () => {
+  for (const state of ['running', 'unknown', 'sidecar', 'debug-container', 'not-terminating']) {
+    const f = proxyFixture(),
+      draining = addProxyPod(f, { terminating: true });
+    draining.status.containerStatuses = [{ name: 'proxy', state: { terminated: { exitCode: 0 } } }];
+    if (state === 'running') draining.status.containerStatuses[0].state = { running: {} };
+    if (state === 'unknown') delete draining.status.containerStatuses;
+    if (state === 'not-terminating') delete draining.metadata.deletionTimestamp;
+    if (state === 'sidecar') {
+      draining.spec.initContainers = [{ name: 'sidecar', restartPolicy: 'Always' }];
+      draining.status.initContainerStatuses = [{ name: 'sidecar', state: { running: {} } }];
+    }
+    if (state === 'debug-container') {
+      draining.spec.ephemeralContainers = [{ name: 'debug' }];
+      draining.status.ephemeralContainerStatuses = [{ name: 'debug', state: { running: {} } }];
+    }
+    f.metrics.pop();
+    await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /headroom is unconfirmed/);
+  }
+});
+
+test('already-terminating proxies may finish during CPU confirmation without losing their measured demand', async () => {
+  for (const finished of ['absent', 'Succeeded', 'Failed', 'containers-stopped']) {
+    const f = proxyFixture(4);
+    addProxyPod(f);
+    const terminating = addProxyPod(f, { terminating: true }),
+      kube = f.options.kube;
+    let podReads = 0;
+    f.options.kube = async (args) => {
+      if (!args[2].includes('/metrics.k8s.io/') && args[2].split('?')[0].endsWith('/pods') && ++podReads === 2) {
+        if (finished === 'absent') f.pods.pop();
+        else if (finished === 'containers-stopped')
+          terminating.status.containerStatuses = [{ name: 'proxy', state: { terminated: { exitCode: 0 } } }];
+        else terminating.status.phase = finished;
+      }
+      return kube(args);
+    };
+    await createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' });
+    assert.equal(f.receipts.at(-1).availableServingOwners, 4);
+    assert.ok(Math.abs(f.receipts.at(-1).totalCpuCores - 0.6) < 1e-9);
+  }
+});
+
+test('serving proxies disappearing or starting termination during CPU confirmation still block retirement', async () => {
+  for (const change of ['absent', 'terminating']) {
+    const f = proxyFixture(),
+      kube = f.options.kube;
+    let podReads = 0;
+    f.options.kube = async (args) => {
+      if (!args[2].includes('/metrics.k8s.io/') && args[2].split('?')[0].endsWith('/pods') && ++podReads === 2) {
+        if (change === 'absent') f.pods.pop();
+        else f.pods[0].metadata.deletionTimestamp = new Date(f.options.now()).toISOString();
+      }
+      return kube(args);
+    };
+    await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /headroom is unconfirmed/);
+  }
+});
+
+test('allowing a draining proxy to finish does not admit a changed or unmeasured owner', async () => {
+  for (const change of ['uid', 'termination-cleared', 'new-owner']) {
+    const f = proxyFixture(),
+      terminating = addProxyPod(f, { terminating: true }),
+      kube = f.options.kube;
+    let podReads = 0;
+    f.options.kube = async (args) => {
+      if (!args[2].includes('/metrics.k8s.io/') && args[2].split('?')[0].endsWith('/pods') && ++podReads === 2) {
+        if (change === 'uid') terminating.metadata.uid = 'replacement';
+        if (change === 'termination-cleared') delete terminating.metadata.deletionTimestamp;
+        if (change === 'new-owner') {
+          f.pods.pop();
+          addProxyPod(f).metadata.uid = 'unmeasured-new-owner';
+        }
+      }
+      return kube(args);
+    };
+    await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /headroom is unconfirmed/);
+  }
+});
 
 test('proxy headroom uses current CPU demand rather than HPA desired replicas', async () => {
   const f = proxyFixture(),

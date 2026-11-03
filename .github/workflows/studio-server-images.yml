@@ -223,7 +223,7 @@ jobs:
       CURRENT_PRODUCTION_MANIFEST: artifacts/studio-server-release-manifest/current-production-release-manifest.json
       RELEASE_MANIFEST_REPOSITORY: ghcr.io/valerypopoff/rivet2.0-studio-server/release-manifest
       ALLOW_RELEASE_LINEAGE_BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_release_lineage_bootstrap == true }}
-      INSTALLED_PREDECESSOR_DIGEST: ${{ github.event_name == 'workflow_dispatch' && inputs.installed_predecessor_digest || '' }}
+      INSTALLED_PREDECESSOR_DIGEST: ${{ github.ref == 'refs/heads/main' && (inputs.installed_predecessor_digest || vars.RIVET_INSTALLED_PREDECESSOR_DIGEST) || '' }}
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

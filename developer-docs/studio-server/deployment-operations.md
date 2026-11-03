@@ -90,6 +90,31 @@ cover HPA-grown capacity, exact-image readiness, HTTP502, interrupted windows,
 recording durability and storage identity. Unit/HTTP/Helm checks are distinct from
 the actual local cluster result, and neither is provider qualification.
 
+Proxy surge limits count only non-terminating Pods. Kubernetes may keep old Pods
+draining beyond `replicas + maxSurge`, so four desired Pods, one surge and one
+terminating predecessor is a valid intermediate state. See the
+[Deployment rollout semantics](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#updating-a-deployment).
+Terminating Pods contribute no serving capacity, but their measured CPU demand
+and ownership checks remain included. An already-terminating Pod may finish
+between the sample and confirmation reads; its sampled demand stays included
+conservatively. A serving Pod disappearing, losing readiness or starting
+termination still invalidates the observation, as do new unmeasured owners.
+Fresh CPU samples, the full ready baseline, zero unavailable Pods, request
+completion and the 300-second protection checks remain required. Local regressions
+cover the six-Pod overlap and completed draining Pods without starting a cloud test.
+
+CPU sampling treats a terminating Pod as finished once every regular container,
+restartable init sidecar and ephemeral debug container reports `Terminated`, even
+if its Pod phase has not caught up. Such a Pod cannot contribute serving capacity
+or CPU demand and needs no further scrape. Live or unknown container states still
+require fresh metrics. See [container states](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#container-states).
+
+Focused test admission also counts only non-terminating proxies for its starting
+pool. Earlier HPA draining does not invalidate a healthy two-to-four-Pod baseline
+or count as observed termination by the new update. Final acceptance still
+requires all proxies settled, current-image and healthy, with completed protected
+responses and exact recordings; no final draining Pod is ignored.
+
 ## Latest-debugger qualification compatibility
 
 The editor-retirement fixture negotiates the observed latest-debugger handshake
@@ -468,8 +493,9 @@ During a rolling operation, the owned journal serializes replica changes. Fresh
 execution slot/CPU and proxy CPU measurements must show adequate headroom before
 template freeze and each retirement. Metrics/ownership failures are not zero
 load. Surviving owners are checked again after routing withdrawal, immediately
-before admission is fenced. A changing proxy Pod inventory invalidates the
-sample rather than counting an unmeasured new owner as spare capacity.
+before admission is fenced. A changing non-terminating proxy Pod inventory
+invalidates the sample rather than counting an unmeasured new owner as spare
+capacity; an already-terminating Pod may finish with its measured demand retained.
 Execution checks also reconfirm the entire Pod inventory and StatefulSet after
 sequential process/CPU sampling. A previously sampled Pod that loses readiness,
 changes UID or owner, or a changed replica count/startup fence invalidates the
