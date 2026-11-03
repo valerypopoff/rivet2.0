@@ -13,7 +13,14 @@ export function createHaProofTiming({
   const active = new Map();
   let status = 'starting';
   let closed = false;
-  const snapshot = () => ({ version: 1, elapsedMs: Math.round(now() - started), status, phases });
+  let firstFailure;
+  const snapshot = () => ({
+    version: 1,
+    elapsedMs: Math.round(now() - started),
+    status,
+    phases,
+    ...(firstFailure ? { firstFailure } : {}),
+  });
   const heartbeat = setInterval(() => {
     log(
       `[ha-progress] ${status}; ${Math.round((now() - started) / 1000)}s elapsed; active: ${[...active.keys()].join(', ') || 'none'}`,
@@ -32,7 +39,8 @@ export function createHaProofTiming({
       status = value;
     },
     async measure(name, action) {
-      if (closed || phases.length >= 256 || active.has(name)) throw Error('Invalid HA timing phase lifetime.');
+      if (closed || active.has(name)) throw Error('Invalid HA timing phase lifetime.');
+      if (phases.length >= 1024) return action(); // Diagnostics cannot cap a valid large rollout.
       const phase = { name, startedMs: Math.round(now() - started), outcome: 'running' };
       phases.push(phase);
       active.set(name, phase);
@@ -43,6 +51,7 @@ export function createHaProofTiming({
         return result;
       } catch (error) {
         phase.outcome = 'failed';
+        firstFailure ??= { name, elapsedMs: Math.round(now() - started) };
         throw error;
       } finally {
         phase.elapsedMs = Math.round(now() - started - phase.startedMs);
@@ -73,6 +82,11 @@ export async function summarizeHaTiming(summary, scenario, timing) {
     ...timing.phases.map((p) => `| ${p.name} | ${p.outcome} | ${(p.elapsedMs / 1000).toFixed(1)} |`),
     '',
     `Scenario elapsed: ${(timing.elapsedMs / 1000).toFixed(1)}s. Cluster creation/cleanup and runner setup are reported separately by GitHub.`,
+    ...(timing.firstFailure
+      ? [
+          `First blocker: ${timing.firstFailure.name} at ${(timing.firstFailure.elapsedMs / 1000).toFixed(1)}s; cleanup may finish later.`,
+        ]
+      : []),
     '',
   ];
   try {

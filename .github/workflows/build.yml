@@ -19,7 +19,11 @@ permissions:
   contents: read
 
 jobs:
+  source-contracts:
+    uses: ./.github/workflows/studio-server-source-contracts.yml
+
   compiled-artifacts:
+    needs: source-contracts
     name: Compile workspace
     runs-on: ubuntu-latest
     steps:

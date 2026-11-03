@@ -5,6 +5,7 @@ import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { actorSparsePatterns, verifyActorSource } from '../images/qualification/verify-source.mjs';
+import { qualificationBuildArgs } from '../../../scripts/ci/qualification-build-cache.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 export async function prepareTemporaryActorContext(source, sha, context) {
@@ -57,7 +58,14 @@ export async function buildTemporaryStagingActor(sha, tag) {
     await prepareTemporaryActorContext(root, sha, context);
     const result = spawnSync(
       'docker',
-      ['build', '--platform=linux/amd64', '--build-arg', `SOURCE_SHA=${sha}`, '--tag', tag, context],
+      qualificationBuildArgs('actor', [
+        '--platform=linux/amd64',
+        '--build-arg',
+        `SOURCE_SHA=${sha}`,
+        '--tag',
+        tag,
+        context,
+      ]),
       { stdio: 'inherit' },
     );
     assert.equal(result.status, 0, 'Qualification actor build failed');

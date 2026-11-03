@@ -359,6 +359,7 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
     const kubectl = (args, extra = {}) =>
       gate.kubectl(['-n', gate.config.namespace, '--request-timeout=30s', ...args], { capture: true, ...extra });
     rollout = await runHaKubernetesRollout({
+      measure: (name, action) => measureHaPhase(gate, name, action),
       safety: createDeploymentSafety({
         mode: 'rolling',
         scope: 'rehearsal',

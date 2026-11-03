@@ -10,6 +10,7 @@ const rootDependencyFiles = new Set(['.pnp.cjs', '.pnp.loader.mjs', '.yarnrc.yml
 const studioRuntimePrefixes = [
   '.yarn/',
   '.github/actions/setup-yarn/',
+  '.github/actions/build-cache-runtime/',
   '.github/workflows/studio-server-',
   'deploy/studio-server/',
   'packages/app/',

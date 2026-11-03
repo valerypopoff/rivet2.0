@@ -28,6 +28,7 @@ import { observeStagingInventory } from '../lib/reusable-staging-cleanup.mjs';
 import { stagingHostname } from '../lib/reusable-staging-state.mjs';
 import { monitorFatalStartup } from '../lib/fatal-startup-monitor.mjs';
 import { imageReference } from '../lib/kubernetes-managed-release-gate-config.mjs';
+import { createHaProofTiming } from '../lib/ha-proof-timing.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -330,71 +331,79 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       ).spec.template;
     const target = [this.operation.previous, this.operation.candidate].find((m) => isDeepStrictEqual(m.images, images));
     const { artifact: observeArtifact, ...rolloutProbes } = probes;
-    const result = await this.runRollout({
-      safety: this.deploymentSafety('rolling', imageDigest(target)),
-      kube: (...args) => this.kube(...args),
-      namespace: this.config.namespace,
-      release: this.config.release,
-      manifestDigest: imageDigest(target),
-      previousManifestDigest: imageDigest(this.currentManifest),
-      resources,
-      ...rolloutProbes,
-      createProxyContinuity: (args) =>
-        createKubernetesProxyContinuity({
-          ...args,
-          observeBackend: createComputeBackendObserver(args.config.network, { accessToken: stagingAccessToken }),
-        }),
-      timeoutMs: this.operation.requestContinuityProfile
-        ? continuityTimeoutMs(this.operation.requestContinuityProfile)
-        : 1200000,
-      artifact: async (...args) => {
-        // The adapter owns persistence. The observer must run after the exact
-        // journal is saved, and its failure must stop the qualification.
-        await this.artifact(...args);
-        if (args[0] === 'ha-rollout.json' && this.operation.requestContinuityProfile) {
-          const record = JSON.parse(args[1]),
-            continuity = record.proxyContinuity;
-          await this.continuityProbes?.observeJournal(record);
-          if (continuity?.phase === 'bridge-serving' && !this.continuityInventoryRecorded) {
-            await observeStagingInventory(this.state, stagingCloudReader(this.settings));
-            this.continuityInventoryRecorded = true;
+    const timing = createHaProofTiming({ artifact: (...args) => this.artifact(...args), log: () => {} });
+    let result;
+    try {
+      result = await this.runRollout({
+        measure: (name, action) =>
+          timing.measure(name, () => (this.rolloutStep ? this.rolloutStep(name, action) : action())),
+        safety: this.deploymentSafety('rolling', imageDigest(target)),
+        kube: (...args) => this.kube(...args),
+        namespace: this.config.namespace,
+        release: this.config.release,
+        manifestDigest: imageDigest(target),
+        previousManifestDigest: imageDigest(this.currentManifest),
+        resources,
+        ...rolloutProbes,
+        createProxyContinuity: (args) =>
+          createKubernetesProxyContinuity({
+            ...args,
+            observeBackend: createComputeBackendObserver(args.config.network, { accessToken: stagingAccessToken }),
+          }),
+        timeoutMs: this.operation.requestContinuityProfile
+          ? continuityTimeoutMs(this.operation.requestContinuityProfile)
+          : 1200000,
+        artifact: async (...args) => {
+          // The adapter owns persistence. The observer must run after the exact
+          // journal is saved, and its failure must stop the qualification.
+          await this.artifact(...args);
+          if (args[0] === 'ha-rollout.json' && this.operation.requestContinuityProfile) {
+            const record = JSON.parse(args[1]),
+              continuity = record.proxyContinuity;
+            await this.continuityProbes?.observeJournal(record);
+            if (continuity?.phase === 'bridge-serving' && !this.continuityInventoryRecorded) {
+              await observeStagingInventory(this.state, stagingCloudReader(this.settings));
+              this.continuityInventoryRecorded = true;
+            }
+            if (continuity?.phase === 'cleanup' && !this.continuityInventoryRetiring) {
+              const service = JSON.parse((await this.kube(['get', 'service', continuity.name, '-o', 'json'])).stdout);
+              assert.equal(service.metadata.uid, continuity.entries.find((e) => e.desired.kind === 'Service').uid);
+              const status = JSON.parse(service.metadata.annotations['cloud.google.com/neg-status']);
+              const paths = status.zones.flatMap((zone) =>
+                Object.values(status.network_endpoint_groups).map(
+                  (name) => `projects/${this.settings.projectId}/zones/${zone}/networkEndpointGroups/${name}`,
+                ),
+              );
+              await this.state.change((r) => {
+                r.retiringNegIds = [
+                  ...new Set([
+                    ...(r.retiringNegIds ?? []),
+                    ...r.inventory.filter((i) => i.kind === 'neg' && paths.includes(i.resource)).map((i) => i.id),
+                  ]),
+                ];
+              });
+              this.continuityInventoryRetiring = true;
+            }
           }
-          if (continuity?.phase === 'cleanup' && !this.continuityInventoryRetiring) {
-            const service = JSON.parse((await this.kube(['get', 'service', continuity.name, '-o', 'json'])).stdout);
-            assert.equal(service.metadata.uid, continuity.entries.find((e) => e.desired.kind === 'Service').uid);
-            const status = JSON.parse(service.metadata.annotations['cloud.google.com/neg-status']);
-            const paths = status.zones.flatMap((zone) =>
-              Object.values(status.network_endpoint_groups).map(
-                (name) => `projects/${this.settings.projectId}/zones/${zone}/networkEndpointGroups/${name}`,
-              ),
-            );
-            await this.state.change((r) => {
-              r.retiringNegIds = [
-                ...new Set([
-                  ...(r.retiringNegIds ?? []),
-                  ...r.inventory.filter((i) => i.kind === 'neg' && paths.includes(i.resource)).map((i) => i.id),
-                ]),
-              ];
-            });
-            this.continuityInventoryRetiring = true;
-          }
-        }
-        await observeArtifact?.(...args);
-      },
-      applyTemplates: (_work, guards) =>
-        this.apply(
-          mergeRuntimeControlGuards(mergeRuntimeControlGuards(values, haRolloutAutoscalingValues(resources)), guards),
-          'provider-roll-template.json',
-        ),
-      restoreAutoscalers: (_work, guards) =>
-        this.apply(
-          {
-            ...mergeRuntimeControlGuards(values, guards),
-            workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } },
-          },
-          'provider-roll-final.json',
-        ),
-    });
+          await observeArtifact?.(...args);
+        },
+        applyTemplates: (_work, guards) =>
+          this.apply(
+            mergeRuntimeControlGuards(mergeRuntimeControlGuards(values, haRolloutAutoscalingValues(resources)), guards),
+            'provider-roll-template.json',
+          ),
+        restoreAutoscalers: (_work, guards) =>
+          this.apply(
+            {
+              ...mergeRuntimeControlGuards(values, guards),
+              workflowSchema: { ...values.workflowSchema, migrationJob: { enabled: false } },
+            },
+            'provider-roll-final.json',
+          ),
+      });
+    } finally {
+      await timing.close();
+    }
     this.currentManifest = target;
     return result;
   }

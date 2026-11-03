@@ -16,6 +16,15 @@ import { matchesKubernetesTemplate } from './kubernetes-template-match.mjs';
 import { continuityFromResources } from './request-continuity.mjs';
 import { createKubernetesProxyContinuity } from './proxy-continuity-kubernetes.mjs';
 
+export function haCandidateReady(podName, pod, image, revision) {
+  if (!revision || !pod) return false;
+  if (!pod.terminating && (pod.image !== image || pod.revision !== revision))
+    throw Error(
+      `Candidate owner ${podName} is an existing stale OnDelete Pod (image ${pod.image}, revision ${pod.revision ?? 'unknown'}; desired ${image}, ${revision}); explicit guarded replacement is required.`,
+    );
+  return !pod.terminating && pod.ready && pod.image === image && pod.revision === revision;
+}
+
 export const haFrozenAutoscalingValues = {
   autoscaling: {
     execution: { enabled: false },
@@ -243,6 +252,7 @@ export async function runHaKubernetesRollout({
   ownerPoolTransition,
   verifyDeveloperReady,
   createProxyContinuity = createKubernetesProxyContinuity,
+  measure,
 }) {
   requireDeploymentSafety(safety, 'rolling', { release, namespace, manifestDigest });
   settle = safety.requireSettlement(settle);
@@ -419,6 +429,7 @@ export async function runHaKubernetesRollout({
       container: container.name,
       image: container.image,
       revision: pod.metadata.labels?.['controller-revision-hash'],
+      terminating: !!pod.metadata.deletionTimestamp,
       ready:
         !pod.metadata.deletionTimestamp &&
         pod.status.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'),
@@ -502,6 +513,7 @@ export async function runHaKubernetesRollout({
       ...(proxyContinuity ? { proxyContinuityIdentity: proxyContinuity.identity } : {}),
     },
     proxyContinuity,
+    measure,
     workloads,
     safety,
     resumeToken,
@@ -544,6 +556,12 @@ export async function runHaKubernetesRollout({
       await artifact('ha-inventory.json', JSON.stringify(inventory, null, 2));
     },
     observePod,
+    readReplicas: async (workload) => {
+      const current = JSON.parse((await kube(['get', 'statefulset', workload.name, '-o', 'json'])).stdout);
+      if (current.metadata.uid !== workload.uid || current.metadata.deletionTimestamp)
+        throw Error('HA StatefulSet identity changed while observing the cooperative pool.');
+      return current.spec.replicas;
+    },
     status: (pod) => exec(pod),
     handoverHousekeeping: (args) =>
       handoverHousekeeping({
@@ -663,7 +681,7 @@ export async function runHaKubernetesRollout({
       deadlineWait(async () => {
         const pod = await observePod(podName);
         const revision = await desiredRevision(podName.slice(0, podName.lastIndexOf('-')));
-        return !!revision && pod?.ready && pod.image === image && pod.revision === revision;
+        return haCandidateReady(podName, pod, image, revision);
       }, `candidate owner ${podName}`),
     waitForWithdrawal: async (pod) => {
       // Propagation was observed before admission closed. Recheck the route,
