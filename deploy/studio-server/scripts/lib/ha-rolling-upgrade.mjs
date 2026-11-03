@@ -68,6 +68,7 @@ export async function runHaRollingUpgrade({
   saveJournal,
   afterCheckpoint,
   observePod,
+  readReplicas,
   status,
   withdraw,
   begin,
@@ -93,6 +94,7 @@ export async function runHaRollingUpgrade({
   handoverHousekeeping,
   verifyPoolPreparationTemplates,
   proxyContinuity,
+  measure = async (_name, action) => action(),
 }) {
   requireDeploymentSafety(safety, 'rolling', identity);
   settle = safety.requireSettlement(settle);
@@ -101,6 +103,33 @@ export async function runHaRollingUpgrade({
   if (controlPlaneMode === 'singleton-overlap' && typeof handoverHousekeeping !== 'function')
     throw Error('Overlapping backends require the housekeeping handover contract.');
   assertHaRolloutPlan(workloads, controlPlaneMode);
+  const elasticWorkload = workloads.find((w) => w.name === identity.cooperativeScaling?.workload);
+  if (
+    elasticWorkload &&
+    (elasticWorkload.role !== 'execution' ||
+      typeof readReplicas !== 'function' ||
+      !Number.isSafeInteger(identity.cooperativeScaling.maxReplicas) ||
+      identity.cooperativeScaling.maxReplicas < Math.max(3, elasticWorkload.replicas) ||
+      identity.cooperativeScaling.maxReplicas > 100)
+  )
+    throw Error('Cooperative HA scaling requires a live replica reader and capacity for three owners.');
+  const ownerCount = async (workload) => {
+    if (workload !== elasticWorkload) return workload.replicas;
+    const count = await readReplicas(workload);
+    if (!Number.isSafeInteger(count) || count < workload.replicas || count > identity.cooperativeScaling.maxReplicas)
+      throw Error('Cooperative HA replica count is outside the journaled baseline/ceiling; serving owners retained.');
+    return count;
+  };
+  // Re-read once per batch, including at the boundary, rather than issuing a
+  // StatefulSet GET for every ordinal. Growth is bounded by the approved ceiling.
+  async function* ownerNames(workload) {
+    let next = 0;
+    while (true) {
+      const count = await ownerCount(workload);
+      if (next >= count) return;
+      while (next < count) yield `${workload.name}-${next++}`;
+    }
+  }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('Invalid HA deadline.');
   const runner = uuid();
   let record = await readJournal();
@@ -201,6 +230,17 @@ export async function runHaRollingUpgrade({
     },
     run: async (operation) => {
       const { checkpoint, assertLease } = operation;
+      const availableOwner = async (name) => {
+        const deadline = now() + timeoutMs;
+        while (true) {
+          assertLease();
+          const pod = await observePod(name);
+          if (pod?.ready) return pod;
+          if (now() >= deadline)
+            throw Error(`Timed out waiting for serving capacity ${name}; original owners retained.`);
+          await wait();
+        }
+      };
       const checkRetirementCapacity = async (pod, workload) => {
         if (workload.role !== 'execution' && !(workload.role === 'backend' && controlPlaneMode !== 'singleton')) return;
         let survivors = 0;
@@ -253,7 +293,7 @@ export async function runHaRollingUpgrade({
           if (now() >= deadline) throw new Error('Routing withdrawal was not acknowledged; admission was not fenced.');
           await wait();
         }
-        await waitForRoutingWithdrawal(pod);
+        await measure(`routing:${pod.name}`, () => waitForRoutingWithdrawal(pod));
         if (!operation.record.owner.beginIssued) {
           // Peers can fail while endpoint removal propagates. Reconfirm surviving
           // owners at the admission fence even when no autoscaler supplies metrics.
@@ -268,13 +308,13 @@ export async function runHaRollingUpgrade({
 
       if (operation.record.phase === 'preflight') {
         await safety.checkOwnedBaseline(operation.record, runner, now);
-        await proxyContinuity?.prepare(operation);
+        await measure('handoff:bridge', () => proxyContinuity?.prepare(operation));
         await safety.checkOwnedBaseline(operation.record, runner, now);
         await checkHeadroom({ stage: 'preflight' });
         await checkpoint({ phase: 'templates' });
         assertLease();
         safety.assertReadyForTemplates();
-        await applyTemplates(operation); // Applies the owned scaling policy; never replaces OnDelete owners.
+        await measure('templates', () => applyTemplates(operation)); // Never replaces OnDelete owners.
       } else if (operation.record.phase === 'templates') {
         // Helm may have committed without its acknowledgement. Template install is
         // declarative, but migrations are not replayed by recovery.
@@ -290,7 +330,7 @@ export async function runHaRollingUpgrade({
       for (const workload of workloads) {
         const w = workload;
         const elastic = w.role === 'execution' && identity.cooperativeScaling?.workload === w.name;
-        if (operation.record.completed.includes(w.name)) continue;
+        if (operation.record.completed.includes(w.name) && !elastic) continue;
         const surgeName = `${w.name}-${w.replicas}`;
         const serial = w.role === 'maintenance' || (controlPlaneMode === 'singleton' && w.role === 'backend');
         // A fresh rollout may leave a whole workload unchanged. Check the desired
@@ -298,11 +338,11 @@ export async function runHaRollingUpgrade({
         // before avoiding a surge that would itself need a full retirement.
         // Recovery retains the old path: a surge may already exist even when its
         // scale acknowledgement or first owner checkpoint was lost.
-        if (!serial && !recovering && !operation.record.owner) {
+        if (!serial && (!recovering || elastic) && !operation.record.owner) {
           let unchanged = true;
-          for (let i = 0; i < w.replicas; i++) {
+          for await (const name of ownerNames(w)) {
             assertLease();
-            const pod = await observePod(`${w.name}-${i}`);
+            const pod = await observePod(name);
             if (!pod?.ready || !(await isCurrentPod(pod, w))) {
               unchanged = false;
               break;
@@ -315,7 +355,8 @@ export async function runHaRollingUpgrade({
             }
           }
           if (unchanged) {
-            await checkpoint({ completed: [...operation.record.completed, w.name] });
+            if (!operation.record.completed.includes(w.name))
+              await checkpoint({ completed: [...operation.record.completed, w.name] });
             continue;
           }
         }
@@ -323,11 +364,26 @@ export async function runHaRollingUpgrade({
           assertLease();
           const target = elastic ? Math.min(w.replicas + 1, identity.cooperativeScaling.maxReplicas) : w.replicas + 1;
           await scale(w.name, target, w.replicas);
-          if (target > w.replicas) await waitForReady(surgeName, w.image);
+          if (elastic && target > w.replicas) {
+            // Autoscaling may already have filled this ordinal from the old
+            // OnDelete template. It supplies capacity; reconcile it below rather
+            // than waiting for an image/revision change the controller cannot do.
+            const peer = await availableOwner(surgeName);
+            const current = assertHaRetirement(await status(peer));
+            if (current.state !== 'serving' || current.operationId)
+              throw Error(`HA capacity owner ${surgeName} is already retiring; resume its recorded operation.`);
+          } else if (target > w.replicas) await waitForReady(surgeName, w.image);
         }
-        for (let i = 0; i < w.replicas; i++) {
-          const name = `${w.name}-${i}`;
+        for await (const name of ownerNames(w)) {
           let pod = await observePod(name);
+          if (!pod && operation.record.owner?.name === name) {
+            // The recorded UID may already be deleted after a lost API ack.
+            // Wait for its candidate replacement; never replay that deletion.
+            await measure(`ready:${name}`, () => waitForReady(name, w.image));
+            await checkpoint({ owner: null });
+            continue;
+          }
+          if (elastic && operation.record.owner?.name !== name && !pod?.ready) pod = await availableOwner(name);
           if (!pod) throw new Error(`HA owner ${name} disappeared before retirement.`);
           if ((await isCurrentPod(pod, w)) && (!operation.record.owner || operation.record.owner.name !== name)) {
             await waitForReady(name, w.image);
@@ -351,20 +407,22 @@ export async function runHaRollingUpgrade({
           }
           await startRetirement(pod, w);
           const deadline = now() + timeoutMs;
-          while (true) {
-            assertLease();
-            pod = await observePod(name);
-            if (pod?.uid !== owner.uid) throw new Error('HA pod changed while its outcome was pending.');
-            const current = assertHaRetirement(await status(pod), owner.incarnation, owner.operationId);
-            if (current.state === 'drained') break;
-            if (now() >= deadline) throw new Error('Accepted work is still active; owner was not deleted.');
-            await wait();
-          }
+          await measure(`work:${name}`, async () => {
+            while (true) {
+              assertLease();
+              pod = await observePod(name);
+              if (pod?.uid !== owner.uid) throw new Error('HA pod changed while its outcome was pending.');
+              const current = assertHaRetirement(await status(pod), owner.incarnation, owner.operationId);
+              if (current.state === 'drained') break;
+              if (now() >= deadline) throw new Error('Accepted work is still active; owner was not deleted.');
+              await wait();
+            }
+          });
           await waitForWithdrawal(pod);
           assertLease();
           // The adapter must use a Kubernetes UID precondition, not kubectl delete --force.
           await removePod(pod);
-          await waitForReady(name, w.image);
+          await measure(`ready:${name}`, () => waitForReady(name, w.image));
           await checkpoint({ owner: null });
         }
         if (!serial && !elastic) {
@@ -384,14 +442,16 @@ export async function runHaRollingUpgrade({
             if (owner.name !== name || owner.uid !== pod.uid) throw new Error('HA surge owner changed.');
             await startRetirement(pod, w);
             const deadline = now() + timeoutMs;
-            while (true) {
-              assertLease();
-              if ((await observePod(name))?.uid !== pod.uid) throw new Error('HA surge identity changed.');
-              if (assertHaRetirement(await status(pod), owner.incarnation, owner.operationId).state === 'drained')
-                break;
-              if (now() >= deadline) throw new Error('Surge work is still active; owner was not scaled down.');
-              await wait();
-            }
+            await measure(`work:${name}`, async () => {
+              while (true) {
+                assertLease();
+                if ((await observePod(name))?.uid !== pod.uid) throw new Error('HA surge identity changed.');
+                if (assertHaRetirement(await status(pod), owner.incarnation, owner.operationId).state === 'drained')
+                  break;
+                if (now() >= deadline) throw new Error('Surge work is still active; owner was not scaled down.');
+                await wait();
+              }
+            });
             await waitForWithdrawal(pod);
             await checkpoint({ owner: { ...operation.record.owner, scaleDownIssued: true } });
             assertLease();
@@ -400,17 +460,17 @@ export async function runHaRollingUpgrade({
           // A lost scale acknowledgement must not recreate a surge or replay the
           // command against a replacement owner. Observe the recorded removal,
           // including actual pod deletion, before restoring autoscalers.
-          await waitForScaleDown(w, operation.record.owner);
+          await measure(`ready:${surgeName}`, () => waitForScaleDown(w, operation.record.owner));
         }
-        await checkpoint({ owner: null, completed: [...operation.record.completed, w.name] });
+        await checkpoint({ owner: null, completed: [...new Set([...operation.record.completed, w.name])] });
       }
       // Journal completion is historical evidence, not a readiness or identity
       // guarantee about an owner that may have changed while another tier drained.
       const verifyCompletedOwners = async () => {
         for (const w of workloads)
-          for (let i = 0; i < w.replicas; i++) {
+          for await (const name of ownerNames(w)) {
             assertLease();
-            const pod = await observePod(`${w.name}-${i}`);
+            const pod = await observePod(name);
             if (!pod?.ready || !(await isCurrentPod(pod, w)))
               throw new Error('HA completed owner is no longer current and ready; completion is blocked.');
             const current = assertHaRetirement(await status(pod));
@@ -431,13 +491,13 @@ export async function runHaRollingUpgrade({
       };
       await verifyCompletedOwners();
       assertLease();
-      await proxyContinuity?.beforeRestoreAutoscalers?.(operation);
+      await measure('handoff:return', () => proxyContinuity?.beforeRestoreAutoscalers?.(operation));
       await restoreAutoscalers(operation);
-      await proxyContinuity?.afterRestoreAutoscalers?.(operation);
+      await measure('handoff:final-routing', () => proxyContinuity?.afterRestoreAutoscalers?.(operation));
       await verifyCompletedOwners();
-      safety.confirmSettlement(await settle());
-      await proxyContinuity?.finish(operation);
-      if (proxyContinuity) safety.confirmSettlement(await settle());
+      safety.confirmSettlement(await measure('settlement', () => settle()));
+      await measure('handoff:cleanup', () => proxyContinuity?.finish(operation));
+      if (proxyContinuity) safety.confirmSettlement(await measure('settlement:after-bridge', () => settle()));
       assertLease();
       await verifyCompletedOwners();
       await operation.complete();

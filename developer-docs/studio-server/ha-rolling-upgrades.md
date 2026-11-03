@@ -29,6 +29,23 @@ replacement-versus-scale-down races.
 Execution PDB/startup fences remain enabled, and HPA-grown proxy/web counts are
 carried into Helm updates with API-server resourceVersion guards.
 
+The cooperative execution pool is reconciled from the live, UID-checked
+StatefulSet replica count, bounded by the journal's original baseline and approved
+maximum. An old `OnDelete` Pod already occupying the surge ordinal is serving
+capacity, not a candidate that will change its own image/revision. Every stale
+owner in the live pool receives the same guarded withdrawal/drain/UID replacement,
+including autoscaler growth beyond the original inventory. At the ceiling, the
+runner uses existing ready peers rather than waiting for an out-of-range surge.
+Final checks and recovery include these extra owners without rewriting the frozen
+baseline or scaling away accepted work. Pool reads are batched rather than issued
+once per ordinal.
+
+Readiness waits retain time for pending/terminating replacements. A stable stale
+`OnDelete` Pod produces a prompt explicit-replacement diagnosis. A lost deletion
+acknowledgement with no replacement yet waits for the candidate and never repeats
+the old deletion. The early source gate covers these cases, same-image/stale-revision
+growth, ceiling capacity, acknowledgement recovery and final-pool verification.
+
 The opt-in [runtime-HA implementation: ten-pod bridge and six-pod compact target](runtime-ha-singleton-control-plan.md)
 keeps production execution redundant while consolidating developer and maintenance
 roles. Implementation and qualification status are tracked there. It is not

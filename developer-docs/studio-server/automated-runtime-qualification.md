@@ -2,6 +2,14 @@
 
 ## Implementation versus activation
 
+The [release performance changes](ci-performance.md#release-iteration-improvements-november-3-2026)
+add early source contracts, scan prerequisites, balanced Kind checks and cached
+qualification tooling within the existing release contracts. Provider progress
+now distinguishes templates, withdrawal, active-work drain, replacement readiness
+and proxy handoffs. Terminal failure is reported before safe command shutdown and
+cleanup complete; it does not release writer ownership or certify cleanup.
+No image workflow, GKE attempt or production activation is implied by local tests.
+
 The optional [bounded request-continuity extension](production-update-continuity.md)
 checks real five-minute HTTP/1 and HTTP/2 bodies across rollout and handoff
 boundaries. The full suite additionally covers late WebSocket admission/resume,

@@ -2097,10 +2097,14 @@ export class ManagedReleaseGate {
         this.config.namespace,
         '--timeout=300s',
       ]);
+      // A Service port-forward is bound to one selected Pod, which may have
+      // shared the drained node. Reconnect the disposable test transport;
+      // workflow recovery and response assertions remain required below.
+      const recoveredBaseUrl = await this.openProxy();
       await waitFor(
         'workflow recovery after execution node drain',
         () =>
-          this.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
+          this.requestWorkflow(recoveredBaseUrl, '/workflows/managed-release-workflow', {
             method: 'POST',
             body: JSON.stringify({ input: 'after-node-drain' }),
           }),

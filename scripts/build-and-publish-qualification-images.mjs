@@ -9,6 +9,7 @@ import { buildTemporaryStagingActor } from '../deploy/studio-server/scripts/buil
 import { verifyActorSource } from '../deploy/studio-server/images/qualification/verify-source.mjs';
 import { buildStagingJanitorRuntime } from '../deploy/studio-server/scripts/package-reusable-staging.mjs';
 import { runRuntimeProbe } from '../deploy/studio-server/images/lib/run-runtime-probe.mjs';
+import { qualificationBuildArgs } from './ci/qualification-build-cache.mjs';
 import {
   publishQualificationImages,
   minioSourceImage,
@@ -27,7 +28,14 @@ try {
   const janitor = `rivet-qualification-janitor:${process.env.GITHUB_SHA}`;
   run(
     'docker',
-    ['build', '--platform=linux/amd64', '-f', 'deploy/studio-server/images/janitor/Dockerfile', '-t', janitor, '.'],
+    qualificationBuildArgs('janitor', [
+      '--platform=linux/amd64',
+      '-f',
+      'deploy/studio-server/images/janitor/Dockerfile',
+      '-t',
+      janitor,
+      '.',
+    ]),
     { stdio: 'inherit' },
   );
   const janitorProgram = path.join(directory, 'janitor.mjs');

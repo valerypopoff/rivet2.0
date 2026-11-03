@@ -5,6 +5,7 @@ import { parseDocument } from 'yaml';
 import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
 import { ACTIONS_QUALIFICATION_MAX_SECONDS } from '../../deploy/studio-server/scripts/lib/runtime-qualification-execution.mjs';
+import { assertFastReleasePolicy } from '../ci/release-workflow-policy.mjs';
 
 const rootDir = process.cwd();
 
@@ -72,7 +73,11 @@ assert.equal(qualificationPublisher.concurrency['cancel-in-progress'], false);
 assert.equal(qualificationPublisher.jobs.publish.if, "${{ github.ref == 'refs/heads/main' }}");
 assert.equal(qualificationPublisher.jobs.publish['runs-on'], 'ubuntu-latest');
 assert.equal(qualificationPublisher.jobs.publish.permissions?.['id-token'], undefined);
-assert.ok(qualificationPublisher.jobs.publish.steps.every((s) => !s.uses || /@[a-f0-9]{40}$/.test(s.uses)));
+assert.ok(
+  qualificationPublisher.jobs.publish.steps.every(
+    (s) => !s.uses || s.uses === './.github/actions/build-cache-runtime' || /@[a-f0-9]{40}$/.test(s.uses),
+  ),
+);
 assert.deepEqual(Object.keys(automaticQualification.on), ['workflow_dispatch']);
 assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), [
   'build_run_id',
@@ -444,7 +449,7 @@ assert.equal(
   findStep(studioJobs['api-tests'], 'Run API test shard', 'API tests').env?.RIVET_API_TEST_RUNTIME,
   'prebuilt',
 );
-assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes']);
+assert.deepEqual(asArray(studioJobs['build-studio-server'].needs), ['changes', 'source-contracts']);
 assert.deepEqual(asArray(studioJobs['api-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['web-tests'].needs), ['changes', 'build-studio-server']);
 assert.deepEqual(asArray(studioJobs['editor-regression'].needs), ['changes', 'build-studio-server']);
@@ -546,8 +551,8 @@ assert.ok(
     ),
   'Real executor retirement requires verified same-commit Core/Node builds, not source-only contracts.',
 );
-assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes']);
-assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes']);
+assert.deepEqual(asArray(studioJobs['host-compatibility'].needs), ['changes', 'source-contracts']);
+assert.deepEqual(asArray(studioJobs['repository-contracts'].needs), ['changes', 'source-contracts']);
 const repositoryContracts = studioJobs['repository-contracts'];
 const repositoryCheckout = findStep(repositoryContracts, 'Check Out Repository', 'Repository contracts');
 assert.equal(repositoryCheckout.with['fetch-depth'], 1);
@@ -746,8 +751,8 @@ assert.match(
 );
 assert.equal(
   imageJobs['build-and-push'].needs,
-  undefined,
-  'Candidate image builds must start in parallel with repository verification.',
+  'source-contracts',
+  'Candidate image builds must require the cheap source gate, not full verification.',
 );
 assert.equal(imageJobs['verify-repository'].uses, './.github/workflows/studio-server-verify.yml');
 assert.match(
@@ -934,7 +939,7 @@ assert.ok(
 );
 assert.deepEqual(
   asArray(imageJobs['managed-kubernetes-release-gate'].needs),
-  ['changes', 'build-and-push', 'release-manifest'],
+  ['changes', 'build-and-push', 'release-manifest', 'scan-images'],
   'The Kubernetes compatibility gate must consume the same manifest-bound predecessor that the candidate records.',
 );
 assert.deepEqual(asArray(imageJobs['managed-kubernetes-provider-gate'].needs), ['build-and-push']);
@@ -1096,7 +1101,6 @@ assert.deepEqual(
 );
 for (const name of [
   'Verify hard-spread scheduling with tainted nodes',
-  'Run Managed Kubernetes Gate',
   'Install browser for full HA upgrade verification',
 ]) {
   assert.equal(findStep(proofMatrix, name, 'HA matrix').if, "matrix.scenario == 'upgrade'");
@@ -1696,4 +1700,11 @@ assert.equal(
   'An active npm publication must never be canceled.',
 );
 
+assertFastReleasePolicy({
+  build: build.workflow,
+  images: images.workflow,
+  verify: studio.workflow,
+  publisher: qualificationPublisher,
+  source: parseWorkflow('.github/workflows/studio-server-source-contracts.yml').workflow,
+});
 console.log('GitHub workflow CI policy is valid.');

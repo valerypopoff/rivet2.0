@@ -26,6 +26,11 @@ concurrency:
   cancel-in-progress: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || github.event_name == 'pull_request' }}
 
 jobs:
+  source-contracts:
+    if: needs.changes.outputs.relevant == 'true'
+    needs: changes
+    uses: ./.github/workflows/studio-server-source-contracts.yml
+
   changes:
     name: Classify Studio Server changes
     runs-on: ubuntu-latest
@@ -51,7 +56,7 @@ jobs:
   build-studio-server:
     name: Build Studio Server
     if: needs.changes.outputs.relevant == 'true'
-    needs: changes
+    needs: [changes, source-contracts]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -285,7 +290,7 @@ jobs:
   host-compatibility:
     name: Studio Server host compatibility
     if: needs.changes.outputs.relevant == 'true'
-    needs: changes
+    needs: [changes, source-contracts]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -304,7 +309,7 @@ jobs:
   repository-contracts:
     name: Studio Server repository contracts
     if: needs.changes.outputs.relevant == 'true'
-    needs: changes
+    needs: [changes, source-contracts]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -427,6 +432,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - source-contracts
       - build-studio-server
       - api-tests
       - web-tests
@@ -442,6 +448,7 @@ jobs:
           CLASSIFICATION_RESULT: ${{ needs.changes.result }}
           RELEVANT: ${{ needs.changes.outputs.relevant }}
           BUILD_RESULT: ${{ needs.build-studio-server.result }}
+          SOURCE_RESULT: ${{ needs.source-contracts.result }}
           API_RESULT: ${{ needs.api-tests.result }}
           WEB_RESULT: ${{ needs.web-tests.result }}
           EDITOR_REGRESSION_RESULT: ${{ needs.editor-regression.result }}
@@ -457,7 +464,7 @@ jobs:
             echo "No Studio Server-affecting paths changed; heavy verification was skipped."
             exit 0
           fi
-          for result in "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$EDITOR_REGRESSION_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_RESULT"; do
+          for result in "$SOURCE_RESULT" "$BUILD_RESULT" "$API_RESULT" "$WEB_RESULT" "$EDITOR_REGRESSION_RESULT" "$HOST_RESULT" "$REPOSITORY_RESULT" "$DEPLOYMENT_RESULT"; do
             test "$result" = success
           done
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

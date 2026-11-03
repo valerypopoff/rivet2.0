@@ -1,0 +1,39 @@
+name: Rollout source contracts
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        timeout-minutes: 2
+        env:
+          GIT_HTTP_LOW_SPEED_LIMIT: '1024'
+          GIT_HTTP_LOW_SPEED_TIME: '30'
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          fetch-tags: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          # Keep source and the offline dependency cache, not desktop binaries.
+          sparse-checkout: |
+            /*
+            !/packages/app/sidecars/pnpm/pnpm-aarch64-apple-darwin
+            !/packages/app/sidecars/pnpm/pnpm-aarch64-unknown-linux-gnu
+            !/packages/app/sidecars/pnpm/pnpm-x86_64-apple-darwin
+            !/packages/app/sidecars/pnpm/pnpm-x86_64-pc-windows-msvc.exe
+            !/packages/app/sidecars/pnpm/pnpm-x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-yarn
+        with:
+          node-version: 24
+      - name: Install immutable source-test dependencies
+        run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache --mode=skip-build
+      - name: Verify rollout source before expensive work
+        run: yarn node scripts/ci/verify-rollout-source.mjs
