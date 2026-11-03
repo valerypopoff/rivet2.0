@@ -15,6 +15,7 @@ import { getStudioServerReleaseManifestDigest } from './studio-server-release-ma
 import { assertRequestContinuityProfile, requestContinuityProfile } from './request-continuity.mjs';
 import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './request-continuity-evidence.mjs';
 import { releaseQualificationPlan } from './release-qualification-policy.mjs';
+import { sizingRequests, assertSizingReport } from './resource-sizing.mjs';
 
 // The hosted workflow reserves another hour for cleanup and 30 minutes for setup.
 export const ACTIONS_QUALIFICATION_MAX_SECONDS = 4 * 60 * 60;
@@ -94,6 +95,16 @@ export function qualificationOperation({
     );
   }
   const normalized = autoscalerPolicy(policy);
+  const sizing = approval.sizingRequests
+    ? sizingRequests(approval.sizingRequests, installed.qualificationValues)
+    : undefined;
+  if (sizing) {
+    assert.ok(installed.qualificationValues, 'Sizing requires observed production reservations');
+    assert.ok(
+      !approval.developerOverlapProfile && !approval.requestContinuityProfile && !parent,
+      'Sizing cannot adopt topology, shutdown profiles or temporary infrastructure',
+    );
+  }
   assert.equal(normalized.minReplicas, 2);
   assert.ok(normalized.maxReplicas >= 4, 'Active and paused growth tests need two surge steps');
   const predecessorManifestDigest = getStudioServerReleaseManifestDigest(previous, { requirePromoted: true });
@@ -119,7 +130,7 @@ export function qualificationOperation({
   );
   assert.equal(installed.edgeProfile, 'compact');
   const adoptedContinuity = requestContinuityProfile(installed.qualificationValues ?? {});
-  if (adoptedContinuity)
+  if (adoptedContinuity && !sizing)
     assert.deepEqual(
       approval.requestContinuityProfile,
       adoptedContinuity,
@@ -156,7 +167,8 @@ export function qualificationOperation({
     previous,
     installed,
     policy: normalized,
-    ...(approval.safetyDigest
+    ...(sizing ? { sizingRequests: sizing } : {}),
+    ...(!sizing && approval.safetyDigest
       ? {
           qualification: releaseQualificationPlan({
             safetyDigest: approval.safetyDigest,
@@ -493,15 +505,23 @@ export async function executeRuntimeQualification(
     inventory(facts.prepared.inventory, operation);
     assert.equal(facts.prepared.expiryIdentity, facts.guard.identity);
     facts.upgrade = await phase('upgrade');
-    assertOrdinaryProviderReport(facts.upgrade, operation);
-    if (operation.qualification?.tier === 'focused') {
-      // The policy/floor observations already span the actual update. Both
-      // declarations describe this same report, not a second traffic window.
-      facts.autoscaling = facts.upgrade;
+    if (operation.sizingRequests) {
+      window(facts.upgrade, operation);
+      assertSizingReport(facts.upgrade, operation.sizingRequests);
     } else {
-      facts.autoscaling = await phase('autoscaling');
-      assertProviderAutoscalingReport(facts.autoscaling, operation);
-      assert.ok(time(facts.autoscaling.startedAt) >= time(facts.upgrade.finishedAt), 'Protected phase windows overlap');
+      assertOrdinaryProviderReport(facts.upgrade, operation);
+      if (operation.qualification?.tier === 'focused') {
+        // The policy/floor observations already span the actual update. Both
+        // declarations describe this same report, not a second traffic window.
+        facts.autoscaling = facts.upgrade;
+      } else {
+        facts.autoscaling = await phase('autoscaling');
+        assertProviderAutoscalingReport(facts.autoscaling, operation);
+        assert.ok(
+          time(facts.autoscaling.startedAt) >= time(facts.upgrade.finishedAt),
+          'Protected phase windows overlap',
+        );
+      }
     }
   } catch (error) {
     failure = error;
@@ -550,6 +570,20 @@ export async function executeRuntimeQualification(
       'Qualification failed; inspect private phase diagnostics and cleanup status. No release was qualified.',
       { cause: failure },
     );
+  if (operation.sizingRequests)
+    return {
+      status: 'sizing-observed',
+      operationId: operation.operationId,
+      inputHash: operation.inputHash,
+      cleanupVerified: true,
+      sizing: {
+        requests: facts.upgrade.requests,
+        checks: facts.upgrade.checks,
+        observations: facts.upgrade.observations.length,
+        workflowSamples: facts.upgrade.workflow.samples,
+        webSamples: facts.upgrade.web.samples,
+      },
+    };
   const common = {
     ...(operation.qualification ? { qualification: operation.qualification } : {}),
     protocol: 1,

@@ -30,6 +30,7 @@ import { qualificationSafetyDigest, releaseQualificationPlan } from '../lib/rele
 import { describeProviderPhaseReceipt, writeProviderPhaseReceipt } from '../lib/provider-phase-receipt.mjs';
 import { providerProgressStep } from '../lib/provider-progress.mjs';
 import { qualificationTimeouts } from '../lib/runtime-qualification-driver.mjs';
+import { runProviderSizing } from './provider-sizing.mjs';
 
 export function normalizeProviderAutoscaling(raw, hpa) {
   const result = (name) => {
@@ -102,6 +103,10 @@ export async function executeProviderPhase({
     phase !== 'autoscaling' || operation.qualification?.tier !== 'focused',
     'Focused policy observations belong to the actual upgrade, not a separate phase',
   );
+  assert.ok(
+    !operation.sizingRequests || ['prepare', 'upgrade'].includes(phase),
+    'Sizing uses preparation and observation only',
+  );
   await state.admission();
   await state.change((r) => {
     r.testPhases ??= {};
@@ -114,8 +119,14 @@ export async function executeProviderPhase({
     await step('namespace', () => state.namespace({ create: true }));
     await step('dependencies', () => gate.installDependencies());
     await step('routing', () => gate.createPublicRoute());
-    await step('installation', () => gate.apply(gate.values(operation.previous.images), 'provider-predecessor.json'));
-    await step('owners', () => waitForOrdinaryRuntime(gate, operation.previous.images, wait));
+    const images = operation.sizingRequests ? operation.candidate.images : operation.previous.images;
+    await step('installation', () =>
+      gate.apply(
+        gate.values(images),
+        operation.sizingRequests ? 'provider-sizing-installation.json' : 'provider-predecessor.json',
+      ),
+    );
+    await step('owners', () => waitForOrdinaryRuntime(gate, images, wait));
     await step('frontend', () => gate.readyPublic());
     // Fixture writes occur once, only after auth, LB health and installed images
     // are proven. A lost response is retained as an uncertain phase, not retried.
@@ -132,7 +143,9 @@ export async function executeProviderPhase({
   } else {
     assert.ok(['upgrade', 'autoscaling'].includes(phase));
     await step('authentication', () => gate.loadWorkflowKey({ webAppSession: true }));
-    if (phase === 'upgrade') {
+    if (operation.sizingRequests) {
+      result = await step('sizing', () => runProviderSizing(gate), Infinity);
+    } else if (phase === 'upgrade') {
       if (operation.requestContinuityProfile) gate.continuityProbes = new ProviderRequestContinuity(gate);
       gate.currentManifest = operation.previous;
       const probes = new HaReleaseProbes(gate, gate.config.baseUrl, root);
@@ -346,6 +359,7 @@ async function main() {
     operation.requestContinuityProfile,
     'Driver and operation continuity profiles differ',
   );
+  assert.deepEqual(settings.sizingRequests, operation.sizingRequests, 'Driver and operation sizing requests differ');
   assert.ok(
     actor.name && actor.uid && process.platform === 'linux',
     'Exact ephemeral in-cluster Linux runner required',

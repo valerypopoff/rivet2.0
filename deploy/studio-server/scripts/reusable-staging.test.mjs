@@ -893,6 +893,8 @@ test('concrete provider Helm render retains installed production timing, real ma
     resources: {
       backend: { requests: { cpu: '500m', memory: '1Gi' } },
       execution: { requests: { cpu: '500m', memory: '1Gi' } },
+      web: { requests: { cpu: '500m', memory: '512Mi' } },
+      proxy: { requests: { cpu: '500m', memory: '512Mi' } },
     },
     lifecycle: { shutdownGraceSeconds: 180, terminationGracePeriodSeconds: 270, preStopDelaySeconds: 60 },
     rollout: { minReadySeconds: 120, maxUnavailable: 0, maxSurge: 1 },
@@ -931,6 +933,19 @@ test('concrete provider Helm render retains installed production timing, real ma
     7,
   );
   assert.ok(!owners.some((r) => r.spec.template.spec.volumes?.some((v) => v.hostPath)));
+  gate.operation.sizingRequests = { web: { cpu: '50m', memory: '128Mi' }, proxy: { cpu: '100m', memory: '128Mi' } };
+  const sizedValues = gate.values();
+  const sized = await gate.resources(sizedValues, 'sizing');
+  for (const role of ['web', 'proxy']) {
+    const workload = sized.find((r) => r.kind === 'Deployment' && r.metadata.labels?.['app.kubernetes.io/component'] === role);
+    assert.deepEqual(workload.spec.template.spec.containers.find((c) => c.name === role).resources.requests,
+      gate.operation.sizingRequests[role]);
+    assert.equal(envelope.resources[role].requests.cpu, '500m');
+  }
+  assert.deepEqual(sizedValues.resources.backend, values.resources.backend);
+  assert.deepEqual(sizedValues.lifecycle, values.lifecycle);
+  assert.deepEqual(sizedValues.autoscaling, values.autoscaling);
+  delete gate.operation.sizingRequests;
   const proxies = Array.from({ length: 2 }, (_, i) => ({
     metadata: {
       name: `proxy-${i}`,

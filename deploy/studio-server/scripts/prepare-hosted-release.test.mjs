@@ -12,6 +12,37 @@ import { spawnSync } from 'node:child_process';
 
 const setupCause = (error) => (error.cause instanceof AggregateError ? error.cause.errors[0] : error.cause ?? error);
 
+test('hosted sizing binds the explicit requests to the existing driver and cannot prepare production', async (t) => {
+  const f = await fixture(t);
+  const requests = { web: { cpu: '50m', memory: '128Mi' }, proxy: { cpu: '100m', memory: '128Mi' } };
+  Object.assign(f.environment, {
+    RIVET_QUALIFICATION_SIZING_REQUESTS: JSON.stringify(requests),
+    RIVET_QUALIFICATION_DEPLOY_PRODUCTION: 'false',
+  });
+  f.configuration.staging.requestContinuityProfile = {};
+  f.configuration.staging.developerOverlapProfile = {};
+  await f.prepare();
+  const settings = JSON.parse(
+    await fs.readFile(path.join(path.dirname(f.setupFile), 'package/driver/settings.json'), 'utf8'),
+  );
+  assert.deepEqual(settings.sizingRequests, requests);
+  assert.equal(settings.requestContinuityProfile, undefined);
+  assert.equal(settings.developerOverlapProfile, undefined);
+  await assert.rejects(prepareHostedRelease('production', { environment: { ...f.environment } }), (e) =>
+    /cannot prepare production/.test(setupCause(e).message),
+  );
+});
+
+test('hosted sizing rejects production-enabled input before credentials or shared writes', async (t) => {
+  const f = await fixture(t);
+  Object.assign(f.environment, {
+    RIVET_QUALIFICATION_SIZING_REQUESTS: '{}',
+    RIVET_QUALIFICATION_DEPLOY_PRODUCTION: 'true',
+  });
+  await assert.rejects(f.prepare(), (e) => /deployment disabled/.test(setupCause(e).message));
+  assert.deepEqual(f.events, []);
+});
+
 // test-style: fixture-read: checks only generated private job configuration and packages.
 async function fixture(t, failedStep) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-hosted-prepare-'));
