@@ -18,6 +18,13 @@ The source job has a five-minute limit and a two-minute checkout limit. Failure,
 skip or cancellation blocks expensive dependents; required aggregate checks still
 fail. Full repository verification remains parallel with image work.
 
+The provider's journal-persistence/observer contract is a separate source-only
+suite (`provider-rollout-observation.test.mjs`) and runs in this gate as well as
+the full Kubernetes contract suite. It checks persistence before observation and
+both failure paths, while treating the timing file as diagnostic output rather
+than a journal observation. Keep Helm-dependent overlap checks in their existing
+lane so the early gate still needs no Kubernetes tools or compiled application.
+
 The Kind matrix now requires successful runtime scans. The independent managed
 Kubernetes check runs in the shorter `lostAcknowledgement` lane, using that
 lane's explicit disposable context. All three HA scenarios, scheduling/browser
@@ -30,13 +37,18 @@ Qualification actor/janitor builds use the existing exact-source context with a
 configuration IDs, archive checks and fresh scans. GHA v2 caches have separate
 actor/janitor/amd64 scopes and export intermediate layers (`mode=max`) so stable
 Helm/kubectl/esbuild compilation can be reused. Imports/exports have 60-second
-timeouts; export failures do not invalidate an otherwise verified image. A missing
+timeout settings; export failures do not invalidate an otherwise verified image. A missing
 cache builds normally. Set repository variable `RIVET_QUALIFICATION_CACHE=off`
 for a deliberately cold publication if the cache service fails; this does not
 authorize an automatic workflow/test retry. The local runtime action exports
 runner cache credentials through `GITHUB_ENV` after registering the token with
 the runner's secret masker, never through build command arguments,
 image layers or logs. Cached output is not qualification evidence.
+
+The first hosted cache population took 172 seconds to export despite that
+60-second setting, and the tooling job took 14m13s. Treat the configured timeout
+as unverified for total transfer duration. Warm-build savings remain unmeasured;
+do not add a separate build merely to benchmark them.
 
 Per-owner routing, active-work drain, replacement readiness, templates, proxy
 handoffs and settlement now use the existing HA timing reporter. Provider progress
