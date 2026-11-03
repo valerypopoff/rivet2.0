@@ -459,6 +459,13 @@ readiness.
 
 ## Automatic test depth
 
+For an edge-resource trial, set the optional Release Rivet `sizing_requests` input
+and `deploy_production=false`. This selects sizing observations on the candidate
+images using the existing owned fixture and cleanup path; it does not run the
+rolling-upgrade/autoscaler qualification or publish a certificate. Invalid input
+or production-enabled sizing stops before cloud access. Normal releases leave
+this input empty. See [the request format, checks and limits](resource-sizing.md#web-and-proxy-reservation-candidate).
+
 `lib/release-qualification-policy.mjs` defaults to focused qualification for a
 singleton release with the bounded request-continuity profile, including its
 first protected rollout. Source/chart/settings changes and the absence of an

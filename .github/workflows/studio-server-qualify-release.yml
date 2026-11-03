@@ -11,6 +11,10 @@ on:
         description: Deploy after qualification and publication using the protected production environment.
         type: boolean
         default: true
+      sizing_requests:
+        description: 'Optional sizing-only JSON: {"web":{"cpu":"50m","memory":"128Mi"},"proxy":{"cpu":"100m","memory":"128Mi"}}. Requires deploy_production=false; no qualification publication.'
+        type: string
+        default: ''
 
 permissions:
   actions: read
@@ -35,6 +39,8 @@ jobs:
       run_attempt: ${{ steps.build.outputs.run_attempt }}
     env:
       BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      RIVET_QUALIFICATION_SIZING_REQUESTS: ${{ inputs.sizing_requests }}
+      RIVET_QUALIFICATION_DEPLOY_PRODUCTION: ${{ inputs.deploy_production }}
       RIVET_AUTOMATED_QUALIFICATION_ENABLED: ${{ vars.RIVET_AUTOMATED_QUALIFICATION_ENABLED }}
       PACKET: artifacts/automated-runtime-qualification
     steps:
@@ -89,7 +95,7 @@ jobs:
           if-no-files-found: error
 
   qualified:
-    name: Qualified — execute provider probes and verify cleanup
+    name: Staging — observe candidate and verify cleanup
     needs: built
     runs-on: ubuntu-latest
     environment: rivet-managed-staging
@@ -108,6 +114,8 @@ jobs:
     env:
       RIVET_QUALIFICATION_ENVIRONMENT_MODE: reusable-cluster
       RIVET_QUALIFICATION_COORDINATOR_MODE: external
+      RIVET_QUALIFICATION_SIZING_REQUESTS: ${{ inputs.sizing_requests }}
+      RIVET_QUALIFICATION_DEPLOY_PRODUCTION: ${{ inputs.deploy_production }}
       RIVET_AUTOMATED_QUALIFICATION_ENABLED: ${{ vars.RIVET_AUTOMATED_QUALIFICATION_ENABLED }}
       RIVET_QUALIFICATION_MAX_USD: ${{ vars.RIVET_QUALIFICATION_MAX_USD }}
       RIVET_QUALIFICATION_MAX_SECONDS: ${{ vars.RIVET_QUALIFICATION_MAX_SECONDS }}
@@ -154,7 +162,7 @@ jobs:
         if: ${{ always() && steps.execute.outcome == 'skipped' && (steps.prepare.outcome == 'failure' || steps.inspect.outcome == 'failure') }}
         timeout-minutes: 10
         run: corepack yarn node deploy/studio-server/scripts/prepare-hosted-release.mjs cleanup-staging-setup
-      - name: Retain only sanitized successful qualification packet
+      - name: Retain sanitized successful staging packet
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: qualification-result-${{ github.run_id }}-${{ github.run_attempt }}
@@ -165,6 +173,7 @@ jobs:
 
   publish:
     name: Publish qualified exact release
+    if: ${{ inputs.sizing_requests == '' }}
     needs: qualified
     uses: ./.github/workflows/studio-server-runtime-qualification.yml
     with:
@@ -174,7 +183,7 @@ jobs:
 
   deploy:
     name: Deploy — live checks, rolling update and acceptance
-    if: ${{ inputs.deploy_production }}
+    if: ${{ inputs.deploy_production && inputs.sizing_requests == '' }}
     needs: [qualified, publish]
     runs-on: ubuntu-latest
     environment: rivet-production

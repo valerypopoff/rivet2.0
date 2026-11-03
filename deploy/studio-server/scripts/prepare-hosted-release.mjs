@@ -18,6 +18,7 @@ import {
   assertSetupJanitorUpdate,
 } from './lib/hosted-staging-setup.mjs';
 import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
+import { sizingInput } from './lib/resource-sizing.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const runCommand = (bin, args, env = process.env) =>
@@ -105,6 +106,8 @@ async function prepareHostedReleaseWork(
 ) {
   assert.equal(environment.GITHUB_REF, 'refs/heads/main');
   assert.ok(['staging', 'production'].includes(mode));
+  const sizing = sizingInput(environment);
+  assert.ok(!sizing || mode === 'staging', 'Sizing cannot prepare production access');
   assert.match(environment.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
   assert.match(environment.GITHUB_RUN_ATTEMPT ?? '', /^[1-9][0-9]*$/);
   if (mode === 'staging') assertActionsQualificationWindow(Number(environment.RIVET_QUALIFICATION_MAX_SECONDS));
@@ -167,6 +170,11 @@ async function prepareHostedReleaseWork(
       assert.match(image.slice(prefix.length), /^sha256:[a-f0-9]{64}$/);
     }
     const settings = { ...s, actorImage: publication.actor.image, objectStorageImage: publication.minio.image };
+    if (sizing) {
+      settings.sizingRequests = sizing;
+      delete settings.requestContinuityProfile;
+      delete settings.developerOverlapProfile;
+    }
     const cloud = cloudEvidence({ bucket: configuration.evidenceBucket, prefix: 'qualification' });
     phase.cloud = cloud;
     const operationId = `rivet-q-${environment.GITHUB_RUN_ID}-${environment.GITHUB_RUN_ATTEMPT}`;

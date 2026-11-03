@@ -617,6 +617,71 @@ test('actual phase sequencing compiles existing publication evidence only after 
   assert.ok(!JSON.stringify(result).includes('exact-new-cloud-id'));
 });
 
+test('sizing preserves installed facts, skips rollout qualification and publishes no certificates after cleanup', async () => {
+  for (const failed of [undefined, 'upgrade', 'verifyCleanup']) {
+    const f = fixture();
+    const requests = { web: { cpu: '50m', memory: '128Mi' }, proxy: { cpu: '100m', memory: '128Mi' } };
+    f.input.installed.qualificationValues = {
+      resources: Object.fromEntries(['web', 'proxy'].map((r) => [r, { requests: { cpu: '500m', memory: '512Mi' } }])),
+    };
+    f.input.approval.sizingRequests = requests;
+    f.operation = qualificationOperation(f.input);
+    assert.equal(f.operation.installed.qualificationValues.resources.web.requests.cpu, '500m');
+    assert.deepEqual(f.operation.sizingRequests, requests);
+    assert.equal(f.operation.qualification, undefined);
+    for (const fact of Object.values(f.facts)) fact.inputHash = f.operation.inputHash;
+    Object.assign(f.facts.upgrade, {
+      purpose: 'resource-sizing',
+      finishedAt: new Date(Date.parse(f.facts.upgrade.startedAt) + 60000).toISOString(),
+      requests,
+      upload: { bytes: 8 * 1024 * 1024 },
+      checks: Object.fromEntries(
+        ['admission', 'browser', 'upload', 'traffic', 'health', 'metrics', 'hpa'].map((k) => [k, true]),
+      ),
+      observations: Array.from({ length: 2 }, () => ({
+        hpa: { uid: 'hpa' },
+        proxyCount: 2,
+        observations: ['web', 'proxy', 'proxy'].map((role, i) => ({
+          role,
+          podUid: String(i),
+          cpu: 0.01,
+          memory: 1024,
+        })),
+      })),
+    });
+    const d = driver(f, failed),
+      states = [];
+    const run = () => executeRuntimeQualification(f.operation, d.api, async (s) => states.push(s), { now: f.now });
+    if (failed) await assert.rejects(run());
+    else {
+      const result = await run();
+      assert.equal(result.status, 'sizing-observed');
+      assert.equal(result.cleanupVerified, true);
+      assert.ok(!Object.hasOwn(result, 'control') && !Object.hasOwn(result, 'autoscaling'));
+    }
+    assert.deepEqual(d.calls, ['armExpiry', 'prepare', 'upgrade', 'settle', 'cleanup', 'verifyCleanup']);
+    assert.equal(states.at(-1).cleanupVerified, failed !== 'verifyCleanup');
+  }
+});
+
+test('sizing refuses increased reservations, missing baselines and shutdown/topology adoption', () => {
+  const f = fixture();
+  const requests = { web: { cpu: '50m', memory: '128Mi' }, proxy: { cpu: '100m', memory: '128Mi' } };
+  f.input.approval.sizingRequests = requests;
+  assert.throws(() => qualificationOperation(f.input), /observed|baseline/i);
+  f.input.installed.qualificationValues = {
+    resources: {
+      web: { requests: { cpu: '500m', memory: '512Mi' } },
+      proxy: { requests: { cpu: '500m', memory: '512Mi' } },
+    },
+  };
+  f.input.approval.sizingRequests = { ...requests, web: { ...requests.web, cpu: '1' } };
+  assert.throws(() => qualificationOperation(f.input), /increase/);
+  f.input.approval.sizingRequests = requests;
+  f.input.approval.developerOverlapProfile = {};
+  assert.throws(() => qualificationOperation(f.input), /adopt/);
+});
+
 test('failures, unknown writes, expiry and dishonest/missing facts cannot become qualification or trigger replay', async () => {
   const mutations = [
     (f) => {
