@@ -11,7 +11,12 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { parseAllDocuments } from 'yaml';
 import { createKubernetesTransport } from './lib/execution-autoscaler-kubernetes.mjs';
-import { ReusableStagingState, reusableStagingSettings, stagingOwner } from './lib/reusable-staging-state.mjs';
+import {
+  ReusableStagingState,
+  reusableStagingSettings,
+  stagingOwner,
+  stagingHostname,
+} from './lib/reusable-staging-state.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
 import {
   settleStaging,
@@ -19,7 +24,7 @@ import {
   verifyStagingCleanup,
   observeStagingInventory,
 } from './lib/reusable-staging-cleanup.mjs';
-import { stagingCloudReader } from './lib/reusable-staging-cloud.mjs';
+import { stagingCloudReader, PendingGatewayBackendError } from './lib/reusable-staging-cloud.mjs';
 import { proxyFixtureProcessCommand } from './lib/staging-proxy-fixture-process.mjs';
 import { inspectStagingPrerequisites } from './lib/reusable-staging-prerequisites.mjs';
 import { stagingJanitorPass } from './reusable-staging-janitor.mjs';
@@ -27,6 +32,7 @@ import { qualificationSizing } from './lib/runtime-qualification-installation.mj
 import { packageReusableStaging } from './package-reusable-staging.mjs';
 import { verifyQualificationDriver } from './lib/runtime-qualification-driver.mjs';
 import { executeProviderPhase } from './qualification/provider-entry.mjs';
+import { providerProgressStep } from './lib/provider-progress.mjs';
 import { ManagedReleaseGate, createReleaseGateWebAppOAuthSession } from './kubernetes-managed-release-gate.mjs';
 import { ReusableProviderGate } from './qualification/provider-gate.mjs';
 import {
@@ -39,12 +45,63 @@ const { WebSocket, WebSocketServer } = createRequire(
   new URL('../../../packages/studio-server-api/package.json', import.meta.url),
 )('ws');
 
+test('focused admission checks shared prerequisites without requiring an unused browser runtime', async () => {
+  const events = [];
+  const operation = { qualification: { tier: 'focused' } };
+  await executeProviderPhase({
+    phase: 'armExpiry',
+    operation,
+    cloud: { project: async () => events.push('project') },
+    gate: {
+      verifyLocalBrowserFixture: async () => {
+        throw Error('Focused rollout must not launch browser tests');
+      },
+      verifySharedPrerequisites: async () => events.push('shared'),
+    },
+    state: {
+      arm: async () => {
+        events.push('expiry');
+        return {};
+      },
+    },
+  });
+  assert.deepEqual(events, ['project', 'shared', 'expiry']);
+  await assert.rejects(
+    executeProviderPhase({
+      phase: 'autoscaling',
+      operation,
+      state: {
+        admission: async () => {
+          throw Error('Must reject before admission or writes');
+        },
+      },
+    }),
+    /actual upgrade/,
+  );
+});
+test('a retained staging endpoint is fixed across releases and cannot escape its non-production domain', () => {
+  const fixed = reusableStagingSettings({ ...settings(), hostname: 'rivet-staging.qualification.example.test' });
+  for (const operationId of ['rivet-q-123-1', 'rivet-q-124-1'])
+    assert.equal(stagingHostname(fixed, { operationId }), fixed.hostname);
+  assert.equal(
+    stagingHostname(settings(), { operationId: 'rivet-q-123-1' }),
+    'rivet-q-123-1.qualification.example.test',
+  );
+  for (const hostname of [
+    'foreign.example.test',
+    'https://rivet-staging.qualification.example.test',
+    'bad\n.qualification.example.test',
+  ])
+    assert.throws(() => reusableStagingSettings({ ...settings(), hostname }));
+});
+
 const digest = 'a'.repeat(64);
 const settings = () =>
   reusableStagingSettings({
     protocol: 1,
     mode: 'reusable-cluster',
     projectId: 'isolated-staging',
+    region: 'europe-central2',
     projectNumber: '601520844163',
     clusterUid: 'staging-cluster',
     gatewayUid: 'shared-gateway',
@@ -57,6 +114,7 @@ const settings = () =>
     storageClassName: 'standard-rwo',
     domain: 'qualification.example.test',
     trustedClients: ['10.128.0.0/20'],
+    trustedForwardingProxies: ['172.30.32.0/23', '192.0.2.200/32'],
     postgresImage: `registry.test/postgres@sha256:${digest}`,
     objectStorageImage: `registry.test/minio@sha256:${digest}`,
   });
@@ -112,7 +170,7 @@ async function fixture(t, op = operation()) {
       spec: { nodeName: 'staging-node' },
     });
   pod(actor);
-  pod(owner);
+  pod(owner).status = { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] };
   const health = `/api/v1/namespaces/${settings().controlNamespace}/configmaps/rivet-qualification-janitor-health`;
   store(health, {
     metadata: { name: 'rivet-qualification-janitor-health', namespace: settings().controlNamespace },
@@ -300,6 +358,7 @@ test('shared staging prerequisites reject setup failures before namespace or dep
       ],
     },
     status: {
+      addresses: [{ type: 'IPAddress', value: '192.0.2.200' }],
       conditions: [positive('Programmed')],
       listeners: [{ name: 'https', conditions: [positive('Accepted'), positive('ResolvedRefs')] }],
     },
@@ -346,6 +405,12 @@ test('shared staging prerequisites reject setup failures before namespace or dep
   );
   assert.equal(f.requests.length, 0, 'A broken local browser must fail before any cluster request');
   const cases = [
+    [
+      () => {
+        f.objects.get(gatewayPath).status.addresses[0].value = '192.0.2.201';
+      },
+      /frontend IP/,
+    ],
     [
       () => {
         f.objects.get(gatewayPath).status.conditions[0].observedGeneration = 2;
@@ -502,6 +567,7 @@ test('Gateway discovery rejects partial inventories and backend replacement betw
   ])
     await assert.rejects(reader.children(inventory, { requiredNegIds: [] }), /Incomplete|changed|replaced/);
   scenario = 'empty';
+  await assert.rejects(reader.children(inventory), PendingGatewayBackendError);
   assert.deepEqual(await reader.children(inventory, { requiredNegIds: [] }), []);
   assert.ok(requests.every((r) => r.method === 'GET'));
 });
@@ -548,6 +614,41 @@ printf 'exact process stopped; reused PID and wrong nonce untouched\\n'
   },
 );
 
+test('unhealthy janitor admission never creates an operation registry', async (t) => {
+  for (const change of [
+    'old-driver',
+    'stale',
+    'future',
+    'missing',
+    'unready',
+    'dead',
+    'deleting',
+    'replaced',
+    'malformed',
+  ])
+    await t.test(change, async (t) => {
+      const f = await fixture(t);
+      const healthPath = `/api/v1/namespaces/${settings().controlNamespace}/configmaps/rivet-qualification-janitor-health`;
+      const health = JSON.parse(f.objects.get(healthPath).data.health);
+      if (change === 'old-driver') health.driverDigest = 'b'.repeat(64);
+      if (change === 'stale') health.observedAt = Date.now() - 60000;
+      if (change === 'future') health.observedAt = Date.now() + 60000;
+      f.objects.get(healthPath).data.health = change === 'malformed' ? 'invalid-json' : JSON.stringify(health);
+      if (change === 'missing') f.objects.delete(healthPath);
+      const janitor = f.objects.get(`/api/v1/namespaces/${owner.namespace}/pods/${owner.name}`);
+      if (change === 'unready') janitor.status.conditions[0].status = 'False';
+      if (change === 'dead') janitor.status.phase = 'Failed';
+      if (change === 'deleting') janitor.metadata.deletionTimestamp = new Date().toISOString();
+      if (change === 'replaced') janitor.metadata.uid = 'replacement-janitor';
+      await assert.rejects(f.state.arm(actor));
+      assert.equal(
+        f.requests.some((r) => r.method !== 'GET'),
+        false,
+        'Admission prerequisites must precede registry CREATE',
+      );
+    });
+});
+
 test('cleanup targets the current controller UID while retaining replaced identities in history', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);
@@ -566,6 +667,59 @@ test('cleanup targets the current controller UID while retaining replaced identi
   assert.ok(record.inventory.some((i) => i.uid === old.metadata.uid));
   assert.ok(record.inventory.some((i) => i.uid === current.metadata.uid));
   assert.equal(f.requests.find((r) => r.method === 'PATCH').input[0].value, current.metadata.uid);
+});
+
+test('GKE automatic ingress annotation does not block internal Service cleanup', async (t) => {
+  const f = await fixture(t);
+  await f.state.arm(actor);
+  const ns = await f.state.namespace({ create: true });
+  const servicePath = `/api/v1/namespaces/${ns.metadata.name}/services/postgres`;
+  const service = f.store(servicePath, {
+    metadata: {
+      name: 'postgres',
+      namespace: ns.metadata.name,
+      annotations: { 'cloud.google.com/neg': '{"ingress":true}' },
+    },
+    spec: { type: 'ClusterIP' },
+  });
+  await settleStaging(f.state, cloud, actor, wait);
+  const { record } = await f.state.read();
+  assert.equal(record.phase, 'settled');
+  assert.ok(record.inventory.some((item) => item.uid === service.metadata.uid));
+  assert.ok(!record.inventory.some((item) => item.kind === 'neg'));
+});
+
+test('unfinished explicit or routed NEGs still block cleanup', async (t) => {
+  for (const scenario of ['explicit', 'ingress', 'status', 'unknown']) {
+    await t.test(scenario, async (t) => {
+      const f = await fixture(t);
+      await f.state.arm(actor);
+      const ns = await f.state.namespace({ create: true });
+      f.store(`/api/v1/namespaces/${ns.metadata.name}/services/proxy`, {
+        metadata: {
+          name: 'proxy',
+          namespace: ns.metadata.name,
+          annotations: {
+            'cloud.google.com/neg':
+              scenario === 'explicit'
+                ? '{"exposed_ports":{"80":{}}}'
+                : scenario === 'unknown'
+                  ? '{"ingress":true,"unknown":true}'
+                  : '{"ingress":true}',
+            ...(scenario === 'status' ? { 'cloud.google.com/neg-status': '{}' } : {}),
+          },
+        },
+        spec: { type: 'ClusterIP' },
+      });
+      if (scenario === 'ingress')
+        f.store(`/apis/networking.k8s.io/v1/namespaces/${ns.metadata.name}/ingresses/route`, {
+          metadata: { name: 'route', namespace: ns.metadata.name },
+        });
+      await assert.rejects(settleStaging(f.state, cloud, actor, wait), /NEG creation is uncertain/);
+      assert.notEqual((await f.state.read()).record.phase, 'settled');
+      assert.ok(!f.requests.some((r) => r.method === 'DELETE'));
+    });
+  }
 });
 
 test('settlement is not published if the final inventory read fails', async (t) => {
@@ -685,7 +839,7 @@ test('route teardown permits already inventoried Gateway children to disappear w
       [...inventory, { id: 'new-neg', kind: 'neg', resource: `${prefix}/zones/zone-a/networkEndpointGroups/new-neg` }],
       { requiredNegIds: ['new-neg'] },
     ),
-    /creation is uncertain/,
+    PendingGatewayBackendError,
   );
 });
 
@@ -694,6 +848,14 @@ test('reusable fixture validates infrastructure scope and exports only runtime s
   for (const patch of [
     { projectId: 'wartime-storyteller' },
     { trustedClients: ['0.0.0.0/0'] },
+    { region: undefined },
+    { trustedForwardingProxies: undefined },
+    { trustedForwardingProxies: [] },
+    { trustedForwardingProxies: ['192.0.2.200/32'] },
+    { trustedForwardingProxies: ['192.0.2.200/32', '192.0.2.200/32'] },
+    { trustedForwardingProxies: ['0.0.0.0/0'] },
+    { trustedForwardingProxies: ['::/0'] },
+    { trustedForwardingProxies: ['proxy.example.test'] },
     { domain: 'storyteller-rivet.litnet.com' },
     { runnerNamespace: 'default' },
   ])
@@ -759,6 +921,8 @@ test('concrete provider Helm render retains installed production timing, real ma
   assert.equal(values.release.production.manifestDigest, getStudioServerReleaseManifestDigest(candidate));
   assert.equal(values.env.RIVET_REQUIRE_UI_GATE_KEY, 'true');
   assert.equal(values.env.RIVET_TRUST_INCOMING_FORWARDED_HEADERS, 'true');
+  assert.equal(values.env.RIVET_TRUSTED_FORWARDING_PROXIES, settings().trustedForwardingProxies.join(','));
+  assert.equal(values.env.RIVET_DEVELOPMENT_AUTH_CLIENTS, settings().trustedClients.join(','));
   assert.equal(values.legacyRestore.storageClassName, settings().storageClassName);
   const rendered = await gate.resources(values, 'provider');
   const owners = rendered.filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind));
@@ -767,6 +931,99 @@ test('concrete provider Helm render retains installed production timing, real ma
     7,
   );
   assert.ok(!owners.some((r) => r.spec.template.spec.volumes?.some((v) => v.hostPath)));
+  const proxies = Array.from({ length: 2 }, (_, i) => ({
+    metadata: {
+      name: `proxy-${i}`,
+      uid: `proxy-${i}`,
+      namespace: gate.config.namespace,
+      labels: { 'app.kubernetes.io/instance': gate.config.release, 'app.kubernetes.io/component': 'proxy' },
+    },
+    spec: {
+      nodeName: `node-${i}`,
+      readinessGates: [{ conditionType: 'cloud.google.com/load-balancer-neg-ready' }],
+      topologySpreadConstraints: [
+        {
+          topologyKey: 'topology.kubernetes.io/zone',
+          nodeTaintsPolicy: 'Honor',
+          whenUnsatisfiable: 'DoNotSchedule',
+          minDomains: 2,
+          maxSkew: 1,
+        },
+      ],
+      containers: [{ ports: [{ name: 'http', containerPort: 8080 }] }],
+    },
+    status: {
+      podIP: `10.0.0.${i + 1}`,
+      conditions: [
+        { type: 'Ready', status: 'True' },
+        {
+          type: 'cloud.google.com/load-balancer-neg-ready',
+          status: 'True',
+          reason: 'LoadBalancerNegWithoutHealthCheck',
+        },
+      ],
+    },
+  }));
+  const web = structuredClone(proxies[0]);
+  web.metadata.uid = 'web-0';
+  web.metadata.labels['app.kubernetes.io/component'] = 'web';
+  const nodes = proxies.map((p, i) => ({
+    metadata: {
+      name: p.spec.nodeName,
+      uid: `node-uid-${i}`,
+      labels: { 'kubernetes.io/hostname': p.spec.nodeName, 'topology.kubernetes.io/zone': `zone-${i}` },
+    },
+  }));
+  const service = {
+    metadata: {
+      uid: 'proxy-service',
+      namespace: gate.config.namespace,
+      annotations: {
+        'cloud.google.com/neg-status': JSON.stringify({
+          zones: ['zone-0', 'zone-1'],
+          network_endpoint_groups: { 80: 'proxy-neg' },
+        }),
+      },
+    },
+    spec: { selector: { 'app.kubernetes.io/component': 'proxy' }, ports: [{ port: 80, targetPort: 'http' }] },
+  };
+  gate.assertProofContext = async () => {};
+  gate.kubectl = async (args) => ({
+    stdout: JSON.stringify(
+      args.includes('deployment')
+        ? {
+            metadata: { name: `${gate.config.release}-proxy`, generation: 1 },
+            spec: { replicas: 2, minReadySeconds: 120 },
+            status: { observedGeneration: 1, updatedReplicas: 2, availableReplicas: 2 },
+          }
+        : args.includes('service')
+          ? service
+          : { items: args.includes('pods') ? [...proxies, web] : nodes },
+    ),
+  });
+  gate.observeProxyBackend = async (current) => {
+    assert.equal(current.metadata.uid, service.metadata.uid);
+    return {
+      healthy: true,
+      serviceUid: service.metadata.uid,
+      backendService: 'regional',
+      backendServiceId: '123',
+      observedAt: Date.now(),
+      healthyEndpoints: proxies.map((p, i) => ({
+        ipAddress: p.status.podIP,
+        port: 8080,
+        zone: `zone-${i}`,
+        neg: 'proxy-neg',
+      })),
+    };
+  };
+  gate.config.deploymentTimeoutSeconds = 1;
+  assert.ok(
+    (await gate.frontendAvailability())
+      .filter((p) => p.component === 'proxy')
+      .every((p) => p.negHealth === 'ComputeHealthy'),
+    'The provider HPA frontend caller must use actual Compute health too',
+  );
   const edgeWrites = [];
   gate.assertProofContext = async () => {};
   gate.kube = async (args, options) => {
@@ -834,6 +1091,67 @@ test('real HTTP lost CREATE acknowledgement reconciles exact nonce once; replace
   });
   await assert.rejects(second.state.namespace(), /uncertain/);
 });
+
+test('provider preflight checks the actual resolved public client over HTTP before dummy OAuth', async (t) => {
+  let clientAddress = '198.51.100.18';
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ clientAddress, trusted: false }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const gate = Object.create(ReusableProviderGate.prototype);
+  gate.config = { baseUrl: `http://127.0.0.1:${server.address().port}` };
+  gate.settings = { trustedClients: ['198.51.100.0/24'] };
+  gate.secrets = { rivetKey: 'fixture-only-key' };
+  gate.uiCookie = 'rivet_ui_token=fixture';
+  assert.deepEqual(await gate.verifyClientProvenance(), { verifiedPublicTestClient: true });
+  for (const address of ['172.30.32.7', '192.0.2.200', '127.0.0.1', null, 'not-an-address']) {
+    clientAddress = address;
+    await assert.rejects(gate.verifyClientProvenance(), /allowed public test client/);
+  }
+  assert.ok(
+    requests.every((r) => r.method === 'GET' && r.path === '/api/app-settings/trusted-clients/current-request'),
+  );
+});
+test('real fixture OAuth configuration cannot expire before its approved full-test window', async (t) => {
+  const observed = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    assert.equal(req.method, 'PUT');
+    assert.equal(req.url, '/api/app-settings/web-app-auth');
+    observed.push(JSON.parse(Buffer.concat(chunks)));
+    // Stop at this real HTTP boundary; the fixture must not seed/login here.
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const gate = Object.create(ReusableProviderGate.prototype);
+  gate.config = { baseUrl: `http://127.0.0.1:${server.address().port}` };
+  gate.secrets = { rivetKey: 'fixture-only-key' };
+  gate.uiCookie = 'rivet_ui_token=fixture';
+  const startedAt = '2026-01-01T00:00:00Z';
+  for (const [expiresAt, expectedTtl] of [
+    ['2026-01-01T02:00:00Z', 10800],
+    ['2026-01-01T04:00:00Z', 14400],
+  ]) {
+    gate.operation = { startedAt, expiresAt };
+    await assert.rejects(gate.enableOAuth(gate.config.baseUrl, 'fixture'));
+    assert.equal(observed.at(-1).sessionTtlSeconds, expectedTtl);
+  }
+  assert.equal(observed.length, 2);
+});
+
 test('normal cleanup proves exact absence and retains shared Gateway, runner and control registry', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);
@@ -847,6 +1165,75 @@ test('normal cleanup proves exact absence and retains shared Gateway, runner and
   assert.ok(f.objects.has(`/api/v1/namespaces/${actor.namespace}/pods/${actor.name}`));
   assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 1);
 });
+test(
+  'provider startup observer matches manifest image objects and rejects stale or recovered log evidence',
+  { timeout: 15000 },
+  async (t) => {
+    for (const change of ['fatal', 'init', 'recovered', 'replaced', 'deleting', 'image-changed', 'starting'])
+      await t.test(change, async () => {
+        const gate = Object.create(ReusableProviderGate.prototype),
+          stop = new AbortController();
+        const image = { repository: 'registry.test/api', digest: `sha256:${'a'.repeat(64)}` };
+        gate.operation = { previous: { images: { api: image } }, candidate: { images: { api: image } } };
+        gate.config = { release: 'rivet-qualification' };
+        const pod = {
+          metadata: {
+            uid: 'original-pod',
+            name: 'autoscaler',
+            ownerReferences: [{ kind: 'ReplicaSet', controller: true }],
+          },
+          spec: { containers: [{ name: 'autoscaler', image: `${image.repository}@${image.digest}` }] },
+          status: {
+            containerStatuses: [
+              {
+                name: 'autoscaler',
+                ready: false,
+                restartCount: 2,
+                state: { waiting: { reason: 'CrashLoopBackOff' } },
+                lastState: { terminated: { exitCode: 1 } },
+              },
+            ],
+          },
+        };
+        if (change === 'init') {
+          pod.spec.initContainers = pod.spec.containers;
+          pod.spec.containers = [];
+          pod.status.initContainerStatuses = pod.status.containerStatuses;
+          pod.status.containerStatuses = [];
+        }
+        let lists = 0,
+          reads = 0,
+          logs = 0;
+        gate.kube = async (args) => {
+          if (args[0] === 'get' && args[1] === 'pods') {
+            assert.ok(args.includes('app.kubernetes.io/instance=rivet-qualification'));
+            if (++lists > 1) stop.abort(new Error('observation completed'));
+            return { exitCode: 0, stdout: JSON.stringify({ items: lists === 1 ? [pod] : [] }) };
+          }
+          if (args[0] === 'get' && args[1] === 'pod') {
+            const current = structuredClone(pod);
+            if (++reads === 2) {
+              setImmediate(() => stop.abort(new Error('observation completed')));
+              if (change === 'recovered') current.status.containerStatuses[0].ready = true;
+              if (change === 'replaced') current.metadata.uid = 'replacement-pod';
+              if (change === 'deleting') current.metadata.deletionTimestamp = 'now';
+              if (change === 'image-changed') current.spec.containers[0].image = 'foreign';
+              if (change === 'starting') current.status.containerStatuses[0].state = { running: {} };
+            }
+            return { exitCode: 0, stdout: JSON.stringify(current) };
+          }
+          assert.equal(args[0], 'logs');
+          assert.ok(args.includes('--previous') && args.includes('--limit-bytes=16384'));
+          logs++;
+          return { exitCode: 0, stdout: 'Error [ERR_MODULE_NOT_FOUND]: private dependency path' };
+        };
+        await gate.observeFatalStartup(stop);
+        assert.equal(logs, 1, 'The real provider adapter must match the manifest image digest');
+        assert.equal(stop.signal.reason.code === 'RIVET_FATAL_STARTUP', ['fatal', 'init'].includes(change));
+      });
+  },
+);
+
 test('independent janitor stays quiet before expiry; after expiry stops exact runner then cleans namespace', async (t) => {
   const op = operation(Date.now() - 1000),
     f = await fixture(t, op);
@@ -862,6 +1249,38 @@ test('independent janitor stays quiet before expiry; after expiry stops exact ru
   assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 1);
   assert.equal(f.requests.find((r) => r.method === 'DELETE').input.preconditions.uid, actor.uid);
 });
+test('new janitors ignore verified completed history but retain driver fences for unresolved or inconsistent records', async (t) => {
+  for (const mode of ['completed', 'unresolved', 'inconsistent', 'malformed-flag', 'tampered-input'])
+    await t.test(mode, async (t) => {
+      const f = await fixture(t);
+      await f.state.arm(actor);
+      await f.state.change((record) => {
+        record.cleanupVerified = mode !== 'unresolved';
+        if (mode === 'malformed-flag') record.cleanupVerified = 'true';
+        record.closed = mode !== 'inconsistent';
+        record.phase = 'cleaned';
+      });
+      if (mode === 'tampered-input') {
+        const object = f.objects.get(
+          `/api/v1/namespaces/${settings().controlNamespace}/configmaps/${f.state.operation.operationId}`,
+        );
+        const record = JSON.parse(object.data.record);
+        record.operation.inputHash = 'f'.repeat(64);
+        object.data.record = JSON.stringify(record);
+      }
+      const outcomes = await stagingJanitorPass({
+        api: f.api,
+        cloud,
+        settings: { ...settings(), approvedDriverDigest: mode === 'malformed-flag' ? digest : 'b'.repeat(64) },
+        owner,
+        wait,
+      });
+      if (mode === 'completed') assert.deepEqual(outcomes, []);
+      else assert.equal(outcomes[0].status, 'blocked-inspect-private-registry');
+      assert.equal(f.requests.filter((r) => r.method === 'DELETE' || r.method === 'PATCH').length, 0);
+    });
+});
+
 test('paused cleanup owner and unacknowledged DELETE block takeover/replay rather than declaring success', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);
@@ -875,6 +1294,53 @@ test('paused cleanup owner and unacknowledged DELETE block takeover/replay rathe
   await assert.rejects(cleanupStaging(f.state, actor));
   assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 1);
 });
+test('settlement waits only for pending Gateway backend creation before withdrawing routes', async (t) => {
+  const f = await fixture(t);
+  await f.state.arm(actor);
+  await f.state.namespace({ create: true });
+  let reads = 0,
+    pendingObserved = false;
+  const pendingCloud = {
+    ...cloud,
+    async children() {
+      if (++reads === 1) throw new PendingGatewayBackendError();
+      return [];
+    },
+  };
+  await settleStaging(f.state, pendingCloud, actor, async (name, check) => {
+    if (name.includes('Gateway backend discovery')) {
+      assert.equal(await check(), null);
+      pendingObserved = true;
+      assert.equal(f.requests.filter((r) => r.method === 'DELETE').length, 0);
+    }
+    return wait(name, check);
+  });
+  assert.equal(pendingObserved, true);
+  assert.equal((await f.state.read()).record.phase, 'settled');
+
+  const denied = await fixture(t);
+  await denied.state.arm(actor);
+  await denied.state.namespace({ create: true });
+  let deniedReads = 0;
+  await assert.rejects(
+    settleStaging(
+      denied.state,
+      {
+        ...cloud,
+        children: async () => {
+          deniedReads++;
+          throw Error('denied discovery');
+        },
+      },
+      actor,
+      wait,
+    ),
+    /denied discovery/,
+  );
+  assert.equal(deniedReads, 1, 'Permission and ambiguous discovery failures are not pending-state retries');
+  assert.equal(denied.requests.filter((r) => r.method === 'DELETE').length, 0);
+});
+
 test('actual HTTP/WebSocket settlement drains the exact backend container, never aborts, and incomplete CSI blocks deletion', async (t) => {
   const f = await fixture(t);
   await f.state.arm(actor);
@@ -947,18 +1413,38 @@ test('concrete phase boundary records intent before seed work and never replays 
   const f = await fixture(t),
     op = f.state.operation;
   await f.state.arm(actor);
+  await f.state.change((record) => {
+    record.workers.push({ id: '123:456', phase: 'prepare', closed: false });
+  });
   let writes = 0;
   const gate = {
     verifySharedPrerequisites: async () => {},
     installDependencies: async () => {
+      assert.equal(
+        (await f.state.read()).record.workers[0].progress.step,
+        'dependencies',
+        'Progress must precede the actual operation',
+      );
       writes++;
       throw Error('lost fixture write acknowledgement');
     },
   };
-  const input = { phase: 'prepare', operation: op, state: f.state, cloud, actor, gate, wait };
+  const input = {
+    phase: 'prepare',
+    operation: op,
+    state: f.state,
+    cloud,
+    actor,
+    gate,
+    wait,
+    step: providerProgressStep(f.state, 'prepare', '123:456', Date.parse(op.expiresAt)),
+  };
   await assert.rejects(executeProviderPhase(input), /lost fixture/);
   await assert.rejects(executeProviderPhase(input), /Never replay/);
   assert.equal(writes, 1);
+  const progress = (await f.state.read()).record.workers[0].progress;
+  assert.equal(progress.sequence, 3);
+  assert.ok(progress.deadlineAt <= Date.parse(op.expiresAt));
 });
 test('provider absence must be an actual 404, not JSON/HTML 5xx or a disconnected API', async (t) => {
   let status = 503;
@@ -1140,6 +1626,14 @@ test('actual package has a closed hash manifest, import-safe CLI boundaries and 
     return d.toJS();
   });
   const deployment = objects.find((o) => o.kind === 'Deployment');
+  const janitorRole = objects.find((o) => o.kind === 'ClusterRole');
+  const code = objects.find((o) => o.kind === 'ConfigMap' && o.immutable === true);
+  assert.equal(code.metadata.name, `rivet-qualification-janitor-${result.driverDigest.slice(0, 12)}`);
+  assert.equal(deployment.spec.template.spec.volumes[0].configMap.name, code.metadata.name);
+  assert.deepEqual(
+    janitorRole.rules.find((rule) => rule.apiGroups.includes('networking.k8s.io')),
+    { apiGroups: ['networking.k8s.io'], resources: ['ingresses'], verbs: ['get', 'list'] },
+  );
   assert.equal(deployment.spec.replicas, 1);
   assert.equal(deployment.spec.strategy.type, 'Recreate');
   const version = path.join(folder, 'configmap-version');

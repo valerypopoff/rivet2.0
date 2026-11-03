@@ -925,6 +925,20 @@ all manifests precede the immutable install, source directories follow it, and
 and Compose wiring under test; it must not require the retired whole-checkout
 copy layout. `prepare-runtime-packages.test.mjs` exercises staged files and
 dependency resolution behavior rather than matching Dockerfile text.
+Build's existing static-validation job runs the image/launcher contract file
+before docs/style checks, including PRs to `main`. These source-only tests need
+no compiled workspace exports; keep this cheap check ahead of image publication.
+API production compilation uses `tsconfig.runtime.json` to exclude test-only
+deployment imports; the image contract checks that runtime compiler target.
+The ordinary API build still type-checks tests. API and executor Dockerfiles copy
+deployment tooling after application compilation, preserving that cache across
+rollout-only repairs.
+The API then bundles the autoscaler runtime closure and the fast candidate smoke
+boots its actual packaged command as non-root/read-only without cloud access.
+The separate minimal cleanup-worker image is scanned and published alongside the
+qualification actor; changing its mounted driver bundle does not add application
+or browser layers to the cleanup worker. See
+[fast staging failure](studio-server/automated-runtime-qualification.md#fast-failure-before-and-during-staging).
 The shared image-layout guard checks actual instruction order, not just the
 presence of a manifest string: root inputs, Yarn cache, package-manager check
 and every workspace manifest must precede installation; packages, scripts and
@@ -1284,13 +1298,29 @@ It also audits the same lockfile without those ignores before the normal audit,
 so a temporary Rust exception that no longer matches an advisory fails CI and
 must be removed. Remove it as soon as a compatible fix is available.
 
-The October 2026 ZIP review is deliberately limited to registry `zip 0.6.6`
+The November 2, 2026 ZIP re-review is deliberately limited to registry `zip 0.6.6`
 with registry `tauri 1.8.3` as its sole consumer. The exception checker pins both
 crate checksums, rejects extra consumers/versions in the generated Cargo lockfile,
 and requires the unfiltered audit's ZIP version to match. These are temporary
-reachability exceptions until **2026-11-01**, not patched dependencies or blanket
+reachability exceptions until **2026-11-16**, not patched dependencies or blanket
 permission to extract untrusted archives. Do not disable the audit, broaden the
 version pins or remove the updater merely to make CI green.
+
+The refreshed unfiltered audit reports the existing h2 finding and four ZIP
+findings, including newly reported
+[RUSTSEC-2026-0429](https://github.com/rustsec/advisory-db/blob/main/crates/zip/RUSTSEC-2026-0429.md).
+The re-review verified the cached crate archive
+checksums against the pinned lockfile, signature verification before installation,
+the Windows-only ZIP updater branch and its regular-file extraction loop. The
+new date is a bounded re-review window. The additional 0429 reachability exception
+uses that same expiry and exact dependency/consumer guard; no version or archive
+entry point changes. The planned dependency migration remains needed.
+
+0429 concerns `ZipArchive::extract` reserving a symlink-target buffer from an
+untrusted declared file size. The checksum-pinned `zip 0.6.6` implementation has
+no such symlink allocation, and Tauri's updater does not call that bulk API.
+Its own extraction loop streams bytes into regular files. This review does not
+generalize to other ZIP versions, callers or unrelated archive vulnerabilities.
 
 RustSec [0367](https://rustsec.org/advisories/RUSTSEC-2026-0367.html),
 [0368](https://rustsec.org/advisories/RUSTSEC-2026-0368.html) and
@@ -1402,8 +1432,8 @@ work behind it is parallelized.
    `package-lint` fans out the same six source-only workspaces immediately; it does not
    wait for compiled artifacts. Test and lint matrices use `fail-fast: false`, so one
    failure cannot hide failures in other packages.
-4. `static-validation` runs PnP freshness, docs typechecking, `yarn test:style`,
-   and Prettier in parallel with compilation.
+4. `static-validation` runs PnP freshness, source-only image/launcher contracts,
+   docs typechecking, `yarn test:style`, and Prettier in parallel with compilation.
    Graph Builder assets are not checked in a second named step because
    `yarn test:style` already owns that complete gate.
 5. `javascript-audit` runs separately, so an npm registry outage is clearly

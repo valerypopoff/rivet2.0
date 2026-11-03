@@ -6,6 +6,8 @@ import { parse } from 'yaml';
 import { ProviderRequestContinuity, qualifyProtectedProxyRoll } from './qualification/provider-request-continuity.mjs';
 import { observeHpaContinuity } from './qualification/provider-proxy-hpa.mjs';
 import { RuntimeControlLocalGate } from './kubernetes-runtime-control-local.mjs';
+import { continuityStages } from './lib/request-continuity.mjs';
+import { autoscalerPolicy } from './lib/execution-autoscaler.mjs';
 // test-style: fixture-read: Run the serialized test project and generated fixture code, without asserting production source text.
 
 const profile = {
@@ -47,7 +49,12 @@ function fixture() {
   };
   const gate = {
     config: { release: 'fixture' },
-    operation: { operationId: randomUUID(), requestContinuityProfile: profile },
+    operation: {
+      operationId: randomUUID(),
+      policy: autoscalerPolicy({}),
+      requestContinuityProfile: profile,
+      installed: { qualificationValues: {} },
+    },
     assertProofContext: async () => events.push('context'),
     kube: async (args) => {
       events.push(args[0]);
@@ -104,6 +111,205 @@ test('lost native-roll acknowledgement never retries or certifies replacement', 
   await assert.rejects(qualifyProtectedProxyRoll(f.gate, f.probes, { waitFor: f.waitFor }), /lost acknowledgement/);
   assert.equal(f.events.filter((e) => e === 'patch').length, 1);
   assert.equal(f.probes.replacement, undefined);
+});
+
+test('focused qualification cannot invoke the separate cold-proxy rollout', async () => {
+  const f = fixture();
+  f.gate.operation.qualification = { tier: 'focused' };
+  await assert.rejects(qualifyProtectedProxyRoll(f.gate, f.probes, { waitFor: f.waitFor }), /actual update/);
+  assert.deepEqual(f.events, []);
+});
+
+for (const changed of [true, false]) {
+  test(`focused request probe observes the actual template apply without a second rollout: changed=${changed}`, async () => {
+    const f = fixture();
+    f.gate.operation.qualification = { tier: 'focused' };
+    f.gate.operation.installed.qualificationValues = {
+      requestContinuity: {
+        enabled: true,
+        maxProtectedRequestSeconds: 300,
+        backendServiceDrainSeconds: 600,
+        propagationSeconds: 60,
+      },
+      lifecycle: { shutdownGraceSeconds: 120, proxy: { preStopDelaySeconds: 660, terminationGracePeriodSeconds: 900 } },
+    };
+    const probes = new ProviderRequestContinuity(f.gate);
+    probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+    if (changed) probes.proxyTemplate.metadata.annotations.release = 'candidate';
+    probes.startCohort = async (stage) => f.events.push(`accepted:${stage}`);
+    await probes.beforeProxyTemplates();
+    assert.equal(probes.replacement.changed, changed);
+    assert.deepEqual(probes.replacement.before, ['old1', 'old2']);
+    if (changed) {
+      f.events.push('real-template-apply');
+      probes.observeProxyPods([pod('new1'), pod('new2')]);
+      assert.equal(probes.replacement.observedAt, undefined, 'Missing IDs alone do not prove when termination started');
+      probes.observeProxyPods([pod('old1', true), pod('old2'), pod('new1')]);
+      probes.observeProxyPods([pod('new1'), pod('new2')]);
+      assert.ok(f.events.indexOf('accepted:protected-roll') < f.events.indexOf('real-template-apply'));
+      assert.ok(probes.replacement.observedAt);
+    } else {
+      assert.ok(!f.events.some((e) => e.startsWith('accepted:')));
+      assert.equal(probes.replacement.dispatchedAt, undefined);
+    }
+    assert.ok(!f.events.includes('patch'), 'The probe must observe the real update, never manufacture another one');
+  });
+}
+
+test('focused journal observes real bridge boundaries without policy or late-admission batches', async () => {
+  const f = fixture(),
+    probes = new ProviderRequestContinuity(f.gate),
+    stages = [];
+  f.gate.operation.qualification = { tier: 'focused' };
+  probes.prepared = true;
+  const basePods = f.gate.pods;
+  f.gate.pods = async () => [...(await basePods()), pod('old3'), pod('old4')];
+  probes.startCohort = async (stage) => {
+    stages.push(stage);
+    probes.cohorts.set(stage, {});
+  };
+  probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+  probes.proxyTemplate.metadata.annotations.release = 'candidate';
+  const state = { phase: 'creating', mutations: { policy: {} }, entries: [] };
+  await probes.observeJournal({ phase: 'preflight', proxyContinuity: state });
+  assert.deepEqual(stages, []);
+  state.mutations.bridge = {};
+  await probes.observeJournal({ phase: 'preflight', proxyContinuity: state });
+  state.phase = 'bridge-serving';
+  await probes.observeJournal({ phase: 'preflight', proxyContinuity: state });
+  await probes.observeJournal({ phase: 'templates', proxyContinuity: state });
+  const owner = { name: 'fixture-ha-execution-0', uid: 'worker-0', withdrawIssued: true };
+  await probes.observeJournal({ phase: 'owners', owner, proxyContinuity: state });
+  owner.beginIssued = true;
+  await probes.observeJournal({ phase: 'owners', owner, proxyContinuity: state });
+  state.mutations.normal = {};
+  await probes.observeJournal({ phase: 'owners', proxyContinuity: state });
+  state.phase = 'normal-serving';
+  await probes.observeJournal({ phase: 'owners', proxyContinuity: state });
+  state.phase = 'complete';
+  state.routeRestored = true;
+  await probes.observeJournal({ phase: 'complete', proxyContinuity: state });
+  assert.deepEqual(stages, ['bootstrap', 'return-handoff']);
+  assert.equal(probes.replacement.changed, true);
+  assert.equal(probes.replacement.before.length, 4, 'First adoption observes the temporary HPA floor');
+  assert.ok(probes.bootstrapHandoff.dispatchedAt && probes.bootstrapHandoff.settledAt);
+  assert.ok(probes.returnHandoff.observedAt);
+  assert.equal(probes.bridgeCleaned, true);
+  assert.equal(probes.actionCompletion, undefined);
+  assert.equal(probes.executionWithdrawal.podUid, 'worker-0');
+  assert.ok(probes.executionWithdrawal.dispatchedAt && probes.executionWithdrawal.observedAt);
+});
+
+test('focused admission accepts a healthy pool with draining predecessors without crediting old termination', async () => {
+  for (const count of [2, 4]) {
+    const f = fixture(),
+      active = Array.from({ length: count }, (_, index) => pod(`active-${index}`)),
+      draining = [pod('already-draining-1', true), pod('already-draining-2', true)],
+      probes = new ProviderRequestContinuity(f.gate);
+    f.gate.operation.qualification = { tier: 'focused' };
+    f.deployment.spec.replicas = count;
+    f.gate.pods = async () => [...active, ...draining];
+    probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+    probes.proxyTemplate.metadata.annotations.release = 'candidate';
+    await probes.beforeProxyTemplates();
+    assert.deepEqual(
+      probes.replacement.before,
+      active.map((p) => p.metadata.uid),
+    );
+    probes.observeProxyPods([...active, ...draining]);
+    assert.equal(probes.replacement.observedAt, undefined, 'Earlier HPA retirement is not this update');
+    probes.observeProxyPods([pod('active-0', true), ...active.slice(1), ...draining]);
+    assert.ok(probes.replacement.observedAt);
+    assert.ok(!f.events.includes('patch'));
+  }
+});
+
+test('draining predecessors cannot satisfy the starting proxy floor or hide unready and excess live pods', async () => {
+  for (const state of ['below-floor', 'unready', 'above-ceiling']) {
+    const f = fixture(),
+      active = state === 'below-floor' ? [pod('one')] : [pod('one'), pod('two')],
+      probes = new ProviderRequestContinuity(f.gate);
+    f.gate.operation.qualification = { tier: 'focused' };
+    if (state === 'unready') active[1].status.conditions[0].status = 'False';
+    if (state === 'above-ceiling') active.push(pod('three'), pod('four'), pod('five'));
+    f.gate.pods = async () => [...active, pod('already-draining', true)];
+    probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+    await assert.rejects(probes.beforeProxyTemplates());
+    assert.equal(probes.replacement, undefined);
+  }
+});
+
+test('focused acceptance requires observed termination and fresh final proxy identities', async () => {
+  const f = fixture();
+  f.gate.operation.qualification = { tier: 'focused' };
+  const probes = new ProviderRequestContinuity(f.gate);
+  // Exercise acceptance after completed cohorts; their response facts are
+  // validated separately by the provider-evidence regressions.
+  for (const stage of continuityStages(false, 'upgrade', 'focused'))
+    probes.cohorts.set(stage, { completion: Promise.resolve() });
+  probes.bridgeCleaned = true;
+  probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+  probes.replacement = {
+    changed: true,
+    deploymentUid: 'deployment',
+    before: ['old1', 'old2'],
+    after: ['cached1', 'cached2'],
+    dispatchedAt: new Date().toISOString(),
+  };
+  f.gate.requestWorkflow = async () => ({ hasMore: false, totalRuns: 0, runs: [] });
+  const health = f.gate.verifyProtectedProxyAvailability;
+  f.gate.verifyProtectedProxyAvailability = async () => ({ ...(await health()), proxyUid: 'deployment' });
+  f.gate.pods = async () => [pod('new1'), pod('new2')];
+  await assert.rejects(probes.finish(), /termination was not observed/);
+  probes.observeProxyPods([pod('old1', true), pod('old2'), pod('new1')]);
+  f.gate.pods = async () => [pod('old1'), pod('new2')];
+  await assert.rejects(probes.finish(), /original proxy still exists/);
+  f.gate.pods = async () => [pod('final1'), pod('final2')];
+  const receipt = await probes.finish();
+  assert.deepEqual(receipt.replacement.after, ['final1', 'final2']);
+  for (const count of [3, 4]) {
+    const final = Array.from({ length: count }, (_, i) => pod(`grown-${i}`));
+    f.gate.pods = async () => final;
+    assert.equal((await probes.finish()).replacement.after.length, count);
+  }
+  for (const final of [
+    [pod('one')],
+    Array.from({ length: 5 }, (_, i) => pod(`too-many-${i}`)),
+    [pod('one'), pod('two'), { ...pod('unhealthy'), status: { conditions: [] } }],
+    [pod('one'), pod('two'), pod('terminating', true)],
+    [pod('duplicate'), pod('duplicate')],
+  ]) {
+    f.gate.pods = async () => final;
+    await assert.rejects(probes.finish(), /bounds|ready|identity/);
+  }
+  f.gate.pods = async () => [pod('final1'), pod('final2')];
+  f.deployment.metadata.uid = 'foreign';
+  await assert.rejects(probes.finish(), /identity changed/);
+});
+
+test('an unchanged focused proxy template accepts autoscaler membership changes under the same Deployment', async () => {
+  const f = fixture();
+  f.gate.operation.qualification = { tier: 'focused' };
+  const probes = new ProviderRequestContinuity(f.gate);
+  probes.bootstrap = 'already-protected';
+  probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+  probes.unchangedProxyTemplate = structuredClone(f.deployment.spec.template);
+  probes.bridgeCleaned = true;
+  probes.replacement = { changed: false, deploymentUid: 'deployment', before: ['old1', 'old2'] };
+  probes.cohorts.set('execution-retirement', { completion: Promise.resolve() });
+  f.gate.requestWorkflow = async () => ({ hasMore: false, totalRuns: 0, runs: [] });
+  const health = f.gate.verifyProtectedProxyAvailability;
+  f.gate.verifyProtectedProxyAvailability = async () => ({ ...(await health()), proxyUid: 'deployment' });
+  f.gate.pods = async () => [pod('old1'), pod('old2'), pod('scaled3')];
+  assert.equal((await probes.finish()).replacement.after.length, 3);
+  probes.replacement.before.push('scaled3');
+  f.gate.pods = async () => [pod('old1'), pod('old2')];
+  assert.equal((await probes.finish()).replacement.after.length, 2);
+  f.deployment.spec.template.metadata.annotations.unexpected = 'unplanned-rollout';
+  await assert.rejects(probes.finish(), /template changed/);
+  delete f.deployment.spec.template.metadata.annotations.unexpected;
+  f.deployment.spec.template.spec.terminationGracePeriodSeconds = 10;
+  await assert.rejects(probes.finish(), /template changed/);
 });
 test('unsafe native rollout policy fails before requests or mutation', async () => {
   const f = fixture();

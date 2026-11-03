@@ -74,6 +74,15 @@ export async function retainTemporaryFailure(directory, mode, error) {
     const stat = await fs.lstat(directory);
     assert.ok(stat.isDirectory() && !stat.isSymbolicLink());
     outside(await fs.realpath(directory));
+    const causes = [],
+      seen = new Set([error]);
+    for (let cause = error?.cause; cause && causes.length < 4 && !seen.has(cause); cause = cause.cause) {
+      seen.add(cause);
+      causes.push({
+        name: String(cause.name ?? 'Error').slice(0, 128),
+        message: String(cause.message ?? 'Unknown failure').slice(0, 8192),
+      });
+    }
     await fs.writeFile(
       path.join(directory, `terminal-error-${randomUUID()}.json`),
       JSON.stringify({
@@ -81,6 +90,7 @@ export async function retainTemporaryFailure(directory, mode, error) {
         mode: String(mode).slice(0, 64),
         name: String(error?.name ?? 'Error').slice(0, 128),
         message: String(error?.message ?? 'Unknown failure').slice(0, 8192),
+        ...(causes.length ? { causes } : {}),
       }),
       { flag: 'wx', mode: 0o600 },
     );

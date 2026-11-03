@@ -17,7 +17,34 @@ export const CONTINUITY_DURATION_STAGES = {
   'duration-180': 180000,
   'duration-295': 295000,
 };
-export function continuityStages(adopted, kind) {
+const LEGACY_FOCUSED_CONTINUITY_CHECKS = REQUEST_CONTINUITY_CHECKS.filter(
+  (check) => !['full-body-duration-matrix', 'bridge-return-handoff', 'proxy-hpa-removal'].includes(check),
+);
+export const FOCUSED_CONTINUITY_CHECKS = [
+  'full-body-300-second-requests',
+  'connection-reuse',
+  'proxy-pod-and-neg-replacement',
+  'execution-owner-300-second-drain',
+  'request-recording-and-no-duplicates',
+];
+export const continuityChecks = (adopted, tier = 'full', proxyReplaced = true) =>
+  tier === 'focused'
+    ? [
+        ...FOCUSED_CONTINUITY_CHECKS.filter((c) => proxyReplaced || c !== 'proxy-pod-and-neg-replacement'),
+        ...(!adopted ? ['bridge-return-handoff'] : []),
+      ]
+    : [...REQUEST_CONTINUITY_CHECKS];
+export function continuityStages(adopted, kind, tier = 'full', proxyReplaced = true) {
+  if (tier === 'focused') {
+    return kind === 'upgrade'
+      ? [
+          'execution-retirement',
+          ...(adopted && proxyReplaced ? ['protected-roll'] : []),
+          ...(!adopted ? ['bootstrap', 'return-handoff'] : []),
+        ]
+      : [];
+  }
+  assert.equal(tier, 'full');
   return kind === 'upgrade'
     ? [
         'late-admission',
@@ -28,6 +55,12 @@ export function continuityStages(adopted, kind) {
       ]
     : ['hpa-removal'];
 }
+// A route handoff needs the complete request lifetime after a propagation
+// allowance. The LB drain timeout is a ceiling, not a mandatory quiet wait.
+export const continuityHandoffSeconds = (profile) => {
+  assertRequestContinuityProfile(profile);
+  return profile.maxProtectedRequestSeconds + profile.propagationSeconds;
+};
 export function continuityTimeoutMs(profile) {
   assertRequestContinuityProfile(profile);
   const timeout = Math.max(
@@ -61,8 +94,12 @@ export function assertRequestContinuityProfile(profile, shutdownSeconds = 120) {
   );
   assert.equal(profile.protocol, 1);
   assert.equal(profile.maxProtectedRequestSeconds, 300);
-  assert.ok(profile.backendServiceDrainSeconds >= 600 && profile.backendServiceDrainSeconds <= 3600);
   assert.ok(profile.propagationSeconds >= 60);
+  assert.ok(
+    profile.backendServiceDrainSeconds >= profile.maxProtectedRequestSeconds + profile.propagationSeconds &&
+      profile.backendServiceDrainSeconds <= 3600,
+    'LB drain must cover the protected request plus propagation and remain at most 3600 seconds',
+  );
   assert.ok(profile.proxyPreStopDelaySeconds >= profile.backendServiceDrainSeconds + profile.propagationSeconds);
   assert.ok(whole(shutdownSeconds) && shutdownSeconds > 0);
   assert.ok(profile.proxyTerminationGracePeriodSeconds >= profile.proxyPreStopDelaySeconds + shutdownSeconds + 25);
@@ -106,7 +143,9 @@ export function continuityFromResources(resources) {
   );
   assert.ok(proxy, 'Continuity proxy Deployment missing');
   assertProtectedProxyTemplate(proxy.spec.template, profile);
-  return { profile, network, proxyName: proxy.metadata.name, configName: configs[0].metadata.name };
+  const proxyImage = proxy.spec.template.spec.containers.find((c) => c.name === 'proxy')?.image;
+  assert.ok(proxyImage, 'Continuity proxy image missing');
+  return { profile, network, proxyName: proxy.metadata.name, proxyImage, configName: configs[0].metadata.name };
 }
 export function assertProtectedProxyTemplate(template, profile) {
   assert.ok(
@@ -138,8 +177,8 @@ export function continuityProfileDigest(profile) {
 export function assertRequestContinuityEvidence(proof, release, profile) {
   assertRequestContinuityProfile(profile);
   assert.ok(
-    proof && proof.protocol === 2,
-    '300-second request continuity requires complete version-2 provider evidence',
+    proof && [2, 3, 4].includes(proof.protocol),
+    '300-second request continuity requires complete provider evidence',
   );
   assert.equal(proof.provider, 'gke');
   assert.equal(proof.gatewayClass, 'gke-l7-regional-external-managed');
@@ -150,14 +189,42 @@ export function assertRequestContinuityEvidence(proof, release, profile) {
   assert.deepEqual(proof.profile, profile);
   assert.equal(proof.profileDigest, continuityProfileDigest(profile));
   assert.equal(proof.failedRequests, 0);
+  const focused = proof.protocol === 4;
   assert.ok(['passed', 'already-protected'].includes(proof.bootstrap));
-  assert.equal(proof.completedRequests, proof.bootstrap === 'passed' ? 30 : 21);
+  const adopted = proof.bootstrap === 'already-protected';
+  if (focused) {
+    assert.equal(typeof proof.proxyReplaced, 'boolean');
+    if (!proof.proxyReplaced) {
+      assert.ok(adopted, 'First adoption must replace the unprotected proxies');
+      assert.deepEqual(
+        release.images.proxy,
+        release.lineage.predecessor.images.proxy,
+        'Changed proxy images require actual replacement observations',
+      );
+    }
+  }
+  assert.equal(
+    proof.completedRequests,
+    focused
+      ? continuityStages(adopted, 'upgrade', 'focused', proof.proxyReplaced).length * 3
+      : proof.protocol === 3
+        ? adopted
+          ? 9
+          : 18
+        : adopted
+          ? 21
+          : 30,
+  );
   assert.ok(
     Number.isSafeInteger(proof.maximumCompletedDurationMs) &&
       proof.maximumCompletedDurationMs >= 300_000 &&
       proof.maximumCompletedDurationMs <= 330_000,
   );
-  assert.deepEqual([...proof.checks].sort(), [...REQUEST_CONTINUITY_CHECKS].sort());
+  const checks =
+    proof.protocol === 3
+      ? [...LEGACY_FOCUSED_CONTINUITY_CHECKS, ...(!adopted ? ['bridge-return-handoff'] : [])]
+      : continuityChecks(adopted, focused ? 'focused' : 'full', proof.proxyReplaced);
+  assert.deepEqual([...proof.checks].sort(), checks.sort());
   assert.match(proof.reportSha256, /^[a-f0-9]{64}$/);
   return structuredClone(proof);
 }

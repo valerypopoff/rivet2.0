@@ -469,10 +469,10 @@ async function clusterFixture(t, policyOverrides = {}) {
       socket.send(
         Buffer.concat([
           Buffer.from([3]),
-          Buffer.from(JSON.stringify({ status: outputFailure === 'exit' ? 'Failure' : 'Success' })),
+          Buffer.from(JSON.stringify({ status: outputFailure?.startsWith('exit') ? 'Failure' : 'Success' })),
         ]),
       );
-    socket.close();
+    if (outputFailure !== 'exit-open') socket.close();
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -1105,7 +1105,7 @@ test('lost fence response plus journal cleanup outage preserves both failures an
 
 test('exec requires an explicit successful exit status and enforces its deadline', async (t) => {
   const f = await clusterFixture(t);
-  for (const failure of ['exit', 'no-status', 'hang']) {
+  for (const failure of ['exit', 'exit-open', 'no-status', 'hang']) {
     f.outputFailure(failure);
     await assert.rejects(f.io.snapshot(), /successful exit|deadline/);
   }

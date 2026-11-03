@@ -51,18 +51,21 @@ RUN --mount=type=cache,target=/root/.cache/yarn \
     YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable
 COPY packages ./packages
 COPY scripts ./scripts
-COPY deploy ./deploy
 COPY tsconfig.base.json LICENSE README.md ./
 RUN YARN_NODE_LINKER=node-modules yarn build:runtime && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet2-evaluations run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-shared run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-bootstrap run build && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-executor run build && \
-    YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-api run build
+    YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-api exec tsc -p tsconfig.runtime.json
+# Deployment scripts are not API compiler inputs. Rollout-only repairs retain
+# the expensive application compilation cache; package their runtime leaf below.
+COPY deploy ./deploy
 RUN mkdir /runtime && node deploy/studio-server/images/lib/prepare-runtime-packages.mjs /runtime/packages api
 RUN node deploy/studio-server/images/lib/remove-dependency-test-fixtures.mjs /app/node_modules
 COPY --from=esbuild-security /out/@esbuild /app/node_modules/@esbuild
 COPY --from=esbuild-security /out/esbuild /app/node_modules/esbuild/bin/esbuild
+RUN node deploy/studio-server/images/lib/prepare-autoscaler-runtime.mjs /runtime/autoscaler
 
 FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
 COPY deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
@@ -85,7 +88,7 @@ ENV https_proxy=$https_proxy
 ENV all_proxy=$all_proxy
 ENV no_proxy=$no_proxy
 
-RUN apk add --no-cache git && \
+RUN apk add --no-cache git 'libexpat>=2.10.0-r0' && \
     npm install -g npm@11.21.1 pnpm@10.34.8 && \
     npm install --prefix /tmp/rivet-npm-security --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact undici@6.29.1 && \
     rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \
@@ -112,7 +115,7 @@ COPY --chown=10001:10001 deploy/studio-server/images/api/housekeeping-supervisor
 COPY --chown=10001:10001 deploy/studio-server/images/api/retire-backend.mjs /opt/rivet/retire-backend.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/local-upgrade-ui.mjs /opt/rivet/local-upgrade-ui.mjs
 COPY --chown=10001:10001 deploy/studio-server/images/api/local-metadata-owner-lease.mjs /opt/rivet/local-metadata-owner-lease.mjs
-COPY --chown=10001:10001 deploy/studio-server/scripts/lib/execution-autoscaler*.mjs deploy/studio-server/scripts/lib/release-operation-journal.mjs /app/packages/studio-server-api/autoscaler/
+COPY --from=builder --chown=10001:10001 /runtime/autoscaler /app/packages/studio-server-api/autoscaler
 
 RUN chmod +x /opt/rivet/lib/load-env.sh /opt/rivet/api-entrypoint.sh /opt/rivet/executor-entrypoint.sh
 

@@ -1,3 +1,4 @@
+import { testOpenSsl } from './fixtures/test-openssl.mjs';
 import assert from 'node:assert/strict';
 // test-style: fixture-read: Read only generated local TLS certificates used by the real HTTP/WebSocket client, never implementation text.
 import test from 'node:test';
@@ -25,9 +26,8 @@ const metrics = '/apis/metrics.k8s.io/v1beta1/namespaces/rivet-staging-rivet-q-1
 const scale =
   '/apis/apps/v1/namespaces/rivet-staging-rivet-q-123-1/statefulsets/rivet-qualification-ha-execution/scale';
 const certificates = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-private-tls-fixture-'));
-const openssl = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl';
 execFileSync(
-  openssl,
+  testOpenSsl,
   [
     'req',
     '-x509',

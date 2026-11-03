@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { parse } from 'yaml';
 import { createKubernetesTransport } from './execution-autoscaler-kubernetes.mjs';
+import { stagingActorRole } from './reusable-staging-coordinator.mjs';
 import { packageReusableStaging } from '../package-reusable-staging.mjs';
 import { qualificationOperation, executeRuntimeQualification } from './runtime-qualification-execution.mjs';
 import { ReusableStagingState, stagingRecordPath } from './reusable-staging-state.mjs';
@@ -660,6 +661,7 @@ export function temporaryStagingRuntime({
         mode: 'reusable-cluster',
         projectId: plan.projectId,
         projectNumber: plan.projectNumber,
+        region: plan.region,
         clusterUid,
         clusterServer: `https://${record.resources.find((i) => i.key === 'cluster').identity.endpoint}/`,
         inClusterServer: `https://${kubernetesService.spec.clusterIP}/`,
@@ -672,12 +674,12 @@ export function temporaryStagingRuntime({
         gatewayUid: gateway.metadata.uid,
         domain: hostname.slice(plan.operationId.length + 1),
         trustedClients: plan.trustedClients,
+        trustedForwardingProxies: [plan.cidrs.proxy, `${address.address}/32`],
         postgresImage: plan.postgresImage,
         objectStorageImage: plan.objectStorageImage,
         storageClassName: 'standard-rwo',
         ...(inputs.developerOverlapProfile ? { developerOverlapProfile: inputs.developerOverlapProfile } : {}),
         ...(inputs.requestContinuityProfile ? { requestContinuityProfile: inputs.requestContinuityProfile } : {}),
-        ...(inputs.requestContinuityProfile ? { region: plan.region } : {}),
       };
       if (plan.registrySecretSha256) {
         const bytes = await stagingRegistryConfig(plan, registryFile, requiredImages(plan)),
@@ -703,70 +705,7 @@ export function temporaryStagingRuntime({
           annotations: { 'iam.gke.io/gcp-service-account': plan.janitorServiceAccount },
         },
       });
-      const role = {
-        apiVersion: 'rbac.authorization.k8s.io/v1',
-        kind: 'ClusterRole',
-        metadata: { name: `${plan.operationId}-actor` },
-        rules: [
-          {
-            apiGroups: [''],
-            resources: [
-              'namespaces',
-              'pods',
-              'pods/exec',
-              'pods/log',
-              'services',
-              'endpoints',
-              'secrets',
-              'configmaps',
-              'persistentvolumeclaims',
-              'persistentvolumes',
-              'events',
-              'serviceaccounts',
-            ],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          { apiGroups: [''], resources: ['nodes'], verbs: ['get', 'list', 'watch'] },
-          {
-            apiGroups: ['apps'],
-            resources: ['statefulsets', 'deployments', 'replicasets'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          { apiGroups: ['batch'], resources: ['jobs'], verbs: ['get', 'list', 'watch', 'create', 'delete'] },
-          {
-            apiGroups: ['rbac.authorization.k8s.io'],
-            resources: ['roles', 'rolebindings'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['gateway.networking.k8s.io'],
-            resources: ['gateways', 'httproutes'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['networking.gke.io'],
-            resources: ['healthcheckpolicies', 'gcpbackendpolicies'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['autoscaling'],
-            resources: ['horizontalpodautoscalers'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['policy'],
-            resources: ['poddisruptionbudgets'],
-            verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete'],
-          },
-          {
-            apiGroups: ['storage.k8s.io'],
-            resources: ['storageclasses', 'volumeattachments'],
-            verbs: ['get', 'list', 'watch'],
-          },
-          { apiGroups: ['discovery.k8s.io'], resources: ['endpointslices'], verbs: ['get', 'list', 'watch'] },
-          { apiGroups: ['metrics.k8s.io'], resources: ['nodes', 'pods'], verbs: ['get', 'list'] },
-        ],
-      };
+      const role = stagingActorRole(`${plan.operationId}-actor`);
       await created(store, 'actor-role', '/apis/rbac.authorization.k8s.io/v1/clusterroles', role);
       await created(store, 'actor-binding', '/apis/rbac.authorization.k8s.io/v1/clusterrolebindings', {
         apiVersion: role.apiVersion,

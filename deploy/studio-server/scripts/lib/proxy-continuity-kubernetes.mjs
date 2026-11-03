@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { assertProtectedProxyTemplate } from './request-continuity.mjs';
 import { createProxyContinuityTransition, buildProxyBridge } from './proxy-continuity-transition.mjs';
+import { hasReadyGkeNegGate, assertGkeProxyBackendHealth, assertGkeProxyPoolReady } from './gke-proxy-health.mjs';
 
 const exec = promisify(execFile);
 const marker = 'rivet.dev/continuity-operation';
@@ -27,17 +28,8 @@ const paths = {
   HealthCheckPolicy: '/apis/networking.gke.io/v1',
   PodDisruptionBudget: '/apis/policy/v1',
 };
-const ready = (p) =>
-  !p.metadata.deletionTimestamp && p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
-const negReady = (p) =>
-  ready(p) &&
-  p.spec.readinessGates?.some((g) => g.conditionType === 'cloud.google.com/load-balancer-neg-ready') &&
-  p.status.conditions.some(
-    (c) =>
-      c.type === 'cloud.google.com/load-balancer-neg-ready' &&
-      c.status === 'True' &&
-      c.reason === 'LoadBalancerNegReady',
-  );
+const negReady = (p) => hasReadyGkeNegGate(p, { allowStandalone: true });
+class ProxyPoolNotReady extends Error {}
 
 async function defaultAccessToken() {
   const bin = process.env.RIVET_GCLOUD_BIN || 'gcloud';
@@ -59,8 +51,9 @@ async function defaultAccessToken() {
  * getHealth is a read-only Compute operation despite its HTTP POST verb. */
 export function createComputeBackendObserver(
   network,
-  { fetchImpl = fetch, accessToken = defaultAccessToken, now = Date.now } = {},
+  { fetchImpl = fetch, accessToken = defaultAccessToken, now = Date.now, minimumRequestSeconds = 300 } = {},
 ) {
+  assert.ok(Number.isSafeInteger(minimumRequestSeconds) && minimumRequestSeconds >= 0);
   const project = network.gcpProject,
     region = network.gcpRegion;
   for (const value of [project, region]) assert.match(value, /^[a-z][a-z0-9-]{0,62}$/);
@@ -81,7 +74,9 @@ export function createComputeBackendObserver(
     assert.equal(response.status, 200, 'Compute backend observation failed');
     return response.json();
   };
-  return async (service) => {
+  return async (service, { allowPending = false } = {}) => {
+    const observedAt = now();
+    assert.ok(service.metadata.uid, 'Service identity missing');
     const status = JSON.parse(service.metadata.annotations?.['cloud.google.com/neg-status'] ?? '{}');
     assert.ok(
       status.zones?.length >= 2 &&
@@ -106,25 +101,65 @@ export function createComputeBackendObserver(
     } while (page);
     const matches = all.filter(
       (b) =>
-        b.backends?.length === groups.length && groups.every((g) => b.backends.some((v) => v.group.endsWith(`/${g}`))),
+        b.backends?.length >= groups.length && groups.every((g) => b.backends.some((v) => v.group.endsWith(`/${g}`))),
     );
+    assert.ok(matches.length <= 1, 'Service must resolve to exactly one actual regional backend');
+    const pending = () => ({
+      healthy: false,
+      serviceUid: service.metadata.uid,
+      observedAt,
+      healthyEndpoints: [],
+      backendServiceDrainSeconds: 0,
+    });
+    if (allowPending && (!matches.length || !matches[0].healthChecks?.length)) return pending();
     assert.equal(matches.length, 1, 'Service must resolve to exactly one actual regional backend');
     const backend = matches[0];
+    // Regional Gateways may retain an empty zone beyond the Service's active
+    // NEG zones. Accept only additional groups for this same Service identity.
+    const groupIdentity = new RegExp(
+      `(?:^|/)(projects/${project}/zones/${region}-[a-z]/networkEndpointGroups/${neg})$`,
+    );
+    const attachedGroups = backend.backends.map(({ group }) => {
+      const identity = group.match(groupIdentity)?.[1];
+      assert.ok(identity, 'Regional backend contains a foreign endpoint group');
+      return identity;
+    });
+    assert.equal(
+      new Set(attachedGroups).size,
+      attachedGroups.length,
+      'Regional backend contains a duplicate endpoint group',
+    );
     assert.match(backend.name, /^[a-z0-9-]+$/);
+    assert.match(String(backend.id), /^[1-9][0-9]*$/);
+    assert.ok(backend.healthChecks?.length, 'Regional backend health checks are not attached');
     assert.equal(backend.loadBalancingScheme, 'EXTERNAL_MANAGED');
-    assert.ok(backend.timeoutSec >= 300, 'Provider request timeout is shorter than the protected request');
+    assert.ok(
+      backend.timeoutSec >= minimumRequestSeconds,
+      'Provider request timeout is shorter than the protected request',
+    );
     const health = await Promise.all(
-      groups.map(async (group) => {
+      attachedGroups.map(async (group) => {
         const result = await request(`regions/${region}/backendServices/${backend.name}/getHealth`, {
           group: `https://www.googleapis.com/compute/v1/${group}`,
         });
-        return result.healthStatus?.some((h) => h.healthState === 'HEALTHY') === true;
+        return (result.healthStatus ?? [])
+          .filter((h) => h.healthState === 'HEALTHY')
+          .map((h) => ({
+            ipAddress: h.ipAddress,
+            port: h.port,
+            zone: group.split('/')[3],
+            neg,
+          }));
       }),
     );
     return {
       backendServiceDrainSeconds: backend.connectionDraining?.drainingTimeoutSec ?? 0,
-      healthy: health.filter(Boolean).length >= 2,
+      healthy: health.filter((endpoints) => endpoints.length).length >= 2,
       backendService: backend.name,
+      backendServiceId: String(backend.id),
+      serviceUid: service.metadata.uid,
+      observedAt,
+      healthyEndpoints: health.flat(),
     };
   };
 }
@@ -161,9 +196,18 @@ export function createKubernetesProxyContinuity({
       .items;
   const until = async (label, check) => {
     const deadline = now() + timeoutMs;
+    let pending;
     do {
-      if (await check()) return;
-      assert.ok(now() < deadline, `Timed out waiting for ${label}; serving capacity retained`);
+      try {
+        if (await check()) return;
+      } catch (error) {
+        if (!(error instanceof ProxyPoolNotReady)) throw error;
+        pending = error;
+      }
+      assert.ok(
+        now() < deadline,
+        `Timed out waiting for ${label}; serving capacity retained${pending ? `: ${pending.message}` : ''}`,
+      );
       await wait();
     } while (true);
   };
@@ -187,8 +231,12 @@ export function createKubernetesProxyContinuity({
     const selected = (await pods(deployment.spec.template.metadata.labels['app.kubernetes.io/instance'])).filter((p) =>
       Object.entries(deployment.spec.selector.matchLabels).every(([k, v]) => p.metadata.labels?.[k] === v),
     );
-    if (selected.length < minimum || selected.some((p) => !negReady(p))) return false;
-    if (new Set(selected.map((p) => p.spec.nodeName)).size < 2) return false;
+    if (selected.length < minimum)
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} has ${selected.length}/${minimum} required Pods`);
+    if (selected.some((p) => !negReady(p)))
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} has Pods without Ready/NEG readiness`);
+    if (new Set(selected.map((p) => p.spec.nodeName)).size < 2)
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} is not spread across two nodes`);
     const sets = JSON.parse((await kube(['get', 'replicasets.apps', '-o', 'json'])).stdout).items;
     const owned = new Set(
       sets
@@ -209,14 +257,18 @@ export function createKubernetesProxyContinuity({
     const zones = selected.map(
       (p) => nodes.find((n) => n.metadata.name === p.spec.nodeName)?.metadata.labels?.['topology.kubernetes.io/zone'],
     );
-    if (zones.some((z) => !z) || new Set(zones).size < 2) return false;
+    if (zones.some((z) => !z) || new Set(zones).size < 2)
+      throw new ProxyPoolNotReady(`Proxy Deployment ${name} is not spread across two provider zones`);
     if (protectedPool) for (const p of selected) assertProtectedProxyTemplate(p, profile);
-    return (
-      deployment.status?.observedGeneration >= deployment.metadata.generation &&
-      deployment.status.availableReplicas >= minimum &&
-      deployment.status.updatedReplicas === deployment.spec.replicas &&
-      !deployment.metadata.deletionTimestamp
-    );
+    const service = await read({ kind: 'Service', name });
+    const backend = await observeBackend(service, { allowPending: true });
+    try {
+      assertGkeProxyPoolReady(selected, service, backend, { deployment, minimum });
+    } catch (error) {
+      if (error.code !== 'ERR_ASSERTION') throw error;
+      throw new ProxyPoolNotReady(error.message, { cause: error });
+    }
+    return true;
   };
   const io = {
     namespaceUid: nsUid,
@@ -250,11 +302,7 @@ export function createKubernetesProxyContinuity({
       const proxyPods = (await pods(config.release)).filter((p) =>
         Object.entries(deployment.spec.selector.matchLabels).every(([k, v]) => p.metadata.labels?.[k] === v),
       );
-      assert.ok(proxyPods.length >= 2 && proxyPods.every(negReady), 'Original proxy pool lacks positive NEG health');
-      assert.ok(
-        await healthyPool(proxyName, false),
-        'Original proxy Deployment is not settled across two provider zones',
-      );
+      await healthyPool(proxyName, false);
       for (const p of proxyPods) {
         const include = (
           await kube(['exec', p.metadata.name, '-c', 'proxy', '--', 'cat', '/tmp/nginx/rivet-proxy-timeout.inc'])
@@ -267,6 +315,7 @@ export function createKubernetesProxyContinuity({
       }
       const backend = await observeBackend(service);
       assert.equal(backend.healthy, true, 'Original provider backend is unhealthy');
+      assertGkeProxyBackendHealth(proxyPods, service, backend);
       if (config.configName) {
         const existing = await read({ kind: 'ConfigMap', name: config.configName }, { optional: true });
         if (existing) {
@@ -281,6 +330,12 @@ export function createKubernetesProxyContinuity({
         }
       }
       return { namespaceUid: await nsUid(), route, gateway, policy, service, deployment, hpa, proxyPods, ...backend };
+    },
+    async admit(resource) {
+      return JSON.parse(
+        (await kube(['create', '--dry-run=server', '-f', '-', '-o', 'json'], { input: JSON.stringify(resource) }))
+          .stdout,
+      );
     },
     async create(resource) {
       await kube(['create', '-f', '-'], { input: JSON.stringify(resource) });
@@ -307,6 +362,10 @@ export function createKubernetesProxyContinuity({
     async observe({ state, target, probe, token }) {
       const service = await read({ kind: 'Service', name: target === 'bridge' ? state.name : proxyName });
       const backend = await observeBackend(service);
+      const selected = (await pods(target === 'bridge' ? state.name : config.release)).filter((p) =>
+        Object.entries(service.spec.selector).every(([key, value]) => p.metadata.labels?.[key] === value),
+      );
+      assertGkeProxyBackendHealth(selected, service, backend);
       // The old backend must have received its longer drain before switching.
       const original =
         target === 'bridge' ? await observeBackend(await read({ kind: 'Service', name: proxyName })) : backend;

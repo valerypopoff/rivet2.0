@@ -1780,6 +1780,9 @@ test('disposable PostgreSQL really provides the HA fixture connection budget', a
   gate.waitForDependency = async () => {};
   await gate.installDependencies();
   assert.deepEqual(postgres.args, ['postgres', '-c', 'max_connections=250']);
+  const data = postgres.env.find((entry) => entry.name === 'PGDATA').value;
+  assert.equal(path.posix.dirname(data), postgres.volumeMounts[0].mountPath);
+  assert.notEqual(data, postgres.volumeMounts[0].mountPath);
 });
 
 test('HA preparation never deletes or rotates Secrets in an existing namespace', async () => {

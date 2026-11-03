@@ -13,7 +13,9 @@ export function preserveDeploymentFailure(primary, secondary, description) {
 /** Shared journal lifecycle; mode-specific validation and rollout policy stay
  * with the strategy. No journal schema changes or retries of uncertain writes.
  * `initial` is supplied only after fresh-operation admission; an existing
- * unfinished record must already have passed exact-token recovery validation. */
+ * unfinished record must already have passed exact-token recovery validation.
+ * saveJournal acknowledges only the durable CAS. afterCheckpoint may perform
+ * slow observations, outside that write queue, before the next operation step. */
 export async function runDeploymentOperation({
   name,
   record,
@@ -23,6 +25,7 @@ export async function runDeploymentOperation({
   safety,
   readJournal,
   saveJournal,
+  afterCheckpoint = async () => {},
   now = Date.now,
   setHeartbeat = setInterval,
   clearHeartbeat = clearInterval,
@@ -50,19 +53,22 @@ export async function runDeploymentOperation({
     }
   } else if (!recovering) throw Error('Exact unfinished deployment ownership is required.');
 
-  let failure, pendingWrite, heartbeatFailure;
+  let failure, observationFailure, pendingWrite, heartbeatFailure;
   let chain = Promise.resolve();
+  let observations = Promise.resolve();
   let stopped = false;
   let timer;
   const assertLease = () => {
     if (failure) throw failure;
+    if (observationFailure) throw observationFailure;
     if (record.runner !== runner || record.leaseExpiresAt <= now())
       throw Error(`${name} lease expired or ownership is unconfirmed; explicit recovery is required.`);
   };
-  const checkpoint = (changes = {}, heartbeat = false) => {
+  const writeCheckpoint = (changes, heartbeat) => {
     const queued = chain
       .then(async () => {
         if (failure) throw failure;
+        if (observationFailure) throw observationFailure;
         // The first write may claim an explicitly validated expired predecessor.
         // This runner can never renew its own expired lease.
         if (record.runner === runner && record.leaseExpiresAt <= now())
@@ -73,15 +79,36 @@ export async function runDeploymentOperation({
         pendingWrite = { next, heartbeat };
         record = await saveJournal(next, record.resourceVersion);
         pendingWrite = undefined;
+        return record;
       })
       .catch((error) => {
-        failure ??= error;
-        if (heartbeat) heartbeatFailure ??= error;
+        if (error !== observationFailure) {
+          failure ??= error;
+          if (heartbeat) heartbeatFailure ??= error;
+        }
         throw error;
       });
-    // Keep one serialized queue, including failed acknowledgements. The rejection
-    // is observed here as well as by the caller to avoid orphaned timer promises.
+    // Only durable CAS writes share this queue. A slow observation must not
+    // prevent the independent heartbeat from renewing the same journal lease.
     chain = queued;
+    void queued.catch(() => {});
+    return queued;
+  };
+  const checkpoint = (changes = {}, heartbeat = false) => {
+    if (heartbeat) return writeCheckpoint(changes, true);
+    // Preserve observation order and the before-next-mutation barrier while
+    // heartbeats remain free to enter the journal-write queue.
+    const queued = observations
+      .then(() => writeCheckpoint(changes, false))
+      .then(async (saved) => {
+        try {
+          await afterCheckpoint(saved);
+        } catch (error) {
+          observationFailure ??= error instanceof Error ? error : Error(message(error), { cause: error });
+          throw observationFailure;
+        }
+      });
+    observations = queued;
     void queued.catch(() => {});
     return queued;
   };
@@ -90,6 +117,7 @@ export async function runDeploymentOperation({
       stopped = true;
       if (timer !== undefined) clearHeartbeat(timer);
     }
+    await observations.catch(() => {});
     await chain.catch(() => {});
   };
   const operation = Object.freeze({
@@ -97,7 +125,7 @@ export async function runDeploymentOperation({
       return record;
     },
     get failure() {
-      return failure;
+      return failure ?? observationFailure;
     },
     assertLease,
     checkpoint,
@@ -107,14 +135,16 @@ export async function runDeploymentOperation({
       return action();
     },
     async complete(changes = {}) {
-      await stopHeartbeat();
       assertLease();
       await checkpoint({ ...changes, phase: 'complete' });
+      await stopHeartbeat();
+      assertLease();
     },
     async reloadOwned() {
       // Cleanup must wait for all in-flight heartbeats. Failed heartbeats fence
       // cleanup too; a same-name journal is not permission to steal ownership.
       await stopHeartbeat();
+      if (observationFailure) throw observationFailure;
       if (heartbeatFailure) throw heartbeatFailure;
       const current = await readJournal();
       if (!current || current.runner !== runner || current.token !== record.token || current.leaseExpiresAt <= now())
@@ -135,6 +165,7 @@ export async function runDeploymentOperation({
         failure = undefined;
         pendingWrite = undefined;
         chain = Promise.resolve();
+        observations = Promise.resolve();
       }
       record = current;
       return current;
@@ -150,6 +181,7 @@ export async function runDeploymentOperation({
         acknowledgement: failure ? 'unconfirmed' : 'confirmed',
         aborted:
           !failure &&
+          !observationFailure &&
           record.phase === 'complete' &&
           Boolean(
             record.abortedBeforeTemplates || record.abortedBeforeQuiescence || record.abortedBeforeTopologyChanges,
@@ -159,11 +191,11 @@ export async function runDeploymentOperation({
     return error;
   };
   try {
-    await checkpoint();
     timer = setHeartbeat(() => {
-      if (!stopped && !failure) void checkpoint({}, true).catch(() => {});
+      if (!stopped && !failure && !observationFailure) void checkpoint({}, true).catch(() => {});
     }, heartbeatMs);
     timer?.unref?.();
+    await checkpoint();
     await run(operation);
     if (record.phase !== 'complete') throw Error(`${name} returned without a durable completion checkpoint.`);
     assertLease();
@@ -181,7 +213,7 @@ export async function runDeploymentOperation({
     await stopHeartbeat();
     // Releasing is best effort, CAS-bound, and never changes the saved phase.
     // An unconfirmed write or expired lease remains for explicit recovery.
-    if (!failure && record.runner === runner && record.leaseExpiresAt > now()) {
+    if (!failure && !observationFailure && record.runner === runner && record.leaseExpiresAt > now()) {
       try {
         record = await saveJournal({ ...record, leaseExpiresAt: now() }, record.resourceVersion);
       } catch {

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { legacyServingFixtureEntrypoint } from './lib/legacy-serving-fixture.mjs';
+import { runRuntimeProbe } from '../images/lib/run-runtime-probe.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const fixturePath = path.join(
@@ -140,6 +141,17 @@ async function main() {
     throw new Error('IMAGE_NAMESPACE and SOURCE_TAG are required.');
   }
 
+  await run('docker', ['pull', `${imageNamespace}/api:${sourceTag}`]);
+  runRuntimeProbe(
+    `${imageNamespace}/api:${sourceTag}`,
+    [
+      {
+        source: path.join(rootDir, 'deploy/studio-server/images/lib/check-autoscaler-startup.mjs'),
+        target: '/check-autoscaler-startup.mjs',
+      },
+    ],
+    ['/check-autoscaler-startup.mjs'],
+  );
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-candidate-smoke-'));
   const projectName = `rivet-image-smoke-${process.env.GITHUB_RUN_ID ?? process.pid}`
     .toLowerCase()

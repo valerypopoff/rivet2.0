@@ -12,7 +12,6 @@ import {
 } from './ha-rollout-headroom.mjs';
 import { autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { requireDeploymentSafety } from './deployment-safety.mjs';
-import { prepareHaReplacements } from './ha-rollout-preparation.mjs';
 import { matchesKubernetesTemplate } from './kubernetes-template-match.mjs';
 import { continuityFromResources } from './request-continuity.mjs';
 import { createKubernetesProxyContinuity } from './proxy-continuity-kubernetes.mjs';
@@ -243,7 +242,6 @@ export async function runHaKubernetesRollout({
   previousManifestDigest,
   ownerPoolTransition,
   verifyDeveloperReady,
-  prepareReplacements = prepareHaReplacements,
   createProxyContinuity = createKubernetesProxyContinuity,
 }) {
   requireDeploymentSafety(safety, 'rolling', { release, namespace, manifestDigest });
@@ -528,8 +526,11 @@ export async function runHaKubernetesRollout({
         (await kube([expectedVersion ? 'replace' : 'create', '-f', '-', '-o', 'json'], { input: JSON.stringify(cm) }))
           .stdout,
       );
-      await artifact('ha-rollout.json', JSON.stringify(data, null, 2));
       return { ...data, resourceVersion: saved.metadata.resourceVersion };
+    },
+    afterCheckpoint: async ({ resourceVersion: _version, ...data }) => {
+      // Five-minute request observations must not block lease renewal.
+      await artifact('ha-rollout.json', JSON.stringify(data, null, 2));
     },
     snapshotCapacity: async () => {
       const old = inventory.filter((w) =>
@@ -574,8 +575,6 @@ export async function runHaKubernetesRollout({
         { timeoutMs },
       );
     },
-    prepareReplacements: (operation) =>
-      prepareReplacements({ operation, kube, resources, namespace, release, timeoutMs }),
     withdraw: (pod, op, inc) => exec(pod, [op, inc, '--withdraw-only']),
     begin: (pod, op, inc) => exec(pod, [op, inc, '--begin-only']),
     waitForRoutingWithdrawal,

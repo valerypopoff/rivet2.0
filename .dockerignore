@@ -55,3 +55,4 @@ packages/app/sidecars
 .vscode
 .idea
 *.tmp
+gha-creds-*.json

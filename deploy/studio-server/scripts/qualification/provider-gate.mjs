@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { parseAllDocuments } from 'yaml';
@@ -16,7 +17,7 @@ import { runHaKubernetesRollout, haRolloutAutoscalingValues } from '../lib/ha-ku
 import { createDeploymentSafety } from '../lib/deployment-safety.mjs';
 import { releaseOperationJournalName } from '../lib/release-operation-journal.mjs';
 import { getStudioServerReleaseManifestDigest } from '../lib/studio-server-release-manifest.mjs';
-import { assertGkeFrontendAvailability, waitForGkeFrontendAvailability } from '../lib/ha-gke-availability.mjs';
+import { waitForGkeFrontendAvailability } from '../lib/ha-gke-availability.mjs';
 import { resolveHelmBinOrThrow } from '../lib/k8s-tools.mjs';
 import { inspectStagingPrerequisites } from '../lib/reusable-staging-prerequisites.mjs';
 import { applyOverlapQualificationProfile } from '../lib/qualification-overlap-profile.mjs';
@@ -24,9 +25,13 @@ import { requestContinuityProfile, continuityTimeoutMs, continuityFromResources 
 import { createKubernetesProxyContinuity, createComputeBackendObserver } from '../lib/proxy-continuity-kubernetes.mjs';
 import { stagingAccessToken, stagingCloudReader } from '../lib/reusable-staging-cloud.mjs';
 import { observeStagingInventory } from '../lib/reusable-staging-cleanup.mjs';
+import { stagingHostname } from '../lib/reusable-staging-state.mjs';
+import { monitorFatalStartup } from '../lib/fatal-startup-monitor.mjs';
+import { imageReference } from '../lib/kubernetes-managed-release-gate-config.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
+const ipaddr = createRequire(path.join(root, 'packages/studio-server-api/package.json'))('ipaddr.js');
 export const role = (p) => p.metadata?.labels?.['app.kubernetes.io/component'];
 export const ready = (p) =>
   !!p && !p.metadata.deletionTimestamp && p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
@@ -51,7 +56,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       allowedContext: settings.context,
       namespace,
       release,
-      baseUrl: `https://${operation.operationId}.${settings.domain}`,
+      baseUrl: `https://${stagingHostname(settings, operation)}`,
       artifactsDir: privateDirectory,
       images: operation.candidate.images,
       previousManifest: operation.previous,
@@ -79,6 +84,10 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.identity = { clusterServer: settings.clusterServer, expiresAt: operation.expiresAt };
     this.journalName = releaseOperationJournalName(release);
     this.runRollout = runRollout;
+    this.observeProxyBackend = createComputeBackendObserver(
+      { gcpProject: settings.projectId, gcpRegion: settings.region },
+      { accessToken: stagingAccessToken, minimumRequestSeconds: 0 },
+    );
   }
   async assertLocalContext() {
     await this.assertProofContext();
@@ -135,6 +144,75 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
   async kube(args, extra = {}) {
     return super.kube(args, extra);
   }
+  async observeFatalStartup(controller) {
+    return monitorFatalStartup({
+      controller,
+      images: [...Object.values(this.operation.previous.images), ...Object.values(this.operation.candidate.images)].map(
+        imageReference,
+      ),
+      listPods: async () => {
+        const result = await this.kube(
+          [
+            'get',
+            'pods',
+            '-l',
+            `app.kubernetes.io/instance=${this.config.release}`,
+            '-o',
+            'json',
+            '--request-timeout=5s',
+          ],
+          { capture: true, allowFailure: true },
+        );
+        return result.exitCode === 0 ? JSON.parse(result.stdout).items : [];
+      },
+      readLog: async (pod, container, previous) => {
+        const statusOf = (current) =>
+          [...(current.status?.initContainerStatuses ?? []), ...(current.status?.containerStatuses ?? [])].find(
+            (c) => c.name === container,
+          );
+        const definitionOf = (current) =>
+          [...(current.spec?.initContainers ?? []), ...(current.spec?.containers ?? [])].find(
+            (c) => c.name === container,
+          );
+        const observed = statusOf(pod);
+        const unchanged = (current) => {
+          assert.equal(current.metadata.uid, pod.metadata.uid);
+          assert.ok(!current.metadata.deletionTimestamp);
+          assert.deepEqual(current.metadata.ownerReferences, pod.metadata.ownerReferences);
+          assert.equal(definitionOf(current)?.image, definitionOf(pod).image);
+          const status = statusOf(current);
+          assert.equal(status.ready, false);
+          assert.equal(status.restartCount, observed.restartCount);
+          assert.deepEqual(status.state, observed.state);
+          assert.deepEqual(status.lastState, observed.lastState);
+        };
+        const current = JSON.parse(
+          (await this.kube(['get', 'pod', pod.metadata.name, '-o', 'json', '--request-timeout=5s'], { capture: true }))
+            .stdout,
+        );
+        unchanged(current);
+        const result = await this.kube(
+          [
+            'logs',
+            pod.metadata.name,
+            '-c',
+            container,
+            '--tail=80',
+            '--limit-bytes=16384',
+            '--request-timeout=5s',
+            ...(previous ? ['--previous'] : []),
+          ],
+          { capture: true, allowFailure: true },
+        );
+        const after = JSON.parse(
+          (await this.kube(['get', 'pod', pod.metadata.name, '-o', 'json', '--request-timeout=5s'], { capture: true }))
+            .stdout,
+        );
+        unchanged(after);
+        return result.exitCode === 0 ? result.stdout : '';
+      },
+    });
+  }
   deploymentSafety(mode, digest) {
     return createDeploymentSafety({
       mode,
@@ -185,6 +263,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         RIVET_REQUIRE_UI_GATE_KEY: 'true',
         RIVET_ENABLE_DEVELOPMENT_AUTH: 'true',
         RIVET_DEVELOPMENT_AUTH_CLIENTS: this.settings.trustedClients.join(','),
+        RIVET_TRUSTED_FORWARDING_PROXIES: this.settings.trustedForwardingProxies.join(','),
         RIVET_CORS_ALLOWED_ORIGINS: this.config.baseUrl,
         RIVET_TRUST_INCOMING_FORWARDED_HEADERS: 'true', // Only the approved Gateway reaches this ClusterIP edge.
       },
@@ -245,6 +324,10 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     if (probes.ownerPoolTransition)
       values.workflowSchema = { ...values.workflowSchema, migrationJob: { enabled: false } };
     const resources = await this.resources(values, `roll-${Date.now()}`);
+    if (this.operation.qualification?.tier === 'focused' && this.continuityProbes)
+      this.continuityProbes.proxyTemplate = resources.find(
+        (r) => r.kind === 'Deployment' && r.metadata.name === `${this.config.release}-proxy`,
+      ).spec.template;
     const target = [this.operation.previous, this.operation.candidate].find((m) => isDeepStrictEqual(m.images, images));
     const { artifact: observeArtifact, ...rolloutProbes } = probes;
     const result = await this.runRollout({
@@ -497,12 +580,14 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       ?.split(';')[0];
     assert.ok(this.uiCookie);
     await response.body?.cancel();
-    if (webAppSession)
+    if (webAppSession) {
+      await this.verifyClientProvenance();
       this.publicAppCookie = await createReleaseGateWebAppOAuthSession(
         this.config.baseUrl,
         'release-gate-web-app',
         'runtime-control@example.test',
       );
+    }
   }
   get probeHeaders() {
     return { authorization: `Bearer ${this.secrets.rivetKey}`, cookie: this.uiCookie };
@@ -527,16 +612,17 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     });
   }
   async enableOAuth(base, relativePath) {
-    return super.enableOAuth(base, relativePath, { allowNonLocalhost: true, sessionTtlSeconds: 10800 });
+    const windowSeconds = Math.ceil(
+      (Date.parse(this.operation.expiresAt) - Date.parse(this.operation.startedAt)) / 1000,
+    );
+    assert.ok(Number.isSafeInteger(windowSeconds) && windowSeconds > 0 && windowSeconds <= 86400);
+    return super.enableOAuth(base, relativePath, {
+      allowNonLocalhost: true,
+      sessionTtlSeconds: Math.max(10800, windowSeconds),
+    });
   }
   async frontendAvailability() {
-    return assertGkeFrontendAvailability(
-      await this.pods(),
-      JSON.parse((await this.kubectl(['get', 'nodes', '-o', 'json'], { capture: true })).stdout).items,
-      this.config.release,
-      'singleton',
-      'compact',
-    );
+    return waitForGkeFrontendAvailability(this);
   }
   async verifyProtectedProxyAvailability() {
     const resources = await this.resources(this.values(this.config.images), 'protected-proxy-acceptance');
@@ -560,6 +646,30 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     await waitForGkeFrontendAvailability(this);
     await this.loadWorkflowKey();
     await this.waitForDeveloperRoute(this.config.baseUrl);
+    await this.verifyClientProvenance();
+  }
+  async verifyClientProvenance() {
+    const observed = await this.requestWorkflow(
+      this.config.baseUrl,
+      '/api/app-settings/trusted-clients/current-request',
+    );
+    let allowed = false;
+    try {
+      const address = ipaddr.process(observed.clientAddress);
+      allowed = this.settings.trustedClients.some((network) => {
+        const [range, prefix] = network.includes('/')
+          ? ipaddr.parseCIDR(network)
+          : [ipaddr.process(network), ipaddr.process(network).kind() === 'ipv4' ? 32 : 128];
+        return address.kind() === range.kind() && address.match(range, prefix);
+      });
+    } catch {
+      /* Invalid or unavailable provenance never authorizes test login. */
+    }
+    assert.ok(
+      allowed,
+      'Staging forwarding did not resolve an allowed public test client; check proxy subnet, frontend hop and NAT allowlist before OAuth',
+    );
+    return { verifiedPublicTestClient: true };
   }
   async verifyPublishedBrowser(base) {
     await run(

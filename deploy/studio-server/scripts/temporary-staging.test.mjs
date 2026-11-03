@@ -1,3 +1,4 @@
+import { testOpenSsl } from './fixtures/test-openssl.mjs';
 import assert from 'node:assert/strict';
 // test-style: fixture-read: Inspect generated private journals, isolated Git/Yarn fixtures and HTTP logs, never repository implementation text.
 import test from 'node:test';
@@ -287,7 +288,7 @@ test('certificate issuance owns one exact local worker and uncertainty never rep
   const cert = path.join(directory, 'cert.pem'),
     key = path.join(directory, 'key.pem');
   execFileSync(
-    process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl',
+    testOpenSsl,
     [
       'req',
       '-x509',
@@ -939,6 +940,24 @@ test('workflow failure diagnostics are bounded and exclude arbitrary command pro
   assert.ok(Number.isFinite(Date.parse(report.at)));
   // An unavailable diagnostic location must preserve the original operation failure.
   await retainTemporaryFailure(path.join(temp, 'absent'), 'execute', failure);
+});
+
+test('wrapped phase failure diagnostics retain bounded causes without command output or cycles', async (t) => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-private-causes-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const root = Object.assign(new Error('remote exec closed'), { stderr: 'private command output' });
+  let failure = root;
+  for (let i = 0; i < 8; i++) failure = new Error('qualification wrapper', { cause: failure });
+  await retainTemporaryFailure(temp, 'execute', failure);
+  root.cause = root;
+  await retainTemporaryFailure(temp, 'execute', new Error('qualification failed', { cause: root }));
+  const reports = await Promise.all(
+    (await fs.readdir(temp)).map(async (file) => JSON.parse(await fs.readFile(path.join(temp, file), 'utf8'))),
+  );
+  assert.deepEqual(reports.map((report) => report.causes.length).sort(), [1, 4]);
+  const report = reports.find((report) => report.causes.length === 1);
+  assert.deepEqual(report.causes, [{ name: 'Error', message: 'remote exec closed' }]);
+  assert.ok(!JSON.stringify(reports).includes('private command output'));
 });
 
 test('tagged Docker Hub images retain their repository and credential host', async (t) => {

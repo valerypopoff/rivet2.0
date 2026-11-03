@@ -87,3 +87,4 @@ packages/app/tmp-icon-test/
 packages/docs/.promo-dev/
 tmp-macos-signing-test/
 tmp-rivet-icon-test/
+gha-creds-*.json

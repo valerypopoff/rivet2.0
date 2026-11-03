@@ -3,12 +3,14 @@
 ## Implementation versus activation
 
 The optional [bounded request-continuity extension](production-update-continuity.md)
-adds real five-minute HTTP/1 and HTTP/2 bodies, late WebSocket admission/resume,
-proxy replacement and HPA removal to either compact suite. Select its reviewed
+checks real five-minute HTTP/1 and HTTP/2 bodies across rollout and handoff
+boundaries. The full suite additionally covers late WebSocket admission/resume,
+the independent cold-proxy roll and HPA removal. Select its reviewed
 `requestContinuityProfile` in the hash-pinned private driver settings (and staging
 `region`), or `RIVET_QUALIFICATION_CONTINUITY_PROFILE` for temporary staging.
 Its nested runtime-control certificate is compiled only after validated upgrade,
-autoscaling and cleanup facts. Version 2 additionally requires the duration
+policy/floor observations and cleanup facts. The full suite also requires separate
+autoscaling facts. Version 2 additionally requires the duration
 matrix, return handoff, real pre-removal admissions and native-roll timing.
 Long HTTP cohorts run one at a time to keep fixture demand within the compact
 runtime's admitted capacity. Qualification preflight derives its timeout from
@@ -16,15 +18,265 @@ the qualified lifecycle profile rather than using the shorter legacy default.
 This extension has no provider activation receipt
 yet and cannot be inferred from the existing short-request certificate.
 
-`studio-server-qualify-release.yml` implements Actions orchestration;
-`execute-runtime-qualification.mjs` owns its command boundary. Neither authorizes
-GCP access, enables automation, installs credentials or deploys production. The
-main-only, dispatch-only workflow fails when
+`studio-server-qualify-release.yml` (Actions name **Release Rivet**) implements the
+normal release: validate an existing successful main `Build Images` run, qualify
+its immutable images in reusable staging, publish the certificate, then deploy
+that exact manifest through the protected `rivet-production` environment.
+`deploy_production` defaults to true; false stops after qualification/publication.
+There is no rebuild between staging and production and no separate readiness job.
+`execute-runtime-qualification.mjs` owns the command boundary. The workflow does
+not install credentials, provision shared infrastructure or enable itself. It is
+main-only and dispatch-only and fails when
 `RIVET_AUTOMATED_QUALIFICATION_ENABLED` is not exactly `true`.
 
-The maintained inner fixture uses a **dedicated staging cluster**. The latest
-operator decision is temporary infrastructure, removed after qualification;
-the earlier always-on reusable-cluster proposal is not current spending approval.
+The standard workflow uses a **dedicated reusable staging cluster**. Install its
+cluster, Gateway/TLS, access and independent janitor once. GitHub-hosted
+Linux jobs coordinate short-lived in-cluster actors; no permanent runner VM is
+required. A new operation
+still creates an isolated namespace with synthetic data and deletes its complete
+fixture afterward. Staging settings require `region` and a reviewed
+`trustedForwardingProxies` list containing the proxy-only subnet CIDR and exact
+Gateway frontend IP. The provider passes this to
+`RIVET_TRUSTED_FORWARDING_PROXIES`; `trustedClients` remains the separate allowlist
+of actual public test clients. Shared admission checks the live Gateway frontend
+against that list before namespace creation. Missing lists, too few peers,
+duplicates or universal ranges fail packaging/admission. The temporary factory derives both
+hops from its owned subnet/address. Before fixture seeding or dummy OAuth, the
+provider reads the authenticated current-request diagnostic and checks that the
+actual resolved client belongs to its frozen public-client allowlist. Forwarding
+peer addresses cannot stand in for that client. See [client provenance](trusted-clients.md).
+
+First-transition bridge creation dry-runs its Deployment through the actual
+Kubernetes admission chain before creating any bridge resources or changing HPA.
+Provider changes to requested shutdown or placement settings block that transition. This
+uses the existing actor/deployer create permission and persists no dry-run
+resource. Read-only installation inspection remains read-only. The GKE profile
+uses 360-second LB drain, 420-second preStop and 600-second termination grace;
+the previous 900-second grace was capped to 600 by Autopilot. A successful dry
+run does not replace exact-image upgrade/autoscaling or cleanup evidence.
+
+The ordinary deployment path uses real replacement readiness rather than
+short-lived image-warmup/scheduler Jobs. Autopilot resource mutation and placement
+of those synthetic Jobs no longer create an extra release gate. Existing
+headroom, actual candidate readiness, accepted-work drain, routing health and
+cleanup checks remain required. See
+[replacement readiness](deployment-operations.md#replacement-readiness-without-warmup-jobs).
+
+### Fast failure before and during staging
+
+The ordinary Build workflow runs the source-only image/launcher contract tests
+in its existing static-validation job, before docs/style checks. This includes
+PRs targeting `main`, where the full Studio Server verifier is not a PR trigger.
+Dockerfile/build-target drift therefore fails before merge and image publication,
+without compiling the application or starting another environment.
+
+Build Images starts the **packaged autoscaler command** in the exact API image,
+as UID 10001 with a read-only filesystem and no network or cloud credentials,
+before the existing candidate Compose smoke. It checks health and normal Linux
+SIGTERM exit. Startup eagerly resolves `ws` and acknowledges its own successful
+health-port bind, so a missing dependency or an unrelated healthy listener cannot
+pass the smoke. API/executor/proxy/web startup and workflow traffic remain covered
+by the existing smoke. The autoscaler bundles its runtime dependency closure;
+its journal predicates live in `release-operation-state.mjs`, independently of
+proxy-handoff implementation. A packaging regression test boots the bundle
+outside the checkout and proves a missing import fails this same check.
+
+During provider prepare/upgrade/autoscaling, a read-only observer checks failed,
+non-ready application and init containers using the frozen predecessor/candidate images in the owned
+release namespace. Missing-module and invalid-program errors stop test commands
+early, including Node loader errors for invalid package configuration, blocked
+package exports/imports, directory imports and unsupported file extensions.
+Ordinary application, connectivity and stream errors remain outside this shortcut.
+Logs are bounded and remain private; an unchanged Pod/container state is
+required across the log read, including its owner, image and absence of deletion.
+A fresh running container retains its readiness window even if its predecessor
+crashed. Unreadable/stale logs from one container do not hide other failed
+containers. Image pulls, scheduling delays, probe failures, OOM and
+CrashLoopBackOff alone do not trigger this shortcut.
+
+Provider interruption and fatal startup abort the test command scope. Managed
+Helm/kubectl clients receive SIGTERM, then SIGKILL after five seconds if needed;
+closure is awaited before acknowledging worker termination. This affects only
+the owned local client, never Pod grace periods. Linux clients run in separate
+process groups so cancellation also stops their auth/helpers, including helpers
+holding output pipes after the client exits. Helpers with no inherited pipes are
+also stopped when a cancelled client closes; unrelated command groups are left
+running. Windows retains direct client termination. Interrupted writes remain
+uncertain and are not retried. Captured commands receive EOF when no input is
+provided, avoiding clients hanging on an open stdin pipe. Settlement and cleanup run in a fresh command
+scope, with the existing ownership, accepted-work and absence checks. CI emits
+an error as soon as the phase fails, while cleanup continues; final job failure
+still waits for cleanup. Rejected or pending notification promises cannot prevent
+cleanup, and observer shutdown failures cannot skip gate/client closure.
+Production deployment remains blocked.
+
+A command-specific cancellation signal is combined with the phase signal; it
+cannot bypass phase shutdown. Hosted staging preparation validates configuration,
+compiles the actual provider/janitor package and serializes the exact ConfigMap
+and Deployment update before obtaining credentials or acquiring the shared lock.
+It then checks the live `kube-system` namespace UID against the configured staging
+cluster UID before any lock acquisition or Kubernetes write. Local mistakes and
+a wrong context therefore stop without claiming the staging lock. Failures after
+acquisition retain the lock for inspection; preparation never retries mutations
+or releases a lock after an uncertain shared update.
+
+Before replacing the cleanup worker, preparation reads the complete operation
+registry under the shared lock and requires existing operations to be closed with
+verified cleanup. An unresolved, malformed or partial inventory keeps the old
+worker in place. Kubernetes Pod readiness is followed by a bounded 60-second wait
+for a fresh heartbeat from the exact new driver and a live, Ready janitor Pod UID;
+denied reads fail immediately. The same health check runs **before** operation
+registry CREATE, so failed janitor admission cannot leave an unacknowledged
+operation record. Missing/old heartbeats are startup conditions, not a reason to
+run the paid test and discover the problem later.
+
+Release Rivet downloads both immutable input packets before cloud credentials or
+shared staging setup. Artifact download failure therefore cannot strand the
+staging lock or interrupt its cleanup worker.
+
+Local TLS fixtures share `fixtures/test-openssl.mjs`. On Windows it prefers Git's
+native `mingw64/bin/openssl.exe`, avoiding MSYS support-runtime startup failures
+before certificate generation; the former location remains a fallback. Linux
+continues to use `openssl` from PATH. These executables generate disposable test
+certificates only and do not change the deployed image or staging certificate path.
+
+The retained janitor now uses the separately scanned `qualification-janitor`
+image: pinned Node, CA certificates and the locked `ws` version, without browser,
+Helm, kubectl or the application checkout. Its actual bundled program remains
+in the immutable, driver-hash-bound ConfigMap. Publication runs an offline,
+non-root/read-only dependency and empty-inventory pass before publishing the
+image. Fresh publication receipts must include this janitor digest; old
+actor-only receipts cannot start a new hosted qualification.
+The janitor probe has its own ten-second watchdog. Both janitor and autoscaler
+probes also run through `images/lib/run-runtime-probe.mjs`, with a host-side
+30-second deadline and a separate ten-second container-removal deadline. The
+host deadline handles synchronous loops that block an in-process watchdog.
+Each probe has a unique container name; cleanup force-removes only that disposable
+container, and unconfirmed removal fails the image gate. This never changes
+Kubernetes request draining or Pod grace periods.
+The shared clean-source admission runs before either qualification image is
+built. Both archives use the same scan-result and exact-image identity checks.
+
+The janitor verifies completed historical records' input hashes and terminal
+cleanup markers, then skips them before checking the current driver digest.
+Verified history from an older driver therefore stays quiet after an update.
+Unresolved records retain the driver fence; inconsistent or malformed completion
+markers require inspection and never authorize cleanup.
+
+Route verification accepts documented HTTPRoute backend-reference defaults
+throughout handoff, recovery and cleanup. Meaningful routing changes still stop
+the rollout; see [routing verification](production-update-continuity.md#routing-verification-during-updates).
+
+Cleanup waits within its existing deadline for a newly discovered NEG's pending
+Gateway backend to appear before withdrawing routes. Only the typed pending
+backend condition is polled; denied, partial, ambiguous or rebound inventories
+still stop immediately. Previously this normal controller delay could stop
+settlement before route withdrawal.
+
+If the controller stopped during an owned execution withdrawal, settlement
+requires inspected recovery. Match the exact Pod UID, process incarnation and
+retirement operation to the stopped controller's journal. Verify controller
+absence and continuously observe the actual execution Service's ready endpoints
+for the full withdrawal interval; headless discovery endpoints are not dispatch
+routing evidence. Then the existing `retire-backend.mjs OPERATION INCARNATION
+--begin-only` command can complete that same withdrawal. Preserve a private
+intent and acknowledgement, and continue the original cleanup after accepted
+work drains. Unknown owners, replaced processes and lost modifying acknowledgements
+retain their existing fences. Never clear the registry, cancel work or force
+Pod deletion to make cleanup appear successful.
+
+Long provider phases save their successful JSON result privately in the original
+actor before acknowledging exact worker closure in the control-namespace registry.
+The coordinator can retrieve that immutable result if exec loses its final status.
+It pins the registry UID returned by `armExpiry`, operation hash, actor UID, phase
+and worker identity, then checks the stored byte count and SHA-256. The normal
+phase evidence validators still decide success. A disconnected, registered worker
+is observed within the original phase deadline; its modifying command is never
+replayed. Failed or missing results cannot qualify a release. Failure is recorded
+only after the provider's managed commands and gate have closed.
+The immutable receipt transfer can retry once for an unknown transport outcome,
+within the same original deadline. Failed commands, changed contents and rebound
+identities stop immediately. The modifying phase is never retried. Receipt files
+are bounded to 31 MiB, leaving framing/status headroom below exec's 32 MiB limit.
+
+The provider records its current step before performing it in the exact worker's
+registry entry. The coordinator prints an allowlisted status on step changes and
+every 30 seconds: phase, expected condition, last observed progress and expected
+step deadline, capped by the original phase deadline. Polling and heartbeats do
+not count as step progress. Protected rollout/autoscaling steps retain their
+original phase allowance; a diagnostic never shortens five-minute requests or
+draining waits.
+
+Two minutes without a step change, or an overdue expected step deadline, captures
+one private snapshot for that step and immediately reports the reason. Phase
+failure captures a fresh snapshot too. Snapshots compare the original actor,
+registry, worker and phase acknowledgement and read fixture Pod readiness only
+after namespace UID confirmation. They exclude Pod environment/command contents
+and never read Secrets. Existing private evidence persistence saves these files;
+public CI output contains source-owned conditions, never raw diagnostics.
+Snapshot read failure is reported without changing qualification or cleanup
+authority. Status and diagnostics add no release gate or automatic retry.
+Snapshot reads run independently of the liveness/completion monitor. The phase
+waits for outstanding snapshots before its final private evidence save, keeping
+their collection from hiding a completed result or causing a false phase timeout.
+Command completion/failure is reported before evidence upload can wait. Actor
+identity reads consume the existing RPC deadline; dispatch cannot reset it.
+If command execution and private evidence handling both fail, retain both errors
+with the command failure first so storage errors cannot conceal the original cause.
+
+On the first alert, compare the saved phase result with its exact worker and the
+coordinator's wait. Recover a completed result through the existing read-only
+path. For an active worker, identify its actual readiness/drain condition and
+bounded deadline before continuing to wait. Report the specific blocker promptly;
+the overall test allowance is not a reason to spend hours exploring unrelated
+symptoms. Unknown or failed work follows existing settlement and cleanup. Before
+another cloud attempt, reproduce the observed automation failure locally and
+require its regression to pass; neither an alert nor a diagnostic grants a retry.
+
+Final cleanup keeps its complete receipt directly in the original registry. It
+requires all workers closed and the usual complete-inventory/absence validation;
+this receipt proves cleanup, never upgrade success. Receipt recovery closes only
+the exec transport without signalling the command. Prior unacknowledged workers
+are marked closed only after `/proc` confirms their original PID/start-time
+incarnation is gone; denied or racing observations remain fenced.
+
+If no exact receipt can be confirmed, preserve bounded private diagnostics and
+verify cleanup independently.
+Require the exact namespace and every journaled Kubernetes/cloud resource absent,
+no live test writers in the original actor, and the same actor/Job UIDs. Close
+only that idle Job using normal termination grace, then confirm actor removal
+and terminal workflow failure with publication/deployment skipped before releasing
+the exact owner/generation lock. Record the unreceived coordinator acknowledgement
+separately from independent absence proof; this recovery cannot qualify a release
+or authorize another paid operation. Preserve the retained foundation.
+
+The previous temporary campaign is closed. On 2026-10-31,
+after the user's explicit request to create and retain staging, the persistent
+cluster foundation was installed independently of that campaign. It has a
+dedicated VPC/subnet, private Autopilot nodes, outbound NAT, a keyless node account
+with the default-node role, and an authenticated DNS control-plane endpoint with
+IP endpoint access disabled. The same region, GKE version and release channel as
+production were selected at creation. HTTPS egress and CSI persistence across
+separate Jobs passed; their namespace and blank disk were removed afterward.
+Production configuration/network and all seven ready production pod UIDs were
+preserved, as were every pre-existing staging network, subnet, address and firewall.
+Exact identities and receipts remain in ignored
+`artifacts/reusable-staging-20261031/`, outside public source.
+
+This is a usable cluster foundation, **not release qualification or completed CI
+activation**. Its dedicated regional Gateway now has a trusted automatically
+renewed certificate on a fixed staging hostname. HTTP port 80 admits only
+same-namespace ACME challenge routes; HTTPS port 443 admits fixture namespaces
+with the maintained qualification label. Cert-manager leader-election Leases
+must use its own namespace: Autopilot denies their creation in `kube-system`.
+The reviewed CI access installation and independent janitor must finish before
+admission. No full Rivet qualification or production update has passed yet.
+Keep the foundation; release cleanup must never delete it. Its approximate idle
+base is USD 73/month for GKE management plus USD 3.65/month for the retained NAT
+IP before applicable credits and additional usage. Worker workloads, traffic,
+logging and future frontend/runner components are additional; these figures are
+not a provider billing cap. See [GKE pricing](https://cloud.google.com/kubernetes-engine/pricing)
+and [Cloud NAT pricing](https://cloud.google.com/nat).
 Each inner operation creates only its temporary namespace and
 synthetic resources. Keep the shared cluster, network, Gateway, certificate and
 administrative identities out of its cleanup inventory. This removes repeated
@@ -34,7 +286,7 @@ environment is silently repurposed.
 
 The inner fixture's namespace cleanup is **not** full temporary-environment
 cleanup: its cluster, Gateway, certificate, addresses and network remain excluded.
-The maintained outer provision/expiry/teardown route is
+The exceptional outer provision/expiry/teardown route remains
 `scripts/temporary-staging.mjs`, selected explicitly by the qualification CLI.
 It coordinates from a durable external Linux host, creates the new foundation,
 uses a UID-bound actor for the existing inner tests and requires full provider
@@ -113,6 +365,16 @@ including its complete immutable manifest identity. They do not substitute the
 newer publication head as the fixture's source. Promotion separately rechecks the
 frozen publication head, so this distinction preserves the freshness fence.
 
+For one merge-triggered main build, set the temporary repository variable
+`RIVET_INSTALLED_PREDECESSOR_DIGEST` to that freshly observed installed digest
+before merging. The same main-only validation applies, and an explicit dispatch
+input takes precedence. Clear the variable after the bound build finishes and its
+artifacts are verified, checking the value still belongs to this operation before
+removal. This lets the automatic build use the correct installed baseline without
+an additional manual build. Staging branches ignore the repository pin. Setting
+this digest does not start qualification or deployment; their fresh installed-state
+and immutable-artifact checks remain required.
+
 First production activation uses the existing deployment command in three
 separately journaled steps, with normal policy, backup, ownership and acceptance
 checks. Obtain approval for the initial developer interruption first.
@@ -141,11 +403,13 @@ image/schema rollouts do not inherit that narrow exception. Template comparison
 is shared with topology recovery and rejects a Secret-derived value in place of
 an empty literal.
 
-Actions readiness on an initial singleton reports `adoption-preflight-passed`
+The optional CLI preview on an initial singleton reports `adoption-preflight-passed`
 and these pending steps, not `deployment-preflight-passed`. It derives private
 sizing values, pulls the predecessor by digest and runs the real read-only
 command. It does not approve or perform the adoption. An already-overlap
-installation continues through the ordinary readiness path.
+installation continues through the ordinary preview path. The standard production
+action currently handles singleton customer-request continuity; use qualification-only
+mode and the explicit ownership procedure for developer overlap adoption.
 If the source pool already matches the profile, readiness starts at ownership
 and the provider skips an unnecessary singleton pool-preparation replacement.
 
@@ -157,7 +421,7 @@ not an Actions `always()` job. Packaging renders installation manifests; it does
 not install them or provision GCP. Archived operation-specific scripts and their
 resource identities remain excluded. Local tests are not provider qualification.
 
-## Three distinct results
+## Release stages
 
 1. **Built:** requested main Build Images run succeeded for this commit. Its
    candidate/promotion agree on exact images, chart, schema, source, creation and
@@ -168,12 +432,115 @@ resource identities remain excluded. Local tests are not provider qualification.
    declarations from completed facts; dispatch inputs cannot supply a list of
    passed check names. Publication reuses the existing guarded workflow. Legacy
    manual publication remains for separately reviewed adoption declarations.
-3. **Production preflight passed:** after publication, the supported deployment
-   command runs with `--preflight-only`. Recheck actual predecessor, namespace,
-   settings and exact operator-value bytes against the qualification input, and
-   inspect the immutable qualified target. This is a timestamped observation,
-   not approval to deploy or a permanent readiness flag. No backup or application
-   journey is run; deployment must repeat ordinary safety/backup checks.
+3. **Deployed:** the protected production runner pulls the published immutable
+   manifest and invokes `deploy-kubernetes-release.mjs` once. Its ordinary path
+   performs current identity/baseline/capacity/routing checks, the existing online
+   recovery checkpoint, rolling update and application acceptance. The settings
+   digest observed for staging qualification is checked against the Helm values
+   already read by that command (`--expected-installed-settings-digest`). Operator
+   values and namespace UID are also bound to the qualification. Drift blocks
+   before writes; no second read-only readiness run is needed. A failed or unknown
+   update retains its journal and serving capacity for exact recovery, with no
+   automatic rollout retry or rollback. Only a sanitized successful deployment
+   summary is uploaded; detailed receipts stay private.
+
+The release concurrency lock spans qualification through deployment and never
+cancels an in-progress operation. A manual `--preflight-only` remains available
+as a preview; it is not part of the standard release and does not grant lasting
+readiness.
+
+## Automatic test depth
+
+`lib/release-qualification-policy.mjs` defaults to focused qualification for a
+singleton release with the bounded request-continuity profile, including its
+first protected rollout. Source/chart/settings changes and the absence of an
+older stress certificate do not automatically add hours of stress testing.
+Exact-source/chart/image, schema compatibility and live configuration checks
+still apply; a changed or unsafe contract cannot bypass those validators.
+
+Focused qualification runs the actual predecessor-to-candidate update once while
+observing public workflow/web traffic, two-ready floors, fresh controller policy
+samples, accepted work, recordings and storage. It does not shut down developer
+services, force a second proxy rollout or run browser-resume/schedule journeys.
+Basic authentication and public-route checks remain part of fixture preparation.
+Its policy evidence comes from this same rollout/report; there is no separate
+autoscaling phase or second 100-workflow/100-web traffic window.
+Both streams must collect their own 100 successful completions before observation
+ends; a faster workflow stream cannot stand in for slower web traffic.
+
+Focused settlement accepts healthy autoscaler-grown capacity instead of waiting
+for exactly seven Pods. Proxy capacity stays within the certified HPA range of
+two to four; execution stays between two and the frozen policy ceiling. Backend,
+web and autoscaler remain singletons. Every final application Pod must be ready,
+non-terminating and on the expected image; unknown roles and duplicate identities
+fail. Reports retain observed initial/final per-role counts and matching totals,
+which the evidence validator checks against the same bounds. The existing final
+runtime and controller checks run after protected responses finish, so growth or
+image drift during request completion cannot leave a stale final snapshot.
+Full regression fixtures retain their fixed seven-Pod layout.
+
+Three concurrent transport variants (fresh HTTP/1, pooled HTTP/1 and HTTP/2)
+consume full five-minute response bodies at each relevant boundary. An already
+protected update normally has two batches: actual proxy template replacement and
+execution-owner retirement, six requests total. An unchanged proxy template is
+observed without manufacturing a restart or proxy batch, leaving three requests.
+First adoption covers the real outbound bridge handoff, execution retirement and
+return handoff: three batches/nine requests. The normal proxies are replaced
+behind the protected bridge, so that replacement does not create another batch.
+Policy adoption and late admission do not create extra five-minute batches.
+Batches remain sequential to fit the admitted worker capacity. Request time is
+at least fifteen minutes for first adoption, ten for a protected proxy update and
+five with an unchanged proxy; setup, rollout/drain waits and cleanup are additional.
+
+The proxy probe captures the normal pool immediately before the real template
+apply and observes retiring and replacement UIDs during that update. An adopted
+proxy's termination is timed from a positively observed deletion marker, not
+missing IDs in a possibly older snapshot. Final replacement identities are read
+again at acceptance rather than retained from an earlier poll. An adopted
+proxy must actually be replaced while its protected requests are in flight;
+first-adoption replacement must occur between the confirmed outbound and return
+bridge handoffs. Execution requests must span a real accepted-work owner's
+routing withdrawal. With an unchanged template, HPA growth or shrinkage may change
+Pod membership; the Deployment and observed template identities must remain the
+same. Changed images or first adoption cannot be relabeled unchanged. Final live Deployment/NEG/backend health
+and protected shutdown acceptance remain required. The first bridge and its
+cleanup retain the same ownership, admission and drain protections.
+
+For autoscaler capacity/fault-policy changes, select `qualificationSuite: "full"`
+in the reviewed private staging settings and approve the appropriate test window.
+The full suite remains available for growth, retirement, metrics faults, HPA and
+duration-matrix tests. Developer overlap and releases without the bounded profile
+also retain full qualification. An explicit incompatible focused selection or an
+unknown suite fails before actor admission. Dispatch inputs cannot waive checks.
+
+Focused runtime-control v5, policy evidence v4 and nested continuity v4 explicitly
+describe the narrower observations; they cannot be relabeled full tests. The
+control and policy declarations must share the same window and report hash.
+Their normalized request counts and policy digests must also agree.
+Historical focused v4/v3/v3 certificates remain readable with their original
+requirements and are not rewritten as the narrower test. Both declarations
+carry identical version-2 qualification metadata with source/configuration
+fingerprints. There is no inherited full-baseline requirement. Version-1 metadata
+remains readable as historical evidence. The provider recomputes selection from
+verified source and its hash-pinned private settings; publication checks the
+source digest again. Custom legacy drivers without settings remain full-only.
+No old pass is rewritten for a new image.
+
+Before another provider attempt, run the local operation, continuity, coordinator
+and publication regressions through the real command/HTTP/WebSocket boundaries.
+`yarn studio-server:verify:kubernetes` includes these tests, Linux process/lock
+checks and Helm renders; it does not deploy a cluster or start qualification.
+On Windows, set `RIVET_STAGING_PROCESS_TEST_IMAGE=node:24-alpine` to include the
+network-disabled Linux fixture-process check with a locally available image.
+The clock-driven five-minute observer regression must renew the two-minute lease
+without admitting the next mutation. The cleanup tests deliberately withhold the
+final exec status, retain or close the socket, and recover delayed phase results
+without replay. They reject altered bytes, foreign identities and missing evidence,
+and keep disconnected active workers bounded by the original deadline. Final
+cleanup still requires every worker closed. Local success remains distinct from a GKE
+certificate; no failed/expired test grants an automatic paid retry.
+Coordinator fixture start/expiry timestamps share one clock read, keeping
+rounding of the actor's finite lifetime independent of process scheduling.
 
 Raw Helm settings may contain credentials. The installation snapshot contains
 only identities, hashes, normalized policy and allowlisted sizing/drain fields,
@@ -197,60 +564,209 @@ must occupy ordered, non-overlapping windows, and **each** must report its own
 workflow/web samples and zero failures. Autoscaling declarations use autoscaling
 traffic totals, never borrowed upgrade totals.
 
-Installation observation rechecks the namespace and cluster lifetimes after
-reading Helm. The production-preflight wrapper checks all installation/settings
-identities before **and after** the supported command, rejecting drift during
-the check rather than claiming production was unchanged from an earlier read.
+Installation observation rechecks namespace and cluster lifetimes after reading
+Helm. Actual deployment checks the qualified settings inside its own fresh live
+preflight; staging cannot prove that production stayed unchanged while it ran.
 
-## Configuration requiring separate approval
+## Hosted CI installation
 
-Use dedicated self-hosted Linux labels `rivet-qualification` and
-`rivet-production-readonly`, never an untrusted-PR/developer runner. Install
-Node24, Corepack/Yarn, native kubectl/Helm, Docker for immutable OCI retrieval and
-the reviewed probe dependencies. Do not persist checkout credentials.
+The normal workflow uses `ubuntu-latest` for orchestration and production deploy.
+`studio-server-publish-qualification-images.yml` is a reusable, main-only workflow:
+it builds an actor from the exact committed source and the small janitor image,
+pulls the pinned MinIO image, verifies all three archive identities, scans the
+actor and janitor, and publishes immutable digests.
+MinIO is pulled from the maintained immutable GHCR mirror because the original
+Quay digest rejects anonymous downloads. Its disposable hosted runner explicitly
+uses Docker's classic image store before any build or pull: Docker 29's default
+containerd store reports manifest/index IDs, while this archive and scanner
+contract compares configuration digests. This setting affects only the publication
+job's fresh Docker daemon; cluster runtimes and application image jobs are unchanged.
+The publisher still checks the exact vendor image ID and release version, retains the original vendor provenance,
+and refuses changed bytes; it adds no registry credential to a test Pod.
+It runs alongside application-image building in main Build Images. The release
+qualification job accepts that exact successful build run's same-source publication
+receipt, without rebuilding the actor at release time. The legacy administrator
+archive publisher remains a CLI; normal CI needs no prebuilt host archive.
 
-Protected `rivet-managed-staging` configuration:
+Google authentication uses pinned `google-github-actions/auth` and `setup-gcloud`
+actions, refreshable Workload Identity Federation credentials and the GKE auth
+plugin. Bind the provider to the exact repository/owner IDs, main ref and release
+workflow ref. Bind each Google service account to its exact protected environment
+subject. No long-lived Google key, untrusted-PR runner or checkout credential is
+required. The generated `gha-creds-*.json` files are Git/Docker ignored.
 
-- `RIVET_AUTOMATED_QUALIFICATION_ENABLED` (also a repository variable for the
-  initial planning job), `RIVET_QUALIFICATION_PROJECT_ID` / `_PROJECT_NUMBER`.
-- `RIVET_QUALIFICATION_MAX_USD` and `_MAX_SECONDS`: explicit approved positive
-  allowance, not a hard billing cap. The Actions path admits at most two hours
-  of tests, leaving an hour of its three-hour timeout for settlement. Never
-  reset/extend the original deadline or first billable-activation clock.
-- `RIVET_QUALIFICATION_DRIVER_DIRECTORY` / `_DRIVER_SHA256`: administrator
-  installed read-only driver bundle and complete manifest hash, not commands
-  chosen by a dispatch input.
-- `RIVET_QUALIFICATION_PRIVATE_STORE`: persistent private directory outside the
-  checkout. It holds exact input, intent records, receipts, stderr and a lock;
-  it must survive checkout cleanup and runner/job loss. Never upload or commit it.
-- `RIVET_QUALIFICATION_STAGING_KUBECONFIG`: private staging-only credential path.
-- `RIVET_QUALIFICATION_CLUSTER_UID` (the approved staging `kube-system` UID),
-  `_CLUSTER_SERVER` (trusted HTTPS origin), `_GATEWAY_UID`: shared infrastructure
-  identities. Staging's cluster UID must differ from the freshly read production
-  cluster UID, even if contexts/project labels look different.
-- Production read-only `RIVET_QUALIFICATION_PRODUCTION_` variables:
-  `KUBECONFIG`, `CONTEXT`, `NAMESPACE`, `NAMESPACE_UID`, `RELEASE`, `VALUES_FILE`.
-  They select fixed read commands, not shell snippets. Production RBAC must not
-  permit the qualification driver to mutate workloads or saved data.
+Set these protected environment values during the separately approved
+installation:
 
-`rivet-production-readiness` supplies the production variables and the existing
-reviewed `RIVET_QUALIFICATION_PRODUCTION_POLICY_FILE`. Keep its observations and
-credentials narrowly scoped; do not broaden access to make a failed preflight
-pass. Actual credentials/settings remain private files, not variables/artifacts.
-Missing prerequisites fail, rather than create a successful skipped job.
+- Both environments: variables `RIVET_GOOGLE_WORKLOAD_IDENTITY_PROVIDER` and
+  `RIVET_GOOGLE_SERVICE_ACCOUNT`, plus **environment secret**
+  `RIVET_DEPLOYMENT_CONFIGURATION` (JSON). Migrate any existing configuration
+  variable to that secret before using the updated workflow, then remove the
+  plaintext variable. There is no fallback: Actions prints step environment
+  variables before the script can remove them. This repository change does not
+  migrate live environment settings.
+- Staging: `RIVET_AUTOMATED_QUALIFICATION_ENABLED=true`, also a repository variable
+  for input validation, and explicit `RIVET_QUALIFICATION_MAX_USD` / `_MAX_SECONDS`.
+  Historical retained attempts used USD 30 / 7200 seconds. That time limit is
+  too tight for the optional full suite's sequential real stabilization windows: returning
+  seven workers to two alone requires five separate five-minute low-load windows,
+  after its 15-minute fixture. Cooperative growth, busy retirement, missing/stale
+  metrics, CPU growth and the update probes add further serial work. Prepare a
+  separately approved full-test window of up to four hours; the workflow allows
+  another hour for cleanup plus 30 minutes for setup (330 minutes total).
+  The shared hosted-command limit accepts whole-second windows through 14400.
+  The workflow validates it before Google authentication; both preparation and
+  execution enforce the same limit. Real CLI regressions cover two/four-hour execution and over-limit
+  rejection before private setup. A failed setup grants no retry allowance.
+  A longer workflow timeout grants no additional test allowance. Fixture OAuth
+  sessions cover at least the frozen operation window, so a longer full test
+  cannot outlive the old three-hour fixture session limit.
+  The explicit spend allowance is not a provider billing cap. Do not reuse a closed
+  temporary campaign or automatically authorize a second paid attempt.
+- Production: its separately scoped configuration selects a generation-pinned
+  private installation object, never values/scripts supplied by dispatch.
 
-For a fresh runner checkout, that policy file may live in a protected external
-directory alongside its two self-contained, checksum-pinned `.mjs` adapters.
-Only read-only qualification preflight validates the installation and adapter
-bytes, copies them into a new private packet directory and rewrites their local
-paths. Path escapes, redirected directories, changed checksums and retained
-output are rejected. No adapter executes during copying. Keep any private
-prerequisite evidence outside the checkout and pin it in the reviewed adapter.
-When the actual recovery operator uses another OS, its dependency and capacity
-checks must run there; the read-only coordinator may verify their exact bound
-receipt, but cannot claim it ran those tools locally. Actual backup and application
-acceptance remain required on the deployment operator, using its own freshly
-validated policy; this copy step neither delegates writes nor permits deployment.
+`prepare-hosted-release.mjs` materializes these fixed configurations in a fresh
+private directory under `RUNNER_TEMP`. Staging configuration has `protocol:1`,
+`staging` (the validated reusable settings plus `clusterName`/`dnsEndpoint`),
+`production` (cluster identity, context, namespace/release/UID and reviewed
+`valuesDigest`), `janitorServiceAccount`, and `evidenceBucket`. Production
+configuration has `protocol:1`, the same `production` identity, its separate
+`evidenceBucket`, and immutable `installationUri` (`gs://.../NAME.json#GENERATION`).
+That private object contains `valuesBase64`, checksum-pinned installation `policy`,
+and `adapters.backup` / `adapters.acceptance` as base64 files. Never put those
+bytes in a public workflow variable, log, source file or uploaded artifact.
+
+An administrator installs initial ServiceAccounts, RBAC and janitor-health
+ConfigMap once. The coordinator can create/exec/delete Jobs only in the runner
+namespace and update code ConfigMaps/Deployment only in the control namespace.
+It also needs `get pods` in the control namespace to verify that the janitor's
+heartbeat belongs to a live Ready Pod. `lib/staging-coordinator-access.mjs` owns
+that control Role. Render it locally for administrator review with:
+
+```sh
+yarn node deploy/studio-server/scripts/render-staging-coordinator-access.mjs CONTROL_NAMESPACE /private/path/coordinator-role.json
+```
+
+Review the resulting Role with `kubectl diff -f` before an authorized
+`kubectl apply -f`. The only grant added to the previously installed control
+Role is Pod GET; Pod list/watch/exec and Secret access are not added. The existing
+`rivet-release-ci` RoleBinding remains unchanged. Rendering does not apply access.
+The same module owns the existing runner Role; its Job, Pod and exec permissions
+are unchanged. Both definitions are shared by the installer and local tests.
+The coordinator cannot grant RBAC. Cluster connect/read and production namespace Helm-Secret
+reads are separate from production deployment rights. The actor and janitor
+receive staging-only in-cluster identities and staging Compute read access;
+they receive no GitHub credential, production kubeconfig, raw production values
+or evidence-bucket access. The production identity has normal Helm workload and
+exec rights only in the installed namespace plus cluster/network metadata reads.
+Namespace Secret/workload/exec rights can expose credentials; review that scope
+explicitly. Federation identities persist for ordinary releases and require
+explicit installation approval and documented revocation, not an expired campaign.
+
+Before each test, hosted preparation packages the source-pinned driver locally,
+connects to the verified clusters, and checks required permissions with
+`kubectl auth can-i` as the actual CI caller (no impersonation). Missing access
+or an unhealthy existing janitor stops before lock acquisition and shared
+Kubernetes writes. Probes cover actor creation/removal, live Pod reads and exec,
+using the documented [`--subresource=exec` syntax](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_auth/kubectl_auth_can-i/).
+A negative answer identifies the denied verb/resource/namespace privately.
+Local tests exercise permission probes and actual reads against both namespace
+Roles, including denied Pod GET and actor exec/cleanup permissions. Unresolved,
+malformed or incomplete operation inventories fail before taking a new lock;
+the inventory is rechecked under the lock to cover concurrent admission.
+
+Preparation then acquires an exclusive generation-bound lock in private GCS
+and updates only the janitor's versioned immutable code ConfigMap and Deployment.
+The acknowledged Deployment must retain its UID and use the exact published
+image and packaged code ConfigMap mounted by the named janitor container before
+rollout waiting or success export. Container order and an unused code volume
+cannot change that identity check.
+These identity checks are shared with setup closure. Its health and approved
+driver hash must pass admission. A private setup receipt
+records intent before acquiring the lock or applying the update, then records
+acknowledged generation/specification and writer closure. If preparation or
+read-only predecessor inspection fails before execution starts, the workflow's
+bounded `always()` cleanup verifies the exact owner/generation, cluster, unchanged
+acknowledged worker, fresh janitor health and absence of an actor/operation before
+releasing that lock and confirming absence. It does not remove test workloads or
+take over normal execution cleanup. Uncertain acquisition/apply acknowledgements,
+unknown writer closure, admitted work or changed ownership keep the lock for
+inspection; no mutation is replayed. Cancellation without writer-closure proof
+also retains the lock.
+
+Setup failures report a safe phase/code publicly. Bounded underlying error details
+remain in private `RUNNER_TEMP/rivet-staging/preparation-failure.json` (or
+`rivet-production`), and after staging authentication in the private bucket under
+`qualification/setup/OPERATION/`. Closure failures use
+`setup-closure-failure.json`; diagnostic persistence failures preserve the
+original error rather than replacing it. Raw configuration, native command
+output and cause chains are never printed by the CLI or uploaded to public
+Actions artifacts.
+
+`lib/reusable-staging-coordinator.mjs` creates one
+non-retrying finite-lifetime actor Job, journals its intent/UID before waiting,
+checks exact source, real offline browser fixture and kubectl version skew, then
+installs the reviewed bundle through WebSocket stdin. Each phase is dispatched
+once with a finite deadline. Lost acknowledgements never replay a write. Cleanup
+must be verified before diagnostics export and UID-bound actor removal. Expiry
+and the independent janitor retain ownership after coordinator loss.
+
+Local and remote phase drivers share one hour across settlement, cleanup,
+verification and diagnostics export, starting at the first settlement dispatch.
+Each phase receives only the remaining time; an exhausted allowance prevents
+another command from starting. Timeout is not writer-absence or cleanup proof:
+unverified work remains owned by the independent janitor. Once cleanup is
+verified, normal UID-bound actor removal is still attempted if diagnostic
+export, local persistence or upload fails. Diagnostic failure still blocks
+publication, and a simultaneous removal failure preserves both errors. Neither
+export nor deletion is replayed. Timers do not impose a hard cloud billing cap.
+
+The actor Pod requests Autopilot extended-duration protection with
+`cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so voluntary node
+scale-down does not normally evict a silent test runner. This preserves the
+existing absolute Job deadline and zero retries; it is not a guarantee against
+node failure. See [GKE extended-duration Pods](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/extended-duration-pods).
+During each exec the coordinator checks the exact actor UID/readiness every five
+seconds. Loss or an unreadable liveness observation aborts the local wait, records
+an unknown outcome privately and never replays the phase. Independent cleanup
+still requires writer absence and exact resource inventory, rather than treating
+the interrupted connection as proof of deletion.
+
+Kubernetes exec completes on its explicit status-channel result, matching the
+[official JavaScript client](https://github.com/kubernetes-client/javascript/blob/main/src/exec.ts).
+It does not wait for a forwarding socket to close afterward. Failure status,
+missing status, malformed status, cancellation and deadlines remain failures;
+no uncertain command is replayed. Real HTTP/WebSocket regressions keep the socket
+open after success/failure to exercise this boundary through actor cleanup.
+
+Private journals are content-addressed immutable GCS objects, with checksum and
+generation verification and no overwrite. Recover an uncertain operation from
+its exact `qualification/OPERATION` journal and cluster registry before removing
+the global `qualification/active.lock`. A stale PID or elapsed timeout is not
+cleanup proof. An admitted failed/unknown operation holds that lock and cannot
+silently start another test. The verified pre-operation setup closure above is a
+separate bounded case. Successful fixture cleanup removes only the exact lock generation;
+the shared cluster, Gateway, certificate and identities remain.
+
+Production uses a separate private bucket and per-operation replay fence. Its
+command persists all online recovery files before admitting workload mutation,
+and persists subsequent journal artifacts as they are acknowledged. Detailed
+values, backups, receipts and errors remain private; only the successful
+sanitized deployment summary is a GitHub artifact. The private local directory
+is outside checkout cleaning; GCS preserves evidence after hosted-runner loss.
+An installation adapter that keeps a live external observer must also keep its
+mutable files outside the checkpoint upload tree. Persist phase acknowledgements
+directly, then copy observer history into final evidence only after the exact
+observer process has exited and owned fixtures are cleaned. This prevents a
+concurrent append from invalidating checkpoint size/checksum verification.
+Existing CLI users can still supply durable external directories and explicit
+credential/policy paths without hosted preparation.
+
+Revoke persistent access by disabling release automation/environment access,
+removing federation impersonation and the dedicated Kubernetes/bucket bindings,
+then removing the dedicated identities/provider after inspecting active locks.
+Keep recovery journals and retained serving infrastructure intact.
 
 ## Provider driver contract
 
@@ -267,6 +783,13 @@ through private stdin; stdout is one JSON receipt. Stderr is privately retained
 up to 1MiB per phase. Receipts bind `protocol`, `operationId`, `inputHash`,
 `projectId`, `projectNumber`. The immutable operation freezes manifests, observed
 installation, normalized policy, driver digest, budget and deadline.
+
+The table describes full qualification. Focused operations replace the stress
+matrix in `autoscaling` with current policy/two-ready-floor observations under
+their own public traffic; they do not claim growth, failure injection or HPA tests.
+When qualification tooling changes, repackage/review its pinned bundle and update
+the existing janitor's approved digest. Ordinary image changes reuse that reviewed
+tooling; no cluster, VM, IAM or certificate setup is repeated per release.
 
 | Phase           | Required actual work                                                                                                                                                                                                                                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -345,6 +868,26 @@ ownership, then its HTTPRoute/health policy, and waits for two-zone NEG discover
 **before** installing proxy Pods. Otherwise those Pods may miss GKE's injected
 readiness gate. Helm adopts that Service without replacing it. This bootstrap
 ordering never weakens the later positive load-balancer-health check.
+
+Fixture setup and proxy-handoff preflight share the same Deployment-availability
+and regional endpoint-health checks in `lib/gke-proxy-health.mjs`. Pod `Ready`
+alone does not complete setup: the proxy Deployment must observe its current
+generation, update its desired replicas and report the required available floor.
+This honors its configured `minReadySeconds` through Kubernetes status, without
+adding a separate sleep. Setup polls within its existing proof/operation deadline;
+normal startup settling does not fail the test immediately. Deadline errors retain
+the specific unmet condition. Preflight and handoff waits also identify missing
+availability, Pod/NEG readiness, node/zone spread or backend health instead of
+reporting every failure as missing two-zone placement. Ownership and protected
+shutdown checks retain their existing fences.
+
+Regional Gateways can attach an empty additional zone while the Service NEG
+annotation lists only active zones. Backend discovery requires every advertised
+group and permits additional groups only for the same NEG, project and region.
+It rejects duplicate/foreign groups and reads health from every actual attached
+group. The current proxy endpoints and required healthy zone floor must still
+pass; an empty extra zone cannot substitute for a healthy expected endpoint.
+
 The fixture trusts that approved Gateway's forwarded HTTPS host/protocol so
 OAuth redirects and Secure cookies retain the public origin. Restrict edge access
 to the shared Gateway in the dedicated cluster/network setup; no extra public
@@ -371,7 +914,7 @@ only a fixture-contract check, not evidence of GKE/TLS readiness.
 
 The qualified runner must be an **ephemeral Pod in the dedicated staging cluster**,
 labelled `rivet.dev/qualification-runner=true`, with Downward API `POD_NAME` and
-`POD_UID`. No general desktop/VM runner is supported by this adapter. It must have
+`POD_UID`. A GitHub-hosted coordinator uses that Pod; a desktop/VM cannot execute the provider phases directly. It must have
 a private persistent operation store, the exact clean candidate checkout and
 immutable Yarn install, native Helm/kubectl, OpenSSL, browser dependencies and
 staging-only credentials. Every CLI command validates the staging kube-system
@@ -449,8 +992,8 @@ cleanup; namespace cleanup is not a claim of zero staging spend.
 
 First separately approve/provision a **dedicated** reusable cluster with metrics,
 CSI Delete-reclaim storage, sufficient node autoscaling in at least two zones,
-a shared Gateway accepting only labelled qualification namespaces, trusted
-wildcard DNS/TLS for a new staging domain, dedicated runner/control namespaces,
+a shared Gateway accepting only labelled qualification namespaces,
+trusted TLS for a dedicated fixed `hostname` (or wildcard per-operation DNS), dedicated runner/control namespaces,
 and Workload Identity. Do not reuse historical resources implicitly.
 Preserve the runner's private operation store on separately approved persistent
 storage; browser traces/reports are directed there, not public Actions artifacts.

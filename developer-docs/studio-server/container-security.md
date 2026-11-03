@@ -33,6 +33,15 @@ older repository packages on either architecture. Keep curl for the existing pro
 refresh/health paths; do not remove it, disable HTTP/2 globally, suppress the
 finding or weaken the High/Critical gate to make publication pass.
 
+The proxy and API runtime images also require `libexpat>=2.10.0-r0`.
+The November 3 image scan found cached Alpine `libexpat 2.9.0-r0` blocked by
+CVE-2026-117610 and CVE-2026-118370 in the proxy (both architectures) and API.
+Alpine publishes the patched [2.10.0-r0 package](https://pkgs.alpinelinux.org/package/v3.24/main/x86_64/libexpat).
+The explicit floor invalidates the cached runtime package-install layers. The
+qualification toolchain passed its scan and needs no package-layer change.
+Preserve the scanner policy and verify the final images; a successful application
+test does not waive OS findings.
+
 ## Release gate
 
 - The four service lanes consume the candidate manifest from this workflow
@@ -348,6 +357,29 @@ source change does not deploy, change cloud resources or publish images. Follow
 normal CI and release approval separately before changing a running installation.
 
 ## Temporary qualification actor boundary
+
+The persistent cleanup worker has its own small image under
+`deploy/studio-server/images/janitor/`. Only pinned Node, system CA certificates
+and `ws` 8.21.0 (matching `yarn.lock`) enter the final image; package managers and
+the browser/deployment toolchain do not. The existing publication job separately
+checks its archive identity, scans it with the same blocking policy and publishes
+`janitor` evidence in `publication.json`. Its offline final-image probe imports
+the real bundled janitor and performs an idle pass as UID 10001 on a read-only
+filesystem. Cleanup authority, grants and ConfigMap/driver-digest binding are
+unchanged. Runtime cleanup regressions remain in the reusable-staging tests.
+The shared runtime-probe wrapper independently limits Docker execution to 30
+seconds and removes its uniquely named disposable container even if the test
+program's event loop is blocked. Probe failure and unconfirmed container removal
+both prevent publication; no application or Kubernetes resource is removed.
+
+The API image bundles the actual autoscaler entrypoint and its runtime-only
+dependencies instead of copying selected source filenames. Build Images boots
+that packaged command before candidate Compose traffic. It eagerly resolves `ws`
+and requires the child's own port-bind acknowledgement as well as health, with
+negative regressions for an unloadable package and an occupied health port.
+Clean-source admission precedes both qualification/cleanup image builds, and
+their archives share one scan/identity verification path. Neither this local smoke
+nor a successful image scan substitutes for GKE rollout qualification.
 
 The qualification actor is a separate final-image security boundary, not covered
 by passing API/executor scans. Its Dockerfile must use the same pinned Node and

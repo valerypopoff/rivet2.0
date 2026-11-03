@@ -1,104 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
-import { randomUUID } from 'node:crypto';
-import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './lib/request-continuity-evidence.mjs';
 import {
-  assertRequestContinuityEvidence,
-  CONTINUITY_DURATION_STAGES,
-  continuityStages,
-} from './lib/request-continuity.mjs';
+  continuityProviderFacts as facts,
+  continuityFixtureProfile as profile,
+  focusedContinuityProviderFacts,
+} from './fixtures/continuity-provider-facts.mjs';
+import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './lib/request-continuity-evidence.mjs';
+import { assertRequestContinuityEvidence } from './lib/request-continuity.mjs';
 import { qualificationSizing } from './lib/runtime-qualification-installation.mjs';
 import { collectContinuityResponse } from './qualification/provider-request-continuity.mjs';
-
-const profile = {
-  protocol: 1,
-  maxProtectedRequestSeconds: 300,
-  backendServiceDrainSeconds: 600,
-  propagationSeconds: 60,
-  proxyPreStopDelaySeconds: 660,
-  proxyTerminationGracePeriodSeconds: 900,
-};
-function facts() {
-  const start = Date.now() - 700000,
-    date = (n) => new Date(start + n).toISOString();
-  const operation = {
-    requestContinuityProfile: profile,
-    installed: { qualificationValues: {} },
-    predecessorManifestDigest: 'previous',
-    candidate: { source: { sha: 'candidate' }, images: { api: 'image' }, chart: { contentDigest: 'chart' } },
-  };
-  const cohort = (stage) =>
-    ['fresh-http1', 'pooled-http1', 'http2'].map((transport) => ({
-      stage,
-      transport,
-      requestId: randomUUID(),
-      correlationId: randomUUID(),
-      recordingId: randomUUID(),
-      executionPodUid: 'execution-owner',
-      durationMs: CONTINUITY_DURATION_STAGES[stage] ?? 300000,
-      outcome: 'passed',
-      fullBody: true,
-      bodyBytes: 18000,
-      bodySha256: 'a'.repeat(64),
-      elapsedMs: CONTINUITY_DURATION_STAGES[stage] ?? 300000,
-      startedAt: date(2000),
-      acceptedAt: date(2500),
-      finishedAt: date(2000 + (CONTINUITY_DURATION_STAGES[stage] ?? 300000)),
-    }));
-  const upgrade = {
-    outcomes: { acceptedWork: [{ retirementDelayMs: 315000 }, { retirementDelayMs: 315000 }] },
-    startedAt: date(0),
-    finishedAt: date(400000),
-    requestContinuity: {
-      protocol: 2,
-      profile,
-      bootstrap: 'passed',
-      bridgeCleaned: true,
-      failures: [],
-      requests: continuityStages(false, 'upgrade').flatMap(cohort),
-      replacement: {
-        before: ['old1', 'old2'],
-        after: ['new1', 'new2'],
-        dispatchedAt: date(4000),
-        observedAt: date(5000),
-      },
-      returnHandoff: { dispatchedAt: date(4000), observedAt: date(5000) },
-      action: {
-        idleOpenedAt: date(500),
-        acceptedAt: date(3000),
-        finishedAt: date(63000),
-        runId: randomUUID(),
-        requestId: randomUUID(),
-        resumed: true,
-        browserResume: true,
-        starts: 1,
-        completions: 1,
-        persisted: { runs: 1, starts: 1, completions: 1 },
-        terminalSequence: 2,
-      },
-    },
-  };
-  const autoscaling = {
-    startedAt: date(0),
-    finishedAt: date(400000),
-    proxyHpa: { hpaUid: 'hpa', readyUids: ['proxy1', 'proxy2', 'proxy3', 'proxy4'] },
-    requestContinuity: {
-      protocol: 2,
-      profile,
-      bootstrap: 'passed',
-      failures: [],
-      requests: cohort('hpa-removal'),
-      removal: {
-        hpaUid: 'hpa',
-        admissionConfirmedAt: date(4000),
-        observedAt: date(5000),
-        podUids: ['proxy3', 'proxy4'],
-      },
-    },
-  };
-  return { operation, upgrade, autoscaling };
-}
+import {
+  assertRuntimeControlEvidence,
+  assertRuntimeAutoscalingEvidence,
+  HA_FOCUSED_AUTOSCALING_CHECKS,
+  HA_FOCUSED_RUNTIME_CHECKS,
+} from './lib/ha-release-evidence.mjs';
 
 test('continuity certificates compile only from all exact transport/lifecycle/recording facts', () => {
   const f = facts();
@@ -186,11 +103,17 @@ test('adopted installations qualify the ordinary protected path without inventin
   f.operation.installed.qualificationValues = {
     requestContinuity: {
       enabled: true,
-      maxProtectedRequestSeconds: 300,
-      backendServiceDrainSeconds: 600,
-      propagationSeconds: 60,
+      maxProtectedRequestSeconds: profile.maxProtectedRequestSeconds,
+      backendServiceDrainSeconds: profile.backendServiceDrainSeconds,
+      propagationSeconds: profile.propagationSeconds,
     },
-    lifecycle: { shutdownGraceSeconds: 120, proxy: { preStopDelaySeconds: 660, terminationGracePeriodSeconds: 900 } },
+    lifecycle: {
+      shutdownGraceSeconds: 120,
+      proxy: {
+        preStopDelaySeconds: profile.proxyPreStopDelaySeconds,
+        terminationGracePeriodSeconds: profile.proxyTerminationGracePeriodSeconds,
+      },
+    },
   };
   f.upgrade.requestContinuity.bootstrap = 'already-protected';
   f.autoscaling.requestContinuity.bootstrap = 'already-protected';
@@ -230,4 +153,205 @@ test('a response counts only after every body byte arrives; a closed partial bod
   partial.write('first');
   partial.destroy();
   await assert.rejects(failed, /complete body/);
+});
+
+function focusedFacts() {
+  return focusedContinuityProviderFacts({ adopted: true });
+}
+
+test('focused continuity proves fresh full five-minute bodies across real upgrade stages without claiming HPA or duration-matrix tests', () => {
+  const f = focusedFacts();
+  const proof = compileRequestContinuityEvidence(f.operation, f.upgrade, f.autoscaling);
+  assert.equal(proof.completedRequests, 6);
+  assert.equal(proof.protocol, 4);
+  assert.ok(!proof.checks.includes('proxy-hpa-removal'));
+  const release = {
+    ...f.operation.candidate,
+    lineage: { predecessor: { manifestDigest: 'previous', sourceSha: 'e'.repeat(40), images: { api: 'old' } } },
+  };
+  const control = {
+    protocol: 5,
+    qualification: f.operation.qualification,
+    requestContinuity: proof,
+    purpose: 'ordinary-upgrade',
+    controlPlaneMode: 'singleton',
+    edgeProfiles: ['compact'],
+    predecessorManifestDigest: 'previous',
+    predecessorSourceSha: 'e'.repeat(40),
+    predecessorImages: { api: 'old' },
+    autoscalerPolicyDigest: 'f'.repeat(64),
+    candidateSourceSha: release.source.sha,
+    candidateImages: release.images,
+    chartDigest: release.chart.contentDigest,
+    failedRequests: 0,
+    requestSamples: 200,
+    checks: [...HA_FOCUSED_RUNTIME_CHECKS],
+  };
+  assert.equal(assertRuntimeControlEvidence(control, release, 'compact').protocol, 5);
+  assert.throws(() => assertRuntimeControlEvidence({ ...control, protocol: 2 }, release));
+  const scaling = {
+    ...control,
+    protocol: 4,
+    policyDigest: 'f'.repeat(64),
+    provider: 'gke',
+    checks: [...HA_FOCUSED_AUTOSCALING_CHECKS],
+  };
+  assert.equal(assertRuntimeAutoscalingEvidence(scaling, release).protocol, 4);
+  assert.throws(() => assertRuntimeAutoscalingEvidence({ ...scaling, protocol: 2 }, release));
+  for (const change of [
+    (x) => {
+      x.upgrade.requestContinuity.requests[0].fullBody = false;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.requests[0].elapsedMs = 200;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.replacement.observedAt = x.upgrade.finishedAt;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.executionWithdrawal.observedAt = x.upgrade.finishedAt;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.executionWithdrawal.podUid = 'foreign-worker';
+    },
+    (x) => {
+      x.upgrade.requestContinuity.replacement.after[0] = x.upgrade.requestContinuity.replacement.before[0];
+    },
+    (x) => {
+      x.upgrade.requestContinuity.bootstrap = 'passed';
+    },
+    (x) => {
+      x.upgrade.requestContinuity.action = { inventedResume: true };
+    },
+    (x) => {
+      x.upgrade.requestContinuity.removal = { inventedHpa: true };
+    },
+    (x) => {
+      x.operation.qualification.tier = 'full';
+    },
+  ]) {
+    const changed = focusedFacts();
+    change(changed);
+    assert.throws(() => compileRequestContinuityEvidence(changed.operation, changed.upgrade, changed.autoscaling));
+  }
+});
+
+test('focused first adoption proves the bridge and return handoff without autoscaling stress claims', () => {
+  const f = focusedContinuityProviderFacts();
+  const proof = compileRequestContinuityEvidence(f.operation, f.upgrade, f.autoscaling);
+  assert.equal(proof.completedRequests, 9);
+  assert.equal(proof.bootstrap, 'passed');
+  assert.ok(proof.checks.includes('bridge-return-handoff'));
+  assert.ok(!proof.checks.includes('proxy-hpa-removal'));
+  const release = { ...f.operation.candidate, lineage: { predecessor: { manifestDigest: 'previous' } } };
+  assertRequestContinuityEvidence(proof, release, profile);
+  assert.throws(() => assertRequestContinuityEvidence({ ...proof, completedRequests: 6 }, release, profile));
+  assert.throws(() =>
+    assertRequestContinuityEvidence(
+      { ...proof, checks: proof.checks.filter((c) => c !== 'bridge-return-handoff') },
+      release,
+      profile,
+    ),
+  );
+  for (const mutate of [
+    (x) => {
+      x.upgrade.requestContinuity.requests = x.upgrade.requestContinuity.requests.filter(
+        (r) => r.stage !== 'bootstrap',
+      );
+    },
+    (x) => {
+      x.upgrade.requestContinuity.bridgeCleaned = false;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.returnHandoff.observedAt = x.upgrade.finishedAt;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.bootstrapHandoff.dispatchedAt = x.upgrade.finishedAt;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.bootstrapHandoff.settledAt = x.upgrade.startedAt;
+    },
+  ]) {
+    const changed = structuredClone(f);
+    mutate(changed);
+    assert.throws(() => compileRequestContinuityEvidence(changed.operation, changed.upgrade, changed.autoscaling));
+  }
+});
+
+test('focused proxy evidence accepts healthy growth or shrinkage inside its approved bounds', () => {
+  for (const [beforeCount, afterCount] of [
+    [2, 3],
+    [4, 4],
+    [4, 2],
+  ]) {
+    const f = focusedContinuityProviderFacts({ adopted: true });
+    f.upgrade.requestContinuity.replacement.before = Array.from({ length: beforeCount }, (_, i) => `old-${i}`);
+    f.upgrade.requestContinuity.replacement.after = Array.from({ length: afterCount }, (_, i) => `new-${i}`);
+    assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  }
+  for (const [side, count] of [
+    ['before', 1],
+    ['before', 5],
+    ['after', 1],
+    ['after', 5],
+  ]) {
+    const f = focusedContinuityProviderFacts({ adopted: true });
+    f.upgrade.requestContinuity.replacement[side] = Array.from({ length: count }, (_, i) => `${side}-${i}`);
+    assert.throws(() => compileRequestContinuityEvidence(f.operation, f.upgrade), /bounds/);
+  }
+  const full = facts();
+  full.upgrade.requestContinuity.replacement.after.push('extra');
+  assert.throws(() => compileRequestContinuityEvidence(full.operation, full.upgrade, full.autoscaling));
+});
+
+test('an unchanged adopted proxy template needs no manufactured replacement or extra request batch', () => {
+  const f = focusedContinuityProviderFacts({ adopted: true, proxyReplaced: false });
+  const image = { repository: 'example/proxy', digest: `sha256:${'a'.repeat(64)}` };
+  f.operation.candidate.images.proxy = image;
+  f.operation.previous.images.proxy = structuredClone(image);
+  const proof = compileRequestContinuityEvidence(f.operation, f.upgrade);
+  assert.equal(proof.completedRequests, 3);
+  assert.equal(proof.proxyReplaced, false);
+  assert.ok(!proof.checks.includes('proxy-pod-and-neg-replacement'));
+  const release = {
+    ...f.operation.candidate,
+    lineage: {
+      predecessor: {
+        manifestDigest: 'previous',
+        images: f.operation.previous.images,
+      },
+    },
+  };
+  assertRequestContinuityEvidence(proof, release, profile);
+  f.upgrade.requestContinuity.replacement.after.push('scaled-3');
+  assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  f.upgrade.requestContinuity.replacement.before.push('scaled-3');
+  f.upgrade.requestContinuity.replacement.after = ['old1', 'old2'];
+  assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  f.operation.previous.images.proxy.digest = `sha256:${'b'.repeat(64)}`;
+  assert.throws(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  assert.throws(() => assertRequestContinuityEvidence(proof, release, profile));
+});
+
+test('historical focused certificates remain readable without being relabeled as the narrower rollout', () => {
+  const f = focusedFacts();
+  const proof = compileRequestContinuityEvidence(f.operation, f.upgrade);
+  const old = {
+    ...proof,
+    protocol: 3,
+    completedRequests: 9,
+    checks: [
+      'full-body-300-second-requests',
+      'late-admission-and-connection-reuse',
+      'proxy-pod-and-neg-replacement',
+      'execution-owner-300-second-drain',
+      'accepted-action-resume',
+      'request-recording-and-no-duplicates',
+    ],
+  };
+  delete old.proxyReplaced;
+  const release = { ...f.operation.candidate, lineage: { predecessor: { manifestDigest: 'previous' } } };
+  assertRequestContinuityEvidence(old, release, profile);
+  assert.throws(() => assertRequestContinuityEvidence({ ...old, protocol: 4 }, release, profile));
+  assert.throws(() => assertRequestContinuityEvidence({ ...proof, protocol: 3 }, release, profile));
 });

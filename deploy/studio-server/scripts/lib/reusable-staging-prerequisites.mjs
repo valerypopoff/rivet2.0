@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import tls from 'node:tls';
 import { isIP } from 'node:net';
+import { stagingHostname } from './reusable-staging-state.mjs';
 
 /** TLS/SNI only: no credentials, HTTP requests, redirects or application writes. */
 export async function verifyStagingTls(origin, { ca, lookup, timeoutMs = 15000 } = {}) {
@@ -45,6 +46,15 @@ export async function inspectStagingPrerequisites(state, { verifyTls = verifySta
   );
   assert.equal(gateway?.metadata.uid, settings.gatewayUid);
   assert.ok(!gateway.metadata.deletionTimestamp);
+  const frontends = gateway.status?.addresses?.filter((a) => a.type === 'IPAddress' && isIP(a.value));
+  assert.ok(frontends?.length === 1, 'Shared staging Gateway requires one verified frontend IP');
+  const frontend = frontends[0].value;
+  assert.ok(
+    settings.trustedForwardingProxies.some(
+      (peer) => peer === frontend || peer === `${frontend}/${isIP(frontend) === 4 ? 32 : 128}`,
+    ),
+    'Staging forwarding trust must include the exact Gateway frontend IP',
+  );
   const generation = gateway.metadata.generation;
   const condition = (conditions, type) =>
     conditions?.some((c) => c.type === type && c.status === 'True' && c.observedGeneration === generation);
@@ -52,7 +62,7 @@ export async function inspectStagingPrerequisites(state, { verifyTls = verifySta
     Number.isSafeInteger(generation) && condition(gateway.status?.conditions, 'Programmed'),
     'Shared staging Gateway is not freshly Programmed',
   );
-  const hostname = `${operation.operationId}.${settings.domain}`;
+  const hostname = stagingHostname(settings, operation);
   const listener = gateway.spec?.listeners?.find(
     (l) =>
       l.protocol === 'HTTPS' && l.port === 443 && (l.hostname === `*.${settings.domain}` || l.hostname === hostname),

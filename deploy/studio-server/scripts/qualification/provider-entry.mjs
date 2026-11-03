@@ -22,9 +22,14 @@ import { assertReleaseManifestMatchesCurrentChart } from '../lib/studio-server-r
 import { qualificationHash } from '../lib/runtime-qualification-execution.mjs';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from '../lib/ha-workflow-traffic.mjs';
 import { waitForManagedGateCommands } from '../kubernetes-managed-release-gate.mjs';
+import { withManagedGateSignal } from '../lib/managed-gate-command.mjs';
 import { adoptProviderOverlap, startProviderOverlapProbe } from './provider-overlap.mjs';
 import { verifyActorSource } from '../../images/qualification/verify-source.mjs';
 import { ProviderRequestContinuity } from './provider-request-continuity.mjs';
+import { qualificationSafetyDigest, releaseQualificationPlan } from '../lib/release-qualification-policy.mjs';
+import { describeProviderPhaseReceipt, writeProviderPhaseReceipt } from '../lib/provider-phase-receipt.mjs';
+import { providerProgressStep } from '../lib/provider-progress.mjs';
+import { qualificationTimeouts } from '../lib/runtime-qualification-driver.mjs';
 
 export function normalizeProviderAutoscaling(raw, hpa) {
   const result = (name) => {
@@ -58,6 +63,8 @@ export async function executeProviderPhase({
   gate,
   privateDirectory,
   wait = until,
+  step = async (_name, action) => action(),
+  signal,
 }) {
   const bind = (result) => ({
     ...result,
@@ -67,22 +74,28 @@ export async function executeProviderPhase({
   if (phase === 'armExpiry') {
     if (operation.developerOverlapProfile) await gate.verifyOverlapCapacity();
     await cloud.project();
-    await gate.verifyLocalBrowserFixture();
+    if (operation.qualification?.tier !== 'focused') await gate.verifyLocalBrowserFixture();
     await gate.verifySharedPrerequisites();
     return bind(await state.arm(actor));
   }
   if (phase === 'settle') {
-    const inventory = await settleStaging(state, cloud, actor, wait);
+    const inventory = await step('settlement', () => settleStaging(state, cloud, actor, wait));
     return bind({ writersStopped: true, acceptedWorkSettled: true, inventoryComplete: true, inventory });
   }
   if (phase === 'cleanup') {
-    await cleanupStaging(state, actor);
+    await step('deletion', () => cleanupStaging(state, actor));
     return bind({ deletionDispatched: true });
   }
   if (phase === 'verifyCleanup') {
-    const result = await wait('exact namespace/CSI/NEG garbage collection', () => verifyStagingCleanup(state, cloud));
+    const result = await step('absence', () =>
+      wait('exact namespace/CSI/NEG garbage collection', () => verifyStagingCleanup(state, cloud)),
+    );
     return bind(result);
   }
+  assert.ok(
+    phase !== 'autoscaling' || operation.qualification?.tier !== 'focused',
+    'Focused policy observations belong to the actual upgrade, not a separate phase',
+  );
   await state.admission();
   await state.change((r) => {
     r.testPhases ??= {};
@@ -91,52 +104,56 @@ export async function executeProviderPhase({
   });
   let result;
   if (phase === 'prepare') {
-    await gate.verifySharedPrerequisites();
-    await state.namespace({ create: true });
-    await gate.installDependencies();
-    await gate.createPublicRoute();
-    await gate.apply(gate.values(operation.previous.images), 'provider-predecessor.json');
-    await waitForOrdinaryRuntime(gate, operation.previous.images, wait);
-    await gate.readyPublic();
+    await step('prerequisites', () => gate.verifySharedPrerequisites());
+    await step('namespace', () => state.namespace({ create: true }));
+    await step('dependencies', () => gate.installDependencies());
+    await step('routing', () => gate.createPublicRoute());
+    await step('installation', () => gate.apply(gate.values(operation.previous.images), 'provider-predecessor.json'));
+    await step('owners', () => waitForOrdinaryRuntime(gate, operation.previous.images, wait));
+    await step('frontend', () => gate.readyPublic());
     // Fixture writes occur once, only after auth, LB health and installed images
     // are proven. A lost response is retained as an uncertain phase, not retried.
-    const seed = await gate.exercisePersistence(gate.config.baseUrl);
+    const seed = await step('persistence', () => gate.exercisePersistence(gate.config.baseUrl));
     await gate.artifact('ha-persisted-state.json', JSON.stringify(seed));
-    await gate.enableOAuth(gate.config.baseUrl, seed.relativePath);
+    await step('oauth', () => gate.enableOAuth(gate.config.baseUrl, seed.relativePath));
     const { object } = await state.read();
     result = {
       stagingClusterUid: operation.staging.clusterUid,
       expiryIdentity: object.metadata.uid,
       inventoryComplete: true,
-      inventory: await observeStagingInventory(state, cloud),
+      inventory: await step('inventory', () => observeStagingInventory(state, cloud)),
     };
   } else {
     assert.ok(['upgrade', 'autoscaling'].includes(phase));
-    await gate.loadWorkflowKey({ webAppSession: true });
+    await step('authentication', () => gate.loadWorkflowKey({ webAppSession: true }));
     if (phase === 'upgrade') {
       if (operation.requestContinuityProfile) gate.continuityProbes = new ProviderRequestContinuity(gate);
       gate.currentManifest = operation.previous;
       const probes = new HaReleaseProbes(gate, gate.config.baseUrl, root);
-      const report = await runOrdinaryRuntimeUpgrade({
-        gate,
-        previous: operation.previous,
-        candidate: operation.candidate,
-        probes,
-        baseUrl: gate.config.baseUrl,
-        until: wait,
-        ...(operation.developerOverlapProfile
-          ? {
-              prepareDeveloperOverlap: () => adoptProviderOverlap(gate),
-              startDeveloperOverlap: (ownedProbes) =>
-                startProviderOverlapProbe(gate, ownedProbes, operation.previous, operation.candidate, { wait }),
-            }
-          : {}),
-      });
+      const report = await step(
+        'upgrade',
+        () =>
+          runOrdinaryRuntimeUpgrade({
+            signal,
+            gate,
+            previous: operation.previous,
+            candidate: operation.candidate,
+            probes,
+            baseUrl: gate.config.baseUrl,
+            until: wait,
+            ...(operation.developerOverlapProfile
+              ? {
+                  prepareDeveloperOverlap: () => adoptProviderOverlap(gate),
+                  startDeveloperOverlap: (ownedProbes) =>
+                    startProviderOverlapProbe(gate, ownedProbes, operation.previous, operation.candidate, { wait }),
+                }
+              : {}),
+          }),
+        Infinity,
+      ); // Protected rollout waits retain the original phase deadline.
       result = {
         ...report,
         qualification: 'isolated-provider',
-        initialApplicationPods: 7,
-        finalApplicationPods: 7,
         storageIdentityPreserved: true,
         policyDigest: operation.policyDigest,
       };
@@ -161,17 +178,22 @@ export async function executeProviderPhase({
           await gate.continuityProbes.prepare(template);
         }
         const owned = new FixtureJournal(state);
-        const raw = await runProviderAutoscaling(gate, owned, {
-          phase: (name) => {
-            subphase = name;
-          },
-          checkpoint: async (item) => {
-            await state.admission();
-            assert.deepEqual(workflow.report.failures, []);
-            assert.deepEqual(web.report.failures, []);
-            await gate.artifact('autoscaling-checkpoint.json', JSON.stringify(item));
-          },
-        });
+        const raw = await step(
+          'autoscaling',
+          () =>
+            runProviderAutoscaling(gate, owned, {
+              phase: (name) => {
+                subphase = name;
+              },
+              checkpoint: async (item) => {
+                await state.admission();
+                assert.deepEqual(workflow.report.failures, []);
+                assert.deepEqual(web.report.failures, []);
+                await gate.artifact('autoscaling-checkpoint.json', JSON.stringify(item));
+              },
+            }),
+          Infinity,
+        );
         subphase = 'proxy-hpa';
         const hpa = await runProviderProxyHpa(gate, owned);
         const requestContinuity = gate.continuityProbes ? await gate.continuityProbes.finish() : undefined;
@@ -205,9 +227,89 @@ export async function executeProviderPhase({
   return bind(result);
 }
 
-export async function assertProviderCheckout(operation) {
+export async function assertProviderCheckout(operation, settings = {}) {
   await verifyActorSource(root, operation.candidate.source.sha);
+  if (operation.qualification)
+    assert.deepEqual(
+      operation.qualification,
+      releaseQualificationPlan({
+        safetyDigest: await qualificationSafetyDigest(root, operation.candidate.source.sha),
+        previous: operation.previous,
+        predecessorDigest: operation.predecessorManifestDigest,
+        candidate: operation.candidate,
+        installed: operation.installed,
+        policy: operation.policy,
+        profile: operation.requestContinuityProfile,
+        overlap: operation.developerOverlapProfile,
+        suite: settings.qualificationSuite,
+      }),
+    );
   assertReleaseManifestMatchesCurrentChart(operation.candidate, root, { requirePromoted: false });
+}
+
+/** Publish only after gate/child cleanup has finished. This durable result lets
+ * the coordinator recover a lost final exec status without replaying a phase. */
+export async function acknowledgeProviderPhase(state, phase, id, result, receipt) {
+  if (phase !== 'verifyCleanup')
+    assert.deepEqual(
+      receipt,
+      describeProviderPhaseReceipt(Buffer.from(JSON.stringify(result))),
+      'Receipt differs from phase result',
+    );
+  await state.change((r) => {
+    const worker = r.workers.find((w) => w.id === id);
+    assert.ok(worker && worker.phase === phase && !worker.closed, 'Exact phase worker is required');
+    worker.closed = true;
+    if (receipt) worker.receipt = receipt;
+    if (phase === 'verifyCleanup') {
+      assert.ok(r.closed && r.phase === 'cleaned' && r.cleanupVerified);
+      for (const key of ['operationId', 'inputHash', 'projectId', 'projectNumber'])
+        assert.equal(result[key], r.operation[key]);
+      assert.equal(result.protocol, 1);
+      assert.ok(!r.cleanupReceipt, 'Cleanup receipt is never overwritten');
+      r.cleanupReceipt = { workerId: id, result };
+    }
+  });
+}
+
+export async function acknowledgeProviderFailure(state, phase, id) {
+  await state.change((r) => {
+    const worker = r.workers.find((w) => w.id === id);
+    assert.ok(worker && worker.phase === phase, 'Exact failed phase worker is required');
+    if (worker.closed) return; // A successful acknowledgement may have committed before its response was lost.
+    worker.closed = true;
+    worker.failed = true;
+  });
+}
+
+export async function registerProviderWorker(
+  state,
+  actor,
+  worker,
+  readStat = (pid) => fs.readFile(`/proc/${pid}/stat`, 'utf8'),
+) {
+  const { record } = await state.read();
+  assert.deepEqual(record.actor, actor);
+  const pending = record.workers.filter((w) => !w.closed);
+  for (const prior of pending) {
+    let stat;
+    try {
+      stat = await readStat(prior.pid);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    assert.ok(!stat || processStartTicks(stat) !== prior.startTicks, 'A prior phase process still exists');
+  }
+  await state.change((r) => {
+    assert.deepEqual(r.actor, actor);
+    assert.deepEqual(
+      r.workers.filter((w) => !w.closed),
+      pending,
+      'Phase ownership changed during process inspection',
+    );
+    for (const prior of r.workers.filter((w) => !w.closed)) prior.closed = true;
+    r.workers.push(worker);
+  });
 }
 async function main() {
   process.env.RIVET_QUALIFICATION_RECEIPT_STDOUT = '1';
@@ -223,10 +325,10 @@ async function main() {
   const { operation, privateDirectory } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   const { inputHash, ...input } = operation;
   assert.equal(qualificationHash(input), inputHash);
-  await assertProviderCheckout(operation);
   const settings = reusableStagingSettings(
     JSON.parse(await fs.readFile(new URL('./settings.json', import.meta.url), 'utf8')),
   );
+  await assertProviderCheckout(operation, settings);
   assert.deepEqual(
     settings.developerOverlapProfile,
     operation.developerOverlapProfile,
@@ -246,7 +348,9 @@ async function main() {
   const api = createKubernetesTransport({ origin: settings.inClusterServer ?? settings.clusterServer, WebSocketClass });
   const state = new ReusableStagingState(api, settings, operation),
     cloud = stagingCloudReader(settings);
+  const cancellation = new AbortController();
   const stop = () => {
+    cancellation.abort(new Error('Provider worker interrupted; stopping test commands before settlement'));
     state
       .change((r) => {
         r.closed = true;
@@ -257,39 +361,85 @@ async function main() {
   process.once('SIGINT', stop);
   const phase = process.argv[2],
     id = `${process.pid}:${processStartTicks(await fs.readFile('/proc/self/stat', 'utf8'))}`;
-  if (phase !== 'armExpiry') {
-    const { record } = await state.read();
-    assert.deepEqual(record.actor, actor);
-    for (const worker of record.workers.filter((w) => !w.closed)) {
-      let stat;
-      try {
-        stat = await fs.readFile(`/proc/${worker.pid}/stat`, 'utf8');
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-      }
-      assert.ok(!stat || processStartTicks(stat) !== worker.startTicks, 'A prior phase process still exists');
-    }
-    await state.change((r) => {
-      r.workers.push({ id, pid: process.pid, startTicks: id.split(':')[1], phase, closed: false });
-    });
-  }
-  const gate = new ReusableProviderGate(operation, settings, state, privateDirectory);
-  let result;
-  try {
-    result = await executeProviderPhase({ phase, operation, state, cloud, actor, gate, privateDirectory });
-  } finally {
-    try {
-      await gate.close();
-    } finally {
-      await waitForManagedGateCommands();
-    }
-    process.removeListener('SIGTERM', stop);
-    process.removeListener('SIGINT', stop);
-  }
   if (phase !== 'armExpiry')
-    await state.change((r) => {
-      r.workers.find((w) => w.id === id).closed = true;
+    await registerProviderWorker(state, actor, {
+      id,
+      pid: process.pid,
+      startTicks: id.split(':')[1],
+      phase,
+      closed: false,
     });
-  process.stdout.write(JSON.stringify(result));
+  const gate = new ReusableProviderGate(operation, settings, state, privateDirectory);
+  const step =
+    phase === 'armExpiry'
+      ? undefined
+      : providerProgressStep(state, phase, id, Date.now() + qualificationTimeouts()(operation, phase));
+  let result,
+    commandsClosed = false,
+    startupMonitor;
+  try {
+    try {
+      result = await withManagedGateSignal(cancellation.signal, async () => {
+        if (['prepare', 'upgrade', 'autoscaling'].includes(phase))
+          startupMonitor = gate.observeFatalStartup(cancellation).catch((error) => cancellation.abort(error));
+        const output = await executeProviderPhase({
+          phase,
+          operation,
+          state,
+          cloud,
+          actor,
+          gate,
+          privateDirectory,
+          step,
+          signal: cancellation.signal,
+        });
+        cancellation.signal.throwIfAborted();
+        return output;
+      });
+    } finally {
+      cancellation.abort();
+      try {
+        await startupMonitor;
+      } finally {
+        // Observability must never prevent mandatory gate/child shutdown.
+        if (step) await step('finalization', async () => {}).catch(() => {});
+        try {
+          await gate.close();
+        } finally {
+          await waitForManagedGateCommands();
+        }
+        commandsClosed = true;
+        process.removeListener('SIGTERM', stop);
+        process.removeListener('SIGINT', stop);
+      }
+    }
+    const output = Buffer.from(JSON.stringify(result));
+    if (phase !== 'armExpiry') {
+      const receipt =
+        phase === 'verifyCleanup' ? undefined : await writeProviderPhaseReceipt(privateDirectory, phase, id, output);
+      await acknowledgeProviderPhase(state, phase, id, result, receipt);
+    }
+    process.stdout.write(output);
+  } catch (error) {
+    if (!commandsClosed || phase === 'armExpiry') throw error;
+    const errors = [error];
+    try {
+      await fs.writeFile(
+        path.join(privateDirectory, `phase-${phase}-${id.replace(':', '-')}.error.log`),
+        String(error.stack ?? error).slice(-49152),
+        { flag: 'wx', mode: 0o600 },
+      );
+    } catch (diagnosticError) {
+      errors.push(diagnosticError);
+    }
+    try {
+      await acknowledgeProviderFailure(state, phase, id);
+    } catch (acknowledgementError) {
+      errors.push(acknowledgementError);
+    }
+    throw errors.length === 1
+      ? error
+      : new AggregateError(errors, 'Provider phase failed; inspect private diagnostics');
+  }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

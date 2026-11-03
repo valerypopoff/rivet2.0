@@ -4,6 +4,7 @@ import { isIP } from 'node:net';
 import { qualificationHash } from './runtime-qualification-execution.mjs';
 import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
 import { assertRequestContinuityProfile } from './request-continuity.mjs';
+import { observeStagingJanitor } from './staging-janitor-health.mjs';
 
 export const stagingOwner = 'rivet.dev/qualification-operation';
 export const stagingRegistry = 'rivet.dev/qualification-registry';
@@ -13,9 +14,13 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  assert.ok(
+    value.qualificationSuite === undefined || ['focused', 'full'].includes(value.qualificationSuite),
+    'Unknown qualification suite',
+  );
+  assert.match(value.region, /^[a-z]+-[a-z]+[0-9]+$/, 'Staging requires the actual regional Compute scope');
   if (value.requestContinuityProfile) {
     assertRequestContinuityProfile(value.requestContinuityProfile);
-    assert.match(value.region, /^[a-z]+-[a-z]+[0-9]+$/, 'Continuity requires the actual regional Compute scope');
   }
   if (value.developerOverlapProfile) overlapQualificationProfile(value.developerOverlapProfile);
   assert.equal(value.protocol, 1);
@@ -40,22 +45,39 @@ export function reusableStagingSettings(value) {
   }
   assert.match(value.domain, /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/);
   assert.ok(!value.domain.includes('litnet.com'), 'Production DNS is excluded');
+  if (value.hostname) {
+    assert.match(value.hostname, /^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$/);
+    assert.ok(value.hostname.endsWith(`.${value.domain}`), 'Fixed staging hostname must remain under its domain');
+  }
   for (const image of [value.postgresImage, value.objectStorageImage])
     assert.match(image, /^[^\s@]+@sha256:[a-f0-9]{64}$/);
   for (const secret of [value.registrySecret, value.janitorRegistrySecret].filter(Boolean)) {
     dns(secret.name);
     assert.ok(typeof secret.uid === 'string' && secret.uid);
   }
-  assert.ok(Array.isArray(value.trustedClients) && value.trustedClients.length);
-  for (const client of value.trustedClients) {
-    const [ip, bits, extra] = client.split('/');
-    const family = isIP(ip);
-    assert.ok(family && !extra);
-    if (bits !== undefined)
-      assert.ok(/^\d+$/.test(bits) && Number(bits) > 0 && Number(bits) <= (family === 4 ? 32 : 128));
+  for (const field of ['trustedClients', 'trustedForwardingProxies']) {
+    const minimum = field === 'trustedForwardingProxies' ? 2 : 1;
+    assert.ok(
+      Array.isArray(value[field]) && value[field].length >= minimum && value[field].length <= 100,
+      `Staging ${field} must be explicit`,
+    );
+    assert.equal(new Set(value[field]).size, value[field].length, `Duplicate staging ${field}`);
+    for (const client of value[field]) {
+      assert.equal(typeof client, 'string', `Invalid staging ${field} address`);
+      const [ip, bits, extra] = client.split('/');
+      const family = isIP(ip);
+      assert.ok(family && !extra, `Invalid staging ${field} address`);
+      if (bits !== undefined)
+        assert.ok(
+          /^\d+$/.test(bits) && Number(bits) > 0 && Number(bits) <= (family === 4 ? 32 : 128),
+          `Invalid staging ${field} prefix`,
+        );
+    }
   }
   return Object.freeze(structuredClone(value));
 }
+export const stagingHostname = (settings, operation) =>
+  settings.hostname ?? `${operation.operationId}.${settings.domain}`;
 const namespacePath = (name) => `/api/v1/namespaces/${encodeURIComponent(name)}`;
 export const stagingRecordPath = (settings, id) => `${namespacePath(settings.controlNamespace)}/configmaps/${id}`;
 export function assertStagingRecord(object, operation, settings) {
@@ -140,6 +162,17 @@ export class ReusableStagingState {
     assert.ok(node?.metadata.uid && node.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'));
     // An existing record is never a successful create acknowledgement.
     assert.equal(await this.api.json('GET', stagingRecordPath(this.settings, this.operation.operationId)), null);
+    // Validate the independent cleanup worker before recording an admitted
+    // operation. A startup failure must not strand an unacknowledged registry.
+    assert.ok(
+      await observeStagingJanitor(
+        (resource, name) =>
+          this.api.json('GET', `${namespacePath(this.settings.controlNamespace)}/${resource}/${name}`),
+        this.settings,
+        this.operation.driverBundleSha256,
+      ),
+      'Independent janitor is not freshly healthy for this exact driver',
+    );
     const object = {
       apiVersion: 'v1',
       kind: 'ConfigMap',
@@ -168,29 +201,6 @@ export class ReusableStagingState {
       },
     };
     const created = await this.api.json('POST', `${namespacePath(this.settings.controlNamespace)}/configmaps`, object);
-    const janitor = await this.api.json(
-      'GET',
-      `${namespacePath(this.settings.controlNamespace)}/configmaps/rivet-qualification-janitor-health`,
-    );
-    const health = JSON.parse(janitor?.data?.health ?? '{}');
-    assert.equal(health.clusterUid, this.settings.clusterUid);
-    assert.equal(
-      health.driverDigest,
-      this.operation.driverBundleSha256,
-      'Independent janitor has not approved this exact driver',
-    );
-    assert.ok(
-      Number.isFinite(health.observedAt) &&
-        Date.now() - health.observedAt >= 0 &&
-        Date.now() - health.observedAt < 60000,
-      'Independent janitor is not freshly healthy',
-    );
-    const owner = await this.api.json(
-      'GET',
-      `${namespacePath(this.settings.controlNamespace)}/pods/${dns(health.podName)}`,
-    );
-    assert.equal(owner?.metadata.uid, health.podUid);
-    assert.ok(!owner.metadata.deletionTimestamp);
     return {
       identity: created.metadata.uid,
       expiresAt: this.operation.expiresAt,

@@ -325,6 +325,34 @@ http {
       });
     const health = () => JSON.parse(docker('inspect', proxy))[0].State.Health.Status;
     await until(`${variant} startup`, async () => (await request('/')).status === 200 && health() === 'healthy');
+    // Nginx 1.29.7+ pools upstream sockets by default. API withdrawal closes
+    // idle sockets, racing a POST sent before nginx observes the close. Verify
+    // the actual rendered proxy does not retain API/execution connections.
+    for (const route of ['/api/echo', '/workflows/fixture']) {
+      const baseline = await request(route);
+      assert.equal(baseline.status, 200);
+      const initial = await baseline.json();
+      const expectedIdentity = route === '/workflows/fixture' && execution ? 'execution-1' : 'api-1';
+      assert.equal(initial.identity, expectedIdentity);
+      assert.ok(Number.isSafeInteger(initial.connectionId) && initial.connectionId > 0);
+      assert.ok(Number.isSafeInteger(initial.acceptedPosts) && initial.acceptedPosts >= 0);
+      const connections = new Set([initial.connectionId]);
+      let accepted = initial.acceptedPosts;
+      for (let i = 0; i < 3; i++) {
+        const body = `${variant}:${route}:${i}:accepted once`;
+        const response = await request(route, { method: 'POST', body });
+        assert.equal(response.status, 200);
+        const data = await response.json();
+        assert.equal(data.identity, expectedIdentity);
+        assert.equal(data.method, 'POST');
+        assert.equal(data.body, body);
+        assert.equal(data.acceptedPosts, ++accepted, `${variant} ${route} replayed an accepted POST`);
+        assert.ok(Number.isSafeInteger(data.connectionId) && data.connectionId > 0);
+        assert.ok(!connections.has(data.connectionId), `${variant} ${route} reused an idle retirement connection`);
+        connections.add(data.connectionId);
+      }
+      if (execution && route === '/workflows/fixture') executionPosts = accepted;
+    }
     assert.equal(await (await request('/', { headers: {} })).text(), 'Fixture login');
     // A frontend fallback or login page must never certify API readiness.
     // Exercise public health routes without an operator session through real nginx.

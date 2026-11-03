@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { performance } from 'node:perf_hooks';
+export { proxyContinuitySettled } from './release-operation-state.mjs';
 import {
   assertProtectedProxyTemplate,
   assertRequestContinuityProfile,
   continuityProfileDigest,
+  continuityHandoffSeconds,
 } from './request-continuity.mjs';
 
 const marker = 'rivet.dev/continuity-operation';
@@ -33,6 +35,23 @@ const identity = (r) => {
   return { kind: r.kind, name: r.metadata.name, namespace: r.metadata.namespace, uid: r.metadata.uid };
 };
 const annotations = (r) => r.metadata.annotations ?? {};
+// Compare HTTPRoute backend references by their Gateway API meaning. Keep the
+// original objects for writes and recovery; only omitted, documented defaults
+// are equivalent. Unexpected fields and non-default values still compare exactly.
+const routingSpec = (resource, spec = resource.spec) => {
+  if (resource.kind !== 'HTTPRoute') return spec;
+  const normalized = clone(spec);
+  for (const rule of normalized.rules ?? [])
+    for (const backend of rule.backendRefs ?? [])
+      for (const [key, value] of Object.entries({
+        group: '',
+        kind: 'Service',
+        namespace: resource.metadata.namespace,
+        weight: 1,
+      }))
+        if (backend[key] === undefined) backend[key] = value;
+  return normalized;
+};
 const frozenHpaSpec = (state) => {
   const spec = clone(state.hpa.spec);
   spec.minReplicas = state.bridgeReplicas;
@@ -46,22 +65,12 @@ const subset = (actual, expected) =>
       ? actual && typeof actual === 'object' && Object.entries(expected).every(([k, v]) => subset(actual[k], v))
       : equal(actual, expected);
 
-export function proxyContinuitySettled(record) {
-  const state = record.proxyContinuity;
-  return (
-    state === undefined ||
-    (state.phase === 'complete' &&
-      state.routeRestored === true &&
-      (!state.hpaFreezeIntent || state.hpaReleased) &&
-      state.entries.every((e) => !e.intent || e.absent))
-  );
-}
-
 /** Only a new, separately selected ingress pool is created. No serving pod is
  * relabelled, adopted or deleted to retrofit its immutable lifecycle. */
 export function buildProxyBridge(baseline, config, token) {
   const { profile, network, namespace, release } = config;
   assertRequestContinuityProfile(profile);
+  assert.match(config.proxyImage ?? '', /^[^\s@]+@sha256:[a-f0-9]{64}$/, 'A pinned candidate proxy image is required');
   identity(baseline.hpa);
   assert.equal(baseline.hpa.spec.scaleTargetRef.kind, 'Deployment');
   assert.equal(baseline.hpa.spec.scaleTargetRef.name, baseline.deployment.metadata.name);
@@ -132,6 +141,9 @@ export function buildProxyBridge(baseline, config, token) {
   assert.ok(template.spec.containers?.length === 1, 'Only the reviewed single-container proxy is supported');
   for (const c of template.spec.containers) {
     assert.match(c.image, /@sha256:[a-f0-9]{64}$/);
+    // The bridge serves throughout API retirement, so it must carry the
+    // candidate's connection policy while preserving installation settings.
+    c.image = config.proxyImage;
     assert.ok(
       !c.env?.some((e) => /KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL/.test(e.name) && e.value),
       'Plaintext proxy credentials must not enter the operation journal',
@@ -271,7 +283,11 @@ export function createProxyContinuityTransition({
       const live = await io.read(entry.desired, { optional: !!entry.deleteIntent });
       if (!live) continue;
       assert.equal(live.metadata.uid, entry.uid, 'Bridge owner replaced');
-      assert.deepEqual(live.spec, entry.observedSpec, 'Bridge specification changed');
+      assert.deepEqual(
+        routingSpec(live),
+        routingSpec(entry.desired, entry.observedSpec),
+        'Bridge specification changed',
+      );
       assert.equal(annotations(live)[marker], operation.record.token, 'Bridge ownership changed');
     }
     // Check the latest owned intent, including writes whose response was lost.
@@ -281,7 +297,11 @@ export function createProxyContinuityTransition({
       const live = await io.read(identity(original));
       assert.equal(identity(live).uid, original.metadata.uid, 'Routing owner replaced');
       const expected = latest.get(original.metadata.uid);
-      assert.deepEqual(live.spec, expected?.expected ?? original.spec, 'Foreign routing specification');
+      assert.deepEqual(
+        routingSpec(live),
+        routingSpec(original, expected?.expected ?? original.spec),
+        'Foreign routing specification',
+      );
       assert.deepEqual(
         annotations(live),
         expected?.annotations ?? annotations(original),
@@ -311,16 +331,24 @@ export function createProxyContinuityTransition({
     assert.equal(identity(current).uid, original.metadata.uid, 'Routing identity changed');
     const desiredAnnotations = { ...annotations(original), ...(!restore ? { [marker]: operation.record.token } : {}) };
     if (existing) {
-      assert.deepEqual(existing.expected, expected, 'Recovery routing specification changed');
+      assert.deepEqual(
+        routingSpec(original, existing.expected),
+        routingSpec(original, expected),
+        'Recovery routing specification changed',
+      );
       assert.ok(
-        equal(current.spec, expected) && equal(annotations(current), desiredAnnotations),
+        equal(routingSpec(current), routingSpec(original, expected)) && equal(annotations(current), desiredAnnotations),
         'Routing write acknowledgement is unknown; retain serving owners',
       );
     } else {
       const previous = Object.values(state.mutations ?? {})
         .filter((m) => m.uid === current.metadata.uid)
         .at(-1);
-      assert.deepEqual(current.spec, previous?.expected ?? original.spec, 'Foreign routing change');
+      assert.deepEqual(
+        routingSpec(current),
+        routingSpec(original, previous?.expected ?? original.spec),
+        'Foreign routing change',
+      );
       assert.deepEqual(
         annotations(current),
         previous?.annotations ?? annotations(original),
@@ -336,7 +364,7 @@ export function createProxyContinuityTransition({
       await io.patch(current, expected, desiredAnnotations);
       const confirmed = await io.read(identity(original));
       assert.equal(identity(confirmed).uid, current.metadata.uid);
-      assert.deepEqual(confirmed.spec, expected);
+      assert.deepEqual(routingSpec(confirmed), routingSpec(original, expected));
       assert.deepEqual(annotations(confirmed), desiredAnnotations);
     }
   };
@@ -356,7 +384,7 @@ export function createProxyContinuityTransition({
       else since = undefined;
       const duration = probe
         ? config.profile.propagationSeconds * 1000
-        : config.profile.backendServiceDrainSeconds * 1000;
+        : continuityHandoffSeconds(config.profile) * 1000;
       if (since !== undefined && now() - since >= duration) return;
       assert.ok(now() < deadline, 'Ingress propagation/drain was not confirmed; no serving owners removed');
       await wait();
@@ -463,6 +491,16 @@ export function createProxyContinuityTransition({
           });
           return;
         }
+        // Verify provider admission before creating any pool or freezing HPA.
+        // Autopilot can reduce a requested Pod termination budget on admission.
+        if (io.admit) {
+          const desired = bridge.entries.find((e) => e.desired.kind === 'Deployment').desired;
+          const admitted = await io.admit(desired);
+          assert.ok(
+            subset(admitted.spec, desired.spec),
+            'Provider admission changes the protected bridge specification; no bridge resources were created',
+          );
+        }
         await save(operation, {
           ...bridge,
           protocol: 1,
@@ -489,7 +527,11 @@ export function createProxyContinuityTransition({
         if (entry.uid) {
           const current = await io.read(entry.desired);
           assert.equal(identity(current).uid, entry.uid);
-          assert.deepEqual(current.spec, entry.observedSpec, 'Bridge specification changed');
+          assert.deepEqual(
+            routingSpec(current),
+            routingSpec(entry.desired, entry.observedSpec),
+            'Bridge specification changed',
+          );
           continue;
         }
         if (!entry.intent) {
@@ -502,7 +544,10 @@ export function createProxyContinuityTransition({
         }
         const current = await io.read(entry.desired);
         assert.equal(annotations(current)[marker], operation.record.token, 'Bridge ownership is unconfirmed');
-        assert.ok(subset(current.spec, entry.desired.spec), 'Created bridge differs from reviewed specification');
+        assert.ok(
+          subset(routingSpec(current), routingSpec(entry.desired)),
+          'Created bridge differs from reviewed specification',
+        );
         const entries = clone(stateOf(operation).entries);
         entries[i] = { ...entries[i], uid: identity(current).uid, observedSpec: clone(current.spec) };
         await save(operation, { entries });
@@ -536,7 +581,11 @@ export function createProxyContinuityTransition({
         if (live) {
           assert.equal(live.metadata.uid, entry.uid, 'Refuse deleting a replacement bridge object');
           assert.equal(annotations(live)[marker], operation.record.token);
-          assert.deepEqual(live.spec, entry.observedSpec, 'Bridge was changed before cleanup');
+          assert.deepEqual(
+            routingSpec(live),
+            routingSpec(entry.desired, entry.observedSpec),
+            'Bridge was changed before cleanup',
+          );
           if (!entry.deleteIntent) {
             const entries = clone(stateOf(operation).entries);
             entries[i].deleteIntent = true;

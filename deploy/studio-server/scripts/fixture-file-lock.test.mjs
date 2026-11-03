@@ -46,3 +46,29 @@ test('fixture lock bounds Windows contention without hiding permissions, links o
     );
   }
 });
+
+test('Windows delete-pending lock can disappear between open and stat without a false permission failure', () => {
+  let attempts = 0,
+    clock = 0;
+  const io = {
+    openSync() {
+      if (++attempts < 3) throw Object.assign(Error('delete pending'), { code: 'EPERM' });
+      return 11;
+    },
+    lstatSync() {
+      throw Object.assign(Error('gone'), { code: 'ENOENT' });
+    },
+  };
+  assert.equal(
+    acquireFixtureFileLock('private-fixture-lock', {
+      io,
+      platform: 'win32',
+      now: () => clock,
+      wait: () => {
+        clock += 10;
+      },
+    }),
+    11,
+  );
+  assert.equal(attempts, 3);
+});

@@ -431,28 +431,6 @@ function kubectl() {
   }
   if (['create', 'replace'].includes(args[0])) {
     const value = readInput();
-    if (value.kind === 'Job' && args[0] === 'create') {
-      if (find('Job', value.metadata.name)) fail('Preparation Job already exists');
-      const plan = JSON.parse(state.journal.data.record).preparation;
-      if (!plan?.jobs.some((j) => j.name === value.metadata.name && j.createIssued)) fail('Preparation intent missing');
-      value.metadata.uid = randomUUID();
-      touch(value);
-      value.status = { conditions: [{ type: 'Complete', status: 'True' }] };
-      state.resources.push(value);
-      state.pods.push({
-        kind: 'Pod',
-        metadata: {
-          name: value.metadata.name + '-pod',
-          namespace: state.namespace,
-          uid: randomUUID(),
-          labels: { ...value.spec.template.metadata.labels, 'job-name': value.metadata.name },
-          ownerReferences: [reference(value)],
-        },
-        spec: { ...clone(value.spec.template.spec), nodeName: 'fixture-node' },
-        status: { phase: 'Succeeded' },
-      });
-      return value;
-    }
     if (value.kind !== 'ConfigMap') fail('Fixture only accepts owned journal writes.');
     const initialClaim =
       state.journal &&
@@ -545,19 +523,6 @@ function kubectl() {
     }
     const name = args[2].split('/').at(-1),
       deletion = readInput();
-    if (args[2].includes('/jobs/')) {
-      const job = find('Job', name);
-      if (
-        !job ||
-        deletion.propagationPolicy !== 'Foreground' ||
-        job.metadata.uid !== deletion.preconditions.uid ||
-        job.metadata.resourceVersion !== deletion.preconditions.resourceVersion
-      )
-        fail('Unsafe preparation Job deletion');
-      state.resources = state.resources.filter((r) => r !== job);
-      state.pods = state.pods.filter((p) => !p.metadata.ownerReferences?.some((o) => o.uid === job.metadata.uid));
-      return { kind: 'Status' };
-    }
     if (args[2].includes('/horizontalpodautoscalers/')) {
       const hpa = find('HorizontalPodAutoscaler', name);
       if (

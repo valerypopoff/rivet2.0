@@ -30,32 +30,64 @@ import {
 } from './lib/ha-kubernetes-rollout.mjs';
 const runHaKubernetesRollout = (options) =>
   runKubernetesRollingStrategy({
-    // This suite isolates retirement plumbing. Real preparation runs in its
-    // HTTP suite and in the actual deployment-command stand-in tests.
-    prepareReplacements: async () => {},
     ...options,
     safety:
       options.safety ?? fixtureDeploymentSafety('rolling', options, { baseline: options.assertInstalledBaseline }),
   });
 
-test('preparation finishes before templates or any old owner retirement, and unresolved cleanup keeps recovery ownership', async () => {
-  for (const fault of [false, true]) {
+test('legacy warmup cleanup must be settled before exact-token recovery can change the rollout', async () => {
+  for (const preparation of [
+    { protocol: 1, state: 'preparing', jobs: [{ createIssued: true, uid: 'job' }] },
+    { protocol: 1, state: 'complete', jobs: [{ createIssued: true, absent: false }] },
+    { protocol: 1, state: 'cleaned-failed' },
+  ]) {
     const f = fixture();
-    f.options.prepareReplacements = async (operation) => {
-      f.operations.push('prepare');
-      await operation.checkpoint({ preparation: { state: fault ? 'preparing' : 'complete' } });
-      if (fault) throw Error('preparation cleanup unknown');
-    };
-    if (fault) {
-      await assert.rejects(runHaRollingUpgrade(f.options), /preparation cleanup unknown/);
-      assert.equal(f.journal.phase, 'preflight');
-      assert.ok(!f.operations.includes('templates'));
-      assert.ok(!f.operations.some((v) => v.startsWith('withdraw-command:')));
-    } else {
-      await runHaRollingUpgrade(f.options);
-      assert.ok(f.operations.indexOf('prepare') < f.operations.indexOf('templates'));
-    }
+    await runHaRollingUpgrade(f.options);
+    f.advance(2000);
+    await f.options.saveJournal(
+      { ...f.journal, phase: 'preflight', completed: [], preparation },
+      f.journal.resourceVersion,
+    );
+    f.operations.length = 0;
+    const original = structuredClone(f.journal);
+    await assert.rejects(
+      runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token }),
+      /warmup Jobs.*unresolved cleanup/,
+    );
+    assert.deepEqual(f.journal, original, 'An unresolved legacy Job must not lose its original journal');
+    assert.deepEqual(f.operations, [], 'No templates, scaling or retirement before inspected legacy cleanup');
   }
+});
+
+test('settled legacy warmup receipts do not require another warmup during recovery', async () => {
+  for (const state of ['complete', 'cleaned-failed']) {
+    const f = fixture();
+    await runHaRollingUpgrade(f.options);
+    f.advance(2000);
+    const preparation = { protocol: 1, state, jobs: [{ createIssued: true, absent: true }] };
+    await f.options.saveJournal(
+      { ...f.journal, phase: 'preflight', completed: [], preparation },
+      f.journal.resourceVersion,
+    );
+    await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
+    assert.equal(f.journal.phase, 'complete');
+    assert.deepEqual(f.journal.preparation, preparation, 'Existing cleanup facts remain intact');
+  }
+});
+
+test('a candidate surge that cannot become ready retains every original serving owner', async () => {
+  const f = fixture(),
+    original = structuredClone([...f.pods.values()]);
+  f.options.waitForReady = async (name) => {
+    assert.equal(name, 'fixture-backend-2');
+    f.pods.get(name).ready = false;
+    throw Error('Candidate image or scheduling did not become ready');
+  };
+  await assert.rejects(runHaRollingUpgrade(f.options), /did not become ready/);
+  for (const pod of original) assert.deepEqual(f.pods.get(pod.name), pod);
+  assert.ok(!f.operations.some((v) => /^(withdraw-command|begin|delete):/.test(v)));
+  assert.equal(f.journal.phase, 'owners');
+  assert.equal(f.journal.preparation, undefined);
 });
 
 test('HA template updates preserve HPA-grown frontend capacity with UID and resourceVersion fencing', async () => {
@@ -133,6 +165,81 @@ test('ingress handoff fences templates and retirement; unfinished bridge prevent
   }
 });
 
+test('a legacy controller-closed proxy handoff requires the original token and resumes without recreating its bridge', async () => {
+  const f = fixture();
+  f.options.identity.configurationDigest = 'original-configuration';
+  let fail = true,
+    bridgesCreated = 0,
+    token;
+  f.options.proxyContinuity = {
+    async prepare(operation) {
+      token ??= operation.record.token;
+      assert.equal(operation.record.token, token);
+      if (!operation.record.proxyContinuity) {
+        bridgesCreated++;
+        await operation.checkpoint({
+          proxyContinuity: {
+            phase: 'bridge-serving',
+            routeRestored: false,
+            entries: [{ intent: true, uid: 'original-bridge' }],
+          },
+        });
+      }
+      if (fail) throw Error('handoff interrupted');
+    },
+    verify: async () => {},
+    finish: async (operation) =>
+      operation.checkpoint({ proxyContinuity: { phase: 'complete', routeRestored: true, entries: [] } }),
+  };
+  await assert.rejects(runHaRollingUpgrade(f.options), /handoff interrupted/);
+  await f.options.saveJournal(
+    {
+      ...f.journal,
+      phase: 'complete',
+      abortedBeforeTemplates: true,
+      runner: 'preflight-recovery-' + f.journal.runner,
+      leaseExpiresAt: 0,
+    },
+    f.journal.resourceVersion,
+  );
+  const legacy = structuredClone(f.journal),
+    before = f.operations.length;
+  for (const kind of ['cutover', 'autoscaling'])
+    assert.throws(
+      () => journalForReleaseOperation(legacy, kind, f.options.identity, f.options.now),
+      /owns this release/,
+    );
+  assert.equal(legacy.phase, 'complete', 'Admission must not mutate the durable record before a recovery claim');
+  await assert.rejects(runHaRollingUpgrade(f.options), /Recover the exact HA release/);
+  await assert.rejects(
+    runHaRollingUpgrade({ ...f.options, resumeToken: randomUUID() }),
+    /Recover the exact HA release/,
+  );
+  await assert.rejects(
+    runHaRollingUpgrade({
+      ...f.options,
+      resumeToken: token,
+      identity: { ...f.options.identity, configurationDigest: 'changed' },
+    }),
+    /configuration changed/,
+  );
+  assert.equal(f.operations.length, before);
+  for (const patch of [
+    { owner: { name: 'unknown' } },
+    { completed: ['backend'] },
+    { runner: 'unknown-closer' },
+    { abortedBeforeTemplates: false },
+  ])
+    assert.throws(() => haJournalForRecovery({ ...legacy, ...patch }), /unfinished proxy handoff/);
+  fail = false;
+  await runHaRollingUpgrade({ ...f.options, resumeToken: token });
+  assert.equal(bridgesCreated, 1);
+  assert.equal(f.journal.token, token);
+  assert.equal(f.journal.phase, 'complete');
+  assert.equal(f.journal.abortedBeforeTemplates, undefined);
+  assert.equal(f.operations.filter((x) => x === 'templates').length, 1);
+});
+
 test('singleton rollout rejects absent or malformed inventory through its validation boundary', () => {
   for (const inventory of [undefined, null, {}, [], [null, { role: 'backend' }]])
     assert.throws(() => assertHaRolloutPlan(inventory, 'singleton'), /Missing HA backends/);
@@ -151,7 +258,11 @@ test('HA accepts the full supported execution-autoscaling range without relaxing
   );
   assert.throws(() => assertHaRolloutPlan([{ ...backend, replicas: 33 }, execution]), /bounded OnDelete/);
 });
-import { journalForReleaseOperation, releaseOperationJournalName } from './lib/release-operation-journal.mjs';
+import {
+  haJournalForRecovery,
+  journalForReleaseOperation,
+  releaseOperationJournalName,
+} from './lib/release-operation-journal.mjs';
 
 test('API-server field ordering does not resemble a Secret identity change', () => {
   const template = (container) => ({ spec: { containers: [{ name: 'backend', ...container }] } });
@@ -1155,8 +1266,10 @@ for (const fault of [
   'recreated-statefulset-recovery',
   'missing-final-revision',
   'foreign-pod-controller',
+  'slow-checkpoint-artifact',
 ])
-  test(`Kubernetes surge removal is capacity/UID guarded and recoverable: ${fault}`, async () => {
+  test(`Kubernetes surge removal is capacity/UID guarded and recoverable: ${fault}`, async (t) => {
+    if (fault === 'slow-checkpoint-artifact') t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
     const f = fixture(),
       calls = [];
     const name = f.options.workloads[0].name;
@@ -1183,7 +1296,10 @@ for (const fault of [
     let cm,
       revision = 0,
       pendingRemoval = false,
-      restored = false;
+      restored = false,
+      templateApplied = false,
+      slowArtifactObserved = false,
+      artifactCount = 0;
     const kube = async (args, extra) => {
       calls.push(args);
       const result = (value) => ({ stdout: value == null ? '' : JSON.stringify(value) });
@@ -1303,7 +1419,21 @@ for (const fault of [
       namespace: 'fixture',
       manifestDigest: 'candidate',
       resources: [candidate, { kind: 'Service', metadata: { name: 'public' }, spec: {} }],
-      timeoutMs: 1000,
+      timeoutMs: fault === 'slow-checkpoint-artifact' ? 1_200_000 : 1000,
+      artifact: async (name, contents) => {
+        artifactCount++;
+        if (fault !== 'slow-checkpoint-artifact' || name !== 'ha-rollout.json' || slowArtifactObserved) return;
+        if (JSON.parse(contents).phase !== 'templates') return;
+        slowArtifactObserved = true;
+        const before = artifactCount;
+        for (let sample = 0; sample < 10; sample++) {
+          t.mock.timers.tick(30_000);
+          await new Promise(setImmediate);
+          assert.equal(JSON.parse(cm.data.record).leaseExpiresAt, Date.now() + 120_000);
+          assert.equal(templateApplied, false, 'Template command must await the long request observation');
+          assert.equal(artifactCount, before, 'Heartbeat writes must not re-enter the long observation');
+        }
+      },
       routingWithdrawalClock: {
         now: () => routingTime,
         wait: async () => {
@@ -1316,6 +1446,7 @@ for (const fault of [
           ha: { rolloutResourceVersions: { [name]: 'observed-version' } },
         });
         if (fault === 'template-resource-version-race') throw Error('Helm resourceVersion conflict');
+        templateApplied = true;
       },
       restoreAutoscalers: async (_workloads, guardedValues) => {
         assert.equal(guardedValues.ha.rolloutResourceVersions[name], current.metadata.resourceVersion);
@@ -1402,5 +1533,6 @@ for (const fault of [
       await runHaKubernetesRollout({ ...options, resumeToken: JSON.parse(cm.data.record).token });
     } else await runHaKubernetesRollout(options);
     assert.equal(restored, true);
+    if (fault === 'slow-checkpoint-artifact') assert.equal(slowArtifactObserved, true);
     assert.equal(calls.filter((a) => a[0] === 'scale').length, 2);
   });

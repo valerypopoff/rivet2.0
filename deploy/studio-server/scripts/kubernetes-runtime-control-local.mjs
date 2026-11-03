@@ -308,6 +308,7 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       manifestDigest: this.config.images.api.digest,
       resources,
       artifact: (...args) => this.artifact(...args),
+      ...(this.observeProxyBackend ? { observeProxyBackend: this.observeProxyBackend } : {}),
       timeoutMs: 180_000,
       applyTemplates: (guards) => this.apply(mergeRuntimeControlGuards(values, guards), `transfer-${singleton}.json`),
     });

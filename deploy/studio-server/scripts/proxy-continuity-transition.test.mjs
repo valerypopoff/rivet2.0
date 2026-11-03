@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
 import {
   buildProxyBridge,
   createProxyContinuityTransition,
@@ -7,6 +9,7 @@ import {
 } from './lib/proxy-continuity-transition.mjs';
 import { createComputeBackendObserver, createKubernetesProxyContinuity } from './lib/proxy-continuity-kubernetes.mjs';
 import { assertContinuityAcceptance } from './lib/request-continuity.mjs';
+import { assertGkeProxyBackendHealth, hasReadyGkeNegGate } from './lib/gke-proxy-health.mjs';
 
 const profile = {
   protocol: 1,
@@ -28,6 +31,7 @@ const config = {
   release: 'rivet',
   namespace: 'fixture',
   proxyName: 'rivet-proxy',
+  proxyImage: `proxy@sha256:${'b'.repeat(64)}`,
   hpaSpec: {
     scaleTargetRef: { kind: 'Deployment', name: 'rivet-proxy' },
     minReplicas: 2,
@@ -41,17 +45,29 @@ const object = (kind, name, spec) => ({
   metadata: { name, namespace: 'fixture', uid: `uid-${name}`, resourceVersion: '1' },
   spec,
 });
+function admitRouteDefaults(resource) {
+  if (resource.kind === 'HTTPRoute')
+    for (const rule of resource.spec.rules)
+      for (const backend of rule.backendRefs ?? []) {
+        backend.group ??= '';
+        backend.kind ??= 'Service';
+        backend.weight ??= 1;
+      }
+  return resource;
+}
 function fixture() {
-  const route = object('HTTPRoute', 'route', {
-    parentRefs: [{ name: 'gateway' }],
-    hostnames: ['fixture.example.test'],
-    rules: [
-      {
-        matches: [{ path: { type: 'PathPrefix', value: '/' } }],
-        backendRefs: [{ name: 'rivet-proxy', port: 80 }],
-      },
-    ],
-  });
+  const route = admitRouteDefaults(
+    object('HTTPRoute', 'route', {
+      parentRefs: [{ name: 'gateway' }],
+      hostnames: ['fixture.example.test'],
+      rules: [
+        {
+          matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+          backendRefs: [{ name: 'rivet-proxy', port: 80 }],
+        },
+      ],
+    }),
+  );
   const policy = object('GCPBackendPolicy', 'policy', {
     default: { timeoutSec: 3600, connectionDraining: { drainingTimeoutSec: 60 } },
     targetRef: { group: '', kind: 'Service', name: 'rivet-proxy' },
@@ -64,6 +80,7 @@ function fixture() {
         {
           name: 'proxy',
           image: `proxy@sha256:${'a'.repeat(64)}`,
+          ports: [{ name: 'http', containerPort: 8080 }],
           lifecycle: { preStop: { exec: { command: ['/bin/sh', '-c', 'sleep 120'] } } },
         },
       ],
@@ -114,9 +131,13 @@ function fixture() {
       if (!found && !optional) throw Error('NotFound');
       return found && structuredClone(found);
     },
+    async admit(r) {
+      events.push(['admit', r.kind]);
+      return structuredClone(r);
+    },
     async create(r) {
       assert.ok(!live.has(key(r)));
-      const v = structuredClone(r);
+      const v = admitRouteDefaults(structuredClone(r));
       v.metadata.uid = `new-${key(r)}`;
       v.metadata.resourceVersion = '1';
       live.set(key(r), v);
@@ -134,6 +155,7 @@ function fixture() {
       const v = live.get(key(r));
       assert.equal(v.metadata.resourceVersion, r.metadata.resourceVersion);
       v.spec = structuredClone(spec);
+      admitRouteDefaults(v);
       v.metadata.annotations = structuredClone(annotations);
       v.metadata.resourceVersion = String(Number(v.metadata.resourceVersion) + 1);
       events.push(['patch', r.kind, clock]);
@@ -180,6 +202,19 @@ function fixture() {
   };
 }
 
+test('provider admission cannot silently shorten bridge lifetime or leave partial bridge resources', async () => {
+  const f = fixture();
+  f.io.admit = async (desired) => {
+    const admitted = structuredClone(desired);
+    admitted.spec.template.spec.terminationGracePeriodSeconds = 600;
+    return admitted;
+  };
+  await assert.rejects(f.transition().prepare(f.operation), /Provider admission/);
+  assert.equal(f.operation.record.proxyContinuity, undefined);
+  assert.equal(f.live.size, 6);
+  assert.ok(!f.events.some(([action]) => ['create', 'patch', 'beforeCreate'].includes(action)));
+});
+
 test('first transition keeps predecessors through both full drain windows and cleans only its bridge', async () => {
   const f = fixture(),
     t = f.transition();
@@ -187,6 +222,7 @@ test('first transition keeps predecessors through both full drain windows and cl
   assert.equal(f.operation.record.proxyContinuity.phase, 'bridge-serving');
   assert.equal(proxyContinuitySettled(f.operation.record), false);
   assert.ok(f.events.some((e) => e[0] === 'beforeCreate' && e[1] === 'Deployment'));
+  assert.equal(f.events[0][0], 'admit');
   assert.ok(!f.events.some((e) => e[0] === 'remove'));
   assert.equal(f.events.filter((e) => e[0] === 'patch' && e[1] === 'HTTPRoute')[0][2], 60000);
   await assert.rejects(t.finish(f.operation), /HPA must be restored/);
@@ -197,7 +233,7 @@ test('first transition keeps predecessors through both full drain windows and cl
   assert.deepEqual(f.live.get('HTTPRoute/route').spec, f.baseline.route.spec);
   assert.deepEqual(f.live.get('GCPBackendPolicy/policy').metadata.annotations, {});
   assert.equal(f.live.get('GCPBackendPolicy/policy').spec.default.connectionDraining.drainingTimeoutSec, 600);
-  assert.ok(f.events.find((e) => e[0] === 'remove')[2] >= 1260000);
+  assert.ok(f.events.find((e) => e[0] === 'remove')[2] >= 780000);
 });
 
 test('lost route acknowledgement is observed on recovery without a duplicate patch', async () => {
@@ -225,6 +261,78 @@ test('lost route acknowledgement is observed on recovery without a duplicate pat
   await f.restore();
   await f.transition().finish(f.operation);
   assert.ok(proxyContinuitySettled(f.operation.record));
+});
+
+test('equivalent HTTPRoute backend defaults survive handoff, verification and restoration', async () => {
+  const f = fixture(),
+    read = f.io.read;
+  f.io.read = async (...args) => {
+    const resource = await read(...args);
+    if (resource?.kind === 'HTTPRoute')
+      for (const rule of resource.spec.rules)
+        for (const backend of rule.backendRefs ?? []) {
+          if (backend.group === '') delete backend.group;
+          if (backend.kind === 'Service') delete backend.kind;
+          if (backend.weight === 1) delete backend.weight;
+          backend.namespace ??= resource.metadata.namespace;
+        }
+    return resource;
+  };
+  const t = f.transition();
+  await t.prepare(f.operation);
+  await t.verify(f.operation);
+  await f.restore();
+  await t.finish(f.operation);
+  assert.ok(proxyContinuitySettled(f.operation.record));
+});
+
+test('routing comparisons still reject changed destinations, traffic policy and invalid defaults', async () => {
+  const changes = [
+    (r) => {
+      r.spec.rules[0].backendRefs[1].name = 'foreign';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].group = 'foreign.example';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].kind = 'OtherBackend';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].namespace = 'foreign';
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].port = 9999;
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].weight = 0;
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].kind = null;
+    },
+    (r) => {
+      r.spec.rules[0].backendRefs[1].namespace = null;
+    },
+    (r) => {
+      r.spec.rules[0].matches[0].path.value = '/foreign';
+    },
+    (r) => {
+      r.spec.rules[0].filters[0].responseHeaderModifier.set[0].value = 'foreign';
+    },
+    (r) => {
+      r.spec.parentRefs[0].name = 'foreign';
+    },
+  ];
+  for (const change of changes) {
+    const f = fixture(),
+      t = f.transition();
+    await t.prepare(f.operation);
+    const before = f.events.length;
+    change(f.live.get('HTTPRoute/route'));
+    await assert.rejects(t.verify(f.operation), /Foreign routing specification/);
+    await assert.rejects(f.restore(), /Foreign routing specification/);
+    await assert.rejects(t.finish(f.operation), /Foreign routing specification/);
+    assert.equal(f.events.length, before, 'Changed routes must not be overwritten or their serving pool removed');
+  }
 });
 test('every bridge creation fences an unapplied intent and observes a committed lost acknowledgement', async () => {
   for (const kind of [
@@ -329,6 +437,34 @@ test('a committed return-route write with a lost response resumes without expect
   );
 });
 
+test('bridge uses the candidate proxy image and retains the captured installation configuration', () => {
+  const f = fixture();
+  f.baseline.deployment.spec.template.spec.containers[0].env = [
+    { name: 'RIVET_KEY', valueFrom: { secretKeyRef: { name: 'fixture-auth', key: 'key' } } },
+  ];
+  const original = structuredClone(f.baseline.deployment);
+  const bridge = buildProxyBridge(f.baseline, config, 'token');
+  const deployment = bridge.entries.find((e) => e.desired.kind === 'Deployment').desired;
+  assert.notEqual(original.spec.template.spec.containers[0].image, config.proxyImage);
+  assert.equal(deployment.spec.template.spec.containers[0].image, config.proxyImage);
+  assert.deepEqual(deployment.spec.template.spec.containers[0].ports, original.spec.template.spec.containers[0].ports);
+  assert.deepEqual(deployment.spec.template.spec.containers[0].env, original.spec.template.spec.containers[0].env);
+  assert.deepEqual(f.baseline.deployment, original, 'Building the bridge must not alter the predecessor');
+  for (const proxyImage of [undefined, 'proxy:latest', `proxy@sha256:${'b'.repeat(63)}`])
+    assert.throws(() => buildProxyBridge(f.baseline, { ...config, proxyImage }, 'token'), /candidate proxy image/);
+});
+
+test('bridge recovery refuses a different candidate proxy image', async () => {
+  const f = fixture();
+  await f.transition().prepare(f.operation);
+  const changed = createProxyContinuityTransition({
+    config: { ...config, proxyImage: `proxy@sha256:${'c'.repeat(64)}` },
+    io: f.io,
+    timeoutMs: 1200000,
+  });
+  await assert.rejects(changed.verify(f.operation), /Ingress recovery inputs changed/);
+});
+
 test('bridge placement preserves unrelated peer selector constraints', () => {
   const f = fixture();
   f.baseline.deployment.spec.template.spec.topologySpreadConstraints = [
@@ -371,25 +507,42 @@ test('actual backend observation binds the exact regional NEG groups and checks 
   );
   const backend = {
     name: 'actual-backend',
+    id: '123',
+    healthChecks: [
+      'https://www.googleapis.com/compute/v1/projects/fixture-project/regions/europe-central2/healthChecks/check',
+    ],
     backends: groups.map((group) => ({ group })),
     loadBalancingScheme: 'EXTERNAL_MANAGED',
     timeoutSec: 3600,
     connectionDraining: { drainingTimeoutSec: 600 },
   };
   const calls = [];
+  const observedAt = Date.now();
   const observe = createComputeBackendObserver(config.network, {
+    now: () => observedAt,
     accessToken: async () => 'private',
     fetchImpl: async (url, options) => {
       calls.push([url, options.method]);
       return {
         status: 200,
         json: async () =>
-          url.endsWith('/getHealth') ? { healthStatus: [{ healthState: 'HEALTHY' }] } : { items: [backend] },
+          url.endsWith('/getHealth')
+            ? {
+                healthStatus: [
+                  {
+                    healthState: 'HEALTHY',
+                    port: 8080,
+                    ipAddress: JSON.parse(options.body).group.includes('central2-a/') ? '10.0.0.1' : '10.0.0.2',
+                  },
+                ],
+              }
+            : { items: [backend] },
       };
     },
   });
   const service = {
     metadata: {
+      uid: 'service-uid',
       annotations: {
         'cloud.google.com/neg-status': JSON.stringify({
           zones: ['europe-central2-a', 'europe-central2-b'],
@@ -402,6 +555,15 @@ test('actual backend observation binds the exact regional NEG groups and checks 
     backendServiceDrainSeconds: 600,
     healthy: true,
     backendService: 'actual-backend',
+    backendServiceId: '123',
+    serviceUid: 'service-uid',
+    observedAt,
+    healthyEndpoints: ['a', 'b'].map((zone, i) => ({
+      ipAddress: `10.0.0.${i + 1}`,
+      port: 8080,
+      zone: `europe-central2-${zone}`,
+      neg: 'fixture-neg',
+    })),
   });
   assert.equal(calls.length, 3);
   const duplicate = structuredClone(service);
@@ -415,13 +577,16 @@ test('actual backend observation binds the exact regional NEG groups and checks 
   await assert.rejects(observe(service), /timeout/);
   backend.timeoutSec = 3600;
   backend.backends.push({ group: 'foreign' });
-  await assert.rejects(observe(service), /exactly one/);
+  await assert.rejects(observe(service), /foreign endpoint group/);
 });
 
 test('Kubernetes adapter runs the full owned handoff with NEG admission, live policy observations and UID-preconditioned cleanup', async () => {
   const f = fixture(),
     commands = [];
-  let clock = 0;
+  let clock = 0,
+    clampAdmissionGrace = true,
+    available = true,
+    backendHealthy = true;
   const types = {
     services: 'Service',
     'deployments.apps': 'Deployment',
@@ -444,7 +609,12 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       };
     if (r.kind === 'Deployment') {
       r.metadata.generation = 1;
-      r.status = { observedGeneration: 1, availableReplicas: r.spec.replicas, updatedReplicas: r.spec.replicas };
+      r.status = {
+        observedGeneration: 1,
+        availableReplicas: available ? r.spec.replicas : 0,
+        updatedReplicas: r.spec.replicas,
+      };
+      r.spec.minReadySeconds = 120;
     }
     return r;
   };
@@ -479,6 +649,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
               kind: 'Pod',
               metadata: {
                 name: `${d.metadata.name}-${i}`,
+                namespace: 'fixture',
                 uid: `${d.metadata.uid}-pod${i}`,
                 labels: d.spec.template.metadata.labels,
                 annotations: d.spec.template.metadata.annotations,
@@ -490,9 +661,14 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
                 readinessGates: [{ conditionType: 'cloud.google.com/load-balancer-neg-ready' }],
               },
               status: {
+                podIP: `10.${d.metadata.name === 'rivet-proxy' ? 0 : 1}.0.${i + 1}`,
                 conditions: [
                   { type: 'Ready', status: 'True' },
-                  { type: 'cloud.google.com/load-balancer-neg-ready', status: 'True', reason: 'LoadBalancerNegReady' },
+                  {
+                    type: 'cloud.google.com/load-balancer-neg-ready',
+                    status: 'True',
+                    reason: 'LoadBalancerNegWithoutHealthCheck',
+                  },
                 ],
               },
             })),
@@ -524,9 +700,15 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     } else if (action === 'create') {
       const desired = JSON.parse(options.input),
         key = `${desired.kind}/${desired.metadata.name}`;
+      if (args.includes('--dry-run=server')) {
+        assert.equal(desired.kind, 'Deployment');
+        if (clampAdmissionGrace) desired.spec.template.spec.terminationGracePeriodSeconds = 600;
+        return { stdout: JSON.stringify(desired) };
+      }
       assert.ok(!f.live.has(key));
       desired.metadata.uid = `new-${key}`;
       desired.metadata.resourceVersion = '1';
+      admitRouteDefaults(desired);
       f.live.set(key, desired);
       result = desired;
     } else if (action === 'patch') {
@@ -535,6 +717,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       assert.equal(current.metadata.uid, patch[0].value);
       assert.equal(current.metadata.resourceVersion, patch[1].value);
       current.spec = patch[2].value;
+      admitRouteDefaults(current);
       current.metadata.annotations = patch[3].value;
       current.metadata.resourceVersion = String(Number(current.metadata.resourceVersion) + 1);
       if (current.kind === 'HorizontalPodAutoscaler') {
@@ -572,7 +755,20 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       clock += 60000;
     },
     observeBackend: async (service) => ({
-      healthy: true,
+      healthy: backendHealthy,
+      serviceUid: service.metadata.uid,
+      observedAt: Date.now(),
+      backendService: `backend-${service.metadata.name}`,
+      backendServiceId: '123',
+      healthyEndpoints: Array.from(
+        { length: f.live.get(`Deployment/${service.metadata.name}`).spec.replicas },
+        (_, i) => ({
+          ipAddress: `10.${service.metadata.name === 'rivet-proxy' ? 0 : 1}.0.${i + 1}`,
+          port: 8080,
+          zone: `europe-central2-${i % 2 ? 'b' : 'a'}`,
+          neg: `neg-${service.metadata.name}`,
+        }),
+      ),
       backendServiceDrainSeconds: f.live.get(
         `GCPBackendPolicy/${service.metadata.name === 'rivet-proxy' ? 'policy' : service.metadata.name}`,
       ).spec.default.connectionDraining.drainingTimeoutSec,
@@ -587,6 +783,20 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
   const before = commands.length;
   assert.equal((await adapter.inspect()).actualBackendServiceDrainSeconds, 60);
   assert.ok(commands.slice(before).every((a) => ['get', 'exec'].includes(a[0] === '--namespace' ? a[2] : a[0])));
+  available = false;
+  await assert.rejects(adapter.inspect(), /0\/2 required available replicas.*minReadySeconds=120/);
+  available = true;
+  backendHealthy = false;
+  await assert.rejects(adapter.inspect(), /Regional backend is not healthy/);
+  backendHealthy = true;
+  await assert.rejects(adapter.prepare(f.operation), /Provider admission/);
+  assert.equal(f.live.size, 6, 'Rejected admission must not create a partial bridge');
+  assert.equal(f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec.minReplicas, 2);
+  assert.equal(f.operation.record.proxyContinuity, undefined);
+  const attemptedCreates = commands.filter((a) => a.includes('create'));
+  assert.equal(attemptedCreates.length, 1);
+  assert.ok(attemptedCreates[0].includes('--dry-run=server'));
+  clampAdmissionGrace = false;
   await adapter.prepare(f.operation);
   assert.equal(f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec.behavior.scaleDown.selectPolicy, 'Disabled');
   assert.equal(f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec.minReplicas, 4);
@@ -594,9 +804,24 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     autoscaling: { proxy: { minReplicas: 4, scaleDownPaused: true } },
   });
   await adapter.verify(f.operation);
+  const beforeProfileFailure = clock;
+  await assert.rejects(adapter.beforeRestoreAutoscalers(f.operation), /Proxy pod grace is too short/);
+  assert.equal(clock, beforeProfileFailure, 'An invalid shutdown profile must fail without readiness retries');
   const template = f.live.get('Deployment/rivet-proxy').spec.template;
   template.spec.terminationGracePeriodSeconds = 900;
   template.spec.containers[0].lifecycle.preStop.exec.command = ['/bin/sh', '-c', 'sleep 660'];
+  available = false;
+  const routeBeforeTimeout = structuredClone(f.live.get('HTTPRoute/route').spec);
+  await assert.rejects(
+    adapter.beforeRestoreAutoscalers(f.operation),
+    /Timed out waiting for protected current normal proxy capacity.*0\/4 required available replicas/,
+  );
+  assert.deepEqual(
+    f.live.get('HTTPRoute/route').spec,
+    routeBeforeTimeout,
+    'Keep bridge traffic while normal availability is pending',
+  );
+  available = true;
   await adapter.beforeRestoreAutoscalers(f.operation);
   assert.deepEqual(f.live.get('HTTPRoute/route').spec, f.baseline.route.spec, 'Traffic returns before HPA restoration');
   assert.deepEqual(adapter.templateValues(f.operation), {});
@@ -646,12 +871,242 @@ test('deadlines that cannot cover a protected phase fail before any mutation', (
     profile: {
       ...profile,
       propagationSeconds: 1200,
-      proxyPreStopDelaySeconds: 1800,
-      proxyTerminationGracePeriodSeconds: 1945,
+      backendServiceDrainSeconds: 1500,
+      proxyPreStopDelaySeconds: 2700,
+      proxyTerminationGracePeriodSeconds: 2845,
     },
   };
   assert.throws(
     () => createProxyContinuityTransition({ config: longPropagation, io: {}, timeoutMs: 1500000 }),
     /deadline must exceed/,
   );
+});
+
+function regionalEndpointFixture() {
+  const zones = ['europe-central2-a', 'europe-central2-b'];
+  const service = object('Service', 'regional-proxy', {
+    selector: { pool: 'current' },
+    ports: [{ port: 80, targetPort: 'http' }],
+  });
+  service.metadata.annotations = {
+    'cloud.google.com/neg-status': JSON.stringify({ zones, network_endpoint_groups: { 80: 'current-neg' } }),
+  };
+  const pods = zones.map((zone, i) => ({
+    metadata: { name: `proxy-${i}`, uid: `proxy-uid-${i}`, namespace: 'fixture', labels: { pool: 'current' } },
+    spec: {
+      readinessGates: [{ conditionType: 'cloud.google.com/load-balancer-neg-ready' }],
+      containers: [{ name: 'proxy', ports: [{ name: 'http', containerPort: 8080 }] }],
+    },
+    status: {
+      podIP: `10.0.0.${i + 1}`,
+      conditions: [
+        { type: 'Ready', status: 'True' },
+        {
+          type: 'cloud.google.com/load-balancer-neg-ready',
+          status: 'True',
+          reason: 'LoadBalancerNegWithoutHealthCheck',
+        },
+      ],
+    },
+  }));
+  const backend = {
+    healthy: true,
+    serviceUid: service.metadata.uid,
+    backendService: 'actual-backend',
+    backendServiceId: '123',
+    observedAt: Date.now(),
+    healthyEndpoints: zones.map((zone, i) => ({
+      ipAddress: pods[i].status.podIP,
+      port: 8080,
+      zone,
+      neg: 'current-neg',
+    })),
+  };
+  return { service, pods, backend };
+}
+
+test('standalone NEG readiness needs fresh exact current-endpoint evidence, not healthy old or surplus Pods', () => {
+  const f = regionalEndpointFixture();
+  assert.equal(hasReadyGkeNegGate(f.pods[0]), false, 'WithoutHealthCheck alone remains insufficient');
+  assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, f.backend).length, 2);
+  const changes = [
+    (f) => {
+      f.backend.healthy = false;
+    },
+    (f) => {
+      f.backend.serviceUid = 'other-service';
+    },
+    (f) => {
+      f.backend.observedAt -= 60001;
+    },
+    (f) => {
+      f.backend.observedAt += 60000;
+    },
+    (f) => {
+      f.backend.healthyEndpoints.pop();
+    },
+    (f) => {
+      f.backend.healthyEndpoints[0].ipAddress = '10.0.0.99';
+    },
+    (f) => {
+      f.backend.healthyEndpoints[0].port = 9090;
+    },
+    (f) => {
+      f.backend.healthyEndpoints[0].zone = 'another-region-a';
+    },
+    (f) => {
+      f.backend.healthyEndpoints[0].neg = 'foreign-neg';
+    },
+    (f) => {
+      f.backend.healthyEndpoints.push({ ...f.backend.healthyEndpoints[0] });
+    },
+    (f) => {
+      f.backend.healthyEndpoints[1].zone = f.backend.healthyEndpoints[0].zone;
+    },
+    (f) => {
+      f.pods[1].metadata.uid = f.pods[0].metadata.uid;
+    },
+    (f) => {
+      f.pods[1].status.podIP = f.pods[0].status.podIP;
+    },
+    (f) => {
+      f.pods[0].metadata.deletionTimestamp = new Date().toISOString();
+    },
+    (f) => {
+      f.pods[0].status.conditions[0].status = 'False';
+    },
+    (f) => {
+      f.pods[0].status.conditions[1].status = 'False';
+    },
+    (f) => {
+      f.pods[0].status.conditions[1].reason = 'LoadBalancerNegTimeout';
+    },
+    (f) => {
+      f.pods[0].spec.readinessGates = [];
+    },
+    (f) => {
+      f.pods[0].metadata.namespace = 'foreign';
+    },
+    (f) => {
+      f.service.spec.selector.pool = 'other';
+    },
+    (f) => {
+      f.service.spec.ports[0].targetPort = 'unknown';
+    },
+    (f) => {
+      f.backend.backendServiceId = '0';
+    },
+  ];
+  for (const change of changes) {
+    const f = regionalEndpointFixture();
+    change(f);
+    assert.throws(() => assertGkeProxyBackendHealth(f.pods, f.service, f.backend));
+  }
+});
+
+test('real regional Compute HTTP reads distinguish pending attachment, unhealthy replacement, ambiguity and denied access', async (t) => {
+  const f = regionalEndpointFixture(),
+    calls = [];
+  const groups = ['a', 'b'].map(
+    (z) =>
+      `https://www.googleapis.com/compute/v1/projects/fixture-project/zones/europe-central2-${z}/networkEndpointGroups/current-neg`,
+  );
+  const extraGroup = groups[0].replace('central2-a/', 'central2-c/');
+  let mode = 'healthy';
+  const server = createServer(async (request, response) => {
+    assert.equal(request.headers.authorization, 'Bearer local-only');
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : undefined;
+    calls.push({ path: request.url, method: request.method, body });
+    response.setHeader('content-type', 'application/json');
+    if (mode === 'denied') {
+      response.writeHead(403);
+      response.end('{}');
+      return;
+    }
+    if (request.url.endsWith('/getHealth')) {
+      assert.equal(request.method, 'POST');
+      assert.ok([...groups, extraGroup].includes(body.group));
+      const i = groups.indexOf(body.group);
+      response.end(
+        JSON.stringify({
+          healthStatus:
+            i < 0
+              ? []
+              : [
+                  {
+                    healthState: mode === 'unhealthy' && i === 1 ? 'UNHEALTHY' : 'HEALTHY',
+                    ipAddress: mode === 'old-endpoint' && i === 1 ? '10.0.0.99' : f.pods[i].status.podIP,
+                    port: 8080,
+                  },
+                ],
+        }),
+      );
+    } else {
+      assert.equal(request.method, 'GET');
+      const backend = {
+        name: 'actual-backend',
+        id: '123',
+        loadBalancingScheme: 'EXTERNAL_MANAGED',
+        timeoutSec: 3600,
+        healthChecks: mode === 'no-check' ? [] : ['regional-check'],
+        backends: (mode === 'extra-empty-zone'
+          ? [...groups, extraGroup]
+          : mode === 'foreign-group'
+            ? [...groups, extraGroup.replace('current-neg', 'foreign-neg')]
+            : mode === 'duplicate-group'
+              ? [...groups, groups[0]]
+              : mode === 'missing-zone'
+                ? [groups[0], extraGroup]
+                : groups
+        ).map((group) => ({ group })),
+      };
+      response.end(
+        JSON.stringify({
+          items: mode === 'missing' ? [] : mode === 'ambiguous' ? [backend, { ...backend, id: '456' }] : [backend],
+        }),
+      );
+    }
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const observe = createComputeBackendObserver(config.network, {
+    accessToken: async () => 'local-only',
+    fetchImpl: (url, options) =>
+      fetch(`http://127.0.0.1:${server.address().port}${new URL(url).pathname}${new URL(url).search}`, options),
+  });
+  assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, await observe(f.service)).length, 2);
+  mode = 'extra-empty-zone';
+  assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, await observe(f.service)).length, 2);
+  assert.ok(
+    calls.some((c) => c.body?.group === extraGroup),
+    'Observe all actual same-Service backend groups',
+  );
+  mode = 'foreign-group';
+  await assert.rejects(observe(f.service, { allowPending: true }), /foreign endpoint group/);
+  mode = 'duplicate-group';
+  await assert.rejects(observe(f.service, { allowPending: true }), /duplicate endpoint group/);
+  mode = 'missing-zone';
+  assert.equal((await observe(f.service, { allowPending: true })).healthy, false);
+  for (const pending of ['missing', 'no-check']) {
+    mode = pending;
+    assert.equal((await observe(f.service, { allowPending: true })).healthy, false);
+    await assert.rejects(observe(f.service), /exactly one|health checks/);
+  }
+  mode = 'unhealthy';
+  assert.equal((await observe(f.service)).healthy, false);
+  mode = 'old-endpoint';
+  const old = await observe(f.service);
+  assert.equal(old.healthy, true);
+  assert.throws(() => assertGkeProxyBackendHealth(f.pods, f.service, old), /current proxy|Current proxy/);
+  mode = 'ambiguous';
+  await assert.rejects(observe(f.service, { allowPending: true }), /exactly one/);
+  mode = 'denied';
+  await assert.rejects(observe(f.service, { allowPending: true }), /Compute backend observation failed/);
+  assert.ok(calls.some((c) => c.method === 'POST' && c.body?.group === groups[1]));
 });

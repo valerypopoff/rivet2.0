@@ -732,8 +732,8 @@
 {{- range $key := list "maxProtectedRequestSeconds" "backendServiceDrainSeconds" "propagationSeconds" -}}
 {{- include "rivet.assertNonNegativeWholeNumber" (dict "path" (printf "requestContinuity.%s" $key) "value" (index $.Values.requestContinuity $key)) -}}
 {{- end -}}
-{{- if or (ne (int .Values.requestContinuity.maxProtectedRequestSeconds) 300) (lt (int .Values.requestContinuity.backendServiceDrainSeconds) 600) (gt (int .Values.requestContinuity.backendServiceDrainSeconds) 3600) (lt (int .Values.requestContinuity.propagationSeconds) 60) -}}
-{{- fail "Request continuity requires 300-second protection, 600–3600-second LB drain and at least 60-second propagation" -}}
+{{- if or (ne (int .Values.requestContinuity.maxProtectedRequestSeconds) 300) (lt (int .Values.requestContinuity.backendServiceDrainSeconds) (add (int .Values.requestContinuity.maxProtectedRequestSeconds) (int .Values.requestContinuity.propagationSeconds))) (gt (int .Values.requestContinuity.backendServiceDrainSeconds) 3600) (lt (int .Values.requestContinuity.propagationSeconds) 60) -}}
+{{- fail "Request continuity requires 300-second protection, at least 60-second propagation, and LB drain covering their sum (at most 3600 seconds)" -}}
 {{- end -}}
 {{- if lt (int $proxyLifecycle.preStopDelaySeconds) (add (int .Values.requestContinuity.backendServiceDrainSeconds) (int .Values.requestContinuity.propagationSeconds)) -}}
 {{- fail "Proxy preStop must cover LB draining plus propagation" -}}

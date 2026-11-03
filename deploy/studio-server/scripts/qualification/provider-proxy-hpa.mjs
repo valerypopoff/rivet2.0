@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { role, ready, until } from './provider-gate.mjs';
 import { proxyFixtureProcessCommand } from '../lib/staging-proxy-fixture-process.mjs';
 import { continuityTimeoutMs } from '../lib/request-continuity.mjs';
+import { isGkeProxyBackendReady } from '../lib/gke-proxy-health.mjs';
 export function processStartTicks(stat) {
   const end = stat.lastIndexOf(')');
   assert.ok(end > 0);
@@ -158,23 +159,16 @@ export async function runProviderProxyHpa(gate, owned) {
           !pods.every(ready)
         )
           return false;
-        if (
-          !pods.every((p) =>
-            p.status.conditions.some(
-              (c) =>
-                c.type === 'cloud.google.com/load-balancer-neg-ready' &&
-                c.status === 'True' &&
-                c.reason === 'LoadBalancerNegReady',
-            ),
-          )
-        )
-          return false;
+        const service = JSON.parse((await gate.kube(['get', 'service', name, '-o', 'json'])).stdout);
+        const backend = await gate.observeProxyBackend(service, { allowPending: true });
+        if (!isGkeProxyBackendReady(pods, service, backend)) return false;
         report.scaleUpObservation = {
           at: new Date().toISOString(),
           elapsedMs: Date.now() - started,
           desired: current.status.desiredReplicas,
           readyUids: pods.map((p) => p.metadata.uid),
           metrics: current.status.currentMetrics,
+          backend,
         };
         return true;
       },

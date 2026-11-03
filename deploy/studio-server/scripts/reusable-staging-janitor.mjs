@@ -51,12 +51,18 @@ export async function stagingJanitorPass({ api, cloud, settings, owner, wait, no
       operation = record.operation;
       const { inputHash, ...input } = operation;
       assert.equal(qualificationHash(input), inputHash, 'Operation input changed');
+      assert.ok(record.cleanupVerified === undefined || typeof record.cleanupVerified === 'boolean');
+      if (record.cleanupVerified === true) {
+        assert.equal(record.closed, true);
+        assert.equal(record.phase, 'cleaned');
+        continue; // Completed history needs no new driver's cleanup authority.
+      }
       assert.equal(
         operation.driverBundleSha256,
         settings.approvedDriverDigest,
         'Janitor has not approved this driver version',
       );
-      if (record.cleanupVerified || Date.parse(operation.expiresAt) > now()) continue;
+      if (Date.parse(operation.expiresAt) > now()) continue;
       assert.ok(Number.isFinite(Date.parse(operation.expiresAt)));
       const state = new ReusableStagingState(api, settings, operation);
       await state.read();

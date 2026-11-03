@@ -22,6 +22,7 @@ export const executionSampleCommand = (port) => [
   `const r=await fetch('http://127.0.0.1:${port}/metrics',{signal:AbortSignal.timeout(5000)});if(!r.ok)process.exit(1);process.stdout.write(await r.text());`,
 ];
 export class PendingExecutionCpuSample extends Error {}
+export class KubernetesExecOutcomeUnknown extends Error {}
 
 export function cpuQuantity(value) {
   const match = /^(\d+(?:\.\d+)?)(n|u|m)?$/.exec(String(value));
@@ -139,7 +140,14 @@ export function createKubernetesTransport({
         }
       }
     },
-    exec(path, command, { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr } = {}) {
+    exec(
+      path,
+      command,
+      { container = 'api', stdin, maxOutputBytes = 1024 * 1024, onStderr, keepAliveMs = 30000, signal } = {},
+    ) {
+      if (signal !== undefined && !(signal instanceof AbortSignal))
+        throw new Error('Kubernetes exec abort signal is invalid.');
+      if (signal?.aborted) return Promise.reject(new Error('Kubernetes exec aborted before dispatch.'));
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(container)) throw new Error('Kubernetes exec container is invalid.');
       if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 32 * 1024 * 1024)
         throw new Error('Kubernetes exec output bound is invalid.');
@@ -147,6 +155,8 @@ export function createKubernetesTransport({
         throw new Error('Kubernetes exec input is invalid.');
       if (onStderr !== undefined && typeof onStderr !== 'function')
         throw new Error('Kubernetes diagnostic sink is invalid.');
+      if (!Number.isSafeInteger(keepAliveMs) || keepAliveMs < 1)
+        throw new Error('Kubernetes exec keepalive interval is invalid.');
       return new Promise((resolve, reject) => {
         const url = new URL(path, base);
         url.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -167,21 +177,44 @@ export function createKubernetesTransport({
         );
         let output = '',
           bytes = 0,
-          status,
-          stderr = false;
+          stderr = false,
+          settled = false,
+          heartbeat;
         const decoder = new StringDecoder('utf8');
         const finish = (error, result) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
+          clearInterval(heartbeat);
+          signal?.removeEventListener('abort', abort);
           socket.removeAllListeners();
           socket.on('error', () => {});
           socket.terminate();
           error ? reject(error) : resolve(result);
         };
+        const abort = () =>
+          finish(new KubernetesExecOutcomeUnknown('Kubernetes exec aborted; command outcome is unknown.'));
         const timer = setTimeout(
-          () => finish(new Error('Kubernetes exec deadline exceeded; command outcome is unknown.')),
+          () =>
+            finish(new KubernetesExecOutcomeUnknown('Kubernetes exec deadline exceeded; command outcome is unknown.')),
           timeoutMs,
         );
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
         socket.once('open', () => {
+          // Keep silent long-running setup commands alive through idle proxies.
+          // This does not extend their absolute deadline or retry the command.
+          heartbeat = setInterval(() => {
+            try {
+              socket.ping();
+            } catch {
+              finish(new KubernetesExecOutcomeUnknown('Kubernetes exec keepalive failed; command outcome is unknown.'));
+            }
+          }, keepAliveMs);
+          heartbeat.unref();
           if (stdin === undefined) return;
           // v5 supports explicit stdin EOF without closing stdout/status. A
           // connection loss remains uncertain and is never retried here.
@@ -203,17 +236,26 @@ export function createKubernetesTransport({
           }
           if (data[0] === 3) {
             try {
-              status = JSON.parse(data.subarray(1).toString('utf8'));
+              const status = JSON.parse(data.subarray(1).toString('utf8'));
+              // Kubernetes' status channel terminates the command streams.
+              // A proxy can retain the socket after the process has exited.
+              // Match the official JS client's status callback completion.
+              if (status?.status === 'Success' && (!stderr || onStderr)) finish(null, output + decoder.end());
+              else finish(new Error('Kubernetes exec did not report a successful exit.'));
             } catch {
               finish(new Error('Kubernetes exec status is invalid.'));
             }
           }
         });
-        socket.once('error', () => finish(new Error('Kubernetes exec connection failed; command outcome is unknown.')));
-        socket.once('close', () =>
-          status?.status === 'Success' && (!stderr || onStderr)
-            ? finish(null, output + decoder.end())
-            : finish(new Error('Kubernetes exec did not confirm a successful exit.')),
+        socket.once('error', () =>
+          finish(new KubernetesExecOutcomeUnknown('Kubernetes exec connection failed; command outcome is unknown.')),
+        );
+        socket.once('close', (code) =>
+          finish(
+            new KubernetesExecOutcomeUnknown(
+              `Kubernetes exec did not confirm a successful exit (close code ${code}); command outcome is unknown.`,
+            ),
+          ),
         );
       });
     },

@@ -84,6 +84,7 @@ export async function inspectQualificationInstallation({
   release,
   expectedNamespaceUid,
   valuesText,
+  valuesDigest,
   run,
   helm = 'helm',
   kubectl = 'kubectl',
@@ -91,6 +92,8 @@ export async function inspectQualificationInstallation({
 }) {
   for (const value of [context, namespace, release, expectedNamespaceUid])
     assert.ok(typeof value === 'string' && value.length > 0);
+  const operatorValuesDigest = valuesDigest ?? `sha256:${createHash('sha256').update(valuesText).digest('hex')}`;
+  assert.match(operatorValuesDigest, /^sha256:[a-f0-9]{64}$/);
   const system = JSON.parse(
     (await run(kubectl, ['--context', context, 'get', 'namespace', 'kube-system', '-o', 'json'], { capture: true }))
       .stdout,
@@ -177,7 +180,7 @@ export async function inspectQualificationInstallation({
     namespaceUid: ns.metadata.uid,
     clusterUid: system.metadata.uid,
     settingsDigest: installedSettingsDigest(values),
-    valuesDigest: `sha256:${createHash('sha256').update(valuesText).digest('hex')}`,
+    valuesDigest: operatorValuesDigest,
     policy,
     policyDigest,
     controlPlaneMode,

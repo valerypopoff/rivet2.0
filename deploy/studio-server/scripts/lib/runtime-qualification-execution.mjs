@@ -6,11 +6,25 @@ import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler
 import {
   HA_ORDINARY_RUNTIME_CHECKS,
   HA_COOPERATIVE_AUTOSCALING_CHECKS,
+  HA_FOCUSED_AUTOSCALING_CHECKS,
+  HA_FOCUSED_RUNTIME_CHECKS,
   HA_PROVIDER_OVERLAP_CHECKS,
+  ordinaryRuntimeReplicaBounds,
 } from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
 import { assertRequestContinuityProfile, requestContinuityProfile } from './request-continuity.mjs';
 import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './request-continuity-evidence.mjs';
+import { releaseQualificationPlan } from './release-qualification-policy.mjs';
+
+// The hosted workflow reserves another hour for cleanup and 30 minutes for setup.
+export const ACTIONS_QUALIFICATION_MAX_SECONDS = 4 * 60 * 60;
+export function assertActionsQualificationWindow(seconds) {
+  assert.ok(
+    Number.isSafeInteger(seconds) && seconds > 0 && seconds <= ACTIONS_QUALIFICATION_MAX_SECONDS,
+    'Actions qualification requires a whole-second test window from 1 to 14400 seconds',
+  );
+  return seconds;
+}
 
 export const qualificationHash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const time = (value) => {
@@ -142,6 +156,21 @@ export function qualificationOperation({
     previous,
     installed,
     policy: normalized,
+    ...(approval.safetyDigest
+      ? {
+          qualification: releaseQualificationPlan({
+            safetyDigest: approval.safetyDigest,
+            previous,
+            predecessorDigest: predecessorManifestDigest,
+            candidate,
+            installed,
+            policy: normalized,
+            profile: approval.requestContinuityProfile,
+            overlap: approval.developerOverlapProfile,
+            suite: approval.qualificationSuite,
+          }),
+        }
+      : {}),
     ...(approval.requestContinuityProfile
       ? { requestContinuityProfile: assertRequestContinuityProfile(approval.requestContinuityProfile) }
       : {}),
@@ -232,8 +261,27 @@ export function assertOrdinaryProviderReport(report, operation) {
   assert.deepEqual(report.candidateImages, operation.candidate.images);
   assert.equal(report.chartDigest, operation.candidate.chart.contentDigest);
   assert.equal(report.policyDigest, operation.policyDigest);
-  assert.equal(report.initialApplicationPods, 7);
-  assert.equal(report.finalApplicationPods, 7);
+  if (operation.qualification?.tier === 'focused') {
+    const bounds = ordinaryRuntimeReplicaBounds(operation.policy);
+    for (const stage of ['initial', 'final']) {
+      const observed = report.capacity?.[stage];
+      assert.ok(observed && typeof observed === 'object', 'Observed runtime capacity is missing');
+      assert.deepEqual(Object.keys(observed).sort(), Object.keys(bounds).sort(), 'Unexpected runtime workload');
+      for (const [role, { min, max }] of Object.entries(bounds))
+        assert.ok(
+          Number.isSafeInteger(observed[role]) && observed[role] >= min && observed[role] <= max,
+          `${role} capacity is outside its approved bounds`,
+        );
+      assert.equal(
+        report[`${stage}ApplicationPods`],
+        Object.values(observed).reduce((a, b) => a + b, 0),
+        'Observed Pod total differs from its capacity report',
+      );
+    }
+  } else {
+    assert.equal(report.initialApplicationPods, 7);
+    assert.equal(report.finalApplicationPods, 7);
+  }
   assertPublicTraffic(report);
   assert.ok(count(report.readiness.samples) > 0);
   for (const role of ['execution', 'proxy']) assert.ok(count(report.readiness.minimumReady[role]) >= 2);
@@ -300,12 +348,20 @@ export function assertOrdinaryProviderReport(report, operation) {
     assert.deepEqual(observed.developerTraffic.failures, []);
   }
   assert.equal(report.storageIdentityPreserved, true);
-  for (const field of ['coldProxyReplacement', 'browserOAuthAction', 'publishedScheduleRecording'])
-    assert.equal(report.outcomes.independence[field], true);
+  if (operation.qualification?.tier === 'focused') {
+    assert.equal(report.outcomes.independence, undefined, 'Focused rollout must not claim architecture/fault tests');
+    assert.ok(
+      report.outcomes.finalAutoscaler.sampleAt > report.outcomes.initialAutoscaler.sampleAt,
+      'Focused policy observations must advance during the actual rollout',
+    );
+  } else
+    for (const field of ['coldProxyReplacement', 'browserOAuthAction', 'publishedScheduleRecording'])
+      assert.equal(report.outcomes.independence[field], true);
 }
 
 /** Compile from completed probe facts, never a submitted array of check names. */
 export function assertProviderAutoscalingReport(report, operation) {
+  assert.notEqual(operation.qualification?.tier, 'focused', 'Focused policy evidence is validated with its rollout');
   assertContinuityProviderFacts(report, operation, 'autoscaling');
   window(report, operation);
   assertPublicTraffic(report);
@@ -392,7 +448,12 @@ function assertPublicTraffic(report) {
 /** A failed/expired observation still settles and cleans. Never replay a phase.
  * Durable inventory and the independent janitor belong to the approved provider
  * driver, not an Actions finally block. The latter cannot survive runner loss. */
-export async function executeRuntimeQualification(operation, driver, persist, { now = Date.now, signal } = {}) {
+export async function executeRuntimeQualification(
+  operation,
+  driver,
+  persist,
+  { now = Date.now, signal, onFailure = () => {} } = {},
+) {
   const record = {
     protocol: 1,
     operationId: operation.operationId,
@@ -433,11 +494,23 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
     assert.equal(facts.prepared.expiryIdentity, facts.guard.identity);
     facts.upgrade = await phase('upgrade');
     assertOrdinaryProviderReport(facts.upgrade, operation);
-    facts.autoscaling = await phase('autoscaling');
-    assertProviderAutoscalingReport(facts.autoscaling, operation);
-    assert.ok(time(facts.autoscaling.startedAt) >= time(facts.upgrade.finishedAt), 'Protected phase windows overlap');
+    if (operation.qualification?.tier === 'focused') {
+      // The policy/floor observations already span the actual update. Both
+      // declarations describe this same report, not a second traffic window.
+      facts.autoscaling = facts.upgrade;
+    } else {
+      facts.autoscaling = await phase('autoscaling');
+      assertProviderAutoscalingReport(facts.autoscaling, operation);
+      assert.ok(time(facts.autoscaling.startedAt) >= time(facts.upgrade.finishedAt), 'Protected phase windows overlap');
+    }
   } catch (error) {
     failure = error;
+    record.failedPhase = record.phase;
+    // Public notification contains source-owned phase names only. Neither a
+    // reporting error nor slow evidence publication may skip settlement.
+    try {
+      Promise.resolve(onFailure({ phase: record.phase })).catch(() => {});
+    } catch {}
   } finally {
     try {
       const settled = await phase('settle', { cleanup: true });
@@ -478,6 +551,7 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
       { cause: failure },
     );
   const common = {
+    ...(operation.qualification ? { qualification: operation.qualification } : {}),
     protocol: 1,
     candidateSourceSha: operation.candidate.source.sha,
     candidateImages: operation.candidate.images,
@@ -507,7 +581,7 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
       ...(operation.requestContinuityProfile
         ? { requestContinuity: compileRequestContinuityEvidence(operation, facts.upgrade, facts.autoscaling) }
         : {}),
-      protocol: operation.developerOverlapProfile ? 3 : 2,
+      protocol: operation.qualification?.tier === 'focused' ? 5 : operation.developerOverlapProfile ? 3 : 2,
       purpose: 'ordinary-upgrade',
       controlPlaneMode: operation.developerOverlapProfile ? 'singleton-overlap' : 'singleton',
       ...(operation.developerOverlapProfile
@@ -528,16 +602,22 @@ export async function executeRuntimeQualification(operation, driver, persist, { 
       predecessorImages: operation.previous.images,
       autoscalerPolicyDigest: operation.policyDigest,
       requestSamples: facts.upgrade.workflow.samples + facts.upgrade.web.samples,
-      checks: [...HA_ORDINARY_RUNTIME_CHECKS],
+      checks: [
+        ...(operation.qualification?.tier === 'focused' ? HA_FOCUSED_RUNTIME_CHECKS : HA_ORDINARY_RUNTIME_CHECKS),
+      ],
     }),
     autoscaling: {
       ...declaration(facts.autoscaling, {
         ...common,
-        protocol: 2,
+        protocol: operation.qualification?.tier === 'focused' ? 4 : 2,
         provider: 'gke',
         policyDigest: operation.policyDigest,
         requestSamples: facts.autoscaling.workflow.samples + facts.autoscaling.web.samples,
-        checks: [...HA_COOPERATIVE_AUTOSCALING_CHECKS],
+        checks: [
+          ...(operation.qualification?.tier === 'focused'
+            ? HA_FOCUSED_AUTOSCALING_CHECKS
+            : HA_COOPERATIVE_AUTOSCALING_CHECKS),
+        ],
       }),
       policy: operation.policy,
     },

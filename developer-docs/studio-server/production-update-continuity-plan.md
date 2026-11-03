@@ -1,8 +1,36 @@
 # Production update continuity implementation plan
 
+The current essential gate supersedes the broad first-adoption stress requirement
+in the original phases below: one focused staging update proves bounded request
+continuity and the initial proxy handoff, then the ordinary production command
+owns live checks, recovery checkpoint, rollout and acceptance. Maximum-capacity,
+autoscaler chaos and extra duration matrices remain separately configured full
+tests. No second manufactured release is required. See
+[current test depth](automated-runtime-qualification.md#automatic-test-depth).
+
+The standard delivery path is now the lighter
+[Release Rivet workflow](automated-runtime-qualification.md): build once, reuse
+isolated staging, run focused request-continuity tests including first adoption,
+publish the exact
+manifest and perform live checks/rolling update/acceptance in one production
+action. Shared staging infrastructure and access are configured once under a
+fresh recurring budget; temporary setup campaigns are exceptional. First adoption
+still requires full regional qualification and its observed bridge transition.
+Each first-transition handoff waits the protected request plus propagation
+(360 seconds for the starting profile), with 360-second LB drain and
+420/600-second proxy preStop/grace. The manufactured second release/campaign is
+deferred. Historical milestones below do not grant new cloud activation authority.
+
 Status: **Repository changes implemented; exact-image verification, provider
 qualification and production activation remain open.** See the
 [implemented contract and operator guide](production-update-continuity.md).
+
+The third retained test passed frontend/authentication preparation, then exposed
+an incompatible timing assumption: Autopilot reduced bridge grace from 900 to
+600 seconds while retaining the 660-second preStop. The replacement settings
+below fit that limit. Server-side dry-run admission now rejects such mutations
+before any bridge resource or HPA freeze is created. Actual full qualification,
+cleanup and the first observed production rollout remain open.
 
 The implementation adds the opt-in Helm profile, journal-owned ingress bridge,
 early HPA capacity floor and scale-down fence, live regional backend inspection, full-body/HTTP2/
@@ -10,6 +38,20 @@ late-action provider probes, exact-profile evidence and admission checks. The
 local validation results are recorded in that guide and the implementation
 handoff. Phases F–G still require their operation-specific approvals and actual
 provider evidence; no production guarantee follows from repository tests alone.
+
+The user narrowed the October 31 delivery to one successful regional GKE
+qualification, the first protected production update with external observation,
+the ordinary rolling-update runbook, and verified cleanup. The manufactured
+second Node release, its separate GKE campaign and associated PR work are
+deferred until a real subsequent release. Keep the 300-second checks, production
+preflight and cleanup gates. The closed temporary campaign's last attempt failed in dependency preparation
+before application deployment, so neither qualification nor activation is closed.
+See the operator guide for the PostgreSQL mount and automatic NEG annotation
+repairs. Rebuild/revalidate the changed source before another qualification.
+The narrowed campaign is now closed: all three attempts failed, cleanup and
+quota restoration were verified, and production serving configuration is
+unchanged. Phases F–G remain open; local repairs and cleanup are not rollout
+acceptance.
 
 The first isolated Autopilot attempt in the October 31 campaign failed before
 application qualification. Live observations exposed an ignored legacy node
@@ -20,8 +62,8 @@ checks the actual node account before bootstrap writes, validates managed Node
 identity against the pinned cluster/network, and inventories only deletable
 objects without treating Events as ownership authority. The failed attempt does
 not qualify a release. Fresh exact-source image/actor checks, successful regional
-qualifications, their verified cleanup, and both observed production updates
-remain required; production serving configuration is unchanged.
+qualification, its verified cleanup, and the first observed production update
+remain required for essential delivery; production serving configuration is unchanged.
 
 Release preparation began on 2026-10-30 after authorization to carry out the
 remaining sequence. The candidate includes the continuity changes and their
@@ -183,9 +225,9 @@ Use the following **proposed starting settings**, then qualify them on GKE:
 | Setting                            |            Proposed target | Purpose                                                 |
 | ---------------------------------- | -------------------------: | ------------------------------------------------------- |
 | Protected product request duration |                       300s | User's required request envelope                        |
-| Proxy backend-service drain        |                       600s | Conservative 2x request-duration allowance              |
-| Proxy preStop                      |                       660s | Drain window plus initial 60s NEG propagation allowance |
-| Proxy termination grace            |                       900s | preStop plus shutdown/finalization headroom             |
+| Proxy backend-service drain        |                       360s | Request duration plus propagation allowance             |
+| Proxy preStop                      |                       420s | Drain window plus initial 60s NEG propagation allowance |
+| Proxy termination grace            |                       600s | Fits observed Autopilot admission; covers 565s minimum  |
 | Proxy/web minReadySeconds          |      Retain 120s initially | Independent readiness stabilization                     |
 | Ordinary request timeout           |    Preserve existing 3600s | No new blanket 300s timeout                             |
 | Non-proxy lifecycle settings       | Preserve existing settings | Accepted-work drain still precedes owner deletion       |
@@ -195,9 +237,11 @@ propagation allowance if provider observations require it; a failed trial does
 not pass by excluding its failures. Keep a documented relationship between the
 protected duration, LB drain, observed propagation and pod lifetime.
 
-Google recommends a drain interval of 1.5–2 times request processing time,
-preStop covering drain plus propagation, and termination grace covering preStop
-plus shutdown. See [GKE draining guidance](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/load-balancing)
+The earlier 2x drain proposal could not fit Autopilot's observed 600-second
+grace limit with the existing shutdown budget. The replacement uses the explicit
+300-second envelope plus propagation, then preserves the relationships between
+drain, preStop and shutdown. These values require real provider qualification;
+server admission alone is insufficient. See [GKE draining guidance](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/load-balancing)
 and [Gateway policy configuration](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/configure-gateway-resources).
 
 ### Helm and installation configuration
@@ -243,8 +287,8 @@ existing pods' short lifecycle. A native rollout could delete one with a protect
 request still active. Raising the LB drain alone does not extend that pod's life.
 
 Implemented mechanism: a temporary, separately labelled four-proxy bridge at the
-approved proxy HPA ceiling, using the
-installed proxy image and the new lifecycle profile. It forwards to the existing
+approved proxy HPA ceiling, using the candidate's pinned proxy image with the
+installed configuration and the new lifecycle profile. It forwards to the existing
 Rivet Services. After the transition it is removed; routine updates retain the
 normal seven-pod baseline.
 
@@ -264,9 +308,12 @@ Sequence to implement and qualify:
    (four), with scale-down paused. Wait for that capacity before creating four
    bridge proxies, their distinct Service and
    their own health/drain policy. Derive their templates from the exact installed
-   proxy template with only the reviewed lifecycle, labels and resource changes.
-   Use installed immutable images and references to existing configuration; do
+   proxy template with the candidate proxy image and reviewed lifecycle, labels
+   and resource changes. Use the candidate's digest-pinned proxy image from the
+   rendered release and references to existing configuration; do
    not copy plaintext credentials or let the normal HPA/Deployment select them.
+   Bind the image into recovery inputs. The bridge serves during API retirement,
+   so retaining the old proxy image would bypass candidate connection-policy fixes.
    Review affinity/topology selectors for the bridge's own peers as well as the
    normal proxies; retain unrelated placement constraints and require distribution
    across at least two nodes/zones.
@@ -405,7 +452,7 @@ Extend existing tests rather than creating a parallel deployer test framework:
 
 - `ha-gke-availability.test.mjs`, relevant Helm/API contract tests.
 - `ha-release-evidence.test.mjs`, `ha-rolling-upgrade.test.mjs`,
-  `ha-rollout-preparation.test.mjs`, `ha-rollout-headroom.test.mjs`.
+  `ha-rollout-headroom.test.mjs`.
 - `deployment-command.test.mjs`, `deployment-operation.test.mjs`.
 - `runtime-upgrade-qualification.test.mjs`,
   `runtime-qualification-execution.test.mjs`,
@@ -547,8 +594,10 @@ The required work is complete only when all of the following are true:
 
 - The existing short-lifecycle production installation has been safely converted
   using the exact provider-qualified transition.
-- At least one later mixed-image ordinary update passes the same protected
-  contract without creating a bootstrap bridge.
+- The ordinary update path is documented. A later real mixed-image update must
+  pass the same protected contract without a bootstrap bridge before phase H's
+  live acceptance can be claimed; that subsequent release is deferred from the
+  essential first rollout.
 - Nominal-300-second accepted requests finish with complete correct bodies during
   real proxy/NEG replacement and HPA removal; short traffic has zero failures.
 - Public web-app journeys, schedule occurrence claims and recording preservation

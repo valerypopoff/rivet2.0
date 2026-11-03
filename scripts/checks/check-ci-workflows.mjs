@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseDocument } from 'yaml';
 import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
+import { ACTIONS_QUALIFICATION_MAX_SECONDS } from '../../deploy/studio-server/scripts/lib/runtime-qualification-execution.mjs';
 
 const rootDir = process.cwd();
 
@@ -65,41 +66,87 @@ const automaticQualification = parseWorkflow('.github/workflows/studio-server-qu
 const qualificationPublisher = parseWorkflow(
   '.github/workflows/studio-server-publish-qualification-images.yml',
 ).workflow;
-assert.deepEqual(Object.keys(qualificationPublisher.on), ['workflow_dispatch']);
+assert.deepEqual(Object.keys(qualificationPublisher.on).sort(), ['workflow_call', 'workflow_dispatch']);
 assert.deepEqual(qualificationPublisher.permissions, { contents: 'read', packages: 'write' });
 assert.equal(qualificationPublisher.concurrency['cancel-in-progress'], false);
 assert.equal(qualificationPublisher.jobs.publish.if, "${{ github.ref == 'refs/heads/main' }}");
-assert.deepEqual(qualificationPublisher.jobs.publish['runs-on'], [
-  'self-hosted',
-  'linux',
-  'x64',
-  'rivet-qualification-control',
-]);
-assert.equal(qualificationPublisher.jobs.publish.environment, 'rivet-managed-staging');
+assert.equal(qualificationPublisher.jobs.publish['runs-on'], 'ubuntu-latest');
+assert.equal(qualificationPublisher.jobs.publish.permissions?.['id-token'], undefined);
 assert.ok(qualificationPublisher.jobs.publish.steps.every((s) => !s.uses || /@[a-f0-9]{40}$/.test(s.uses)));
 assert.deepEqual(Object.keys(automaticQualification.on), ['workflow_dispatch']);
-assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), ['build_run_id']);
+assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), [
+  'build_run_id',
+  'deploy_production',
+]);
 assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);
 assert.equal(automaticQualification.jobs.built.if, undefined);
 assert.equal(automaticQualification.jobs.built.steps[0].run, 'test "$GITHUB_REF" = refs/heads/main');
 assert.equal(automaticQualification.jobs.qualified.environment, 'rivet-managed-staging');
-assert.equal(
-  automaticQualification.jobs.qualified['runs-on'],
-  '${{ vars.RIVET_QUALIFICATION_ENVIRONMENT_MODE == \'temporary\' && fromJSON(\'["self-hosted","linux","x64","rivet-qualification-control"]\') || fromJSON(\'["self-hosted","linux","x64","rivet-qualification"]\') }}',
-);
+assert.equal(automaticQualification.jobs.qualified['runs-on'], 'ubuntu-latest');
+assert.equal(automaticQualification.jobs.qualified.permissions['id-token'], 'write');
+assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE, 'reusable-cluster');
+assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.type, 'boolean');
+assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.default, true);
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
-assert.equal(automaticQualification.jobs.qualified['timeout-minutes'], 300);
-assert.equal(automaticQualification.jobs.preflight['timeout-minutes'], 45);
+assert.equal(
+  automaticQualification.jobs.qualified['timeout-minutes'],
+  ACTIONS_QUALIFICATION_MAX_SECONDS / 60 + 60 + 30,
+);
+const qualifiedSteps = automaticQualification.jobs.qualified.steps;
+const windowCheck = qualifiedSteps.findIndex((s) =>
+  s.run?.endsWith('execute-runtime-qualification.mjs validate-window'),
+);
+const googleAuth = qualifiedSteps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));
+assert.ok(windowCheck >= 0 && windowCheck < googleAuth, 'Validate qualification window before cloud credentials');
+const prepareSetup = qualifiedSteps.findIndex((s) => s.id === 'prepare');
+const inspectSetup = qualifiedSteps.findIndex((s) => s.id === 'inspect');
+const executeOperation = qualifiedSteps.findIndex((s) => s.id === 'execute');
+const closeSetup = qualifiedSteps.findIndex((s) => s.run?.endsWith('prepare-hosted-release.mjs cleanup-staging-setup'));
+assert.ok(
+  googleAuth < prepareSetup &&
+    prepareSetup < inspectSetup &&
+    inspectSetup < executeOperation &&
+    executeOperation < closeSetup,
+);
+assert.equal(
+  qualifiedSteps[closeSetup].if,
+  "${{ always() && steps.execute.outcome == 'skipped' && (steps.prepare.outcome == 'failure' || steps.inspect.outcome == 'failure') }}",
+  'Only failed pre-operation setup may use setup lock closure',
+);
+assert.equal(qualifiedSteps[closeSetup]['timeout-minutes'], 10);
+for (const job of [automaticQualification.jobs.qualified, automaticQualification.jobs.deploy]) {
+  const prepare = job.steps.find((s) => s.run?.match(/prepare-hosted-release\.mjs (staging|production)$/));
+  assert.equal(
+    prepare?.env?.RIVET_DEPLOYMENT_CONFIGURATION,
+    '${{ secrets.RIVET_DEPLOYMENT_CONFIGURATION }}',
+    'Deployment configuration must be an environment secret; Actions logs plaintext variables before execution',
+  );
+}
+for (const artifactPath of ['artifacts/automated-runtime-qualification', 'artifacts/qualification-image-publication']) {
+  const download = qualifiedSteps.findIndex(
+    (s) => s.uses?.startsWith('actions/download-artifact@') && s.with?.path === artifactPath,
+  );
+  assert.ok(
+    download >= 0 && download < googleAuth,
+    'Download required release inputs before credentials or shared staging setup',
+  );
+}
+assert.equal(automaticQualification.jobs.deploy['timeout-minutes'], 90);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');
 assert.equal(
   automaticQualification.jobs.publish.with.runtime_control_declaration,
   '${{ needs.qualified.outputs.control }}',
 );
-assert.deepEqual(automaticQualification.jobs.preflight.needs, ['qualified', 'publish']);
-assert.equal(automaticQualification.jobs.preflight.environment, 'rivet-production-readiness');
+assert.deepEqual(automaticQualification.jobs.deploy.needs, ['qualified', 'publish']);
+assert.equal(automaticQualification.jobs.preflight, undefined);
+assert.equal(automaticQualification.jobs.deploy.if, '${{ inputs.deploy_production }}');
+assert.equal(automaticQualification.jobs.deploy['runs-on'], 'ubuntu-latest');
+assert.equal(automaticQualification.jobs.deploy.permissions['id-token'], 'write');
+assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_COORDINATOR_MODE, 'external');
+assert.equal(automaticQualification.jobs.deploy.environment, 'rivet-production');
 assert.equal(
-  automaticQualification.jobs.preflight.env.QUALIFIED_MANIFEST_DIGEST,
+  automaticQualification.jobs.deploy.env.QUALIFIED_MANIFEST_DIGEST,
   '${{ needs.publish.outputs.manifest_digest }}',
 );
 for (const job of Object.values(automaticQualification.jobs)) {
@@ -114,8 +161,8 @@ assert.ok(
   ),
 );
 assert.ok(
-  automaticQualification.jobs.preflight.steps.some((step) =>
-    step.run?.includes('execute-runtime-qualification.mjs preflight'),
+  automaticQualification.jobs.deploy.steps.some((step) =>
+    step.run?.includes('execute-runtime-qualification.mjs deploy'),
   ),
 );
 assert.equal(
@@ -267,6 +314,22 @@ assert.equal(
   buildJobs['static-validation'].steps.some((step) => step.name === 'Audit JavaScript dependencies'),
   false,
   'Static validation must not hide the network-dependent JavaScript audit.',
+);
+const imageContracts = findStep(
+  buildJobs['static-validation'],
+  'Verify image and launcher contracts',
+  'Static validation',
+);
+assert.equal(
+  imageContracts.run,
+  'yarn workspace @valerypopoff/rivet-studio-server-api run test:files src/tests/proxy-image-contract.test.ts',
+);
+assert.ok(
+  buildJobs['static-validation'].steps.indexOf(imageContracts) <
+    buildJobs['static-validation'].steps.indexOf(
+      findStep(buildJobs['static-validation'], 'Test style', 'Static validation'),
+    ),
+  'Source-only image contracts must fail on PRs before the longer style and image build checks.',
 );
 assertIncludesAll(
   asArray(buildJobs.build.needs),
@@ -623,6 +686,11 @@ assert.match(
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
 const imageJobs = images.workflow.jobs;
+assert.equal(
+  imageJobs['release-manifest'].env.INSTALLED_PREDECESSOR_DIGEST,
+  "${{ github.ref == 'refs/heads/main' && (inputs.installed_predecessor_digest || vars.RIVET_INSTALLED_PREDECESSOR_DIGEST) || '' }}",
+  'Only main may use an installed-predecessor pin; explicit dispatch input takes precedence over the temporary build pin.',
+);
 assert.equal(findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['fetch-depth'], 1);
 assert.equal(
   findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['sparse-checkout'],
@@ -769,6 +837,14 @@ for (const file of [
   assert.ok(refs.length && refs.every((reference) => reference === nginxImage), `${file}: NGINX reference drift`);
 }
 assert.match(read('deploy/studio-server/images/proxy/Dockerfile'), /brotli-libs>=1\.2\.1-r0/);
+for (const service of ['proxy', 'api']) {
+  const dockerfile = read(`deploy/studio-server/images/${service}/Dockerfile`);
+  const runtime = service === 'api' ? dockerfile.slice(dockerfile.lastIndexOf('\nFROM ')) : dockerfile;
+  assert.ok(
+    runtime.includes("'libexpat>=2.10.0-r0'"),
+    `${service}: require the patched libexpat floor in the runtime package layer, not only a builder.`,
+  );
+}
 for (const packageName of ['curl', 'libcurl']) {
   assert.ok(
     read('deploy/studio-server/images/proxy/Dockerfile').includes(`'${packageName}>=8.23.0-r0'`),
@@ -803,6 +879,11 @@ for (const service of ['api', 'executor', 'web']) {
   }
 }
 assert.match(read('deploy/studio-server/images/api/Dockerfile'), /pnpm@10\.34\.8/);
+const janitorDockerfile = read('deploy/studio-server/images/janitor/Dockerfile');
+const janitorBases = [...janitorDockerfile.matchAll(/^FROM (node:[^\s]+)/gm)];
+assert.ok(janitorBases.length && janitorBases.every((match) => match[1] === runtimeNodeImage));
+assert.match(janitorDockerfile, /USER 10001:10001/);
+assert.match(janitorDockerfile, /ws@8\.21\.0/);
 const actorDockerfile = read('deploy/studio-server/images/qualification/Dockerfile');
 assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
 assert.ok(actorDockerfile.includes(`FROM ${runtimeNodeImage}`));

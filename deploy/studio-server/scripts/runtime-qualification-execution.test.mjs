@@ -11,16 +11,21 @@ import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
+  assertStudioServerReleaseManifest,
 } from './lib/studio-server-release-manifest.mjs';
 import {
   qualificationOperation,
   executeRuntimeQualification,
   qualificationHash,
   assertQualificationPreflight,
+  assertProviderAutoscalingReport,
+  assertOrdinaryProviderReport,
+  assertActionsQualificationWindow,
 } from './lib/runtime-qualification-execution.mjs';
 import {
   verifyQualificationDriver,
   qualificationDriverEnvironment,
+  qualificationDriver,
   providerPhaseProcess,
 } from './lib/runtime-qualification-driver.mjs';
 import {
@@ -29,10 +34,13 @@ import {
 } from './lib/runtime-qualification-installation.mjs';
 import { prepareRuntimeQualification } from './lib/runtime-qualification-publication.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
-import { HA_REQUIRED_CHECKS } from './lib/ha-release-evidence.mjs';
+import { HA_REQUIRED_CHECKS, HA_ORDINARY_RUNTIME_CHECKS } from './lib/ha-release-evidence.mjs';
 import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
 import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
 import { readDeploymentPolicy } from './lib/deployment-workflow.mjs';
+import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
+import { continuityProviderFacts, focusedContinuityProviderFacts } from './fixtures/continuity-provider-facts.mjs';
+import { continuityStages, assertContinuityUpgrade } from './lib/request-continuity.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sha = 'a'.repeat(40),
   repository = 'example/rivet';
@@ -687,6 +695,31 @@ test('failures, unknown writes, expiry and dishonest/missing facts cannot become
   assert.deepEqual(d.calls, ['settle', 'cleanup', 'verifyCleanup']);
 });
 
+test('failure notification cannot delay or interrupt verified cleanup', async (t) => {
+  for (const mode of ['throw', 'reject', 'pending'])
+    await t.test(mode, async () => {
+      const f = fixture(),
+        d = driver(f, 'upgrade'),
+        states = [],
+        notifications = [];
+      await assert.rejects(
+        executeRuntimeQualification(f.operation, d.api, async (state) => states.push(state), {
+          now: f.now,
+          onFailure: ({ phase }) => {
+            notifications.push({ phase, settling: d.calls.includes('settle') });
+            if (mode === 'throw') throw new Error('notification unavailable');
+            return mode === 'reject' ? Promise.reject(new Error('notification unavailable')) : new Promise(() => {});
+          },
+        }),
+        /No release was qualified/,
+      );
+      assert.deepEqual(notifications, [{ phase: 'upgrade', settling: false }]);
+      assert.deepEqual(d.calls.slice(-3), ['settle', 'cleanup', 'verifyCleanup']);
+      assert.equal(states.at(-1).cleanupVerified, true);
+      assert.equal(states.at(-1).failedPhase, 'upgrade');
+    });
+});
+
 test('late cancellation, expiry and driver-owned mutations cannot revise accepted evidence', async () => {
   for (const mode of ['cancel', 'expire']) {
     const f = fixture(),
@@ -731,6 +764,8 @@ test('driver credential boundary is case-insensitive and process startup failure
     Gh_Enterprise_Token: 'secret',
     Actions_Runtime_Token: 'secret',
     Rivet_Qualification_Production_Context: 'production',
+    Rivet_Production_Deploy_Kubeconfig: 'production-deployment-credential',
+    RIVET_PRODUCTION_PRIVATE_STORE: 'private-production-receipts',
     Kubeconfig: 'production-credentials',
     RIVET_QUALIFICATION_STAGING_KUBECONFIG: 'staging-credentials',
   });
@@ -748,6 +783,51 @@ test('driver credential boundary is case-insensitive and process startup failure
       { cwd: path.join(os.tmpdir(), `absent-rivet-${process.pid}-${Date.now()}`) },
     ),
     /process failed/,
+  );
+});
+
+test('local provider processes share a cleanup deadline and never launch an expired phase', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-driver-deadline-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const bundle = path.join(directory, 'bundle'),
+    privateDirectory = path.join(directory, 'private');
+  await fs.mkdir(bundle);
+  await fs.mkdir(privateDirectory);
+  const code = Buffer.from(`import fs from 'node:fs/promises';
+import path from 'node:path';
+let input = '';
+for await (const part of process.stdin) input += part;
+const request = JSON.parse(input), phase = process.argv[2];
+await fs.appendFile(path.join(request.privateDirectory, 'calls.jsonl'), JSON.stringify(phase) + '\\n');
+process.stdout.write(JSON.stringify({ phase }));
+`);
+  const manifest = {
+    protocol: 1,
+    suite: 'compact-seven-v1',
+    provider: 'gke',
+    scope: 'isolated-provider',
+    entrypoint: 'provider.mjs',
+    files: { 'provider.mjs': createHash('sha256').update(code).digest('hex') },
+  };
+  await fs.writeFile(path.join(bundle, 'provider.mjs'), code);
+  await fs.writeFile(path.join(bundle, 'driver.json'), JSON.stringify(manifest));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const operation = { expiresAt: new Date(now + 7200000).toISOString() };
+  const driver = qualificationDriver(bundle, qualificationHash(manifest), {
+    privateDirectory,
+    env: { ...process.env, RIVET_QUALIFICATION_STAGING_KUBECONFIG: 'unused-local-test-context' },
+  });
+  assert.deepEqual(await driver.settle(operation), { phase: 'settle' });
+  now += 59 * 60000;
+  assert.deepEqual(await driver.cleanup(operation), { phase: 'cleanup' });
+  now += 60000;
+  await assert.rejects(driver.verifyCleanup(operation), /cleanup deadline exceeded/);
+  now = Date.parse(operation.expiresAt);
+  await assert.rejects(driver.prepare(operation), /Provider admission expired/);
+  assert.deepEqual(
+    (await fs.readFile(path.join(privateDirectory, 'calls.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse),
+    ['settle', 'cleanup'],
   );
 });
 
@@ -772,13 +852,14 @@ test('installation observation reads exact context and never returns raw credent
     secret: 'PRIVATE-TEST-CREDENTIAL',
   };
   const calls = [];
-  const observe = (run) =>
+  const observe = (run, options = {}) =>
     inspectQualificationInstallation({
       context: 'read-only',
       namespace: 'prod',
       release: 'rivet',
       expectedNamespaceUid: 'production-ns',
       valuesText: 'operator-values',
+      ...options,
       run,
     });
   const snapshot = await observe(async (bin, args) => {
@@ -793,6 +874,26 @@ test('installation observation reads exact context and never returns raw credent
   });
   assert.ok(calls.every((args) => args.includes('read-only') && args.includes('get')));
   assert.ok(!JSON.stringify(snapshot).includes(values.secret));
+  const digestOnly = await observe(
+    async (bin, args) => ({
+      stdout: JSON.stringify(
+        bin === 'kubectl'
+          ? { metadata: { uid: args.includes('kube-system') ? 'production-cluster' : 'production-ns' } }
+          : values,
+      ),
+    }),
+    { valuesText: undefined, valuesDigest: snapshot.valuesDigest },
+  );
+  assert.equal(digestOnly.valuesDigest, snapshot.valuesDigest);
+  await assert.rejects(
+    observe(
+      () => {
+        throw Error('Must reject before cluster read');
+      },
+      { valuesText: undefined, valuesDigest: 'invalid' },
+    ),
+    { code: 'ERR_ASSERTION' },
+  );
   assertQualificationInstallationMatches(snapshot, snapshot);
   for (const key of ['manifestDigest', 'namespaceUid', 'clusterUid', 'settingsDigest', 'valuesDigest'])
     assert.throws(() => assertQualificationInstallationMatches({ ...snapshot, [key]: 'changed' }, snapshot));
@@ -845,7 +946,54 @@ test('installation observation reads exact context and never returns raw credent
     );
 });
 
-test('real CLI runs a fully hash-pinned local driver once, strips credential environment and blocks publication on failure', async (t) => {
+test('hosted qualification rejects invalid windows before private setup and accepts the four-hour CLI boundary', async (t) => {
+  for (const seconds of [1, 7200, 14400]) assert.equal(assertActionsQualificationWindow(seconds), seconds);
+  for (const seconds of [NaN, Infinity, 0, -1, 1.5, 14401])
+    assert.throws(() => assertActionsQualificationWindow(seconds), /whole-second test window/);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-window-'));
+  const packet = await fs.mkdtemp(path.join(root, 'artifacts/qualification-window-'));
+  t.after(() => Promise.all([directory, packet].map((p) => fs.rm(p, { recursive: true, force: true }))));
+  const env = {
+    ...process.env,
+    GITHUB_REF: 'refs/heads/main',
+    GITHUB_RUN_ID: '123',
+    GITHUB_RUN_ATTEMPT: '1',
+    RUNNER_TEMP: directory,
+    RIVET_DEPLOYMENT_CONFIGURATION: '{}',
+    RIVET_QUALIFICATION_MAX_SECONDS: '14401',
+    RIVET_QUALIFICATION_PACKET: packet,
+  };
+  const prepare = spawnSync(
+    process.execPath,
+    ['.yarn/releases/yarn-4.17.1.cjs', 'node', 'deploy/studio-server/scripts/prepare-hosted-release.mjs', 'staging'],
+    { cwd: root, env, encoding: 'utf8', timeout: 30000 },
+  );
+  assert.equal(prepare.status, 1, prepare.stderr);
+  assert.deepEqual(await fs.readdir(directory), [], 'Window validation must precede private setup and cloud access');
+  for (const [value, status] of [
+    ['7200', 0],
+    ['14400', 0],
+    ['14401', 1],
+    ['', 1],
+    ['NaN', 1],
+    ['1.5', 1],
+  ]) {
+    const validation = spawnSync(
+      process.execPath,
+      [
+        '.yarn/releases/yarn-4.17.1.cjs',
+        'node',
+        'deploy/studio-server/scripts/execute-runtime-qualification.mjs',
+        'validate-window',
+      ],
+      { cwd: root, env: { ...env, RIVET_QUALIFICATION_MAX_SECONDS: value }, encoding: 'utf8', timeout: 30000 },
+    );
+    assert.equal(validation.status, status, validation.stderr);
+    assert.deepEqual(await fs.readdir(packet), [], 'Standalone window check must not create an operation');
+  }
+});
+
+test('real CLI runs two/four-hour hash-pinned drivers once, rejects over-limit windows and blocks publication on failure', async (t) => {
   const directory = await fs.mkdtemp(path.join(root, 'artifacts/qualification-command-'));
   const privateStore = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-private-'));
   const bundle = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-driver-'));
@@ -873,9 +1021,11 @@ test('real CLI runs a fully hash-pinned local driver once, strips credential env
     await fs.writeFile(path.join(bundle, 'driver.json'), JSON.stringify(manifest));
     return qualificationHash(manifest);
   };
-  for (const [attempt, failure] of [
-    [1, undefined],
-    [2, 'upgrade'],
+  for (const [attempt, failure, maxSeconds] of [
+    [1, undefined, 7200],
+    [2, undefined, 14400],
+    [3, 'window', 14401],
+    [4, 'upgrade', 14400],
   ]) {
     const target = path.join(directory, String(attempt));
     await fs.mkdir(path.join(target, 'candidate'), { recursive: true });
@@ -906,7 +1056,10 @@ test('real CLI runs a fully hash-pinned local driver once, strips credential env
       RIVET_QUALIFICATION_PROJECT_ID: 'isolated-project',
       RIVET_QUALIFICATION_PROJECT_NUMBER: '123456789',
       RIVET_QUALIFICATION_MAX_USD: '50',
-      RIVET_QUALIFICATION_MAX_SECONDS: '7200',
+      RIVET_QUALIFICATION_MAX_SECONDS: String(maxSeconds),
+      RIVET_QUALIFICATION_ENVIRONMENT_MODE: 'reusable-cluster',
+      RIVET_QUALIFICATION_COORDINATOR_MODE: '',
+      RIVET_QUALIFICATION_EVIDENCE_BUCKET: '',
       RIVET_QUALIFICATION_DRIVER_DIRECTORY: bundle,
       RIVET_QUALIFICATION_DRIVER_SHA256: driverDigest,
       RIVET_QUALIFICATION_PRIVATE_STORE: privateStore,
@@ -933,6 +1086,13 @@ test('real CLI runs a fully hash-pinned local driver once, strips credential env
     );
     assert.ok(!(result.stdout + result.stderr).includes('PRIVATE-TEST-CREDENTIAL'));
     const privateDirectory = path.join(privateStore, `rivet-q-456-${attempt}`);
+    if (failure === 'window') {
+      await assert.rejects(fs.stat(privateDirectory), { code: 'ENOENT' });
+      await assert.rejects(fs.stat(path.join(privateStore, 'active.lock')), { code: 'ENOENT' });
+      continue;
+    }
+    const frozen = JSON.parse(await fs.readFile(path.join(privateDirectory, 'operation.json'), 'utf8')).operation;
+    assert.equal(Date.parse(frozen.expiresAt) - Date.parse(frozen.startedAt), maxSeconds * 1000);
     const calls = (await fs.readFile(path.join(privateDirectory, 'calls.jsonl'), 'utf8'))
       .trim()
       .split('\n')
@@ -957,4 +1117,357 @@ test('real CLI runs a fully hash-pinned local driver once, strips credential env
     await assert.rejects(verifyQualificationDriver(bundle, driverDigest), /unrecorded/);
     await fs.unlink(path.join(bundle, 'unexpected.txt'));
   }
+});
+
+async function qualifiedFixture() {
+  const f = fixture();
+  f.input.approval.safetyDigest = '9'.repeat(64);
+  f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
+  f.operation = qualificationOperation(f.input);
+  for (const report of Object.values(f.facts))
+    if (report && typeof report === 'object') report.inputHash = f.operation.inputHash;
+  const result = await executeRuntimeQualification(f.operation, driver(f).api, async () => {}, { now: f.now });
+  const input = {
+    candidate: f.operation.candidate,
+    promoted: f.promoted,
+    control: result.control,
+    autoscaling: result.autoscaling,
+    repository,
+    sourceSha: sha,
+    build: { runId: '123', runAttempt: 1 },
+    safetyDigest: f.input.approval.safetyDigest,
+  };
+  return { f, input, packet: prepareRuntimeQualification(input) };
+}
+
+test('source safety basis survives compilation/publication and cannot be mixed across tiers or source trees', async () => {
+  const { f, input, packet } = await qualifiedFixture();
+  assert.equal(packet.candidate.evidence.runtimeControl.qualification.tier, 'full');
+  assert.deepEqual(packet.candidate.evidence.runtimeAutoscaling.qualification, f.operation.qualification);
+  assert.throws(() => prepareRuntimeQualification({ ...input, safetyDigest: '8'.repeat(64) }), /committed runtime/);
+  const invalid = structuredClone(packet.candidate);
+  delete invalid.evidence.runtimeAutoscaling.qualification;
+  assert.throws(() => assertStudioServerReleaseManifest(invalid), /same operation/);
+});
+
+test('first focused adoption compiles and publishes fresh continuity evidence without a full baseline', async () => {
+  const f = fixture(),
+    continuity = focusedContinuityProviderFacts();
+  f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
+  f.input.installed.observedAt = new Date(f.input.now).toISOString();
+  f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
+  f.input.approval.safetyDigest = '9'.repeat(64);
+  f.input.approval.requestContinuityProfile = continuity.operation.requestContinuityProfile;
+  f.operation = qualificationOperation(f.input);
+  assert.equal(f.operation.qualification.tier, 'focused');
+  assert.equal(f.operation.qualification.protocol, 2);
+  assert.equal(f.operation.qualification.fullBaselineManifestDigest, undefined);
+  f.facts.armExpiry.expiresAt = f.operation.expiresAt;
+  const stages = continuityStages(false, 'upgrade', 'focused');
+  const requestContinuity = {
+    ...continuity.upgrade.requestContinuity,
+    protocol: 4,
+    requests: continuity.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage)),
+    executionWithdrawal: {
+      ...continuity.upgrade.requestContinuity.executionWithdrawal,
+      podUid: f.facts.upgrade.outcomes.acceptedWork[0].uid,
+    },
+  };
+  Object.assign(f.facts.upgrade, {
+    startedAt: continuity.upgrade.startedAt,
+    finishedAt: continuity.upgrade.finishedAt,
+    requestContinuity,
+    capacity: {
+      initial: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+      final: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+    },
+  });
+  for (const run of f.facts.upgrade.outcomes.acceptedWork) run.retirementDelayMs = 315000;
+  const start = Date.parse(f.facts.upgrade.startedAt);
+  for (const [i, key] of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'].entries())
+    f.facts.upgrade.outcomes[key] = { policyDigest: f.operation.policyDigest, sampleAt: start + 1500 + i * 1000 };
+  delete f.facts.upgrade.outcomes.independence;
+  const scalingStart = Date.parse(f.facts.upgrade.finishedAt) + 1000;
+  for (const report of Object.values(f.facts))
+    Object.assign(
+      report,
+      Object.fromEntries(['operationId', 'inputHash', 'projectId', 'projectNumber'].map((k) => [k, f.operation[k]])),
+    );
+  const persisted = [];
+  const d = driver(f);
+  d.api.autoscaling = async () => {
+    throw Error('A focused rollout must not dispatch a separate autoscaling phase');
+  };
+  const result = await executeRuntimeQualification(f.operation, d.api, async (r) => persisted.push(r), {
+    now: () => scalingStart + 3000,
+  }).catch((error) => {
+    throw error.cause ?? error;
+  });
+  assert.equal(persisted.at(-1).cleanupVerified, true);
+  const packet = prepareRuntimeQualification({
+    candidate: f.operation.candidate,
+    promoted: f.promoted,
+    control: result.control,
+    autoscaling: result.autoscaling,
+    repository,
+    sourceSha: sha,
+    build: { runId: '123', runAttempt: 1 },
+    safetyDigest: f.input.approval.safetyDigest,
+  });
+  assert.equal(packet.candidate.evidence.runtimeControl.protocol, 5);
+  assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 4);
+  assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 9);
+  for (const key of ['startedAt', 'finishedAt', 'reportSha256'])
+    assert.equal(result.control[key], result.autoscaling[key]);
+  assert.ok(!d.calls.includes('autoscaling'));
+  for (const change of [
+    (proof) => {
+      proof.requestSamples++;
+    },
+    (proof) => {
+      proof.policyDigest = 'f'.repeat(64);
+    },
+  ]) {
+    const mismatched = structuredClone(packet.candidate);
+    change(mismatched.evidence.runtimeAutoscaling);
+    assert.throws(() => assertStudioServerReleaseManifest(mismatched), /same operation/);
+  }
+  const historical = structuredClone(packet.candidate);
+  const oldControl = historical.evidence.runtimeControl;
+  oldControl.protocol = 4;
+  oldControl.checks = [...HA_ORDINARY_RUNTIME_CHECKS];
+  oldControl.requestContinuity.protocol = 3;
+  oldControl.requestContinuity.completedRequests = 18;
+  oldControl.requestContinuity.checks = [
+    'full-body-300-second-requests',
+    'late-admission-and-connection-reuse',
+    'proxy-pod-and-neg-replacement',
+    'execution-owner-300-second-drain',
+    'accepted-action-resume',
+    'request-recording-and-no-duplicates',
+    'bridge-return-handoff',
+  ];
+  delete oldControl.requestContinuity.proxyReplaced;
+  historical.evidence.runtimeAutoscaling.protocol = 3;
+  assertStudioServerReleaseManifest(historical);
+  historical.evidence.runtimeAutoscaling.protocol = 4;
+  assert.throws(() => assertStudioServerReleaseManifest(historical), /same operation/);
+  for (const mutate of [
+    (a) => {
+      a.reportSha256 = 'f'.repeat(64);
+    },
+    (a) => {
+      a.startedAt = new Date(Date.parse(a.startedAt) + 1).toISOString();
+    },
+  ]) {
+    const separate = structuredClone(result.autoscaling);
+    mutate(separate);
+    assert.throws(
+      () =>
+        prepareRuntimeQualification({
+          candidate: f.operation.candidate,
+          promoted: f.promoted,
+          control: result.control,
+          autoscaling: separate,
+          repository,
+          sourceSha: sha,
+          build: { runId: '123', runAttempt: 1 },
+          safetyDigest: f.input.approval.safetyDigest,
+        }),
+      /same observed rollout/,
+    );
+  }
+  assertContinuityUpgrade(packet.candidate, f.input.installed.qualificationValues, {
+    profile: f.operation.requestContinuityProfile,
+  });
+  const falseClaim = structuredClone(result.control);
+  falseClaim.evidence.requestContinuity.checks.push('proxy-hpa-removal');
+  assert.throws(() =>
+    prepareRuntimeQualification({
+      candidate: f.operation.candidate,
+      promoted: f.promoted,
+      control: falseClaim,
+      autoscaling: result.autoscaling,
+      repository,
+      sourceSha: sha,
+      build: { runId: '123', runAttempt: 1 },
+      safetyDigest: f.input.approval.safetyDigest,
+    }),
+  );
+});
+
+test('focused policy evidence is validated inside the real rollout with fresh samples, ready floors and successful traffic', () => {
+  const f = fixture();
+  const operation = { ...f.operation, qualification: { tier: 'focused' } };
+  const report = {
+    ...structuredClone(f.facts.upgrade),
+    capacity: {
+      initial: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+      final: { proxy: 4, execution: 3, backend: 1, web: 1, autoscaler: 1 },
+    },
+    finalApplicationPods: 10,
+  };
+  delete report.outcomes.independence;
+  report.outcomes.finalAutoscaler = {
+    ...report.outcomes.initialAutoscaler,
+    sampleAt: report.outcomes.initialAutoscaler.sampleAt + 1,
+  };
+  assert.doesNotThrow(() => assertOrdinaryProviderReport(report, operation));
+  assert.throws(() => assertProviderAutoscalingReport(report, operation), /with its rollout/);
+  for (const change of [
+    (x) => {
+      x.capacity.final.proxy = 5;
+      x.finalApplicationPods = 11;
+    },
+    (x) => {
+      x.capacity.final.execution = 5;
+      x.finalApplicationPods = 12;
+    },
+    (x) => {
+      delete x.capacity.final;
+    },
+    (x) => {
+      x.finalApplicationPods = 7;
+    },
+    (x) => {
+      x.capacity.final.foreign = 1;
+      x.finalApplicationPods = 11;
+    },
+    (x) => {
+      x.outcomes.finalAutoscaler.sampleAt = x.outcomes.initialAutoscaler.sampleAt;
+    },
+    (x) => {
+      x.readiness.minimumReady.proxy = 1;
+    },
+    (x) => {
+      x.outcomes.initialAutoscaler.sampleAt = String(x.outcomes.initialAutoscaler.sampleAt);
+    },
+    (x) => {
+      x.outcomes.initialAutoscaler.policyDigest = 'changed';
+    },
+    (x) => {
+      x.workflow.samples = 0;
+    },
+    (x) => {
+      x.web.failures.push('unavailable');
+    },
+    (x) => {
+      x.outcomes.independence = { invented: true };
+    },
+  ]) {
+    const invalid = structuredClone(report);
+    change(invalid);
+    assert.throws(() => assertOrdinaryProviderReport(invalid, operation));
+  }
+});
+
+test('production action invokes the normal command once with bound inputs and publishes only a sanitized success', async (t) => {
+  const { f, packet } = await qualifiedFixture();
+  const manifest = promoteStudioServerReleaseManifest(packet.candidate, { promotionEvidence: evidence });
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-qualified-deploy-'));
+  const privateStore = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-qualified-deploy-store-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  t.after(() => fs.rm(privateStore, { recursive: true, force: true }));
+  const identity = { context: 'production', namespace: 'rivet', release: 'rivet' };
+  const adapter = 'throw Error("should only be executed by the normal deployment command");';
+  const installation = path.join(privateStore, 'installation');
+  await fs.mkdir(installation);
+  await fs.writeFile(path.join(installation, 'adapter.mjs'), adapter);
+  const entry = { script: 'adapter.mjs', sha256: `sha256:${createHash('sha256').update(adapter).digest('hex')}` };
+  const policyFile = path.join(installation, 'policy.json');
+  await fs.writeFile(
+    policyFile,
+    JSON.stringify({ formatVersion: 1, ...identity, namespaceUid: 'production-ns', backup: entry, acceptance: entry }),
+  );
+  const valuesFile = path.join(directory, 'values.yaml');
+  await fs.writeFile(valuesFile, 'private: never-upload');
+  const operation = {
+    ...structuredClone(f.operation),
+    candidate: { sourceSha: sha, images: manifest.images, chartDigest: manifest.chart.contentDigest },
+  };
+  operation.installed.valuesDigest = `sha256:${createHash('sha256')
+    .update(await fs.readFile(valuesFile))
+    .digest('hex')}`;
+  const digest = getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true });
+  let calls = 0;
+  const args = {
+    root: directory,
+    packet: directory,
+    operation,
+    manifest,
+    digest,
+    sourceSha: sha,
+    identity,
+    valuesFile,
+    policyFile,
+    privateStore,
+    run: async (_bin, argv) => {
+      calls++;
+      assert.ok(argv[0].endsWith('deploy-kubernetes-release.mjs'));
+      assert.ok(!argv.includes('--preflight-only'));
+      assert.equal(argv[argv.indexOf('--expected-installed-settings-digest') + 1], operation.installed.settingsDigest);
+      assert.equal(await fs.readFile(argv[argv.indexOf('--values') + 1], 'utf8'), 'private: never-upload');
+      await fs.writeFile(
+        path.join(directory, 'private-deployment/deployment-result.json'),
+        JSON.stringify({
+          state: 'complete',
+          candidateManifestDigest: digest,
+          outcome: { infrastructure: 'applied', autoscaling: 'verified', application: 'passed' },
+        }),
+      );
+    },
+  };
+  for (const change of [
+    (x) => {
+      x.sourceSha = '1'.repeat(40);
+    },
+    (x) => {
+      x.digest = `sha256:${'2'.repeat(64)}`;
+    },
+    (x) => {
+      x.operation.installed.namespaceUid = 'other-namespace';
+    },
+    (x) => {
+      x.operation.installed.valuesDigest = `sha256:${'3'.repeat(64)}`;
+    },
+    (x) => {
+      x.operation.candidate.images.api.digest = `sha256:${'4'.repeat(64)}`;
+    },
+  ]) {
+    const invalid = { ...args, operation: structuredClone(operation) };
+    invalid.packet = await fs.mkdtemp(path.join(directory, 'invalid-'));
+    change(invalid);
+    await assert.rejects(deployQualifiedRelease(invalid));
+    assert.equal(calls, 0);
+  }
+  const result = await deployQualifiedRelease(args);
+  assert.equal(result.status, 'deployed');
+  assert.equal(calls, 1);
+  assert.ok(!JSON.stringify(result).includes('private'));
+  const saved = path.join(privateStore, operation.operationId, 'receipts');
+  assert.equal(await fs.readFile(path.join(saved, 'values.yaml'), 'utf8'), 'private: never-upload');
+  assert.equal(await fs.readFile(path.join(saved, 'private-installation-policy/backup.mjs'), 'utf8'), adapter);
+  const newCheckoutPacket = await fs.mkdtemp(path.join(directory, 'retry-'));
+  await assert.rejects(deployQualifiedRelease({ ...args, packet: newCheckoutPacket }), { code: 'EEXIST' });
+  assert.equal(calls, 1, 'Fresh checkout packets cannot replay the durable production attempt');
+  await assert.rejects(deployQualifiedRelease(args), { code: 'EEXIST' });
+  assert.equal(calls, 1);
+  const failedPacket = await fs.mkdtemp(path.join(directory, 'failed-'));
+  let failedCalls = 0;
+  const failed = {
+    ...args,
+    packet: failedPacket,
+    operation: { ...operation, operationId: 'rivet-q-999-1' },
+    run: async () => {
+      failedCalls++;
+      throw Error('private stderr: uncertain write');
+    },
+  };
+  await assert.rejects(deployQualifiedRelease(failed), /uncertain write/);
+  assert.match(
+    await fs.readFile(path.join(failedPacket, 'private-deployment/command-failure.log'), 'utf8'),
+    /private stderr/,
+  );
+  await assert.rejects(deployQualifiedRelease(failed), { code: 'EEXIST' });
+  assert.equal(failedCalls, 1);
 });

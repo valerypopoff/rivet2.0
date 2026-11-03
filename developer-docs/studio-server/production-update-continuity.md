@@ -6,6 +6,164 @@ production has not been changed by this implementation. The
 [delivery plan](production-update-continuity-plan.md) retains the exact-image
 qualification, publication and production activation gates.
 
+The October 31 essential rollout scope is one successful regional qualification,
+the first observed protected production update, the documented ordinary update
+path, and verified cleanup. A manufactured second source release and second
+cloud campaign are deferred until a real subsequent release. This changes the
+delivery scope, not the 300-second qualification or production preflight gates.
+
+The ordinary release gate now uses focused request-continuity qualification even
+for first adoption. That first test still covers policy adoption, the temporary
+bridge and return handoff, plus the ordinary rolling update, accepted work and
+complete 300-second responses. The focused test observes proxy replacement in
+that actual update, omits the developer-service shutdown/browser-recovery
+experiment and folds policy/floor evidence into the same rollout. It uses nine
+long requests for first adoption and six for an ordinary protected proxy update
+(three when the proxy template is unchanged). Full autoscaling stress and the
+extra duration matrix are separately configured tests; developer overlap retains its own full
+suite. See [test depth](automated-runtime-qualification.md#automatic-test-depth).
+Local regressions do not qualify a release or authorize a cloud attempt.
+
+The latest setup repair adds the missing staging-control Pod GET to a versioned
+administrator Role and probes required access as CI before taking the shared
+lock, including actor creation/exec/cleanup access. Unresolved operation records
+also fail before locking and are rechecked after acquisition. Setup verifies
+the exact applied cleanup-worker image/code before exporting success.
+Pre-operation failures preserve private diagnostics and can close only a
+verified owned lock with no admitted work; uncertain writes stay fenced. The
+workflow now requires deployment configuration as an environment secret. The
+live Role patch and environment-secret migration remain separate installation
+steps; local validation neither applies them nor qualifies an image. See
+[hosted setup](automated-runtime-qualification.md) for rendering and recovery.
+
+An earlier temporary staging attempt failed before application deployment: PostgreSQL
+initialized at the CSI mount root and rejected its `lost+found` directory.
+The fixture now sets `PGDATA` to a child directory. Cleanup also distinguishes
+GKE's automatic `ingress:true` annotation on a ClusterIP dependency Service
+from an explicit pending NEG: it permits the status-less automatic annotation
+only when a fresh namespace Ingress list is empty. Explicit ports, existing NEG
+status, unknown intent, failed reads and any Ingress still require the complete
+NEG inventory. Actor and janitor roles include read-only Ingress discovery.
+These repairs do not qualify the failed images or authorize a production update.
+Private terminal diagnostics retain up to four error causes (names/messages
+only), so qualification wrappers preserve the underlying transport failure.
+Command-output/environment fields and other error properties are not serialized.
+
+The narrowed campaign closed after three failed staging attempts, with zero
+successful qualifications and zero production serving updates. Child and parent
+resource cleanup, temporary access removal, evidence transfer and restoration of
+the original quota were verified. The repaired source still needs review/CI,
+exact-image qualification and the first observed production transition.
+
+The first retained-cluster test then failed during frontend preparation, before
+upgrade/autoscaling or production deployment. Regional Compute reported healthy
+proxy endpoints while the Gateway's standalone NEG Pod gates remained
+`True/LoadBalancerNegWithoutHealthCheck`. Requiring the different
+`LoadBalancerNegReady` reason rejected that valid regional attachment. The
+repair below requires actual endpoint health instead. The actor was subsequently
+evicted during scale-down; normal fixture deletion had completed, and independent
+resource/writer absence plus the retained janitor verified cleanup before the
+failed workflow and its exact lock were closed. This attempt produced no
+qualification certificate. Admissions remain disabled until a new approved test.
+
+The second retained test verified regional frontend health and seeded its
+synthetic project, then failed the staging dummy-OAuth login with HTTP403. The
+provider omitted its deployment-owned forwarding peers, so the load balancer's
+address was not resolved to the allowed public test client. This is repaired by
+explicit proxy-subnet/frontend trust, without broadening the client allowlist.
+Its50 tracked resources were verified absent; an idle actor was closed after
+diagnostics preservation because the old exec client waited beyond process exit.
+The exec status channel now terminates that wait. This failed test produced no
+qualification certificate or production update. A new paid operation needs its
+own allowance after the repaired source/image gates.
+
+The third retained test passed preparation, including real regional health,
+client provenance and dummy OAuth. Upgrade then stopped before public handoff:
+Autopilot admitted the requested 900-second bridge termination grace as 600
+seconds while preserving its 660-second preStop. The strict specification check
+correctly rejected that unsafe combination. The replacement profile below fits
+600 seconds, and bridge creation now performs server-side dry-run admission
+before freezing HPA or creating any bridge resources. This check needs the
+deployer's existing namespace create permission; read-only inspection does not
+invoke it. A dry run is admission evidence, not request-continuity qualification.
+New exact-image GKE qualification remains required; production was not updated.
+
+## Normal release process
+
+Use **Release Rivet** with an existing successful main Build Images run. CI
+qualifies those immutable images in a reusable isolated staging cluster, publishes
+the exact certificate and invokes the normal production command once through
+the protected production environment. That command owns fresh live checks, the
+online recovery checkpoint, rollout, short application acceptance and journaled
+recovery. There is no separate production-readiness job or repeated cloud setup.
+See [automated qualification](automated-runtime-qualification.md) for runner
+configuration and focused continuity gate (or explicitly configured full stress
+test). A recurring
+staging budget and one-time installation are still needed; the closed temporary
+campaign grants no new cloud authority.
+
+First activation still requires a successful focused GKE qualification and the
+observed temporary proxy bridge below. After that, ordinary updates omit the
+bridge. No manufactured second release or second campaign is required to finish
+the first rollout. Requests beyond 300 seconds may be interrupted as agreed.
+
+Ordinary updates do not create image-warmup or synthetic scheduler Jobs. Actual
+replacement Pods supply the scheduling, image-pull and readiness checks; serving
+headroom and drain checks still gate retirement. See
+[replacement readiness](deployment-operations.md#replacement-readiness-without-warmup-jobs).
+Legacy warmup Jobs with unresolved cleanup still block recovery. Removing this
+optimization does not change the proxy bridge or the 300-second protection.
+
+Deterministic startup errors are caught by packaged-command smoke checks before
+staging, and by a narrow read-only fatal-startup observer during staging. An
+aborted provider phase now stops and awaits its owned Helm/kubectl clients before
+settlement; it does not shorten request draining or replay uncertain changes.
+CI reports the failed phase immediately and continues verified cleanup. See
+[fast failure](automated-runtime-qualification.md#fast-failure-before-and-during-staging).
+
+Focused acceptance retains healthy autoscaler growth within approved bounds,
+rather than requiring exactly two final proxies or seven total Pods. The test
+and provider evidence validate observed per-role counts, complete replacement,
+current images and readiness. Unchanged proxy templates may have HPA-driven Pod
+membership changes while retaining their Deployment/template identity and live
+regional health. This removes an idle scale-down wait, not a request-drain or
+serving-capacity check.
+
+The proxy headroom guard also permits terminating predecessors beyond the native
+surge limit. They never count as ready capacity, and their CPU demand remains in
+the headroom calculation. This corrects a guard rejection of normal rolling-update
+overlap without weakening request completion, draining or the ready baseline.
+Known-stopped terminating containers need no further CPU sample, and earlier HPA
+draining is excluded from the focused test's starting pool and retirement proof.
+Live or unknown containers still require metrics, and final acceptance still
+requires every proxy settled and healthy.
+See [headroom semantics](deployment-operations.md#ordinary-seven-pod-qualification-and-headroom).
+
+### Routing verification during updates
+
+HTTPRoute comparisons accept equivalent backend references: omitted `group`,
+`kind`, `namespace` and `weight` mean the core API group, `Service`, the route's
+namespace and weight `1`. These are the documented
+[Gateway API reference defaults](https://github.com/kubernetes-sigs/gateway-api/blob/v1.4.0/apis/v1/object_reference_types.go)
+and [weight default](https://github.com/kubernetes-sigs/gateway-api/blob/v1.4.0/apis/v1/shared_types.go).
+The same comparison applies after writes, during recovery, on return to the
+normal proxy pool and before bridge cleanup. Recorded intents and submitted
+objects keep their original representation; an uncertain write is observed,
+never replayed to resolve a default-field difference.
+
+Actual destination, API group/kind, namespace, port, traffic weight, match,
+filter and ownership changes still block the transition. Non-route resources,
+health, request completion and draining retain their existing checks. The local
+Kubernetes fixtures apply route defaults on create and patch, covering the
+previous GKE failure without a cloud run. This repair does not qualify the failed
+release or authorize another staging attempt.
+
+The local supervisor retirement fixture waits for the API's withdrawal
+acknowledgement before inspecting its state. Supervisor `/readyz` becomes `503`
+before that asynchronous child command finishes; readiness withdrawal alone is
+not an acknowledgement. The fixture still checks that accepted work outlives the
+forced-shutdown grace and that the executor drains before the API.
+
 ## Contract and configuration
 
 The protected envelope is a published product request completing within 300
@@ -19,10 +177,20 @@ The optional `helm/overlays/gke-proxy-continuity.yaml` selects:
 | Setting                       |       Value |
 | ----------------------------- | ----------: |
 | Protected request             | 300 seconds |
-| Actual regional backend drain | 600 seconds |
+| Actual regional backend drain | 360 seconds |
 | Initial propagation allowance |  60 seconds |
-| Proxy preStop                 | 660 seconds |
-| Proxy pod termination grace   | 900 seconds |
+| Proxy preStop                 | 420 seconds |
+| Proxy pod termination grace   | 600 seconds |
+
+The LB drain must cover the 300-second request plus the propagation allowance;
+preStop covers drain plus propagation. Grace also covers the existing
+120-second proxy shutdown budget and 25-second finalization margin (565 seconds
+minimum for this profile). The 600-second setting leaves additional headroom
+and fits the observed Autopilot admission limit. Google's [Autopilot upgrade
+documentation](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/cluster-upgrades-autopilot)
+also describes a 600-second termination limit during node draining. Increasing
+propagation requires rechecking every timing inequality and actual admission;
+do not accept a provider-shortened lifetime or omit failed probe results.
 
 `lifecycle.proxy.preStopDelaySeconds` and
 `lifecycle.proxy.terminationGracePeriodSeconds` inherit their global fields only
@@ -64,7 +232,20 @@ rewritten in production. The isolated fixture sets it to 3600 using its own
 revision-aware settings API and waits for all original proxies to reload it.
 
 Compute observations require read access to regional backend services and their
-health. GCP observations are authenticated separately from Kubernetes. Local
+health. Every current proxy must match a unique healthy endpoint IP/target-port
+in its exact Service NEG, with a fresh observation, backend identity and zonal
+redundancy. Healthy old/surplus endpoints cannot cover an unhealthy replacement.
+`LoadBalancerNegWithoutHealthCheck` is accepted only with this independent
+Compute proof; Pod readiness alone and `LoadBalancerNegTimeout` never suffice.
+Frontend preparation, proxy HPA, bridge handoff and optional control-topology
+transfer share this check. Readiness polls wait for a complete endpoint set;
+ambiguous backend discovery and denied Compute reads fail before handoff.
+See [standalone NEG readiness](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/standalone-neg).
+Provider-gate construction requires the staging project's region even for a
+local render-only fixture, so tests must supply that installation identity too.
+The provider's HPA frontend snapshot uses the same regional wait/check as initial
+admission, including standalone NEG conditions and exact current endpoints.
+GCP observations are authenticated separately from Kubernetes. Local
 operators use `gcloud auth print-access-token` (optionally a reviewed
 `RIVET_GCLOUD_BIN` launcher); in-cluster staging uses its existing metadata
 identity. Credentials and raw templates are not included in preflight reports.
@@ -89,6 +270,11 @@ change templates:
    raise its minimum to the approved maximum (four). Wait for that normal capacity.
 2. Create a distinct four-proxy bridge at the same approved HPA ceiling, Service, backend policy, health policy,
    narrow probe route and PDB. Rebind peer placement selectors to bridge labels.
+   Keep the captured installation settings but use the exact candidate proxy
+   image from the rendered release, pinned by digest. Cloning the predecessor's
+   image would leave its old connection policy serving throughout API retirement
+   and bypass the candidate's rollout fix. The candidate image is part of the
+   transition configuration digest; recovery cannot substitute another image.
    Wait for the bridge Service's regional NEGs **before creating its pods**, then
    require all four proxies ready, positive NEG health, at least two nodes/zones
    and the protected lifecycle. Preserve unrelated placement selector constraints.
@@ -96,28 +282,36 @@ change templates:
    continuous propagation window through the bridge probe route.
 4. Change route weights while retaining both backend references and the old
    normal pods. Confirm public routing and provider drain continuously for a
-   full 600-second quiet window. Only then prepare/apply candidate templates and
+   full protected-request-plus-propagation quiet window (300 + 60 = 360 seconds
+   for the starting profile). Lost routing or drain confirmation resets that
+   window. Only then prepare/apply candidate templates and
    execute the existing accepted-work retirement protocol.
 5. After normal candidate settlement, confirm four healthy protected normal
    proxies. Keep the temporary HPA floor and scale-down pause through Helm's
    template update. Return route weights to normal and observe
-   another full 600-second quiet window. Restore the original route specification,
+   another full 360-second quiet window. Restore the original route specification,
    retain the longer backend drain, then let Helm restore the original HPA policy
    before removing only exact owned bridge UIDs. This prevents idle normal-pool
    metrics from shrinking capacity just before traffic returns.
 6. Recheck ordinary settlement before completing the release journal. Subsequent
    updates inspect an already protected installation and omit the bridge.
 
+The 360-second backend drain remains a configured upper bound; it is not an
+additional mandatory handoff sleep. Proxy preStop/grace remain 420/600 seconds.
+The shorter handoff is a repository change requiring the first full regional
+qualification, not a measured routing guarantee from the failed campaign.
+
 The bridge adds four temporary proxies; raising the normal pool's minimum can add
 two more, in addition to native rollout surges and execution autoscaling. Size
 the reviewed staging/production capacity allowance for that overlap. A scheduling
 or readiness timeout retains serving owners rather than deleting capacity to
 make space. Per-stage deployment deadlines and the external staging expiry must
-cover the two drain windows, image preparation, 900-second pod termination,
+cover the two drain windows, candidate image pulls, 600-second pod termination,
 accepted work, qualification requests and cleanup.
-Use **`--timeout 20m` or longer** for this profile. The legacy 15-minute default
-equals the protected pod grace and is rejected before ingress writes; each stage
-deadline must exceed drain, propagation and pod termination grace.
+Use **`--timeout 20m` or longer** for this profile to allow scheduling and stage
+headroom. Each stage deadline must exceed drain, propagation and pod termination
+grace. The legacy 15-minute default satisfies that minimum with the 600-second
+grace; the qualification workflow derives its longer deadline from the profile.
 
 The journal records creation, route/policy/HPA writes and deletion intents before
 dispatch. It verifies namespace and owner lifetimes, latest owned network state,
@@ -125,6 +319,17 @@ bridge specs and public health while progressing. A lost acknowledged write is
 resolved by reading its exact result. An unapplied/foreign/unknown write is not
 replayed. An interrupted deletion is observed; a same-name replacement is never
 deleted. An unfinished bridge prevents automatic preflight abandonment.
+Thirty-second heartbeats renew the 120-second journal lease while five-minute
+request observations wait. These observations run after the durable checkpoint
+acknowledges, outside the serialized journal-write queue; the next routing,
+template or retirement command still waits for them. Heartbeats do not start
+duplicate request cohorts, and remain active through initial and completion
+observations. Autoscaler preflight recovery requires the proxy handoff to be
+settled as well as replacement preparation.
+If an older installed controller already marked an untouched preflight complete
+with a pending handoff, admission retains it as recovery-only. The original
+`--resume-ha` token and unchanged configuration are required to reclaim it;
+competing operation modes cannot replace the journal or its bridge identities.
 Lost return-route acknowledgements recover from the latest recorded write intent
 even if the phase checkpoint was not saved. If Helm stores the temporary
 four-proxy minimum, ordinary-layout admission normalizes a copy only for an
@@ -149,10 +354,10 @@ Put `requestContinuityProfile` in the private settings supplied to
 {
   "protocol": 1,
   "maxProtectedRequestSeconds": 300,
-  "backendServiceDrainSeconds": 600,
+  "backendServiceDrainSeconds": 360,
   "propagationSeconds": 60,
-  "proxyPreStopDelaySeconds": 660,
-  "proxyTerminationGracePeriodSeconds": 900
+  "proxyPreStopDelaySeconds": 420,
+  "proxyTerminationGracePeriodSeconds": 600
 }
 ```
 
@@ -162,6 +367,22 @@ agree. An adopted installation requires the same target profile on every exact
 successor qualification; it cannot fall back to the old short-request suite.
 The approved window must be at least two hours and must actually cover the run
 and settlement. No previous budget or expiry is inherited.
+
+For a campaign with several qualifications and production windows, reserve the
+whole remaining sequence before starting its next paid step. Recheck against
+the original approval deadline after any wait for clarification; a later custody
+approval does not restart that clock. Show the next stage's latest permitted
+start in approval questions whenever it falls before the overall expiry.
+If the remaining sequence no longer fits,
+close admission, preserve and verify the actual evidence, then clean up the
+temporary campaign. Successful builds or local checks do not justify shortening
+the approved qualification or cleanup reserves.
+
+The activation request must identify the trusted control host, credential and
+Helm-value payloads, setup/cleanup ledger transfers, permitted readers and local
+operator sudo access. Keep these files out of actor containers and public
+artifacts. Resolve custody questions before starting the bounded cloud window
+where possible; retain the actual reply time and immutable payload hashes.
 
 `ProviderRequestContinuity` publishes a dedicated synthetic duration-controlled fixture.
 It consumes and validates every body byte and correlates each request with one
@@ -241,6 +462,24 @@ from the qualified profile (at least 20 minutes), including termination headroom
 
 ## Verification and activation gates
 
+API and execution upstream groups explicitly use `keepalive 0` in production,
+Compose and development proxies. Nginx 1.29.7+ enables upstream connection caching
+by default. The API's withdrawal protocol closes idle connections while it still
+accepts requests during routing propagation; reusing one of those connections
+can race its closure and return a 502 for a workflow POST. The proxy therefore
+opens a fresh internal TCP connection for each API/execution request. This also
+protects retirement of existing API images with that withdrawal behavior.
+The policy changes idle upstream reuse, not active response, SSE or WebSocket
+lifetimes. It does not enable POST retries or relax the zero-failure traffic gate.
+Shared DNS peer zones and background resolution remain required independently.
+See [Nginx upstream keepalive](https://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive).
+
+The fast proxy-image contract guards this explicit policy on PRs. The existing
+local Docker proxy fixture also checks actual backend connection identities
+through all three rendered templates using POST bodies and exact acceptance
+counts. Socket identities do not depend on OS source-port allocation. Its existing
+outage no-replay and browser checks remain required.
+
 Image-CI retirement probes use a separate synthetic latest workflow with an
 explicit file admission/release barrier. A 300 ms workflow can complete before
 its pause reaches the owner, so elapsed delay alone cannot prove live controls.
@@ -271,6 +510,12 @@ registry check runs with workspace dependencies; the Linux kernel ownership
 container remains dependency-free. The published web-app Playwright assertions
 use the current Decision AI labels.
 
+The backup-adapter timeout regression waits for its real child listener before
+starting the timeout under test. Slow CI process startup cannot substitute for
+the shutdown proof: the same supervised process group must stop, its exact port
+must be reusable, and no child may write after recovery begins. Fixture readiness
+has its own bounded wait and failed setup still supervises that process tree.
+
 Plan-audit verification on 2026-10-30 passed:
 
 - Full Kubernetes command: main suite 840 passed, three expected skips; initial
@@ -289,9 +534,19 @@ one failed, three skipped). The exact case passed in isolation, and the full
 rerun passed. The initial failure log is retained; its cause was not reproduced
 and is not represented as a successful run.
 
-Remaining activation work is the exact clean candidate build and image/toolchain
-verification, separately budgeted isolated regional GKE run, provider cleanup,
-qualified-manifest publication, fresh production preflight/backup, and separately
-approved production transition. Any provider failure remains a failure and may
-require implementation changes before another reviewed run. No rollout or
-publication is started automatically by these repository changes.
+Remaining essential acceptance work includes one successful isolated regional GKE
+qualification, provider cleanup, qualified-manifest publication, fresh production
+preflight and backup, and the first observed production transition.
+Revalidate the exact source, installed predecessor, artifacts and scan freshness
+before reusing an existing build or actor publication. The genuine later source
+change requires its own build and qualification. Any provider failure remains a
+failure and may require implementation changes before another reviewed run.
+These repository changes do not automatically start a rollout or publication.
+
+Operational preparation on 2026-10-31 completed candidate builds, scanned actor
+publication and a local headless production-version continuity check. Its cloud
+window closed with zero regional GKE qualifications and zero production serving
+updates because the full remaining sequence no longer fit the fixed deadline.
+Native preparation evidence was exported and independently verified before
+temporary infrastructure/access cleanup and quota restoration. That was a closed
+earlier window; its receipts do not settle the latest failed staging attempt.

@@ -137,6 +137,7 @@ void test('proxy DNS refresh keeps shared upstream peers independently of reques
       const group = extractBracedBlock(template, new RegExp(`upstream rivet_${role}\\s*\\{`));
       assert.match(group, new RegExp(`zone rivet_${role} 64k;`));
       assert.match(group, /server [^;]+ resolve;/);
+      if (['api', 'execution'].includes(role)) assert.match(group, /keepalive 0;/);
       assert.match(template, new RegExp(`set \\$${role}_upstream http://rivet_${role}/?;`));
     }
     assert.match(template, /set \$api_ui_auth_check_upstream http:\/\/rivet_api\/ui-auth\/check;/);
@@ -707,7 +708,10 @@ void test('images and local launchers build directly from the monorepo workspace
     );
   }
   assert.match(apiDockerfile, /yarn build:runtime/);
-  assert.match(apiDockerfile, /yarn workspace @valerypopoff\/rivet-studio-server-api run build/);
+  assert.match(
+    apiDockerfile,
+    /yarn workspace @valerypopoff\/rivet-studio-server-api exec tsc -p tsconfig\.runtime\.json/,
+  );
   assert.match(webDockerfile, /yarn build:hosted-web-deps/);
   assert.match(webDockerfile, /studio-server-web\/production\/server\.mjs --bundle/);
   assert.match(webDockerfile, /--outfile=\/app\/web-server\.mjs/);

@@ -160,7 +160,7 @@ test('ordinary compact publication does not invent adoption checks and still req
     autoscalerPolicyDigest: autoscalerPolicyDigest(f.autoscaling.policy),
     checks: [...HA_ORDINARY_RUNTIME_CHECKS],
   };
-  assert.throws(() => prepareRuntimeQualification(f), /v2 autoscaling/);
+  assert.throws(() => prepareRuntimeQualification(f), /full or certified focused autoscaling/);
   f.autoscaling.evidence.protocol = 2;
   f.autoscaling.evidence.checks = [...HA_COOPERATIVE_AUTOSCALING_CHECKS];
   const result = prepareRuntimeQualification(f);
