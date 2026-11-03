@@ -33,6 +33,15 @@ older repository packages on either architecture. Keep curl for the existing pro
 refresh/health paths; do not remove it, disable HTTP/2 globally, suppress the
 finding or weaken the High/Critical gate to make publication pass.
 
+The proxy and API runtime images also require `libexpat>=2.10.0-r0`.
+The November 3 image scan found cached Alpine `libexpat 2.9.0-r0` blocked by
+CVE-2026-117610 and CVE-2026-118370 in the proxy (both architectures) and API.
+Alpine publishes the patched [2.10.0-r0 package](https://pkgs.alpinelinux.org/package/v3.24/main/x86_64/libexpat).
+The explicit floor invalidates the cached runtime package-install layers. The
+qualification toolchain passed its scan and needs no package-layer change.
+Preserve the scanner policy and verify the final images; a successful application
+test does not waive OS findings.
+
 ## Release gate
 
 - The four service lanes consume the candidate manifest from this workflow
