@@ -6,6 +6,15 @@ Revised decision: repair the worker race, run cheap source contracts before expe
 
 ## Implementation and evidence
 
+The first publication ([PR 236](https://github.com/valerypopoff/rivet2.0/pull/236),
+[Build Images 41643584037](https://github.com/valerypopoff/rivet2.0/actions/runs/41643584037))
+hit a deployment-contract blocker: a journal-observer test expected no diagnostic
+artifact after the rollout. The local follow-up separates journal ordering from
+the timing file and moves that source-only contract into the early gate, retaining
+its persistence/observer failure checks and the full Kubernetes suite entry.
+This follow-up is not a verified image build or provider qualification. No
+automatic retry or further cloud operation follows from the repair.
+
 | Item                                 | Implemented behavior / evidence                                                                                                                                                                                                                                                                                                                                                                                                 | Still requires hosted evidence                                          |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | A: cooperative worker reconciliation | Live, UID-checked bounded pool; old surge owners and same-image/stale-revision owners are replaced; ceiling and pending/lost-ack recovery regressions pass. The captured-race tests failed before repair.                                                                                                                                                                                                                       | One successful exact-image focused GKE update.                          |

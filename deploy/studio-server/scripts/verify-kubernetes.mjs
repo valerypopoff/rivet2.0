@@ -256,6 +256,7 @@ async function main() {
       'deploy/studio-server/scripts/qualification-browser-tools.test.mjs',
       'deploy/studio-server/scripts/temporary-staging-bootstrap.test.mjs',
       'deploy/studio-server/scripts/provider-overlap.test.mjs',
+      'deploy/studio-server/scripts/provider-rollout-observation.test.mjs',
       'deploy/studio-server/scripts/reusable-staging-transport.test.mjs',
       'deploy/studio-server/scripts/runtime-qualification-publication.test.mjs',
       'deploy/studio-server/scripts/execution-autoscaler.test.mjs',
