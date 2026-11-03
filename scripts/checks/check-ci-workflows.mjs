@@ -837,6 +837,14 @@ for (const file of [
   assert.ok(refs.length && refs.every((reference) => reference === nginxImage), `${file}: NGINX reference drift`);
 }
 assert.match(read('deploy/studio-server/images/proxy/Dockerfile'), /brotli-libs>=1\.2\.1-r0/);
+for (const service of ['proxy', 'api']) {
+  const dockerfile = read(`deploy/studio-server/images/${service}/Dockerfile`);
+  const runtime = service === 'api' ? dockerfile.slice(dockerfile.lastIndexOf('\nFROM ')) : dockerfile;
+  assert.ok(
+    runtime.includes("'libexpat>=2.10.0-r0'"),
+    `${service}: require the patched libexpat floor in the runtime package layer, not only a builder.`,
+  );
+}
 for (const packageName of ['curl', 'libcurl']) {
   assert.ok(
     read('deploy/studio-server/images/proxy/Dockerfile').includes(`'${packageName}>=8.23.0-r0'`),
