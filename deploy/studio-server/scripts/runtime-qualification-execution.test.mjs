@@ -664,7 +664,7 @@ test('sizing preserves installed facts, skips rollout qualification and publishe
   }
 });
 
-test('sizing refuses increased reservations, missing baselines and shutdown/topology adoption', () => {
+test('sizing allows requested reservations independently of the baseline and refuses shutdown/topology adoption', () => {
   const f = fixture();
   const requests = { web: { cpu: '50m', memory: '128Mi' }, proxy: { cpu: '100m', memory: '128Mi' } };
   f.input.approval.sizingRequests = requests;
@@ -676,7 +676,7 @@ test('sizing refuses increased reservations, missing baselines and shutdown/topo
     },
   };
   f.input.approval.sizingRequests = { ...requests, web: { ...requests.web, cpu: '1' } };
-  assert.throws(() => qualificationOperation(f.input), /increase/);
+  assert.equal(qualificationOperation(f.input).sizingRequests.web.cpu, '1');
   f.input.approval.sizingRequests = requests;
   f.input.approval.developerOverlapProfile = {};
   assert.throws(() => qualificationOperation(f.input), /adopt/);

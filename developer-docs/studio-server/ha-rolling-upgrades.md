@@ -7,11 +7,11 @@ qualification and production activation as separate, unfinished release gates.
 
 The standard [release workflow](automated-runtime-qualification.md) now reuses
 staging and deploys the qualified immutable manifest through one production
-action. Full qualification is automatic for runtime/infrastructure or unknown
-changes; eligible UI/docs-only releases on an unchanged protected baseline run
-fresh focused upgrade/300-second continuity checks. Focused certificates describe
-their own observations and retain the original full-baseline manifest reference.
-They cannot authorize first adoption, configuration changes or developer overlap.
+action. Singleton releases with the bounded request-continuity profile run fresh
+focused upgrade/300-second checks, including first adoption. They do not require
+an inherited stress-test baseline. Source, image, configuration and schema checks
+still apply. Full stress testing is an explicit configuration choice; developer
+overlap and releases without the bounded profile retain their full suite.
 
 The optional [developer-backend overlap protocol](developer-backend-overlap.md)
 adds `singleton-overlap` without changing serial `singleton` or replicated-control
@@ -107,6 +107,14 @@ journal token; never force-delete the accepted owner or replay its execution.
 An already-issued retirement is observed and settled, not undone or resubmitted
 because a peer later failed. Singleton developer/maintenance replacement remains
 serial and intentionally permits its documented developer-only interruption.
+
+Ordinary retirement uses actual admission capacity and full CPU reservations;
+the autoscaler's utilization targets are advisory for rollout acceptance. A
+temporary capacity shortage can wait read-only for permitted autoscaling for up
+to five minutes within the existing deadline, retaining the old serving owner.
+Identity failures and loss of the minimum serving floor remain terminal. The
+same shared guard runs in staging and production; no test-only bypass is used.
+See [capacity checks](runtime-autoscaling.md) for demand accounting and receipts.
 
 The core runner, not just Helm, rejects an execution tier below two in either
 control mode. Ordinary Kubernetes rolls also verify each observed pod's controlling

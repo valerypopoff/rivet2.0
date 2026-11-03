@@ -335,10 +335,38 @@ settles. This operational pause does not change the qualified demand policy.
 The release tool checks fresh execution slot/CPU and proxy CPU headroom before
 template application, and again before owner withdrawal and admission fencing. It excludes
 the departing execution owner and does not count temporary proxy surge as durable
-capacity. Missing/stale metrics, foreign ownership or insufficient capacity stop
-further retirement. `ha-headroom-*.json` and `ha-proxy-headroom-*.json` are sanitized
+capacity. Ordinary rolls compare aggregate occupied slots with the surviving
+owners' enforced admission limits, and CPU demand with their full CPU requests.
+The autoscaler's 60% slot / 75% CPU targets remain growth guidance, not additional
+rollout limits. Total demand still includes work draining on the departing owner;
+that accepted work stays on its original owner until it finishes. Proxy checks
+similarly use full requested CPU and retain live terminating Pods' demand.
+
+While the minimum serving floor remains intact, insufficient measured capacity
+or pending replacement metrics are rechecked read-only for at most five minutes,
+bounded by the caller's shorter deadline. The existing controllers can grow the
+pool during this wait; the check never scales, withdraws or repeats a command.
+An exhausted wait retains serving owners and fails the update. Lost serving
+floors, foreign ownership and malformed observations still stop immediately.
+Stale execution CPU scrapes, including samples that expire during final inventory
+confirmation, use that same bounded read-only wait. Invalid timestamps, malformed
+CPU quantities and changed workload identities still fail; stale samples never
+count as capacity. Unresolved stale metrics fail by the same deadline. Normal scaling targets,
+replica limits, resource requests and drain behavior are unchanged.
+`ha-headroom-*.json` and `ha-proxy-headroom-*.json` are sanitized
 per-decision receipts. The operator therefore needs read access to PodMetrics as
 well as the existing workload/exec permissions.
+Receipts distinguish required capacity (`requiredServingOwners`) from preferred
+autoscaler capacity (`targetServingOwners`, `spareOwnersAtTarget`). A negative
+target spare can coexist with sufficient actual rollout capacity.
+
+Growth during sequential metric collection invalidates the old sample rather
+than the release. Reobservation is permitted only for the same controller,
+unchanged sampled owners and growth within the approved cap while the serving
+floor holds. New Pending Pods never count as ready capacity or zero demand.
+Changed images/strategies or proxy templates, replaced/foreign peers, lost readiness and unapproved capacity
+changes still stop. The deliberately withdrawn owner remains unready while its
+accepted work drains; the check does not wait for that owner to become ready again.
 
 This remains a bounded-capacity rolling operation. Growth during deployment is
 permitted, but demand beyond the approved cap or missing metrics still pauses

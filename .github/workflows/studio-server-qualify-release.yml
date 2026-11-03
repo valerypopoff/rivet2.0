@@ -12,7 +12,7 @@ on:
         type: boolean
         default: true
       sizing_requests:
-        description: 'Optional sizing-only JSON: {"web":{"cpu":"50m","memory":"128Mi"},"proxy":{"cpu":"100m","memory":"128Mi"}}. Requires deploy_production=false; no qualification publication.'
+        description: 'Optional sizing-only web/proxy CPU and memory request JSON. Requires deploy_production=false; no qualification publication. Values must be compatible with GKE placement.'
         type: string
         default: ''
 

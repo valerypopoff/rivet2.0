@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { autoscalerPolicy, recommendExecutionReplicas } from './execution-autoscaler.mjs';
 import {
   createExecutionAutoscalerIO,
@@ -7,6 +8,14 @@ import {
 } from './execution-autoscaler-kubernetes.mjs';
 
 class PendingProxyMetrics extends Error {}
+class PendingHaCapacity extends Error {}
+
+function cpuOwners(cpu, capacity, samples) {
+  const ratio = cpu / capacity;
+  // CPU quantities are decimal fractions; summation must not invent an owner
+  // when a mathematically integral ratio lands a few floating-point bits above it.
+  return Math.ceil(ratio - Number.EPSILON * samples * Math.max(1, ratio));
+}
 
 function proxyPodHasFinished(pod) {
   if (['Succeeded', 'Failed'].includes(pod.status?.phase)) return true;
@@ -29,25 +38,35 @@ function proxyPodHasFinished(pod) {
   );
 }
 
-/** A replacement may be Ready before metrics-server's next scrape. Only this
- * typed observation delay is waitable; identity/policy/capacity failures remain
- * terminal. Every attempt reruns the complete checks, never a workload write. */
+/** Allow fresh metrics and permitted autoscaling to catch up before retirement.
+ * Recheck read-only for at most five minutes within the caller's deadline;
+ * ownership, malformed observations and loss of the serving floor still fail. */
 export async function waitForHaHeadroom(
   check,
   { timeoutMs, now = Date.now, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
 ) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
     throw Error('Headroom observation requires a bounded timeout.');
-  const deadline = now() + timeoutMs;
+  const deadline = now() + Math.min(timeoutMs, 300000);
+  let pending;
   for (;;) {
+    if (pending && now() >= deadline) throw pending;
     try {
-      return await check();
+      const result = await check();
+      if (now() >= deadline) throw new Error('HA headroom observation deadline exceeded; serving owners retained.');
+      return result;
     } catch (error) {
       if (
-        !(error?.cause instanceof PendingProxyMetrics || error?.cause instanceof PendingExecutionCpuSample) ||
+        !(
+          error instanceof PendingHaCapacity ||
+          error?.cause instanceof PendingHaCapacity ||
+          error?.cause instanceof PendingProxyMetrics ||
+          error?.cause instanceof PendingExecutionCpuSample
+        ) ||
         now() >= deadline
       )
         throw error;
+      pending = error;
       await pause(Math.min(1000, deadline - now()));
     }
   }
@@ -141,37 +160,71 @@ export function createHaExecutionHeadroomGuard({
       if (
         owner.metadata?.uid !== snapshot.uid ||
         owner.metadata.deletionTimestamp ||
-        owner.spec?.replicas !== snapshot.replicas ||
+        !Number.isSafeInteger(owner.spec?.replicas) ||
+        owner.spec.replicas < policy.minReplicas ||
+        owner.spec.replicas > policy.maxReplicas + 1 ||
         owner.spec.updateStrategy?.type !== 'OnDelete' ||
         owner.spec.template?.spec?.containers?.find((value) => value.name === 'api')?.image !== expectedImage ||
         owner.spec.template?.metadata?.annotations?.['rivet.dev/execution-retirement-fence'] ||
         !Array.isArray(pods.items) ||
-        pods.items.length !== snapshot.pods.length ||
+        new Set(pods.items.map((pod) => pod.metadata.uid)).size !== pods.items.length ||
+        pods.items.some((pod) => {
+          const name = pod.metadata.name,
+            ordinal = name?.slice(workload.name.length + 1);
+          return (
+            !pod.metadata.uid ||
+            !name?.startsWith(`${workload.name}-`) ||
+            !/^\d+$/.test(ordinal) ||
+            Number(ordinal) >= owner.spec.replicas ||
+            pod.metadata.deletionTimestamp ||
+            !['Running', 'Pending'].includes(pod.status?.phase) ||
+            !pod.metadata.ownerReferences?.some(
+              (ref) =>
+                ref.controller && ref.kind === 'StatefulSet' && ref.name === workload.name && ref.uid === snapshot.uid,
+            )
+          );
+        }) ||
         snapshot.pods.some(
           (sample) =>
             !pods.items.some(
               (pod) =>
                 pod.metadata?.uid === sample.uid &&
                 pod.metadata.name === sample.name &&
-                !pod.metadata.deletionTimestamp &&
-                pod.status?.phase === 'Running' &&
-                pod.metadata.ownerReferences?.some(
-                  (ref) =>
-                    ref.controller &&
-                    ref.kind === 'StatefulSet' &&
-                    ref.name === workload.name &&
-                    ref.uid === snapshot.uid,
-                ) &&
                 (!sample.ready ||
-                  pod.status.conditions?.some((value) => value.type === 'Ready' && value.status === 'True')),
+                  (pod.status.phase === 'Running' &&
+                    pod.status.conditions?.some((value) => value.type === 'Ready' && value.status === 'True'))),
             ),
         )
       )
         throw new Error('Execution capacity changed during rollout headroom inspection.');
       const observedAt = now();
-      for (const pod of snapshot.pods)
+      for (const pod of snapshot.pods) {
+        if (Number.isFinite(pod.cpuSampleAt) && observedAt - pod.cpuSampleAt > policy.metricsMaxAgeSeconds * 1000)
+          throw new PendingExecutionCpuSample('Execution CPU sample expired while confirming rollout capacity.');
         pod.sampleFresh &&=
           observedAt - pod.cpuSampleAt >= -5_000 && observedAt - pod.cpuSampleAt <= policy.metricsMaxAgeSeconds * 1000;
+      }
+      if (
+        owner.spec.replicas !== snapshot.replicas ||
+        pods.items.length !== snapshot.pods.length ||
+        snapshot.pods.some(
+          (pod) => pod.uid !== departing?.uid && (!pod.state || (pod.state === 'serving' && !pod.ready)),
+        )
+      ) {
+        const serving = snapshot.pods.filter(
+          (pod) =>
+            pod.ready && pod.sampleFresh && pod.state === 'serving' && !pod.operationId && pod.uid !== departing?.uid,
+        ).length;
+        if (
+          owner.spec.replicas >= snapshot.replicas &&
+          owner.spec.replicas <= Math.max(snapshot.replicas, policy.maxReplicas) &&
+          pods.items.length >= snapshot.pods.length &&
+          pods.items.length <= owner.spec.replicas &&
+          serving >= policy.minReplicas
+        )
+          throw new PendingHaCapacity('Owned execution growth is still settling; collect a fresh capacity sample.');
+        throw new Error('Execution capacity changed outside permitted growth.');
+      }
       observation = assessHaExecutionHeadroom(snapshot, policy, departing);
     } catch (cause) {
       await artifact(
@@ -203,10 +256,12 @@ export function createHaExecutionHeadroomGuard({
         2,
       ),
     );
-    if (!observation.sufficient)
-      throw new Error(
-        `HA rollout has insufficient measured headroom: ${observation.requiredServingOwners} execution owners required, ${observation.availableServingOwners} available${departing ? ' after withdrawal' : ''}. Wait for ready capacity within the approved limit before exact recovery; do not change ordinals manually.`,
+    if (!observation.sufficient) {
+      const CapacityError = observation.availableServingOwners >= policy.minReplicas ? PendingHaCapacity : Error;
+      throw new CapacityError(
+        `HA rollout has insufficient measured headroom: ${observation.requiredServingOwners} execution owners required, ${observation.availableServingOwners} available${departing ? ' after proposed withdrawal' : ''}. Serving owners retained; capacity must be confirmed before retirement.`,
       );
+    }
   };
 }
 
@@ -226,21 +281,26 @@ export function assessHaExecutionHeadroom(snapshot, input, departing) {
   const available = snapshot.pods.filter(
     (pod) => pod.ready && pod.state === 'serving' && !pod.operationId && pod.uid !== departing?.uid,
   ).length;
-  const required = Math.max(
+  // Autoscaler targets guide ordinary growth; they are not hard rollout limits.
+  // Retain total demand, including accepted work draining on the departing owner,
+  // so the remaining pool can handle that demand at real admission/CPU capacity.
+  const required = Math.max(policy.minReplicas, Math.ceil(slots / limit), cpuOwners(cpu, 1, snapshot.pods.length));
+  const target = Math.max(
     policy.minReplicas,
     Math.ceil(slots / ((limit * policy.targetSlotsPercent) / 100)),
-    Math.ceil(cpu / (policy.targetCpuPercent / 100)),
+    cpuOwners(cpu, policy.targetCpuPercent / 100, snapshot.pods.length),
   );
   return {
     replicas: snapshot.replicas,
     availableServingOwners: available,
     requiredServingOwners: required,
+    targetServingOwners: target,
     activeSlots: slots,
     admissionLimitPerOwner: limit,
     totalCpuRequestRatio: cpu,
     targetSlotsPercent: policy.targetSlotsPercent,
     targetCpuPercent: policy.targetCpuPercent,
-    spareOwnersAtTarget: available - required,
+    spareOwnersAtTarget: available - target,
     sufficient: available >= required,
     owners: snapshot.pods.map(({ name, uid, incarnation }) => ({ name, uid, incarnation })),
   };
@@ -385,13 +445,16 @@ export function createHaProxyHeadroomGuard({
       const available = Math.min(owner.spec.replicas, ready.length);
       const usageCpu = samples.reduce((sum, value) => sum + value.usageCpu, 0);
       const minimumRequest = Math.min(...samples.map((value) => value.requestCpu));
-      const required = Math.max(hpa.spec.minReplicas, Math.ceil(usageCpu / ((minimumRequest * target) / 100)));
+      const required = Math.max(hpa.spec.minReplicas, cpuOwners(usageCpu, minimumRequest, samples.length));
+      const targetRequired = Math.max(
+        hpa.spec.minReplicas,
+        cpuOwners(usageCpu, (minimumRequest * target) / 100, samples.length),
+      );
       // Confirm the observed identities after reading metrics, including Pod
       // replacements that can otherwise reuse an old name's CPU observation.
-      const [confirmedOwner, confirmedPods] = await Promise.all([
-        get(`/apis/apps/v1/namespaces/${ns}/deployments/${encodeURIComponent(workload)}`),
-        get(`/api/v1/namespaces/${ns}/pods${query}`),
-      ]);
+      const confirmedPods = await get(`/api/v1/namespaces/${ns}/pods${query}`);
+      // Read the parent after its Pods: a template edit must not look like HPA growth.
+      const confirmedOwner = await get(`/apis/apps/v1/namespaces/${ns}/deployments/${encodeURIComponent(workload)}`);
       const confirmedActive = Array.isArray(confirmedPods.items)
         ? confirmedPods.items.filter((pod) => !proxyPodHasFinished(pod))
         : [];
@@ -402,11 +465,20 @@ export function createHaProxyHeadroomGuard({
       );
       if (
         confirmedOwner.metadata.uid !== workloadUid ||
-        confirmedOwner.metadata.generation !== owner.metadata.generation ||
-        confirmedOwner.spec.replicas !== owner.spec.replicas ||
+        !Number.isSafeInteger(confirmedOwner.spec?.replicas) ||
+        confirmedOwner.spec.replicas < hpa.spec.minReplicas ||
+        confirmedOwner.spec.replicas > hpa.spec.maxReplicas ||
+        !isDeepStrictEqual(confirmedOwner.spec, { ...owner.spec, replicas: confirmedOwner.spec.replicas }) ||
         samples.some((sample) => now() - sample.sampleAt > metricsMaxAgeSeconds * 1000) ||
         !Array.isArray(confirmedPods.items) ||
-        confirmedActive.length !== confirmedSamples.length ||
+        new Set(confirmedActive.map((pod) => pod.metadata.uid)).size !== confirmedActive.length ||
+        confirmedActive.some(
+          (pod) =>
+            !pod.metadata.uid ||
+            !pod.metadata.ownerReferences?.some(
+              (ref) => ref.controller && ref.kind === 'ReplicaSet' && ownedSets.has(ref.uid),
+            ),
+        ) ||
         confirmedSamples.some(
           (sample) =>
             !confirmedActive.some(
@@ -420,14 +492,25 @@ export function createHaProxyHeadroomGuard({
         )
       )
         throw new Error('Proxy observation changed during CPU inspection.');
+      if (confirmedOwner.spec.replicas !== owner.spec.replicas || confirmedActive.length !== confirmedSamples.length) {
+        if (
+          confirmedOwner.spec.replicas >= owner.spec.replicas &&
+          confirmedActive.length >= confirmedSamples.length &&
+          confirmedActive.filter((pod) => !pod.metadata.deletionTimestamp).length <= confirmedOwner.spec.replicas + 1 &&
+          ready.length >= hpa.spec.minReplicas
+        )
+          throw new PendingHaCapacity('Owned proxy growth changed the sample; collect fresh CPU observations.');
+        throw new Error('Proxy capacity changed outside permitted growth.');
+      }
       result = {
         workloadUid,
         replicas: owner.spec.replicas,
         availableServingOwners: available,
         requiredServingOwners: required,
+        targetServingOwners: targetRequired,
         totalCpuCores: usageCpu,
         targetCpuPercent: target,
-        spareOwnersAtTarget: available - required,
+        spareOwnersAtTarget: available - targetRequired,
         sufficient: available === owner.spec.replicas && available >= required,
         owners: samples.map(({ name, uid }) => ({ name, uid })),
       };
@@ -458,9 +541,11 @@ export function createHaProxyHeadroomGuard({
         2,
       ),
     );
-    if (!result.sufficient)
-      throw new Error(
-        `HA proxy headroom is insufficient: ${result.requiredServingOwners} owners required, ${result.availableServingOwners} available. Wait for fresh ready capacity before recovery; the approved cap and provisioning time still apply.`,
+    if (!result.sufficient) {
+      const CapacityError = result.availableServingOwners >= hpa.spec.minReplicas ? PendingHaCapacity : Error;
+      throw new CapacityError(
+        `HA proxy headroom is insufficient: ${result.requiredServingOwners} owners required, ${result.availableServingOwners} available. Serving owners retained; capacity must be confirmed before retirement.`,
       );
+    }
   };
 }

@@ -6,6 +6,7 @@ export const providerSteps = Object.freeze({
   starting: 'provider worker registration',
   prerequisites: 'shared staging prerequisites',
   namespace: 'isolated fixture namespace',
+  admission: 'non-persisting Kubernetes workload admission',
   dependencies: 'database and object-storage readiness',
   routing: 'public route and Service NEG discovery',
   installation: 'exact predecessor installation',

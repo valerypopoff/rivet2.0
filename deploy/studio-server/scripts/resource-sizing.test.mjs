@@ -38,7 +38,7 @@ test('the representative upload is a real valid large project and an uncertain P
   assert.equal(calls, 2);
 });
 
-test('sizing accepts only four request fields, requires disabled deployment and preserves the observed baseline', () => {
+test('sizing accepts intentional increases or decreases, requires disabled deployment and preserves other Helm values', () => {
   assert.equal(sizingInput({}), undefined);
   assert.deepEqual(
     sizingInput({
@@ -55,9 +55,14 @@ test('sizing accepts only four request fields, requires disabled deployment and 
     { ...requests, backend: requests.web },
     { ...requests, web: { ...requests.web, limits: {} } },
     ...['0', '-1', 'NaN', 'Infinity', '1e999', ''].map((cpu) => ({ ...requests, web: { ...requests.web, cpu } })),
-    { ...requests, proxy: { ...requests.proxy, memory: '2Gi' } },
   ])
-    assert.throws(() => sizingRequests(invalid, values()));
+    assert.throws(() => sizingRequests(invalid));
+  const increased = { ...requests, proxy: { cpu: '1', memory: '2Gi' } };
+  assert.deepEqual(sizingRequests(increased), increased);
+  assert.deepEqual(applySizingRequests(values(), increased).resources.proxy.requests, {
+    ...increased.proxy,
+    'ephemeral-storage': '1Gi',
+  });
   const before = values(),
     frozen = structuredClone(before);
   const after = applySizingRequests(before, requests);
@@ -109,14 +114,17 @@ function fixture() {
   return { gate, pods, hpa, metrics };
 }
 
-test('sizing observes admitted requests, unchanged limits, restarts and fresh measurements without demanding HPA growth', async () => {
+test('sizing reports admission changes without vetoing reservations and still detects health failures', async () => {
   const { gate, pods, metrics } = fixture();
   assert.equal((await observeSizing(gate)).proxyCount, 2);
   pods[0].spec.containers[0].resources.requests = { cpu: '250m', memory: '512Mi' };
-  await assert.rejects(observeSizing(gate), /changed the candidate/);
-  pods[0].spec.containers[0].resources.requests = requests.web;
+  let sample = await observeSizing(gate);
+  assert.deepEqual(sample.observations[0].resources.requested.requests, requests.web);
+  assert.deepEqual(sample.observations[0].resources.admitted.requests, { cpu: '250m', memory: '512Mi' });
   pods[0].spec.containers[0].resources.limits = { cpu: '50m' };
-  await assert.rejects(observeSizing(gate), /hard CPU/);
+  sample = await observeSizing(gate);
+  assert.deepEqual(sample.observations[0].resources.admitted.limits, { cpu: '50m' });
+  assert.equal(sample.observations[0].resources.requested.limits, undefined);
   delete pods[0].spec.containers[0].resources.limits;
   pods[0].status.containerStatuses[0].restartCount = 1;
   await assert.rejects(observeSizing(gate), /restarted/);
