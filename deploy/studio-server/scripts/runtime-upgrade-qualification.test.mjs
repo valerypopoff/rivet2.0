@@ -309,6 +309,11 @@ for (const scenario of [
   'focused-grown',
   'focused-late-growth',
   'focused-late-image-drift',
+  'focused-service-config-change',
+  'focused-claim-resize',
+  'focused-service-address-drift',
+  'focused-storage-volume-drift',
+  'focused-service-uid-drift',
 ]) {
   test(`ordinary observation keeps a single truthful window: ${scenario}`, async (t) => {
     const { previous, candidate } = pair();
@@ -324,6 +329,11 @@ for (const scenario of [
     let failing = false,
       images = previous.images,
       storageUid = 'original',
+      storageVolume = 'original-volume',
+      storageSize = '1Gi',
+      serviceUid = 'original-service',
+      serviceAddress = '10.0.0.1',
+      servicePort = 8080,
       rolls = 0,
       independence = 0,
       continuityFinished = false;
@@ -379,7 +389,18 @@ for (const scenario of [
       },
       kube: async () => ({
         stdout: JSON.stringify({
-          items: [{ kind: 'PersistentVolumeClaim', metadata: { name: 'restore', uid: storageUid }, spec: {} }],
+          items: [
+            {
+              kind: 'PersistentVolumeClaim',
+              metadata: { name: 'restore', uid: storageUid },
+              spec: { volumeName: storageVolume, resources: { requests: { storage: storageSize } } },
+            },
+            {
+              kind: 'Service',
+              metadata: { name: 'proxy', uid: serviceUid },
+              spec: { clusterIP: serviceAddress, ports: [{ port: 80, targetPort: servicePort }] },
+            },
+          ],
         }),
       }),
       requestWorkflow: ManagedReleaseGate.prototype.requestWorkflow,
@@ -395,6 +416,11 @@ for (const scenario of [
         }
         images = candidate.images;
         if (scenario === 'storage-drift') storageUid = 'replacement';
+        if (variant === 'service-config-change') servicePort = 9090;
+        if (variant === 'claim-resize') storageSize = '2Gi';
+        if (variant === 'service-address-drift') serviceAddress = '10.0.0.2';
+        if (variant === 'storage-volume-drift') storageVolume = 'different-volume';
+        if (variant === 'service-uid-drift') serviceUid = 'different-service';
         if (scenario === 'aborted') controller.abort(Error('Qualification deadline reached'));
       },
       assertAutoscalerActive: async () => ({ policyDigest: autoscalerPolicyDigest({}) }),
@@ -459,7 +485,7 @@ for (const scenario of [
           }
         : {}),
     });
-    if (variant === 'pass' || variant === 'slow-web' || scenario === 'overlap') {
+    if (['pass', 'slow-web', 'service-config-change', 'claim-resize'].includes(variant) || scenario === 'overlap') {
       const report = await work;
       assert.equal(report.outcome, 'passed');
       assert.equal(report.qualification, 'local-functional-only');

@@ -171,7 +171,7 @@ export function createKubernetesProxyContinuity({
   observeBackend = createComputeBackendObserver(config.network),
   fetchImpl = fetch,
   now = () => performance.now(),
-  wait = () => new Promise((r) => setTimeout(r, 5000)),
+  wait = (ms = 5000) => new Promise((r) => setTimeout(r, ms)),
 }) {
   const { namespace, network, proxyName, profile } = config;
   const read = async (object, { optional = false } = {}) => {
@@ -194,22 +194,26 @@ export function createKubernetesProxyContinuity({
   const pods = async (instance) =>
     JSON.parse((await kube(['get', 'pods', '-l', `app.kubernetes.io/instance=${instance}`, '-o', 'json'])).stdout)
       .items;
-  const until = async (label, check) => {
-    const deadline = now() + timeoutMs;
+  const until = async (label, check, deadline = now() + timeoutMs) => {
     let pending;
-    do {
-      try {
-        if (await check()) return;
-      } catch (error) {
-        if (!(error instanceof ProxyPoolNotReady)) throw error;
-        pending = error;
-      }
+    const withinDeadline = () =>
       assert.ok(
         now() < deadline,
         `Timed out waiting for ${label}; serving capacity retained${pending ? `: ${pending.message}` : ''}`,
       );
-      await wait();
-    } while (true);
+    for (;;) {
+      withinDeadline();
+      let ready;
+      try {
+        ready = await check();
+      } catch (error) {
+        if (!(error instanceof ProxyPoolNotReady)) throw error;
+        pending = error;
+      }
+      withinDeadline();
+      if (ready) return;
+      await wait(Math.min(5000, deadline - now()));
+    }
   };
   const publicProbe = async (state, target, probe, token) => {
     const route = state.route ?? (await read({ kind: 'HTTPRoute', name: network.routeName }));
@@ -228,9 +232,11 @@ export function createKubernetesProxyContinuity({
   const healthyPool = async (name, protectedPool, minimum = 2) => {
     const deployment = await read({ kind: 'Deployment', name });
     // Normal release and Deployment names differ; use its exact selector instead.
-    const selected = (await pods(deployment.spec.template.metadata.labels['app.kubernetes.io/instance'])).filter((p) =>
+    const observed = (await pods(deployment.spec.template.metadata.labels['app.kubernetes.io/instance'])).filter((p) =>
       Object.entries(deployment.spec.selector.matchLabels).every(([k, v]) => p.metadata.labels?.[k] === v),
     );
+    // Draining predecessors retain ownership checks but cannot supply capacity.
+    const selected = observed.filter((p) => !p.metadata.deletionTimestamp);
     if (selected.length < minimum)
       throw new ProxyPoolNotReady(`Proxy Deployment ${name} has ${selected.length}/${minimum} required Pods`);
     if (selected.some((p) => !negReady(p)))
@@ -248,7 +254,7 @@ export function createKubernetesProxyContinuity({
         .map((r) => r.metadata.uid),
     );
     assert.ok(
-      selected.every((p) =>
+      observed.every((p) =>
         p.metadata.ownerReferences?.some((o) => o.controller && o.kind === 'ReplicaSet' && owned.has(o.uid)),
       ),
       'Proxy pod is not owned by the captured Deployment',
@@ -268,12 +274,12 @@ export function createKubernetesProxyContinuity({
       if (error.code !== 'ERR_ASSERTION') throw error;
       throw new ProxyPoolNotReady(error.message, { cause: error });
     }
-    return true;
+    return { deployment, proxyPods: selected, service, backend };
   };
   const io = {
     namespaceUid: nsUid,
     read,
-    async baseline() {
+    async baseline({ deadline } = {}) {
       const route = await read({ kind: 'HTTPRoute', name: network.routeName });
       const routes = JSON.parse(
         (await kube(['get', 'httproutes.gateway.networking.k8s.io', '-o', 'json'])).stdout,
@@ -294,15 +300,25 @@ export function createKubernetesProxyContinuity({
         namespace: route.spec.parentRefs?.[0]?.namespace ?? namespace,
       });
       const policy = await read({ kind: 'GCPBackendPolicy', name: network.backendPolicyName });
-      const service = await read({ kind: 'Service', name: policy.spec.targetRef.name });
-      const deployment = await read({ kind: 'Deployment', name: proxyName });
+      let service = await read({ kind: 'Service', name: policy.spec.targetRef.name });
+      let deployment = await read({ kind: 'Deployment', name: proxyName });
       const hpa = await read({ kind: 'HorizontalPodAutoscaler', name: proxyName });
       assert.equal(gateway.spec.gatewayClassName, 'gke-l7-regional-external-managed');
       assert.equal(service.metadata.name, proxyName);
-      const proxyPods = (await pods(config.release)).filter((p) =>
-        Object.entries(deployment.spec.selector.matchLabels).every(([k, v]) => p.metadata.labels?.[k] === v),
+      let pool;
+      await until(
+        'normal serving proxy capacity',
+        async () => {
+          pool = await healthyPool(proxyName, false);
+          return true;
+        },
+        deadline,
       );
-      await healthyPool(proxyName, false);
+      assert.equal(pool.deployment.metadata.uid, deployment.metadata.uid, 'Proxy Deployment identity changed');
+      assert.equal(pool.service.metadata.uid, service.metadata.uid, 'Proxy Service identity changed');
+      deployment = pool.deployment;
+      service = pool.service;
+      const { proxyPods, backend } = pool;
       for (const p of proxyPods) {
         const include = (
           await kube(['exec', p.metadata.name, '-c', 'proxy', '--', 'cat', '/tmp/nginx/rivet-proxy-timeout.inc'])
@@ -313,7 +329,6 @@ export function createKubernetesProxyContinuity({
           'Set installation runtime proxyReadTimeoutSeconds to at least 360 before adopting 300-second continuity',
         );
       }
-      const backend = await observeBackend(service);
       assert.equal(backend.healthy, true, 'Original provider backend is unhealthy');
       assertGkeProxyBackendHealth(proxyPods, service, backend);
       if (config.configName) {
@@ -427,8 +442,14 @@ export function createKubernetesProxyContinuity({
   const transition = createProxyContinuityTransition({ config, io, timeoutMs, now, wait });
   return {
     ...transition,
-    async inspect() {
-      const baseline = await io.baseline();
+    async inspect({ timeoutMs: inspectionTimeoutMs = timeoutMs } = {}) {
+      assert.ok(
+        Number.isSafeInteger(inspectionTimeoutMs) && inspectionTimeoutMs > 0 && inspectionTimeoutMs <= timeoutMs,
+        'Proxy inspection requires a positive timeout within its operation deadline',
+      );
+      const deadline = now() + inspectionTimeoutMs;
+      const baseline = await io.baseline({ deadline });
+      assert.ok(now() < deadline, 'Timed out inspecting protected proxy availability');
       buildProxyBridge(baseline, config, '00000000-0000-4000-8000-000000000000');
       let protectedProxies = true;
       try {
@@ -445,6 +466,7 @@ export function createKubernetesProxyContinuity({
         policyUid: baseline.policy.metadata.uid,
         gatewayUid: baseline.gateway.metadata.uid,
         proxyUid: baseline.deployment.metadata.uid,
+        proxyPodUids: baseline.proxyPods.map((p) => p.metadata.uid),
         hpaUid: baseline.hpa.metadata.uid,
         actualBackendServiceDrainSeconds: baseline.backendServiceDrainSeconds,
         policyBackendServiceDrainSeconds: baseline.policy.spec.default?.connectionDraining?.drainingTimeoutSec ?? 0,

@@ -27,6 +27,19 @@ const snapshot = (replicas = 3) => ({
   })),
 });
 
+test('ordinary retirement can exceed the scaling target while retaining real admission and CPU capacity', () => {
+  const sample = snapshot();
+  for (const pod of sample.pods) Object.assign(pod, { active: 1, limit: 4, cpuRatio: 0.6 });
+  sample.pods[0].active = 3;
+  const result = assessHaExecutionHeadroom(sample, policy, sample.pods[0]);
+  assert.equal(result.activeSlots, 5);
+  assert.equal(result.availableServingOwners, 2);
+  assert.equal(result.requiredServingOwners, 2);
+  assert.equal(result.targetServingOwners, 3);
+  assert.equal(result.spareOwnersAtTarget, -1);
+  assert.equal(result.sufficient, true);
+});
+
 test('headroom accounts for the departing owner and all accepted work', () => {
   const sample = snapshot();
   let result = assessHaExecutionHeadroom(sample, policy, sample.pods[2]);
@@ -36,16 +49,30 @@ test('headroom accounts for the departing owner and all accepted work', () => {
   Object.assign(sample.pods[2], { state: 'withdrawing', ready: false, operationId: 'owned' });
   result = assessHaExecutionHeadroom(sample, policy, sample.pods[2]);
   assert.equal(result.activeSlots, 24);
-  assert.equal(result.requiredServingOwners, 4);
+  assert.equal(result.requiredServingOwners, 3);
+  assert.equal(result.targetServingOwners, 4);
   assert.equal(result.sufficient, false);
   assert.equal(result.spareOwnersAtTarget, -2);
+});
+
+test('CPU rounding cannot invent an extra required owner at reserved capacity', () => {
+  const sample = snapshot();
+  sample.pods[0].cpuRatio = 0.5 + Number.EPSILON;
+  sample.pods[1].cpuRatio = 0.5 + Number.EPSILON;
+  sample.pods[2].cpuRatio = 1;
+  const result = assessHaExecutionHeadroom(sample, policy, sample.pods[2]);
+  assert.equal(result.requiredServingOwners, 2);
+  assert.equal(result.sufficient, true);
+  sample.pods[2].cpuRatio = 1.000001;
+  assert.equal(assessHaExecutionHeadroom(sample, policy, sample.pods[2]).sufficient, false);
 });
 
 test('CPU demand and overload beyond the autoscaler maximum cannot be hidden by clamping', () => {
   const sample = snapshot(8);
   for (const pod of sample.pods) pod.cpuRatio = 3;
   const result = assessHaExecutionHeadroom(sample, policy);
-  assert.equal(result.requiredServingOwners, 32);
+  assert.equal(result.requiredServingOwners, 24);
+  assert.equal(result.targetServingOwners, 32);
   assert.equal(result.sufficient, false);
   assert.throws(() => assessHaExecutionHeadroom(snapshot(9), policy), /surge bound/);
 });
@@ -78,7 +105,7 @@ test('missing, stale, changed or inconsistent observations block headroom accept
   );
 });
 
-function fixture() {
+function fixture(replicas = 2) {
   const now = 1_000_000;
   const oldImage = `api@sha256:${'a'.repeat(64)}`,
     candidate = `api@sha256:${'b'.repeat(64)}`;
@@ -86,7 +113,7 @@ function fixture() {
   const owner = {
     metadata: { name: 'execution', uid: workload.uid, labels: { 'app.kubernetes.io/instance': 'rivet' } },
     spec: {
-      replicas: 2,
+      replicas,
       updateStrategy: { type: 'OnDelete' },
       template: {
         spec: { containers: [{ name: 'api', image: oldImage }] },
@@ -94,7 +121,7 @@ function fixture() {
     },
   };
   const initial = structuredClone(owner);
-  const pods = snapshot(2).pods.map((pod) => ({
+  const pods = snapshot(replicas).pods.map((pod) => ({
     metadata: {
       name: pod.name,
       uid: pod.uid,
@@ -145,7 +172,7 @@ function fixture() {
           }),
         };
       return {
-        stdout: `rivet_published_execution_active_runs ${active}\nrivet_published_execution_admission_limit{mode="enforce"} 10\n`,
+        stdout: `rivet_published_execution_active_runs ${typeof active === 'function' ? active(args[1]) : active}\nrivet_published_execution_admission_limit{mode="enforce"} 10\n`,
       };
     }
     assert.deepEqual(args.slice(0, 2), ['get', '--raw']);
@@ -183,6 +210,57 @@ function fixture() {
   };
 }
 
+test('retirement waits read-only for cooperative growth when current demand needs another surviving worker', async () => {
+  const f = fixture(3);
+  f.owner.spec.template.spec.containers[0].image = f.candidate;
+  f.setActive((name) => (name === 'execution-3' ? 0 : 8));
+  const departing = { name: 'execution-0', uid: 'uid-0' };
+  const guard = createHaExecutionHeadroomGuard(f.options);
+  let clock = 0,
+    pauses = 0;
+  await waitForHaHeadroom(() => guard({ stage: 'retirement', departing }), {
+    timeoutMs: 2000,
+    now: () => clock,
+    pause: async (ms) => {
+      clock += ms;
+      pauses++;
+      f.owner.spec.replicas = 4;
+      const pod = structuredClone(f.pods[0]);
+      Object.assign(pod.metadata, { name: 'execution-3', uid: 'uid-3' });
+      f.pods.push(pod);
+      f.metrics.push({ ...structuredClone(f.metrics[0]), metadata: { name: 'execution-3' } });
+    },
+  });
+  assert.equal(pauses, 1);
+  assert.equal(f.receipts[0].outcome, 'blocked');
+  assert.equal(f.receipts.at(-1).requiredServingOwners, 3);
+  assert.equal(f.receipts.at(-1).availableServingOwners, 3);
+  assert.equal(f.receipts.at(-1).outcome, 'passed');
+  assert.ok(f.calls.every((args) => args[0] === 'get' || args[0] === 'exec'));
+});
+
+test('capacity waiting expires within the original shorter deadline or five minutes, and identity failures stop it', async () => {
+  for (const scenario of ['shorter-deadline', 'five-minute-cap', 'changed-identity']) {
+    const f = fixture(3);
+    f.setActive(11);
+    let clock = 0,
+      pauses = 0;
+    const guard = createHaExecutionHeadroomGuard(f.options);
+    const work = waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+      timeoutMs: scenario === 'five-minute-cap' ? 1200000 : 2000,
+      now: () => clock,
+      pause: async (ms) => {
+        clock += ms;
+        pauses++;
+        if (scenario === 'changed-identity') f.owner.metadata.uid = 'foreign';
+      },
+    });
+    await assert.rejects(work, scenario === 'changed-identity' ? /headroom is unconfirmed/ : /insufficient/);
+    assert.equal(pauses, scenario === 'changed-identity' ? 1 : scenario === 'five-minute-cap' ? 300 : 2);
+    assert.equal(clock, scenario === 'five-minute-cap' ? 300000 : scenario === 'changed-identity' ? 1000 : 2000);
+  }
+});
+
 test('Kubernetes guard reuses fenced metrics reads and records sanitized execution headroom', async () => {
   const f = fixture();
   const guard = createHaExecutionHeadroomGuard(f.options);
@@ -197,7 +275,7 @@ test('Kubernetes guard reuses fenced metrics reads and records sanitized executi
   assert.equal(f.receipts[1].availableServingOwners, 2);
   assert.ok(f.calls.every((args) => args[0] === 'get' || args[0] === 'exec'));
   assert.equal(JSON.stringify(f.receipts).includes('sha256:'), false);
-  f.setActive(7);
+  f.setActive(11);
   await assert.rejects(guard({ stage: 'retirement' }), /insufficient measured headroom/);
   assert.equal(f.receipts.at(-1).requiredServingOwners, 3);
   assert.equal(f.receipts.at(-1).outcome, 'blocked');
@@ -270,6 +348,71 @@ test('execution headroom cannot outlive metric freshness while confirming capaci
   };
   await assert.rejects(createHaExecutionHeadroomGuard(f.options)({ stage: 'preflight' }), /headroom is unconfirmed/);
   assert.equal(f.receipts.at(-1).outcome, 'blocked');
+});
+
+test('growth during metric sampling is reobserved without hiding changed identities or lost readiness', async () => {
+  for (const scenario of ['growth', 'changed-peer', 'foreign-growth', 'lost-readiness', 'outside-cap']) {
+    const f = fixture(3),
+      kube = f.options.kube;
+    let added,
+      pauses = 0,
+      clock = 0;
+    f.options.kube = async (args) => {
+      const result = await kube(args);
+      if (!added && args[0] === 'exec' && args[1] === 'execution-2' && args.includes('-e')) {
+        added = structuredClone(f.pods[0]);
+        Object.assign(added.metadata, { name: 'execution-3', uid: 'uid-3' });
+        added.status.phase = 'Pending';
+        added.status.conditions[0].status = 'False';
+        f.owner.spec.replicas = scenario === 'outside-cap' ? 8 : 4;
+        f.pods.push(added);
+        if (scenario === 'changed-peer') f.pods[0].metadata.uid = 'replacement';
+        if (scenario === 'foreign-growth') added.metadata.ownerReferences[0].uid = 'foreign';
+        if (scenario === 'lost-readiness') f.pods[0].status.conditions[0].status = 'False';
+      }
+      return result;
+    };
+    const guard = createHaExecutionHeadroomGuard(f.options);
+    const work = waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+      timeoutMs: 3000,
+      now: () => clock,
+      pause: async (ms) => {
+        clock += ms;
+        if (++pauses === 2) {
+          added.status.phase = 'Running';
+          added.status.conditions[0].status = 'True';
+          f.metrics.push({ ...structuredClone(f.metrics[0]), metadata: { name: 'execution-3' } });
+        }
+      },
+    });
+    if (scenario === 'growth') {
+      await work;
+      assert.equal(pauses, 2);
+      assert.equal(f.receipts.at(-1).availableServingOwners, 4);
+    } else {
+      await assert.rejects(work, /headroom is unconfirmed/);
+      assert.equal(pauses, 0, 'Only intact owned growth within the approved cap can wait');
+    }
+  }
+});
+
+test('the deliberately withdrawn owner need not become ready again before its accepted work drains', async () => {
+  const f = fixture(3),
+    kube = f.options.kube;
+  f.owner.spec.template.spec.containers[0].image = f.candidate;
+  f.pods[0].status.conditions[0].status = 'False';
+  f.options.kube = async (args) => {
+    const result = await kube(args);
+    if (args[0] === 'exec' && args[1] === 'execution-0' && args.at(-1) === '/opt/rivet/retire-backend.mjs')
+      return { stdout: JSON.stringify({ ...JSON.parse(result.stdout), state: 'withdrawing', operationId: 'owned' }) };
+    return result;
+  };
+  await createHaExecutionHeadroomGuard(f.options)({
+    stage: 'retirement',
+    departing: { name: 'execution-0', uid: 'uid-0' },
+  });
+  assert.equal(f.receipts.at(-1).outcome, 'passed');
+  assert.equal(f.receipts.at(-1).availableServingOwners, 2);
 });
 
 test('profiles without the execution controller do not acquire an unrelated metrics dependency', async () => {
@@ -388,7 +531,7 @@ test('terminating proxies cannot supply serving capacity and their CPU demand st
   addProxyPod(busy, { terminating: true, cpu: '1400m' });
   await assert.rejects(createHaProxyHeadroomGuard(busy.options)({ stage: 'retirement' }), /insufficient/);
   assert.equal(busy.receipts.at(-1).availableServingOwners, 2);
-  assert.equal(busy.receipts.at(-1).requiredServingOwners, 5);
+  assert.equal(busy.receipts.at(-1).requiredServingOwners, 4);
 });
 
 test('proxy rollout still rejects too many non-terminating pods', async () => {
@@ -517,9 +660,70 @@ test('proxy headroom uses current CPU demand rather than HPA desired replicas', 
   assert.equal(f.receipts.at(-1).totalCpuCores, 0.2);
   for (const sample of f.metrics) sample.containers[0].usage.cpu = '700m';
   await assert.rejects(guard({ stage: 'retirement' }), /proxy headroom is insufficient/);
-  assert.equal(f.receipts.at(-1).requiredServingOwners, 4);
+  assert.equal(f.receipts.at(-1).requiredServingOwners, 3);
+  assert.equal(f.receipts.at(-1).targetServingOwners, 4);
   assert.equal(f.receipts.at(-1).autoscalingFrozen, false);
   assert.equal(f.receipts.at(-1).scaleDownPaused, true);
+});
+
+test('proxy utilization above its scaling target can roll within its reserved CPU capacity', async () => {
+  const f = proxyFixture();
+  for (const sample of f.metrics) sample.containers[0].usage.cpu = '450m';
+  await createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' });
+  assert.equal(f.receipts.at(-1).requiredServingOwners, 2);
+  assert.equal(f.receipts.at(-1).targetServingOwners, 3);
+  assert.equal(f.receipts.at(-1).spareOwnersAtTarget, -1);
+  assert.equal(f.receipts.at(-1).outcome, 'passed');
+});
+
+test('proxy capacity growth is observed without scaling or withdrawing from the guard', async () => {
+  const f = proxyFixture();
+  for (const sample of f.metrics) sample.containers[0].usage.cpu = '700m';
+  let clock = 0,
+    pauses = 0;
+  const guard = createHaProxyHeadroomGuard(f.options);
+  await waitForHaHeadroom(() => guard({ stage: 'retirement' }), {
+    timeoutMs: 2000,
+    now: () => clock,
+    pause: async (ms) => {
+      clock += ms;
+      pauses++;
+      f.deployment.spec.replicas = 3;
+      addProxyPod(f);
+    },
+  });
+  assert.equal(pauses, 1);
+  assert.equal(f.receipts.at(-1).requiredServingOwners, 3);
+  assert.equal(f.receipts.at(-1).outcome, 'passed');
+  assert.ok(f.calls.every((args) => args[0] === 'get' && args[1] === '--raw'));
+});
+
+test('loss of the two-owner floor fails immediately rather than waiting for utilization to fall', async () => {
+  const f = proxyFixture();
+  f.pods[0].status.conditions[0].status = 'False';
+  let pauses = 0;
+  const guard = createHaProxyHeadroomGuard(f.options);
+  await assert.rejects(
+    waitForHaHeadroom(() => guard({ stage: 'retirement' }), {
+      timeoutMs: 2000,
+      pause: async () => pauses++,
+    }),
+    /insufficient/,
+  );
+  assert.equal(pauses, 0);
+});
+
+test('a successful observation cannot extend the headroom deadline', async () => {
+  let clock = 0;
+  await assert.rejects(
+    waitForHaHeadroom(
+      async () => {
+        clock = 2000;
+      },
+      { timeoutMs: 2000, now: () => clock },
+    ),
+    /deadline exceeded/,
+  );
 });
 
 test('proxy surge is not accepted as enduring baseline capacity', async () => {
@@ -529,7 +733,7 @@ test('proxy surge is not accepted as enduring baseline capacity', async () => {
     metadata: { ...f.pods[0].metadata, name: 'proxy-2', uid: 'proxy-2-uid' },
   });
   f.metrics.push({ ...structuredClone(f.metrics[0]), metadata: { name: 'proxy-2' } });
-  for (const sample of f.metrics) sample.containers[0].usage.cpu = '300m';
+  for (const sample of f.metrics) sample.containers[0].usage.cpu = '350m';
   await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /insufficient/);
   assert.equal(f.receipts.at(-1).availableServingOwners, 2);
   assert.equal(f.receipts.at(-1).requiredServingOwners, 3);
@@ -599,6 +803,44 @@ test('proxy headroom rejects additional owners appearing after the sampled inven
   await assert.rejects(createHaProxyHeadroomGuard(f.options)({ stage: 'retirement' }), /headroom is unconfirmed/);
 });
 
+test('proxy HPA growth during CPU confirmation waits for a fresh owned sample', async () => {
+  for (const scenario of ['growth', 'foreign-owner', 'changed-peer', 'changed-template', 'outside-cap']) {
+    const f = proxyFixture(),
+      kube = f.options.kube;
+    let reads = 0,
+      clock = 0,
+      pauses = 0;
+    f.options.kube = async (args) => {
+      if (!args[2].includes('/metrics.k8s.io/') && args[2].split('?')[0].endsWith('/pods') && ++reads === 2) {
+        f.deployment.spec.replicas = scenario === 'outside-cap' ? 5 : 3;
+        const added = addProxyPod(f);
+        if (scenario === 'foreign-owner') added.metadata.ownerReferences[0].uid = 'foreign';
+        if (scenario === 'changed-peer') f.pods[0].metadata.uid = 'rebound';
+        if (scenario === 'changed-template') f.deployment.spec.template = { unexpected: true };
+      }
+      return kube(args);
+    };
+    const guard = createHaProxyHeadroomGuard(f.options);
+    const work = waitForHaHeadroom(() => guard({ stage: 'retirement' }), {
+      timeoutMs: 2000,
+      now: () => clock,
+      pause: async (ms) => {
+        clock += ms;
+        pauses++;
+      },
+    });
+    if (scenario === 'growth') {
+      await work;
+      assert.equal(pauses, 1);
+      assert.equal(f.receipts.at(-1).availableServingOwners, 3);
+    } else {
+      await assert.rejects(work, /headroom is unconfirmed/);
+      assert.equal(pauses, 0);
+    }
+    assert.ok(f.calls.every((args) => args[0] === 'get'));
+  }
+});
+
 test('proxy guard requires zero-unavailable and one-surge policy and no unrelated metrics', async () => {
   const f = proxyFixture();
   f.options.resources[0].spec.strategy.rollingUpdate.maxUnavailable = 1;
@@ -634,6 +876,71 @@ test('missing execution scrape waits without parsing it as CPU or accepting a re
   }
 });
 
+test('stale execution CPU observations can refresh within the original deadline', async () => {
+  for (const scenario of [
+    'fresh-scrape',
+    'stale-forever',
+    'changed-identity',
+    'malformed-cpu',
+    'invalid-time',
+    'future-time',
+  ]) {
+    const f = fixture();
+    f.metrics[0].timestamp =
+      scenario === 'invalid-time' ? 'invalid' : new Date(scenario === 'future-time' ? 1006000 : 0).toISOString();
+    if (scenario === 'malformed-cpu') f.metrics[0].containers[0].usage.cpu = 'invalid';
+    let clock = 0,
+      pauses = 0;
+    const guard = createHaExecutionHeadroomGuard(f.options);
+    const work = waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+      timeoutMs: 2000,
+      now: () => clock,
+      pause: async (ms) => {
+        clock += ms;
+        pauses++;
+        if (scenario === 'fresh-scrape') f.metrics[0].timestamp = f.metrics[1].timestamp;
+        if (scenario === 'changed-identity') f.owner.metadata.uid = 'replaced';
+      },
+    });
+    if (scenario === 'fresh-scrape') {
+      await work;
+      assert.equal(f.receipts.at(-1).outcome, 'passed');
+    } else await assert.rejects(work, /headroom is unconfirmed/);
+    assert.equal(
+      pauses,
+      scenario === 'stale-forever' ? 2 : ['fresh-scrape', 'changed-identity'].includes(scenario) ? 1 : 0,
+    );
+    assert.ok(f.calls.every((args) => args[0] === 'get' || args[0] === 'exec'));
+  }
+});
+
+test('CPU freshness expiring during final execution inventory confirmation is reobserved', async () => {
+  const f = fixture(),
+    kube = f.options.kube;
+  let now = 1000000,
+    lists = 0,
+    pauses = 0,
+    clock = 0;
+  f.options.now = () => now;
+  f.options.kube = async (args) => {
+    const result = await kube(args);
+    if (args[0] === 'get' && args[2].split('?')[0].endsWith('/pods') && ++lists === 2) now += 90001;
+    return result;
+  };
+  const guard = createHaExecutionHeadroomGuard(f.options);
+  await waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+    timeoutMs: 2000,
+    now: () => clock,
+    pause: async (ms) => {
+      clock += ms;
+      pauses++;
+      for (const metric of f.metrics) metric.timestamp = new Date(now).toISOString();
+    },
+  });
+  assert.equal(pauses, 1);
+  assert.equal(f.receipts.at(-1).outcome, 'passed');
+});
+
 test('replacement CPU scrape delay waits read-only; stale forever, changed identity and insufficient capacity still block', async () => {
   for (const scenario of ['fresh-scrape', 'stale-forever', 'changed-identity', 'insufficient']) {
     const f = proxyFixture();
@@ -653,7 +960,8 @@ test('replacement CPU scrape delay waits read-only; stale forever, changed ident
         pause: async (ms) => {
           clock += ms;
           pauses++;
-          if (scenario === 'fresh-scrape' || scenario === 'insufficient') f.metrics.push(absent);
+          if ((scenario === 'fresh-scrape' || scenario === 'insufficient') && !f.metrics.includes(absent))
+            f.metrics.push(absent);
           if (scenario === 'changed-identity') f.deployment.metadata.uid = 'replacement';
           if (scenario === 'insufficient') for (const sample of f.metrics) sample.containers[0].usage.cpu = '700m';
         },
@@ -666,7 +974,7 @@ test('replacement CPU scrape delay waits read-only; stale forever, changed ident
       await assert.rejects(work);
       assert.equal(decisions, 0);
     }
-    assert.equal(pauses, scenario === 'stale-forever' ? 2 : 1);
+    assert.equal(pauses, scenario === 'stale-forever' || scenario === 'insufficient' ? 2 : 1);
     assert.ok(f.calls.every((args) => args[0] === 'get' && args[1] === '--raw'));
   }
 });

@@ -584,6 +584,8 @@ export function createExecutionAutoscalerIO({
         // A metrics request must not hide pod replacement during exec.
         const after = await owned({ ...entry, workloadUid: owner.metadata.uid });
         result.at(-1).ready = after.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true;
+        if (Number.isFinite(age) && age > policy.metricsMaxAgeSeconds * 1000)
+          throw new PendingExecutionCpuSample('Execution CPU sample is stale; wait for a fresh scrape.');
       }
       return {
         uid: owner.metadata.uid,

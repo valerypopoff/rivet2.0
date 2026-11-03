@@ -155,9 +155,21 @@ export async function runOrdinaryRuntimeUpgrade({
   };
   const inventory = async () => {
     const items = JSON.parse((await gate.kube(['get', 'service,pvc', '-o', 'json'])).stdout).items;
-    return items
-      .map((r) => ({ kind: r.kind, name: r.metadata.name, uid: r.metadata.uid, spec: r.spec }))
-      .sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`));
+    return (
+      items
+        // Compare durable identities, not the whole desired configuration. A
+        // Service port update or same-volume resize is not replacement/data loss.
+        .map((r) => ({
+          kind: r.kind,
+          name: r.metadata.name,
+          uid: r.metadata.uid,
+          binding:
+            r.kind === 'Service'
+              ? { addresses: r.spec.clusterIPs ?? [r.spec.clusterIP] }
+              : { volumeName: r.spec.volumeName, storageClassName: r.spec.storageClassName },
+        }))
+        .sort((a, b) => `${a.kind}/${a.name}`.localeCompare(`${b.kind}/${b.name}`))
+    );
   };
   const before = await inventory();
   let phase = focused ? 'predecessor-runtime-preparation' : 'predecessor-seven-preparation';

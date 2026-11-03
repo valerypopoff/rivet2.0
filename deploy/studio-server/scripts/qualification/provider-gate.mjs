@@ -97,6 +97,38 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
   async verifySharedPrerequisites() {
     return inspectStagingPrerequisites(this.state);
   }
+  async verifyAdmission(values, name = 'candidate') {
+    const items = (await this.resources(values, `provider-admission-${name}`)).filter((r) =>
+      ['Deployment', 'StatefulSet', 'Job'].includes(r.kind),
+    );
+    assert.ok(items.length > 0, 'Admission requires rendered application workloads');
+    // Ask the real admission chain without creating workloads, PVCs or routes.
+    // GKE can adjust resources; retain those facts rather than imposing a
+    // staging reservation policy on the operator's Helm values.
+    const response = await this.kube(['create', '--dry-run=server', '-f', '-', '-o', 'json'], {
+      input: JSON.stringify({ apiVersion: 'v1', kind: 'List', items }),
+    });
+    const admitted = JSON.parse(response.stdout);
+    const admittedItems = admitted.items ?? [admitted];
+    assert.ok(Array.isArray(admittedItems), 'Admission workload list is missing');
+    const identities = (workloads) =>
+      workloads.map((r) => `${r.kind}/${r.metadata.namespace ?? this.config.namespace}/${r.metadata.name}`).sort();
+    assert.deepEqual(identities(admittedItems), identities(items), 'Admission workload identities differ');
+    const summarize = (workloads) =>
+      workloads.map((r) => ({
+        kind: r.kind,
+        name: r.metadata.name,
+        containers: r.spec.template.spec.containers.map((c) => ({ name: c.name, resources: c.resources })),
+        initContainers: r.spec.template.spec.initContainers?.map((c) => ({ name: c.name, resources: c.resources })),
+      }));
+    await this.artifact(
+      `workload-admission-${name}.json`,
+      JSON.stringify({
+        requested: summarize(items),
+        admitted: summarize(admittedItems),
+      }),
+    );
+  }
   async verifyOverlapCapacity() {
     if (!this.operation.developerOverlapProfile) return;
     // Render-only identity cannot be used by apply(): that independently reads
@@ -636,7 +668,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
   async frontendAvailability() {
     return waitForGkeFrontendAvailability(this);
   }
-  async verifyProtectedProxyAvailability() {
+  async verifyProtectedProxyAvailability({ timeoutMs } = {}) {
     const resources = await this.resources(this.values(this.config.images), 'protected-proxy-acceptance');
     const continuity = continuityFromResources(resources);
     assert.ok(continuity, 'The isolated proxy must retain its continuity profile');
@@ -652,7 +684,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       },
       timeoutMs: continuityTimeoutMs(continuity.profile),
       observeBackend: createComputeBackendObserver(continuity.network, { accessToken: stagingAccessToken }),
-    }).inspect();
+    }).inspect({ timeoutMs });
   }
   async readyPublic() {
     await waitForGkeFrontendAvailability(this);

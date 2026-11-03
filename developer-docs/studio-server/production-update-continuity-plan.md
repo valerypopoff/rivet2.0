@@ -10,6 +10,18 @@ autoscaler chaos and extra duration matrices remain separately configured full
 tests. No second manufactured release is required. See
 [current test depth](automated-runtime-qualification.md#automatic-test-depth).
 
+The local qualification-rule audit additionally separates scaling targets from
+actual rollout capacity, waits for normal HPA settling, treats a keep-alive
+agent's replacement socket as diagnostic, and compares durable storage/service
+identities rather than entire desired specifications. Public-request success,
+300-second continuity, actual rollout completion and cleanup remain mandatory.
+These source changes have not qualified an image or activated production.
+The local follow-up review covers pool growth during metric collection, final
+Pod/GCP health correlation, stale CPU-scrape recovery and shared nested observation
+deadlines. Service NEG data comes from the same observation as Compute health.
+These checks retain the same ownership and serving floors while allowing only
+bounded read retries; local validation does not qualify a release.
+
 The standard delivery path is now the lighter
 [Release Rivet workflow](automated-runtime-qualification.md): build once, reuse
 isolated staging, run focused request-continuity tests including first adoption,
@@ -17,7 +29,7 @@ publish the exact
 manifest and perform live checks/rolling update/acceptance in one production
 action. Shared staging infrastructure and access are configured once under a
 fresh recurring budget; temporary setup campaigns are exceptional. First adoption
-still requires full regional qualification and its observed bridge transition.
+still requires focused regional qualification and its observed bridge transition.
 Each first-transition handoff waits the protected request plus propagation
 (360 seconds for the starting profile), with 360-second LB drain and
 420/600-second proxy preStop/grace. The manufactured second release/campaign is
@@ -31,7 +43,7 @@ The third retained test passed frontend/authentication preparation, then exposed
 an incompatible timing assumption: Autopilot reduced bridge grace from 900 to
 600 seconds while retaining the 660-second preStop. The replacement settings
 below fit that limit. Server-side dry-run admission now rejects such mutations
-before any bridge resource or HPA freeze is created. Actual full qualification,
+before any bridge resource or HPA freeze is created. Actual regional qualification,
 cleanup and the first observed production rollout remain open.
 
 The implementation adds the opt-in Helm profile, journal-owned ingress bridge,

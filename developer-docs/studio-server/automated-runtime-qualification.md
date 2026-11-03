@@ -72,6 +72,17 @@ cleanup checks remain required. See
 
 ### Fast failure before and during staging
 
+Provider preparation checks the actual predecessor and candidate workload
+manifests with Kubernetes server-side dry-run CREATEs, after creating the empty
+owned namespace and **before** installing dependencies, PVCs or public routes.
+Sizing-only trials check the candidate only. The requests persist no workloads;
+an actual admission rejection stops setup immediately. Requested and admitted
+container resources are retained in separate private packets for each side,
+including init containers. Resource mutations are observations, not a staging
+policy requiring reservations to match old production or Helm quantities.
+GKE's own platform restrictions still apply. This does not prove schedulability,
+startup or continuity; the ordinary rollout retains those behavioral checks.
+
 The ordinary Build workflow runs the source-only image/launcher contract tests
 in its existing static-validation job, before docs/style checks. This includes
 PRs targeting `main`, where the full Studio Server verifier is not a PR trigger.
@@ -493,6 +504,54 @@ which the evidence validator checks against the same bounds. The existing final
 runtime and controller checks run after protected responses finish, so growth or
 image drift during request completion cannot leave a stale final snapshot.
 Full regression fixtures retain their fixed seven-Pod layout.
+
+Ordinary rollout acceptance does not require staying below autoscaler utilization
+targets at every sample. The shared deployer checks actual admission/CPU capacity
+and can wait up to five minutes for fresh metrics or permitted capacity growth,
+within its existing deadline and without replaying a rollout command. For example,
+five occupied slots with two surviving four-slot workers satisfy admission
+capacity even when they exceed the 60% scaling target. Availability floors,
+complete protected responses, accepted-work drain, recording/data preservation,
+final health and verified cleanup remain required. An unfinished or failed update
+cannot qualify from successful partial traffic alone. See
+[rollout capacity checks](runtime-autoscaling.md) for the shared production policy.
+
+The ordinary gate distinguishes expected Kubernetes transitions from failed
+customer work. The current rule review is:
+
+| Rule                   | Ordinary-update acceptance                                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Actual update          | Must finish; successful partial traffic cannot qualify it.                                                                                                                                                                                                                     |
+| Public traffic         | Keep both independent streams, their minimum sample counts and zero failed requests.                                                                                                                                                                                           |
+| Protected requests     | Keep complete 300-second bodies, real withdrawal/replacement overlap and unique successful recordings.                                                                                                                                                                         |
+| Connection reuse       | Exercise a keep-alive agent; record whether its socket was reused. A server-closed idle socket may be replaced without replaying the POST.                                                                                                                                     |
+| HPA transitions        | Wait for ready starting/final proxy pools instead of rejecting a single growing/draining snapshot. Starting growth has a five-minute limit; final termination uses the existing profile-derived shutdown deadline. The serving floor and final settled bounds remain required. |
+| Utilization            | Scaling targets are advisory; actual capacity still gates retirement.                                                                                                                                                                                                          |
+| Persistence identity   | Preserve claim UID, bound volume/storage class and Service UID/addresses. Whole desired specifications are not identities: a port update or same-volume resize may proceed if runtime/data checks pass.                                                                        |
+| GCP routing            | Keep actual current-Pod endpoint health, zonal redundancy and protected draining checks.                                                                                                                                                                                       |
+| Source and schema      | Keep exact source/image lineage, compatible schema, installed configuration and owned-resource checks.                                                                                                                                                                         |
+| Cleanup                | Keep complete resource absence and closed-writer evidence. Unknown CSI provisioning or deletion outcomes still require inspected recovery.                                                                                                                                     |
+| Feature/chaos coverage | Browser resume, developer shutdown, maximum-capacity and autoscaler fault matrices remain separate full tests.                                                                                                                                                                 |
+
+These adjustments do not retry failed customer requests, restart the observation
+window, rewrite an old failure as a pass or authorize another cloud operation.
+The early source-only CI gate includes the provider continuity, GCP handoff
+adapter and evidence regressions, so these boundary rules are checked before
+expensive image builds. The GCP handoff likewise waits for a fresh serving pool;
+draining predecessors retain ownership checks but cannot supply healthy capacity.
+Final proxy evidence joins the settled Pod UID set with the actual GCP health
+inspection and reconfirms the Deployment afterward. HPA growth during that
+inspection requires a fresh read, never reuse of an earlier final pool. A late
+successful observation cannot extend its original deadline. Workload dry-run
+admission also requires a complete matching kind/name/namespace response; resource
+adjustments remain observations rather than a separate reservation policy.
+
+The final GCP inspector receives only the remaining proxy observation budget,
+including its inner readiness poll and runtime-timeout reads. It cannot begin
+another poll after expiry or accept a late successful observation. Compute health
+is joined to the Service snapshot from that same pool observation; an earlier
+NEG annotation cannot invalidate fresh health, but a changed Service UID still
+blocks acceptance. These are read-only observations and never replay the rollout.
 
 Three concurrent transport variants (fresh HTTP/1, pooled HTTP/1 and HTTP/2)
 consume full five-minute response bodies at each relevant boundary. An already
