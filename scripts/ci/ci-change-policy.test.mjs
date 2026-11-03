@@ -7,6 +7,12 @@ import path from 'node:path';
 
 import { classifyChangedPaths, listChangedPaths, ensureDiffCommits } from './ci-change-policy.mjs';
 
+test('qualification cache runtime edits select server verification and images', () => {
+  const result = classifyChangedPaths(['.github/actions/build-cache-runtime/runtime.cjs']);
+  assert.equal(result.studioServer, true);
+  assert.equal(result.studioImages, true);
+});
+
 test('shallow classification fetches exact distant endpoints without downloading intervening history', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rivet-shallow-ci-'));
   const origin = path.join(root, 'origin');

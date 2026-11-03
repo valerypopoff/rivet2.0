@@ -1,0 +1,5 @@
+name: Expose BuildKit cache runtime
+description: Make the runner-provided cache environment available to the following CLI build without logging credentials.
+runs:
+  using: node24
+  main: runtime.cjs

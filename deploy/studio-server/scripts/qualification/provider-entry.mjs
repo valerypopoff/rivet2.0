@@ -66,6 +66,12 @@ export async function executeProviderPhase({
   step = async (_name, action) => action(),
   signal,
 }) {
+  if (phase === 'upgrade')
+    gate.rolloutStep = async (name, action) => {
+      // Additional per-owner progress is diagnostic, not new rollout authority.
+      await step(`rollout-${name.split(':')[0]}`, async () => {}, Infinity).catch(() => {});
+      return action();
+    };
   const bind = (result) => ({
     ...result,
     protocol: 1,
@@ -396,6 +402,11 @@ async function main() {
         cancellation.signal.throwIfAborted();
         return output;
       });
+    } catch (error) {
+      // Diagnostic progress only: never acknowledge failure or writer closure
+      // before the existing command-shutdown path has actually completed.
+      await step?.('failed', async () => {}, Infinity).catch(() => {});
+      throw error;
     } finally {
       cancellation.abort();
       try {

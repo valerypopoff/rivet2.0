@@ -13,7 +13,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  source-contracts:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/studio-server-source-contracts.yml
+
   publish:
+    needs: source-contracts
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -46,7 +51,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure cache builder with classic-store output
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          name: rivet-qualification
+          driver: docker-container
+      - uses: ./.github/actions/build-cache-runtime
+        if: ${{ vars.RIVET_QUALIFICATION_CACHE != 'off' }}
       - name: Build exact source, verify archives, scan and publish immutable images
+        env:
+          RIVET_QUALIFICATION_BUILDER: rivet-qualification
+          RIVET_QUALIFICATION_CACHE: ${{ vars.RIVET_QUALIFICATION_CACHE || 'gha' }}
         run: corepack yarn node scripts/build-and-publish-qualification-images.mjs
       - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:

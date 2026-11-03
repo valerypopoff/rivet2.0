@@ -1,5 +1,7 @@
 # Production update continuity implementation plan
 
+The [2026-11-03 workflow performance implementation](release-workflow-performance-plan.md) repairs the cooperative-worker slot collision and adds a cheap source gate, scan dependencies, balanced Kind lanes and bounded caching/diagnostics within the existing workflows. Local validation is separate from hosted timing/cache evidence. Candidate/GKE overlap, new orchestration artifacts, selective certification and shutdown bypasses remain deferred. Publication, a successful GKE qualification and production activation are open; no new cloud run is authorized.
+
 The current essential gate supersedes the broad first-adoption stress requirement
 in the original phases below: one focused staging update proves bounded request
 continuity and the initial proxy handoff, then the ordinary production command

@@ -381,6 +381,7 @@ test('timing uses monotonic phases, logs progress, and never changes success or 
     (e) => e === error,
   );
   const receipt = await timing.close();
+  assert.deepEqual(receipt.firstFailure, { name: 'fault', elapsedMs: 220 });
   const closedLogCount = logs.length;
   t.mock.timers.tick(60_000);
   assert.equal(logs.length, closedLogCount, 'closing timing must stop its heartbeat');

@@ -27,6 +27,7 @@ import {
   getHaConfigurationDigest,
   hasSameHaServiceRouting,
   captureHaFrontendCapacity,
+  haCandidateReady,
 } from './lib/ha-kubernetes-rollout.mjs';
 const runHaKubernetesRollout = (options) =>
   runKubernetesRollingStrategy({
@@ -34,6 +35,20 @@ const runHaKubernetesRollout = (options) =>
     safety:
       options.safety ?? fixtureDeploymentSafety('rolling', options, { baseline: options.assertInstalledBaseline }),
   });
+
+test('candidate waits distinguish impossible OnDelete states from valid pending replacements', () => {
+  const pod = { image: 'candidate', revision: 'new', ready: true, terminating: false };
+  assert.equal(haCandidateReady('owner-0', pod, 'candidate', 'new'), true);
+  for (const [value, revision] of [
+    [null, 'new'],
+    [pod, null],
+    [{ ...pod, ready: false }, 'new'],
+    [{ ...pod, image: 'old', revision: 'old', terminating: true }, 'new'],
+  ])
+    assert.equal(haCandidateReady('owner-0', value, 'candidate', revision), false);
+  for (const change of [{ image: 'old' }, { revision: 'old' }, { revision: undefined }])
+    assert.throws(() => haCandidateReady('owner-0', { ...pod, ...change }, 'candidate', 'new'), /stale OnDelete Pod/);
+});
 
 test('legacy warmup cleanup must be settled before exact-token recovery can change the rollout', async () => {
   for (const preparation of [
@@ -472,6 +487,7 @@ function fixture() {
     },
     snapshotCapacity: async () => operations.push('capacity'),
     observePod: async (name) => structuredClone(pods.get(name)),
+    readReplicas: async (workload) => [...pods.keys()].filter((name) => name.startsWith(`${workload.name}-`)).length,
     status: async (pod) => ({ protocol: 1, withdrawalProtocol: 1, ...pods.get(pod.name) }),
     withdraw: async (pod, op) => {
       assert.equal(journal.owner.withdrawIssued, true);
@@ -580,6 +596,165 @@ test('autoscaled execution owners retain surge capacity for the drain-aware cont
   assert.equal(f.operations.includes('surge-removed'), false);
   assert.equal(f.operations.filter((op) => op.startsWith('delete:fixture-backend')).length, 2);
 });
+
+function cooperativeFixture(maxReplicas = 7) {
+  const f = fixture();
+  const workload = f.options.workloads[0];
+  workload.role = 'execution';
+  f.options.identity.controlPlaneMode = 'singleton';
+  f.options.identity.cooperativeScaling = { workload: workload.name, maxReplicas };
+  f.options.workloads.push({ ...workload, name: 'developer', role: 'backend', replicas: 1 });
+  f.pods.set('developer-0', {
+    ...structuredClone(f.pods.get(`${workload.name}-0`)),
+    name: 'developer-0',
+    image: workload.image,
+  });
+  return f;
+}
+
+for (const fault of ['scale', 'withdraw', 'removePod']) {
+  test(`cooperative old extra owners recover after lost ${fault} acknowledgement`, async () => {
+    const f = cooperativeFixture(3),
+      w = f.options.workloads[0];
+    f.pods.set(`${w.name}-2`, {
+      ...structuredClone(f.pods.get(`${w.name}-0`)),
+      name: `${w.name}-2`,
+      uid: randomUUID(),
+    });
+    const command = f.options[fault];
+    let failed = false;
+    f.options[fault] = async (...args) => {
+      const result = await command(...args);
+      if (!failed) {
+        failed = true;
+        throw Error(`lost ${fault}`);
+      }
+      return result;
+    };
+    await assert.rejects(runHaRollingUpgrade(f.options), new RegExp(`lost ${fault}`));
+    assert.equal(f.journal.phase, 'owners');
+    f.advance(1);
+    await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
+    assert.equal(f.journal.phase, 'complete');
+    assert.equal(f.operations.filter((op) => op.startsWith(`delete:${w.name}`)).length, 3);
+    assert.equal(f.pods.size, 4);
+  });
+}
+
+test('pending cooperative capacity gets time to appear and every late old owner is replaced', async () => {
+  const f = cooperativeFixture(4),
+    w = f.options.workloads[0];
+  const original = f.options.wait;
+  f.options.readReplicas = async (workload) => (workload === w ? 4 : 1);
+  f.options.wait = async () => {
+    await original();
+    f.pods.set(`${w.name}-3`, {
+      ...structuredClone(f.pods.get(`${w.name}-0`)),
+      name: `${w.name}-3`,
+      uid: randomUUID(),
+      image: 'old',
+      ready: true,
+    });
+  };
+  await runHaRollingUpgrade(f.options);
+  assert.equal(f.journal.phase, 'complete');
+  assert.equal(f.pods.get(`${w.name}-3`).image, w.image);
+});
+
+test('lost deletion acknowledgement with a not-yet-created replacement resumes without replaying deletion', async () => {
+  const f = cooperativeFixture(3),
+    w = f.options.workloads[0];
+  f.options.readReplicas = async (workload) => (workload === w ? 3 : 1);
+  const remove = f.options.removePod;
+  let removed;
+  f.options.removePod = async (pod) => {
+    await remove(pod);
+    if (!removed) {
+      removed = { ...f.pods.get(pod.name) };
+      f.pods.delete(pod.name);
+      throw Error('lost deletion before replacement creation');
+    }
+  };
+  await assert.rejects(runHaRollingUpgrade(f.options), /lost deletion/);
+  const ready = f.options.waitForReady;
+  f.options.waitForReady = async (name, image) => {
+    if (name === removed.name && !f.pods.has(name)) f.pods.set(name, removed);
+    await ready(name, image);
+  };
+  f.advance(1);
+  await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
+  assert.equal(f.journal.phase, 'complete');
+  assert.equal(f.operations.filter((op) => op === `delete:${removed.name}`).length, 1);
+});
+
+test('a completed cooperative pool is rechecked on recovery, including later extra owners', async () => {
+  const f = cooperativeFixture(4),
+    w = f.options.workloads[0];
+  const restore = f.options.restoreAutoscalers;
+  f.options.restoreAutoscalers = async () => {
+    await restore();
+    f.pods.set(`${w.name}-3`, {
+      ...structuredClone(f.pods.get(`${w.name}-0`)),
+      name: `${w.name}-3`,
+      uid: randomUUID(),
+      image: 'old',
+    });
+  };
+  await assert.rejects(runHaRollingUpgrade(f.options), /no longer current and ready/);
+  assert.ok(f.journal.completed.includes(w.name));
+  f.options.restoreAutoscalers = restore;
+  f.advance(1);
+  await runHaRollingUpgrade({ ...f.options, resumeToken: f.journal.token });
+  assert.equal(f.journal.phase, 'complete');
+  assert.equal(f.pods.get(`${w.name}-3`).image, w.image);
+});
+
+test('an impossible cooperative ceiling fails before journal, template or owner changes', async () => {
+  const f = cooperativeFixture(2);
+  await assert.rejects(runHaRollingUpgrade(f.options), /capacity for three owners/);
+  assert.equal(f.journal, undefined);
+  assert.deepEqual(f.operations, []);
+});
+
+test('an initial inventory already at the cooperative ceiling rolls without an out-of-range surge', async () => {
+  const f = cooperativeFixture(3),
+    w = f.options.workloads[0];
+  w.replicas = 3;
+  f.pods.set(`${w.name}-2`, { ...structuredClone(f.pods.get(`${w.name}-0`)), name: `${w.name}-2`, uid: randomUUID() });
+  await runHaRollingUpgrade(f.options);
+  assert.equal(f.journal.phase, 'complete');
+  assert.equal(f.pods.has(`${w.name}-3`), false);
+  assert.equal(f.operations.filter((op) => op.startsWith(`delete:${w.name}`)).length, 3);
+});
+
+for (const sameImage of [false, true]) {
+  test(`pre-template autoscaler growth replaces every old owner (${sameImage ? 'same image, stale revision' : 'old image'})`, async () => {
+    const f = cooperativeFixture(3);
+    const workload = f.options.workloads[0];
+    for (const pod of f.pods.values())
+      if (pod.name.startsWith(`${workload.name}-`)) {
+        if (sameImage) pod.image = workload.image;
+        pod.oldRevision = true;
+      }
+    f.options.isCurrentPod = (pod, w) => pod.image === w.image && !pod.oldRevision;
+    const apply = f.options.applyTemplates;
+    f.options.applyTemplates = async (...args) => {
+      f.pods.set(`${workload.name}-2`, {
+        ...structuredClone(f.pods.get(`${workload.name}-0`)),
+        name: `${workload.name}-2`,
+        uid: randomUUID(),
+        incarnation: randomUUID(),
+      });
+      await apply(...args);
+    };
+    await runHaRollingUpgrade(f.options);
+    assert.equal(f.journal.phase, 'complete');
+    const owners = [...f.pods.values()].filter((p) => p.name.startsWith(`${workload.name}-`));
+    assert.equal(owners.length, 3);
+    assert.ok(owners.every((p) => p.ready && p.image === workload.image && !p.oldRevision));
+    assert.equal(f.operations.filter((op) => op.startsWith(`delete:${workload.name}-`)).length, 3);
+  });
+}
 
 test('traffic growth during a real retirement adds execution owners that the upgrader preserves', async () => {
   const f = fixture(),

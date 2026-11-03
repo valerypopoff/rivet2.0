@@ -5,6 +5,54 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+## Release iteration improvements: November 3, 2026
+
+The shared `studio-server-source-contracts.yml` workflow runs
+`yarn node scripts/ci/verify-rollout-source.mjs` before application compilation,
+image builds and actor publication. General Build covers main/develop PRs;
+Studio verification and direct actor publication also call the same gate.
+It uses Node 24, the tracked offline cache and an immutable `skip-build` install,
+without compiled workspace outputs, Docker or GCP. Its partial checkout excludes
+the five unused desktop executables, preserving authored source and dependencies.
+The source job has a five-minute limit and a two-minute checkout limit. Failure,
+skip or cancellation blocks expensive dependents; required aggregate checks still
+fail. Full repository verification remains parallel with image work.
+
+The Kind matrix now requires successful runtime scans. The independent managed
+Kubernetes check runs in the shorter `lostAcknowledgement` lane, using that
+lane's explicit disposable context. All three HA scenarios, scheduling/browser
+checks, evidence assembly and cleanup remain required. No drain or 300-second
+protection duration was shortened. Balancing these existing lanes removes
+163–183 seconds from the longest lane before accounting for the new prerequisites.
+
+Qualification actor/janitor builds use the existing exact-source context with a
+`docker-container` buildx builder and `--load`, preserving classic-store
+configuration IDs, archive checks and fresh scans. GHA v2 caches have separate
+actor/janitor/amd64 scopes and export intermediate layers (`mode=max`) so stable
+Helm/kubectl/esbuild compilation can be reused. Imports/exports have 60-second
+timeouts; export failures do not invalidate an otherwise verified image. A missing
+cache builds normally. Set repository variable `RIVET_QUALIFICATION_CACHE=off`
+for a deliberately cold publication if the cache service fails; this does not
+authorize an automatic workflow/test retry. The local runtime action exports
+runner cache credentials through `GITHUB_ENV` after registering the token with
+the runner's secret masker, never through build command arguments,
+image layers or logs. Cached output is not qualification evidence.
+
+Per-owner routing, active-work drain, replacement readiness, templates, proxy
+handoffs and settlement now use the existing HA timing reporter. Provider progress
+uses source-owned public descriptions; Pod details stay in private timing files.
+First failure visibility is separate from managed-command shutdown, actual cleanup
+and lock closure. No progress record can claim that a writer has stopped.
+
+Local evidence and the measured/proposed distinction are recorded in the
+[release performance plan](release-workflow-performance-plan.md). A network-disabled
+clean Node 24 fixture passed the early gate without application outputs; a fresh
+local builder reused an external cache while preserving the archive/configuration
+ID and invalidating changed input. Hosted GHA cache hits and end-to-end workflow
+timings still require the next authorized CI run. The improvement to failed
+iterations is larger than the projected successful-build saving; do not advertise
+these changes as a demonstrated 10-minute full image release.
+
 A desktop job cancelled with an empty runner name/ID, no executed steps and no
 available job log is not evidence of a compiler or signing failure. Inspect those
 facts before changing packaging code. A failed-job-only workflow retry preserves
