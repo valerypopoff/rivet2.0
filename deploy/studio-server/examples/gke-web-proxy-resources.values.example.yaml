@@ -1,0 +1,15 @@
+# Candidate requests from the November 2026 production usage review.
+# Merge AFTER installation values, which may override the chart's smaller defaults.
+# Staging validation is required before production use; this file applies nothing.
+# Requests reserve capacity; these are not CPU or memory limits.
+resources:
+  web:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  proxy:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+# Preserve existing limits, ephemeral storage, replica bounds and HPA policy.
+# With a 75% CPU HPA target, 100m per proxy means 75m average CPU per Pod.

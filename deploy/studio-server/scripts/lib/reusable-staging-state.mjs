@@ -5,6 +5,7 @@ import { qualificationHash } from './runtime-qualification-execution.mjs';
 import { overlapQualificationProfile } from './qualification-overlap-profile.mjs';
 import { assertRequestContinuityProfile } from './request-continuity.mjs';
 import { observeStagingJanitor } from './staging-janitor-health.mjs';
+import { sizingRequests } from './resource-sizing.mjs';
 
 export const stagingOwner = 'rivet.dev/qualification-operation';
 export const stagingRegistry = 'rivet.dev/qualification-registry';
@@ -14,6 +15,13 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  if (value.sizingRequests) {
+    sizingRequests(value.sizingRequests);
+    assert.ok(
+      !value.requestContinuityProfile && !value.developerOverlapProfile,
+      'Sizing cannot adopt shutdown or topology profiles',
+    );
+  }
   assert.ok(
     value.qualificationSuite === undefined || ['focused', 'full'].includes(value.qualificationSuite),
     'Unknown qualification suite',

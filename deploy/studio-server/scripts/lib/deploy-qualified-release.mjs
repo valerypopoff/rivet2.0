@@ -25,6 +25,7 @@ export async function deployQualifiedRelease({
   identity,
   run,
 }) {
+  assert.ok(!operation.sizingRequests, 'Sizing observations cannot authorize production deployment');
   assert.equal(getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }), digest);
   assert.equal(manifest.source.sha, sourceSha);
   assert.equal(manifest.source.sha, operation.candidate.sourceSha);

@@ -5,6 +5,87 @@ and ceiling: compact mode is six application pods plus one controller. Its
 execution maximum must fit the real DB/node/provider budgets. Local protocol
 tests are not representative-load or GKE capacity measurements.
 
+## Web and proxy reservation candidate
+
+The November 3, 2026 DevOps review of October 27-November 3 production usage
+identifies two request-only candidates. The reported CPU peaks are one-minute
+averages and memory peaks are sampled, so neither establishes a safe hard limit.
+
+| Container | Reported current request | Candidate request | Reported CPU peak / memory peak |
+| --- | --- | --- | --- |
+| Web | 500m / 512Mi | 50m / 128Mi | 95m / 60Mi |
+| Each proxy | 500m / 512Mi | 100m / 128Mi | 95m / 14Mi |
+
+The [candidate values](../../deploy/studio-server/examples/gke-web-proxy-resources.values.example.yaml)
+are outside the chart and change only these four request fields. Merge them
+**after installation values**; the live installation explicitly overrides the
+already-smaller chart defaults. The override changes no chart template or
+application code. Keep existing limits and ephemeral storage,
+the controller at 100m/128Mi, and backend/execution at 500m/1Gi each. Backend and
+execution bursts in the review argue against reducing their requests now.
+
+Keep the proxy's existing 75% CPU target and replica bounds for the first trial.
+At 100m CPU requested, that target is 75m average CPU per Pod, down from 375m
+with the reported old request. Earlier scale-up is expected; observe replica
+counts, latency and total admitted reservations together. Do not compensate by
+raising the target to 375%: the current rollout headroom guard supports 1-100%.
+Do not add a CPU limit equal to the smaller request; a request is a reservation,
+and the web's reported CPU peak already exceeds its proposed request.
+
+The narrow staging trial needs cold startup/readiness, frontend/editor loading,
+an existing WebSocket journey, a representative allowed upload and concurrent
+public traffic through the proxies. Check readiness, restarts/OOMs, errors and
+latency, and retain the HPA's actual scale-up/down behavior. Reuse existing
+immutable images and retained staging infrastructure. This does not require
+running the full execution-capacity scenario matrix below. Before accepting a
+savings estimate, inspect **admitted Pod requests** and limits: Autopilot can
+raise values to its compute-class minimums/ratios, and clusters without bursting
+can set limits equal to requests. See [Autopilot resource requests](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-resource-requests)
+and [Pod-based billing](https://cloud.google.com/kubernetes-engine/pricing#general-purpose_autopilot_workloads).
+
+**Release Rivet** now accepts an optional `sizing_requests` JSON input:
+
+```json
+{"web":{"cpu":"50m","memory":"128Mi"},"proxy":{"cpu":"100m","memory":"128Mi"}}
+```
+
+Set `deploy_production=false`. A nonempty sizing input selects an observation-only
+trial; production-enabled or invalid input fails before cloud setup. Only these
+four positive quantity strings are accepted, and none can exceed its observed
+production request. Installed facts remain unchanged. The candidate images start
+with the requested reservations; there is no rolling update or topology/shutdown
+profile adoption in this mode. The regular release path still copies production
+sizing and retains its existing qualification requirements.
+
+The trial reuses fixture preparation, authentication, expiry, resource inventory,
+private evidence and independent cleanup. The existing observation phase runs the
+browser journey, an 8 MiB valid project upload and four concurrent non-retrying
+workflow streams plus published-app traffic, with at least a minute of resource
+observations. It checks admitted requests/limits, fresh CPU/RAM samples, readiness,
+restarts and HPA bounds. Healthy HPA growth is allowed; reaching the ceiling or
+returning to exactly two proxies is not required. No CPU-burn or separate
+autoscaler stress phase is added. This is a sizing observation, not a measured
+throughput ceiling or a seven-day peak guarantee.
+
+After verified cleanup, the result is `sizing-observed`, with no runtime-control
+or autoscaling certificate. Workflow publication and production jobs are disabled,
+and the production command also rejects sizing packets. Keep these results with
+the exact requests for later production planning. A resource change replaces Pods;
+the first protected rollout is still required before relying on the new
+300-second shutdown protection for subsequent configuration updates.
+
+The updated runner must be published and pass the existing exact-source image,
+driver and cleanup-worker gates before cloud use. A previously built actor is
+not evidence for changed runner code. Local implementation does not start a test
+or reuse a closed operation allowance.
+
+This candidate has not been applied or qualified. A local Helm render proves
+merge order and generated settings, not performance, Autopilot admission or savings.
+The DevOps estimate of roughly USD57/month is conditional on actual admitted
+requests, prices and replica counts; it is not a measured reduction in billing.
+
+## Broader workload sizing
+
 Status: **measurement pending**. Do not replace the production overlay's
 `resourceLimitAcknowledgements` with guessed values. This is a staging-only
 procedure for when DevOps can provide the cluster and monitoring access. The

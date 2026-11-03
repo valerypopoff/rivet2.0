@@ -82,6 +82,7 @@ assert.deepEqual(Object.keys(automaticQualification.on), ['workflow_dispatch']);
 assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), [
   'build_run_id',
   'deploy_production',
+  'sizing_requests',
 ]);
 assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);
 assert.equal(automaticQualification.jobs.built.if, undefined);
@@ -145,7 +146,12 @@ assert.equal(
 );
 assert.deepEqual(automaticQualification.jobs.deploy.needs, ['qualified', 'publish']);
 assert.equal(automaticQualification.jobs.preflight, undefined);
-assert.equal(automaticQualification.jobs.deploy.if, '${{ inputs.deploy_production }}');
+assert.equal(automaticQualification.jobs.deploy.if, "${{ inputs.deploy_production && inputs.sizing_requests == '' }}");
+assert.equal(automaticQualification.jobs.publish.if, "${{ inputs.sizing_requests == '' }}");
+for (const job of [automaticQualification.jobs.built, automaticQualification.jobs.qualified]) {
+  assert.equal(job.env.RIVET_QUALIFICATION_SIZING_REQUESTS, '${{ inputs.sizing_requests }}');
+  assert.equal(job.env.RIVET_QUALIFICATION_DEPLOY_PRODUCTION, '${{ inputs.deploy_production }}');
+}
 assert.equal(automaticQualification.jobs.deploy['runs-on'], 'ubuntu-latest');
 assert.equal(automaticQualification.jobs.deploy.permissions['id-token'], 'write');
 assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_COORDINATOR_MODE, 'external');

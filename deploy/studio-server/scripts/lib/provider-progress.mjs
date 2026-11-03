@@ -16,6 +16,7 @@ export const providerSteps = Object.freeze({
   inventory: 'complete owned-resource inventory',
   authentication: 'existing fixture authentication',
   upgrade: 'protected rolling update and accepted-work completion',
+  sizing: 'candidate web/proxy reservation observations',
   'rollout-templates': 'protected rollout template application',
   'rollout-routing': 'protected rollout routing withdrawal',
   'rollout-work': 'protected rollout accepted-work drain',

@@ -29,6 +29,7 @@ import { stagingHostname } from '../lib/reusable-staging-state.mjs';
 import { monitorFatalStartup } from '../lib/fatal-startup-monitor.mjs';
 import { imageReference } from '../lib/kubernetes-managed-release-gate-config.mjs';
 import { createHaProofTiming } from '../lib/ha-proof-timing.mjs';
+import { applySizingRequests } from '../lib/resource-sizing.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -275,7 +276,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         this.operation.developerOverlapProfile,
       );
     const continuity =
-      manifest === this.operation.candidate
+      manifest === this.operation.candidate && !this.operation.sizingRequests
         ? this.operation.requestContinuityProfile
         : requestContinuityProfile(envelope);
     if (continuity) {
@@ -296,6 +297,8 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       };
     }
     this.providerValues.ha.controlPlane.mode = this.overlap ? 'singleton-overlap' : 'singleton';
+    if (this.operation.sizingRequests)
+      this.providerValues = applySizingRequests(this.providerValues, this.operation.sizingRequests);
     return this.providerValues;
   }
   async verifyDeveloperAcceptance(pod) {
@@ -680,13 +683,13 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     );
     return { verifiedPublicTestClient: true };
   }
-  async verifyPublishedBrowser(base) {
+  async verifyPublishedBrowser(base, sizing = false) {
     await run(
       process.execPath,
       [
         path.join(root, '.yarn/releases/yarn-4.17.1.cjs'),
         'studio-server:ui:observe',
-        'runtime-control-independence.spec.ts',
+        sizing ? 'resource-sizing.spec.ts' : 'runtime-control-independence.spec.ts',
         ...(this.continuityProbes ? ['web-app-accepted-resume.spec.ts'] : []),
       ],
       {

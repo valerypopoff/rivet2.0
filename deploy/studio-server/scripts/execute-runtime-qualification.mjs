@@ -30,6 +30,7 @@ import { qualificationSafetyDigest } from './lib/release-qualification-policy.mj
 import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
 import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
 import { coordinatorKubernetes, prepareStagingActor } from './lib/reusable-staging-coordinator.mjs';
+import { sizingInput } from './lib/resource-sizing.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const packet = path.resolve(
@@ -67,6 +68,11 @@ const inspect = async () =>
   });
 
 async function main(mode) {
+  const sizing = sizingInput(process.env);
+  assert.ok(
+    !sizing || process.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE !== 'temporary',
+    'Sizing reuses the retained staging cluster only',
+  );
   assert.equal(process.env.GITHUB_REF, 'refs/heads/main');
   assert.match(process.env.GITHUB_RUN_ID ?? '', /^[1-9][0-9]*$/);
   assert.match(process.env.GITHUB_RUN_ATTEMPT ?? '', /^[1-9][0-9]*$/);
@@ -138,6 +144,7 @@ async function main(mode) {
   }
   if (mode === 'preflight') {
     const operation = await read(path.join(packet, 'operation-public.json'));
+    assert.ok(!operation.sizingRequests, 'Sizing observations cannot authorize production preflight');
     assert.equal(operation.installed.manifestDigest, operation.predecessorManifestDigest);
     assertQualificationInstallationMatches(await inspect(), operation.installed);
     const file = path.join(packet, 'qualified-manifest.json');
@@ -270,6 +277,7 @@ async function main(mode) {
   await verifyQualificationDriver(bundle, bundleDigest); // Before provisioning or creating an operation.
   const driverManifest = await read(path.join(bundle, 'driver.json'));
   const settings = driverManifest.files['settings.json'] ? await read(path.join(bundle, 'settings.json')) : {};
+  assert.deepEqual(settings.sizingRequests, sizing, 'Sizing input differs from the reviewed driver');
   const operation = qualificationOperation({
     candidate,
     previous,
@@ -283,6 +291,7 @@ async function main(mode) {
       developerOverlapProfile: settings.developerOverlapProfile,
       requestContinuityProfile: settings.requestContinuityProfile,
       qualificationSuite: settings.qualificationSuite,
+      sizingRequests: settings.sizingRequests,
       enabled: process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED === 'true',
       projectId: process.env.RIVET_QUALIFICATION_PROJECT_ID,
       projectNumber: process.env.RIVET_QUALIFICATION_PROJECT_NUMBER,
@@ -388,19 +397,24 @@ async function main(mode) {
         predecessorManifestDigest: operation.predecessorManifestDigest,
         installed: operation.installed,
         driverBundleSha256: bundleDigest,
+        ...(operation.sizingRequests ? { sizingRequests: operation.sizingRequests } : {}),
         candidate: {
           sourceSha: candidate.source.sha,
           images: candidate.images,
           chartDigest: candidate.chart.contentDigest,
         },
       });
-      await emit('control', result.control);
-      await emit('autoscaling', result.autoscaling);
+      if (!operation.sizingRequests) {
+        await emit('control', result.control);
+        await emit('autoscaling', result.autoscaling);
+      }
       await persist();
       if (cloud) await cloud.release(cloudGeneration);
       succeeded = true;
       console.log(
-        `Qualified ${operation.candidate.source.sha}; cleanup verified. Production deployment was not started.`,
+        operation.sizingRequests
+          ? `Sizing observations completed for ${operation.candidate.source.sha}; cleanup verified. No release was qualified.`
+          : `Qualified ${operation.candidate.source.sha}; cleanup verified. Production deployment was not started.`,
       );
     } finally {
       await actor?.close({ cleanupVerified: lastState?.cleanupVerified });
