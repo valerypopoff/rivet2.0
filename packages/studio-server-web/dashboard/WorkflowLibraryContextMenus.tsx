@@ -19,6 +19,7 @@ export const WorkflowLibraryContextMenus: FC<{
     handleUploadProjectFromFolder,
     handleDeleteFolderFromContextMenu,
     handleRenameProjectFromContextMenu,
+    handleInspectProjectRecordingsFromContextMenu,
     handleDownloadProject,
     handleDuplicateProject,
     handleCompareProjectFromContextMenu,
@@ -83,6 +84,7 @@ export const WorkflowLibraryContextMenus: FC<{
           y={projectContextMenuState.y}
           onClose={closeProjectContextMenu}
           onRename={() => void handleRenameProjectFromContextMenu()}
+          onInspectRecordings={handleInspectProjectRecordingsFromContextMenu}
           onDownload={() => void handleDownloadProject()}
           onDuplicate={() => void handleDuplicateProject()}
           canCompare={canCompareWithProject(projectContextMenuState.project)}
