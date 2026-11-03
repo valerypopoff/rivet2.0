@@ -423,7 +423,9 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     assert.equal(deployment.metadata.labels?.['app.kubernetes.io/instance'], this.gate.config.release);
     assert.equal(deployment.spec.strategy.type, 'RollingUpdate');
     assert.equal(deployment.spec.strategy.rollingUpdate.maxUnavailable, 0);
-    const pods = (await this.gate.pods()).filter((p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy');
+    const pods = (await this.gate.pods()).filter(
+      (p) => p.metadata.labels?.['app.kubernetes.io/component'] === 'proxy' && !p.metadata.deletionTimestamp,
+    );
     const { min, max } = ordinaryRuntimeReplicaBounds(this.gate.operation.policy).proxy;
     assert.ok(
       pods.length >= min &&

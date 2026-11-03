@@ -686,6 +686,11 @@ assert.match(
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
 const imageJobs = images.workflow.jobs;
+assert.equal(
+  imageJobs['release-manifest'].env.INSTALLED_PREDECESSOR_DIGEST,
+  "${{ github.ref == 'refs/heads/main' && (inputs.installed_predecessor_digest || vars.RIVET_INSTALLED_PREDECESSOR_DIGEST) || '' }}",
+  'Only main may use an installed-predecessor pin; explicit dispatch input takes precedence over the temporary build pin.',
+);
 assert.equal(findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['fetch-depth'], 1);
 assert.equal(
   findStep(imageJobs.changes, 'Check Out Repository', 'Image classification').with?.['sparse-checkout'],

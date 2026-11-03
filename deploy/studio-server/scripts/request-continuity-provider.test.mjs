@@ -200,6 +200,45 @@ test('focused journal observes real bridge boundaries without policy or late-adm
   assert.ok(probes.executionWithdrawal.dispatchedAt && probes.executionWithdrawal.observedAt);
 });
 
+test('focused admission accepts a healthy pool with draining predecessors without crediting old termination', async () => {
+  for (const count of [2, 4]) {
+    const f = fixture(),
+      active = Array.from({ length: count }, (_, index) => pod(`active-${index}`)),
+      draining = [pod('already-draining-1', true), pod('already-draining-2', true)],
+      probes = new ProviderRequestContinuity(f.gate);
+    f.gate.operation.qualification = { tier: 'focused' };
+    f.deployment.spec.replicas = count;
+    f.gate.pods = async () => [...active, ...draining];
+    probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+    probes.proxyTemplate.metadata.annotations.release = 'candidate';
+    await probes.beforeProxyTemplates();
+    assert.deepEqual(
+      probes.replacement.before,
+      active.map((p) => p.metadata.uid),
+    );
+    probes.observeProxyPods([...active, ...draining]);
+    assert.equal(probes.replacement.observedAt, undefined, 'Earlier HPA retirement is not this update');
+    probes.observeProxyPods([pod('active-0', true), ...active.slice(1), ...draining]);
+    assert.ok(probes.replacement.observedAt);
+    assert.ok(!f.events.includes('patch'));
+  }
+});
+
+test('draining predecessors cannot satisfy the starting proxy floor or hide unready and excess live pods', async () => {
+  for (const state of ['below-floor', 'unready', 'above-ceiling']) {
+    const f = fixture(),
+      active = state === 'below-floor' ? [pod('one')] : [pod('one'), pod('two')],
+      probes = new ProviderRequestContinuity(f.gate);
+    f.gate.operation.qualification = { tier: 'focused' };
+    if (state === 'unready') active[1].status.conditions[0].status = 'False';
+    if (state === 'above-ceiling') active.push(pod('three'), pod('four'), pod('five'));
+    f.gate.pods = async () => [...active, pod('already-draining', true)];
+    probes.proxyTemplate = structuredClone(f.deployment.spec.template);
+    await assert.rejects(probes.beforeProxyTemplates());
+    assert.equal(probes.replacement, undefined);
+  }
+});
+
 test('focused acceptance requires observed termination and fresh final proxy identities', async () => {
   const f = fixture();
   f.gate.operation.qualification = { tier: 'focused' };

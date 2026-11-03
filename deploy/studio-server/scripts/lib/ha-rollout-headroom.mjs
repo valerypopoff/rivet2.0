@@ -8,6 +8,27 @@ import {
 
 class PendingProxyMetrics extends Error {}
 
+function proxyPodHasFinished(pod) {
+  if (['Succeeded', 'Failed'].includes(pod.status?.phase)) return true;
+  const containers = [
+    ...(pod.spec?.containers ?? []),
+    ...(pod.spec?.initContainers ?? []).filter((container) => container.restartPolicy === 'Always'),
+    ...(pod.spec?.ephemeralContainers ?? []),
+  ];
+  const statuses = [
+    ...(pod.status?.containerStatuses ?? []),
+    ...(pod.status?.initContainerStatuses ?? []),
+    ...(pod.status?.ephemeralContainerStatuses ?? []),
+  ];
+  return (
+    !!pod.metadata.deletionTimestamp &&
+    !!pod.spec?.containers?.length &&
+    containers.every((container) =>
+      statuses.some((status) => status.name === container.name && Number.isInteger(status.state?.terminated?.exitCode)),
+    )
+  );
+}
+
 /** A replacement may be Ready before metrics-server's next scrape. Only this
  * typed observation delay is waitable; identity/policy/capacity failures remain
  * terminal. Every attempt reruns the complete checks, never a workload write. */
@@ -315,7 +336,10 @@ export function createHaProxyHeadroomGuard({
           .map((set) => set.metadata.uid),
       );
       const samples = pods.items
-        .filter((pod) => !['Succeeded', 'Failed'].includes(pod.status?.phase))
+        // Kubelet can report all containers stopped before Pod phase catches up.
+        // Those terminating Pods cannot serve or consume CPU, even if their last
+        // scrape has already disappeared. Live or unknown containers still wait.
+        .filter((pod) => !proxyPodHasFinished(pod))
         .map((pod) => {
           if (
             !pod.metadata.uid ||
@@ -342,14 +366,18 @@ export function createHaProxyHeadroomGuard({
             requestCpu,
             usageCpu,
             sampleAt: Date.parse(sample.timestamp),
+            terminating: !!pod.metadata.deletionTimestamp,
             ready:
               !pod.metadata.deletionTimestamp &&
               pod.status?.conditions?.some((value) => value.type === 'Ready' && value.status === 'True'),
           };
         });
+      // Kubernetes excludes terminating Pods from maxSurge. They can still
+      // consume CPU while draining, so retain their demand and ownership checks.
+      const nonTerminating = samples.filter((value) => !value.terminating);
       if (
         !samples.length ||
-        samples.length > owner.spec.replicas + 1 ||
+        nonTerminating.length > owner.spec.replicas + 1 ||
         new Set(samples.map((value) => value.uid)).size !== samples.length
       )
         throw new Error('Proxy rollout inventory is incomplete or outside the surge bound.');
@@ -365,24 +393,29 @@ export function createHaProxyHeadroomGuard({
         get(`/api/v1/namespaces/${ns}/pods${query}`),
       ]);
       const confirmedActive = Array.isArray(confirmedPods.items)
-        ? confirmedPods.items.filter((pod) => !['Succeeded', 'Failed'].includes(pod.status?.phase))
+        ? confirmedPods.items.filter((pod) => !proxyPodHasFinished(pod))
         : [];
+      // An already-terminating Pod may finish between reads. Its sampled CPU
+      // remains included; every non-terminating owner must still be confirmed.
+      const confirmedSamples = samples.filter(
+        (sample) => !sample.terminating || confirmedActive.some((pod) => pod.metadata.uid === sample.uid),
+      );
       if (
         confirmedOwner.metadata.uid !== workloadUid ||
         confirmedOwner.metadata.generation !== owner.metadata.generation ||
         confirmedOwner.spec.replicas !== owner.spec.replicas ||
         samples.some((sample) => now() - sample.sampleAt > metricsMaxAgeSeconds * 1000) ||
         !Array.isArray(confirmedPods.items) ||
-        confirmedActive.length !== samples.length ||
-        samples.some(
+        confirmedActive.length !== confirmedSamples.length ||
+        confirmedSamples.some(
           (sample) =>
             !confirmedActive.some(
               (pod) =>
                 pod.metadata.uid === sample.uid &&
                 pod.metadata.name === sample.name &&
+                !!pod.metadata.deletionTimestamp === sample.terminating &&
                 (!sample.ready ||
-                  (!pod.metadata.deletionTimestamp &&
-                    pod.status?.conditions?.some((value) => value.type === 'Ready' && value.status === 'True'))),
+                  pod.status?.conditions?.some((value) => value.type === 'Ready' && value.status === 'True')),
             ),
         )
       )
