@@ -65,8 +65,13 @@ function fixture() {
       permissions: { contents: 'read' },
       jobs: {
         source: {
-          'timeout-minutes': 5,
+          'timeout-minutes': 8,
           steps: [
+            {
+              uses: 'actions/checkout@fixture',
+              'timeout-minutes': 5,
+              env: { GIT_HTTP_LOW_SPEED_LIMIT: '1024', GIT_HTTP_LOW_SPEED_TIME: '30' },
+            },
             { run: 'yarn install --immutable --immutable-cache --mode=skip-build' },
             { run: 'yarn node scripts/ci/verify-rollout-source.mjs' },
           ],
@@ -77,6 +82,27 @@ function fixture() {
 }
 test('parallel build/recovery lanes retain cheap prerequisites and unconditional cleanup', () => {
   assert.doesNotThrow(() => assertFastReleasePolicy(fixture()));
+});
+
+test('cold checkout allowance stays distinct from stalled transfers and the source job deadline', () => {
+  for (const mutate of [
+    (job) => {
+      job['timeout-minutes'] = 5;
+    },
+    (job) => {
+      job.steps[0]['timeout-minutes'] = 2;
+    },
+    (job) => {
+      delete job.steps[0].env.GIT_HTTP_LOW_SPEED_TIME;
+    },
+    (job) => {
+      job.steps[0].env.GIT_HTTP_LOW_SPEED_LIMIT = '0';
+    },
+  ]) {
+    const f = fixture();
+    mutate(f.source.jobs.source);
+    assert.throws(() => assertFastReleasePolicy(f));
+  }
 });
 test('failed, skipped or cancelled prerequisites cannot be bypassed by permissive conditions', () => {
   for (const condition of ['always()', 'failure()', 'cancelled()']) {

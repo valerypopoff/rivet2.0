@@ -157,7 +157,7 @@ Owners: `deploy/studio-server/scripts/lib/ha-rolling-upgrade.mjs`, `lib/ha-kuber
 
 Owners: `.github/workflows/studio-server-images.yml`, `studio-server-verify.yml`, `studio-server-publish-qualification-images.yml`, `scripts/checks/check-ci-workflows.mjs`, `scripts/ci/ci-performance.test.mjs` and a small shared command in the existing script/package layout.
 
-**Local feasibility measured during reassessment:** the existing three suites below passed all 105 tests in 4.92 seconds wall time on Windows. This excludes CI checkout/install and does not cover the new missing regression; it establishes that these source contracts need not wait for application images.
+**Local feasibility measured during reassessment:** the existing three suites below passed all 105 tests in 4.92 seconds wall time on Windows. This excludes CI checkout/install and does not cover the new missing regression; it establishes that these source contracts need not wait for application images. The source job now permits a five-minute cold checkout within an eight-minute total budget; PR #239 exposed the earlier two-minute limit as shorter than a successful sibling checkout. The 30-second stalled-transfer guard remains in place.
 
 ```powershell
 node .yarn/releases/yarn-4.17.1.cjs node --test deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs deploy/studio-server/scripts/ha-rollout-headroom.test.mjs

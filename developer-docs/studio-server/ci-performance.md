@@ -14,7 +14,10 @@ Studio verification and direct actor publication also call the same gate.
 It uses Node 24, the tracked offline cache and an immutable `skip-build` install,
 without compiled workspace outputs, Docker or GCP. Its partial checkout excludes
 the five unused desktop executables, preserving authored source and dependencies.
-The source job has a five-minute limit and a two-minute checkout limit. Failure,
+The source job has an eight-minute limit and a five-minute cold-checkout limit.
+The former two-minute checkout limit failed before tests on PR #239, while a
+successful sibling checkout took about 2m39s. Git's 30-second low-speed cutoff
+still stops stalled transfers; the larger total budget does not retry them. Failure,
 skip or cancellation blocks expensive dependents; required aggregate checks still
 fail. Full repository verification remains parallel with image work.
 
