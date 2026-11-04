@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 // Source-only: no compiled workspace exports, Docker, browser or cloud access.
 const suites = [
+  'deploy/studio-server/scripts/ha-runner-space.test.mjs',
   'deploy/studio-server/scripts/candidate-image-smoke.test.mjs',
   'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
   'deploy/studio-server/scripts/deployment-workflow.test.mjs',
@@ -36,6 +37,12 @@ for (const args of [
     '--test-name-pattern',
     'ordinary observation keeps a single truthful window:.*502$',
     'deploy/studio-server/scripts/runtime-upgrade-qualification.test.mjs',
+  ],
+  [
+    '--test',
+    '--test-name-pattern',
+    'shutdown proof|timed-out adapter',
+    'deploy/studio-server/scripts/maintenance-deployment-plan.test.mjs',
   ],
   ['scripts/checks/check-ci-workflows.mjs'],
 ]) {

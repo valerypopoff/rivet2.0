@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import {
   assertMaintenancePlan,
@@ -772,6 +772,38 @@ test('shutdown proof rejects a port still held by a connection-resetting listene
   await assert.rejects(reserveLoopbackPort(t, live.address().port), { code: 'EADDRINUSE' });
 });
 
+function assertCaptureChildStopped(pid) {
+  assert.ok(Number.isInteger(pid) && pid > 0, 'Capture child PID is required');
+  if (process.platform === 'win32') {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      assert.equal(error.code, 'ESRCH', 'Capture child status is unknown');
+      return;
+    }
+    assert.fail('Capture child is still live');
+  }
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'stat='], {
+    encoding: 'utf8',
+    timeout: 2_000,
+    env: { ...process.env, COLUMNS: '80', LINES: '24' },
+  });
+  assert.ifError(result.error);
+  const state = result.stdout.trim();
+  assert.ok(
+    (result.status === 1 && !state && !result.stderr.trim()) || (result.status === 0 && /^[ZX][^\s]*$/.test(state)),
+    `Capture child is still live or its shutdown is unconfirmed: ${JSON.stringify({
+      status: result.status,
+      state,
+      stderr: result.stderr.trim(),
+    })}`,
+  );
+}
+
+test('shutdown proof rejects a live capture process independently of its port', () => {
+  assert.throws(() => assertCaptureChildStopped(process.pid), /Capture child is still live/);
+});
+
 test('a timed-out adapter cannot leave a capture child writing while recovery begins', async (t) => {
   const childProgram = `const fs = require('node:fs');
 const net = require('node:net');
@@ -779,7 +811,7 @@ const [marker, started, recovery] = process.argv.slice(1);
 process.on('SIGTERM', () => {});
 net.createServer(socket => socket.destroy()).listen(0, '127.0.0.1', function () {
   setInterval(() => { if (fs.existsSync(recovery)) fs.writeFileSync(marker, 'late'); }, 10);
-  fs.writeFileSync(started, String(this.address().port));
+  fs.writeFileSync(started, JSON.stringify({ port: this.address().port, pid: process.pid }));
 });
 setTimeout(() => process.exit(0), 60000);
 `;
@@ -840,16 +872,25 @@ setInterval(() => {}, 1000);
     /did not complete successfully/,
   );
   const [directory] = await fs.readdir(state.artifactsDir);
-  const port = Number(await fs.readFile(path.join(state.artifactsDir, directory, 'child-started'), 'utf8'));
+  const captured = JSON.parse(await fs.readFile(path.join(state.artifactsDir, directory, 'child-started'), 'utf8'));
+  const { port } = captured;
   assert.ok(Number.isInteger(port) && port > 0 && port <= 65535, 'The child must actually listen before termination.');
-  // Recovery is allowed only after confirmed shutdown, not at a fixed time after spawn.
-  // Even a paused surviving child retains its listener. Rebinding proves the
-  // exact port was released, independently of connect/reset error timing.
-  await reserveLoopbackPort(t, port);
+  assertCaptureChildStopped(captured.pid);
+  // Another parallel fixture may legitimately acquire the child's freed port.
+  let unrelated;
+  try {
+    unrelated = await reserveLoopbackPort(t, port);
+  } catch (error) {
+    assert.equal(error.code, 'EADDRINUSE'); // A different fixture already reused it.
+  }
+  // Recovery requires the exact child to be absent or terminal, independently
+  // of an unrelated listener on a recycled TCP port. A paused child still fails.
+  assertCaptureChildStopped(captured.pid);
   await fs.writeFile(path.join(state.artifactsDir, directory, 'recovery-started'), 'recovery');
   await new Promise((resolve) => setTimeout(resolve, 100));
   await assert.rejects(fs.stat(path.join(state.artifactsDir, directory, 'late-child-write')), { code: 'ENOENT' });
   await assert.rejects(fs.stat(path.join(state.artifactsDir, directory, 'verified.json')), { code: 'ENOENT' });
+  if (unrelated) assert.equal(unrelated.address().port, port);
 });
 
 function simulatedChild(pid) {

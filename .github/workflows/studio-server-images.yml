@@ -625,6 +625,12 @@ jobs:
         with:
           node-version: 24
 
+      - name: Prepare disposable runner disk space
+        timeout-minutes: 5
+        env:
+          RIVET_HA_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: node deploy/studio-server/scripts/prepare-ha-kind-runner.mjs
+
       - name: Install Workspace Dependencies
         run: |
           corepack enable

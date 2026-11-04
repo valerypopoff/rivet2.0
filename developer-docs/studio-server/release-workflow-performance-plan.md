@@ -34,6 +34,13 @@ diagnostics. A shared capture promise now covers either detection path and late
 in-flight failures, without changing traffic acceptance. Its deterministic real
 HTTP regression also runs before expensive work.
 
+The follow-up image run exposed a recycled-port shutdown assertion and missing
+hosted-runner disk preparation. Shutdown evidence now identifies the child process,
+with a deliberate unrelated-port-reuse regression. Kind runners reclaim only
+unused preinstalled SDKs before provisioning; the 20 GiB floor remains unchanged
+and reports actual free space. Both contracts fail in the early gate. See
+[runner preparation and ownership](../BUILD-AND-CI.md#runner-capacity-and-process-shutdown-fixture-ownership).
+
 The first publication ([PR 236](https://github.com/valerypopoff/rivet2.0/pull/236),
 [Build Images 41643584037](https://github.com/valerypopoff/rivet2.0/actions/runs/41643584037))
 hit a deployment-contract blocker: a journal-observer test expected no diagnostic

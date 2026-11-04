@@ -29,6 +29,7 @@ import {
 } from './lib/ha-browser-probe.mjs';
 import { createHaProofTiming, measureHaPhase, summarizeHaTiming } from './lib/ha-proof-timing.mjs';
 import { manageHaKindCluster, HA_KIND_CLUSTERS } from './ha-kind-cluster.mjs';
+import { assertHaWorkspaceSpace } from './lib/ha-workspace.mjs';
 import {
   HA_PROOF_SCENARIOS,
   haProofRunIdentity,
@@ -77,9 +78,7 @@ export class HaReleaseGate extends ManagedReleaseGate {
       this.config.context !== this.config.allowedContext
     )
       throw new Error('HA gate is restricted to an explicitly allowed disposable local cluster.');
-    const disk = await fs.statfs(rootDir);
-    if (disk.bavail * disk.bsize < 20 * 1024 ** 3)
-      throw new Error('HA rehearsal requires at least 20 GiB free on the workspace drive before any cluster mutation.');
+    await assertHaWorkspaceSpace(rootDir);
     await this.kubectl(['cluster-info'], { capture: true });
   }
   values(images = this.config.images, managedWorkflowSchema = this.config.managedWorkflowSchema) {

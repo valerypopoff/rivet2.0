@@ -1092,6 +1092,30 @@ one capture, and runs in the early source gate instead of waiting for deployment
 contracts. Failed diagnostic capture remains best-effort and cannot hide the
 original traffic failure.
 
+### Runner capacity and process-shutdown fixture ownership
+
+[Build Images 41910935217](https://github.com/valerypopoff/rivet2.0/actions/runs/41910935217)
+exposed two further harness problems. Its shutdown regression tried to rebind a
+terminated child's TCP port, which can be reused by another parallel fixture.
+The test now records the exact child PID and requires it to be absent or terminal
+before recovery. A live-process negative control and deliberate unrelated port
+reuse guard that distinction; late writes and unverified receipts remain failures.
+The production process-group/taskkill shutdown contract is unchanged.
+
+The lost-acknowledgement lane also exhausted the existing 20 GiB workspace floor
+after running the managed gate. Every disposable Kind runner now removes only
+its preinstalled Android, .NET and GHC SDK directories before dependency installs
+and cluster creation. The preparation command refuses local, self-hosted and
+non-Linux environments; it preserves Docker images/data, tool caches and checkout
+files. It logs free space before/after and fails if the unchanged floor is not
+met. The later HA check still enforces that floor and reports actual free GiB.
+No GCP service, Helm resource request or production capacity setting changes.
+
+Disk-preparation contracts and the real child-shutdown/port-reuse regression run
+in the early source gate. Local validation stubs SDK deletion; actual reclamation
+runs only on the disposable hosted CI runner. No global Docker prune, automatic
+retry of failed tests or weakening of cleanup/accepted-work checks is introduced.
+
 ### Shared setup and cache behavior
 
 Node/Yarn CI jobs should use

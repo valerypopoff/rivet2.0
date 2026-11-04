@@ -1110,6 +1110,16 @@ assert.equal(
   'Managed Kubernetes release-gate diagnostics must remain distinct per workflow attempt.',
 );
 const proofMatrix = imageJobs['managed-kubernetes-release-gate'];
+const prepareHaRunner = findStep(proofMatrix, 'Prepare disposable runner disk space', 'HA matrix');
+assert.equal(prepareHaRunner.run, 'node deploy/studio-server/scripts/prepare-ha-kind-runner.mjs');
+assert.equal(prepareHaRunner.env?.RIVET_HA_RUNNER_ENVIRONMENT, '${{ runner.environment }}');
+assert.equal(prepareHaRunner['timeout-minutes'], 5);
+assert.equal(prepareHaRunner.if, undefined, 'Every Kind lane needs the same disk preparation.');
+assert.ok(
+  proofMatrix.steps.indexOf(prepareHaRunner) <
+    proofMatrix.steps.indexOf(findStep(proofMatrix, 'Create Disposable Kind Cluster', 'HA matrix')),
+  'Prepare the disposable runner before creating the cluster.',
+);
 assert.deepEqual(proofMatrix.strategy.matrix.scenario, ['upgrade', 'lostAcknowledgement', 'leaseLoss']);
 assert.equal(
   proofMatrix.strategy['fail-fast'],
