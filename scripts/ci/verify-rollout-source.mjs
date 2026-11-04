@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 // Source-only: no compiled workspace exports, Docker, browser or cloud access.
 const suites = [
+  'deploy/studio-server/scripts/candidate-image-smoke.test.mjs',
   'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
   'deploy/studio-server/scripts/deployment-workflow.test.mjs',
   'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',
@@ -28,7 +29,16 @@ const suites = [
   'scripts/ci/release-workflow-policy.test.mjs',
   'scripts/ci/qualification-build-cache.test.mjs',
 ];
-for (const args of [['--test', ...suites], ['scripts/checks/check-ci-workflows.mjs']]) {
+for (const args of [
+  ['--test', ...suites],
+  [
+    '--test',
+    '--test-name-pattern',
+    'ordinary observation keeps a single truthful window:.*502$',
+    'deploy/studio-server/scripts/runtime-upgrade-qualification.test.mjs',
+  ],
+  ['scripts/checks/check-ci-workflows.mjs'],
+]) {
   const result = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);

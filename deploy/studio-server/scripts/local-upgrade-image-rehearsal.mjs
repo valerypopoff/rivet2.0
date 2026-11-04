@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { rootStructuralMutation } from './lib/structural-fixture-admission.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { pullImageWithRetry } from './lib/docker-image-pull.mjs';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
@@ -729,7 +730,7 @@ async function main() {
   for (const [name, reference] of Object.entries(references)) {
     let inspected = await run('docker', ['image', 'inspect', reference], process.env, true);
     if (inspected.code !== 0) {
-      await run('docker', ['pull', reference], process.env);
+      await pullImageWithRetry(reference, (image) => run('docker', ['pull', image], process.env));
       inspected = await run('docker', ['image', 'inspect', reference], process.env);
     }
     inspections[name] = JSON.parse(inspected.output)[0];

@@ -341,6 +341,8 @@ for (const scenario of [
       artifacts = new Map(),
       captures = [];
     const controller = new AbortController();
+    let failedRequestObserved;
+    const failedRequest = new Promise((resolve) => (failedRequestObserved = resolve));
     // Keep real HTTP and request deadlines; shorten only the one-second web
     // sampling pause so the complete 100-response window is testable locally.
     const nativeSetTimeout = globalThis.setTimeout;
@@ -403,12 +405,22 @@ for (const scenario of [
           ],
         }),
       }),
-      requestWorkflow: ManagedReleaseGate.prototype.requestWorkflow,
+      requestWorkflow: async function (...args) {
+        try {
+          return await ManagedReleaseGate.prototype.requestWorkflow.apply(this, args);
+        } catch (error) {
+          failedRequestObserved();
+          throw error;
+        }
+      },
       roll: async (_images, singleton, hooks) => {
         rolls++;
         assert.equal(singleton, true);
         failing = variant === '502';
-        if (failing) await new Promise((r) => setTimeout(r, 60));
+        if (failing) {
+          await failedRequest;
+          await new Promise(setImmediate); // Let traffic record the response before the checkpoint.
+        }
         for (const ordinal of [0, 1]) {
           const pod = { name: `fixture-ha-execution-${ordinal}`, uid: `owner-${ordinal}` };
           await hooks.beforeRetirement(pod);
@@ -462,7 +474,8 @@ for (const scenario of [
       baseUrl,
       until,
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
-      sampleIntervalMs: 5,
+      // Force the checkpoint to see a real 502 before the observer's next tick.
+      sampleIntervalMs: variant === '502' ? 500 : 5,
       ...(overlap
         ? {
             prepareDeveloperOverlap: async () => {
@@ -536,6 +549,7 @@ for (const scenario of [
         assert.ok(report.workflow.failedRequests.some((r) => r.error.status === 502));
         assert.ok(report.workflow.failedRequests.some((r) => r.http?.server === 'nginx' && r.http.format === 'html'));
         assert.ok(report.firstFailureDiagnosticsCaptured);
+        assert.equal(captures.filter((name) => name === 'ordinary-upgrade-first-failure').length, 1);
         assert.ok(!JSON.stringify(report).includes('<html>'));
       }
     }

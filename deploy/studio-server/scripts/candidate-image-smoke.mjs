@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { legacyServingFixtureEntrypoint } from './lib/legacy-serving-fixture.mjs';
 import { runRuntimeProbe } from '../images/lib/run-runtime-probe.mjs';
+import { pullImageWithRetry } from './lib/docker-image-pull.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const fixturePath = path.join(
@@ -32,12 +33,14 @@ function run(command, args, options = {}) {
     let output = '';
     child.stdout?.on('data', (chunk) => {
       output += String(chunk);
+      if (options.tee) process.stdout.write(chunk);
     });
     child.stderr?.on('data', (chunk) => {
       output += String(chunk);
+      if (options.tee) process.stderr.write(chunk);
     });
     child.on('error', reject);
-    child.on('exit', (code) => {
+    child.on('close', (code) => {
       if (code === 0 || options.allowFailure) {
         resolve({ code: code ?? 1, output });
       } else {
@@ -141,7 +144,10 @@ async function main() {
     throw new Error('IMAGE_NAMESPACE and SOURCE_TAG are required.');
   }
 
-  await run('docker', ['pull', `${imageNamespace}/api:${sourceTag}`]);
+  for (const service of ['api', 'web', 'proxy'])
+    await pullImageWithRetry(`${imageNamespace}/${service}:${sourceTag}`, (image) =>
+      run('docker', ['pull', image], { stdio: ['ignore', 'pipe', 'pipe'], tee: true }),
+    );
   runRuntimeProbe(
     `${imageNamespace}/api:${sourceTag}`,
     [
@@ -220,6 +226,8 @@ async function main() {
         'up',
         '-d',
         '--no-build',
+        '--pull',
+        'never',
         '--force-recreate',
         '--remove-orphans',
         '--wait',

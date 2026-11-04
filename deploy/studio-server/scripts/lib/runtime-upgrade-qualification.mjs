@@ -180,10 +180,20 @@ export async function runOrdinaryRuntimeUpgrade({
     observationFailure,
     failure,
     firstFailureDiagnostics;
+  const captureFirstFailure = () => {
+    firstFailureDiagnostics ??= Promise.resolve()
+      .then(() => gate.capture('ordinary-upgrade-first-failure'))
+      .then(
+        () => true,
+        () => false,
+      );
+  };
   const checkpoint = () => {
     signal?.throwIfAborted();
-    if (observationFailure || workflow.report.failures.length || web.report.failures.length)
+    if (observationFailure || workflow.report.failures.length || web.report.failures.length) {
+      captureFirstFailure();
       throw observationFailure ?? Error('Protected public traffic failed');
+    }
   };
   const wait = (name, check) =>
     until(name, async () => {
@@ -214,10 +224,7 @@ export async function runOrdinaryRuntimeUpgrade({
     observationFailure = error;
     // Keep the request IDs and contemporaneous upstream logs together. Waiting
     // until a long rollout finishes can lose the first 502 to log truncation.
-    firstFailureDiagnostics = gate.capture('ordinary-upgrade-first-failure').then(
-      () => true,
-      () => false,
-    );
+    captureFirstFailure();
   });
   try {
     gate.config.images = previous.images;
@@ -326,8 +333,10 @@ export async function runOrdinaryRuntimeUpgrade({
     observing = false;
     await Promise.all([observe, workflow.stop(), web.stop()]);
     failure ??= observationFailure;
-    if (workflow.report.failures.length || web.report.failures.length)
+    if (workflow.report.failures.length || web.report.failures.length) {
+      captureFirstFailure();
       failure ??= Error('Protected public traffic failed');
+    }
     report.workflow = workflow.report;
     report.web = web.report;
     report.outcome = failure ? 'failed' : 'passed';

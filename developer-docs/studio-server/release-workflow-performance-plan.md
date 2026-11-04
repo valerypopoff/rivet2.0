@@ -22,6 +22,18 @@ and [current continuity plan](production-update-continuity-plan.md#preparation-a
 
 ## Implementation and evidence
 
+The November 5 candidate-smoke failure occurred during a GHCR image pull, before
+application tests. Read-only downloads now have a narrow three-attempt transport
+retry, shared with the local-upgrade rehearsal; smoke startup uses only the
+already downloaded images. The regression runs in the early source gate. This
+adds at most 20 seconds of backoff per affected image, without rerunning builds,
+tests or writes. See [download handling](../BUILD-AND-CI.md#candidate-image-download-failures).
+
+The same run's 502 contract exposed a checkpoint/sampler race in first-failure
+diagnostics. A shared capture promise now covers either detection path and late
+in-flight failures, without changing traffic acceptance. Its deterministic real
+HTTP regression also runs before expensive work.
+
 The first publication ([PR 236](https://github.com/valerypopoff/rivet2.0/pull/236),
 [Build Images 41643584037](https://github.com/valerypopoff/rivet2.0/actions/runs/41643584037))
 hit a deployment-contract blocker: a journal-observer test expected no diagnostic

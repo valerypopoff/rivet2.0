@@ -1059,6 +1059,39 @@ the current VM stack; it does not start a storage conversion. See
 [the VM procedure](./studio-server/development.md#deploying-a-verified-staging-build-to-a-vm)
 for environment/TLS handling and production-data risks.
 
+### Candidate image download failures
+
+[Build Images 41903036853](https://github.com/valerypopoff/rivet2.0/actions/runs/41903036853)
+failed its candidate smoke before application checks on 2026-11-05: GHCR reset
+the API layer download (`failed to copy ... connection reset by peer`). The image
+had been built; this log did not establish an application failure.
+
+The smoke runner now downloads its exact API, web and proxy references before
+creating fixtures. A read-only pull gets at most three attempts, with 5/15-second
+backoff, for recognised connection resets, TLS/socket timeouts or unexpected EOF.
+Authentication, missing manifests/platforms, invalid references, digest/storage
+errors and unknown failures stop immediately. Commands settle after their output
+streams close, and pull progress remains visible. Compose uses
+[`--pull never`](https://docs.docker.com/reference/cli/docker/compose/up/), so
+startup cannot introduce an implicit unprotected download. The local-upgrade
+rehearsal uses the same policy when a required image is missing locally.
+
+Only image downloads are retried. Build, migration, application-test, fixture
+mutation and publication failures keep their original failure semantics. The
+source gate runs the transport-recovery and deterministic-failure regressions
+before expensive builds. Provider qualification and production deployment are
+separate operations; a locally passing retry regression does not qualify images.
+
+The same run later exposed a diagnostic-capture race in the ordinary 502 fixture:
+the main checkpoint could observe a failed request before the background sampler,
+stop sampling, and omit the first-failure receipt. Both paths now share one
+capture promise, also joined for a request that fails during observer shutdown.
+Traffic failures still disqualify the rollout; no request is replayed. The real
+HTTP regression forces the checkpoint-before-sampler ordering, requires exactly
+one capture, and runs in the early source gate instead of waiting for deployment
+contracts. Failed diagnostic capture remains best-effort and cannot hide the
+original traffic failure.
+
 ### Shared setup and cache behavior
 
 Node/Yarn CI jobs should use
