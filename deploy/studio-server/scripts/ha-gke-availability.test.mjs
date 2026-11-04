@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { withManagedGateSignal } from './lib/managed-gate-command.mjs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseAllDocuments } from 'yaml';
@@ -19,6 +20,15 @@ const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const release = 'gke-proof';
 const namespace = 'rivet-staging-proof';
 const neg = 'cloud.google.com/load-balancer-neg-ready';
+
+test('GKE frontend readiness propagates cancellation caught during a health observation', async () => {
+  const cancellation = new AbortController(), reason = new Error('fixture frontend phase cancelled');
+  const gate = { config: { namespace, release, deploymentTimeoutSeconds: 60 }, providerValues: {},
+    assertProofContext: async () => {},
+    kubectl: async (args) => ({ stdout: JSON.stringify(args.includes('deployment') ? {} : { items: [] }) }),
+    observeProxyBackend: async () => { cancellation.abort(reason); throw Error('temporary health failure'); } };
+  await assert.rejects(withManagedGateSignal(cancellation.signal, () => waitForGkeFrontendAvailability(gate)), (error) => error === reason);
+});
 
 test('provider identity must declare its platform and GKE cannot silently omit the new proof', () => {
   const identity = { provider: 'gke', clusterServer: 'https://cluster.gke.goog' };

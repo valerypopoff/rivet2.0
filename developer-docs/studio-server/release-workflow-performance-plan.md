@@ -2,7 +2,14 @@
 
 Status: **A–C implemented and locally validated; hosted CI/cache timings, publication and GKE qualification remain open** (2026-11-03). No CI run, paid staging attempt or production deployment was used for the local validation recorded below. This plan complements [production update continuity](production-update-continuity-plan.md).
 
-Revised decision: repair the worker race, run cheap source contracts before expensive work, gate Kind on scans, and add bounded caching/diagnostics within the existing workflows. Then qualify one repaired build under a fresh approval. Early GKE admission, new delivery artifacts and shutdown bypasses are deferred; shorter successful workflow durations remain unproven.
+Revised decision: repair the worker race, run cheap source contracts before expensive work, gate Kind on scans, and add bounded caching/diagnostics within the existing workflows. Then qualify one repaired build under a fresh approval. Admission now runs early inside staging preparation; separate paid preflight operations, new delivery artifacts and shutdown bypasses remain outside this work. Shorter successful hosted workflow durations remain unproven.
+
+The November 4 follow-up repairs the native admission JSON contract and adds
+packaged preparation/cleanup checks to the same early job. It also propagates
+phase cancellation through readiness polling. The source gate and native checks
+passed locally from a fresh source projection without application builds. See the
+[preparation contract audit](automated-runtime-qualification.md#local-provider-preparation-contracts)
+and [current continuity plan](production-update-continuity-plan.md#preparation-after-repeated-staging-integration-failures).
 
 ## Implementation and evidence
 

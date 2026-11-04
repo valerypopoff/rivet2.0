@@ -83,6 +83,67 @@ policy requiring reservations to match old production or Helm quantities.
 GKE's own platform restrictions still apply. This does not prove schedulability,
 startup or continuity; the ordinary rollout retains those behavioral checks.
 
+Each dry run sends one workload and parses one JSON object. Native kubectl
+expands a List into separate requests and prints successive JSON documents;
+parsing that entire output as one object is invalid. Identity is checked before
+the next workload, and a command or identity failure stops admission immediately.
+
+### Local provider preparation contracts
+
+Before publishing deployment-script changes, run the existing source gate and
+the native integration tests on Linux with Node 24.22.1, kubectl 1.36.6 and Helm
+3.22.1. Missing tools or mismatched versions fail rather than silently skipping.
+The existing early source workflow runs both commands before compilation/images:
+
+```sh
+yarn node scripts/ci/verify-rollout-source.mjs
+yarn node --test deploy/studio-server/scripts/provider-tool-contracts.test.mjs deploy/studio-server/scripts/reusable-staging.test.mjs deploy/studio-server/scripts/runtime-control-local.test.mjs deploy/studio-server/scripts/ha-gke-availability.test.mjs
+```
+
+The native test assembles the real `packageReusableStaging` bundle, then invokes
+its exported provider class and phase executor. It uses an isolated loopback-only
+kubeconfig without credential plugins. Actual kubectl and Helm execute discovery,
+dry-run admission, dependency creation, chart rendering, route creation, Helm
+install/hooks/release storage, readiness reads and proxy exec. Actual application
+fixture HTTP/WebSocket traffic covers UI/Bearer auth, persistence seed and OAuth.
+The concrete state/cloud clients inventory and settle resources, drain accepted
+work, delete with exact preconditions and verify absence. Tests cover successful
+preparation, denied admission, committed creation with a lost reply and interrupted
+creation; failed mutations are issued once, and cleanup retains shared resources.
+
+The shared fixtures were extracted from the existing staging tests. Their native
+adapter handles only the wire formats these clients use, including Helm Secret
+protobuf and typed lists/watch completion. It supplies instant controller outcomes;
+it does not execute workloads or replace real Kubernetes/GKE qualification.
+
+| Audited boundary                                                | Local evidence                                                                                                                                                                        | Remaining provider evidence                                                               |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| CLI documents, warnings and exit status                         | Packaged provider through native Helm/kubectl; original List parser reproduces the staging SyntaxError                                                                                | Current Autopilot admission policy                                                        |
+| No replay after rejection, lost acknowledgement or cancellation | Native failure cases plus HTTP coordinator/worker receipt tests                                                                                                                       | Actual runner/node failure and live IAM availability                                      |
+| Caller permissions                                              | Existing hosted setup tests cover the declared control/runner Roles and required `get pods`/exec probes before activation                                                             | Real caller `can-i` checks still run during staging setup; fixtures do not prove IAM/RBAC |
+| Package and entrypoint identity                                 | Real bundled phase executor; existing hash-manifest, import-safe CLI and projected janitor startup tests                                                                              | Final published actor/janitor images and in-cluster main identity checks                  |
+| Defaults and normal transitions                                 | Provider-adjusted requests are observations; typed lists, Helm release storage and watches use real clients; existing HTTP tests cover automatic NEG annotations, pending Jobs and GC | Real scheduling, startup, CSI binding and propagation timings                             |
+| TLS, auth and exec completion                                   | Existing strict-TLS hostname/CA and WebSocket transport tests; native proxy exec and real authenticated seed requests                                                                 | Actual public certificate, forwarding provenance and GKE endpoint health                  |
+| Cancellation and cleanup                                        | Readiness pollers check phase cancellation even when a probe catches a transient error; child commands close before independent cleanup                                               | Live regional draining and bounded public-request completion                              |
+
+Only shared public TLS and GKE frontend-health observations are substituted at
+the gate boundary; prerequisite validation and the remaining preparation methods
+run their shipped implementations against fixture APIs. Compute replies and
+controller status are synthetic. The tests import the packaged phase API rather
+than bypassing the in-cluster CLI's identity/source checks. Local runs certify
+these integration contracts, not GKE availability, an image release or production
+readiness. Report tools, reached phases and cleanup results alongside this limit.
+
+The existing `images/qualification/verify-toolchain.mjs` check also passed locally
+with the actual patched binaries: trusted native TLS/HTTP2, file-backed mutation,
+lost acknowledgement without replay and rejection of stale identity. It uses
+synthetic loopback resources and does not require a cloud attempt.
+
+The focused live gate remains one normal update with complete 300-second public
+responses, surviving serving capacity, preserved recordings/data and verified
+cleanup. No extra warmup, resource-equality policy, feature/stress journey or paid
+preflight operation was added by this repair.
+
 The ordinary Build workflow runs the source-only image/launcher contract tests
 in its existing static-validation job, before docs/style checks. This includes
 PRs targeting `main`, where the full Studio Server verifier is not a PR trigger.

@@ -74,6 +74,17 @@ function fixture() {
             },
             { run: 'yarn install --immutable --immutable-cache --mode=skip-build' },
             { run: 'yarn node scripts/ci/verify-rollout-source.mjs' },
+            {
+              name: 'Install native provider test tools',
+              'timeout-minutes': 2,
+              env: { KUBECTL_VERSION: 'v1.36.6', HELM_VERSION: 'v3.22.1' },
+              run: 'sha256sum -c -',
+            },
+            {
+              name: 'Verify packaged provider preparation and cleanup before expensive work',
+              'timeout-minutes': 2,
+              run: 'yarn node --test deploy/studio-server/scripts/provider-tool-contracts.test.mjs deploy/studio-server/scripts/reusable-staging.test.mjs',
+            },
           ],
         },
       },
@@ -109,6 +120,28 @@ test('failed, skipped or cancelled prerequisites cannot be bypassed by permissiv
     const f = fixture();
     f.images.jobs['managed-kubernetes-release-gate'].if = condition;
     assert.throws(() => assertFastReleasePolicy(f), /successful prerequisites/);
+  }
+});
+
+test('native preparation checks cannot be removed, skipped or allowed to fail', () => {
+  for (const mutate of [
+    (steps) => steps.pop(),
+    (steps) => {
+      steps.at(-1).if = 'false';
+    },
+    (steps) => {
+      steps.at(-1)['continue-on-error'] = true;
+    },
+    (steps) => {
+      steps.at(-2).env.KUBECTL_VERSION = 'latest';
+    },
+    (steps) => {
+      steps.at(-2).run = 'download without checksums';
+    },
+  ]) {
+    const f = fixture();
+    mutate(f.source.jobs.source.steps);
+    assert.throws(() => assertFastReleasePolicy(f));
   }
 });
 test('removing source/scan barriers, losing cleanup or reserializing expensive work is rejected', () => {
