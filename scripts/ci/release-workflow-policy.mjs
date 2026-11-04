@@ -63,5 +63,23 @@ export function assertFastReleasePolicy({ images, verify, publisher, source, bui
   assert.match(commands, /--immutable --immutable-cache/);
   assert.match(commands, /--mode=skip-build\b/);
   assert.match(commands, /yarn node scripts\/ci\/verify-rollout-source\.mjs/);
-  assert.doesNotMatch(commands, /studio-server:build|docker|kubectl|gcloud/);
+  assert.doesNotMatch(commands, /studio-server:build|docker|gcloud/);
+  const nativeTools = source.jobs.source.steps.find((s) => s.name === 'Install native provider test tools');
+  assert.equal(nativeTools?.['timeout-minutes'], 2);
+  assert.equal(nativeTools.env.KUBECTL_VERSION, 'v1.36.6');
+  assert.equal(nativeTools.env.HELM_VERSION, 'v3.22.1');
+  assert.match(nativeTools.run, /sha256sum -c -/);
+  const native = source.jobs.source.steps.find(
+    (s) => s.name === 'Verify packaged provider preparation and cleanup before expensive work',
+  );
+  assert.equal(native?.['timeout-minutes'], 2);
+  for (const step of [nativeTools, native]) {
+    assert.equal(step.if, undefined, 'Native provider contracts must not be conditional');
+    assert.equal(step['continue-on-error'], undefined, 'Native provider contracts must block expensive work');
+  }
+  assert.match(
+    native.run,
+    /--test deploy\/studio-server\/scripts\/provider-tool-contracts.test.mjs deploy\/studio-server\/scripts\/reusable-staging.test.mjs/,
+  );
+  assert.ok(source.jobs.source.steps.indexOf(nativeTools) < source.jobs.source.steps.indexOf(native));
 }

@@ -9,6 +9,7 @@ const active = new Set();
 // Cancellation applies only to the test phase. Settlement and cleanup run in a
 // fresh scope and must remain usable after a failed or interrupted observation.
 export const withManagedGateSignal = (signal, action) => scope.run(signal, action);
+export const assertManagedGateActive = () => scope.getStore()?.throwIfAborted();
 export async function waitForManagedGateCommands() {
   await Promise.all([...active]);
 }

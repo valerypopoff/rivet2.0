@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { assertManagedGateActive } from './managed-gate-command.mjs';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './ha-workflow-traffic.mjs';
 import { hasReadyGkeNegGate, assertGkeProxyDeploymentAvailable, assertGkeProxyPoolReady } from './gke-proxy-health.mjs';
 
@@ -73,6 +74,7 @@ export async function waitForGkeFrontendAvailability(gate, removed = []) {
   const deadline = Date.now() + gate.config.deploymentTimeoutSeconds * 1000;
   let last;
   do {
+    assertManagedGateActive();
     await gate.assertProofContext();
     const read = async (args) => JSON.parse((await gate.kubectl(args, { capture: true })).stdout).items;
     const pods = await read(['-n', namespace, 'get', 'pods', '-l', `app.kubernetes.io/instance=${gate.config.release}`, '-o', 'json']);
@@ -90,6 +92,7 @@ export async function waitForGkeFrontendAvailability(gate, removed = []) {
         gate.providerValues?.ha?.controlPlane?.mode ?? 'replicated',
         gate.providerValues?.availability?.gkeGatewayProfile ?? 'regional', regionalHealth);
     } catch (error) { last = error; }
+    assertManagedGateActive();
     await new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(1000, deadline - Date.now()))));
   } while (Date.now() < deadline);
   throw Error(`GKE frontends did not become available before the proof deadline: ${last?.message ?? 'readiness not confirmed'}`, { cause: last });

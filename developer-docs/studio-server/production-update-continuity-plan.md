@@ -1,6 +1,85 @@
 # Production update continuity implementation plan
 
-The [2026-11-03 workflow performance implementation](release-workflow-performance-plan.md) repairs the cooperative-worker slot collision and adds a cheap source gate, scan dependencies, balanced Kind lanes and bounded caching/diagnostics within the existing workflows. Local validation is separate from hosted timing/cache evidence. Candidate/GKE overlap, new orchestration artifacts, selective certification and shutdown bypasses remain deferred. Publication, a successful GKE qualification and production activation are open; no new cloud run is authorized.
+The [workflow performance implementation](release-workflow-performance-plan.md) and subsequent rollout repairs are published through [PR 239](https://github.com/valerypopoff/rivet2.0/pull/239), source `66cfa994ab0d65557b06360c2197c8221cb687d0`. [Build Images 41714935583](https://github.com/valerypopoff/rivet2.0/actions/runs/41714935583) passed its image, scan and local Kubernetes gates. [Staging run 41724373390](https://github.com/valerypopoff/rivet2.0/actions/runs/41724373390) then failed in preparation, before the rollout: the new admission preflight parsed kubectl's successive JSON documents as one document. Cleanup and independent closure passed; production was skipped. GKE qualification and production activation remain open. The single-attempt allowance is closed.
+
+## Preparation after repeated staging integration failures
+
+The five preparation items below are implemented locally. Admission uses one
+workload per native dry run, and the packaged provider now has a Linux
+preparation-to-cleanup integration test before compilation/images. The audit also
+fixed readiness loops that could swallow cancellation and delay settlement.
+See the [contract audit and evidence limits](automated-runtime-qualification.md#local-provider-preparation-contracts).
+No cloud attempt or production action is included in this work.
+
+The recurring process failure is using a full cloud qualification to discover
+the next basic integration assumption. Mocked method responses, source tests and
+a successful local Kubernetes runtime update do not establish that the concrete
+provider runner works with its real command-line tools. The last admission test
+returned a fabricated List, hiding kubectl's actual per-resource JSON output.
+The earlier missing container imports, permission mismatch and admission/default
+comparisons expose the same need to test the boundary that will actually run.
+
+Keep the objective fixed: one ordinary update at valid installed sizing, complete
+300-second public responses, healthy surviving capacity, preserved recordings/data
+and verified cleanup. Resource experiments, optional feature/chaos journeys and
+new deployment features remain outside this repair.
+
+Completed local preparation (retain these checks when changing the runner):
+
+1. Repair admission handling with one workload per dry-run/JSON parse. Test the
+   actual provider method through real kubectl against a local fixture API. The
+   existing local reproduction already demonstrates the broken List response and
+   successful single-workload parsing; testing JSON.parse alone is insufficient.
+2. Make one bounded audit of the preparation and cleanup path's external
+   contracts: CLI serialization/exit status, required caller permissions,
+   packaged entrypoints, provider defaults and ordinary transitional states.
+   Reuse the recent failure evidence and existing tests. Record which boundary
+   each test really exercises; add only missing coverage. Do not count a mocked
+   gate.kube call as a real-client test.
+3. Exercise the concrete preparation-to-cleanup command flow on Linux with the
+   same Node/tool versions and shipped entrypoints. Use real kubectl/Helm and
+   existing runtime/container checks; fixture servers stand in for provider API
+   replies. Cover successful preparation and an interrupted/failed preparation
+   closing its workers and resources. Reuse existing fixtures and transports;
+   a full GCP emulator, new cluster or new repository is not required.
+4. Put the missing cheap tool-contract checks in the existing early CI path.
+   Iterate deployment code locally before publishing a candidate or rebuilding
+   release images. Existing verified images can support local development where
+   their runtime is unchanged; final release source/image bindings still apply.
+5. Report readiness by phases and evidence: actual tools exercised, preparation
+   and cleanup stages reached, and remaining GKE-only observations. Test totals
+   alone are not a readiness claim. Do not add another guard to the release path
+   without exercising its real tool/provider contract first.
+
+After that preparation, one focused staging run supplies the evidence a local
+fixture cannot: current Autopilot admission and real regional routing, NEG health
+and draining during replacement. Keep the existing early admission/access checks
+inside that operation; no extra paid rehearsal or broad preflight framework is
+added. A local replay does not prove GCP availability or guarantee success.
+
+Local validation reached prerequisites, namespace, both admissions, dependencies,
+routing, Helm installation, ready owners, frontend auth/exec, persistence, OAuth,
+inventory, settlement, deletion and verified absence. Denied admission, lost
+creation acknowledgement and interrupted creation also settled and cleaned without
+replaying the mutation. Native Linux tools were Node 24.22.1, kubectl
+1.36.6+rivet.go1.27.3 and Helm 3.22.1+rivet.go1.27.3. The original parser failed
+the native test with the same multi-document SyntaxError before the repair.
+The expanded source gate passed 293 tests and workflow policy locally in about
+19 seconds; native setup/failure cases took about eight seconds together.
+A fresh tracked-source projection also passed offline immutable `skip-build`
+installation, all 293 source tests and all 106 native/staging/readiness tests,
+without application compilation or network access. The Alpine test host selected
+the tracked glibc dependency cache to match the Ubuntu CI install; this changed
+only that disposable projection's libc selection. The native suite took about
+14 seconds there. Public TLS/GKE health and controller outcomes remain fixtures,
+as recorded in the audit; these counts are not provider qualification.
+
+Publication and a fresh focused GKE qualification remain separate next steps.
+There is no claim that a new image is built or that the last failed GKE attempt
+qualified the release. No new build, cloud attempt or production action is
+authorized by this document.
+
+## Existing rollout objective and implementation history
 
 The current essential gate supersedes the broad first-adoption stress requirement
 in the original phases below: one focused staging update proves bounded request

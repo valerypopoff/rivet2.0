@@ -11,6 +11,9 @@ const suites = [
   'deploy/studio-server/scripts/request-continuity-evidence.test.mjs',
   'deploy/studio-server/scripts/proxy-continuity-transition.test.mjs',
   'deploy/studio-server/scripts/resource-sizing.test.mjs',
+  'deploy/studio-server/scripts/prepare-hosted-release.test.mjs',
+  'deploy/studio-server/scripts/reusable-staging-coordinator.test.mjs',
+  'deploy/studio-server/scripts/reusable-staging-transport.test.mjs',
   'scripts/ci/release-workflow-policy.test.mjs',
   'scripts/ci/qualification-build-cache.test.mjs',
 ];
