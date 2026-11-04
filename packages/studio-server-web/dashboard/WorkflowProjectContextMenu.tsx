@@ -10,6 +10,7 @@ import {
 import CopyIcon from '@atlaskit/icon/glyph/copy';
 import ArrowDownIcon from 'majesticons/line/arrow-down-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
+import RecordingIcon from 'majesticons/line/video-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowProjectItem } from './types';
 import { useHostedSurfaceDismiss } from './useHostedSurfaceDismiss';
@@ -21,6 +22,7 @@ type WorkflowProjectContextMenuProps = {
   y: number;
   onClose: () => void;
   onRename: () => void;
+  onInspectRecordings: () => void;
   onDownload: () => void;
   onDuplicate: () => void;
   canCompare: boolean;
@@ -54,6 +56,7 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
   y,
   onClose,
   onRename,
+  onInspectRecordings,
   onDownload,
   onDuplicate,
   canCompare,
@@ -102,6 +105,15 @@ export const WorkflowProjectContextMenu: FC<WorkflowProjectContextMenuProps> = (
     >
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
         <span>Rename project</span>
+      </button>
+      <button
+        type="button"
+        className="workflow-project-context-menu-item"
+        role="menuitem"
+        onClick={onInspectRecordings}
+      >
+        <RecordingIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+        <span>Inspect recordings</span>
       </button>
       {canCompare ? (
         <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCompare}>

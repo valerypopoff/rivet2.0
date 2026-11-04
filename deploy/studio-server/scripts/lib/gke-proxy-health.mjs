@@ -117,3 +117,12 @@ export function isGkeProxyBackendReady(pods, service, backend, options) {
     throw error;
   }
 }
+
+/** During a native roll, pending replacements do not supply capacity. Preserve
+ * a real current-Pod serving floor; final acceptance still checks the full pool. */
+export function assertGkeProxyServingFloor(pods, service, backend, minimum = 2) {
+  assert.ok(Number.isSafeInteger(minimum) && minimum >= 2);
+  const serving = pods.filter((pod) => isGkeProxyBackendReady([pod], service, backend, { minimumZones: 1 }));
+  assert.ok(serving.length >= minimum, 'Proxy rollout lost its healthy current-Pod serving floor');
+  return assertGkeProxyBackendHealth(serving, service, backend);
+}

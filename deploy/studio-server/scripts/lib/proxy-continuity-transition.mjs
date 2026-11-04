@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { performance } from 'node:perf_hooks';
+import { readConcurrently } from './read-concurrently.mjs';
 export { proxyContinuitySettled } from './release-operation-state.mjs';
 import {
   assertProtectedProxyTemplate,
@@ -258,56 +259,79 @@ export function createProxyContinuityTransition({
       'Unknown ingress transition phase',
     );
     assert.equal(state.configurationDigest, digest, 'Ingress recovery inputs changed');
-    assert.equal(await io.namespaceUid(), state.namespaceUid, 'Ingress namespace lifetime changed');
+    // Read each object once within this guard, never across a write. Namespace
+    // and identity observations can overlap; mutation intents remain serial.
+    const observations = new Map();
+    const observe = (reference, options, validate) => {
+      const key = JSON.stringify([
+        reference.kind,
+        reference.namespace ?? reference.metadata?.namespace ?? config.namespace,
+        reference.name ?? reference.metadata.name,
+        !!options.optional,
+      ]);
+      if (!observations.has(key)) observations.set(key, { reference, options, validators: [] });
+      observations.get(key).validators.push(validate);
+    };
     for (const bound of state.bindings) {
-      const live = await io.read(bound);
-      assert.equal(identity(live).uid, bound.uid, 'Ingress owner replaced');
-      if (operation.record.phase === 'preflight' && bound.kind === 'Deployment' && bound.name === config.proxyName)
-        assert.equal(
-          hash(live.spec.template),
-          state.sourceTemplateDigest,
-          'Original proxy template changed before the owned Helm update',
-        );
+      observe(bound, {}, (live) => {
+        assert.equal(identity(live).uid, bound.uid, 'Ingress owner replaced');
+        if (operation.record.phase === 'preflight' && bound.kind === 'Deployment' && bound.name === config.proxyName)
+          assert.equal(
+            hash(live.spec.template),
+            state.sourceTemplateDigest,
+            'Original proxy template changed before the owned Helm update',
+          );
+      });
     }
     if (state.hpa) {
-      const current = await io.read(identity(state.hpa));
-      assert.equal(identity(current).uid, state.hpa.metadata.uid, 'Proxy HPA replaced');
-      const frozen = frozenHpaSpec(state);
-      const expected = state.hpaFreezeIntent && !state.hpaReleased ? frozen : state.hpa.spec;
-      assert.ok(
-        equal(current.spec, expected) || (state.hpaRestoreIntent && equal(current.spec, state.hpa.spec)),
-        'Proxy HPA changed outside the owned transition',
-      );
+      observe(identity(state.hpa), {}, (current) => {
+        assert.equal(identity(current).uid, state.hpa.metadata.uid, 'Proxy HPA replaced');
+        const expected = state.hpaFreezeIntent && !state.hpaReleased ? frozenHpaSpec(state) : state.hpa.spec;
+        assert.ok(
+          equal(current.spec, expected) || (state.hpaRestoreIntent && equal(current.spec, state.hpa.spec)),
+          'Proxy HPA changed outside the owned transition',
+        );
+      });
     }
     for (const entry of state.entries.filter((e) => e.uid && !e.absent)) {
-      const live = await io.read(entry.desired, { optional: !!entry.deleteIntent });
-      if (!live) continue;
-      assert.equal(live.metadata.uid, entry.uid, 'Bridge owner replaced');
-      assert.deepEqual(
-        routingSpec(live),
-        routingSpec(entry.desired, entry.observedSpec),
-        'Bridge specification changed',
-      );
-      assert.equal(annotations(live)[marker], operation.record.token, 'Bridge ownership changed');
+      observe(entry.desired, { optional: !!entry.deleteIntent }, (live) => {
+        if (!live) return;
+        assert.equal(live.metadata.uid, entry.uid, 'Bridge owner replaced');
+        assert.deepEqual(
+          routingSpec(live),
+          routingSpec(entry.desired, entry.observedSpec),
+          'Bridge specification changed',
+        );
+        assert.equal(annotations(live)[marker], operation.record.token, 'Bridge ownership changed');
+      });
     }
     // Check the latest owned intent, including writes whose response was lost.
     // A retry may observe it, but may never overwrite a different route/policy.
     const latest = new Map(Object.values(state.mutations ?? {}).map((m) => [m.uid, m]));
     for (const original of [state.route, state.policy].filter(Boolean)) {
-      const live = await io.read(identity(original));
-      assert.equal(identity(live).uid, original.metadata.uid, 'Routing owner replaced');
-      const expected = latest.get(original.metadata.uid);
-      assert.deepEqual(
-        routingSpec(live),
-        routingSpec(original, expected?.expected ?? original.spec),
-        'Foreign routing specification',
-      );
-      assert.deepEqual(
-        annotations(live),
-        expected?.annotations ?? annotations(original),
-        'Foreign routing annotations',
-      );
+      observe(identity(original), {}, (live) => {
+        assert.equal(identity(live).uid, original.metadata.uid, 'Routing owner replaced');
+        const expected = latest.get(original.metadata.uid);
+        assert.deepEqual(
+          routingSpec(live),
+          routingSpec(original, expected?.expected ?? original.spec),
+          'Foreign routing specification',
+        );
+        assert.deepEqual(
+          annotations(live),
+          expected?.annotations ?? annotations(original),
+          'Foreign routing annotations',
+        );
+      });
     }
+    await readConcurrently([
+      async () => assert.equal(await io.namespaceUid(), state.namespaceUid, 'Ingress namespace lifetime changed'),
+      ...[...observations.values()].map(({ reference, options, validators }) => async () => {
+        const live = await io.read(reference, options);
+        for (const validate of validators) validate(live);
+      }),
+    ]);
+    operation.assertLease();
   };
   const routeSpec = (state, target) => {
     const spec = clone(state.route.spec);
@@ -440,14 +464,22 @@ export function createProxyContinuityTransition({
       );
       await save(operation, { hpaReleased: true });
     },
-    async verify(operation) {
+    async verify(operation, { settled = false } = {}) {
       await check(operation);
       const state = stateOf(operation);
       assert.notEqual(state.phase, 'creating', 'Ingress protection has not been established');
       // A return-route write can commit before its phase checkpoint. Recover
       // from the recorded intent rather than expecting the previous route.
       const target = state.phase === 'bridge-serving' && !state.mutations?.normal ? 'bridge' : 'normal';
-      const observed = await io.observe({ state, config, target, probe: false, token: operation.record.token });
+      const observed = await io.observe({
+        state,
+        config,
+        target,
+        probe: false,
+        token: operation.record.token,
+        allowUpdating:
+          !settled && operation.record.phase === 'owners' && state.phase === 'complete' && state.entries.length === 0,
+      });
       assert.equal(observed.healthy, true);
       assert.ok(observed.backendServiceDrainSeconds >= config.profile.backendServiceDrainSeconds);
       if (target === 'bridge' || (!state.routeRestored && !state.mutations?.restore))

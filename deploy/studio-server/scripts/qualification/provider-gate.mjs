@@ -30,6 +30,7 @@ import { monitorFatalStartup } from '../lib/fatal-startup-monitor.mjs';
 import { imageReference } from '../lib/kubernetes-managed-release-gate-config.mjs';
 import { createHaProofTiming } from '../lib/ha-proof-timing.mjs';
 import { applySizingRequests } from '../lib/resource-sizing.mjs';
+import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
 import { assertManagedGateActive } from '../lib/managed-gate-command.mjs';
 
 export const root =
@@ -54,7 +55,7 @@ const imageDigest = (manifest) =>
   getStudioServerReleaseManifestDigest(manifest, { requirePromoted: manifest.state === 'promoted' });
 export class ReusableProviderGate extends RuntimeControlLocalGate {
   constructor(operation, settings, state, privateDirectory, { runRollout = runHaKubernetesRollout } = {}) {
-    const namespace = `rivet-staging-${operation.operationId}`,
+    const namespace = operation.retainedApplication?.namespace ?? `rivet-staging-${operation.operationId}`,
       release = 'rivet-qualification';
     const config = {
       context: settings.context,
@@ -112,13 +113,44 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     // List. One workload per command keeps this boundary unambiguous, including
     // command failures partway through admission. Dry-runs are never retried.
     const admittedItems = [];
+    const admissionItems = [];
     const identity = (r) => `${r?.kind}/${r?.metadata?.namespace ?? this.config.namespace}/${r?.metadata?.name}`;
     for (const item of items) {
-      const response = await this.kube(['create', '--dry-run=server', '-f', '-', '-o', 'json'], {
-        input: JSON.stringify(item),
+      const request = structuredClone(item);
+      let command = 'create';
+      if (this.state?.application) {
+        const raw = (
+          await this.kube(['get', item.kind.toLowerCase(), item.metadata.name, '--ignore-not-found', '-o', 'json'])
+        ).stdout;
+        const current = raw.trim() ? JSON.parse(raw) : null;
+        if (current) {
+          assert.equal(current.kind, item.kind);
+          assert.equal(current.metadata.namespace, this.config.namespace);
+          assert.equal(current.metadata.labels?.['app.kubernetes.io/instance'], this.config.release);
+          assert.ok(current.metadata.uid && current.metadata.resourceVersion);
+          if (item.kind === 'Job') {
+            // Helm recreates this hook; replacing an existing Job would test
+            // an immutable-template update that the real rollout never makes.
+            assert.ok(
+              item.metadata.annotations?.['helm.sh/hook-delete-policy']?.split(',').includes('before-hook-creation'),
+            );
+            request.metadata.name = `${item.metadata.name.slice(0, 50)}-dry-${randomUUID().slice(0, 8)}`;
+          } else {
+            assert.ok(!current.metadata.deletionTimestamp);
+            command = 'replace';
+            Object.assign(request.metadata, {
+              uid: current.metadata.uid,
+              resourceVersion: current.metadata.resourceVersion,
+            });
+          }
+        }
+      }
+      const response = await this.kube([command, '--dry-run=server', '-f', '-', '-o', 'json'], {
+        input: JSON.stringify(request),
       });
       const admitted = JSON.parse(response.stdout);
-      assert.equal(identity(admitted), identity(item), 'Admission workload identities differ');
+      assert.equal(identity(admitted), identity(request), 'Admission workload identities differ');
+      admissionItems.push(request);
       admittedItems.push(admitted);
     }
     const summarize = (workloads) =>
@@ -131,7 +163,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     await this.artifact(
       `workload-admission-${name}.json`,
       JSON.stringify({
-        requested: summarize(items),
+        requested: summarize(admissionItems),
         admitted: summarize(admittedItems),
       }),
     );
@@ -169,7 +201,11 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     );
   }
   async assertProofContext() {
-    await this.state.admission();
+    if (this.cleanupOwner) {
+      const { record } = await this.state.read();
+      assert.ok(record.closed && record.cleanupOwner?.uid === this.cleanupOwner.uid);
+      await this.state.application.owned();
+    } else await this.state.admission();
     const ns = await this.state.namespace();
     assert.ok(ns && !ns.metadata.deletionTimestamp);
     this.namespaceUid = ns.metadata.uid;
@@ -279,6 +315,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.providerValues = {
       ...values,
       ...structuredClone(envelope),
+      ha: { ...values.ha, ...envelope.ha, controlPlane: { ...values.ha.controlPlane, ...envelope.ha?.controlPlane } },
       release: {
         production: {
           manifestDigest: imageDigest(manifest),
@@ -336,6 +373,12 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       };
     }
     this.providerValues.ha.controlPlane.mode = this.overlap ? 'singleton-overlap' : 'singleton';
+    if (manifest === this.operation.candidate && this.operation.executionPools)
+      this.providerValues.ha.executionPools = {
+        enabled: true,
+        active: envelope.ha?.executionPools?.active ?? 'a',
+        retiringReplicas: 0,
+      };
     if (this.operation.sizingRequests)
       this.providerValues = applySizingRequests(this.providerValues, this.operation.sizingRequests);
     return this.providerValues;
@@ -357,9 +400,9 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     assert.equal(receipt.editorSession, true);
     return receipt;
   }
-  async apply(values, label = 'provider-values.json') {
+  async apply(values, label = 'provider-values.json', options) {
     await this.assertProofContext();
-    return super.apply(values, label);
+    return super.apply(values, label, options);
   }
   async roll(images, singleton = true, probes = {}) {
     assert.equal(singleton, true);
@@ -429,10 +472,11 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
           }
           await observeArtifact?.(...args);
         },
-        applyTemplates: (_work, guards) =>
+        applyTemplates: (_work, guards, options) =>
           this.apply(
             mergeRuntimeControlGuards(mergeRuntimeControlGuards(values, haRolloutAutoscalingValues(resources)), guards),
             'provider-roll-template.json',
+            options,
           ),
         restoreAutoscalers: (_work, guards) =>
           this.apply(
@@ -533,6 +577,117 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     });
     for (const name of ['postgres', 'minio'])
       await this.kube(['rollout', 'status', `deployment/release-gate-${name}`, '--timeout=600s']);
+    if (this.state.application) {
+      const secrets = await this.retainedSecrets();
+      await this.state.application.change((record) => {
+        record.secrets = secrets.identities;
+      });
+    }
+  }
+  async retainedSecrets() {
+    const fields = {
+      'rivet-release-gate-postgres': { password: 'postgresPassword' },
+      'rivet-release-gate-object-storage': {
+        accessKeyId: 'objectStorageAccessKey',
+        secretAccessKey: 'objectStorageSecretKey',
+      },
+      'rivet-release-gate-settings': { encryptionKey: 'settingsEncryptionKey' },
+      'rivet-release-gate-auth': { RIVET_KEY: 'rivetKey' },
+    };
+    const identities = {},
+      values = {};
+    const application = await this.state.application.owned();
+    for (const [name, mapping] of Object.entries(fields)) {
+      const secret = await this.state.api.json('GET', `/api/v1/namespaces/${this.config.namespace}/secrets/${name}`);
+      assert.ok(secret?.metadata.uid && !secret.metadata.deletionTimestamp);
+      identities[name] = secret.metadata.uid;
+      if (application.record.secrets) assert.equal(secret.metadata.uid, application.record.secrets[name]);
+      for (const [key, target] of Object.entries(mapping)) {
+        assert.ok(secret.data?.[key]);
+        values[target] = Buffer.from(secret.data[key], 'base64').toString('utf8');
+        assert.ok(values[target]);
+      }
+    }
+    if (this.settings.registrySecret) {
+      const name = 'rivet-release-gate-registry';
+      const source = await this.state.api.json(
+        'GET',
+        `/api/v1/namespaces/${this.settings.runnerNamespace}/secrets/${this.settings.registrySecret.name}`,
+      );
+      assert.equal(source?.metadata.uid, this.settings.registrySecret.uid);
+      assert.ok(!source.metadata.deletionTimestamp);
+      assert.equal(source.type, 'kubernetes.io/dockerconfigjson');
+      assert.deepEqual(Object.keys(source.data), ['.dockerconfigjson']);
+      const targetPath = `/api/v1/namespaces/${this.config.namespace}/secrets/${name}`;
+      const target = await this.state.api.json('GET', targetPath);
+      assert.ok(target?.metadata.uid && !target.metadata.deletionTimestamp);
+      assert.equal(target.type, source.type);
+      if (application.record.secrets) assert.equal(target.metadata.uid, application.record.secrets[name]);
+      identities[name] = target.metadata.uid;
+      if (!isDeepStrictEqual(target.data, source.data)) {
+        assert.equal(
+          target.metadata.uid,
+          application.record.secrets?.[name],
+          'Registry Secret is not yet identity-bound',
+        );
+        assert.ok(target.metadata.resourceVersion);
+        await this.assertProofContext();
+        const updated = await this.state.api.json('PUT', targetPath, { ...target, data: source.data });
+        assert.equal(updated.metadata.uid, target.metadata.uid);
+      }
+    }
+    this.secrets = values;
+    return { identities };
+  }
+  async prepareRetainedFixture() {
+    const { record } = await this.state.read();
+    assert.ok(!record.fixtureFolderIntent, 'Never replay fixture-folder creation');
+    const request = { name: this.operation.operationId, parentRelativePath: '', mutation: rootStructuralMutation() };
+    await this.state.change((current) => {
+      current.fixtureFolderIntent = request.mutation.operationId;
+    });
+    const { folder } = await this.requestWorkflow(this.config.baseUrl, '/api/workflows/folders', {
+      method: 'POST',
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
+      body: JSON.stringify(request),
+    });
+    assert.equal(folder.relativePath, this.operation.operationId);
+    assert.ok(folder.namespaceId);
+    this.fixtureFolder = { relativePath: folder.relativePath, namespaceId: folder.namespaceId };
+    await this.state.change((current) => {
+      current.fixtureFolder = this.fixtureFolder;
+    });
+  }
+  async verifyRetainedInstallation(manifest = this.operation.previous) {
+    await this.assertProofContext();
+    const values = JSON.parse(
+      (
+        await run(
+          this.helmBin,
+          [
+            'get',
+            'values',
+            this.config.release,
+            '--kube-context',
+            this.config.context,
+            '--namespace',
+            this.config.namespace,
+            '-o',
+            'json',
+          ],
+          { capture: true },
+        )
+      ).stdout,
+    );
+    assert.equal(
+      values.release?.production?.manifestDigest,
+      getStudioServerReleaseManifestDigest(manifest),
+      'Retained Helm release differs from the expected immutable release',
+    );
+    for (const [name, image] of Object.entries(manifest.images)) {
+      assert.equal(values.images[name].repository, image.repository);
+      assert.equal(values.images[name].digest, image.digest);
+    }
   }
   async createPublicRoute() {
     await this.assertProofContext();
@@ -653,6 +808,13 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     assert.equal(new URL(base).origin, this.config.baseUrl);
     assert.ok(route.startsWith('/') && !route.startsWith('//') && !route.includes('\\'));
     assert.equal(new URL(route, base).origin, this.config.baseUrl);
+    if (this.fixtureFolder && route === '/api/workflows/projects/upload' && options.method === 'POST') {
+      const body = JSON.parse(options.body);
+      assert.equal(body.folderRelativePath, '', 'Retained fixture uploads must stay in their owned folder');
+      body.folderRelativePath = this.fixtureFolder.relativePath;
+      body.mutation = { ...body.mutation, expectedDestinationId: this.fixtureFolder.namespaceId };
+      options = { ...options, body: JSON.stringify(body) };
+    }
     return super.requestWorkflow(base, route, {
       ...options,
       redirect: 'manual',

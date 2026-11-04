@@ -72,9 +72,17 @@ test('concrete provider rollout persists each journal before observing it and pr
     { kind: 'Deployment', metadata: { labels: { 'app.kubernetes.io/component': 'autoscaler' } } },
     { kind: 'HorizontalPodAutoscaler', metadata: { labels: { 'app.kubernetes.io/component': 'proxy' } } },
   ];
-  gate.apply = async (value) => applied.push(value);
+  const readiness = [];
+  gate.apply = async (value, _label, options) => {
+    applied.push(value);
+    readiness.push(options);
+  };
   gate.runRollout = async (options) => {
-    await options.applyTemplates([], { autoscaling: { proxy: { minReplicas: 4, scaleDownPaused: true } } });
+    await options.applyTemplates(
+      [],
+      { autoscaling: { proxy: { minReplicas: 4, scaleDownPaused: true } } },
+      { waitForReady: false },
+    );
     await options.restoreAutoscalers([], {});
     return { phase: 'complete' };
   };
@@ -86,6 +94,11 @@ test('concrete provider rollout persists each journal before observing it and pr
   });
   assert.deepEqual(applied[0].autoscaling.executionController, values.autoscaling.executionController);
   assert.deepEqual(applied[1].autoscaling, values.autoscaling, 'The final apply restores the original HPA policy');
+  assert.deepEqual(
+    readiness,
+    [{ waitForReady: false }, undefined],
+    'Only template application may omit the broad Helm wait',
+  );
   gate.runRollout = originalRollout;
   await assert.rejects(
     gate.roll(manifest.images, true, {

@@ -817,7 +817,23 @@ assert.match(
   /require_kind != 'true'.*managed-kubernetes-release-gate\.result == 'skipped'/,
   'A skipped Kind gate is acceptable only when the classifier explicitly permits it.',
 );
-assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push']);
+assert.deepEqual(asArray(imageJobs['fast-container-smoke'].needs), ['build-and-push', 'release-manifest']);
+assert.equal(
+  imageJobs['fast-container-smoke'].env.STUDIO_SERVER_CANDIDATE_MANIFEST,
+  'artifacts/studio-server-release-manifest/candidate-release-manifest.json',
+);
+const proxyReuse = findStep(imageJobs['build-and-push'], 'Resolve unchanged proxy image', 'Component reuse');
+assert.equal(
+  findStep(imageJobs['build-and-push'], 'Check Out Repository', 'Component reuse').with.filter,
+  "${{ matrix.service == 'proxy' && 'blob:none' || '' }}",
+  'Proxy ancestry proof must not download historical image/desktop blobs',
+);
+assert.equal(proxyReuse.if, "${{ matrix.service == 'proxy' }}");
+assert.match(proxyReuse.run, /prepare-component-image\.mjs/);
+assert.equal(
+  findStep(imageJobs['build-and-push'], 'Build and Push ${{ matrix.service }}', 'Component reuse').if,
+  "${{ steps.reuse.outputs.reused != 'true' }}",
+);
 const scanImages = imageJobs['scan-images'];
 assert.deepEqual(asArray(scanImages.needs), ['release-manifest']);
 assert.deepEqual(scanImages.strategy.matrix.service, ['proxy', 'web', 'api', 'executor']);

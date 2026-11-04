@@ -105,7 +105,7 @@ export class HaReleaseGate extends ManagedReleaseGate {
       ),
     };
   }
-  async apply(values, name = 'ha-values.json') {
+  async apply(values, name = 'ha-values.json', { waitForReady = true } = {}) {
     const file = path.join(this.config.artifactsDir, name);
     await fs.mkdir(this.config.artifactsDir, { recursive: true });
     await fs.writeFile(file, JSON.stringify(values));
@@ -122,8 +122,7 @@ export class HaReleaseGate extends ManagedReleaseGate {
       overlay,
       '-f',
       file,
-      '--wait',
-      '--wait-for-jobs',
+      ...(waitForReady ? ['--wait', '--wait-for-jobs'] : []),
       '--timeout',
       '600s',
     ]);

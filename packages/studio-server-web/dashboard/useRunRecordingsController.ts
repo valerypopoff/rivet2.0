@@ -10,6 +10,7 @@ import {
   fetchWorkflowRecordingWorkflows,
 } from './workflowApi';
 import type {
+  WorkflowProjectItem,
   WorkflowRecordingFilterStatus,
   WorkflowRecordingInputFilter,
   WorkflowRecordingInputFilterOperator,
@@ -73,7 +74,11 @@ function getNextInputSearchProgress(
   };
 }
 
-export function useRunRecordingsController(isOpen: boolean, resetToken: number | string = 0) {
+export function useRunRecordingsController(
+  isOpen: boolean,
+  resetToken: number | string = 0,
+  initialProject: WorkflowProjectItem | null = null,
+) {
   const [workflowsResponse, setWorkflowsResponse] = useState<WorkflowRecordingWorkflowListResponse | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(true);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -133,7 +138,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken: number |
     abortInputSearch();
     runsRequestVersionRef.current++;
     deletionRequestRef.current = null;
-    setSelectedWorkflowId('');
+    setSelectedWorkflowId(initialProject?.id ?? '');
     setRunsPage(null);
     setRelatedCounts(null);
     setError(null);
@@ -153,7 +158,7 @@ export function useRunRecordingsController(isOpen: boolean, resetToken: number |
     setWorkflowsResponse(null);
     setWorkflowsLoading(true);
     setDeletingRecordingId(null);
-  }, [abortInputSearch]);
+  }, [abortInputSearch, initialProject]);
 
   useEffect(() => {
     resetSessionState();
@@ -192,7 +197,14 @@ export function useRunRecordingsController(isOpen: boolean, resetToken: number |
     };
   }, [isOpen, loadWorkflowRecordingWorkflows, resetToken, workflowsResponse]);
 
-  const workflows = useMemo(() => workflowsResponse?.workflows ?? [], [workflowsResponse]);
+  const workflows = useMemo(() => {
+    const catalog = workflowsResponse?.workflows ?? [];
+    if (!initialProject || catalog.some((workflow) => workflow.workflowId === initialProject.id)) return catalog;
+    return [
+      ...catalog,
+      { workflowId: initialProject.id, project: initialProject, totalRuns: 0, failedRuns: 0, suspiciousRuns: 0 },
+    ];
+  }, [initialProject, workflowsResponse]);
   const workflowsReady = workflowsResponse !== null;
 
   useEffect(() => {

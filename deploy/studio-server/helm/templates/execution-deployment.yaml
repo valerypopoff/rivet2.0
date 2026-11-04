@@ -1,18 +1,26 @@
-{{- if ne .Values.deploymentProfile "single-machine" }}
+{{- define "rivet.executionPoolWorkload" -}}
+{{- $pool := .pool -}}
+{{- $root := .root -}}
+{{- $name := include "rivet.executionName" $root -}}
+{{- if eq $pool "b" -}}{{- $name = printf "%s-next" $name -}}{{- end -}}
+{{- with $root }}
 apiVersion: apps/v1
 kind: {{ ternary "StatefulSet" "Deployment" .Values.ha.enabled }}
 metadata:
-  name: {{ include "rivet.executionName" . }}
+  name: {{ $name }}
   {{- if .Values.ha.enabled }}
-  {{- with index .Values.ha.rolloutResourceVersions (include "rivet.executionName" .) }}
+  {{- with index .Values.ha.rolloutResourceVersions $name }}
   resourceVersion: {{ . | quote }}
   {{- end }}
   {{- end }}
   labels:
     {{- include "rivet.labels" . | nindent 4 }}
     app.kubernetes.io/component: execution
+    {{- if $pool }}
+    rivet.dev/execution-pool: {{ $pool | quote }}
+    {{- end }}
 spec:
-  replicas: {{ .Values.replicaCount.execution }}
+  replicas: {{ ternary .Values.replicaCount.execution .Values.ha.executionPools.retiringReplicas (or (not $pool) (eq $pool .Values.ha.executionPools.active)) }}
   {{- if .Values.ha.enabled }}
   serviceName: {{ include "rivet.executionName" . }}-headless
   podManagementPolicy: Parallel
@@ -28,10 +36,16 @@ spec:
   selector:
     matchLabels:
       {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 6 }}
+      {{- if eq $pool "b" }}
+      rivet.dev/execution-pool: {{ $pool | quote }}
+      {{- end }}
   template:
     metadata:
       labels:
         {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 8 }}
+        {{- if $pool }}
+        rivet.dev/execution-pool: {{ $pool | quote }}
+        {{- end }}
       annotations:
         rivet.dev/managed-schema-reader-version: {{ .Values.workflowSchema.compatibility.minimumVersion | quote }}
         {{- with .Values.podAnnotations.execution }}
@@ -83,4 +97,14 @@ spec:
             sizeLimit: {{ .Values.writableVolumeLimits.runtimeLibraries }}
         {{- end }}
 {{ include "rivet.pod.tmpVolume" . | nindent 8 }}
+{{- end }}
+{{- end }}
+{{- if ne .Values.deploymentProfile "single-machine" }}
+{{- if .Values.ha.executionPools.enabled }}
+{{ include "rivet.executionPoolWorkload" (dict "root" . "pool" "a") }}
+---
+{{ include "rivet.executionPoolWorkload" (dict "root" . "pool" "b") }}
+{{- else }}
+{{ include "rivet.executionPoolWorkload" (dict "root" . "pool" "") }}
+{{- end }}
 {{- end }}

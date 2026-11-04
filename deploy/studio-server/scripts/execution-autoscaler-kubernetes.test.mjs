@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { parseAllDocuments } from 'yaml';
 import { resolveHelmBinOrThrow } from './lib/k8s-tools.mjs';
+import { prepareExecutionPoolResources, alignSettledExecutionPoolResources } from './lib/execution-pool-resources.mjs';
+import { exerciseExecutionPoolRollout } from './test-fixtures/execution-pool-cluster.mjs';
+import { assertOrdinaryRuntimeResources } from './lib/ha-release-evidence.mjs';
 import {
   createKubernetesTransport,
   createExecutionAutoscalerIO,
@@ -63,6 +66,190 @@ function render(...overrides) {
     })
     .filter(Boolean);
 }
+
+test('native Helm paired pools preserve the old selector and declare exact read/exec/scale capabilities', async () => {
+  const protectedValues = [
+    'requestContinuity.enabled=true',
+    'requestContinuity.backendServiceDrainSeconds=360',
+    'requestContinuity.routeName=fixture',
+    'requestContinuity.backendPolicyName=fixture',
+    'requestContinuity.gatewayName=fixture',
+    'requestContinuity.gcpProject=isolated-staging',
+    'requestContinuity.gcpRegion=europe-central2',
+    'lifecycle.proxy.preStopDelaySeconds=420',
+    'lifecycle.proxy.terminationGracePeriodSeconds=600',
+  ];
+  const previous = render(...protectedValues).filter((resource) => resource.kind === 'StatefulSet');
+  previous.forEach((resource, index) => {
+    resource.metadata.uid = `controller-${index}`;
+  });
+  const resources = render(...protectedValues, 'ha.executionPools.enabled=true');
+  const pair = prepareExecutionPoolResources({
+    resources,
+    inventory: previous,
+    journal: null,
+    controlPlaneMode: 'singleton',
+  });
+  assert.ok(pair.plan);
+  assert.equal(pair.slot, 'b');
+  assert.equal(pair.config.workload, pair.other.metadata.name);
+  const old = previous.find((resource) => resource.metadata.labels['app.kubernetes.io/component'] === 'execution');
+  assert.deepEqual(pair.prior.spec.selector, old.spec.selector, 'Legacy StatefulSet selector is immutable');
+  const actual = render(
+    ...protectedValues,
+    'ha.executionPools.enabled=true',
+    'ha.executionPools.active=b',
+    'ha.executionPools.retiringReplicas=2',
+  );
+  const role = actual.find((resource) => resource.kind === 'Role' && resource.metadata.name.endsWith('-autoscaler'));
+  assert.deepEqual(role.rules.find((rule) => rule.resources.includes('statefulsets/scale')).resourceNames, [
+    pair.other.metadata.name,
+  ]);
+  assert.ok(
+    role.rules.find((rule) => rule.resources.includes('pods/exec')).resourceNames.includes(old.metadata.name + '-0'),
+  );
+  assert.ok(
+    !role.rules
+      .find((rule) => rule.resources.includes('pods') && rule.verbs.includes('delete'))
+      .resourceNames.includes(old.metadata.name + '-0'),
+  );
+  assert.deepEqual(
+    actual.find((resource) => resource.kind === 'Service' && resource.metadata.name === pair.config.service).metadata
+      .annotations['rivet.dev/active-execution-workload'],
+    pair.other.metadata.name,
+  );
+  assert.throws(
+    () =>
+      render(
+        ...protectedValues,
+        'ha.executionPools.enabled=true',
+        'ha.executionPools.retiringReplicas=2',
+        'autoscaling.execution.maxReplicas=3',
+      ),
+    /approved total capacity/,
+  );
+  for (const invalid of ['ha.executionPools.enabled=0', 'ha.executionPools.retiringReplicas=1.5'])
+    assert.throws(() => render(...protectedValues, 'ha.executionPools.enabled=true', invalid));
+  const oldResources = render(...protectedValues, 'images.api.digest=sha256:' + 'a'.repeat(64));
+  const newResources = render(
+    ...protectedValues,
+    'ha.executionPools.enabled=true',
+    'images.api.digest=sha256:' + 'b'.repeat(64),
+  );
+  const exercised = await exerciseExecutionPoolRollout({
+    previous: oldResources,
+    candidate: newResources,
+    renderFinal: async (guards) =>
+      render(
+        ...protectedValues,
+        'ha.executionPools.enabled=true',
+        'images.api.digest=sha256:' + 'b'.repeat(64),
+        'ha.executionPools.active=' + guards.ha.executionPools.active,
+        'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+        'replicaCount.execution=' + guards.replicaCount.execution,
+      ),
+  });
+  assert.equal(exercised.result.phase, 'complete');
+  assert.equal(exercised.result.executionPool.phase, 'complete');
+  assert.ok(
+    !exercised.mutations.some((mutation) => mutation.startsWith('recreate:') && mutation.includes('execution')),
+  );
+  assert.equal(exercised.guards.at(-1).ha.executionPools.retiringReplicas, 0);
+  const back = await exerciseExecutionPoolRollout({
+    previous: render(
+      ...protectedValues,
+      'ha.executionPools.enabled=true',
+      'ha.executionPools.active=b',
+      'images.api.digest=sha256:' + 'b'.repeat(64),
+    ),
+    candidate: render(
+      ...protectedValues,
+      'ha.executionPools.enabled=true',
+      'images.api.digest=sha256:' + 'c'.repeat(64),
+    ),
+    renderFinal: async (guards) =>
+      render(
+        ...protectedValues,
+        'ha.executionPools.enabled=true',
+        'images.api.digest=sha256:' + 'c'.repeat(64),
+        'ha.executionPools.active=' + guards.ha.executionPools.active,
+        'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+        'replicaCount.execution=' + guards.replicaCount.execution,
+      ),
+  });
+  assert.equal(back.result.phase, 'complete');
+  assert.equal(back.guards.at(-1).ha.executionPools.active, 'a');
+  const expected = render(...protectedValues, 'ha.executionPools.enabled=true');
+  const settled = render(...protectedValues, 'ha.executionPools.enabled=true', 'ha.executionPools.active=b');
+  alignSettledExecutionPoolResources(expected, settled);
+  assert.deepEqual(expected, settled, 'Final verification aligns only the live active slot');
+  const invalid = structuredClone(settled);
+  invalid.find(
+    (resource) => resource.kind === 'StatefulSet' && resource.metadata.labels['rivet.dev/execution-pool'] === 'a',
+  ).spec.replicas = 2;
+  assert.throws(() => alignSettledExecutionPoolResources(expected, invalid), /one active/);
+  const oversized = render(...protectedValues, 'ha.executionPools.enabled=true', 'replicaCount.execution=3');
+  oversized
+    .filter((resource) => resource.kind === 'StatefulSet')
+    .forEach((resource) => {
+      resource.metadata.uid = 'uid-' + resource.metadata.name;
+    });
+  const fallback = prepareExecutionPoolResources({
+    resources: render(...protectedValues, 'ha.executionPools.enabled=true'),
+    inventory: oversized.filter((resource) => resource.kind === 'StatefulSet'),
+    controlPlaneMode: 'singleton',
+  });
+  assert.equal(fallback.plan, null, 'Larger live pools retain the existing safe serial procedure');
+  const serial = await exerciseExecutionPoolRollout({
+    previous: render(...protectedValues, 'replicaCount.execution=3', 'images.api.digest=sha256:' + 'a'.repeat(64)),
+    candidate: render(
+      ...protectedValues,
+      'ha.executionPools.enabled=true',
+      'images.api.digest=sha256:' + 'b'.repeat(64),
+    ),
+    renderFinal: async (guards) =>
+      render(
+        ...protectedValues,
+        'ha.executionPools.enabled=true',
+        'images.api.digest=sha256:' + 'b'.repeat(64),
+        'ha.executionPools.active=' + guards.ha.executionPools.active,
+        'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+        'replicaCount.execution=' + guards.replicaCount.execution,
+      ),
+  });
+  assert.equal(serial.result.phase, 'complete');
+  assert.equal(serial.result.executionPool, undefined);
+  assert.equal(serial.result.executionPools, true);
+  const certifiedSerial = await exerciseExecutionPoolRollout({
+    previous: oldResources,
+    candidate: render(
+      ...protectedValues,
+      'ha.executionPools.enabled=true',
+      'images.api.digest=sha256:' + 'b'.repeat(64),
+    ),
+    allowExecutionPoolTransition: false,
+    renderFinal: async (guards) =>
+      render(
+        ...protectedValues,
+        'ha.executionPools.enabled=true',
+        'images.api.digest=sha256:' + 'b'.repeat(64),
+        'ha.executionPools.active=' + guards.ha.executionPools.active,
+        'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+        'replicaCount.execution=' + guards.replicaCount.execution,
+      ),
+  });
+  assert.equal(certifiedSerial.result.phase, 'complete');
+  assert.equal(certifiedSerial.result.executionPool, undefined);
+  assert.equal(
+    certifiedSerial.guards.at(-1).ha.executionPools.active,
+    'a',
+    'A serial-only qualification cannot authorize the parallel pool handoff even at a two-worker floor',
+  );
+  const layout = render(...protectedValues, 'ha.executionPools.enabled=true');
+  const proof = { protocol: 5, autoscalerPolicyDigest: autoscalerPolicyDigest(pair.config.policy) };
+  assert.throws(() => assertOrdinaryRuntimeResources(proof, layout), /own observed layout/);
+  assert.doesNotThrow(() => assertOrdinaryRuntimeResources({ ...proof, executionPools: true }, layout));
+});
 test('chart has exactly one execution writer, seven baseline pods, fixed developers and tightly scoped controller capability', () => {
   const resources = render();
   assert.equal(resources.filter((r) => r.kind === 'HorizontalPodAutoscaler').length, 1);

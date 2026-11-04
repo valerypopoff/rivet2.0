@@ -26,7 +26,9 @@ export const RecordingWorkflowSelect: FC<RecordingWorkflowSelectProps> = ({
   onSelectWorkflow,
 }) => (
   <section className="run-recordings-selector-section">
-    <div className="run-recordings-field-label">Workflow</div>
+    <label className="run-recordings-field-label" htmlFor="run-recordings-workflow-select">
+      Project
+    </label>
     <Select
       inputId="run-recordings-workflow-select"
       options={workflowOptions}

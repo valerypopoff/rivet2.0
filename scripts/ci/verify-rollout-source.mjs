@@ -3,6 +3,16 @@ import { spawnSync } from 'node:child_process';
 // Source-only: no compiled workspace exports, Docker, browser or cloud access.
 const suites = [
   'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
+  'deploy/studio-server/scripts/deployment-workflow.test.mjs',
+  'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',
+  'deploy/studio-server/scripts/release-operation-journal.test.mjs',
+  'deploy/studio-server/scripts/read-concurrently.test.mjs',
+  'deploy/studio-server/scripts/acceptance-concurrency.test.mjs',
+  'deploy/studio-server/scripts/component-image-reuse.test.mjs',
+  'deploy/studio-server/scripts/execution-pool-transition.test.mjs',
+  'deploy/studio-server/scripts/execution-pool-evidence.test.mjs',
+  'deploy/studio-server/scripts/execution-pool-autoscaling.test.mjs',
+  'deploy/studio-server/scripts/ha-template-readiness.test.mjs',
   'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
   'deploy/studio-server/scripts/ha-rollout-headroom.test.mjs',
   'deploy/studio-server/scripts/managed-disruption-transport.test.mjs',
@@ -14,6 +24,7 @@ const suites = [
   'deploy/studio-server/scripts/prepare-hosted-release.test.mjs',
   'deploy/studio-server/scripts/reusable-staging-coordinator.test.mjs',
   'deploy/studio-server/scripts/reusable-staging-transport.test.mjs',
+  'deploy/studio-server/scripts/retained-staging-application.test.mjs',
   'scripts/ci/release-workflow-policy.test.mjs',
   'scripts/ci/qualification-build-cache.test.mjs',
 ];

@@ -953,7 +953,79 @@ async function deleteFirstRun(page: Page, modal: Locator) {
 }
 
 test.describe('Run recordings modal', () => {
-  test('refresh starts a fresh recordings session and replaces an in-flight input search', async ({ page }, testInfo) => {
+  for (const empty of [false, true]) {
+    test(`Inspect recordings selects the tree project${empty ? ' without recordings' : ''}`, async ({ page }) => {
+      await installRunRecordingRoutes(page);
+      const catalog = responseGate();
+      let holdCatalog = false;
+      await page.route('**/api/workflows/recordings/workflows', async (route) => {
+        if (holdCatalog) await catalog.promise;
+        await route.fallback();
+      });
+      const projects = createRunRecordingsFixture().workflows.map((workflow) => workflow.project);
+      const project = empty
+        ? {
+            ...projects[0]!,
+            id: 'empty-project',
+            name: 'Empty project',
+            fileName: 'Empty project.rivet-project',
+            relativePath: 'Empty project.rivet-project',
+            absolutePath: '/workflows/Empty project.rivet-project',
+          }
+        : projects[0]!;
+      await page.route('**/api/workflows/tree', (route) =>
+        route.fulfill({
+          json: { root: '/workflows', folders: [], projects: empty ? [...projects, project] : projects },
+        }),
+      );
+      const modal = await openLatestFlowRecordings(page);
+      await modal.getByRole('button', { name: /^Bad only/ }).click();
+      await page.keyboard.press('Escape');
+      await expect(modal).toBeHidden();
+      await page.locator('.project-row', { hasText: project.name }).click({ button: 'right' });
+      const menu = page.getByRole('menu', { name: `Actions for ${project.name}` });
+      await expect(menu.getByRole('menuitem').nth(0)).toHaveText('Rename project');
+      const inspect = menu.getByRole('menuitem').nth(1);
+      await expect(inspect).toHaveText('Inspect recordings');
+      await expect(inspect.locator('svg')).toHaveCount(1);
+      const loaded = page.waitForRequest((request) => {
+        const url = new URL(request.url());
+        return (
+          url.pathname.endsWith(`/recordings/workflows/${project.id}/runs`) && url.searchParams.get('status') === 'all'
+        );
+      });
+      holdCatalog = true;
+      try {
+        if (empty) {
+          await inspect.focus();
+          await page.keyboard.press('Enter');
+        } else {
+          await inspect.click();
+        }
+        await expect(modal.getByText('Loading recordings...', { exact: true })).toBeVisible();
+      } finally {
+        catalog.release();
+      }
+      await loaded;
+      await expect(menu).toBeHidden();
+      await expect(modal.getByRole('combobox', { name: 'Project', exact: true })).toBeVisible();
+      await modal.locator('label[for="run-recordings-workflow-select"]').click();
+      await expect(modal.getByRole('combobox', { name: 'Project', exact: true })).toBeFocused();
+      await expect(modal.locator('.run-recordings-selector-section .run-recordings-select__single-value')).toHaveText(
+        project.name,
+      );
+      await expect(modal.locator('.run-recordings-runs-title')).toHaveText(empty ? '0 Runs' : '2 Runs');
+      await modal.getByLabel('Close run recordings').click();
+      await page.getByRole('button', { name: 'Run recordings' }).click();
+      await expect(modal.locator('.run-recordings-selector-section .run-recordings-select__single-value')).toHaveText(
+        'Any',
+      );
+    });
+  }
+
+  test('refresh starts a fresh recordings session and replaces an in-flight input search', async ({
+    page,
+  }, testInfo) => {
     const search = responseGate();
     let catalogLoads = 0;
     page.on('request', (request) => {

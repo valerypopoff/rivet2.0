@@ -26,6 +26,7 @@ function parseArgs(argv) {
           '--run-id',
           '--run-attempt',
           '--image',
+          '--image-origins',
           '--predecessor',
           '--publication-head',
         ])
@@ -172,6 +173,9 @@ function main() {
         sha: required(options, '--source-sha'),
       },
       images: parseImages(options),
+      ...(options.has('--image-origins')
+        ? { imageOrigins: JSON.parse(fs.readFileSync(repositoryPath(options, '--image-origins'), 'utf8')) }
+        : {}),
       candidateEvidence: evidenceFrom(options),
       predecessorRelease: predecessorPath ? readManifest(predecessorPath, { requirePromoted: true }) : null,
       ...(options.has('--publication-head')

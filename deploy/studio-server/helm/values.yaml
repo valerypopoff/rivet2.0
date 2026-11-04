@@ -424,6 +424,11 @@ compatibility:
 # Durable upload/extraction scratch for the single control backend; not a new controller or Job.
 ha:
   enabled: false
+  executionPools:
+    enabled: false
+    active: a
+    # Private transition override. Steady state retains the other slot at zero.
+    retiringReplicas: 0
   controlPlane:
     # Opt-in runtime HA; developer tools may pause during serial replacement.
     mode: replicated

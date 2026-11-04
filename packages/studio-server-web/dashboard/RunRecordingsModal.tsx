@@ -5,13 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'reac
 import { getWorkflowProjectStatusLabel } from './projectSettingsForm';
 import { RecordingRunsTable } from './RecordingRunsTable';
 import { RecordingWorkflowSelect, type RecordingWorkflowOption } from './RecordingWorkflowSelect';
-import type { RecordingOpenResult, WorkflowRecordingWorkflowSummary } from './types';
+import type { RecordingOpenResult, WorkflowProjectItem, WorkflowRecordingWorkflowSummary } from './types';
 import './RunRecordingsModal.css';
 import { useRunRecordingsController } from './useRunRecordingsController';
 
 interface RunRecordingsModalProps {
   isOpen: boolean;
   resetToken: number;
+  initialProject?: WorkflowProjectItem | null;
   onDismiss: () => void;
   onClose: () => void;
   onOpenRecording: (recordingId: string) => Promise<RecordingOpenResult>;
@@ -47,6 +48,7 @@ function getWorkflowEndpoint(workflow: WorkflowRecordingWorkflowSummary): string
 export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   isOpen,
   resetToken: externalResetToken,
+  initialProject = null,
   onDismiss,
   onClose,
   onOpenRecording,
@@ -97,7 +99,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     handleClearInputFilter,
     handleStopInputSearch,
     handleDeleteRecording,
-  } = useRunRecordingsController(isOpen, resetToken);
+  } = useRunRecordingsController(isOpen, resetToken, initialProject);
 
   const hierarchyScope = JSON.stringify([
     resetToken,
@@ -153,7 +155,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
       {
         label: 'Any',
         value: '',
-        description: 'Runs across all workflows',
+        description: 'Runs across all projects',
         endpoint: '',
         statusLabel: '',
         recordingCount: allWorkflowsRunsCount,
@@ -217,12 +219,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
 
   return (
     <ModalTransition>
-      <ModalDialog
-        testId="run-recordings-modal"
-        height="calc(100vh - 40px)"
-        label="Run recordings"
-        onClose={onDismiss}
-      >
+      <ModalDialog testId="run-recordings-modal" height="calc(100vh - 40px)" label="Run recordings" onClose={onDismiss}>
         <ModalBody>
           <div className="project-settings-modal-shell run-recordings-shell" aria-busy={openingRecordingId !== null}>
             <div className="project-settings-modal-header-row run-recordings-header-row">
@@ -241,7 +238,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                   </button>
                 </div>
                 <div className="run-recordings-help">
-                  Choose Any or a workflow, filter its run history, and open any recording in the editor.
+                  Choose Any or a project, filter its run history, and open any recording in the editor.
                 </div>
               </div>
               <button

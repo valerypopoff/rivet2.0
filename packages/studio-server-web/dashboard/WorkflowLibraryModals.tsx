@@ -49,6 +49,7 @@ export const WorkflowLibraryModals: FC<{
     onDeleteProject,
     runRecordingsOpen,
     runRecordingsResetToken,
+    runRecordingsInitialProject,
     hideRunRecordingsModal,
     closeRunRecordingsModal,
     handleRunRecordingsFoundCountChange,
@@ -142,6 +143,7 @@ export const WorkflowLibraryModals: FC<{
       <RunRecordingsModal
         isOpen={runRecordingsOpen}
         resetToken={runRecordingsResetToken}
+        initialProject={runRecordingsInitialProject}
         onDismiss={hideRunRecordingsModal}
         onClose={closeRunRecordingsModal}
         onOpenRecording={onOpenRecording}

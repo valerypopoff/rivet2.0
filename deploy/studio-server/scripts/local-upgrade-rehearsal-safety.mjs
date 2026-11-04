@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { assertStudioServerReleaseManifest } from './lib/studio-server-release-manifest.mjs';
 
 export const REHEARSAL_PROJECT = /^rivet-local-upgrade-rehearsal-[a-f0-9-]{36}$/;
 
@@ -78,13 +79,27 @@ export function assertFreshRehearsalResources(model, resources) {
 }
 
 /** Resolve tags once. Compose receives immutable local IDs, never mutable tags. */
-export function pinRehearsalImages(inspections, expectedRevision) {
+export function pinRehearsalImages(inspections, expectedRevision, candidate) {
+  const manifest = candidate ? assertStudioServerReleaseManifest(candidate) : null;
+  if (manifest) assert.equal(manifest.source.sha, expectedRevision);
   const result = {};
   for (const service of ['api', 'web', 'proxy']) {
     const image = inspections[service];
     assert.match(image?.Id ?? '', /^sha256:[a-f0-9]{64}$/);
     const revision = image.Config?.Labels?.['org.opencontainers.image.revision'] || null;
     if (revision !== null) assert.match(revision, /^[a-f0-9]{40}$/);
+    if (manifest) {
+      const expected = manifest.images[service];
+      assert.ok(
+        image.RepoDigests?.includes(`${expected.repository}@${expected.digest}`),
+        'Rehearsal image differs from immutable manifest',
+      );
+      assert.equal(
+        revision,
+        manifest.imageOrigins?.[service]?.sourceSha ?? expectedRevision,
+        'Image provenance differs from manifest',
+      );
+    }
     result[service] = { id: image.Id, digests: [...(image.RepoDigests || [])].sort(), revision };
   }
   const revisions = new Set(
@@ -92,13 +107,13 @@ export function pinRehearsalImages(inspections, expectedRevision) {
       .map((image) => image.revision)
       .filter(Boolean),
   );
-  assert.ok(revisions.size <= 1, 'Rehearsal images must have matching source revisions.');
+  if (!manifest) assert.ok(revisions.size <= 1, 'Rehearsal images must have matching source revisions.');
   if (revisions.size)
     assert.ok(
       Object.values(result).every((image) => image.revision),
       'Mixed labelled/unlabelled images.',
     );
-  if (expectedRevision !== undefined) {
+  if (expectedRevision !== undefined && !manifest) {
     assert.match(expectedRevision, /^[a-f0-9]{40}$/);
     assert.ok(
       Object.values(result).every((image) => image.revision === expectedRevision),

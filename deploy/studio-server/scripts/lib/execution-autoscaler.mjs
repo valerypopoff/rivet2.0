@@ -95,6 +95,65 @@ export function recommendExecutionReplicas(snapshot, policy) {
 
 const routingObservationEpochs = new WeakMap();
 
+export function executionPoolDemand(snapshot, peer, policy) {
+  const pools = peer ? [snapshot, peer] : [snapshot];
+  return recommendExecutionReplicas(
+    {
+      replicas: pools.reduce((sum, pool) => sum + pool.replicas, 0),
+      pods: pools.flatMap((pool) => pool.pods).map((pod, ordinal) => ({ ...pod, ordinal })),
+    },
+    policy,
+  );
+}
+
+async function scaleDuringPoolTransition({
+  io,
+  record,
+  release,
+  namespace,
+  workload,
+  image,
+  manifestDigest,
+  policy,
+  shouldStop,
+  now,
+}) {
+  journalForReleaseOperation(record, 'ha', { release, namespace }, now);
+  const plan = record.executionPoolPlan,
+    state = record.executionPool;
+  if (plan.protocol !== 1 || plan.maxReplicas !== policy.maxReplicas)
+    throw Error('Execution pool scaling policy changed');
+  if (workload === plan.previous.name) return { state: 'previous-pool-observing', scaleDownPaused: true };
+  if (workload !== plan.candidate.name || image !== plan.image || manifestDigest !== record.manifestDigest)
+    throw Error('Execution pool candidate scaling identity changed');
+  if (!state?.candidateUid) return { state: 'candidate-pool-preparing', scaleDownPaused: true };
+  const snapshot = await io.snapshot(),
+    peer = await io.peerSnapshot();
+  if (
+    snapshot.uid !== state.candidateUid ||
+    peer?.uid !== plan.previous.uid ||
+    snapshot.poolCapacity?.otherUid !== plan.previous.uid ||
+    snapshot.startupFence
+  )
+    throw Error('Execution pool scaling ownership is unconfirmed');
+  const desired = Math.min(
+    executionPoolDemand(snapshot, peer, policy),
+    policy.maxReplicas - snapshot.poolCapacity.otherReplicas,
+    snapshot.replicas + Math.max(0, policy.maxReplicas - snapshot.poolCapacity.totalPods),
+  );
+  if (desired <= snapshot.replicas) return { state: 'candidate-pool-observing', scaleDownPaused: true };
+  const confirmed = await io.readJournal();
+  if (
+    shouldStop() ||
+    confirmed?.resourceVersion !== record.resourceVersion ||
+    confirmed.token !== record.token ||
+    confirmed.phase === 'complete'
+  )
+    throw Error('Execution pool scaling observation changed');
+  await io.scale(snapshot.uid, snapshot.replicas, desired, snapshot.resourceVersion);
+  return { state: 'candidate-pool-scaled-up', replicas: desired, scaleDownPaused: true };
+}
+
 /** During an HA roll only monotonic growth is shared. The deployer never
  * removes an execution ordinal or reduces its replica count in this mode. */
 async function scaleUpDuringRollout({
@@ -217,6 +276,19 @@ async function reconcileExecutionAutoscalingTick({
   const policy = autoscalerPolicy(input),
     policyDigest = autoscalerPolicyDigest(policy);
   const observed = await io.readJournal();
+  if (observed?.protocol === 1 && !['complete', 'preflight'].includes(observed.phase) && observed.executionPoolPlan)
+    return scaleDuringPoolTransition({
+      io,
+      record: observed,
+      release,
+      namespace,
+      manifestDigest,
+      workload,
+      image,
+      policy,
+      shouldStop,
+      now,
+    });
   if (observed?.protocol === 1 && observed.phase !== 'complete' && observed.cooperativeScaling)
     return scaleUpDuringRollout({
       io,
@@ -364,6 +436,8 @@ async function reconcileExecutionAutoscalingTick({
       await io.clearFence(record.target);
       return { state: 'unfencing' };
     }
+    if (snapshot.poolCapacity?.otherReplicas > 0)
+      throw Error('A peer execution pool is still present outside its recorded handoff');
     const desired = recommendExecutionReplicas(snapshot, policy);
     completedObservation = true;
     if (snapshot.uid !== (record.target?.workloadUid ?? snapshot.uid))

@@ -75,6 +75,8 @@ export async function runHaRollingUpgrade({
   removePod,
   scale,
   applyTemplates,
+  waitForTemplatesReady,
+  waitForFrontendsReady,
   restoreAutoscalers,
   waitForReady,
   waitForWithdrawal,
@@ -94,6 +96,7 @@ export async function runHaRollingUpgrade({
   handoverHousekeeping,
   verifyPoolPreparationTemplates,
   proxyContinuity,
+  executionPool,
   measure = async (_name, action) => action(),
 }) {
   requireDeploymentSafety(safety, 'rolling', identity);
@@ -103,6 +106,8 @@ export async function runHaRollingUpgrade({
   if (controlPlaneMode === 'singleton-overlap' && typeof handoverHousekeeping !== 'function')
     throw Error('Overlapping backends require the housekeeping handover contract.');
   assertHaRolloutPlan(workloads, controlPlaneMode);
+  if (identity.executionPoolPlan && (!executionPool || typeof executionPool.run !== 'function'))
+    throw Error('Execution pool transition requires its exact adapter');
   const elasticWorkload = workloads.find((w) => w.name === identity.cooperativeScaling?.workload);
   if (
     elasticWorkload &&
@@ -149,6 +154,8 @@ export async function runHaRollingUpgrade({
   record = haJournalForRecovery(record);
   const recovering = !!record && record.phase !== 'complete';
   if (record && record.phase !== 'complete') {
+    if (JSON.stringify(record.executionPoolPlan) !== JSON.stringify(identity.executionPoolPlan))
+      throw Error('Execution pool recovery plan changed');
     if ((record.controlPlaneMode ?? 'replicated') !== controlPlaneMode)
       throw new Error('HA recovery control-plane mode changed.');
     if (resumeToken !== record.token || record.manifestDigest !== identity.manifestDigest)
@@ -326,9 +333,17 @@ export async function runHaRollingUpgrade({
           throw new Error('HA template acknowledgement is unknown. Verify Helm/schema state before recovery.');
       }
       await checkpoint({ phase: 'owners' });
+      if (waitForTemplatesReady) await measure('templates:prerequisites', () => waitForTemplatesReady(operation));
+      assertLease();
       await proxyContinuity?.verify(operation);
       for (const workload of workloads) {
         const w = workload;
+        if (executionPool?.workload === w.name) {
+          await measure('execution:pool', () => executionPool.run(operation));
+          if (!operation.record.completed.includes(w.name))
+            await checkpoint({ completed: [...operation.record.completed, w.name] });
+          continue;
+        }
         const elastic = w.role === 'execution' && identity.cooperativeScaling?.workload === w.name;
         if (operation.record.completed.includes(w.name) && !elastic) continue;
         const surgeName = `${w.name}-${w.replicas}`;
@@ -467,7 +482,11 @@ export async function runHaRollingUpgrade({
       // Journal completion is historical evidence, not a readiness or identity
       // guarantee about an owner that may have changed while another tier drained.
       const verifyCompletedOwners = async () => {
-        for (const w of workloads)
+        for (const w of workloads) {
+          if (executionPool?.workload === w.name) {
+            await executionPool.verify(operation);
+            continue;
+          }
           for await (const name of ownerNames(w)) {
             assertLease();
             const pod = await observePod(name);
@@ -488,9 +507,15 @@ export async function runHaRollingUpgrade({
             if (confirmed?.uid !== pod.uid || !confirmed.ready || !(await isCurrentPod(confirmed, w)))
               throw new Error('HA completed owner changed during verification; completion is blocked.');
           }
+        }
       };
       await verifyCompletedOwners();
       assertLease();
+      if (waitForFrontendsReady) {
+        await measure('frontends:ready', () => waitForFrontendsReady(operation));
+        assertLease();
+        await verifyCompletedOwners();
+      }
       await measure('handoff:return', () => proxyContinuity?.beforeRestoreAutoscalers?.(operation));
       await restoreAutoscalers(operation);
       await measure('handoff:final-routing', () => proxyContinuity?.afterRestoreAutoscalers?.(operation));

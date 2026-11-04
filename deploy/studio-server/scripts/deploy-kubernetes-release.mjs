@@ -36,10 +36,12 @@ import {
   continuityRecoveryLayout,
 } from './lib/request-continuity.mjs';
 import { createKubernetesProxyContinuity, createComputeBackendObserver } from './lib/proxy-continuity-kubernetes.mjs';
+import { createHaProofTiming } from './lib/ha-proof-timing.mjs';
 import { installedSettingsDigest } from './lib/runtime-qualification-installation.mjs';
 import { privateCloudEvidence, persistDeploymentArtifact } from './lib/private-cloud-evidence.mjs';
 import { runHaKubernetesControlTopology } from './lib/ha-kubernetes-control-topology.mjs';
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
+import { alignSettledExecutionPoolResources } from './lib/execution-pool-resources.mjs';
 import {
   readMaintenancePlan,
   assertMaintenanceBaseline,
@@ -53,7 +55,12 @@ import {
   waitForExecutionAutoscalerActivation,
 } from './lib/kubernetes-release-settlement.mjs';
 import { createMaintenanceValidationValues, getMaintenanceValidationTargets } from './lib/maintenance-validation.mjs';
-import { readDeploymentPolicy, runDeploymentStage, executeDeploymentWorkflow } from './lib/deployment-workflow.mjs';
+import {
+  readDeploymentPolicy,
+  readAcceptanceVerificationContext,
+  runDeploymentStage,
+  executeDeploymentWorkflow,
+} from './lib/deployment-workflow.mjs';
 import { planInstalledUpgrade } from './lib/installed-upgrade-plan.mjs';
 import {
   overlapAdoptionAuthority,
@@ -113,6 +120,7 @@ const supportedOptions = new Set([
   '--expected-installed-settings-digest',
   '--plan-only',
   '--acceptance-only',
+  '--acceptance-request',
   '--preflight-only',
   '--verify-only',
   '--resume-cutover',
@@ -506,6 +514,10 @@ async function main() {
     ['--acceptance-only', '--plan-only', '--dry-run', '--resume-cutover', '--resume-ha'].some((key) => options.has(key))
   )
     throw Error('--preflight-only is a fresh non-disruptive readiness check, not recovery or another inspection mode.');
+  if (options.has('--acceptance-request') && !options.has('--acceptance-only'))
+    throw Error(
+      '--acceptance-request requires --acceptance-only; it cannot authorize a deployment or journal recovery.',
+    );
   const { timeout, timeoutMs } = parseDeploymentTimeout(options.get('--timeout') ?? '15m');
   if (
     options.has('--maintenance-plan') &&
@@ -755,7 +767,11 @@ async function main() {
       : null;
     if (options.has('--expected-installed-settings-digest')) {
       const expected = required(options, '--expected-installed-settings-digest');
-      if (!/^sha256:[a-f0-9]{64}$/.test(expected) || !installed || installedSettingsDigest(installed) !== expected)
+      if (!/^sha256:[a-f0-9]{64}$/.test(expected))
+        throw Error('--expected-installed-settings-digest requires a SHA256 digest.');
+      // This is a pre-deployment qualification guard. Verification checks the
+      // already-installed candidate against its complete final configuration.
+      if (!options.has('--acceptance-only') && (!installed || installedSettingsDigest(installed) !== expected))
         throw Error(
           'Installed production settings changed since qualification; qualify the current baseline before deploying.',
         );
@@ -905,6 +921,7 @@ async function main() {
       const stored = parseReleaseResources(
         (await run(helmBin, ['get', 'manifest', release, '--namespace', namespace], { capture: true })).stdout,
       );
+      alignSettledExecutionPoolResources(renderedResources, stored);
       assertInstalledReleaseManifest(renderedResources, stored, { release, namespace });
       const items = JSON.parse(
         (await kubeForRelease(['get', releaseSettlementResourceTypes, '-o', 'json'])).stdout,
@@ -941,6 +958,13 @@ async function main() {
           'Acceptance-only verification requires the installed exact candidate, a deployment policy and no unfinished operation.',
         );
       const kube = kubeForRelease;
+      if (options.has('--acceptance-request'))
+        workflowContext = await readAcceptanceVerificationContext(
+          required(options, '--acceptance-request'),
+          rootDir,
+          workflowContext,
+          deploymentPolicy.digest,
+        );
       const retainedExecution = retainedTopologyExecution(pendingJournal, workflowContext, deploymentPolicy.digest);
       await executeDeploymentWorkflow({
         approval: deploymentPolicy,
@@ -1312,7 +1336,7 @@ async function main() {
             (args, extra = {}) => run(selectedKubectl, args, { capture: true, ...extra }),
             { verifyOnly: true },
           );
-        const upgrade = (extra = []) =>
+        const upgrade = (extra = [], { waitForReady = true } = {}) =>
           run(helmBin, [
             'upgrade',
             '--install',
@@ -1325,8 +1349,7 @@ async function main() {
             // Candidate migrations may commit irreversibly. Atomic rollback is
             // reserved for the explicit forward-rollback path, which skips them.
             ...(rollbackManifestPath ? ['--atomic'] : []),
-            '--wait',
-            '--wait-for-jobs',
+            ...(waitForReady ? ['--wait', '--wait-for-jobs'] : []),
             '--timeout',
             timeout,
           ]);
@@ -1351,7 +1374,24 @@ async function main() {
             };
             await fs.writeFile(frozenPath, JSON.stringify(haRolloutAutoscalingValues(renderedResources)));
             const rollout = controlTransition ? runHaKubernetesControlTopology : runHaKubernetesRollout;
-            return await rollout({
+            const timedRollout = async (args) => {
+              if (controlTransition) return rollout(args);
+              const timing = createHaProofTiming({
+                artifact: (name, value) => writeArtifact(artifactsDir, name, value),
+              });
+              timing.status('upgrading');
+              try {
+                const result = await rollout({ ...args, measure: (name, action) => timing.measure(name, action) });
+                timing.status('complete');
+                return result;
+              } catch (error) {
+                timing.status('failed');
+                throw error;
+              } finally {
+                await timing.close();
+              }
+            };
+            return await timedRollout({
               kube,
               ...(controlTransition && continuityTarget
                 ? { observeProxyBackend: createComputeBackendObserver(continuityTarget.network) }
@@ -1359,6 +1399,7 @@ async function main() {
               release,
               namespace,
               manifestDigest: candidateDigest,
+              allowExecutionPoolTransition: Boolean(manifest.evidence.runtimeControl?.executionPool),
               resources: renderedResources,
               safety,
               previousManifestDigest: installedDigest,
@@ -1368,14 +1409,14 @@ async function main() {
               resumeToken: options.get('--resume-ha'),
               timeoutMs,
               artifact: (name, value) => writeArtifact(artifactsDir, name, value),
-              applyTemplates: async (_workloads, guardedValues) => {
+              applyTemplates: async (_workloads, guardedValues, readiness) => {
                 if (controlTransition) {
                   await preserve(_workloads);
                   await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']);
                   return;
                 }
                 await preserve(guardedValues);
-                await upgrade(['--values', preservePath, '--values', frozenPath]);
+                await upgrade(['--values', preservePath, '--values', frozenPath], readiness);
               },
               restoreAutoscalers: async (_workloads, guardedValues) => {
                 await preserve(guardedValues);

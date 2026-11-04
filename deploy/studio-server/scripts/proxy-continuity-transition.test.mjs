@@ -9,7 +9,11 @@ import {
 } from './lib/proxy-continuity-transition.mjs';
 import { createComputeBackendObserver, createKubernetesProxyContinuity } from './lib/proxy-continuity-kubernetes.mjs';
 import { assertContinuityAcceptance } from './lib/request-continuity.mjs';
-import { assertGkeProxyBackendHealth, hasReadyGkeNegGate } from './lib/gke-proxy-health.mjs';
+import {
+  assertGkeProxyBackendHealth,
+  hasReadyGkeNegGate,
+  assertGkeProxyServingFloor,
+} from './lib/gke-proxy-health.mjs';
 
 const profile = {
   protocol: 1,
@@ -895,6 +899,28 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     /regressed/,
   );
   assert.throws(() => assertContinuityAcceptance({ ...receipt, protectedProxies: false }, profile), /lifecycle/);
+  const next = {
+    record: { token: 'next-operation', phase: 'preflight' },
+    assertLease() {},
+    async checkpoint(patch) {
+      Object.assign(this.record, structuredClone(patch));
+    },
+  };
+  await adapter.prepare(next);
+  assert.deepEqual(next.record.proxyContinuity.entries, [], 'Ordinary protected updates must not build another bridge');
+  next.record.phase = 'owners';
+  pendingNormalReads = 1;
+  await adapter.verify(next);
+  pendingNormalReads = 1;
+  await assert.rejects(adapter.verify(next, { settled: true }), /readiness\/NEG gate/);
+  drainingNormal = true;
+  foreignDraining = true;
+  await assert.rejects(adapter.verify(next), /not owned/);
+  drainingNormal = false;
+  foreignDraining = false;
+  f.live.get('Deployment/rivet-proxy').spec.replicas = 2;
+  pendingNormalReads = 1;
+  await assert.rejects(adapter.verify(next), /serving floor/);
   assert.ok(commands.some((a) => a[0] === 'delete' && a[1] === '--raw'));
 });
 
@@ -938,6 +964,41 @@ test('deadlines that cannot cover a protected phase fail before any mutation', (
     () => createProxyContinuityTransition({ config: longPropagation, io: {}, timeoutMs: 1500000 }),
     /deadline must exceed/,
   );
+});
+
+test('ingress guards deduplicate object reads, bound concurrency, and settle failure before mutation', async () => {
+  const f = fixture();
+  const template = f.baseline.deployment.spec.template;
+  template.spec.terminationGracePeriodSeconds = 900;
+  template.spec.containers[0].lifecycle.preStop.exec.command = ['/bin/sh', '-c', 'sleep 660'];
+  f.baseline.backendServiceDrainSeconds = 600;
+  f.baseline.policy.spec.default.connectionDraining.drainingTimeoutSec = 600;
+  f.live.set('Deployment/rivet-proxy', structuredClone(f.baseline.deployment));
+  f.live.set('GCPBackendPolicy/policy', structuredClone(f.baseline.policy));
+  await f.transition().prepare(f.operation);
+  const read = f.io.read;
+  const calls = [];
+  let active = 0,
+    maximum = 0;
+  f.io.read = async (reference, options) => {
+    maximum = Math.max(maximum, ++active);
+    calls.push(reference.kind + '/' + (reference.name ?? reference.metadata.name));
+    try {
+      await new Promise(setImmediate);
+      return await read(reference, options);
+    } finally {
+      active--;
+    }
+  };
+  await f.transition().verify(f.operation);
+  assert.equal(active, 0);
+  assert.ok(maximum > 1 && maximum <= 4);
+  assert.equal(calls.filter((name) => name === 'HTTPRoute/route').length, 1);
+  assert.equal(calls.filter((name) => name === 'GCPBackendPolicy/policy').length, 1);
+  f.live.get('HTTPRoute/route').spec.hostnames = ['foreign.test'];
+  await assert.rejects(f.transition().verify(f.operation), /Foreign routing specification/);
+  assert.equal(active, 0);
+  assert.deepEqual(f.events, [], 'No guard may create or patch a resource');
 });
 
 function regionalEndpointFixture() {
@@ -1059,6 +1120,51 @@ test('standalone NEG readiness needs fresh exact current-endpoint evidence, not 
     const f = regionalEndpointFixture();
     change(f);
     assert.throws(() => assertGkeProxyBackendHealth(f.pods, f.service, f.backend));
+  }
+});
+
+test('native proxy overlap tolerates pending replacements only with an actual zonally healthy serving floor', () => {
+  const f = regionalEndpointFixture();
+  const replacement = structuredClone(f.pods[0]);
+  replacement.metadata.uid = 'pending';
+  replacement.status.podIP = '10.0.0.99';
+  replacement.status.conditions[0].status = 'False';
+  f.pods.push(replacement);
+  assert.equal(assertGkeProxyServingFloor(f.pods, f.service, f.backend).length, 2);
+  replacement.status.conditions[0].status = 'True';
+  assert.equal(
+    assertGkeProxyServingFloor(f.pods, f.service, f.backend).length,
+    2,
+    'NEG attachment lag cannot supply capacity',
+  );
+  assert.throws(
+    () => assertGkeProxyBackendHealth(f.pods, f.service, f.backend),
+    /healthy regional endpoint/,
+    'Final acceptance must still reject an incomplete replacement',
+  );
+  for (const change of [
+    (f) => {
+      f.pods[0].metadata.deletionTimestamp = new Date().toISOString();
+    },
+    (f) => {
+      f.backend.healthyEndpoints.pop();
+    },
+    (f) => {
+      f.backend.observedAt -= 60001;
+    },
+    (f) => {
+      f.backend.serviceUid = 'foreign';
+    },
+    (f) => {
+      f.backend.healthyEndpoints[1].zone = f.backend.healthyEndpoints[0].zone;
+    },
+  ]) {
+    const broken = regionalEndpointFixture();
+    change(broken);
+    assert.throws(
+      () => assertGkeProxyServingFloor(broken.pods, broken.service, broken.backend),
+      /serving floor|zonal redundancy/,
+    );
   }
 });
 

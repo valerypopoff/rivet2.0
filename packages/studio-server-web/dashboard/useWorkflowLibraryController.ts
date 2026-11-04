@@ -733,6 +733,13 @@ export function useWorkflowLibraryController(options: {
     uploadingFolderPath,
   ]);
 
+  const handleInspectProjectRecordingsFromContextMenu = useCallback(() => {
+    const project = projectContextMenuState?.project;
+    if (!project) return;
+    closeProjectContextMenu();
+    runRecordings.showForProject(project);
+  }, [closeProjectContextMenu, projectContextMenuState, runRecordings.showForProject]);
+
   const closeSettingsModal = useCallback(() => {
     setSettingsModalProject(null);
   }, []);
@@ -844,6 +851,7 @@ export function useWorkflowLibraryController(options: {
     runRecordingsRetained: runRecordings.retained,
     runRecordingsFoundCount: runRecordings.foundCount,
     runRecordingsResetToken: runRecordings.resetToken,
+    runRecordingsInitialProject: runRecordings.initialProject,
     runStatisticsOpen,
     publishedItemsOpen,
     appSettingsOpen,
@@ -882,6 +890,7 @@ export function useWorkflowLibraryController(options: {
     handleCancelFolderRename,
     handleDeleteFolderFromContextMenu,
     handleRenameProjectFromContextMenu,
+    handleInspectProjectRecordingsFromContextMenu,
     handleSubmitProjectRename,
     handleCancelProjectRename,
     handleDownloadProject,

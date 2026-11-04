@@ -1,5 +1,14 @@
 # Release workflow timing audit and improvement plan
 
+For the successful staging and completed production rollout timing audit on
+2026-11-04, see [faster ordinary updates](rolling-update-performance-plan.md).
+It separates the one-time bridge from normal releases. Shared frontend/worker
+overlap, bounded independent reads, unchanged-proxy provenance/reuse, retained
+staging application and the bounded worker-pool handoff are implemented locally.
+Concurrent online preparation/final acceptance is prepared in a private adapter
+copy. Native tool and recovery regressions are local evidence; faster hosted/GKE
+timings still need measurement. Fresh security scans still cover reused digests.
+
 Status: **A–C implemented and locally validated; hosted CI/cache timings, publication and GKE qualification remain open** (2026-11-03). No CI run, paid staging attempt or production deployment was used for the local validation recorded below. This plan complements [production update continuity](production-update-continuity-plan.md).
 
 Revised decision: repair the worker race, run cheap source contracts before expensive work, gate Kind on scans, and add bounded caching/diagnostics within the existing workflows. Then qualify one repaired build under a fresh approval. Admission now runs early inside staging preparation; separate paid preflight operations, new delivery artifacts and shutdown bypasses remain outside this work. Shorter successful hosted workflow durations remain unproven.

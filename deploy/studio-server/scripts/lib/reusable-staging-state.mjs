@@ -6,6 +6,7 @@ import { overlapQualificationProfile } from './qualification-overlap-profile.mjs
 import { assertRequestContinuityProfile } from './request-continuity.mjs';
 import { observeStagingJanitor } from './staging-janitor-health.mjs';
 import { sizingRequests } from './resource-sizing.mjs';
+import { retainedApplicationSettings, RetainedStagingApplication } from './retained-staging-application.mjs';
 
 export const stagingOwner = 'rivet.dev/qualification-operation';
 export const stagingRegistry = 'rivet.dev/qualification-registry';
@@ -15,6 +16,16 @@ const dns = (value) => {
   return value;
 };
 export function reusableStagingSettings(value) {
+  if (value.executionPoolsEnabled !== undefined) assert.equal(typeof value.executionPoolsEnabled, 'boolean');
+  if (value.executionPoolsEnabled) {
+    assert.equal(value.qualificationSuite, 'focused', 'Paired execution supports the ordinary focused suite');
+    assert.ok(!value.sizingRequests && !value.developerOverlapProfile);
+  }
+  if (value.retainedApplication) {
+    value = { ...value, retainedApplication: retainedApplicationSettings(value.retainedApplication) };
+    assert.equal(value.qualificationSuite, 'focused', 'Retained application supports the ordinary focused suite');
+    assert.ok(value.hostname && !value.sizingRequests && !value.developerOverlapProfile);
+  }
   if (value.sizingRequests) {
     sizingRequests(value.sizingRequests);
     assert.ok(
@@ -95,7 +106,10 @@ export function assertStagingRecord(object, operation, settings) {
   const record = JSON.parse(object.data.record);
   const { inputHash, ...input } = record.operation;
   assert.equal(qualificationHash(input), inputHash);
-  assert.equal(record.namespace, `rivet-staging-${operation.operationId}`);
+  assert.equal(
+    record.namespace,
+    record.retainedApplication ? operation.retainedApplication.namespace : `rivet-staging-${operation.operationId}`,
+  );
   assert.equal(record.release, 'rivet-qualification');
   assert.equal(record.protocol, 1);
   assert.equal(record.operation.inputHash, operation.inputHash);
@@ -115,6 +129,7 @@ export class ReusableStagingState {
     this.api = api;
     this.settings = settings;
     this.operation = operation;
+    if (operation.retainedApplication) this.application = new RetainedStagingApplication(this);
   }
   async cluster() {
     assert.equal(this.operation.projectId, this.settings.projectId);
@@ -142,7 +157,13 @@ export class ReusableStagingState {
     assert.ok(object, 'Operation registry is missing; never recreate an uncertain operation');
     return { object, record: assertStagingRecord(object, this.operation, this.settings) };
   }
-  async change(transform) {
+  change(transform) {
+    const next = (this.pendingChange ?? Promise.resolve()).then(() => this.writeChange(transform));
+    this.pendingChange = next;
+    next.catch(() => {}); // A failed CAS fences this writer, including queued work.
+    return next;
+  }
+  async writeChange(transform) {
     const { object, record } = await this.read();
     const next = structuredClone(record);
     await transform(next);
@@ -209,6 +230,7 @@ export class ReusableStagingState {
       },
     };
     const created = await this.api.json('POST', `${namespacePath(this.settings.controlNamespace)}/configmaps`, object);
+    if (this.application) await this.application.acquire(created.metadata.uid);
     return {
       identity: created.metadata.uid,
       expiresAt: this.operation.expiresAt,
@@ -229,6 +251,10 @@ export class ReusableStagingState {
   async namespace({ create = false } = {}) {
     const { object, record } = await this.read();
     const url = namespacePath(record.namespace);
+    const retained = record.retainedApplication;
+    const expectedOwner = retained?.name ?? this.operation.operationId;
+    const registryUid = retained?.uid ?? object.metadata.uid;
+    const inputIdentity = retained?.uid ?? this.operation.inputHash;
     let current = await this.api.json('GET', url);
     if (!current && create) {
       assert.ok(!record.namespaceUid && !record.namespaceCreateIssued && !record.closed);
@@ -242,13 +268,13 @@ export class ReusableStagingState {
         metadata: {
           name: record.namespace,
           labels: {
-            [stagingOwner]: this.operation.operationId,
+            [stagingOwner]: expectedOwner,
             'rivet.release-gate/owned': 'true',
             'rivet.dev/qualification-route': 'true',
           },
           annotations: {
-            [stagingRegistry]: object.metadata.uid,
-            [stagingInput]: this.operation.inputHash,
+            [stagingRegistry]: registryUid,
+            [stagingInput]: inputIdentity,
             'rivet.dev/qualification-nonce': record.creationNonce,
           },
         },
@@ -262,9 +288,10 @@ export class ReusableStagingState {
       assert.ok(!record.namespaceUid || !create);
       return null;
     }
-    assert.equal(current.metadata.labels?.[stagingOwner], this.operation.operationId);
-    assert.equal(current.metadata.annotations?.[stagingRegistry], object.metadata.uid);
-    assert.equal(current.metadata.annotations?.[stagingInput], this.operation.inputHash);
+    assert.ok(current.metadata?.uid, 'Namespace identity is unavailable');
+    assert.equal(current.metadata.labels?.[stagingOwner], expectedOwner);
+    assert.equal(current.metadata.annotations?.[stagingRegistry], registryUid);
+    assert.equal(current.metadata.annotations?.[stagingInput], inputIdentity);
     assert.equal(current.metadata.annotations?.['rivet.dev/qualification-nonce'], record.creationNonce);
     if (record.namespaceUid) assert.equal(current.metadata.uid, record.namespaceUid);
     else {
@@ -275,6 +302,7 @@ export class ReusableStagingState {
         assert.ok(!r.namespaceUid);
         r.namespaceUid = current.metadata.uid;
       });
+      if (this.application) await this.application.namespaceCreated(current.metadata.uid);
     }
     return current;
   }
@@ -282,6 +310,7 @@ export class ReusableStagingState {
     const { record } = await this.read();
     assert.ok(!record.closed && Date.now() < Date.parse(this.operation.expiresAt), 'Staging test admission is closed');
     await this.namespace();
+    if (this.application) await this.application.owned();
   }
   async claimCleanup(owner, { expired = false } = {}) {
     assert.ok([this.settings.runnerNamespace, this.settings.controlNamespace].includes(owner.namespace));

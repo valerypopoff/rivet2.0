@@ -31,6 +31,11 @@ import { describeProviderPhaseReceipt, writeProviderPhaseReceipt } from '../lib/
 import { providerProgressStep } from '../lib/provider-progress.mjs';
 import { qualificationTimeouts } from '../lib/runtime-qualification-driver.mjs';
 import { runProviderSizing } from './provider-sizing.mjs';
+import {
+  settleRetainedStaging,
+  cleanupRetainedStaging,
+  verifyRetainedStagingCleanup,
+} from '../lib/retained-staging-cleanup.mjs';
 export { ReusableProviderGate, withManagedGateSignal, waitForManagedGateCommands };
 
 export function normalizeProviderAutoscaling(raw, hpa) {
@@ -64,6 +69,7 @@ export async function executeProviderPhase({
   actor,
   gate,
   privateDirectory,
+  qualificationPassed = false,
   wait = until,
   step = async (_name, action) => action(),
   signal,
@@ -87,14 +93,24 @@ export async function executeProviderPhase({
     return bind(await state.arm(actor));
   }
   if (phase === 'settle') {
-    const inventory = await step('settlement', () => settleStaging(state, cloud, actor, wait));
+    const inventory = await step('settlement', () =>
+      state.application ? settleRetainedStaging(state, actor, wait) : settleStaging(state, cloud, actor, wait),
+    );
     return bind({ writersStopped: true, acceptedWorkSettled: true, inventoryComplete: true, inventory });
   }
   if (phase === 'cleanup') {
+    if (state.application) {
+      const retainedApplication = await step('fixture-data-cleanup', () =>
+        cleanupRetainedStaging(state, gate, actor, { qualificationPassed }),
+      );
+      return bind({ deletionDispatched: false, retainedApplication });
+    }
     await step('deletion', () => cleanupStaging(state, actor));
     return bind({ deletionDispatched: true });
   }
   if (phase === 'verifyCleanup') {
+    if (state.application)
+      return bind(await step('retained-application-verification', () => verifyRetainedStagingCleanup(state)));
     const result = await step('absence', () =>
       wait('exact namespace/CSI/NEG garbage collection', () => verifyStagingCleanup(state, cloud)),
     );
@@ -109,6 +125,7 @@ export async function executeProviderPhase({
     'Sizing uses preparation and observation only',
   );
   await state.admission();
+  if (state.application) gate.fixtureFolder = (await state.read()).record.fixtureFolder;
   await state.change((r) => {
     r.testPhases ??= {};
     assert.ok(!r.testPhases[phase], 'Never replay an admitted phase');
@@ -123,16 +140,23 @@ export async function executeProviderPhase({
       if (!operation.sizingRequests) await gate.verifyAdmission(gate.values(images), 'predecessor');
       await gate.verifyAdmission(gate.values(operation.candidate.images), 'candidate');
     });
-    await step('dependencies', () => gate.installDependencies());
-    await step('routing', () => gate.createPublicRoute());
-    await step('installation', () =>
-      gate.apply(
-        gate.values(images),
-        operation.sizingRequests ? 'provider-sizing-installation.json' : 'provider-predecessor.json',
-      ),
-    );
+    const reuse = state.application && !(await state.read()).record.retainedApplication.bootstrap;
+    if (reuse) {
+      await step('retained-dependencies', () => gate.retainedSecrets());
+      await step('retained-predecessor', () => gate.verifyRetainedInstallation());
+    } else {
+      await step('dependencies', () => gate.installDependencies());
+      await step('routing', () => gate.createPublicRoute());
+      await step('installation', () =>
+        gate.apply(
+          gate.values(images),
+          operation.sizingRequests ? 'provider-sizing-installation.json' : 'provider-predecessor.json',
+        ),
+      );
+    }
     await step('owners', () => waitForOrdinaryRuntime(gate, images, wait));
     await step('frontend', () => gate.readyPublic());
+    if (state.application) await step('owned-fixture-folder', () => gate.prepareRetainedFixture());
     // Fixture writes occur once, only after auth, LB health and installed images
     // are proven. A lost response is retained as an uncertain phase, not retried.
     const seed = await step('persistence', () => gate.exercisePersistence(gate.config.baseUrl));
@@ -144,6 +168,7 @@ export async function executeProviderPhase({
       expiryIdentity: object.metadata.uid,
       inventoryComplete: true,
       inventory: await step('inventory', () => observeStagingInventory(state, cloud)),
+      ...(state.application ? { retainedApplication: { namespaceUid: (await state.read()).record.namespaceUid } } : {}),
     };
   } else {
     assert.ok(['upgrade', 'autoscaling'].includes(phase));
@@ -346,7 +371,7 @@ async function main() {
     assert.ok(size < 4000000);
     chunks.push(chunk);
   }
-  const { operation, privateDirectory } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  const { operation, privateDirectory, qualificationPassed } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   const { inputHash, ...input } = operation;
   assert.equal(qualificationHash(input), inputHash);
   const settings = reusableStagingSettings(
@@ -365,6 +390,15 @@ async function main() {
     'Driver and operation continuity profiles differ',
   );
   assert.deepEqual(settings.sizingRequests, operation.sizingRequests, 'Driver and operation sizing requests differ');
+  assert.deepEqual(
+    settings.retainedApplication,
+    operation.retainedApplication,
+    'Driver and retained application differ',
+  );
+  assert.equal(
+    !!operation.executionPools,
+    !!settings.executionPoolsEnabled || !!operation.installed.qualificationValues?.ha?.executionPools?.enabled,
+  );
   assert.ok(
     actor.name && actor.uid && process.platform === 'linux',
     'Exact ephemeral in-cluster Linux runner required',
@@ -415,6 +449,7 @@ async function main() {
           actor,
           gate,
           privateDirectory,
+          qualificationPassed,
           step,
           signal: cancellation.signal,
         });

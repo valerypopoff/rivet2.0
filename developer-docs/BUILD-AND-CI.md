@@ -1580,6 +1580,46 @@ policy to conceal unavailable infrastructure. A deployment-contract job cancelle
 at its deadline instead requires investigating test duration, not treating it as
 the same runner-allocation problem.
 
+### Recovering a desktop runner-allocation cancellation
+
+On 2026-11-04, [Developer Desktop Release 41891512301](https://github.com/valerypopoff/rivet2.0/actions/runs/41891512301)
+for `488019eb9` lost its Apple Silicon job before checkout. GitHub recorded
+`runner_id: 0`, no steps, a 15-minute acquisition interval and the annotation
+"The job was not acquired by Runner of type hosted even after multiple attempts",
+alongside ARM capacity notices. Build and Studio Server verification passed;
+Windows packaging passed and Intel packaging continued independently. This is
+hosted-runner unavailability, not evidence of a compiler or signing defect.
+`macos-15` remains a supported ARM runner label; see the
+[GitHub-hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+Intel subsequently passed, including its packaged-executor checks, signing and
+notarization. One job-specific rerun reused the successful jobs; Apple Silicon
+again waited 15 minutes without a runner or any steps, then ended with the same
+acquisition failure and capacity notices. [Attempt 2](https://github.com/valerypopoff/rivet2.0/actions/runs/41891512301/attempts/2)
+therefore remains unqualified for desktop publication. No further retry was
+started and no compiler, signing or architecture check was weakened.
+
+For this failure, preserve completed jobs and recover only the cancelled job:
+
+1. Inspect its check annotations and confirm that no runner or build step started.
+2. Wait for the containing workflow to finish. GitHub rejects a job rerun while
+   another job in that workflow is running; an HTTP 403 saying the run is already
+   running does not queue a retry. Let healthy sibling builds settle.
+3. Rerun the cancelled job once through its job-specific Actions control/API;
+   retain successful artifacts and jobs. Observe the new attempt before taking
+   another action. A timeout or missing write acknowledgement requires readback,
+   not an automatic replay.
+4. Verify that the native build, architecture checks, signing/notarization and
+   publication succeed. An infrastructure retry is not proof of a working build.
+
+Keep the remote branch head unchanged during that recovery if the release should
+publish. The existing freshness checks intentionally skip publication after a
+new push; pushing a documentation-only recovery note early must not invalidate
+the attempt being recovered. Commit locally if needed, then push after release
+settlement. Do not weaken native checks, rebuild successful platforms or switch
+OS/architecture labels solely to conceal an acquisition failure. Continued ARM
+capacity failures remain an infrastructure blocker requiring a new decision.
+
 ## `release.yml`
 
 ### Trigger conditions
@@ -1998,6 +2038,30 @@ that the CLI Dockerfile's local-build fallback matches the lockstep package
 version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
+
+### Prepared release versions (2026-11-04)
+
+Changes since the last coordinated bump, `2ec2b7085`, through `be4119e95`
+prepare these compatible minor releases:
+
+| Release track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.32.0` → `2.33.0` | New Decision AI model/cache authoring, simplified model selection, debugger history/reconnect improvements and highlighted connection styling. |
+| Public Core/Node/Evaluations/CLI | `2.26.0` → `2.27.0` | Core adds Joey-1, cache-token accounting and optional debugger protocol fields; other workspaces are required family companions. |
+| App executor | `2.18.0` → `2.19.0` | Source-bundled Core capability companion; no separate sidecar protocol change. |
+| Documentation site | `2.26.0` → `2.27.0` | Model/cache guidance and session-local debugger history behavior. |
+| Five private Studio Server packages | `1.34.0` → `1.35.0` | Project recording inspection, debugger isolation and rollout continuity, recovery and performance tooling. |
+
+The [package matrix](PACKAGES.md#version-update-2026-11-04--decision-ai-recording-inspection-and-faster-updates)
+distinguishes changed workspaces from release companions. Tauri/Cargo metadata
+and the CLI Docker fallback are synchronized. Existing workspace ranges, Yarn
+resolutions, Helm metadata and managed schema numbers remain unchanged.
+
+Validate this metadata with `node scripts/sync-desktop-version.mjs --check`,
+`node scripts/publish-npm-packages.mjs --check-versions`,
+`yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. Publication, new provider qualification
+and production activation remain separate operations.
 
 ### Prepared release versions (2026-10-29)
 

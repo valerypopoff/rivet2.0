@@ -1769,20 +1769,21 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.34.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.35.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since `ee0748968` through `2edd4a77c`:
-isolated latest-debugger channels and run-scoped controls, bounded replay and
-diagnostics, recording refresh/replay and independent statistics grouping, rolling
-migration policy and repeatable qualification/infrastructure lifecycle tooling.
-API/Web/Shared change locally; unchanged Bootstrap/Executor workspaces are
+This minor release covers changes since `2ec2b7085` through `be4119e95`:
+project-scoped recording inspection and Project wording, mixed-version debugger
+history isolation, request-continuity/recovery tooling and faster rollout paths
+with optional retained staging, paired workers and unchanged-proxy image reuse.
+API/Web change locally; unchanged Bootstrap/Executor/Shared workspaces are
 release companions, not separate implementations of these features.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
-This version update does not enable overlap or establish GKE qualification.
+This version update does not enable optional rollout features or establish new
+GKE qualification; see the [performance implementation status](rolling-update-performance-plan.md).
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-10-29) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-04) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or

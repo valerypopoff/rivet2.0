@@ -1,4 +1,5 @@
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
+import { assertExecutionPoolEvidence } from './execution-pool-evidence.mjs';
 import { assertQualificationPlan } from './release-qualification-policy.mjs';
 import { assertContinuityUpgrade, assertRequestContinuityEvidence } from './request-continuity.mjs';
 import { assertSchemaCompatibilityEvidence } from './schema-compatibility-probe.mjs';
@@ -227,10 +228,17 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     throw Error('Focused runtime qualification requires its exact five-minute upgrade observations');
   if (!focused && [3, 4].includes(requestContinuity?.protocol))
     throw Error('Focused continuity observations cannot qualify a full runtime suite');
+  if (
+    (value.executionPools !== undefined && value.executionPools !== true) ||
+    (value.executionPool && value.executionPools !== true)
+  )
+    throw Error('Execution pool evidence requires its observed paired layout');
   return {
     protocol: value.protocol,
     ...(qualification ? { qualification } : {}),
     ...(requestContinuity ? { requestContinuity } : {}),
+    ...(value.executionPools ? { executionPools: true } : {}),
+    ...(value.executionPool ? { executionPool: assertExecutionPoolEvidence(value.executionPool) } : {}),
     ...(ordinary
       ? {
           purpose: 'ordinary-upgrade',
@@ -678,7 +686,19 @@ export function ordinaryRuntimeReplicaBounds(policy) {
 
 export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizing = false } = {}) {
   if (![2, 3, 4, 5].includes(proof?.protocol)) return;
-  const workloads = resources.filter((r) => ['StatefulSet', 'Deployment'].includes(r.kind));
+  let workloads = resources.filter((r) => ['StatefulSet', 'Deployment'].includes(r.kind));
+  const pools = workloads.filter((r) => r.kind === 'StatefulSet' && r.metadata.labels?.['rivet.dev/execution-pool']);
+  if (pools.length) {
+    if (proof.executionPools !== true) throw Error('Paired execution requires its own observed layout');
+    if (proof.executionPool) assertExecutionPoolEvidence(proof.executionPool);
+    if (
+      pools.length !== 2 ||
+      new Set(pools.map((r) => r.metadata.labels['rivet.dev/execution-pool'])).size !== 2 ||
+      pools.filter((r) => r.spec.replicas === 0).length !== 1
+    )
+      throw Error('Paired execution requires one active and one empty pool');
+    workloads = workloads.filter((resource) => !pools.includes(resource) || resource.spec.replicas > 0);
+  }
   const counts = { backend: 1, web: 1, proxy: 2, execution: 2, autoscaler: 1 };
   if (
     workloads.length !== 5 ||
@@ -722,6 +742,8 @@ export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizin
   if (configs.length !== 1 || configs[0].valueFrom)
     throw Error('Ordinary runtime qualification autoscaler policy changed.');
   const policy = autoscalerPolicy(JSON.parse(configs[0].value).policy);
+  if (pools.length && proof.executionPool && proof.executionPool.maxReplicas !== policy.maxReplicas)
+    throw Error('Execution pool capacity differs from its qualification');
   const execution = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'execution');
   if (
     policy.minReplicas !== 2 ||

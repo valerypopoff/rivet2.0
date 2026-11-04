@@ -544,11 +544,14 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     const state = record.proxyContinuity;
     if (!state) return;
     const focused = this.gate.operation.qualification?.tier === 'focused';
-    if (focused && record.owner?.withdrawIssued && /-ha-execution-[01]$/.test(record.owner.name)) {
-      this.executionWithdrawal ??= { podUid: record.owner.uid, dispatchedAt: new Date().toISOString() };
+    const executionOwner = record.owner?.withdrawIssued
+      ? record.owner
+      : record.executionPool?.owners?.find((owner) => owner.withdrawIssued);
+    if (focused && executionOwner?.withdrawIssued && /-ha-execution(?:-next)?-[01]$/.test(executionOwner.name)) {
+      this.executionWithdrawal ??= { podUid: executionOwner.uid, dispatchedAt: new Date().toISOString() };
       if (
-        record.owner.uid === this.executionWithdrawal.podUid &&
-        record.owner.beginIssued &&
+        executionOwner.uid === this.executionWithdrawal.podUid &&
+        executionOwner.beginIssued &&
         !this.executionWithdrawal.observedAt
       )
         this.executionWithdrawal.observedAt = new Date().toISOString();

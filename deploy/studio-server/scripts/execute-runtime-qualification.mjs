@@ -292,6 +292,8 @@ async function main(mode) {
       requestContinuityProfile: settings.requestContinuityProfile,
       qualificationSuite: settings.qualificationSuite,
       sizingRequests: settings.sizingRequests,
+      retainedApplication: settings.retainedApplication,
+      executionPoolsEnabled: settings.executionPoolsEnabled,
       enabled: process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED === 'true',
       projectId: process.env.RIVET_QUALIFICATION_PROJECT_ID,
       projectNumber: process.env.RIVET_QUALIFICATION_PROJECT_NUMBER,

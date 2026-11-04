@@ -31,9 +31,57 @@ import {
 } from './release-manifest-oci.mjs';
 import { parseArgs, resolveDeploymentRelease } from './deploy-kubernetes-release.mjs';
 import { HA_REQUIRED_CHECKS, HA_AUTOSCALING_CHECKS } from './lib/ha-release-evidence.mjs';
+import { pinRehearsalImages } from './local-upgrade-rehearsal-safety.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
+
+test('reused component provenance survives normalization/promotion and is bound to installed lineage', () => {
+  const previous = promoted();
+  const next = candidate({ predecessorRelease: previous, sourceSha: 'b'.repeat(40) });
+  const imageOrigins = {
+    proxy: {
+      sourceSha: previous.source.sha,
+      inputsDigest: digest('e'),
+      predecessorDigest: getStudioServerReleaseManifestDigest(previous),
+    },
+  };
+  const normalized = assertStudioServerReleaseManifest({ ...next, imageOrigins });
+  assert.deepEqual(normalized.imageOrigins, imageOrigins);
+  assert.notEqual(getStudioServerReleaseManifestDigest(normalized), getStudioServerReleaseManifestDigest(next));
+  const published = promoteStudioServerReleaseManifest(normalized, {
+    previousRelease: previous,
+    promotionEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+  });
+  assert.deepEqual(published.imageOrigins, imageOrigins);
+  const inspections = Object.fromEntries(
+    ['api', 'web', 'proxy'].map((name) => [
+      name,
+      {
+        Id: digest('f'),
+        RepoDigests: [`${normalized.images[name].repository}@${normalized.images[name].digest}`],
+        Config: {
+          Labels: {
+            'org.opencontainers.image.revision': name === 'proxy' ? previous.source.sha : normalized.source.sha,
+          },
+        },
+      },
+    ]),
+  );
+  assert.doesNotThrow(() => pinRehearsalImages(inspections, normalized.source.sha, normalized));
+  const relabelled = structuredClone(inspections);
+  relabelled.proxy.Config.Labels['org.opencontainers.image.revision'] = normalized.source.sha;
+  assert.throws(() => pinRehearsalImages(relabelled, normalized.source.sha, normalized), /provenance/);
+  const wrongBytes = structuredClone(inspections);
+  wrongBytes.proxy.RepoDigests = [];
+  assert.throws(() => pinRehearsalImages(wrongBytes, normalized.source.sha, normalized), /immutable manifest/);
+  assert.throws(() =>
+    assertStudioServerReleaseManifest({
+      ...normalized,
+      images: { ...normalized.images, proxy: { ...normalized.images.proxy, digest: digest('f') } },
+    }),
+  );
+});
 
 function images(prefix = 'example.test/rivet') {
   return {

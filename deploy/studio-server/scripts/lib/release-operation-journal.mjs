@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { proxyContinuitySettled } from './release-operation-state.mjs';
+import { proxyContinuitySettled, executionPoolSettled } from './release-operation-state.mjs';
 
 // Compatibility fence for Jobs created by older updaters. New rollouts have no warmup stage.
 export function haPreparationSettled(record) {
@@ -19,6 +19,7 @@ export function haPreparationSettled(record) {
  * before this view is ever persisted by a CAS. */
 export function haJournalForRecovery(record) {
   if (!record || record.phase !== 'complete') return record;
+  if (!executionPoolSettled(record)) throw Error('Completed HA journal has an unfinished execution pool transition');
   if (!haPreparationSettled(record)) throw Error('Completed HA journal has unfinished replacement preparation.');
   if (proxyContinuitySettled(record)) return record;
   if (
