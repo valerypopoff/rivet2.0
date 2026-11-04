@@ -2,6 +2,32 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-04 — Decision AI, recording inspection and faster updates
+
+All tracks last changed versions in `2ec2b7085`. This preparation covers the
+subsequent source changes through `be4119e95`, including the project-tree
+recording action committed in `21757fd33`.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| App | `2.32.0` → `2.33.0` | Joey-1 authoring, model sizes and a single selected default model; model-scoped cache guidance and cache-pricing controls; bounded session-local debugger history and reconnect/follow behavior; thicker highlighted graph connections. |
+| Core, Node, CLI, Evaluations | `2.26.0` → `2.27.0` | Core adds Baseten Joey-1, OpenAI Decision AI cache-read/write accounting and optional debugger history/event-position protocol fields. Node, CLI and Evaluations have no package-local source changes and follow the required public-family lockstep. |
+| App Executor | `2.18.0` → `2.19.0` | Source-bundled companion for the new Core model, accounting and debugger protocol; no package-local source or separate sidecar protocol change. |
+| All five Studio Server packages | `1.34.0` → `1.35.0` | Adds project-scoped Inspect recordings with the Project picker; repairs mixed-version debugger history isolation; includes request-continuity, rollout recovery, faster worker/frontend handoffs, retained staging and unchanged-proxy image reuse tooling. API/Web change locally; Bootstrap/Executor/Shared are unchanged lockstep companions. |
+| Docs | `2.26.0` → `2.27.0` | Documents Joey-1, simplified model selection, cache accounting and session-local debugger history/reconnect behavior. |
+
+Compatible capabilities and optional protocol fields warrant minor increments;
+no major-version interface break was identified. Companion bumps include the
+updated runtime without claiming independent new features in every package.
+Tauri/Cargo metadata follows App and the CLI Docker default follows the public
+family. Workspace dependency ranges and Yarn resolutions remain unchanged.
+
+This version preparation does not publish packages, enable optional rollout
+features, change Helm/schema metadata or deploy to GCP. New rollout timings and
+provider qualification remain separate from local validation. See the
+[prepared release summary](BUILD-AND-CI.md#prepared-release-versions-2026-11-04)
+and [rollout implementation status](studio-server/rolling-update-performance-plan.md).
+
 ## Version update: 2026-10-29 — isolated debugging and scoped cost inspection
 
 Every track last changed versions in `ee0748968`. This update covers subsequent

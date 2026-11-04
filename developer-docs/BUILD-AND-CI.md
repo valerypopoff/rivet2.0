@@ -1999,6 +1999,30 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-04)
+
+Changes since the last coordinated bump, `2ec2b7085`, through `be4119e95`
+prepare these compatible minor releases:
+
+| Release track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.32.0` → `2.33.0` | New Decision AI model/cache authoring, simplified model selection, debugger history/reconnect improvements and highlighted connection styling. |
+| Public Core/Node/Evaluations/CLI | `2.26.0` → `2.27.0` | Core adds Joey-1, cache-token accounting and optional debugger protocol fields; other workspaces are required family companions. |
+| App executor | `2.18.0` → `2.19.0` | Source-bundled Core capability companion; no separate sidecar protocol change. |
+| Documentation site | `2.26.0` → `2.27.0` | Model/cache guidance and session-local debugger history behavior. |
+| Five private Studio Server packages | `1.34.0` → `1.35.0` | Project recording inspection, debugger isolation and rollout continuity, recovery and performance tooling. |
+
+The [package matrix](PACKAGES.md#version-update-2026-11-04--decision-ai-recording-inspection-and-faster-updates)
+distinguishes changed workspaces from release companions. Tauri/Cargo metadata
+and the CLI Docker fallback are synchronized. Existing workspace ranges, Yarn
+resolutions, Helm metadata and managed schema numbers remain unchanged.
+
+Validate this metadata with `node scripts/sync-desktop-version.mjs --check`,
+`node scripts/publish-npm-packages.mjs --check-versions`,
+`yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. Publication, new provider qualification
+and production activation remain separate operations.
+
 ### Prepared release versions (2026-10-29)
 
 All tracks last bumped in `ee0748968`. Reviewing that commit through `2edd4a77c`
