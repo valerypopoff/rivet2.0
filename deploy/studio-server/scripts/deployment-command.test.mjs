@@ -53,6 +53,16 @@ const request=process.argv[process.argv.indexOf('--request')+1], receipt=process
 const r=JSON.parse(await fs.readFile(request,'utf8')), directory=path.dirname(receipt), fixture=process.env.RIVET_COMMAND_FIXTURE;
 await fs.appendFile(path.join(fixture,'adapters.ndjson'),JSON.stringify({stage:r.stage,requestId:r.requestId,operationId:r.operationId})+'\\n');
 const state=JSON.parse(await fs.readFile(path.join(fixture,'state.json'),'utf8'));
+if(state.fault==='boundObserver'){
+ const keys=['operationId','installedManifestDigest','candidateManifestDigest','valuesDigest','operationPlanDigest','namespaceUid'];
+ const file=path.join(fixture,'observer-binding.json');
+ if(r.stage==='before')await fs.writeFile(file,JSON.stringify(r),{flag:'wx'});
+ if(r.stage==='after'){
+  const original=JSON.parse(await fs.readFile(file,'utf8'));
+  if(keys.some(key=>r[key]!==original[key]))throw Error('Original observer binding changed');
+  if(!state.acceptanceFailed){state.acceptanceFailed=true;await fs.writeFile(path.join(fixture,'state.json'),JSON.stringify(state));throw Error('Synthetic final acceptance failure');}
+ }
+}
 if(r.stage==='before'&&['completedAutoscalerAdvance','samplingAutoscalerAdvance','busyAutoscalerAdvance','inventoryAutoscalerAdvance'].includes(state.fault)){
  const record=JSON.parse(state.journal.data.record);
  if(state.fault==='busyAutoscalerAdvance'){record.phase='scaling';record.leaseExpiresAt=Date.now()+120000;}
@@ -400,7 +410,7 @@ async function fixture(t, mode, fault, schemaChange = false) {
   // Keep the fixture kubeconfig ignored and source clean just like production.
   await fs.appendFile(
     path.join(directory, '.git/info/exclude'),
-    '\nempty-kubeconfig\nstate.json\ncalls.ndjson\nadapters.ndjson\nstate.lock\nclock-offset.json\n',
+    '\nempty-kubeconfig\nstate.json\ncalls.ndjson\nadapters.ndjson\nstate.lock\nclock-offset.json\nobserver-binding.json\n',
   );
   const env = {
     ...process.env,
@@ -591,6 +601,69 @@ const clone = structuredClone;
 // Bound overlap rather than serialize all real CLI recovery journeys into one
 // CI timeout. Operations inside an individual journey remain strictly ordered.
 describe('isolated deployment command journeys', { concurrency: 3 }, () => {
+  test(
+    'acceptance-only can finish the original bound observer without another deployment or backup',
+    { timeout: 330000 },
+    async (t) => {
+      const f = await fixture(t, 'direct', 'boundObserver');
+      const expected = ['--expected-installed-settings-digest', installedSettingsDigest((await f.state()).installed)];
+      const deployed = await f.invoke(expected);
+      assert.equal(deployed.code, 1, deployed.stdout + deployed.stderr);
+      assert.match(deployed.stderr, /Infrastructure deployment completed, but application acceptance failed/);
+      const writes = (await f.calls()).filter((call) =>
+        ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(call.args[0]),
+      ).length;
+      const requests = (await fs.readdir(path.join(f.directory, 'artifacts/result'))).filter((name) =>
+        name.startsWith('after-'),
+      );
+      assert.equal(requests.length, 1);
+      const original = path.join('artifacts/result', requests[0], 'request.json');
+      const changed = path.join(f.directory, 'artifacts/changed-request.json');
+      await fs.writeFile(
+        changed,
+        JSON.stringify({
+          ...JSON.parse(await fs.readFile(path.join(f.directory, original))),
+          valuesDigest: hash('other'),
+        }),
+      );
+      const rejected = await f.invoke([...expected, '--acceptance-only', '--acceptance-request', changed]);
+      assert.equal(rejected.code, 1, rejected.stdout + rejected.stderr);
+      assert.match(rejected.stderr, /Original acceptance request must match/);
+      assert.equal((await f.stages()).length, 4, 'Mismatched observer context must not reach the adapter');
+      const current = await f.state(),
+        manifest = current.manifest;
+      const documents = parseAllDocuments(manifest);
+      documents
+        .find((document) => document.get('kind') === 'ConfigMap' && document.get('data'))
+        .setIn(['data', 'unexpected-policy'], 'changed');
+      current.manifest = documents.map((document) => document.toString()).join('\n---\n');
+      await fs.writeFile(path.join(f.directory, 'state.json'), JSON.stringify(current));
+      const drifted = await f.invoke([...expected, '--acceptance-only', '--acceptance-request', original]);
+      assert.equal(drifted.code, 1, drifted.stdout + drifted.stderr);
+      assert.match(drifted.stderr, /verification failed; no release changes were made/i);
+      assert.equal((await f.stages()).length, 4, 'Final configuration drift must still block application acceptance');
+      const observed = await f.state();
+      observed.manifest = manifest;
+      await fs.writeFile(path.join(f.directory, 'state.json'), JSON.stringify(observed));
+      const verified = await f.invoke([...expected, '--acceptance-only', '--acceptance-request', original]);
+      assert.equal(verified.code, 0, verified.stdout + verified.stderr);
+      assert.equal(
+        (await f.calls()).filter((call) =>
+          ['upgrade', 'patch', 'scale', 'delete', 'create', 'replace'].includes(call.args[0]),
+        ).length,
+        writes,
+      );
+      assert.deepEqual(
+        (await f.stages()).map((entry) => entry.stage),
+        ['preflight', 'before', 'backup', 'after', 'after'],
+      );
+      assert.equal(
+        new Set((await f.stages()).filter((entry) => entry.stage !== 'preflight').map((entry) => entry.operationId))
+          .size,
+        1,
+      );
+    },
+  );
   test(
     'qualification baseline is checked inside the real deployment command before any write or adapter',
     { timeout: 330000 },

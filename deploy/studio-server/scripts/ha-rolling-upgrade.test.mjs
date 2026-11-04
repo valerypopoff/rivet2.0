@@ -444,6 +444,61 @@ test('HA Service routing normalizes API defaults but rejects mixed-version route
   }
 });
 
+test('template prerequisites gate retirement and final frontend failure remains recoverable without replay', async () => {
+  const f = fixture();
+  const release = Promise.withResolvers();
+  const entered = Promise.withResolvers();
+  let ready = false;
+  f.options.waitForTemplatesReady = async () => {
+    f.operations.push('template-prerequisites');
+    entered.resolve();
+    await release.promise;
+    ready = true;
+  };
+  const withdraw = f.options.withdraw;
+  f.options.withdraw = async (...args) => {
+    assert.equal(ready, true, 'No owner may withdraw before prerequisite acknowledgement');
+    return withdraw(...args);
+  };
+  f.options.waitForFrontendsReady = async () => {
+    throw Error('Frontend candidate did not settle');
+  };
+  const run = runHaRollingUpgrade(f.options);
+  const rejected = assert.rejects(run, /Frontend candidate did not settle/);
+  rejected.catch(() => {});
+  await Promise.race([entered.promise, run]);
+  assert.ok(!f.operations.some((value) => value.startsWith('withdraw-command:')));
+  release.resolve();
+  await rejected;
+  assert.ok(
+    f.operations.some((value) => value.startsWith('withdraw-command:')),
+    'Owners must progress while frontend replacement is pending',
+  );
+  assert.notEqual(f.journal.phase, 'complete');
+  const token = f.journal.token;
+  const applied = f.operations.filter((value) => value === 'templates').length;
+  assert.ok(!f.operations.includes('autoscalers'), 'Frontend failure must block autoscaler restoration');
+  f.options.waitForFrontendsReady = async () => {};
+  f.advance(2000);
+  await runHaRollingUpgrade({ ...f.options, resumeToken: token });
+  assert.equal(f.journal.token, token);
+  assert.equal(f.journal.phase, 'complete');
+  assert.equal(f.operations.filter((value) => value === 'templates').length, applied, 'Recovery must not reapply Helm');
+  assert.equal(f.operations.filter((value) => value === 'template-prerequisites').length, 2);
+});
+
+test('a migration or prerequisite failure cannot retire an owner', async () => {
+  for (const stage of ['applyTemplates', 'waitForTemplatesReady']) {
+    const f = fixture();
+    f.options[stage] = async () => {
+      throw Error(stage + ' failed');
+    };
+    await assert.rejects(runHaRollingUpgrade(f.options), new RegExp(stage + ' failed'));
+    assert.ok(!f.operations.some((value) => /^(withdraw-command|begin|delete):/.test(value)));
+    assert.notEqual(f.journal.phase, 'complete');
+  }
+});
+
 function fixture() {
   let journal,
     revision = 0,

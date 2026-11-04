@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertImageOrigins } from './component-image-origin.mjs';
 import {
   assertHaReleaseEvidence,
   assertRuntimeControlEvidence,
@@ -276,6 +277,8 @@ export function assertStudioServerReleaseManifest(manifest, { requirePromoted = 
     normalized.evidence.runtimeControl = assertRuntimeControlEvidence(evidence.runtimeControl, normalized);
   if (evidence.runtimeAutoscaling)
     normalized.evidence.runtimeAutoscaling = assertRuntimeAutoscalingEvidence(evidence.runtimeAutoscaling, normalized);
+  if (manifest.imageOrigins !== undefined)
+    normalized.imageOrigins = assertImageOrigins(manifest.imageOrigins, normalized);
   const control = normalized.evidence.runtimeControl,
     scaling = normalized.evidence.runtimeAutoscaling;
   if (
@@ -418,6 +421,7 @@ export function createStudioServerReleaseManifest({
   rootDir,
   source,
   images,
+  imageOrigins,
   candidateEvidence,
   haEvidence,
   predecessorRelease = null,
@@ -434,6 +438,7 @@ export function createStudioServerReleaseManifest({
     chart,
     database: { managedWorkflowSchema: schema },
     images,
+    ...(imageOrigins ? { imageOrigins } : {}),
     lineage: {
       predecessor: predecessorRelease === null ? null : predecessorReferenceFor(predecessorRelease),
       ...(publicationHeadRelease !== undefined

@@ -349,6 +349,16 @@ test('lost remote phase acknowledgement is never replayed or treated as safe del
   assert.equal(f.state.deleted, false);
 });
 
+for (const qualificationPassed of [false, true])
+  test(`cleanup sends the coordinator's qualification decision through actual exec stdin (${qualificationPassed})`, async (t) => {
+    const f = await fixture(t),
+      actor = await f.prepare();
+    await actor.driver.cleanup(undefined, { qualificationPassed });
+    const sent = f.state.commands.find((command) => command.phase === 'cleanup');
+    assert.equal(sent.payload.qualificationPassed, qualificationPassed);
+    assert.equal(sent.payload.operation.inputHash, f.state.registry.operation.inputHash);
+  });
+
 test('verified cleanup removes the exact actor even if export or persistence fails, without replay', async (t) => {
   for (const fault of ['export', 'persist', 'export-and-delete']) {
     const f = await fixture(t);

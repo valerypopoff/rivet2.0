@@ -700,6 +700,20 @@
 {{- if lt (int .Values.lifecycle.shutdownGraceSeconds) 1 -}}
 {{- fail "lifecycle.shutdownGraceSeconds must be greater than zero" -}}
 {{- end -}}
+{{- if not (kindIs "bool" .Values.ha.executionPools.enabled) -}}
+{{- fail "ha.executionPools.enabled must be a boolean" -}}
+{{- end -}}
+{{- if .Values.ha.executionPools.enabled -}}
+{{- if or (not .Values.ha.enabled) (ne .Values.ha.controlPlane.mode "singleton") (not .Values.autoscaling.executionController.enabled) (not .Values.requestContinuity.enabled) -}}
+{{- fail "Execution pools require singleton HA with the execution controller" -}}
+{{- end -}}
+{{- if not (has .Values.ha.executionPools.active (list "a" "b")) -}}
+{{- fail "Execution pool active slot must be a or b" -}}
+{{- end -}}
+{{- if or (not (regexMatch "^[0-2]$" (toString .Values.ha.executionPools.retiringReplicas))) (gt (add (int .Values.replicaCount.execution) (int .Values.ha.executionPools.retiringReplicas)) (int .Values.autoscaling.execution.maxReplicas)) -}}
+{{- fail "Execution pools exceed the approved total capacity or two-owner transition profile" -}}
+{{- end -}}
+{{- end -}}
 {{- if lt (int .Values.lifecycle.preStopDelaySeconds) 0 -}}
 {{- fail "lifecycle.preStopDelaySeconds must be zero or greater" -}}
 {{- end -}}

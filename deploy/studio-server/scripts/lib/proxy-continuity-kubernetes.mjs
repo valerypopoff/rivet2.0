@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
+import { readConcurrently } from './read-concurrently.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { assertProtectedProxyTemplate } from './request-continuity.mjs';
 import { createProxyContinuityTransition, buildProxyBridge } from './proxy-continuity-transition.mjs';
-import { hasReadyGkeNegGate, assertGkeProxyBackendHealth, assertGkeProxyPoolReady } from './gke-proxy-health.mjs';
+import {
+  hasReadyGkeNegGate,
+  assertGkeProxyBackendHealth,
+  assertGkeProxyPoolReady,
+  assertGkeProxyServingFloor,
+} from './gke-proxy-health.mjs';
 
 const exec = promisify(execFile);
 const marker = 'rivet.dev/continuity-operation';
@@ -319,16 +325,18 @@ export function createKubernetesProxyContinuity({
       deployment = pool.deployment;
       service = pool.service;
       const { proxyPods, backend } = pool;
-      for (const p of proxyPods) {
-        const include = (
-          await kube(['exec', p.metadata.name, '-c', 'proxy', '--', 'cat', '/tmp/nginx/rivet-proxy-timeout.inc'])
-        ).stdout;
-        const timeout = /proxy_read_timeout\s+(\d+)s;/.exec(include);
-        assert.ok(
-          timeout && Number(timeout[1]) >= 360,
-          'Set installation runtime proxyReadTimeoutSeconds to at least 360 before adopting 300-second continuity',
-        );
-      }
+      await readConcurrently(
+        proxyPods.map((p) => async () => {
+          const include = (
+            await kube(['exec', p.metadata.name, '-c', 'proxy', '--', 'cat', '/tmp/nginx/rivet-proxy-timeout.inc'])
+          ).stdout;
+          const timeout = /proxy_read_timeout\s+(\d+)s;/.exec(include);
+          assert.ok(
+            timeout && Number(timeout[1]) >= 360,
+            'Set installation runtime proxyReadTimeoutSeconds to at least 360 before adopting 300-second continuity',
+          );
+        }),
+      );
       assert.equal(backend.healthy, true, 'Original provider backend is unhealthy');
       assertGkeProxyBackendHealth(proxyPods, service, backend);
       if (config.configName) {
@@ -374,20 +382,53 @@ export function createKubernetesProxyContinuity({
     async normalReady(_config, state) {
       await until('protected current normal proxy capacity', () => healthyPool(proxyName, true, state.bridgeReplicas));
     },
-    async observe({ state, target, probe, token }) {
+    async observe({ state, target, probe, token, allowUpdating = false }) {
       const service = await read({ kind: 'Service', name: target === 'bridge' ? state.name : proxyName });
-      const backend = await observeBackend(service);
-      const selected = (await pods(target === 'bridge' ? state.name : config.release)).filter((p) =>
+      const [backend, observedPods, routedTo, sets, deployment, oldBackend] = await readConcurrently([
+        () => observeBackend(service),
+        () => pods(target === 'bridge' ? state.name : config.release),
+        () => publicProbe(state, target, probe, token),
+        async () => JSON.parse((await kube(['get', 'replicasets.apps', '-o', 'json'])).stdout).items,
+        () => read({ kind: 'Deployment', name: target === 'bridge' ? state.name : proxyName }),
+        ...(target === 'bridge' ? [async () => observeBackend(await read({ kind: 'Service', name: proxyName }))] : []),
+      ]);
+      const selected = observedPods.filter((p) =>
         Object.entries(service.spec.selector).every(([key, value]) => p.metadata.labels?.[key] === value),
       );
-      assertGkeProxyBackendHealth(selected, service, backend);
+      const expectedUid =
+        target === 'bridge'
+          ? state.entries.find((entry) => entry.desired.kind === 'Deployment').uid
+          : state.bindings.find((bound) => bound.kind === 'Deployment' && bound.name === proxyName).uid;
+      assert.equal(deployment.metadata.uid, expectedUid, 'Proxy Deployment identity changed');
+      const ownedSets = new Set(
+        sets
+          .filter((set) =>
+            set.metadata.ownerReferences?.some(
+              (owner) => owner.controller && owner.kind === 'Deployment' && owner.uid === expectedUid,
+            ),
+          )
+          .map((set) => set.metadata.uid),
+      );
+      assert.ok(
+        selected.every((pod) =>
+          pod.metadata.ownerReferences?.some(
+            (owner) => owner.controller && owner.kind === 'ReplicaSet' && ownedSets.has(owner.uid),
+          ),
+        ),
+        'Proxy pod is not owned by the captured Deployment',
+      );
+      const current = selected.filter((pod) => !pod.metadata.deletionTimestamp);
+      if (allowUpdating) {
+        const minimum = Math.max(2, config.hpaSpec?.minReplicas ?? 2);
+        assert.ok(deployment.status?.availableReplicas >= minimum, 'Proxy rollout lost available serving capacity');
+        assertGkeProxyServingFloor(current, service, backend, minimum);
+      } else assertGkeProxyBackendHealth(current, service, backend);
       // The old backend must have received its longer drain before switching.
-      const original =
-        target === 'bridge' ? await observeBackend(await read({ kind: 'Service', name: proxyName })) : backend;
+      const original = target === 'bridge' ? oldBackend : backend;
       return {
         healthy: backend.healthy,
         backendServiceDrainSeconds: Math.min(backend.backendServiceDrainSeconds, original.backendServiceDrainSeconds),
-        routedTo: await publicProbe(state, target, probe, token),
+        routedTo,
       };
     },
     async patch(current, spec, annotations) {

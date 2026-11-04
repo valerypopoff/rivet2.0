@@ -177,6 +177,69 @@ test('a retained staging endpoint is fixed across releases and cannot escape its
     assert.throws(() => reusableStagingSettings({ ...settings(), hostname }));
 });
 
+test('retained staging refreshes only its bound registry credential from the pinned source, without rotating app secrets', async () => {
+  const gate = Object.create(ReusableProviderGate.prototype),
+    objects = new Map(),
+    writes = [];
+  gate.config = { namespace: 'retained-staging' };
+  gate.settings = { runnerNamespace: 'runners', registrySecret: { name: 'approved-registry', uid: 'source-uid' } };
+  const identities = {};
+  const add = (name, data, namespace = gate.config.namespace, type = 'Opaque', uid = name + '-uid') => {
+    const secret = {
+      metadata: { name, namespace, uid, resourceVersion: '1' },
+      type,
+      data: Object.fromEntries(
+        Object.entries(data).map(([key, value]) => [key, Buffer.from(value).toString('base64')]),
+      ),
+    };
+    objects.set(`/api/v1/namespaces/${namespace}/secrets/${name}`, secret);
+    if (namespace === gate.config.namespace) identities[name] = uid;
+    return secret;
+  };
+  add('rivet-release-gate-postgres', { password: 'fixture-password' });
+  add('rivet-release-gate-object-storage', { accessKeyId: 'fixture-access', secretAccessKey: 'fixture-secret' });
+  add('rivet-release-gate-settings', { encryptionKey: 'fixture-encryption' });
+  add('rivet-release-gate-auth', { RIVET_KEY: 'fixture-key' });
+  const type = 'kubernetes.io/dockerconfigjson';
+  const source = add('approved-registry', { '.dockerconfigjson': 'fresh-credential' }, 'runners', type, 'source-uid');
+  const target = add(
+    'rivet-release-gate-registry',
+    { '.dockerconfigjson': 'old-credential' },
+    gate.config.namespace,
+    type,
+  );
+  const owner = { record: { secrets: identities } };
+  gate.assertProofContext = async () => {};
+  gate.state = {
+    application: { owned: async () => owner },
+    api: {
+      json: async (method, url, body) => {
+        if (method === 'GET') return structuredClone(objects.get(url));
+        assert.equal(method, 'PUT');
+        assert.ok(url.endsWith('/rivet-release-gate-registry'));
+        assert.equal(body.metadata.uid, target.metadata.uid);
+        assert.equal(body.metadata.resourceVersion, target.metadata.resourceVersion);
+        writes.push(url);
+        objects.set(url, body);
+        return body;
+      },
+    },
+  };
+  const result = await gate.retainedSecrets();
+  assert.deepEqual(result.identities, identities);
+  assert.equal(result.identities['rivet-release-gate-registry'], target.metadata.uid);
+  assert.equal(gate.secrets.postgresPassword, 'fixture-password');
+  assert.deepEqual(objects.get(writes[0]).data, source.data);
+  await gate.retainedSecrets();
+  assert.equal(writes.length, 1, 'An unchanged credential must not trigger another write');
+  source.metadata.uid = 'replacement-source';
+  await assert.rejects(gate.retainedSecrets());
+  source.metadata.uid = 'source-uid';
+  objects.get(writes[0]).metadata.uid = 'foreign-target';
+  await assert.rejects(gate.retainedSecrets());
+  assert.equal(writes.length, 1);
+});
+
 import { digest, settings, actor, owner, operation, fixture, cloud, wait } from './test-fixtures/reusable-staging.mjs';
 
 test('shared staging prerequisites reject setup failures before namespace or dependency writes', async (t) => {

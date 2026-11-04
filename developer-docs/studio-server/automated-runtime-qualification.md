@@ -627,6 +627,74 @@ Batches remain sequential to fit the admitted worker capacity. Request time is
 at least fifteen minutes for first adoption, ten for a protected proxy update and
 five with an unchanged proxy; setup, rollout/drain waits and cleanup are additional.
 
+For ordinary protected singleton updates, the staging and production callers now
+defer the broad frontend Helm wait while retaining its blocking migration hook.
+The shared updater confirms applied OnDelete templates/generations and candidate
+controller readiness before owner retirement. Native proxy/web replacement
+can proceed concurrently, with actual available/current-endpoint serving floors
+and Pod ownership checked during the update. A full frontend and regional-health
+join precedes traffic/autoscaler restoration; settlement and cleanup still gate
+success. The three transports and successive cohort admission guard are unchanged.
+The source gate tests the barriers/recovery and the pinned-tool job exercises the
+packaged apply against a pending frontend through real Helm and multi-kind kubectl
+reads. These are local tool contracts, not a measured GKE performance result.
+See [faster ordinary updates](rolling-update-performance-plan.md).
+
+The optional paired execution profile (`executionPoolsEnabled: true` in reviewed
+staging settings, or already installed in production) exercises a two-worker
+pool handoff with `ha.executionPools.enabled`. Candidates must be ready before
+both predecessor withdrawals. The original 315-second accepted jobs overlap;
+complete public 300-second responses, distinct successful recordings, the
+two-ready floor and all proxy checks remain required. Its additional certificate
+binds actual candidate capacity, physical Pod peak within the existing ceiling
+and removal of the old pool. A larger predecessor or shared worker PVC keeps
+the serial procedure and can qualify its actual paired layout with the normal
+checks. Its receipt records `executionPools: true` without claiming a parallel
+`executionPool` transition. The production CLI preserves serial retirement for
+that release. Parallel handoff requires its separately observed transition proof;
+legacy receipts without the layout claim cannot enable the new topology. Report
+validation compiles that proof once, before retained cleanup.
+
+### Optional retained application
+
+Focused reusable staging can additionally specify `retainedApplication` with
+`protocol: 1`, a fixed `rivet-staging-*` namespace and permanent ConfigMap
+`recordName`, plus the existing fixed staging hostname. This is an opt-in
+application lifecycle change, not merely retaining the cluster. Its first use
+installs the disposable application; later tests verify its exact installed
+production predecessor and secret/namespace/registry UIDs before reuse.
+
+Each attempt owns one fixture folder. Success settles producers and accepted
+work, logically deletes only that exact folder, verifies final installed images
+and public health, then records retained application identity/health and releases
+ownership. The empty transient deletion inventory does not mean the application
+was deleted. Legacy disposable tests still require namespace/NEG/CSI absence.
+An expired/failed attempt quarantines the retained application and preserves
+data; the independent janitor never deletes it. Busy/quarantined state or staging
+ahead of production requires explicit recovery/reseed. A failed acquisition can
+close its empty operation without changing another application's owner.
+
+Retained staging is restricted to the focused suite, excludes sizing/developer
+overlap, and needs an explicit ongoing-resource allowance before activation.
+The matching cleanup worker and driver must be installed together. No persistent
+application or new profile was activated by the local performance implementation.
+
+The coordinator accepts the full report and compiles its behavioral evidence
+before cleanup. It supplies `qualificationPassed` in the cleanup request over
+both the local driver and hosted exec transport. Missing/false decisions preserve
+fixtures and quarantine; a provider's successful phase exit alone cannot release
+the retained application as healthy. The janitor never supplies this authority.
+If the application's final completion write committed but its response or attempt
+receipt was lost, recovery may observe that same operation's terminal result.
+It checks application UID, nonce, namespace UID, settled-work proof and the exact
+result/manifest before recording completion. It repeats neither fixture deletion
+nor the finish write and never changes a quarantine into healthy state. This completes
+cleanup bookkeeping; it does not qualify a failed test or invent a new healthy
+decision.
+Admission previews existing controllers with UID/resourceVersion-bound server
+dry-run updates and previews recreated migration hooks under a fresh dry-run
+name. It never attempts to create an already installed controller.
+
 The proxy probe captures the normal pool immediately before the real template
 apply and observes retiring and replacement UIDs during that update. An adopted
 proxy's termination is timed from a positively observed deletion marker, not
@@ -1145,6 +1213,10 @@ explicit staging-only dockerconfigjson Secret in the runner namespace. Preparati
 verifies its immutable UID and copies only that registry credential into the new
 namespace; the original is never cleanup-owned. GitHub/production tokens are not
 substituted, and a missing image-pull permission must fail rather than fall back.
+On retained preparation, the application copy's UID is checked and changed
+credential bytes are refreshed from that same approved source with a conditional
+update. An unchanged copy is read only. Replacement source/target UIDs stop the
+operation; application and database secrets are never regenerated during reuse.
 
 ```text
 yarn node deploy/studio-server/scripts/package-reusable-staging.mjs SETTINGS_JSON NEW_OUTPUT_DIRECTORY API_IMAGE_AT_DIGEST JANITOR_GSA_EMAIL

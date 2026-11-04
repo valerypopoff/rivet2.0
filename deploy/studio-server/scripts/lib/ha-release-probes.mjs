@@ -248,7 +248,7 @@ export class HaReleaseProbes {
       });
       this.evaluations.push({ pod: pod.name, uid: pod.uid, runId, jobs });
     }
-    if (/-ha-execution-[01]$/.test(pod.name)) {
+    if (/-ha-execution(?:-next)?-[01]$/.test(pod.name)) {
       const source = `const r=await fetch('http://127.0.0.1:'+process.env.PORT+'/workflows/${this.backgroundEndpoint}',{method:'POST',headers:{authorization:'Bearer '+process.env.RIVET_KEY,'content-type':'application/json'},body:JSON.stringify({input:'preserved'}),signal:AbortSignal.timeout(10000)});console.log(JSON.stringify({status:r.status,correlationId:r.headers.get('x-rivet-correlation-id'),body:await r.json()}));`;
       const response = JSON.parse(
         (await this.kube(['exec', pod.name, '-c', pod.container, '--', 'node', '--input-type=module', '-e', source]))
@@ -261,6 +261,7 @@ export class HaReleaseProbes {
         ...(this.retirementDelayMs !== haRetirementProbeDelayMs ? { retirementDelayMs: this.retirementDelayMs } : {}),
         pod: pod.name,
         uid: pod.uid,
+        acceptedAt: new Date().toISOString(),
         workflowId: this.backgroundWorkflowId,
         correlationId: response.correlationId,
       });
@@ -362,6 +363,7 @@ export class HaReleaseProbes {
       assert.equal(recordings.length, 1, 'one full-run recording must be durable before removing its owner');
       assert.equal(recordings[0].status, 'succeeded');
       background.recordingId = recordings[0].id;
+      background.completedAt = new Date().toISOString();
     }
     if (/-maintenance-backend-0$/.test(pod.name)) {
       const response = await fetch(`${this.baseUrl}/api/workflows/project-bundles/${this.bundle.id}/download`, {

@@ -22,9 +22,294 @@ import {
 import { persistenceFixture } from './test-fixtures/persistence.mjs';
 import { inspectStagingPrerequisites } from './lib/reusable-staging-prerequisites.mjs';
 import { stagingCloudReader } from './lib/reusable-staging-cloud.mjs';
+import { waitForHaTemplateReadiness } from './lib/ha-template-readiness.mjs';
+import { ReusableProviderGate } from './qualification/provider-gate.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const evidence = { workflow: 'Build Images', runId: '123', runAttempt: 1 };
+
+test(
+  'native retained admission previews existing controllers and recreated hooks without changing live resources',
+  { timeout: 30000 },
+  async (t) => {
+    const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-retained-admission-'));
+    t.after(() => fs.rm(folder, { recursive: true, force: true }));
+    const ns = 'retained-fixture',
+      release = 'rivet';
+    const workload = (kind, name) => ({
+      apiVersion: kind === 'Job' ? 'batch/v1' : 'apps/v1',
+      kind,
+      metadata: {
+        name,
+        namespace: ns,
+        labels: { 'app.kubernetes.io/instance': release },
+        ...(kind === 'Job'
+          ? { annotations: { 'helm.sh/hook-delete-policy': 'before-hook-creation,hook-succeeded' } }
+          : {}),
+      },
+      spec: {
+        selector: { matchLabels: { app: name } },
+        template: {
+          metadata: { labels: { app: name } },
+          spec: {
+            containers: [
+              {
+                name: 'app',
+                image: 'registry.test/app:fixture',
+                resources: { requests: { cpu: '50m', memory: '128Mi' } },
+              },
+            ],
+          },
+        },
+      },
+    });
+    const desired = [
+      workload('Deployment', 'web'),
+      workload('StatefulSet', 'execution'),
+      workload('Job', 'migration'),
+      workload('StatefulSet', 'execution-next'),
+    ];
+    const methods = [],
+      errors = [];
+    const f = await fixture(t, providerOperation(), {
+      intercept(packet) {
+        try {
+          assertFixtureRequest(packet.req);
+          if (cliDiscovery(packet)) return true;
+          const { req, url, input, objects, res, result } = packet;
+          if (url.searchParams.get('dryRun') === 'All') {
+            assert.ok(['POST', 'PUT'].includes(req.method));
+            const existing = objects.get(
+              req.method === 'POST' ? url.pathname + '/' + input.metadata.name : url.pathname,
+            );
+            if (req.method === 'POST') {
+              assert.ok(!existing, 'A dry-run create on an existing object fails AlreadyExists');
+              res.statusCode = 201;
+            } else {
+              assert.ok(existing && input.kind !== 'Job');
+              assert.equal(input.metadata.uid, existing.metadata.uid);
+              assert.equal(input.metadata.resourceVersion, existing.metadata.resourceVersion);
+              assert.deepEqual(input.spec.selector, existing.spec.selector);
+            }
+            methods.push({ method: req.method, kind: input.kind, name: input.metadata.name });
+            const admitted = structuredClone(input);
+            admitted.spec.template.spec.containers[0].resources.requests.cpu = '500m';
+            result(admitted);
+            return true;
+          }
+          return nativeKubernetes(packet);
+        } catch (error) {
+          errors.push(error);
+          packet.res.statusCode = 500;
+          packet.result({ message: error.message });
+          return true;
+        }
+      },
+    });
+    f.store(`/api/v1/namespaces/${ns}`, { apiVersion: 'v1', kind: 'Namespace', metadata: { name: ns } });
+    for (const resource of desired.slice(0, 3)) {
+      const api = resource.kind === 'Job' ? '/apis/batch/v1' : '/apis/apps/v1';
+      f.store(`${api}/namespaces/${ns}/${resource.kind.toLowerCase()}s/${resource.metadata.name}`, resource);
+    }
+    const before = JSON.stringify([...f.objects]);
+    const kubeconfig = path.join(folder, 'kubeconfig.json');
+    await fs.writeFile(
+      kubeconfig,
+      JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'Config',
+        clusters: [{ name: 'local', cluster: { server: f.origin } }],
+        users: [],
+        contexts: [{ name: 'local', context: { cluster: 'local', namespace: ns } }],
+        'current-context': 'local',
+      }),
+    );
+    const gate = {
+      config: { namespace: ns, release },
+      state: { application: {} },
+      resources: async () => structuredClone(desired),
+      artifact: async () => {},
+      kube: (args, options = {}) =>
+        run(process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl', ['--kubeconfig', kubeconfig, '--namespace', ns, ...args], {
+          capture: true,
+          ...options,
+        }),
+    };
+    await ReusableProviderGate.prototype.verifyAdmission.call(gate, {});
+    assert.deepEqual(errors, []);
+    assert.equal(methods.filter((entry) => entry.method === 'PUT').length, 2);
+    assert.equal(methods.filter((entry) => entry.method === 'POST').length, 2);
+    assert.match(methods.find((entry) => entry.kind === 'Job').name, /^migration-dry-/);
+    assert.equal(JSON.stringify([...f.objects]), before, 'All admission operations must remain dry runs');
+  },
+);
+
+test(
+  'native Helm keeps the migration hook blocking when ordinary template readiness is deferred',
+  { timeout: 30000 },
+  async (t) => {
+    for (const scenario of ['overlap', 'failed-hook', 'blocking-default'])
+      await t.test(scenario, async (t) => {
+        const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-helm-readiness-'));
+        t.after(() => fs.rm(folder, { recursive: true, force: true }));
+        const watched = Promise.withResolvers();
+        let watch;
+        const f = await fixture(t, operation(), {
+          decodeBody: decodeKubernetesBody,
+          intercept(packet) {
+            assertFixtureRequest(packet.req);
+            if (cliDiscovery(packet)) return true;
+            const { req, res, url, objects } = packet;
+            if (
+              req.method === 'GET' &&
+              url.pathname.endsWith('/jobs') &&
+              ['1', 'true'].includes(url.searchParams.get('watch'))
+            ) {
+              watch = res;
+              res.setHeader('content-type', 'application/json');
+              const job = [...objects.values()].find((resource) => resource.kind === 'Job');
+              res.write(JSON.stringify({ type: 'ADDED', object: job }) + '\n');
+              if (url.searchParams.get('sendInitialEvents') === 'true')
+                res.write(
+                  JSON.stringify({
+                    type: 'BOOKMARK',
+                    object: {
+                      apiVersion: 'batch/v1',
+                      kind: 'Job',
+                      metadata: {
+                        resourceVersion: job.metadata.resourceVersion,
+                        annotations: { 'k8s.io/initial-events-end': 'true' },
+                      },
+                    },
+                  }) + '\n',
+                );
+              watched.resolve();
+              return true;
+            }
+            const handled = nativeKubernetes(packet);
+            if (handled && req.method === 'POST' && packet.input?.kind === 'Job')
+              objects.get(url.pathname + '/' + packet.input.metadata.name).status = {};
+            if (handled && req.method === 'POST' && packet.input?.kind === 'Deployment')
+              for (const resource of objects.values()) {
+                if (resource.kind === 'Deployment')
+                  resource.status.readyReplicas = resource.status.availableReplicas = 0;
+                if (resource.kind === 'ReplicaSet') resource.status.readyReplicas = 0;
+                if (resource.kind === 'Pod') resource.status.conditions = [{ type: 'Ready', status: 'False' }];
+              }
+            return handled;
+          },
+        });
+        f.store('/api/v1/namespaces/fixture', { apiVersion: 'v1', kind: 'Namespace', metadata: { name: 'fixture' } });
+        const kubeconfig = path.join(folder, 'kubeconfig.json');
+        await fs.writeFile(
+          kubeconfig,
+          JSON.stringify({
+            apiVersion: 'v1',
+            kind: 'Config',
+            clusters: [{ name: 'local', cluster: { server: f.origin } }],
+            users: [],
+            contexts: [{ name: 'local', context: { cluster: 'local', namespace: 'fixture' } }],
+            'current-context': 'local',
+          }),
+        );
+        const chart = path.join(folder, 'chart');
+        await fs.mkdir(path.join(chart, 'templates'), { recursive: true });
+        await fs.writeFile(path.join(chart, 'Chart.yaml'), 'apiVersion: v2\nname: fixture\nversion: 0.1.0\n');
+        const args = [
+          'upgrade',
+          '--install',
+          'readiness',
+          chart,
+          '--namespace',
+          'fixture',
+          '--kubeconfig',
+          kubeconfig,
+          '--disable-openapi-validation',
+          '--timeout',
+          '3s',
+        ];
+        const env = {
+          ...process.env,
+          KUBECONFIG: kubeconfig,
+          HELM_CACHE_HOME: path.join(folder, 'cache'),
+          HELM_CONFIG_HOME: path.join(folder, 'config'),
+          HELM_DATA_HOME: path.join(folder, 'data'),
+        };
+        const helm = process.env.RIVET_K8S_HELM_BIN || 'helm';
+        await run(helm, args, { capture: true, env });
+        await fs.writeFile(
+          path.join(chart, 'templates/hook.json'),
+          JSON.stringify({
+            apiVersion: 'batch/v1',
+            kind: 'Job',
+            metadata: { name: 'migration', annotations: { 'helm.sh/hook': 'pre-upgrade' } },
+            spec: {
+              backoffLimit: 0,
+              template: {
+                spec: {
+                  restartPolicy: 'Never',
+                  containers: [{ name: 'migration', image: 'fixture.invalid/migration:local' }],
+                },
+              },
+            },
+          }),
+        );
+        await fs.writeFile(
+          path.join(chart, 'templates/proxy.json'),
+          JSON.stringify({
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            metadata: { name: 'proxy' },
+            spec: {
+              replicas: 1,
+              selector: { matchLabels: { app: 'proxy' } },
+              template: {
+                metadata: { labels: { app: 'proxy' } },
+                spec: { containers: [{ name: 'proxy', image: 'fixture.invalid/proxy:local' }] },
+              },
+            },
+          }),
+        );
+        const outcome = run(
+          helm,
+          [...args, ...(scenario === 'blocking-default' ? ['--wait', '--wait-for-jobs'] : [])],
+          { capture: true, env },
+        ).then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        );
+        try {
+          const early = await Promise.race([watched.promise.then(() => null), outcome]);
+          assert.equal(early, null, early?.error?.message);
+          assert.ok(
+            !f.requests.some((request) => request.method === 'POST' && request.pathname.endsWith('/deployments')),
+            'Migration must finish before frontend mutation',
+          );
+          const job = f.objects.get('/apis/batch/v1/namespaces/fixture/jobs/migration');
+          job.status =
+            scenario === 'failed-hook'
+              ? { failed: 1, conditions: [{ type: 'Failed', status: 'True', reason: 'BackoffLimitExceeded' }] }
+              : { succeeded: 1, conditions: [{ type: 'Complete', status: 'True' }] };
+          watch.end(JSON.stringify({ type: 'MODIFIED', object: job }) + '\n');
+          const result = await outcome;
+          if (scenario === 'overlap') assert.ok(!result.error, result.error?.message);
+          else assert.ok(result.error, 'A failed hook or unfinished frontend must still fail its owning command');
+          const writes = f.requests.filter(
+            (request) => request.method === 'POST' && request.pathname.endsWith('/deployments'),
+          );
+          assert.equal(writes.length, scenario === 'failed-hook' ? 0 : 1);
+          assert.equal(
+            f.objects.get('/apis/apps/v1/namespaces/fixture/deployments/proxy')?.status.readyReplicas,
+            scenario === 'failed-hook' ? undefined : 0,
+          );
+        } finally {
+          watch?.end();
+          await outcome;
+        }
+      });
+  },
+);
+
 function providerOperation() {
   const make = (letter, predecessorRelease) =>
     createStudioServerReleaseManifest({
@@ -173,7 +458,21 @@ for (const fault of ['none', 'admission', 'lost-ack', 'interrupt'])
             else cancellation.abort(new Error('fixture interrupted dependency creation'));
             return true;
           }
-          return nativeKubernetes(packet);
+          const handled = nativeKubernetes(packet);
+          if (handled && req.method === 'POST' && input?.kind === 'Deployment') {
+            const deployment = packet.objects.get(url.pathname + '/' + input.metadata.name);
+            const set = [...packet.objects.values()].find(
+              (r) =>
+                r.kind === 'ReplicaSet' && r.metadata.ownerReferences?.some((o) => o.uid === deployment.metadata.uid),
+            );
+            for (const pod of packet.objects.values())
+              if (pod.kind === 'Pod' && pod.metadata.labels?.['fixture-owner'] === deployment.metadata.name) {
+                pod.metadata.ownerReferences = [
+                  { controller: true, kind: 'ReplicaSet', name: set.metadata.name, uid: set.metadata.uid },
+                ];
+              }
+          }
+          return handled;
         } catch (error) {
           errors.push(error);
           packet.res.statusCode = 500;
@@ -306,8 +605,47 @@ for (const fault of ['none', 'admission', 'lost-ack', 'interrupt'])
     );
     try {
       const preparing = withManagedGateSignal(cancellation.signal, () => phase('prepare'));
-      if (fault === 'none') await preparing;
-      else await assert.rejects(preparing, fault === 'interrupt' ? /interrupted dependency/ : /Command failed/);
+      if (fault === 'none') {
+        await preparing;
+        // Exercise the shipped apply override and real multi-kind kubectl read.
+        // A pending frontend must not hold the template/controller prerequisite.
+        await withManagedGateSignal(cancellation.signal, async () => {
+          for (const resource of f.objects.values())
+            if (
+              resource.metadata.namespace === namespace &&
+              resource.metadata.labels?.['app.kubernetes.io/component'] === 'proxy'
+            ) {
+              if (resource.kind === 'Deployment') resource.status.readyReplicas = resource.status.availableReplicas = 0;
+              if (resource.kind === 'ReplicaSet') resource.status.readyReplicas = 0;
+              if (resource.kind === 'Pod') resource.status.conditions = [{ type: 'Ready', status: 'False' }];
+            }
+          const values = gate.values(op.previous.images);
+          await gate.apply(values, 'native-overlap-apply.json', { waitForReady: false });
+          const resources = await gate.resources(values, 'native-overlap-resources');
+          const workloads = resources
+            .filter((r) => r.kind === 'StatefulSet')
+            .map((r) => ({
+              name: r.metadata.name,
+              uid: f.objects.get(`/apis/apps/v1/namespaces/${namespace}/statefulsets/${r.metadata.name}`).metadata.uid,
+            }));
+          await waitForHaTemplateReadiness({
+            kube: (...args) => gate.kube(...args),
+            resources,
+            workloads,
+            release: gate.config.release,
+            namespace,
+            timeoutMs: 3000,
+          });
+          assert.ok(
+            [...f.objects.values()].some(
+              (r) =>
+                r.kind === 'Deployment' &&
+                r.metadata.labels?.['app.kubernetes.io/component'] === 'proxy' &&
+                r.status.readyReplicas === 0,
+            ),
+          );
+        });
+      } else await assert.rejects(preparing, fault === 'interrupt' ? /interrupted dependency/ : /Command failed/);
     } catch (error) {
       t.diagnostic(JSON.stringify(f.requests.slice(-12).map((r) => ({ method: r.method, path: r.pathname }))));
       t.diagnostic(

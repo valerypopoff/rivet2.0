@@ -124,7 +124,7 @@ export async function fixture(
       if (value) return result(value);
       if (
         pathname.endsWith('/' + 'rivet-q-123-1') ||
-        pathname === '/api/v1/namespaces/rivet-staging-rivet-q-123-1' ||
+        /^\/api\/v1\/namespaces\/[^/]+$/.test(pathname) ||
         /\/(pods|configmaps|deployments|statefulsets|httproutes|services|persistentvolumes|healthcheckpolicies)\/[^/]+$/.test(
           pathname,
         )

@@ -16,6 +16,8 @@ import { assertRequestContinuityProfile, requestContinuityProfile } from './requ
 import { assertContinuityProviderFacts, compileRequestContinuityEvidence } from './request-continuity-evidence.mjs';
 import { releaseQualificationPlan } from './release-qualification-policy.mjs';
 import { sizingRequests, assertSizingReport } from './resource-sizing.mjs';
+import { retainedApplicationSettings } from './retained-staging-application.mjs';
+import { compileExecutionPoolEvidence } from './execution-pool-evidence.mjs';
 
 // The hosted workflow reserves another hour for cleanup and 30 minutes for setup.
 export const ACTIONS_QUALIFICATION_MAX_SECONDS = 4 * 60 * 60;
@@ -96,6 +98,10 @@ export function qualificationOperation({
   }
   const normalized = autoscalerPolicy(policy);
   const sizing = approval.sizingRequests ? sizingRequests(approval.sizingRequests) : undefined;
+  const retainedApplication = approval.retainedApplication
+    ? retainedApplicationSettings(approval.retainedApplication)
+    : undefined;
+  if (retainedApplication) assert.ok(!sizing && !approval.developerOverlapProfile && !parent);
   if (sizing) {
     assert.ok(installed.qualificationValues, 'Sizing requires observed production reservations');
     assert.ok(
@@ -184,6 +190,10 @@ export function qualificationOperation({
     ...(approval.requestContinuityProfile
       ? { requestContinuityProfile: assertRequestContinuityProfile(approval.requestContinuityProfile) }
       : {}),
+    ...(retainedApplication ? { retainedApplication } : {}),
+    ...(approval.executionPoolsEnabled || installed.qualificationValues?.ha?.executionPools?.enabled
+      ? { executionPools: true }
+      : {}),
     ...(approval.developerOverlapProfile
       ? { developerOverlapProfile: overlapQualificationProfile(approval.developerOverlapProfile) }
       : {}),
@@ -191,6 +201,12 @@ export function qualificationOperation({
     predecessorManifestDigest,
     policyDigest: autoscalerPolicyDigest(normalized),
   };
+  if (retainedApplication || input.executionPools)
+    assert.equal(
+      input.qualification?.tier,
+      'focused',
+      'Retained application and paired pools require the focused suite',
+    );
   return freeze(structuredClone({ ...input, inputHash: qualificationHash(input) }));
 }
 
@@ -358,6 +374,10 @@ export function assertOrdinaryProviderReport(report, operation) {
     assert.deepEqual(observed.developerTraffic.failures, []);
   }
   assert.equal(report.storageIdentityPreserved, true);
+  if (operation.executionPools)
+    assert.equal(report.outcomes.executionPools, true, 'Paired execution layout was not observed');
+  if (report.outcomes.executionPool) assert.equal(operation.executionPools, true);
+  const poolEvidence = report.outcomes.executionPool ? compileExecutionPoolEvidence(report, operation) : undefined;
   if (operation.qualification?.tier === 'focused') {
     assert.equal(report.outcomes.independence, undefined, 'Focused rollout must not claim architecture/fault tests');
     assert.ok(
@@ -367,6 +387,7 @@ export function assertOrdinaryProviderReport(report, operation) {
   } else
     for (const field of ['coldProxyReplacement', 'browserOAuthAction', 'publishedScheduleRecording'])
       assert.equal(report.outcomes.independence[field], true);
+  return poolEvidence;
 }
 
 /** Compile from completed probe facts, never a submitted array of check names. */
@@ -472,7 +493,7 @@ export async function executeRuntimeQualification(
     phase: 'created',
   };
   const facts = {};
-  let failure;
+  let failure, continuityEvidence, executionPoolEvidence;
   const phase = async (name, { cleanup = false } = {}) => {
     if (!cleanup) {
       signal?.throwIfAborted();
@@ -484,7 +505,7 @@ export async function executeRuntimeQualification(
       signal?.throwIfAborted();
       assert.ok(now() < time(operation.expiresAt), 'Qualification expired before phase dispatch');
     }
-    const result = await driver[name](operation);
+    const result = await driver[name](operation, name === 'cleanup' ? { qualificationPassed: !failure } : undefined);
     if (!cleanup) {
       signal?.throwIfAborted();
       assert.ok(now() < time(operation.expiresAt), 'Qualification expired before phase acknowledgement');
@@ -502,12 +523,13 @@ export async function executeRuntimeQualification(
     assert.equal(facts.prepared.stagingClusterUid, operation.staging.clusterUid);
     inventory(facts.prepared.inventory, operation);
     assert.equal(facts.prepared.expiryIdentity, facts.guard.identity);
+    if (operation.retainedApplication) nonempty(facts.prepared.retainedApplication?.namespaceUid);
     facts.upgrade = await phase('upgrade');
     if (operation.sizingRequests) {
       window(facts.upgrade, operation);
       assertSizingReport(facts.upgrade, operation.sizingRequests);
     } else {
-      assertOrdinaryProviderReport(facts.upgrade, operation);
+      executionPoolEvidence = assertOrdinaryProviderReport(facts.upgrade, operation);
       if (operation.qualification?.tier === 'focused') {
         // The policy/floor observations already span the actual update. Both
         // declarations describe this same report, not a second traffic window.
@@ -520,6 +542,11 @@ export async function executeRuntimeQualification(
           'Protected phase windows overlap',
         );
       }
+      // Report acceptance belongs to the coordinator, not the provider process
+      // acknowledgement. Compile behavior proofs before allowing retained data
+      // cleanup or releasing the installation for another test.
+      if (operation.requestContinuityProfile)
+        continuityEvidence = compileRequestContinuityEvidence(operation, facts.upgrade, facts.autoscaling);
     }
   } catch (error) {
     failure = error;
@@ -553,6 +580,25 @@ export async function executeRuntimeQualification(
         assert.ok(item.state === 'absent' || (!original.billable && item.state === 'non-billable-hold'));
       }
       assert.equal(verified.uncertainWrites, 0);
+      if (operation.retainedApplication) {
+        const retained = verified.retainedApplication;
+        assert.ok(
+          retained && (retained.namespaceUid || (failure && ['not-acquired', 'quarantined'].includes(retained.phase))),
+        );
+        assert.equal(retained.operationId, operation.operationId);
+        if (failure)
+          assert.ok(
+            ['quarantined', 'not-acquired'].includes(retained.phase),
+            'Rejected qualification must preserve retained staging for recovery',
+          );
+        if (!failure) {
+          assert.equal(retained.phase, 'idle');
+          assert.equal(retained.healthy, true);
+          assert.equal(retained.dataCleaned, true);
+          assert.equal(retained.manifestDigest, operation.candidateManifestDigest);
+          assert.equal(retained.namespaceUid, facts.prepared.retainedApplication?.namespaceUid);
+        }
+      }
       record.cleanupVerified = true;
     } catch (error) {
       record.cleanupVerified = false;
@@ -610,9 +656,9 @@ export async function executeRuntimeQualification(
     inputHash: operation.inputHash,
     control: declaration(facts.upgrade, {
       ...common,
-      ...(operation.requestContinuityProfile
-        ? { requestContinuity: compileRequestContinuityEvidence(operation, facts.upgrade, facts.autoscaling) }
-        : {}),
+      ...(operation.requestContinuityProfile ? { requestContinuity: continuityEvidence } : {}),
+      ...(operation.executionPools ? { executionPools: true } : {}),
+      ...(executionPoolEvidence ? { executionPool: executionPoolEvidence } : {}),
       protocol: operation.qualification?.tier === 'focused' ? 5 : operation.developerOverlapProfile ? 3 : 2,
       purpose: 'ordinary-upgrade',
       controlPlaneMode: operation.developerOverlapProfile ? 'singleton-overlap' : 'singleton',

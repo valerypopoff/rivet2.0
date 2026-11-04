@@ -161,7 +161,7 @@ export function qualificationDriver(directory, digest, { cwd, privateDirectory, 
   return Object.fromEntries(
     ['armExpiry', 'prepare', 'upgrade', 'autoscaling', 'settle', 'cleanup', 'verifyCleanup'].map((phase) => [
       phase,
-      async (operation) => {
+      async (operation, { qualificationPassed } = {}) => {
         const entrypoint = await verifyQualificationDriver(directory, digest);
         const manifest = JSON.parse(await fs.readFile(path.join(directory, 'driver.json'), 'utf8'));
         assert.equal(
@@ -171,7 +171,7 @@ export function qualificationDriver(directory, digest, { cwd, privateDirectory, 
         const result = await providerPhaseProcess(
           entrypoint,
           phase,
-          { operation, privateDirectory },
+          { operation, privateDirectory, ...(phase === 'cleanup' ? { qualificationPassed } : {}) },
           {
             cwd,
             timeoutMs: timeoutFor(operation, phase),

@@ -44,6 +44,8 @@ export async function readDeploymentPolicy(file, root, identity) {
   )
     throw Error('Deployment policy installation identity is invalid.');
   const scripts = {};
+  if (policy.preparation !== undefined && policy.preparation !== 'parallel-online')
+    throw Error('Unknown deployment preparation contract.');
   for (const name of ['backup', 'acceptance']) {
     const entry = policy[name];
     if (
@@ -58,6 +60,45 @@ export async function readDeploymentPolicy(file, root, identity) {
   return { policy, scripts, root, digest: hash(bytes) };
 }
 
+/** Reverify a retained observer using its original binding. This request grants
+ * no deployment/recovery authority; the CLI separately verifies the installed
+ * exact candidate and absence of an unfinished operation. */
+export async function readAcceptanceVerificationContext(file, root, context, policyDigest) {
+  const request = json(await fs.readFile(await regular(root, file)));
+  const originalAcceptanceStartedAt = request.originalAcceptanceStartedAt ?? request.startedAt;
+  if (
+    request.formatVersion !== 1 ||
+    request.stage !== 'after' ||
+    typeof request.requestId !== 'string' ||
+    !request.requestId ||
+    typeof request.operationId !== 'string' ||
+    !request.operationId ||
+    !Number.isFinite(Date.parse(originalAcceptanceStartedAt)) ||
+    !Number.isFinite(Date.parse(request.startedAt)) ||
+    Date.parse(originalAcceptanceStartedAt) > Date.parse(request.startedAt) ||
+    !/^sha256:[a-f0-9]{64}$/.test(request.installedManifestDigest ?? '') ||
+    request.operationPlanDigest !== policyDigest ||
+    [
+      'release',
+      'namespace',
+      'context',
+      'namespaceUid',
+      'candidateManifestDigest',
+      'valuesDigest',
+      'authorizationManifestDigest',
+      'adoptionStage',
+    ].some((key) => request[key] !== context[key])
+  )
+    throw Error('Original acceptance request must match the current installation, candidate, values and policy.');
+  return {
+    ...context,
+    operationId: request.operationId,
+    installedManifestDigest: request.installedManifestDigest,
+    originalAcceptanceStartedAt,
+    recovering: true,
+  };
+}
+
 /** The adapter implements installation-specific capture and safe application
  * journeys. It gets private request/receipt files, never shell interpolation. */
 export async function runDeploymentStage(
@@ -67,7 +108,7 @@ export async function runDeploymentStage(
   { artifactsDir, timeoutMs, runAdapter = executeMaintenanceBackupAdapter, now = Date.now } = {},
 ) {
   if (
-    !['preflight', 'backup', 'before', 'after', 'backend'].includes(stage) ||
+    !['preflight', 'backup', 'before', 'after', 'backend', 'abort-preparation'].includes(stage) ||
     context.namespaceUid !== approval.policy.namespaceUid ||
     context.release !== approval.policy.release ||
     context.namespace !== approval.policy.namespace ||
@@ -171,7 +212,12 @@ export async function runDeploymentStage(
     }
     report = { verified: true, requestId, checks: ['dependencies', 'capacity'] };
   } else {
-    const checks = stage === 'backend' ? ['developerApi', 'editorSession'] : ['workflow', 'webApp', 'remoteDebugger'];
+    const checks =
+      stage === 'abort-preparation'
+        ? ['observerStopped', 'acceptedWorkSettled', 'fixtureCleaned']
+        : stage === 'backend'
+          ? ['developerApi', 'editorSession']
+          : ['workflow', 'webApp', 'remoteDebugger'];
     if (
       stage === 'backend' &&
       (!context.backendCandidate?.uid ||
@@ -181,7 +227,8 @@ export async function runDeploymentStage(
     )
       throw Error('Developer acceptance belongs to another backend incarnation.');
     if (
-      receipt.kind !== 'rivet-deployment-acceptance' ||
+      receipt.kind !==
+        (stage === 'abort-preparation' ? 'rivet-deployment-preparation-abort' : 'rivet-deployment-acceptance') ||
       receipt.passed !== true ||
       !checks.every(
         (name) =>
@@ -272,25 +319,60 @@ export async function executeDeploymentWorkflow({
       'Infrastructure deployment completed but saving its result is unconfirmed. Inspect diagnostics before any retry; no rollback was attempted.',
       cause,
     );
+  const abortOnlinePreparation = async (failures) => {
+    try {
+      report.stages.push(await stage(approval, 'abort-preparation', context, { artifactsDir, timeoutMs }));
+    } catch (error) {
+      failures.push(error);
+    }
+    throw new AggregateError(failures, 'Online deployment preparation failed; nothing applied.');
+  };
   try {
     await save('preparing');
     if (context && typeof prepareSafety !== 'function')
       throw Error('Production deployment requires a safety-contract preparation step.');
-    let before, backup;
+    let before,
+      backup,
+      parallelPreparation = false;
     if (context) {
-      if (!context.recovering) {
+      parallelPreparation =
+        approval?.policy?.preparation === 'parallel-online' && !context.recovering && !maintenance && !verificationOnly;
+      if (parallelPreparation) {
+        // Independent reviewed adapters share immutable inputs, not files or
+        // journals. Settle both even on failure before any mutation or recovery.
+        await save('checking-recovery');
+        const results = await Promise.allSettled(
+          ['before', 'backup'].map((name) =>
+            Promise.resolve().then(() => stage(approval, name, context, { artifactsDir, timeoutMs })),
+          ),
+        );
+        for (const result of results) if (result.status === 'fulfilled') report.stages.push(result.value);
+        const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+        if (failures.length) await abortOnlinePreparation(failures);
+        [before, backup] = results.map((result) => result.value);
+      } else if (!context.recovering) {
         before = await stage(approval, 'before', context, { artifactsDir, timeoutMs });
         report.stages.push(before);
       }
-      await save('checking-recovery');
-      if (!maintenance && !verificationOnly) {
+      if (!parallelPreparation) await save('checking-recovery');
+      if (!parallelPreparation && !maintenance && !verificationOnly) {
         backup = await stage(approval, 'backup', context, { artifactsDir, timeoutMs });
         report.stages.push(backup);
       }
     }
-    const safety = prepareSafety ? await prepareSafety({ before, backup }) : undefined;
-    report.outcome.infrastructure = verificationOnly ? 'checking-existing' : 'in-progress';
-    await save(verificationOnly ? 'verifying' : 'deploying');
+    let safety;
+    try {
+      safety = prepareSafety ? await prepareSafety({ before, backup }) : undefined;
+      report.outcome.infrastructure = verificationOnly ? 'checking-existing' : 'in-progress';
+      await save(verificationOnly ? 'verifying' : 'deploying');
+    } catch (error) {
+      // No infrastructure command has started. A failed readiness receipt must
+      // close the prepared observer just like any other preparation failure.
+      report.state = 'preparing';
+      report.outcome.infrastructure = 'not-started';
+      if (parallelPreparation) await abortOnlinePreparation([error]);
+      throw error;
+    }
     const applied = await run(safety);
     report.outcome.infrastructure = verificationOnly ? 'existing-verified' : 'applied';
     if (applied?.phase === 'complete') report.operation = { token: applied.token, phase: applied.phase };
@@ -339,7 +421,7 @@ export async function executeDeploymentWorkflow({
       report.outcome.application = 'failed';
       await failAfterInfrastructure(
         'infrastructure-complete-application-failed',
-        'Infrastructure deployment completed, but application acceptance failed. Traffic and scaling remain active. Inspect the private after receipt and repair forward; no automatic rollback was attempted.',
+        "Infrastructure deployment completed, but application acceptance failed. Traffic and scaling remain active. Inspect the private after receipt and repair forward; no automatic rollback was attempted. Use --acceptance-only --acceptance-request <original after request.json> to retain this attempt's observer identity.",
         cause,
       );
     }

@@ -521,7 +521,7 @@ export async function prepareStagingActor(
   const driver = Object.fromEntries(
     ['armExpiry', 'prepare', 'upgrade', 'autoscaling', 'settle', 'cleanup', 'verifyCleanup'].map((phase) => [
       phase,
-      async () => {
+      async (_operation, { qualificationPassed } = {}) => {
         assert.ok(!issued.has(phase), 'Never replay a remote phase');
         issued.add(phase);
         await fs.writeFile(
@@ -544,7 +544,11 @@ export async function prepareStagingActor(
         try {
           const result = await rpc(
             ['node', `/qualification/private/${operation.operationId}/provider.mjs`, phase],
-            { operation, privateDirectory: `/qualification/private/${operation.operationId}/results` },
+            {
+              operation,
+              privateDirectory: `/qualification/private/${operation.operationId}/results`,
+              ...(phase === 'cleanup' ? { qualificationPassed } : {}),
+            },
             timeoutMs,
             phase === 'armExpiry'
               ? undefined

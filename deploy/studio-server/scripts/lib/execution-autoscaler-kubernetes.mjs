@@ -263,7 +263,7 @@ export function createKubernetesTransport({
 }
 
 export function createExecutionAutoscalerIO({
-  transport: api,
+  transport,
   release,
   namespace,
   workload,
@@ -271,9 +271,37 @@ export function createExecutionAutoscalerIO({
   image,
   expectedUid,
   policy,
+  poolWorkloads = [],
   port = 8080,
   now = Date.now,
 }) {
+  if (
+    poolWorkloads.length &&
+    (poolWorkloads.length !== 2 ||
+      poolWorkloads[1] !== `${poolWorkloads[0]}-next` ||
+      !poolWorkloads.includes(workload) ||
+      poolWorkloads.some((name) => !/^[a-z0-9-]{1,63}$/.test(name)))
+  )
+    throw Error('Execution pool identities are invalid');
+  const assertActive = async () => {
+    if (!poolWorkloads.length) return;
+    const selected = await transport.json('GET', `/api/v1/namespaces/${enc(namespace)}/services/${enc(service)}`);
+    if (selected?.metadata.annotations?.['rivet.dev/active-execution-workload'] !== workload)
+      throw Error('Inactive execution pool cannot mutate workloads or the release journal');
+  };
+  const api = {
+    async json(method, ...args) {
+      if (method !== 'GET') await assertActive();
+      return transport.json(method, ...args);
+    },
+    async exec(resource, command, ...args) {
+      const readOnly =
+        (command.length === 2 && command[1] === '/opt/rivet/retire-backend.mjs') ||
+        JSON.stringify(command) === JSON.stringify(executionSampleCommand(port));
+      if (!readOnly) await assertActive();
+      return transport.exec(resource, command, ...args);
+    },
+  };
   if (
     ![release, namespace, workload].every((x) => /^[a-z0-9][a-z0-9.-]*$/.test(x)) ||
     !Number.isSafeInteger(port) ||
@@ -526,6 +554,51 @@ export function createExecutionAutoscalerIO({
       )
         throw new Error('Execution inventory/metrics unavailable or a competing HPA exists.');
       const result = [];
+      let poolCapacity;
+      if (poolWorkloads.length) {
+        const owners = await Promise.all(
+          poolWorkloads.map((name) =>
+            api.json('GET', `/apis/apps/v1/namespaces/${enc(namespace)}/statefulsets/${enc(name)}`),
+          ),
+        );
+        if (
+          owners
+            .filter(Boolean)
+            .some(
+              (item) =>
+                !item.metadata.uid ||
+                item.metadata.deletionTimestamp ||
+                item.metadata.labels?.['app.kubernetes.io/instance'] !== release ||
+                item.spec.updateStrategy?.type !== 'OnDelete',
+            )
+        )
+          throw Error('Execution pool controller identity is unconfirmed');
+        const targetPods = [],
+          others = [];
+        for (const pod of pods.items) {
+          const controller = owners
+            .filter(Boolean)
+            .find((item) =>
+              pod.metadata.ownerReferences?.some(
+                (ref) =>
+                  ref.controller &&
+                  ref.kind === 'StatefulSet' &&
+                  ref.name === item.metadata.name &&
+                  ref.uid === item.metadata.uid,
+              ),
+            );
+          if (!controller || !pod.metadata.name.startsWith(controller.metadata.name + '-'))
+            throw Error('Execution pool has a foreign controller');
+          (controller.metadata.uid === owner.metadata.uid ? targetPods : others).push(pod);
+        }
+        const other = owners.filter(Boolean).find((item) => item.metadata.uid !== owner.metadata.uid);
+        poolCapacity = {
+          otherReplicas: Math.max(other?.spec.replicas ?? 0, others.length),
+          totalPods: pods.items.length,
+          otherUid: other?.metadata.uid ?? null,
+        };
+        pods.items = targetPods;
+      }
       // Sequential bounded exec avoids a burst of management requests at scale.
       for (const pod of pods.items) {
         const suffix = pod.metadata.name.slice(workload.length + 1);
@@ -588,6 +661,7 @@ export function createExecutionAutoscalerIO({
           throw new PendingExecutionCpuSample('Execution CPU sample is stale; wait for a fresh scrape.');
       }
       return {
+        ...(poolCapacity ? { poolCapacity } : {}),
         uid: owner.metadata.uid,
         resourceVersion: owner.metadata.resourceVersion,
         replicas: owner.spec.replicas,
@@ -597,6 +671,26 @@ export function createExecutionAutoscalerIO({
         })),
         startupFence: owner.spec.template.metadata?.annotations?.[fenceAnnotation],
       };
+    },
+    async peerSnapshot() {
+      if (!poolWorkloads.length) return null;
+      const peer = poolWorkloads.find((name) => name !== workload);
+      const owner = await api.json('GET', `/apis/apps/v1/namespaces/${enc(namespace)}/statefulsets/${enc(peer)}`);
+      if (!owner) return { uid: null, replicas: 0, pods: [] };
+      if (!owner.metadata.uid) throw Error('Peer execution pool is unconfirmed');
+      return createExecutionAutoscalerIO({
+        transport,
+        release,
+        namespace,
+        workload: peer,
+        service,
+        image: owner.spec.template.spec.containers.find((container) => container.name === 'api').image,
+        expectedUid: owner.metadata.uid,
+        policy,
+        poolWorkloads,
+        port,
+        now,
+      }).snapshot();
     },
     async scale(uid, from, to, expectedResourceVersion) {
       const scale = await api.json('GET', `${sts}/scale`);

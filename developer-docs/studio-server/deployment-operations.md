@@ -14,6 +14,97 @@ There is no separate readiness job. `--expected-installed-settings-digest`
 compares the canonical live Helm settings already read by the command with the
 qualification baseline, rejecting drift before adapters or Kubernetes writes.
 The action also binds namespace UID, operator values, source, images and manifest.
+Protected ordinary singleton HA updates overlap native proxy/web replacement
+with backend/execution retirement. Only their template apply omits Helm's
+broad resource wait; the pre-upgrade schema hook remains enabled and blocking.
+An acknowledged apply must pass `ha-template-readiness.json`: desired OnDelete
+templates and their observed generations/revisions, plus a ready candidate
+controller when configured. Stale ready Pods cannot stand in for that controller.
+Deployment failure conditions apply only after its current generation has been
+observed. A prior rollout's `Progressing=False` status must not reject a newly
+applied candidate before controller acknowledgement; the existing deadline bounds
+that wait. A current-generation failure still stops immediately.
+The shared frontend join then requires candidate availability, completed old-Pod
+termination, the approved HPA bounds and strict regional health before traffic
+or autoscaler restoration. Final Helm wait, settlement, accepted-work draining
+and application acceptance remain required. Maintenance, topology/pool transitions
+and other HA profiles retain their existing wait behavior.
+
+Independent ingress observations use at most four concurrent read tasks and
+settle all started tasks on failure. Object reads are deduplicated only within
+one guard; namespace/UID checks and fresh resourceVersion CAS still protect each
+write. During the adopted pool's native replacement, pending Pods supply no
+capacity and every owned Pod remains checked. At least the configured healthy
+current-Pod floor must be available across zones; final GCP acceptance checks the
+whole pool. `ha-frontend-readiness.json` records the join; `ha-timing.json` is
+diagnostic only and does not change a deadline or release outcome. See the
+[performance plan and evidence limits](rolling-update-performance-plan.md).
+
+The opt-in `ha.executionPools.enabled` profile adds two stable execution slots.
+For a settled two-worker predecessor with approved headroom, two ready candidates
+serve while both predecessors withdraw and drain concurrently; candidates become
+steady capacity and the previous slot settles at zero. Larger pools and shared
+worker PVCs retain serial retirement. Both pools, including terminating Pods,
+count against the same capacity/connection ceiling. Active-slot identity,
+per-owner commands and scale-to-zero intent are journaled; uncertain writes are
+observed rather than replayed. Existing unfinished serial operations are unchanged.
+Production needs the exact new paired-layout observation. Parallel handoff also
+needs its own transition certificate. An ordinary qualification using the serial
+fallback authorizes serial retirement only, including at a two-worker production
+floor. Older receipts without the layout observation cannot enable the paired
+profile. This profile is implemented locally and not activated.
+
+The old execution pool's final scale intent is persisted before its last owner
+checks. Both original UIDs/incarnations must still report drained, and the
+StatefulSet resourceVersion is refreshed after slow recording/capacity reads.
+The scale remains conditional on its original UID and unchanged replica count;
+unknown acknowledgements are observed without repeating the mutation.
+
+Reviewed private policies may opt into `preparation: "parallel-online"` for a
+fresh online operation: baseline acceptance and the checkpoint overlap but both
+finish before mutation. Failure invokes the bound `abort-preparation` acceptance
+stage, requiring `observerStopped`, `acceptedWorkSettled` and `fixtureCleaned`
+evidence. Maintenance, recovery and acceptance-only retain their original order.
+The prepared private adapter overlaps independent final journeys and finishes
+accepted long probes while short availability observation continues. Enabling
+this policy requires its matching checksummed adapter, not the old bundle.
+
+Installation-owned adapter bundles need a cold entry-point check as well as
+`node --check`: invoke their packaged request and observer modes with invalid
+arguments and no production credentials, and require the owning adapter's
+argument guard. An imported CLI's `import.meta.url` guard can become true after
+bundling and accidentally start that CLI. Retain its module filename in the
+guard; publish the corrected private bundle with a new checksum and immutable
+installation generation. This does not require rebuilding unchanged Rivet images.
+Use the checkout's Yarn Node entry point for local orchestration and its children;
+raw Node does not load this repository's Plug'n'Play dependencies. Cold checks
+must use the same launcher as the final command. Before copying private receipts,
+check available space against their actual size. Keep verified original/private
+cloud recovery artifacts when a redundant local copy fails; a local retention
+failure is not a reason to replay an already-completed production update.
+Published-workflow probes need the configured bearer key as well as any UI
+cookie used for control-plane requests. Test the packaged observer's header
+construction without real credentials. Pooled-connection reuse is an observation:
+an idle socket closed by the load balancer may be replaced successfully. Keep
+HTTP status, complete response-body, request-duration and recording checks; never
+retry a failed workflow POST to make a probe pass.
+Check the recovery client's PostgreSQL major against the live server before
+creating an acceptance fixture. A successful schema check does not prove that
+an older `pg_dump` can export a newer server. Pin the recovery tool image by
+digest and test the actual snapshot/export/local-restore boundary. On Docker
+Desktop, host networking is distinct from WSL loopback; a container health check
+does not establish that a dump container can reach a WSL-local SQL proxy. Keep
+that proxy on loopback and use a verified local client when running the operator
+there. Keep private child failure diagnostics, excluding credential input.
+Production observation must also distinguish the public edge from the GCP
+load balancer. An existing edge timeout can reject five-minute responses before
+any update. Keep public workflow/web availability probes; exercise the full
+300-second response against the live, installation-verified Gateway address
+using the original hostname and normal TLS verification. Record which route
+each probe exercised; do not claim that this changes the public edge's timeout.
+Write observer acknowledgements locally before awaiting private cloud
+persistence. A cloud failure must still reject acceptance, while leaving enough
+local evidence to settle accepted work and clean only the owned fixture.
 Private policy/adapters are materialized outside the checkout from a protected,
 generation-pinned installation object on hosted CI. Private GCS keeps the
 operation replay fence and journal after runner loss; the command durably saves
@@ -21,6 +112,23 @@ online recovery payloads before workload mutation. The staging actor receives
 only its in-cluster identity and sanitized operation. See
 [hosted CI installation](automated-runtime-qualification.md#hosted-ci-installation)
 for exact federation, namespace permissions, evidence and revocation boundaries.
+
+For the first protected transition, inspect the installed execution controller's
+recovery behavior before creating a proxy handoff. Older controllers can close
+an expired preflight without understanding its unfinished proxy state. Update
+that controller first to the already-qualified candidate image, retaining its
+existing configuration, and verify replacement readiness before continuing the
+original handoff. Later ordinary releases already have this protection.
+If a legacy controller has discarded an original handoff record, do not start
+another rollout over its retained resources. Reconcile the exact durable
+checkpoint, route, resource creation intents, journal UID and current completed
+autoscaler sample. Any operator restoration must use the original token and
+resourceVersion CAS, followed by the documented `--resume-ha` route; never infer
+that an unknown route/resource mutation did not occur. The November 4 recovery
+had no bridge creation intents or route switch, only a retained proxy HPA freeze.
+Transient GCP observation failures may be retried as bounded reads while keeping
+the original abort signal and deadline. Compute `getHealth` is a read-only POST;
+workflow POSTs, private uploads, IAM updates and other writes are excluded.
 
 The ordinary release gate is focused request continuity, including first adoption
 with its temporary proxy handoff. Full autoscaler stress is a reviewed private
@@ -644,6 +752,18 @@ for a completed autoscaler's sampling lease to be released. Every observation is
 validated; an unfinished scaling/retirement operation still rejects admission.
 Lease timeout never permits takeover. The approval deadline is checked again
 before ownership, and there is no retry of a modifying request.
+HA journal reads now use the same bounded-wait principle: a completed
+autoscaler sampling lease can be observed for up to 30 seconds using GET only.
+The next read must retain the journal UID, installation, manifest and policy
+bindings; the latest resourceVersion remains the CAS precondition. Unfinished
+scaling/retirement, identity changes, failed reads and an unreleased lease at
+the deadline still block admission. The 2026-11-04 production preparation
+reproduced the one-shot HA collision during a normal short sampling tick.
+`release-operation-journal.test.mjs` covers that race and the refusal paths;
+the combined HA/journal suite passes 88 tests locally. This repository fix is
+uncommitted; the current exact-source production checkout uses a separately
+validated local GET-only tool adapter for the same wait, without changing its
+qualified scripts, images or deployment policy.
 Legacy direct Helm installs also retain their existing native locking; this
 runner does not invent a journal protocol or HA guarantees for that path.
 
@@ -706,6 +826,18 @@ restore verification, object-version coverage and key recovery. Its receipt uses
 `capturedAt` between request start and verification, plus the four assertions and
 four distinct checksummed artifacts described below. It must actually retain
 recoverable bytes/versions; a bucket listing or unchecked dump is insufficient.
+Size this against the actual reference inventory before starting observation.
+Copying the complete historical object set on every ordinary update can exceed
+an old adapter's download ceiling. The explicitly approved 2026-11-04 production
+profile for an installation with effective seven-day soft delete retains exact generation/size/checksum
+coverage and fresh bucket-protection evidence alongside the restored SQL dump
+and encryption keys. It depends on source-bucket protection rather than an
+independent object copy, and requires recovery to finish within six days. This
+is an explicit recovery-policy change, not permission to assert coverage from a
+listing alone. Record approval of that bounded recovery window before use;
+verify the recovery operator's restore permissions and give CI only the bucket
+metadata read permission it needs. Do not change source protection or grant CI
+object writes implicitly.
 For a cutover the policy adapter receives `consistency=quiesced`, its actual
 cutover journal token/phase/live lease, and returns
 `kind=rivet-frozen-recovery-checkpoint` with the same recovery assertions and
@@ -767,6 +899,27 @@ IO failure never replaces the actual recovery reason.
 exact already-installed candidate without Helm, Secret preparation or migration;
 it requires the policy and no unfinished operation. Approved fixture requests
 still execute, so this is not a generic read-only production diagnostic.
+For an adapter that retains an observer bound to the original deployment, pass
+`--acceptance-request artifacts/<original-operation>/after-<request-id>/request.json`
+with `--acceptance-only`. Use the saved **request**, not the adapter receipt. The
+file must be regular and remain inside the checkout; its release, namespace/UID,
+context, candidate, values and policy must match. Verification retains the
+original operation, installed predecessor and post-deployment observation boundary
+while performing fresh application journeys. It does not start a new observer,
+repeat backup or grant journal-recovery/workload mutation authority. A mismatched
+request or changed final configuration fails before application acceptance.
+
+`--expected-installed-settings-digest` protects a fresh deployment's qualification
+baseline. Acceptance-only instead verifies the exact installed candidate and its
+complete final configuration; retaining that earlier option does not require the
+candidate to equal the predecessor's settings. Its digest syntax is still checked.
+The prepared production observer uses the original request's acceptance time when
+revalidating its historical window. An already-ended observation is not required
+to cover the later verification retry, whose fresh journeys run separately. Failed
+observations, incomplete original coverage, unsettled work and missing recording
+proofs still fail. Uncertain cleanup acknowledgements require inspection of the
+recorded intents; this option does not replay cleanup writes.
+
 During its baseline/settlement observation the result state is `verifying`, not
 `deploying`. Failure there records `verification-incomplete` and explicitly says
 no release changes were made: fix the observation/storage/access issue and retry

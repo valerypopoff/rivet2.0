@@ -240,13 +240,19 @@ export async function runOrdinaryRuntimeUpgrade({
     const callbacks = {
       beforeRetirement: async (pod) => {
         checkpoint();
-        if (/-ha-execution-[01]$/.test(pod.name)) await gate.continuityProbes?.startCohort('execution-retirement');
-        return /-ha-execution-[01]$/.test(pod.name) ? probes.beforeRetirement(pod) : undefined;
+        if (/-ha-execution(?:-next)?-[01]$/.test(pod.name))
+          await gate.continuityProbes?.startCohort('execution-retirement');
+        return /-ha-execution(?:-next)?-[01]$/.test(pod.name) ? probes.beforeRetirement(pod) : undefined;
       },
-      afterWithdrawal: (pod) => (/-ha-execution-[01]$/.test(pod.name) ? probes.afterWithdrawal(pod) : undefined),
+      afterWithdrawal: (pod) =>
+        /-ha-execution(?:-next)?-[01]$/.test(pod.name) ? probes.afterWithdrawal(pod) : undefined,
     };
     if (developer) await developer.roll(callbacks);
-    else await gate.roll(candidate.images, true, callbacks);
+    else {
+      const rolled = await gate.roll(candidate.images, true, callbacks);
+      if (rolled?.executionPools !== undefined) report.outcomes.executionPools = rolled.executionPools;
+      if (rolled?.executionPool) report.outcomes.executionPool = rolled.executionPool;
+    }
     if (developer) {
       report.outcomes.developerOverlap = await developer.finish();
       await developer.close();

@@ -614,7 +614,42 @@ test('already-terminating proxies may finish during CPU confirmation without los
   }
 });
 
-test('serving proxies disappearing or starting termination during CPU confirmation still block retirement', async () => {
+test('native proxy replacement during CPU confirmation waits for a fresh sample when two owners remain ready', async () => {
+  for (const surge of ['before-inspection', 'during-inspection']) {
+    const f = proxyFixture(),
+      kube = f.options.kube;
+    if (surge === 'before-inspection') addProxyPod(f);
+    let podReads = 0,
+      clock = 0,
+      pauses = 0;
+    f.options.kube = async (args) => {
+      if (!args[2].includes('/metrics.k8s.io/') && args[2].split('?')[0].endsWith('/pods') && ++podReads === 2) {
+        if (surge === 'during-inspection') addProxyPod(f);
+        f.pods[0].metadata.deletionTimestamp = new Date(f.options.now()).toISOString();
+        f.pods[0].status.conditions[0].status = 'False';
+      }
+      return kube(args);
+    };
+    const guard = createHaProxyHeadroomGuard(f.options);
+    await waitForHaHeadroom(() => guard({ stage: 'retirement' }), {
+      timeoutMs: 2000,
+      now: () => clock,
+      pause: async (ms) => {
+        clock += ms;
+        pauses++;
+      },
+    });
+    assert.equal(pauses, 1, 'Never use the stale sample to authorize retirement');
+    assert.equal(f.receipts.at(-1).availableServingOwners, 2);
+    assert.ok(Math.abs(f.receipts.at(-1).totalCpuCores - 0.3) < 1e-9, 'Draining CPU demand still counts');
+    assert.ok(
+      f.calls.every((args) => args[0] === 'get'),
+      'Refresh observations without replaying mutations',
+    );
+  }
+});
+
+test('serving proxies disappearing or starting termination without the ready floor still block retirement', async () => {
   for (const change of ['absent', 'terminating']) {
     const f = proxyFixture(),
       kube = f.options.kube;

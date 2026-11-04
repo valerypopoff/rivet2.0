@@ -1016,6 +1016,7 @@ test('hosted qualification rejects invalid windows before private setup and acce
   for (const seconds of [NaN, Infinity, 0, -1, 1.5, 14401])
     assert.throws(() => assertActionsQualificationWindow(seconds), /whole-second test window/);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-window-'));
+  await fs.mkdir(path.join(root, 'artifacts'), { recursive: true });
   const packet = await fs.mkdtemp(path.join(root, 'artifacts/qualification-window-'));
   t.after(() => Promise.all([directory, packet].map((p) => fs.rm(p, { recursive: true, force: true }))));
   const env = {
@@ -1059,6 +1060,7 @@ test('hosted qualification rejects invalid windows before private setup and acce
 });
 
 test('real CLI runs two/four-hour hash-pinned drivers once, rejects over-limit windows and blocks publication on failure', async (t) => {
+  await fs.mkdir(path.join(root, 'artifacts'), { recursive: true });
   const directory = await fs.mkdtemp(path.join(root, 'artifacts/qualification-command-'));
   const privateStore = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-private-'));
   const bundle = await fs.mkdtemp(path.join(os.tmpdir(), 'qualification-driver-'));
@@ -1215,151 +1217,268 @@ test('source safety basis survives compilation/publication and cannot be mixed a
   assert.throws(() => assertStudioServerReleaseManifest(invalid), /same operation/);
 });
 
-test('first focused adoption compiles and publishes fresh continuity evidence without a full baseline', async () => {
-  const f = fixture(),
-    continuity = focusedContinuityProviderFacts();
-  f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
-  f.input.installed.observedAt = new Date(f.input.now).toISOString();
-  f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
-  f.input.approval.safetyDigest = '9'.repeat(64);
-  f.input.approval.requestContinuityProfile = continuity.operation.requestContinuityProfile;
-  f.operation = qualificationOperation(f.input);
-  assert.equal(f.operation.qualification.tier, 'focused');
-  assert.equal(f.operation.qualification.protocol, 2);
-  assert.equal(f.operation.qualification.fullBaselineManifestDigest, undefined);
-  f.facts.armExpiry.expiresAt = f.operation.expiresAt;
-  const stages = continuityStages(false, 'upgrade', 'focused');
-  const requestContinuity = {
-    ...continuity.upgrade.requestContinuity,
-    protocol: 4,
-    requests: continuity.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage)),
-    executionWithdrawal: {
-      ...continuity.upgrade.requestContinuity.executionWithdrawal,
-      podUid: f.facts.upgrade.outcomes.acceptedWork[0].uid,
-    },
-  };
-  Object.assign(f.facts.upgrade, {
-    startedAt: continuity.upgrade.startedAt,
-    finishedAt: continuity.upgrade.finishedAt,
-    requestContinuity,
-    capacity: {
-      initial: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
-      final: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
-    },
-  });
-  for (const run of f.facts.upgrade.outcomes.acceptedWork) run.retirementDelayMs = 315000;
-  const start = Date.parse(f.facts.upgrade.startedAt);
-  for (const [i, key] of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'].entries())
-    f.facts.upgrade.outcomes[key] = { policyDigest: f.operation.policyDigest, sampleAt: start + 1500 + i * 1000 };
-  delete f.facts.upgrade.outcomes.independence;
-  const scalingStart = Date.parse(f.facts.upgrade.finishedAt) + 1000;
-  for (const report of Object.values(f.facts))
-    Object.assign(
-      report,
-      Object.fromEntries(['operationId', 'inputHash', 'projectId', 'projectNumber'].map((k) => [k, f.operation[k]])),
-    );
-  const persisted = [];
-  const d = driver(f);
-  d.api.autoscaling = async () => {
-    throw Error('A focused rollout must not dispatch a separate autoscaling phase');
-  };
-  const result = await executeRuntimeQualification(f.operation, d.api, async (r) => persisted.push(r), {
-    now: () => scalingStart + 3000,
-  }).catch((error) => {
-    throw error.cause ?? error;
-  });
-  assert.equal(persisted.at(-1).cleanupVerified, true);
-  const packet = prepareRuntimeQualification({
-    candidate: f.operation.candidate,
-    promoted: f.promoted,
-    control: result.control,
-    autoscaling: result.autoscaling,
-    repository,
-    sourceSha: sha,
-    build: { runId: '123', runAttempt: 1 },
-    safetyDigest: f.input.approval.safetyDigest,
-  });
-  assert.equal(packet.candidate.evidence.runtimeControl.protocol, 5);
-  assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 4);
-  assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 9);
-  for (const key of ['startedAt', 'finishedAt', 'reportSha256'])
-    assert.equal(result.control[key], result.autoscaling[key]);
-  assert.ok(!d.calls.includes('autoscaling'));
-  for (const change of [
-    (proof) => {
-      proof.requestSamples++;
-    },
-    (proof) => {
-      proof.policyDigest = 'f'.repeat(64);
-    },
-  ]) {
-    const mismatched = structuredClone(packet.candidate);
-    change(mismatched.evidence.runtimeAutoscaling);
-    assert.throws(() => assertStudioServerReleaseManifest(mismatched), /same operation/);
-  }
-  const historical = structuredClone(packet.candidate);
-  const oldControl = historical.evidence.runtimeControl;
-  oldControl.protocol = 4;
-  oldControl.checks = [...HA_ORDINARY_RUNTIME_CHECKS];
-  oldControl.requestContinuity.protocol = 3;
-  oldControl.requestContinuity.completedRequests = 18;
-  oldControl.requestContinuity.checks = [
-    'full-body-300-second-requests',
-    'late-admission-and-connection-reuse',
-    'proxy-pod-and-neg-replacement',
-    'execution-owner-300-second-drain',
-    'accepted-action-resume',
-    'request-recording-and-no-duplicates',
-    'bridge-return-handoff',
-  ];
-  delete oldControl.requestContinuity.proxyReplaced;
-  historical.evidence.runtimeAutoscaling.protocol = 3;
-  assertStudioServerReleaseManifest(historical);
-  historical.evidence.runtimeAutoscaling.protocol = 4;
-  assert.throws(() => assertStudioServerReleaseManifest(historical), /same operation/);
-  for (const mutate of [
-    (a) => {
-      a.reportSha256 = 'f'.repeat(64);
-    },
-    (a) => {
-      a.startedAt = new Date(Date.parse(a.startedAt) + 1).toISOString();
-    },
-  ]) {
-    const separate = structuredClone(result.autoscaling);
-    mutate(separate);
-    assert.throws(
-      () =>
-        prepareRuntimeQualification({
-          candidate: f.operation.candidate,
-          promoted: f.promoted,
-          control: result.control,
-          autoscaling: separate,
-          repository,
-          sourceSha: sha,
-          build: { runId: '123', runAttempt: 1 },
-          safetyDigest: f.input.approval.safetyDigest,
+for (const profile of ['disposable', 'retained', 'serial pools', 'parallel pools'])
+  test(`focused adoption publishes continuity evidence: ${profile}`, async () => {
+    const retained = profile !== 'disposable';
+    const serialPools = profile === 'serial pools';
+    const parallelPools = profile === 'parallel pools';
+    const f = fixture(),
+      continuity = focusedContinuityProviderFacts();
+    f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
+    f.input.installed.observedAt = new Date(f.input.now).toISOString();
+    f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
+    f.input.approval.safetyDigest = '9'.repeat(64);
+    f.input.approval.requestContinuityProfile = continuity.operation.requestContinuityProfile;
+    if (serialPools || parallelPools) f.input.approval.executionPoolsEnabled = true;
+    if (retained)
+      f.input.approval.retainedApplication = {
+        protocol: 1,
+        namespace: 'rivet-staging-persistent',
+        recordName: 'rivet-staging-application',
+      };
+    f.operation = qualificationOperation(f.input);
+    assert.equal(f.operation.qualification.tier, 'focused');
+    assert.equal(f.operation.qualification.protocol, 2);
+    assert.equal(f.operation.qualification.fullBaselineManifestDigest, undefined);
+    f.facts.armExpiry.expiresAt = f.operation.expiresAt;
+    if (retained) {
+      f.facts.prepare.inventory = [];
+      f.facts.prepare.retainedApplication = { namespaceUid: 'retained-namespace' };
+      f.facts.settle.inventory = [];
+      f.facts.verifyCleanup.inventoryHash = qualificationHash([]);
+      f.facts.verifyCleanup.resources = [];
+      f.facts.verifyCleanup.retainedApplication = {
+        namespaceUid: 'retained-namespace',
+        phase: 'idle',
+        healthy: true,
+        dataCleaned: true,
+        operationId: f.operation.operationId,
+        manifestDigest: f.operation.candidateManifestDigest,
+      };
+    }
+    const stages = continuityStages(false, 'upgrade', 'focused');
+    const requestContinuity = {
+      ...continuity.upgrade.requestContinuity,
+      protocol: 4,
+      requests: continuity.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage)),
+      executionWithdrawal: {
+        ...continuity.upgrade.requestContinuity.executionWithdrawal,
+        podUid: f.facts.upgrade.outcomes.acceptedWork[0].uid,
+      },
+    };
+    Object.assign(f.facts.upgrade, {
+      startedAt: continuity.upgrade.startedAt,
+      finishedAt: continuity.upgrade.finishedAt,
+      requestContinuity,
+      capacity: {
+        initial: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+        final: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
+      },
+    });
+    if (serialPools) {
+      f.facts.upgrade.outcomes.executionPools = true;
+      f.facts.upgrade.capacity.initial.execution = 3;
+      f.facts.upgrade.capacity.final.execution = 4;
+      f.facts.upgrade.initialApplicationPods = 8;
+      f.facts.upgrade.finalApplicationPods = 9;
+    }
+    for (const run of f.facts.upgrade.outcomes.acceptedWork) run.retirementDelayMs = 315000;
+    const start = Date.parse(f.facts.upgrade.startedAt);
+    if (parallelPools) {
+      const work = f.facts.upgrade.outcomes.acceptedWork;
+      work.forEach((run, index) =>
+        Object.assign(run, {
+          correlationId: 'pool-correlation-' + index,
+          acceptedAt: new Date(start + 1000 + index * 500).toISOString(),
+          completedAt: new Date(start + 316000 + index * 500).toISOString(),
         }),
-      /same observed rollout/,
-    );
-  }
-  assertContinuityUpgrade(packet.candidate, f.input.installed.qualificationValues, {
-    profile: f.operation.requestContinuityProfile,
-  });
-  const falseClaim = structuredClone(result.control);
-  falseClaim.evidence.requestContinuity.checks.push('proxy-hpa-removal');
-  assert.throws(() =>
-    prepareRuntimeQualification({
+      );
+      f.facts.upgrade.outcomes.executionPools = true;
+      f.facts.upgrade.outcomes.executionPool = {
+        protocol: 1,
+        phase: 'complete',
+        candidateUid: 'candidate-pool',
+        scaleIssued: true,
+        plan: {
+          maxReplicas: f.operation.policy.maxReplicas,
+          previous: { replicas: 2 },
+          image: `${f.operation.candidate.images.api.repository}@${f.operation.candidate.images.api.digest}`,
+        },
+        owners: work.map(({ uid }) => ({ uid, withdrawIssued: true, beginIssued: true, probeDone: true })),
+        capacity: { minimumReady: 2, maximumPhysicalPods: 4 },
+      };
+    }
+    for (const [i, key] of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'].entries())
+      f.facts.upgrade.outcomes[key] = { policyDigest: f.operation.policyDigest, sampleAt: start + 1500 + i * 1000 };
+    delete f.facts.upgrade.outcomes.independence;
+    const scalingStart = Date.parse(f.facts.upgrade.finishedAt) + 1000;
+    for (const report of Object.values(f.facts))
+      Object.assign(
+        report,
+        Object.fromEntries(['operationId', 'inputHash', 'projectId', 'projectNumber'].map((k) => [k, f.operation[k]])),
+      );
+    const persisted = [];
+    const d = driver(f);
+    const cleanup = d.api.cleanup;
+    d.api.cleanup = async (operation, decision) => {
+      assert.equal(decision.qualificationPassed, true);
+      return cleanup(operation);
+    };
+    d.api.autoscaling = async () => {
+      throw Error('A focused rollout must not dispatch a separate autoscaling phase');
+    };
+    const result = await executeRuntimeQualification(f.operation, d.api, async (r) => persisted.push(r), {
+      now: () => scalingStart + 3000,
+    }).catch((error) => {
+      throw error.cause ?? error;
+    });
+    assert.equal(persisted.at(-1).cleanupVerified, true);
+    if (serialPools) {
+      assert.equal(result.control.evidence.executionPools, true);
+      assert.equal(
+        result.control.evidence.executionPool,
+        undefined,
+        'Serial rollout must not claim that the parallel handoff was exercised',
+      );
+    }
+    if (parallelPools) {
+      assert.equal(result.control.evidence.executionPools, true);
+      assert.equal(result.control.evidence.executionPool.parallelAcceptedWork, true);
+    }
+    const packet = prepareRuntimeQualification({
       candidate: f.operation.candidate,
       promoted: f.promoted,
-      control: falseClaim,
+      control: result.control,
       autoscaling: result.autoscaling,
       repository,
       sourceSha: sha,
       build: { runId: '123', runAttempt: 1 },
       safetyDigest: f.input.approval.safetyDigest,
-    }),
-  );
-});
+    });
+    assert.equal(packet.candidate.evidence.runtimeControl.protocol, 5);
+    assert.equal(packet.candidate.evidence.runtimeAutoscaling.protocol, 4);
+    assert.equal(packet.candidate.evidence.runtimeControl.requestContinuity.completedRequests, 9);
+    for (const key of ['startedAt', 'finishedAt', 'reportSha256'])
+      assert.equal(result.control[key], result.autoscaling[key]);
+    assert.ok(!d.calls.includes('autoscaling'));
+    for (const change of [
+      (proof) => {
+        proof.requestSamples++;
+      },
+      (proof) => {
+        proof.policyDigest = 'f'.repeat(64);
+      },
+    ]) {
+      const mismatched = structuredClone(packet.candidate);
+      change(mismatched.evidence.runtimeAutoscaling);
+      assert.throws(() => assertStudioServerReleaseManifest(mismatched), /same operation/);
+    }
+    const historical = structuredClone(packet.candidate);
+    const oldControl = historical.evidence.runtimeControl;
+    oldControl.protocol = 4;
+    oldControl.checks = [...HA_ORDINARY_RUNTIME_CHECKS];
+    oldControl.requestContinuity.protocol = 3;
+    oldControl.requestContinuity.completedRequests = 18;
+    oldControl.requestContinuity.checks = [
+      'full-body-300-second-requests',
+      'late-admission-and-connection-reuse',
+      'proxy-pod-and-neg-replacement',
+      'execution-owner-300-second-drain',
+      'accepted-action-resume',
+      'request-recording-and-no-duplicates',
+      'bridge-return-handoff',
+    ];
+    delete oldControl.requestContinuity.proxyReplaced;
+    historical.evidence.runtimeAutoscaling.protocol = 3;
+    assertStudioServerReleaseManifest(historical);
+    historical.evidence.runtimeAutoscaling.protocol = 4;
+    assert.throws(() => assertStudioServerReleaseManifest(historical), /same operation/);
+    for (const mutate of [
+      (a) => {
+        a.reportSha256 = 'f'.repeat(64);
+      },
+      (a) => {
+        a.startedAt = new Date(Date.parse(a.startedAt) + 1).toISOString();
+      },
+    ]) {
+      const separate = structuredClone(result.autoscaling);
+      mutate(separate);
+      assert.throws(
+        () =>
+          prepareRuntimeQualification({
+            candidate: f.operation.candidate,
+            promoted: f.promoted,
+            control: result.control,
+            autoscaling: separate,
+            repository,
+            sourceSha: sha,
+            build: { runId: '123', runAttempt: 1 },
+            safetyDigest: f.input.approval.safetyDigest,
+          }),
+        /same observed rollout/,
+      );
+    }
+    assertContinuityUpgrade(packet.candidate, f.input.installed.qualificationValues, {
+      profile: f.operation.requestContinuityProfile,
+    });
+    const falseClaim = structuredClone(result.control);
+    falseClaim.evidence.requestContinuity.checks.push('proxy-hpa-removal');
+    assert.throws(() =>
+      prepareRuntimeQualification({
+        candidate: f.operation.candidate,
+        promoted: f.promoted,
+        control: falseClaim,
+        autoscaling: result.autoscaling,
+        repository,
+        sourceSha: sha,
+        build: { runId: '123', runAttempt: 1 },
+        safetyDigest: f.input.approval.safetyDigest,
+      }),
+    );
+    if (retained) {
+      // Both report validation and certificate compilation must happen before
+      // cleanup is allowed to discard a failed attempt's fixtures.
+      const pooled = qualificationOperation({
+        ...f.input,
+        approval: { ...f.input.approval, executionPoolsEnabled: true },
+      });
+      for (const [operation, fault] of [
+        [f.operation, 'report'],
+        [pooled, 'layout'],
+        [pooled, 'parallel-proof'],
+      ]) {
+        const facts = structuredClone(f.facts);
+        for (const report of Object.values(facts)) report.inputHash = operation.inputHash;
+        if (fault === 'report') facts.upgrade.readiness.minimumReady.execution = 1;
+        if (fault === 'layout') delete facts.upgrade.outcomes.executionPools;
+        if (fault === 'parallel-proof') {
+          facts.upgrade.outcomes.executionPools = true;
+          facts.upgrade.outcomes.executionPool = { protocol: 1, phase: 'incomplete' };
+        }
+        Object.assign(facts.verifyCleanup.retainedApplication, {
+          phase: 'quarantined',
+          healthy: false,
+          dataCleaned: false,
+        });
+        const rejected = driver({ ...f, facts }),
+          decisions = [],
+          states = [];
+        const rejectCleanup = rejected.api.cleanup;
+        rejected.api.cleanup = async (input, decision) => {
+          decisions.push(decision.qualificationPassed);
+          return rejectCleanup(input);
+        };
+        await assert.rejects(
+          executeRuntimeQualification(operation, rejected.api, async (state) => states.push(state), {
+            now: () => scalingStart + 3000,
+          }),
+          /Qualification failed/,
+        );
+        assert.deepEqual(decisions, [false]);
+        assert.equal(states.at(-1).cleanupVerified, true);
+      }
+    }
+  });
 
 test('focused policy evidence is validated inside the real rollout with fresh samples, ready floors and successful traffic', () => {
   const f = fixture();

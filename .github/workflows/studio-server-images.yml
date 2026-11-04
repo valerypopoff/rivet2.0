@@ -132,6 +132,8 @@ jobs:
     timeout-minutes: 90
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      INSTALLED_PREDECESSOR_DIGEST: ${{ github.ref == 'refs/heads/main' && (inputs.installed_predecessor_digest || vars.RIVET_INSTALLED_PREDECESSOR_DIGEST) || '' }}
+      ALLOW_RELEASE_LINEAGE_BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_release_lineage_bootstrap == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -156,6 +158,9 @@ jobs:
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: ${{ matrix.service == 'proxy' && '0' || '1' }}
+          filter: ${{ matrix.service == 'proxy' && 'blob:none' || '' }}
 
       - name: Set Up QEMU
         if: ${{ contains(matrix.platforms, 'linux/arm64') }}
@@ -171,7 +176,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Node for proxy input proof
+        if: ${{ matrix.service == 'proxy' }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Resolve unchanged proxy image
+        if: ${{ matrix.service == 'proxy' }}
+        id: reuse
+        run: node deploy/studio-server/scripts/prepare-component-image.mjs
+      - name: Retain proxy source provenance
+        if: ${{ matrix.service == 'proxy' }}
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
+        with:
+          name: studio-server-proxy-origin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/component-image-origin/proxy.json
+          if-no-files-found: error
       - name: Prepare Docker Metadata
+        if: ${{ steps.reuse.outputs.reused != 'true' }}
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
@@ -183,6 +205,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build and Push ${{ matrix.service }}
+        if: ${{ steps.reuse.outputs.reused != 'true' }}
         id: build
         continue-on-error: true
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -405,6 +428,11 @@ jobs:
             exit 1
           fi
           echo "::warning::Explicitly starting a new release lineage while promoted images already exist. This transition is non-rollbackable through the automated forward-rollback command."
+      - name: Download proxy provenance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-proxy-origin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/component-image-origin
       - name: Materialize immutable candidate manifest
         shell: bash
         run: |
@@ -440,6 +468,11 @@ jobs:
             fi
             predecessor_args=(--predecessor "$installed_predecessor" --publication-head "$CURRENT_PRODUCTION_MANIFEST")
           fi
+          origin_args=()
+          if jq -e '. != null' artifacts/component-image-origin/proxy.json >/dev/null; then
+            jq '{proxy: .origin}' artifacts/component-image-origin/proxy.json > artifacts/component-image-origin/origins.json
+            origin_args=(--image-origins artifacts/component-image-origin/origins.json)
+          fi
           node deploy/studio-server/scripts/create-release-manifest.mjs create \
             --output "$RELEASE_MANIFEST" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -449,6 +482,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --image "$image_specs_csv" \
+            "${origin_args[@]}" \
             "${predecessor_args[@]}"
       - name: Upload candidate release manifest
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
@@ -508,10 +542,12 @@ jobs:
     name: Smoke candidate images
     needs:
       - build-and-push
+      - release-manifest
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      STUDIO_SERVER_CANDIDATE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -528,6 +564,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Exercise Candidate Image Set
         run: yarn studio-server:verify:candidate-images
+      - name: Download exact candidate for rehearsal provenance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/studio-server-release-manifest
       - name: Install Playwright Chromium and Linux dependencies
         run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
       - name: Rehearse local SQLite conversion and recovery with candidate images

@@ -1,8 +1,44 @@
 # Production update continuity implementation plan
 
-The [workflow performance implementation](release-workflow-performance-plan.md) and subsequent rollout repairs are published through [PR 239](https://github.com/valerypopoff/rivet2.0/pull/239), source `66cfa994ab0d65557b06360c2197c8221cb687d0`. [Build Images 41714935583](https://github.com/valerypopoff/rivet2.0/actions/runs/41714935583) passed its image, scan and local Kubernetes gates. [Staging run 41724373390](https://github.com/valerypopoff/rivet2.0/actions/runs/41724373390) then failed in preparation, before the rollout: the new admission preflight parsed kubectl's successive JSON documents as one document. Cleanup and independent closure passed; production was skipped. GKE qualification and production activation remain open. The single-attempt allowance is closed.
+As of 2026-11-04, [PR 240](https://github.com/valerypopoff/rivet2.0/pull/240), source `7b42dabdeab8b312c2ee50ca198a385bc2acd2a2`, passed [Build Images 41788374693](https://github.com/valerypopoff/rivet2.0/actions/runs/41788374693) and [focused GKE qualification 41793031762](https://github.com/valerypopoff/rivet2.0/actions/runs/41793031762). The qualified manifest was published and staging cleanup independently verified.
+
+Production activation completed on 2026-11-04 with that same qualified release. Independent final verification confirmed manifest `sha256:399452eb945530d430390b5ff194ea588a84d184d265d25b329e1c178349fce5`, all qualified images, seven ready Pods, schema 18, two healthy GCP proxy endpoints and the protected shutdown profile. The original handoff was resumed with its original token after updating the legacy controller to its already-qualified image. The normal route and HPA are restored, all six temporary handoff resources are absent, the owned observer project is cleaned, and the operation lock is released with absence verified. No second staging qualification or application build was needed.
+
+The original observation window completed 1,522 successful workflow requests, including 48 complete 300-second origin responses, and 1,473 successful web samples. All 1,522 matching recordings were subsequently checked. The fixed 80-minute observer expired during removal of unused handoff resources, after owner replacement and route restoration/draining had been captured inside its window. Its original application-failed result is preserved. A separate `--acceptance-only` verification passed fresh workflow, web and debugger checks against the installed candidate, audited the original recordings and cleaned the original fixture; it did not repeat deployment or create another fixture. Public GET-only readiness observation added 455 successful samples. A local disk-full event interrupted that later logging for 393 seconds; there is no invented coverage for the gap and no claim that all editor connections survived the singleton backend replacement.
+
+Production preparation exposed private-bundle entry/authentication errors, PostgreSQL client compatibility and local Docker networking boundaries, an existing public-edge timeout, an oversized historical object-copy step, and a brief autoscaler sampling lease collision. Cold packaged-entry tests, native PostgreSQL 18 snapshot/local-restore checks, public availability plus origin 300-second probes, and a bounded GET-only sampling wait cover those boundaries. The subsequent [performance implementation](rolling-update-performance-plan.md) overlaps ordinary native frontends with serial owners, adds explicit readiness joins and bounds independent ingress reads. These source changes and documentation are included in the develop update; activation remains separate. The final source suite passed 406 tests and workflow policy on Windows and Linux; 28 real deployment-command scenarios, the additional acceptance-only recovery scenario and the pinned native-tool contracts passed locally. Hosted timing and new GKE qualification remain open. The qualified production checkout and live deployment remain unchanged by this source update.
+
+The user explicitly approved an object-version checkpoint using the source bucket's existing seven-day soft delete, with any recovery completed within six days. The final checkpoint's recovery deadline is **2026-11-10T12:17:28.046Z**. The complete scoped SQL dump, isolated restore verification, encryption keys and exact object generation/size/checksum coverage are retained privately. The exact bucket-metadata-only CI grant and checksummed private bundle publication are verified. This replaces the old historical-object download step, rather than changing the source bucket or claiming an independent copy of its bytes. Private operation receipts and all 359 ignored artifacts from the qualified checkout were also retained separately with file-size/SHA256 verification; no private evidence belongs in public Git.
 
 ## Preparation after repeated staging integration failures
+
+The November 4 larger performance implementation is also prepared locally:
+retained staging application identity/scoped cleanup, unchanged proxy image
+provenance with fresh scans, a bounded two-worker pool handoff, and concurrent
+online preparation/final acceptance in a separate private adapter copy. Original
+production artifacts remain unchanged. It preserves the 300-second traffic,
+accepted-work/recording, serving-capacity and recovery checks. Larger live pools
+and shared worker PVCs keep serial retirement. The approximately 25-35 minute
+staging / 15-22 minute production targets are unmeasured steady-state budgets;
+the first retained installation still pays bootstrap cost. See the
+[implemented path, validation and activation sequence](rolling-update-performance-plan.md).
+No new build, staging activation or production deployment was started for it.
+
+Local reassessment also fixed retained-app admission against existing workloads,
+propagated the coordinator's validated cleanup decision through both transports,
+and moved certificate compilation ahead of retained data deletion. Pool removal
+now refreshes its conditional resource version and rechecks both drained owners
+after slow evidence reads. Private-image registry copies can follow rotation of
+their pinned staging source without rotating database/app keys. These repairs
+add no cloud operation, qualification retry or production write.
+
+A further local reproduction covered the supported three-worker serial fallback:
+it previously rejected the new standby after an acknowledged apply, then required
+parallel-only evidence for the completed serial update. The standby now binds to
+its verified template UID. Qualification records the actual paired layout and
+permits a successful serial fallback; production enables parallel handoff only
+when that separate behavior was observed and certified. This changes no traffic,
+completion, recording or capacity checks and adds no wait or cloud attempt.
 
 The five preparation items below are implemented locally. Admission uses one
 workload per native dry run, and the packaged provider now has a Linux
@@ -297,7 +333,7 @@ owners include:
   actor/source-packet dependency-closure checks.
 
 The previous production operation recorded staging packaging and hostname
-blockers. The current uncommitted work already addresses parts of these areas;
+blockers. The current source already addresses parts of these areas;
 inspect and validate it before proposing another fix. Its existence does not mean
 it is present in a clean main image or provider-qualified.
 

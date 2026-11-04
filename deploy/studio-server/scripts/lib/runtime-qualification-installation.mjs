@@ -37,6 +37,17 @@ export function qualificationSizing(values) {
   );
   return {
     resources,
+    ...(values.ha?.executionPools?.enabled
+      ? {
+          ha: {
+            executionPools: {
+              enabled: true,
+              active: values.ha.executionPools.active,
+              retiringReplicas: 0,
+            },
+          },
+        }
+      : {}),
     ...(requestContinuityProfile(values)
       ? {
           requestContinuity: pick(values.requestContinuity, [

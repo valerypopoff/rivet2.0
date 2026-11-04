@@ -18,6 +18,10 @@ const lists = [
   ['healthcheckpolicy', '/apis/networking.gke.io/v1', 'healthcheckpolicies'],
 ];
 export async function observeStagingInventory(state, cloud, { settlement } = {}) {
+  if (state.application) {
+    await state.application.owned();
+    return []; // Permanent application resources are never operation deletion targets.
+  }
   const namespace = await state.namespace();
   const { record } = await state.read();
   if (!namespace) {
@@ -283,6 +287,7 @@ export async function settleStagingProcesses(state, wait) {
 }
 
 export async function settleStaging(state, cloud, owner, wait) {
+  assert.ok(!state.application, 'Retained application requires its dedicated settlement contract');
   await state.claimCleanup(owner);
   const namespace = await state.namespace();
   if (!namespace) {
@@ -426,6 +431,7 @@ export async function settleStaging(state, cloud, owner, wait) {
 }
 
 export async function cleanupStaging(state, owner) {
+  assert.ok(!state.application, 'Retained application namespaces must never be deleted by attempt cleanup');
   const { record } = await state.read();
   assert.equal(record.cleanupOwner?.uid, owner.uid);
   assert.equal(record.phase, 'settled');

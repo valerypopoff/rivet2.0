@@ -13,6 +13,11 @@ import {
   verifyStagingCleanup,
 } from './lib/reusable-staging-cleanup.mjs';
 import { stagingCloudReader } from './lib/reusable-staging-cloud.mjs';
+import {
+  settleRetainedStaging,
+  cleanupRetainedStaging,
+  verifyRetainedStagingCleanup,
+} from './lib/retained-staging-cleanup.mjs';
 
 export async function stagingJanitorPass({ api, cloud, settings, owner, wait, now = Date.now }) {
   await cloud.project();
@@ -67,6 +72,20 @@ export async function stagingJanitorPass({ api, cloud, settings, owner, wait, no
       const state = new ReusableStagingState(api, settings, operation);
       await state.read();
       await stopExpiredStagingWriter(state, wait);
+      if (state.application) {
+        await state.claimCleanup(owner, { expired: true });
+        const retained = await state.application.read();
+        if (retained?.record.phase === 'owned' || !(await state.read()).record.retainedApplication) {
+          await settleRetainedStaging(state, owner, wait);
+          await cleanupRetainedStaging(state, null, owner); // Preserve data and quarantine; no unreviewed application writes.
+        }
+        const verified = await verifyRetainedStagingCleanup(state);
+        outcomes.push({
+          operationId: operation.operationId,
+          status: verified.retainedApplication.phase === 'idle' ? 'retained-cleaned' : 'retained-quarantined',
+        });
+        continue;
+      }
       const current = (await state.read()).record;
       if (!current.namespaceDeleteIssued) {
         await settleStaging(state, cloud, owner, wait);

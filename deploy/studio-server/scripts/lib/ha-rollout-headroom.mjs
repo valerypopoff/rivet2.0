@@ -104,6 +104,13 @@ export function createHaExecutionHeadroomGuard({
   const transport = {
     async json(method, requestPath) {
       if (method !== 'GET') throw new Error('Rollout headroom transport is read-only.');
+      const poolPrefix = `/apis/apps/v1/namespaces/${encodeURIComponent(namespace)}/statefulsets/`;
+      if (config.poolWorkloads?.length && requestPath.startsWith(poolPrefix)) {
+        const name = decodeURIComponent(requestPath.slice(poolPrefix.length));
+        if (!config.poolWorkloads.includes(name)) throw Error('Execution headroom read escaped its paired pools');
+        const raw = (await kube(['get', 'statefulset', name, '--ignore-not-found', '-o', 'json'])).stdout;
+        return raw.trim() ? JSON.parse(raw) : null;
+      }
       return JSON.parse((await kube(['get', '--raw', requestPath])).stdout);
     },
     async exec(requestPath, command) {
@@ -141,6 +148,7 @@ export function createHaExecutionHeadroomGuard({
         expectedUid: workload.uid,
         policy,
         port: config.port,
+        poolWorkloads: config.poolWorkloads,
         now,
       });
       const snapshot = await io.snapshot();
@@ -157,6 +165,15 @@ export function createHaExecutionHeadroomGuard({
         transport.json('GET', `/apis/apps/v1/namespaces/${ns}/statefulsets/${encodeURIComponent(workload.name)}`),
         transport.json('GET', `/api/v1/namespaces/${ns}/pods?labelSelector=${selector}`),
       ]);
+      if (config.poolWorkloads?.length) {
+        // IO already validated the complete paired-pool inventory. This guard
+        // assesses the selected owner; peer capacity is assessed at pool fencing.
+        pods.items = pods.items.filter((pod) =>
+          pod.metadata.ownerReferences?.some(
+            (ref) => ref.controller && ref.kind === 'StatefulSet' && ref.uid === snapshot.uid,
+          ),
+        );
+      }
       if (
         owner.metadata?.uid !== snapshot.uid ||
         owner.metadata.deletionTimestamp ||
@@ -485,22 +502,42 @@ export function createHaProxyHeadroomGuard({
               (pod) =>
                 pod.metadata.uid === sample.uid &&
                 pod.metadata.name === sample.name &&
-                !!pod.metadata.deletionTimestamp === sample.terminating &&
+                (!sample.terminating || !!pod.metadata.deletionTimestamp) &&
                 (!sample.ready ||
+                  !!pod.metadata.deletionTimestamp ||
                   pod.status?.conditions?.some((value) => value.type === 'Ready' && value.status === 'True')),
             ),
         )
       )
         throw new Error('Proxy observation changed during CPU inspection.');
-      if (confirmedOwner.spec.replicas !== owner.spec.replicas || confirmedActive.length !== confirmedSamples.length) {
+      const startedDraining = confirmedSamples.some(
+        (sample) =>
+          !sample.terminating &&
+          confirmedActive.some((pod) => pod.metadata.uid === sample.uid && pod.metadata.deletionTimestamp),
+      );
+      if (
+        startedDraining ||
+        confirmedOwner.spec.replicas !== owner.spec.replicas ||
+        confirmedActive.length !== confirmedSamples.length
+      ) {
+        // Native RollingUpdate can begin an owned predecessor's drain between
+        // the CPU snapshot and confirmation. Keep the two-owner floor and take
+        // a fresh sample before any worker retirement, never use stale readiness.
+        const stillReady = confirmedActive.filter(
+          (pod) =>
+            !pod.metadata.deletionTimestamp &&
+            pod.status?.conditions?.some((condition) => condition.type === 'Ready' && condition.status === 'True'),
+        ).length;
         if (
           confirmedOwner.spec.replicas >= owner.spec.replicas &&
           confirmedActive.length >= confirmedSamples.length &&
           confirmedActive.filter((pod) => !pod.metadata.deletionTimestamp).length <= confirmedOwner.spec.replicas + 1 &&
-          ready.length >= hpa.spec.minReplicas
+          stillReady >= hpa.spec.minReplicas
         )
-          throw new PendingHaCapacity('Owned proxy growth changed the sample; collect fresh CPU observations.');
-        throw new Error('Proxy capacity changed outside permitted growth.');
+          throw new PendingHaCapacity(
+            'Owned proxy replacement or growth changed the sample; collect fresh CPU observations.',
+          );
+        throw new Error('Proxy capacity changed outside its protected rollout bounds.');
       }
       result = {
         workloadUid,

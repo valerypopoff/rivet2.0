@@ -1,6 +1,10 @@
 {{- if .Values.autoscaling.executionController.enabled }}
 {{- $name := printf "%s-autoscaler" (include "rivet.fullname" .) }}
 {{- $workload := include "rivet.executionName" . }}
+{{- $poolWorkloads := list $workload (printf "%s-next" $workload) }}
+{{- if and .Values.ha.executionPools.enabled (eq .Values.ha.executionPools.active "b") }}
+{{- $workload = printf "%s-next" $workload }}
+{{- end }}
 {{- $apiImage := include "rivet.image" (dict "root" . "image" .Values.images.api) }}
 {{- $manifestDigest := default (printf "local:%s" (sha256sum $apiImage)) .Values.release.production.manifestDigest }}
 {{- $journal := printf "%s-%s-cutover" (.Release.Name | trunc 32) (sha256sum .Release.Name | trunc 8) }}
@@ -23,6 +27,12 @@ rules:
     resources: [statefulsets]
     resourceNames: [{{ $workload | quote }}]
     verbs: [get, patch] # exact StatefulSet startup fence, never a developer owner
+  {{- if .Values.ha.executionPools.enabled }}
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    resourceNames: [{{ index $poolWorkloads (ternary 1 0 (eq .Values.ha.executionPools.active "a")) | quote }}]
+    verbs: [get]
+  {{- end }}
   - apiGroups: [apps]
     resources: [statefulsets/scale]
     resourceNames: [{{ $workload | quote }}]
@@ -37,11 +47,33 @@ rules:
       - {{ printf "%s-%d" $workload $ordinal | quote }}
       {{- end }}
     verbs: [get, patch, delete]
+  {{- if .Values.ha.executionPools.enabled }}
+  - apiGroups: ['']
+    resources: [pods]
+    resourceNames:
+      {{- $peer := index $poolWorkloads (ternary 1 0 (eq .Values.ha.executionPools.active "a")) }}
+      {{- range $ordinal := until (add1 (int .Values.autoscaling.execution.maxReplicas) | int) }}
+      - {{ printf "%s-%d" $peer $ordinal | quote }}
+      {{- end }}
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [services]
+    resourceNames: [{{ include "rivet.executionServiceName" . | quote }}]
+    verbs: [get]
+  {{- end }}
   - apiGroups: ['']
     resources: [pods/exec]
     resourceNames:
+      {{- if .Values.ha.executionPools.enabled }}
+      {{- range $pool := $poolWorkloads }}
+      {{- range $ordinal := until (add1 (int $.Values.autoscaling.execution.maxReplicas) | int) }}
+      - {{ printf "%s-%d" $pool $ordinal | quote }}
+      {{- end }}
+      {{- end }}
+      {{- else }}
       {{- range $ordinal := until (add1 (int .Values.autoscaling.execution.maxReplicas) | int) }}
       - {{ printf "%s-%d" $workload $ordinal | quote }}
+      {{- end }}
       {{- end }}
     # WebSocket GET upgrades also require CREATE on Kubernetes 1.35+.
     # Keep it separate: this does not grant creation of Pods.
@@ -106,7 +138,7 @@ spec:
           {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
           env:
             - name: RIVET_AUTOSCALER_CONFIG
-              value: {{ dict "release" .Release.Name "namespace" .Release.Namespace "workload" $workload "service" (include "rivet.executionServiceName" .) "port" .Values.service.execution.targetPort "image" $apiImage "manifestDigest" $manifestDigest "policy" (dict "minReplicas" .Values.autoscaling.execution.minReplicas "maxReplicas" .Values.autoscaling.execution.maxReplicas "targetSlotsPercent" .Values.autoscaling.executionController.targetSlotsPercent "targetCpuPercent" .Values.autoscaling.execution.targetCPUUtilizationPercentage "stabilizationSeconds" .Values.autoscaling.executionController.stabilizationSeconds "cooldownSeconds" .Values.autoscaling.executionController.cooldownSeconds "withdrawalSeconds" .Values.autoscaling.executionController.withdrawalSeconds "pollSeconds" .Values.autoscaling.executionController.pollSeconds "metricsMaxAgeSeconds" .Values.autoscaling.executionController.metricsMaxAgeSeconds) | toJson | quote }}
+              value: {{ dict "release" .Release.Name "namespace" .Release.Namespace "workload" $workload "poolWorkloads" (ternary $poolWorkloads (list) .Values.ha.executionPools.enabled) "service" (include "rivet.executionServiceName" .) "port" .Values.service.execution.targetPort "image" $apiImage "manifestDigest" $manifestDigest "policy" (dict "minReplicas" .Values.autoscaling.execution.minReplicas "maxReplicas" .Values.autoscaling.execution.maxReplicas "targetSlotsPercent" .Values.autoscaling.executionController.targetSlotsPercent "targetCpuPercent" .Values.autoscaling.execution.targetCPUUtilizationPercentage "stabilizationSeconds" .Values.autoscaling.executionController.stabilizationSeconds "cooldownSeconds" .Values.autoscaling.executionController.cooldownSeconds "withdrawalSeconds" .Values.autoscaling.executionController.withdrawalSeconds "pollSeconds" .Values.autoscaling.executionController.pollSeconds "metricsMaxAgeSeconds" .Values.autoscaling.executionController.metricsMaxAgeSeconds) | toJson | quote }}
           ports: [{ name: health, containerPort: 9090 }]
           readinessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 15 }
           livenessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 30, failureThreshold: 6 }

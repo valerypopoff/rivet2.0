@@ -734,7 +734,10 @@ async function main() {
     }
     inspections[name] = JSON.parse(inspected.output)[0];
   }
-  const images = pinRehearsalImages(inspections, process.env.GITHUB_SHA);
+  const candidate = process.env.STUDIO_SERVER_CANDIDATE_MANIFEST
+    ? JSON.parse(await fs.readFile(process.env.STUDIO_SERVER_CANDIDATE_MANIFEST, 'utf8'))
+    : undefined;
+  const images = pinRehearsalImages(inspections, process.env.GITHUB_SHA, candidate);
   const project = prefix + randomUUID();
   const artifactRoot = path.join(root, 'artifacts', 'local-upgrade');
   await fs.mkdir(artifactRoot, { recursive: true });

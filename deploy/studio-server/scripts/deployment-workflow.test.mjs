@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   readDeploymentPolicy,
+  readAcceptanceVerificationContext,
   runDeploymentStage,
   executeDeploymentWorkflow as runDeploymentWorkflow,
   deploymentRecoveryIdentity,
@@ -27,6 +28,44 @@ const executeDeploymentWorkflow = (options) =>
 
 const hash = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`;
 
+for (const failing of [null, 'before', 'backup'])
+  test(`parallel online preparation joins both adapters before ${failing ? `reporting ${failing} failure` : 'mutation'}`, async () => {
+    const started = [],
+      settled = [];
+    let release;
+    const barrier = new Promise((resolve) => {
+      release = resolve;
+    });
+    let applied = false;
+    const run = executeDeploymentWorkflow({
+      approval: { policy: { preparation: 'parallel-online' } },
+      context: {},
+      stage: async (_approval, name) => {
+        if (name === 'abort-preparation') {
+          assert.deepEqual(new Set(settled), new Set(['before', 'backup']));
+          assert.equal(applied, false);
+          return { stage: name };
+        }
+        if (name === 'after') return { stage: name };
+        started.push(name);
+        if (started.length === 2) release();
+        await barrier;
+        settled.push(name);
+        if (name === failing) throw Error(name);
+        return { stage: name };
+      },
+      run: async () => {
+        assert.deepEqual(new Set(settled), new Set(['before', 'backup']));
+        applied = true;
+      },
+    });
+    if (failing) await assert.rejects(run, /Online deployment preparation failed/);
+    else await run;
+    assert.deepEqual(new Set(started), new Set(['before', 'backup']));
+    assert.deepEqual(new Set(settled), new Set(['before', 'backup']));
+    assert.equal(applied, !failing);
+  });
+
 test('the final baseline check rejects a recreated or terminating namespace even at the same installed version', () => {
   const expected = { installedManifestDigest: hash('installed'), namespace: 'fixture', namespaceUid: 'original' };
   const installed = { release: { production: { manifestDigest: expected.installedManifestDigest } } };
@@ -43,6 +82,63 @@ test('the final baseline check rejects a recreated or terminating namespace even
   assert.doesNotThrow(() =>
     assertDeploymentBaseline({ installedManifestDigest: expected.installedManifestDigest }, installed),
   );
+});
+
+test('a failed final preparation guard aborts its observer and preserves cleanup failures before applying', async () => {
+  const stages = [],
+    guardError = Error('baseline changed'),
+    cleanupError = Error('observer exit unconfirmed');
+  const work = executeDeploymentWorkflow({
+    approval: { policy: { preparation: 'parallel-online' } },
+    context: {},
+    stage: async (_approval, name) => {
+      stages.push(name);
+      if (name === 'abort-preparation') throw cleanupError;
+      return { stage: name };
+    },
+    prepareSafety: async () => {
+      throw guardError;
+    },
+    run: async () => {
+      throw Error('Must never apply');
+    },
+  });
+  await assert.rejects(work, (error) => {
+    assert.ok(error.errors.includes(guardError));
+    assert.ok(error.errors.includes(cleanupError));
+    return true;
+  });
+  assert.deepEqual(stages, ['before', 'backup', 'abort-preparation']);
+});
+
+test('failure to persist deployment readiness closes parallel preparation without claiming a workload write', async () => {
+  const stages = [],
+    reports = [],
+    disk = Error('deployment result disk full');
+  let applied = false;
+  await assert.rejects(
+    executeDeploymentWorkflow({
+      approval: { policy: { preparation: 'parallel-online' } },
+      context: {},
+      stage: async (_approval, name) => {
+        stages.push(name);
+        return { stage: name };
+      },
+      artifact: async (_name, value) => {
+        const report = JSON.parse(value);
+        reports.push(report);
+        if (report.state === 'deploying') throw disk;
+      },
+      run: async () => {
+        applied = true;
+      },
+    }),
+    (error) => error instanceof AggregateError && error.errors.includes(disk),
+  );
+  assert.equal(applied, false);
+  assert.deepEqual(stages, ['before', 'backup', 'abort-preparation']);
+  assert.equal(reports.at(-1).state, 'preparation-failed');
+  assert.equal(reports.at(-1).outcome.infrastructure, 'not-started');
 });
 
 test('only an explicit exact token resumes a verified workflow and preserves its original installed baseline', () => {
@@ -83,7 +179,7 @@ if(r.stage==='backup'){
  objectReferencesCovered:true,encryptionKeysRecoverable:true,unrelatedDataExcluded:true,artifacts:[]};
  for(const role of ['database','objects','keys','verification']){const text=role+' recovery bytes';await fs.writeFile(path.join(directory,role),text);
  receipt.artifacts.push({role,path:role,sha256:'sha256:'+createHash('sha256').update(text).digest('hex')});}
-}else{receipt.kind='rivet-deployment-acceptance';receipt.checks={};for(const name of (r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
+}else{receipt.kind=r.stage==='abort-preparation'?'rivet-deployment-preparation-abort':'rivet-deployment-acceptance';receipt.checks={};for(const name of (r.stage==='abort-preparation'?['observerStopped','acceptedWorkSettled','fixtureCleaned']:r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
  await fs.writeFile(path.join(directory,name),'observed fixture journey');receipt.checks[name]={passed:true,observed:true,evidence:name};}}
 await fs.writeFile(out,JSON.stringify(receipt));`;
 
@@ -119,13 +215,60 @@ async function fixture(t) {
 
 test('real private adapters bind online recovery and before/after application journeys to each attempt', async (t) => {
   const f = await fixture(t);
-  for (const stage of ['before', 'backup', 'after']) {
+  for (const stage of ['before', 'backup', 'after', 'abort-preparation']) {
     const report = await runDeploymentStage(f.approval, stage, f.context, f.options);
     assert.equal(report.verified, true);
     assert.equal(JSON.stringify(report).includes('private adapter log'), false);
     assert.match(await fs.readFile(path.join(report.directory, 'adapter-private.log'), 'utf8'), /private adapter log/);
     assert.equal(JSON.parse(await fs.readFile(path.join(report.directory, 'verified.json'), 'utf8')).stage, stage);
   }
+});
+
+test('observer verification restores only the exact original acceptance binding', async (t) => {
+  const f = await fixture(t);
+  const report = await runDeploymentStage(f.approval, 'after', f.context, f.options);
+  const file = path.join(report.directory, 'request.json');
+  const context = {
+    ...f.context,
+    operationId: 'new-verification',
+    installedManifestDigest: f.context.candidateManifestDigest,
+  };
+  const restored = await readAcceptanceVerificationContext(file, f.root, context, f.approval.digest);
+  assert.equal(restored.operationId, f.context.operationId);
+  assert.equal(restored.installedManifestDigest, f.context.installedManifestDigest);
+  assert.equal(restored.recovering, true);
+  assert.equal(restored.originalAcceptanceStartedAt, JSON.parse(await fs.readFile(file, 'utf8')).startedAt);
+  assert.equal(restored.candidateManifestDigest, context.candidateManifestDigest);
+  const request = JSON.parse(await fs.readFile(file, 'utf8'));
+  for (const [key, value] of Object.entries({
+    formatVersion: 2,
+    stage: 'before',
+    requestId: '',
+    operationId: '',
+    installedManifestDigest: 'invalid',
+    startedAt: 'invalid',
+    originalAcceptanceStartedAt: '9999-01-01T00:00:00Z',
+    operationPlanDigest: hash('changed'),
+    release: 'other',
+    namespace: 'other',
+    context: 'other',
+    namespaceUid: 'other',
+    candidateManifestDigest: hash('changed'),
+    valuesDigest: hash('changed'),
+    authorizationManifestDigest: hash('other'),
+    adoptionStage: 'ownership',
+  })) {
+    await fs.writeFile(file, JSON.stringify({ ...request, [key]: value }));
+    await assert.rejects(readAcceptanceVerificationContext(file, f.root, context, f.approval.digest), /must match/);
+  }
+  await assert.rejects(
+    readAcceptanceVerificationContext('../outside.json', f.root, context, f.approval.digest),
+    /inside/,
+  );
+  await fs.writeFile(file, JSON.stringify(request));
+  const link = path.join(f.root, 'redirect.json');
+  await fs.symlink(file, link);
+  await assert.rejects(readAcceptanceVerificationContext(link, f.root, context, f.approval.digest), /regular files/);
 });
 
 test('changed scripts or namespace identity fail before an adapter starts', async (t) => {

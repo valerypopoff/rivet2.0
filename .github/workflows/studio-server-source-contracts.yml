@@ -61,4 +61,4 @@ jobs:
           echo "$tools" >> "$GITHUB_PATH"
       - name: Verify packaged provider preparation and cleanup before expensive work
         timeout-minutes: 2
-        run: yarn node --test deploy/studio-server/scripts/provider-tool-contracts.test.mjs deploy/studio-server/scripts/reusable-staging.test.mjs deploy/studio-server/scripts/runtime-control-local.test.mjs deploy/studio-server/scripts/ha-gke-availability.test.mjs
+        run: yarn node --test deploy/studio-server/scripts/provider-tool-contracts.test.mjs deploy/studio-server/scripts/reusable-staging.test.mjs deploy/studio-server/scripts/runtime-control-local.test.mjs deploy/studio-server/scripts/ha-gke-availability.test.mjs deploy/studio-server/scripts/execution-autoscaler-kubernetes.test.mjs
