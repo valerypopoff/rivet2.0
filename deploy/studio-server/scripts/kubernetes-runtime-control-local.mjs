@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
+import { assertManagedGateActive } from './lib/managed-gate-command.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { parse, parseAllDocuments } from 'yaml';
 import { HaReleaseGate } from './kubernetes-ha-release-gate.mjs';
@@ -90,7 +91,11 @@ export function publishedScheduleCompletedWithoutDevelopers(runs, absentAt) {
 }
 const until = async (name, check, timeout = 180_000) => {
   const deadline = Date.now() + timeout;
-  while (!(await check())) {
+  while (true) {
+    assertManagedGateActive();
+    const result = await check();
+    assertManagedGateActive();
+    if (result) return;
     if (Date.now() >= deadline) throw Error(`Local runtime control proof timed out: ${name}`);
     await sleep(500);
   }

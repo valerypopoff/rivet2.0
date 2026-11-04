@@ -1,22 +1,16 @@
 import assert from 'node:assert/strict';
 // test-style: fixture-read: Inspect only freshly generated private driver packages and rendered manifests, not implementation source.
 import test from 'node:test';
+import { persistenceFixture } from './test-fixtures/persistence.mjs';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { parseAllDocuments } from 'yaml';
-import { createKubernetesTransport } from './lib/execution-autoscaler-kubernetes.mjs';
-import {
-  ReusableStagingState,
-  reusableStagingSettings,
-  stagingOwner,
-  stagingHostname,
-} from './lib/reusable-staging-state.mjs';
+import { reusableStagingSettings, stagingHostname } from './lib/reusable-staging-state.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
 import {
   settleStaging,
@@ -34,16 +28,31 @@ import { verifyQualificationDriver } from './lib/runtime-qualification-driver.mj
 import { executeProviderPhase } from './qualification/provider-entry.mjs';
 import { providerProgressStep } from './lib/provider-progress.mjs';
 import { ManagedReleaseGate, createReleaseGateWebAppOAuthSession } from './kubernetes-managed-release-gate.mjs';
-import { ReusableProviderGate } from './qualification/provider-gate.mjs';
+import { ReusableProviderGate, until } from './qualification/provider-gate.mjs';
+import { withManagedGateSignal } from './lib/managed-gate-command.mjs';
 import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
 } from './lib/studio-server-release-manifest.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
-const { WebSocket, WebSocketServer } = createRequire(
-  new URL('../../../packages/studio-server-api/package.json', import.meta.url),
-)('ws');
+
+test('provider polling stops on cancellation instead of treating it as another pending observation', async () => {
+  const cancellation = new AbortController(),
+    reason = new Error('fixture observation cancelled');
+  let calls = 0;
+  await assert.rejects(
+    withManagedGateSignal(cancellation.signal, () =>
+      until('fixture readiness', async () => {
+        calls++;
+        cancellation.abort(reason);
+        return false;
+      }),
+    ),
+    (error) => error === reason,
+  );
+  assert.equal(calls, 1);
+});
 
 test('focused admission checks shared prerequisites without requiring an unused browser runtime', async () => {
   const events = [];
@@ -123,7 +132,7 @@ test('workload admission uses server dry runs and records provider adjustments w
       const packet = JSON.parse(options.input);
       sent.push(packet);
       const admitted = structuredClone(packet);
-      for (const item of admitted.items) item.spec.template.spec.containers[0].resources.requests.cpu = '500m';
+      admitted.spec.template.spec.containers[0].resources.requests.cpu = '500m';
       return { stdout: JSON.stringify(admitted) };
     },
     artifact: async (_name, contents) => {
@@ -131,18 +140,18 @@ test('workload admission uses server dry runs and records provider adjustments w
     },
   };
   await ReusableProviderGate.prototype.verifyAdmission.call(gate, {});
-  assert.deepEqual(sent[0].items, desired);
+  assert.deepEqual(sent, desired);
   assert.deepEqual(resources.requests, { cpu: '50m', memory: '128Mi' });
   const validKube = gate.kube;
   for (const fault of ['missing', 'duplicate', 'name', 'kind', 'namespace']) {
     gate.kube = async (...args) => {
       const response = await validKube(...args),
         result = JSON.parse(response.stdout);
-      if (fault === 'missing') result.items.pop();
-      if (fault === 'duplicate') result.items[1] = structuredClone(result.items[0]);
-      if (fault === 'name') result.items[0].metadata.name = 'foreign';
-      if (fault === 'kind') result.items[0].kind = 'Unexpected';
-      if (fault === 'namespace') result.items[0].metadata.namespace = 'foreign';
+      if (fault === 'missing') return { stdout: 'null' };
+      if (fault === 'duplicate') return { stdout: JSON.stringify(desired[0]) };
+      if (fault === 'name') result.metadata.name = 'foreign';
+      if (fault === 'kind') result.kind = 'Unexpected';
+      if (fault === 'namespace') result.metadata.namespace = 'foreign';
       return { stdout: JSON.stringify(result) };
     };
     await assert.rejects(ReusableProviderGate.prototype.verifyAdmission.call(gate, {}), /admission.*workload/i);
@@ -168,246 +177,7 @@ test('a retained staging endpoint is fixed across releases and cannot escape its
     assert.throws(() => reusableStagingSettings({ ...settings(), hostname }));
 });
 
-const digest = 'a'.repeat(64);
-const settings = () =>
-  reusableStagingSettings({
-    protocol: 1,
-    mode: 'reusable-cluster',
-    projectId: 'isolated-staging',
-    region: 'europe-central2',
-    projectNumber: '601520844163',
-    clusterUid: 'staging-cluster',
-    gatewayUid: 'shared-gateway',
-    context: 'gke_isolated-staging_eu_cluster',
-    clusterServer: 'https://staging.invalid',
-    controlNamespace: 'rivet-qualification-control',
-    runnerNamespace: 'rivet-qualification-runners',
-    gatewayNamespace: 'rivet-edge',
-    gatewayName: 'shared-edge',
-    storageClassName: 'standard-rwo',
-    domain: 'qualification.example.test',
-    trustedClients: ['10.128.0.0/20'],
-    trustedForwardingProxies: ['172.30.32.0/23', '192.0.2.200/32'],
-    postgresImage: `registry.test/postgres@sha256:${digest}`,
-    objectStorageImage: `registry.test/minio@sha256:${digest}`,
-  });
-const actor = { name: 'runner-pod', uid: 'runner-uid', namespace: settings().runnerNamespace };
-const owner = { name: 'janitor-pod', uid: 'janitor-uid', namespace: settings().controlNamespace };
-const operation = (expires = Date.now() + 3600000) => {
-  const input = {
-    protocol: 1,
-    operationId: 'rivet-q-123-1',
-    projectId: settings().projectId,
-    projectNumber: settings().projectNumber,
-    staging: {
-      clusterUid: settings().clusterUid,
-      gatewayUid: settings().gatewayUid,
-      clusterServer: settings().clusterServer,
-    },
-    driverBundleSha256: digest,
-    policy: autoscalerPolicy({}),
-    maxUsd: 50,
-    expiresAt: new Date(expires).toISOString(),
-  };
-  return { ...input, inputHash: qualificationHash(input) };
-};
-async function fixture(t, op = operation()) {
-  const objects = new Map(),
-    requests = [];
-  let rv = 0,
-    loseCreate = false,
-    pendingDelete = false;
-  let loseRetirementAck = false;
-  let readFailure;
-  const readCounts = new Map();
-  const store = (url, object) => {
-    const value = structuredClone(object);
-    value.metadata.uid ??= randomUUID();
-    value.metadata.resourceVersion = String(++rv);
-    value.metadata.creationTimestamp ??= new Date(Date.now() - 1000).toISOString();
-    objects.set(url, value);
-    return value;
-  };
-  store('/api/v1/namespaces/kube-system', { metadata: { name: 'kube-system', uid: settings().clusterUid } });
-  store('/api/v1/nodes/staging-node', {
-    metadata: { name: 'staging-node', uid: 'node-uid' },
-    status: { conditions: [{ type: 'Ready', status: 'True' }] },
-  });
-  store(
-    `/apis/gateway.networking.k8s.io/v1/namespaces/${settings().gatewayNamespace}/gateways/${settings().gatewayName}`,
-    { metadata: { uid: settings().gatewayUid } },
-  );
-  const pod = (item) =>
-    store(`/api/v1/namespaces/${item.namespace}/pods/${item.name}`, {
-      metadata: { ...item, labels: { 'rivet.dev/qualification-runner': 'true' } },
-      spec: { nodeName: 'staging-node' },
-    });
-  pod(actor);
-  pod(owner).status = { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] };
-  const health = `/api/v1/namespaces/${settings().controlNamespace}/configmaps/rivet-qualification-janitor-health`;
-  store(health, {
-    metadata: { name: 'rivet-qualification-janitor-health', namespace: settings().controlNamespace },
-    data: {
-      health: JSON.stringify({
-        clusterUid: settings().clusterUid,
-        driverDigest: digest,
-        podUid: owner.uid,
-        podName: owner.name,
-        observedAt: Date.now(),
-      }),
-    },
-  });
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://fixture.invalid'),
-      pathname = url.pathname;
-    let body = '';
-    for await (const chunk of req) body += chunk;
-    const input = body ? JSON.parse(body) : undefined;
-    requests.push({ method: req.method, pathname, input });
-    res.setHeader('content-type', 'application/json');
-    const result = (value) => res.end(JSON.stringify(value));
-    if (req.method === 'GET') {
-      readCounts.set(pathname, (readCounts.get(pathname) ?? 0) + 1);
-      if (readFailure?.path === pathname && readCounts.get(pathname) > readFailure.after) {
-        res.statusCode = 503;
-        return result({ kind: 'Status', reason: 'ServiceUnavailable' });
-      }
-      const value = objects.get(pathname);
-      if (value) return result(value);
-      if (
-        pathname.endsWith('/' + 'rivet-q-123-1') ||
-        pathname === '/api/v1/namespaces/rivet-staging-rivet-q-123-1' ||
-        /\/(pods|configmaps|deployments|statefulsets|httproutes|services|persistentvolumes|healthcheckpolicies)\/[^/]+$/.test(
-          pathname,
-        )
-      ) {
-        res.statusCode = 404;
-        return result({ kind: 'Status' });
-      }
-      return result({
-        items: [...objects.entries()]
-          .filter(
-            ([key, value]) =>
-              key.startsWith(pathname + '/') &&
-              !key.slice(pathname.length + 1).includes('/') &&
-              (!url.searchParams.has('labelSelector') || value.metadata.labels?.[stagingOwner]),
-          )
-          .map(([, value]) => value),
-      });
-    }
-    if (req.method === 'POST') {
-      const target = `${pathname}/${input.metadata.name}`;
-      if (objects.has(target)) {
-        res.statusCode = 409;
-        return result({});
-      }
-      const created = store(target, input);
-      if (loseCreate && input.kind === 'Namespace') {
-        loseCreate = false;
-        req.socket.destroy();
-        return;
-      }
-      return result(created);
-    }
-    const current = objects.get(pathname);
-    if (req.method === 'PATCH') {
-      assert.deepEqual(input.slice(0, 2), [
-        { op: 'test', path: '/metadata/uid', value: current.metadata.uid },
-        { op: 'test', path: '/metadata/resourceVersion', value: current.metadata.resourceVersion },
-      ]);
-      assert.equal(input[2].path, '/spec/replicas');
-      current.spec.replicas = input[2].value;
-      return result(store(pathname, current));
-    }
-    if (req.method === 'PUT') {
-      if (current?.metadata.resourceVersion !== input.metadata.resourceVersion) {
-        res.statusCode = 409;
-        return result({});
-      }
-      return result(store(pathname, input));
-    }
-    if (req.method === 'DELETE') {
-      assert.equal(input.preconditions.uid, current.metadata.uid);
-      assert.equal(input.preconditions.resourceVersion, current.metadata.resourceVersion);
-      if (pendingDelete) {
-        req.socket.destroy();
-        return;
-      }
-      objects.delete(pathname);
-      return result({ kind: 'Status' });
-    }
-    res.statusCode = 501;
-    result({});
-  });
-  const execCalls = [],
-    ws = new WebSocketServer({ noServer: true });
-  let retirement;
-  server.on('upgrade', (req, socket, head) =>
-    ws.handleUpgrade(req, socket, head, (client) => {
-      const url = new URL(req.url, 'http://fixture.invalid'),
-        commands = url.searchParams.getAll('command');
-      execCalls.push({ container: url.searchParams.get('container'), commands });
-      if (commands.length > 2) retirement = commands[2];
-      if (commands.length > 2 && loseRetirementAck) {
-        loseRetirementAck = false;
-        client.terminate();
-        return;
-      }
-      const value = {
-        state: retirement ? 'drained' : 'serving',
-        incarnation: 'exact-incarnation',
-        ...(retirement ? { operationId: retirement } : {}),
-      };
-      client.send(Buffer.concat([Buffer.from([1]), Buffer.from(JSON.stringify(value))]));
-      client.send(Buffer.concat([Buffer.from([3]), Buffer.from('{"status":"Success"}')]));
-      client.close();
-    }),
-  );
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => {
-    for (const client of ws.clients) client.terminate();
-    ws.close();
-    server.closeAllConnections();
-    server.close();
-  });
-  const api = createKubernetesTransport({
-    origin: `http://127.0.0.1:${server.address().port}`,
-    allowLoopbackHttp: true,
-    token: () => 'local-test-only',
-    WebSocketClass: WebSocket,
-  });
-  return {
-    state: new ReusableStagingState(api, settings(), op),
-    api,
-    objects,
-    requests,
-    execCalls,
-    failReads(value) {
-      readFailure = value;
-    },
-    loseRetirementAck() {
-      loseRetirementAck = true;
-    },
-    loseCreate() {
-      loseCreate = true;
-    },
-    pendingDelete() {
-      pendingDelete = true;
-    },
-    health,
-    store,
-  };
-}
-const cloud = {
-  project: async () => ({ projectId: settings().projectId, projectNumber: settings().projectNumber }),
-  children: async () => [],
-  get: async () => null,
-};
-const wait = async (name, check) => {
-  const result = await check();
-  assert.ok(result, name);
-  return result;
-};
+import { digest, settings, actor, owner, operation, fixture, cloud, wait } from './test-fixtures/reusable-staging.mjs';
 
 test('shared staging prerequisites reject setup failures before namespace or dependency writes', async (t) => {
   const f = await fixture(t);
@@ -1610,91 +1380,15 @@ test('OAuth setup rejects foreign login/callback redirects before another reques
 });
 
 test('shared persistence seed carries real UI/Bearer authentication through every HTTP and WebSocket path', async (t) => {
-  const headers = { authorization: 'Bearer staging-only', cookie: 'rivet_ui_token=fixture-only' },
-    relativePath = 'fixture.rivet-project';
-  const projectId = randomUUID(),
-    revision = randomUUID(),
-    publication = randomUUID();
-  const requests = [],
-    failures = [];
-  const authenticate = (req) => {
-    if (req.headers.authorization !== headers.authorization || req.headers.cookie !== headers.cookie) {
-      failures.push(req.url);
-      return false;
-    }
-    return true;
-  };
-  const server = http.createServer(async (req, res) => {
-    let text = '';
-    for await (const chunk of req) text += chunk;
-    const body = text ? JSON.parse(text) : {},
-      url = new URL(req.url, 'http://local.invalid'),
-      route = url.pathname;
-    requests.push(route);
-    res.setHeader('content-type', 'application/json');
-    const json = (value) => res.end(JSON.stringify(value));
-    if (!authenticate(req)) {
-      res.statusCode = 401;
-      return json({});
-    }
-    if (route.endsWith('/projects/upload')) return json({ project: { relativePath } });
-    if (route.endsWith('/projects/web-apps'))
-      return json({
-        projectId,
-        draftRevisionId: revision,
-        publicationVersion: publication,
-        project: { projectMetadataId: projectId, revisionId: revision, settings: { publicationVersion: publication } },
-      });
-    if (route.endsWith('/projects/publish') && body.preconditions.expectedDraftRevisionId !== revision) {
-      res.statusCode = 409;
-      return json({ error: 'Publishing failed because the project changed' });
-    }
-    if (route.endsWith('/published-versions')) return json([]);
-    if (route.startsWith('/workflows')) return json({ environmentValue: 'managed-persistence' });
-    if (route.endsWith('/environment-variables/value')) return json({ value: 'managed-persistence' });
-    if (route.endsWith('/environment-variables')) return json({ variables: [{ id: 'value' }] });
-    if (route.endsWith('/environment-variables/value/value')) return json({ value: 'managed-persistence' });
-    if (route.endsWith('/recordings/workflows'))
-      return json({ workflows: [{ workflowId: projectId, totalRuns: 6, project: { relativePath } }] });
-    if (route.endsWith('/runs')) return json({ runs: Array.from({ length: 6 }, (_, i) => ({ id: `recording-${i}` })) });
-    if (route.endsWith('/replay-project')) return res.end('saved synthetic project');
-    if (route.endsWith('/run-statistics/targets')) return json({ targets: [{ target: { workflowId: projectId } }] });
-    if (/^\/apps(?:-latest)?\/release-gate-web-app$/.test(route)) {
-      res.setHeader('content-type', 'text/html');
-      return res.end(
-        'Managed release gate app <div data-rivet-web-app-config="{&quot;revisionKey&quot;:&quot;owned-revision&quot;}"></div>',
-      );
-    }
-    return json({});
-  });
-  const ws = new WebSocketServer({ noServer: true });
-  server.on('upgrade', (req, socket, head) => {
-    assert.ok(authenticate(req));
-    ws.handleUpgrade(req, socket, head, (client) =>
-      client.on('message', (raw) => {
-        const input = JSON.parse(raw.toString());
-        if (input.type === 'client.hello') client.send('{"type":"server.ready"}');
-        if (input.type === 'action.start') {
-          client.send('{"type":"action.accepted"}');
-          client.send('{"type":"action.completed"}');
-        }
-      }),
-    );
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => {
-    for (const client of ws.clients) client.terminate();
-    ws.close();
-    server.closeAllConnections();
-    server.close();
-  });
+  const headers = { authorization: 'Bearer staging-only', cookie: 'rivet_ui_token=fixture-only' };
+  const { relativePath, requests, failures, origin } = await persistenceFixture(t, { headers });
   const gate = new ManagedReleaseGate({}, 'unused-kubectl', 'unused-helm');
   gate.secrets = { rivetKey: 'staging-only' };
   Object.defineProperty(gate, 'probeHeaders', { get: () => headers });
   const original = gate.requestWorkflow.bind(gate);
   gate.requestWorkflow = (base, route, options) =>
     original(base, route, { ...options, headers: { ...headers, ...options?.headers } });
-  const result = await gate.exercisePersistence(`http://127.0.0.1:${server.address().port}`);
+  const result = await gate.exercisePersistence(origin);
   assert.equal(result.relativePath, relativePath);
   assert.equal(result.replayRecordingId, 'recording-0');
   assert.deepEqual(failures, []);

@@ -31,6 +31,7 @@ import { describeProviderPhaseReceipt, writeProviderPhaseReceipt } from '../lib/
 import { providerProgressStep } from '../lib/provider-progress.mjs';
 import { qualificationTimeouts } from '../lib/runtime-qualification-driver.mjs';
 import { runProviderSizing } from './provider-sizing.mjs';
+export { ReusableProviderGate, withManagedGateSignal, waitForManagedGateCommands };
 
 export function normalizeProviderAutoscaling(raw, hpa) {
   const result = (name) => {

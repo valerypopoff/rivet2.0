@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { withManagedGateSignal } from './lib/managed-gate-command.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import {
   RuntimeControlLocalGate,
@@ -9,6 +10,23 @@ import {
   runtimeControlOwnerContainer,
   publishedScheduleCompletedWithoutDevelopers,
 } from './kubernetes-runtime-control-local.mjs';
+
+test('developer readiness propagates cancellation even when a safe GET is caught as transient', async () => {
+  const gate = Object.create(RuntimeControlLocalGate.prototype);
+  const cancellation = new AbortController(),
+    reason = new Error('fixture phase cancelled');
+  let calls = 0;
+  gate.requestWorkflow = async () => {
+    calls++;
+    cancellation.abort(reason);
+    throw Error('temporary GET failure');
+  };
+  await assert.rejects(
+    withManagedGateSignal(cancellation.signal, () => gate.waitForDeveloperRoute('http://127.0.0.1:1')),
+    (error) => error === reason,
+  );
+  assert.equal(calls, 1);
+});
 
 test('schedule independence requires one recorded execution started after developer shutdown', () => {
   const complete = { status: 'succeeded', recordingStatus: 'saved', startedAt: 1100 };

@@ -30,6 +30,7 @@ import { monitorFatalStartup } from '../lib/fatal-startup-monitor.mjs';
 import { imageReference } from '../lib/kubernetes-managed-release-gate-config.mjs';
 import { createHaProofTiming } from '../lib/ha-proof-timing.mjs';
 import { applySizingRequests } from '../lib/resource-sizing.mjs';
+import { assertManagedGateActive } from '../lib/managed-gate-command.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -41,7 +42,9 @@ export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until(label, check, timeoutMs = 1200000) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
+    assertManagedGateActive();
     const result = await check();
+    assertManagedGateActive();
     if (result) return result;
     await sleep(1000);
   }
@@ -105,15 +108,19 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     // Ask the real admission chain without creating workloads, PVCs or routes.
     // GKE can adjust resources; retain those facts rather than imposing a
     // staging reservation policy on the operator's Helm values.
-    const response = await this.kube(['create', '--dry-run=server', '-f', '-', '-o', 'json'], {
-      input: JSON.stringify({ apiVersion: 'v1', kind: 'List', items }),
-    });
-    const admitted = JSON.parse(response.stdout);
-    const admittedItems = admitted.items ?? [admitted];
-    assert.ok(Array.isArray(admittedItems), 'Admission workload list is missing');
-    const identities = (workloads) =>
-      workloads.map((r) => `${r.kind}/${r.metadata.namespace ?? this.config.namespace}/${r.metadata.name}`).sort();
-    assert.deepEqual(identities(admittedItems), identities(items), 'Admission workload identities differ');
+    // kubectl prints consecutive JSON documents for a List, rather than a JSON
+    // List. One workload per command keeps this boundary unambiguous, including
+    // command failures partway through admission. Dry-runs are never retried.
+    const admittedItems = [];
+    const identity = (r) => `${r?.kind}/${r?.metadata?.namespace ?? this.config.namespace}/${r?.metadata?.name}`;
+    for (const item of items) {
+      const response = await this.kube(['create', '--dry-run=server', '-f', '-', '-o', 'json'], {
+        input: JSON.stringify(item),
+      });
+      const admitted = JSON.parse(response.stdout);
+      assert.equal(identity(admitted), identity(item), 'Admission workload identities differ');
+      admittedItems.push(admitted);
+    }
     const summarize = (workloads) =>
       workloads.map((r) => ({
         kind: r.kind,

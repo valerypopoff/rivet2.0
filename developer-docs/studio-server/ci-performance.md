@@ -11,7 +11,7 @@ The shared `studio-server-source-contracts.yml` workflow runs
 `yarn node scripts/ci/verify-rollout-source.mjs` before application compilation,
 image builds and actor publication. General Build covers main/develop PRs;
 Studio verification and direct actor publication also call the same gate.
-It uses Node 24, the tracked offline cache and an immutable `skip-build` install,
+It uses Node 24.22.1, the tracked offline cache and an immutable `skip-build` install,
 without compiled workspace outputs, Docker or GCP. Its partial checkout excludes
 the five unused desktop executables, preserving authored source and dependencies.
 The source job has an eight-minute limit and a five-minute cold-checkout limit.
@@ -25,8 +25,22 @@ The provider's journal-persistence/observer contract is a separate source-only
 suite (`provider-rollout-observation.test.mjs`) and runs in this gate as well as
 the full Kubernetes contract suite. It checks persistence before observation and
 both failure paths, while treating the timing file as diagnostic output rather
-than a journal observation. Keep Helm-dependent overlap checks in their existing
-lane so the early gate still needs no Kubernetes tools or compiled application.
+than a journal observation. The source command also checks hosted setup access,
+coordinator/worker settlement and real TLS/WebSocket transports. Helm-dependent
+overlap feature tests stay in their existing lane.
+
+The same early job now downloads checksum-verified kubectl 1.36.6 and Helm 3.22.1
+and runs the packaged provider's preparation/cleanup against loopback fixtures,
+plus the existing staging and readiness regressions. Tool installation and the
+native test step each have a two-minute deadline; failure blocks compilation and
+image publication through the existing job dependency. This adds no cluster,
+cloud authentication or Docker requirement to hosted CI. These upstream CLI
+versions match the actor's upstream sources; the actor additionally rebuilds
+them with its patched Go/dependency graph and retains its final-image tool check.
+Local proof used the actual patched Linux tools with Docker networking disabled.
+The new native cases took about eight seconds together. This is measured local
+test time, not a promise about hosted checkout, downloads or total workflow time.
+See [the preparation contract audit](automated-runtime-qualification.md#local-provider-preparation-contracts).
 
 The Kind matrix now requires successful runtime scans. The independent managed
 Kubernetes check runs in the shorter `lostAcknowledgement` lane, using that
