@@ -284,6 +284,12 @@ The wrapper API currently exposes these groups behind `/api`:
 Current tree-response note:
 
 - `GET /api/workflows/tree` is the dashboard's main workflow-library metadata source
+- The root `+ New folder` action stays disabled while that tree is loading or has
+  failed. Its capabilities select the guarded structural-mutation protocol;
+  allowing creation before the initial response can send a legacy request that
+  the managed backend correctly rejects. The hosted authoring browser regression
+  holds the initial tree response until it verifies this startup boundary, then
+  checks the existing lost-acknowledgement recovery against PostgreSQL/MinIO.
 - each `WorkflowProjectItem` in that response carries the API-derived publication status used by the sidebar and Project Settings flows
 - that same project item also carries per-project `stats` (`graphCount`, `totalNodeCount`), which drive the active project summary shown in the dashboard
 - stats are cached as wrapper-owned metadata (`*.wrapper-stats.json` in filesystem mode, revision columns in managed mode), but publication status stays API-derived from settings/hash/revision state so save refreshes still show the correct `Published` or `Unpublished changes` state

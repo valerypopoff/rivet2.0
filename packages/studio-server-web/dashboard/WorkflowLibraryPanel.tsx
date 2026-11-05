@@ -307,7 +307,12 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
             </div>
           ) : null}
           <div className="body-actions">
-            <button type="button" className="link-button" onClick={() => void handleCreateFolder()}>
+            <button
+              type="button"
+              className="link-button"
+              disabled={loading || !!error}
+              onClick={() => void handleCreateFolder()}
+            >
               + New folder
             </button>
           </div>
