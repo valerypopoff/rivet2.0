@@ -4,6 +4,12 @@ import { fixture, settings, operation, actor } from './test-fixtures/reusable-st
 import { ReusableStagingState, reusableStagingSettings } from './lib/reusable-staging-state.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
 import { cleanupStaging } from './lib/reusable-staging-cleanup.mjs';
+import { fileURLToPath } from 'node:url';
+import {
+  createStudioServerReleaseManifest,
+  promoteStudioServerReleaseManifest,
+  getStudioServerReleaseManifestDigest,
+} from './lib/studio-server-release-manifest.mjs';
 import {
   settleRetainedStaging,
   cleanupRetainedStaging,
@@ -24,7 +30,7 @@ async function retained(t) {
       recordName: 'rivet-staging-application',
     },
   });
-  const make = (id, predecessor = previous) => {
+  const make = (id, predecessor = previous, releases = {}) => {
     const { inputHash: _hash, ...original } = operation();
     const input = {
       ...original,
@@ -32,11 +38,115 @@ async function retained(t) {
       retainedApplication: configuration.retainedApplication,
       predecessorManifestDigest: predecessor,
       candidateManifestDigest: candidate,
+      ...releases,
     };
     return new ReusableStagingState(f.api, configuration, { ...input, inputHash: qualificationHash(input) });
   };
   return { ...f, make, state: make('rivet-q-123-1') };
 }
+
+async function publishedApplication(t) {
+  const f = await retained(t);
+  const tested = createStudioServerReleaseManifest({
+    rootDir: fileURLToPath(new URL('../../../', import.meta.url)),
+    source: { repository: 'example/rivet', ref: 'refs/heads/main', sha: 'a'.repeat(40) },
+    images: Object.fromEntries(
+      ['api', 'web', 'proxy', 'executor'].map((name) => [
+        name,
+        {
+          repository: `registry.test/${name}`,
+          digest: `sha256:${'c'.repeat(64)}`,
+        },
+      ]),
+    ),
+    candidateEvidence: { workflow: 'Build Images', runId: '123', runAttempt: 1 },
+    createdAt: '2026-11-05T12:00:00.000Z',
+  });
+  const published = promoteStudioServerReleaseManifest(tested, {
+    promotionEvidence: { workflow: 'Publish qualified exact release', runId: '124', runAttempt: 1 },
+    promotedAt: '2026-11-05T13:00:00.000Z',
+  });
+  const testedDigest = getStudioServerReleaseManifestDigest(tested),
+    publishedDigest = getStudioServerReleaseManifestDigest(published);
+  assert.notEqual(testedDigest, publishedDigest);
+  const state = f.make('rivet-q-123-1', previous, { candidate: tested, candidateManifestDigest: testedDigest });
+  await state.arm(actor);
+  const namespace = await state.namespace({ create: true });
+  await state.application.finish({ healthy: true, dataCleaned: true, manifestDigest: testedDigest });
+  await state.change((record) => {
+    record.closed = true;
+    record.phase = 'cleaned';
+    record.cleanupVerified = true;
+  });
+  return { f, tested, published, publishedDigest, state, namespace };
+}
+
+test('the next release reuses the tested application after publication changes its manifest digest', async (t) => {
+  const { f, tested, published, publishedDigest, namespace } = await publishedApplication(t);
+  const next = f.make('rivet-q-124-1', publishedDigest, { previous: published });
+  await next.arm(actor);
+  assert.equal((await next.namespace()).metadata.uid, namespace.metadata.uid);
+  assert.deepEqual((await next.read()).record.retainedApplication.predecessorManifest, tested);
+  // An image, schema, source, chart, lineage or original build change is a
+  // different application, even when publication metadata also changed.
+});
+
+for (const [name, mutate] of [
+  [
+    'image',
+    (m) => {
+      m.images.api.digest = `sha256:${'d'.repeat(64)}`;
+    },
+  ],
+  [
+    'chart',
+    (m) => {
+      m.chart.contentDigest = `sha256:${'d'.repeat(64)}`;
+    },
+  ],
+  [
+    'source',
+    (m) => {
+      m.source.sha = 'd'.repeat(40);
+    },
+  ],
+  [
+    'schema',
+    (m) => {
+      m.database.managedWorkflowSchema.version++;
+    },
+  ],
+  [
+    'original build',
+    (m) => {
+      m.evidence.candidate.runId = '999';
+    },
+  ],
+])
+  test(`publication cannot hide a changed retained application ${name}`, async (t) => {
+    const { f, published } = await publishedApplication(t);
+    const changed = structuredClone(published);
+    mutate(changed);
+    const rejected = f.make('rivet-q-124-1', getStudioServerReleaseManifestDigest(changed), { previous: changed });
+    await assert.rejects(rejected.arm(actor), /differs from installed production/);
+  });
+
+test('lost acquisition bookkeeping recovers the same publication-bound predecessor without acquiring again', async (t) => {
+  const { f, tested, published, publishedDigest } = await publishedApplication(t);
+  const next = f.make('rivet-q-124-1', publishedDigest, { previous: published });
+  const json = f.api.json.bind(f.api);
+  f.api.json = async (method, url, body) => {
+    if (method === 'PUT' && url.endsWith('/rivet-q-124-1') && JSON.parse(body.data.record).retainedApplication)
+      throw Error('acquisition bookkeeping interrupted');
+    return json(method, url, body);
+  };
+  await assert.rejects(next.arm(actor), /bookkeeping interrupted/);
+  f.api.json = json;
+  const recovered = new ReusableStagingState(f.api, next.settings, next.operation);
+  assert.equal(await recovered.application.reconcileAcquisition(), true);
+  assert.deepEqual((await recovered.read()).record.retainedApplication.predecessorManifest, tested);
+  assert.equal((await recovered.application.owned()).record.owner.operationId, next.operation.operationId);
+});
 
 test('success retains namespace identity and admits only the exact next production predecessor', async (t) => {
   const f = await retained(t),

@@ -126,7 +126,12 @@ export async function executeProviderPhase({
     'Sizing uses preparation and observation only',
   );
   await state.admission();
-  if (state.application) gate.fixtureFolder = (await state.read()).record.fixtureFolder;
+  if (state.application) {
+    const { record } = await state.read();
+    gate.fixtureFolder = record.fixtureFolder;
+    gate.currentManifest = record.retainedApplication.predecessorManifest ?? operation.previous;
+    gate.config.previousManifest = gate.currentManifest;
+  }
   await state.change((r) => {
     r.testPhases ??= {};
     assert.ok(!r.testPhases[phase], 'Never replay an admitted phase');
@@ -138,7 +143,8 @@ export async function executeProviderPhase({
     await step('namespace', () => state.namespace({ create: true }));
     const images = operation.sizingRequests ? operation.candidate.images : operation.previous.images;
     await step('admission', async () => {
-      if (!operation.sizingRequests) await gate.verifyAdmission(gate.values(images), 'predecessor');
+      if (!operation.sizingRequests)
+        await gate.verifyAdmission(gate.values(images, true, gate.currentManifest), 'predecessor');
       await gate.verifyAdmission(gate.values(operation.candidate.images), 'candidate');
     });
     const reuse = state.application && !(await state.read()).record.retainedApplication.bootstrap;
@@ -150,7 +156,7 @@ export async function executeProviderPhase({
       await step('routing', () => gate.createPublicRoute());
       await step('installation', () =>
         gate.apply(
-          gate.values(images),
+          gate.values(images, true, operation.sizingRequests ? operation.candidate : gate.currentManifest),
           operation.sizingRequests ? 'provider-sizing-installation.json' : 'provider-predecessor.json',
         ),
       );
@@ -178,7 +184,7 @@ export async function executeProviderPhase({
       result = await step('sizing', () => runProviderSizing(gate), Infinity);
     } else if (phase === 'upgrade') {
       if (operation.requestContinuityProfile) gate.continuityProbes = new ProviderRequestContinuity(gate);
-      gate.currentManifest = operation.previous;
+      if (!state.application) gate.currentManifest = operation.previous;
       const probes = new HaReleaseProbes(gate, gate.config.baseUrl, root);
       const report = await step(
         'upgrade',
