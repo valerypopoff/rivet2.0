@@ -1100,6 +1100,9 @@ terminated child's TCP port, which can be reused by another parallel fixture.
 The test now records the exact child PID and requires it to be absent or terminal
 before recovery. A live-process negative control and deliberate unrelated port
 reuse guard that distinction; late writes and unverified receipts remain failures.
+The Linux helper-exit fixture accepts both `ENOENT` and `ESRCH` when procfs
+disappears during a read. Permission and other read failures still fail; a live
+process still cannot satisfy shutdown. This regression runs in the early source gate.
 The production process-group/taskkill shutdown contract is unchanged.
 
 The lost-acknowledgement lane also exhausted the existing 20 GiB workspace floor

@@ -12,6 +12,33 @@ import {
 } from './lib/managed-gate-command.mjs';
 import { fatalStartupReason, monitorFatalStartup } from './lib/fatal-startup-monitor.mjs';
 
+async function helperStopped(pid, readFile = fs.readFile) {
+  const state = await readFile(`/proc/${pid}/stat`, 'utf8').catch((error) => {
+    if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error;
+  });
+  // PID 1 may not immediately reap an orphan. A zombie has already stopped.
+  return state === undefined || /\) [ZX] /.test(state);
+}
+
+test('procfs disappearance during a shutdown observation means stopped; other read errors remain failures', async () => {
+  for (const code of ['ENOENT', 'ESRCH'])
+    assert.equal(
+      await helperStopped(123, async () => {
+        throw Object.assign(Error('gone'), { code });
+      }),
+      true,
+    );
+  assert.equal(await helperStopped(123, async () => '123 (fixture) S 1'), false);
+  assert.equal(await helperStopped(123, async () => '123 (fixture) Z 1'), true);
+  const denied = Object.assign(Error('denied'), { code: 'EACCES' });
+  await assert.rejects(
+    helperStopped(123, async () => {
+      throw denied;
+    }),
+    (error) => error === denied,
+  );
+});
+
 // test-style: fixture-read: runs Node against disposable, deliberately broken packages.
 test('actual Node loader failures are recognized without treating ordinary runtime errors as startup proof', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-loader-failure-'));
@@ -94,11 +121,7 @@ test(
         const deadline = Date.now() + 250;
         let stopped = false;
         while (Date.now() < deadline) {
-          const state = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch((error) => {
-            if (error.code !== 'ENOENT') throw error;
-          });
-          // PID 1 may not immediately reap an orphan. A zombie has already stopped.
-          stopped = state === undefined || /\) [ZX] /.test(state);
+          stopped = await helperStopped(pid);
           if (stopped) break;
           await sleep(5);
         }
