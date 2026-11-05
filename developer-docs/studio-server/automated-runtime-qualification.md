@@ -709,7 +709,7 @@ validation compiles that proof once, before retained cleanup.
 ### Optional retained application
 
 Focused reusable staging can additionally specify `retainedApplication` with
-`protocol: 1`, a fixed `rivet-staging-*` namespace and permanent ConfigMap
+`protocol: 2`, a fixed `rivet-staging-*` namespace and permanent ConfigMap
 `recordName`, plus the existing fixed staging hostname. This is an opt-in
 application lifecycle change, not merely retaining the cluster. Its first use
 installs the disposable application; later tests verify its exact installed
@@ -724,6 +724,9 @@ tested manifest remains the staging Helm/journal predecessor; it is not rewritte
 to production's later evidence digest. Changed application inputs still require
 explicit recovery/reseed. Candidate rendering and rollout identity remain distinct
 even when the candidate and predecessor reuse every image.
+Protocol 2 selects this publication-aware lifecycle and makes older tooling fail
+at local settings validation before provider setup. Updated tooling still reads
+protocol 1 configurations; new activations use protocol 2.
 
 Each attempt owns one fixture folder. Success settles producers and accepted
 work, logically deletes only that exact folder, verifies final installed images

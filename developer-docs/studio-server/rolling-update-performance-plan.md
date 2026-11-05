@@ -74,7 +74,7 @@ remain required. Speed is not an additional pass/fail deadline.
 
 ### Retained staging application
 
-`reusable-staging` settings can opt into `retainedApplication: {protocol: 1,
+`reusable-staging` settings can opt into `retainedApplication: {protocol: 2,
 namespace: "rivet-staging-persistent", recordName: "rivet-staging-application"}`
 with a fixed staging hostname and the focused suite. This retains the disposable
 application namespace, database, object store, secrets, route and NEG. The first

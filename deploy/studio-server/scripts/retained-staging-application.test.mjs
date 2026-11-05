@@ -4,6 +4,7 @@ import { fixture, settings, operation, actor } from './test-fixtures/reusable-st
 import { ReusableStagingState, reusableStagingSettings } from './lib/reusable-staging-state.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
 import { cleanupStaging } from './lib/reusable-staging-cleanup.mjs';
+import { retainedApplicationSettings } from './lib/retained-staging-application.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   createStudioServerReleaseManifest,
@@ -18,6 +19,13 @@ import {
 
 const previous = 'sha256:' + 'a'.repeat(64),
   candidate = 'sha256:' + 'b'.repeat(64);
+
+test('publication-aware retention has an explicit compatibility marker before provider setup', () => {
+  const names = { namespace: 'rivet-staging-persistent', recordName: 'rivet-staging-application' };
+  for (const protocol of [1, 2])
+    assert.deepEqual(retainedApplicationSettings({ protocol, ...names }), { protocol, ...names });
+  assert.throws(() => retainedApplicationSettings({ protocol: 3, ...names }), /Unsupported/);
+});
 async function retained(t) {
   const f = await fixture(t);
   const configuration = reusableStagingSettings({

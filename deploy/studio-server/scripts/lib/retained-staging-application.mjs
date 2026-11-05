@@ -12,9 +12,9 @@ const applicationIdentity = (manifest) => {
 };
 
 export function retainedApplicationSettings(input) {
-  assert.equal(input.protocol, 1);
+  assert.ok([1, 2].includes(input.protocol), 'Unsupported retained staging application protocol');
   for (const key of ['namespace', 'recordName']) assert.match(input[key], /^rivet-staging-[a-z0-9][a-z0-9-]{0,38}$/);
-  return { protocol: 1, namespace: input.namespace, recordName: input.recordName };
+  return { protocol: input.protocol, namespace: input.namespace, recordName: input.recordName };
 }
 
 /** The application has a durable owner separate from per-test cleanup. Time or
