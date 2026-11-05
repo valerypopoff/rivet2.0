@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { assertHaWorkspaceSpace } from './lib/ha-workspace.mjs';
+import { assertHaWorkspaceSpace, HA_WORKSPACE_MIN_FREE_BYTES } from './lib/ha-workspace.mjs';
 
 export const UNUSED_HA_RUNNER_SDKS = Object.freeze(['/usr/local/lib/android', '/usr/share/dotnet', '/opt/ghc']);
 
@@ -14,7 +14,7 @@ export async function prepareHaKindRunner({
   platform = process.platform,
   workspace = fileURLToPath(new URL('../../../', import.meta.url)),
   statfs = fs.statfs,
-  remove = (paths) => execFileSync('sudo', ['-n', 'rm', '-rf', '--', ...paths], { stdio: 'inherit', timeout: 120_000 }),
+  remove = (paths) => execFileSync('sudo', ['-n', 'rm', '-rf', '--', ...paths], { stdio: 'inherit', timeout: 240_000 }),
   log = console.log,
 } = {}) {
   assert.ok(
@@ -25,8 +25,18 @@ export async function prepareHaKindRunner({
     'SDK cleanup is restricted to a GitHub-hosted Linux runner.',
   );
   const before = await statfs(workspace);
-  log(`[ha-runner] Workspace free before SDK cleanup: ${((before.bavail * before.bsize) / 1024 ** 3).toFixed(1)} GiB`);
-  await remove(UNUSED_HA_RUNNER_SDKS);
+  const initialAvailable = before.bavail * before.bsize;
+  log(`[ha-runner] Workspace free before SDK cleanup: ${(initialAvailable / 1024 ** 3).toFixed(1)} GiB`);
+  if (Number.isSafeInteger(initialAvailable) && initialAvailable >= HA_WORKSPACE_MIN_FREE_BYTES) {
+    log('[ha-runner] Workspace capacity is sufficient; skipping unused SDK cleanup.');
+    return initialAvailable;
+  }
+  try {
+    await remove(UNUSED_HA_RUNNER_SDKS);
+  } catch (error) {
+    if (error.code !== 'ETIMEDOUT') throw error;
+    log('[ha-runner] SDK cleanup timed out; rechecking workspace capacity without retrying cleanup.');
+  }
   const available = await assertHaWorkspaceSpace(workspace, { statfs });
   log(`[ha-runner] Workspace free after SDK cleanup: ${(available / 1024 ** 3).toFixed(1)} GiB`);
   return available;

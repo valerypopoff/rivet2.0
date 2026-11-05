@@ -1100,15 +1100,22 @@ terminated child's TCP port, which can be reused by another parallel fixture.
 The test now records the exact child PID and requires it to be absent or terminal
 before recovery. A live-process negative control and deliberate unrelated port
 reuse guard that distinction; late writes and unverified receipts remain failures.
+The Linux helper-exit fixture accepts both `ENOENT` and `ESRCH` when procfs
+disappears during a read. Permission and other read failures still fail; a live
+process still cannot satisfy shutdown. This regression runs in the early source gate.
 The production process-group/taskkill shutdown contract is unchanged.
 
 The lost-acknowledgement lane also exhausted the existing 20 GiB workspace floor
-after running the managed gate. Every disposable Kind runner now removes only
-its preinstalled Android, .NET and GHC SDK directories before dependency installs
+after running the managed gate. Disposable Kind runners with insufficient space remove only
+their preinstalled Android, .NET and GHC SDK directories before dependency installs
 and cluster creation. The preparation command refuses local, self-hosted and
 non-Linux environments; it preserves Docker images/data, tool caches and checkout
 files. It logs free space before/after and fails if the unchanged floor is not
-met. The later HA check still enforces that floor and reports actual free GiB.
+met. SDK removal has a four-minute bound within the existing five-minute setup
+step. A timed-out removal triggers a fresh capacity read rather than another
+deletion attempt; it can continue only if the full 20 GiB floor is confirmed.
+Other removal errors still fail. Runners already above the floor skip deletion.
+The later HA check still enforces that floor and reports actual free GiB.
 No GCP service, Helm resource request or production capacity setting changes.
 
 Disk-preparation contracts and the real child-shutdown/port-reuse regression run

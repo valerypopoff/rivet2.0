@@ -32,6 +32,41 @@ test('hosted Kind preparation removes only unused SDKs and measures the recovere
   assert.equal(UNUSED_HA_RUNNER_SDKS.length, 3);
 });
 
+test('sufficient hosted workspace capacity skips unnecessary SDK deletion', async () => {
+  let reads = 0;
+  const available = await prepareHaKindRunner({
+    ...hosted,
+    statfs: async () => {
+      reads++;
+      return disk(22);
+    },
+    remove: async () => assert.fail('No deletion is needed above the capacity floor'),
+    log: () => {},
+  });
+  assert.equal(available, 22 * 1024 ** 3);
+  assert.equal(reads, 1);
+});
+
+test('a cleanup timeout permits preparation only after the unchanged capacity floor is freshly confirmed', async () => {
+  for (const after of [24, 19]) {
+    const snapshots = [disk(18), disk(after)];
+    let removals = 0;
+    const work = prepareHaKindRunner({
+      ...hosted,
+      statfs: async () => snapshots.shift(),
+      remove: async () => {
+        removals++;
+        throw Object.assign(Error('SDK cleanup timeout'), { code: 'ETIMEDOUT' });
+      },
+      log: () => {},
+    });
+    if (after >= 20) assert.equal(await work, after * 1024 ** 3);
+    else await assert.rejects(work, /20 GiB.*19.0 GiB/);
+    assert.equal(removals, 1, 'Cleanup is never replayed');
+    assert.equal(snapshots.length, 0, 'Capacity must be measured after the failed cleanup');
+  }
+});
+
 test('local, self-hosted and non-Linux environments cannot run SDK cleanup', async () => {
   for (const change of [
     { platform: 'win32' },
