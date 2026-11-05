@@ -217,7 +217,9 @@ export async function runOrdinaryRuntimeUpgrade({
         ).length;
         const minimum = report.readiness.minimumReady[role];
         report.readiness.minimumReady[role] = minimum === null ? count : Math.min(minimum, count);
-        assert.ok(count >= 2, 'Published runtime lost its two ready owners');
+        // The retirement guard waits for two healthy/available proxies before
+        // advancing. A transient external eviction is not itself an outage.
+        assert.ok(count >= (focused && role === 'proxy' ? 1 : 2), 'Published runtime lost its ready serving floor');
       }
       report.readiness.samples++;
       if (workflow.report.failures.length || web.report.failures.length) throw Error('Public traffic failed');

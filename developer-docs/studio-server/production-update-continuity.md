@@ -148,13 +148,27 @@ with at least two proxies across two zones. The wait does not lower that floor
 or restart a rollout action.
 
 Each observation rechecks the lease, captured resource identities, routing,
-public readiness, actual regional backend health and drain protection. At least
+public readiness, actual regional endpoint health and drain protection. At least
 one current healthy endpoint must remain while waiting. Public request errors,
 invalid backend evidence, lost owners and expired leases fail immediately;
 unrecovered capacity fails at the observation deadline. Final settled acceptance
 still requires the full current pool healthy. The local adapter regression
 covers replacement recovery, persistent capacity loss and failures during the
 wait; the failed cloud attempt is not qualification evidence for this repair.
+The regional observer's aggregate health flag requires two healthy zones; loss
+of that redundancy can wait only while a fresh, owned current endpoint is still
+healthy. Both the current serving floor and zonal redundancy must recover before
+the guard returns. Zero healthy endpoints and invalid provider identities remain
+immediate failures.
+
+The focused traffic observer and certificate accept a transient single Ready
+proxy while recovery is pending. They continue to require successful public
+requests and at least one Ready proxy; execution still requires two Ready owners.
+The retirement guard still waits for two available, healthy proxy endpoints before
+advancing, and final acceptance requires the full current pool healthy with at
+least two proxies. Full stress qualification retains its two-proxy observation
+floor. Recovery, zero-capacity rejection and final capacity are covered in the
+early source checks and report validation, without another polling phase.
 
 ### Routing verification during updates
 

@@ -9,6 +9,9 @@ cleanup; neither deployed application images to production. The separately
 approved restoration of the live proxy minimum to Helm's two replicas is verified.
 The incoming keepalive and fixture-ordering repair is a local candidate until its
 source, image and provider gates pass; no further cloud attempt is automatic.
+The focused observer/certificate is also aligned with the guarded recovery path:
+a temporary single serving proxy can recover without hiding request failures,
+while retirement and final healthy-capacity requirements remain at two proxies.
 
 As of 2026-11-04, [PR 240](https://github.com/valerypopoff/rivet2.0/pull/240), source `7b42dabdeab8b312c2ee50ca198a385bc2acd2a2`, passed [Build Images 41788374693](https://github.com/valerypopoff/rivet2.0/actions/runs/41788374693) and [focused GKE qualification 41793031762](https://github.com/valerypopoff/rivet2.0/actions/runs/41793031762). The qualified manifest was published and staging cleanup independently verified.
 
