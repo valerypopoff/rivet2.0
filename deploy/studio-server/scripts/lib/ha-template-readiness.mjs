@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { matchesKubernetesTemplate } from './kubernetes-template-match.mjs';
+import { kubernetesReadRetryReason } from './kubernetes-read-errors.mjs';
 
 const component = 'app.kubernetes.io/component';
 const instance = 'app.kubernetes.io/instance';
@@ -42,13 +43,32 @@ export async function waitForHaTemplateReadiness({
   );
   assert.ok(expected.length > 0);
   const deadline = clock.now() + timeoutMs;
+  let readFailure;
   for (;;) {
     assertLease();
-    assert.ok(clock.now() < deadline, 'Timed out waiting for HA template/controller readiness; owners retained');
-    const { items } = JSON.parse(
-      (await kube(['get', 'statefulset,deployment,replicaset,pod', '-l', `${instance}=${release}`, '-o', 'json']))
-        .stdout,
-    );
+    if (clock.now() >= deadline)
+      throw new Error('Timed out waiting for HA template/controller readiness; owners retained', {
+        cause: readFailure,
+      });
+    let response;
+    try {
+      response = await kube([
+        'get',
+        'statefulset,deployment,replicaset,pod',
+        '-l',
+        `${instance}=${release}`,
+        '-o',
+        'json',
+      ]);
+    } catch (error) {
+      assertLease();
+      if (!kubernetesReadRetryReason(error)) throw error;
+      readFailure = error;
+      await clock.sleep(Math.max(0, Math.min(1000, deadline - clock.now())));
+      continue;
+    }
+    readFailure = undefined;
+    const { items } = JSON.parse(response.stdout);
     assert.ok(Array.isArray(items), 'HA prerequisite inventory is unavailable');
     assertLease();
     assert.ok(clock.now() < deadline, 'HA prerequisite observation exceeded its deadline');

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { journalForReleaseOperation, releaseOperationJournalName } from './release-operation-journal.mjs';
+import { kubernetesReadRetryReason } from './kubernetes-read-errors.mjs';
 
 const releaseLabel = 'app.kubernetes.io/instance';
 const componentLabel = 'app.kubernetes.io/component';
@@ -556,7 +557,40 @@ export async function waitForReleaseSettlement({
   let previousFingerprint;
   let previousObservedAt = null;
   while (true) {
-    const response = await kube(['get', releaseSettlementResourceTypes, '--namespace', namespace, '-o', 'json']);
+    let response;
+    try {
+      response = await kube(['get', releaseSettlementResourceTypes, '--namespace', namespace, '-o', 'json']);
+    } catch (error) {
+      if (!kubernetesReadRetryReason(error)) throw error;
+      stableSince = null;
+      previousFingerprint = undefined;
+      previousObservedAt = null;
+      const elapsedMs = clock.now() - startedAt;
+      if (elapsedMs >= timeoutMs) {
+        await artifact(
+          'release-settlement.json',
+          JSON.stringify(
+            {
+              release,
+              namespace,
+              observedAt: new Date(clock.now()).toISOString(),
+              elapsedMs,
+              stableMs: 0,
+              healthy: false,
+              settled: false,
+              pending: ['Kubernetes inventory read unavailable'],
+            },
+            null,
+            2,
+          ),
+        );
+        throw new Error('Release workload settlement timed out: Kubernetes inventory read unavailable.', {
+          cause: error,
+        });
+      }
+      await clock.sleep(Math.min(1000, timeoutMs - elapsedMs));
+      continue;
+    }
     let items;
     try {
       items = JSON.parse(response.stdout).items;

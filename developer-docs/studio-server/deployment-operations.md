@@ -192,10 +192,58 @@ measured capacity are not retryable observations. Execution snapshot ownership i
 bound to the expected StatefulSet UID before sampling. This is not a retry of Helm,
 scale, retirement, graph execution or any other modifying request.
 
+The failed [November 5 staging attempt](https://github.com/valerypopoff/rivet2.0/actions/runs/41986002747)
+also exposed a temporary metrics-service gap: audit evidence showed the managed
+metrics-server controller deleting its APIService registration and recreating it
+about 80 seconds later. The actor's Pod-metrics route/version and read permissions
+matched the expected API. The later successful operator probe alone did not prove
+that; the retained controller audit events supplied the missing evidence.
+
+Execution and proxy headroom classify canonical kubectl API Status failures on
+their read-only inventory/metrics calls. Throttling and recognized temporary server
+errors become pending observations; `NotFound` is eligible only on the expected
+namespace's `metrics.k8s.io/v1beta1` Pod-list GET. Paired-pool owner reads use the
+same classification; an absent inactive controller retains its existing semantics,
+while an absent active controller still fails. The existing wait reobserves the
+whole snapshot, including ownership, serving readiness and fresh CPU/admission
+data, for at most five minutes within the original caller deadline. Started sibling reads settle
+before a recheck; no cached or zero-valued replacement for unavailable CPU is used.
+There is no new retry loop or independent timeout.
+The detached autoscaler bundle explicitly permits this shared concurrency helper;
+its packaging guard still excludes deployment and qualification implementations.
+
+Missing workloads, authorization failures, unclassified errors, malformed JSON or
+CPU values, cancellation and changed ownership remain failures. A persistent
+metrics-service failure exhausts the same deadline and retains the native command
+error as its private cause. Capacity decisions and owner withdrawal still require
+valid current observations; this does not retry deployment or graph writes.
+
+The same read-error classification is used inside the existing template-readiness,
+owner-readiness/removal, endpoint-withdrawal and final-settlement polls. Their
+deadlines are never restarted. A failed inventory read resets settlement's stable
+window; a routing-read gap resets the full continuous propagation observation.
+Known ownership failures take priority over later reads, and lease loss still
+stops readiness immediately. The source gate includes final-settlement regressions.
+
+The regional Compute observer also tolerates brief 429/500/502/503/504 responses
+while listing backends or invoking read-only `getHealth`. Each request permits at
+most three attempts inside its original 15-second budget. Authorization errors,
+malformed results, foreign NEGs and unhealthy/missing endpoints retain their
+existing failure/pending semantics. This retry does not cover cloud mutations.
+
+These are observation repairs, not additional release stages. Exact-image/source
+binding, the recovery checkpoint, public availability and complete responses,
+accepted-work settlement, recordings, serving floors, drain time and verified
+cleanup remain required. Optional stress/eviction tests stay separate from the
+focused ordinary rollout. No access, resource reservation, certificate or private
+installation setting changes are implied by this local repair.
+
 `ha-rollout-headroom.test.mjs` covers delayed scrape recovery, permanent absence,
-identity change and real overload; the ordinary qualification tests additionally
-cover HPA-grown capacity, exact-image readiness, HTTP502, interrupted windows,
-recording durability and storage identity. Unit/HTTP/Helm checks are distinct from
+temporary/persistent API failures, authorization rejection, sibling-read settlement,
+the native command-error boundary, identity change and real overload; the ordinary
+qualification tests additionally cover HPA-grown capacity, exact-image readiness,
+HTTP502, interrupted windows, recording durability and storage identity.
+Unit/HTTP/Helm checks are distinct from
 the actual local cluster result, and neither is provider qualification.
 
 Proxy surge limits count only non-terminating Pods. Kubernetes may keep old Pods

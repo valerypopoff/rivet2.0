@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { StringDecoder } from 'node:string_decoder';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { classifyStartupFence, assertFenceIntent } from './execution-autoscaler-fence.mjs';
+import { readConcurrently } from './read-concurrently.mjs';
 
 const enc = encodeURIComponent;
 const fenceAnnotation = 'rivet.dev/execution-retirement-fence';
@@ -536,15 +537,16 @@ export function createExecutionAutoscalerIO({
         owner.spec.template.spec.containers.find((c) => c.name === 'api')?.image !== image
       )
         throw new Error('Execution workload identity, image or retirement strategy changed.');
-      const [pods, metrics, hpas] = await Promise.all([
-        api.json('GET', `${ns}/pods?labelSelector=${enc(selector)}`),
-        demand
-          ? api.json(
-              'GET',
-              `/apis/metrics.k8s.io/v1beta1/namespaces/${enc(namespace)}/pods?labelSelector=${enc(selector)}`,
-            )
-          : Promise.resolve(null),
-        api.json('GET', `/apis/autoscaling/v2/namespaces/${enc(namespace)}/horizontalpodautoscalers`),
+      const [pods, metrics, hpas] = await readConcurrently([
+        () => api.json('GET', `${ns}/pods?labelSelector=${enc(selector)}`),
+        () =>
+          demand
+            ? api.json(
+                'GET',
+                `/apis/metrics.k8s.io/v1beta1/namespaces/${enc(namespace)}/pods?labelSelector=${enc(selector)}`,
+              )
+            : Promise.resolve(null),
+        () => api.json('GET', `/apis/autoscaling/v2/namespaces/${enc(namespace)}/horizontalpodautoscalers`),
       ]);
       if (
         !pods?.items ||
@@ -556,9 +558,9 @@ export function createExecutionAutoscalerIO({
       const result = [];
       let poolCapacity;
       if (poolWorkloads.length) {
-        const owners = await Promise.all(
-          poolWorkloads.map((name) =>
-            api.json('GET', `/apis/apps/v1/namespaces/${enc(namespace)}/statefulsets/${enc(name)}`),
+        const owners = await readConcurrently(
+          poolWorkloads.map(
+            (name) => () => api.json('GET', `/apis/apps/v1/namespaces/${enc(namespace)}/statefulsets/${enc(name)}`),
           ),
         );
         if (

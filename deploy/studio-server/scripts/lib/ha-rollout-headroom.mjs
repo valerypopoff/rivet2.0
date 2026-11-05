@@ -1,14 +1,39 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { autoscalerPolicy, recommendExecutionReplicas } from './execution-autoscaler.mjs';
+import { readConcurrently } from './read-concurrently.mjs';
+import { kubernetesReadRetryReason } from './kubernetes-read-errors.mjs';
 import {
   createExecutionAutoscalerIO,
   cpuQuantity,
   PendingExecutionCpuSample,
 } from './execution-autoscaler-kubernetes.mjs';
 
-class PendingProxyMetrics extends Error {}
+class PendingHeadroomObservation extends Error {}
 class PendingHaCapacity extends Error {}
+
+function headroomReader(kube, namespace) {
+  const metricsPath = `/apis/metrics.k8s.io/v1beta1/namespaces/${encodeURIComponent(namespace)}/pods`;
+  return async (requestPath, args = ['get', '--raw', requestPath]) => {
+    let response;
+    try {
+      response = await kube(args);
+    } catch (cause) {
+      const reason = kubernetesReadRetryReason(cause, { allowNotFound: requestPath.split('?')[0] === metricsPath });
+      if (reason)
+        throw new PendingHeadroomObservation(
+          `Kubernetes headroom GET unavailable (${reason}); serving owners retained.`,
+          { cause },
+        );
+      throw cause;
+    }
+    // A paired pool may have no inactive controller yet. Only kubectl's
+    // explicit ignore-not-found read can represent that absence as empty.
+    if (args.includes('--ignore-not-found') && !response.stdout.trim()) return null;
+    // Invalid JSON is a malformed observation, not a retryable API failure.
+    return JSON.parse(response.stdout);
+  };
+}
 
 function cpuOwners(cpu, capacity, samples) {
   const ratio = cpu / capacity;
@@ -60,7 +85,7 @@ export async function waitForHaHeadroom(
         !(
           error instanceof PendingHaCapacity ||
           error?.cause instanceof PendingHaCapacity ||
-          error?.cause instanceof PendingProxyMetrics ||
+          error?.cause instanceof PendingHeadroomObservation ||
           error?.cause instanceof PendingExecutionCpuSample
         ) ||
         now() >= deadline
@@ -101,6 +126,7 @@ export function createHaExecutionHeadroomGuard({
     .find((value) => value.metadata.uid === workload.uid)
     ?.spec.template.spec.containers.find((value) => value.name === 'api')?.image;
   if (!originalImage) throw new Error('Original execution image is unconfirmed for rollout headroom.');
+  const get = headroomReader(kube, namespace);
   const transport = {
     async json(method, requestPath) {
       if (method !== 'GET') throw new Error('Rollout headroom transport is read-only.');
@@ -108,10 +134,9 @@ export function createHaExecutionHeadroomGuard({
       if (config.poolWorkloads?.length && requestPath.startsWith(poolPrefix)) {
         const name = decodeURIComponent(requestPath.slice(poolPrefix.length));
         if (!config.poolWorkloads.includes(name)) throw Error('Execution headroom read escaped its paired pools');
-        const raw = (await kube(['get', 'statefulset', name, '--ignore-not-found', '-o', 'json'])).stdout;
-        return raw.trim() ? JSON.parse(raw) : null;
+        return get(requestPath, ['get', 'statefulset', name, '--ignore-not-found', '-o', 'json']);
       }
-      return JSON.parse((await kube(['get', '--raw', requestPath])).stdout);
+      return get(requestPath);
     },
     async exec(requestPath, command) {
       const prefix = `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods/`;
@@ -161,9 +186,9 @@ export function createHaExecutionHeadroomGuard({
       const selector = encodeURIComponent(
         `app.kubernetes.io/instance=${release},app.kubernetes.io/component=execution`,
       );
-      const [owner, pods] = await Promise.all([
-        transport.json('GET', `/apis/apps/v1/namespaces/${ns}/statefulsets/${encodeURIComponent(workload.name)}`),
-        transport.json('GET', `/api/v1/namespaces/${ns}/pods?labelSelector=${selector}`),
+      const [owner, pods] = await readConcurrently([
+        () => transport.json('GET', `/apis/apps/v1/namespaces/${ns}/statefulsets/${encodeURIComponent(workload.name)}`),
+        () => transport.json('GET', `/api/v1/namespaces/${ns}/pods?labelSelector=${selector}`),
       ]);
       if (config.poolWorkloads?.length) {
         // IO already validated the complete paired-pool inventory. This guard
@@ -370,7 +395,7 @@ export function createHaProxyHeadroomGuard({
   )}`;
   const ns = encodeURIComponent(namespace),
     workload = proxy.metadata.name;
-  const get = async (requestPath) => JSON.parse((await kube(['get', '--raw', requestPath])).stdout);
+  const get = headroomReader(kube, namespace);
   let workloadUid;
   return async ({ stage = 'retirement' } = {}) => {
     const base = {
@@ -396,10 +421,10 @@ export function createHaProxyHeadroomGuard({
       )
         throw new Error('Proxy rollout identity or capacity changed.');
       workloadUid = owner.metadata.uid;
-      const [sets, pods, metrics] = await Promise.all([
-        get(`/apis/apps/v1/namespaces/${ns}/replicasets${query}`),
-        get(`/api/v1/namespaces/${ns}/pods${query}`),
-        get(`/apis/metrics.k8s.io/v1beta1/namespaces/${ns}/pods${query}`),
+      const [sets, pods, metrics] = await readConcurrently([
+        () => get(`/apis/apps/v1/namespaces/${ns}/replicasets${query}`),
+        () => get(`/api/v1/namespaces/${ns}/pods${query}`),
+        () => get(`/apis/metrics.k8s.io/v1beta1/namespaces/${ns}/pods${query}`),
       ]);
       if (![sets, pods, metrics].every((value) => Array.isArray(value.items)))
         throw new Error('Proxy rollout metrics are unavailable.');
@@ -428,7 +453,7 @@ export function createHaProxyHeadroomGuard({
           const sample = metrics.items.find((value) => value.metadata.name === pod.metadata.name);
           const age = now() - Date.parse(sample?.timestamp);
           if (!Number.isFinite(age) || age < -5000 || age > metricsMaxAgeSeconds * 1000)
-            throw new PendingProxyMetrics('Proxy CPU sample is missing or stale.');
+            throw new PendingHeadroomObservation('Proxy CPU sample is missing or stale.');
           let requestCpu = 0,
             usageCpu = 0;
           for (const container of pod.spec.containers) {

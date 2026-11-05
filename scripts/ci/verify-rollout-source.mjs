@@ -15,6 +15,7 @@ const suites = [
   'deploy/studio-server/scripts/execution-pool-evidence.test.mjs',
   'deploy/studio-server/scripts/execution-pool-autoscaling.test.mjs',
   'deploy/studio-server/scripts/ha-template-readiness.test.mjs',
+  'deploy/studio-server/scripts/kubernetes-release-settlement.test.mjs',
   'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
   'deploy/studio-server/scripts/ha-rollout-headroom.test.mjs',
   'deploy/studio-server/scripts/managed-disruption-transport.test.mjs',

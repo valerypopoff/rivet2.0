@@ -22,7 +22,7 @@ export async function prepareAutoscalerRuntime(output) {
   for (const input of Object.keys(result.metafile.inputs))
     assert.match(
       input,
-      /^deploy\/studio-server\/scripts\/lib\/(?:execution-autoscaler[^/]*|release-operation-(?:journal|state))\.mjs$/,
+      /^deploy\/studio-server\/scripts\/lib\/(?:execution-autoscaler[^/]*|release-operation-(?:journal|state)|read-concurrently)\.mjs$/,
       'Autoscaler runtime must not import deployment or qualification implementations',
     );
   await fs.mkdir(output, { recursive: true });

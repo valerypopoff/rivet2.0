@@ -28,7 +28,49 @@ import {
   hasSameHaServiceRouting,
   captureHaFrontendCapacity,
   haCandidateReady,
+  waitForHaObservation,
 } from './lib/ha-kubernetes-rollout.mjs';
+
+test('owner readiness polls recover temporary reads without replaying an action or accepting late success', async () => {
+  for (const scenario of ['recover', 'persistent', 'missing', 'late', 'invalid-state']) {
+    let time = 0,
+      reads = 0;
+    const work = waitForHaObservation(
+      async () => {
+        reads++;
+        if (scenario === 'late') {
+          time = 2500;
+          return true;
+        }
+        if (scenario === 'invalid-state') throw Error('Owner UID changed');
+        if (reads === 1 || scenario === 'persistent')
+          throw Error(`Error from server (${scenario === 'missing' ? 'NotFound' : 'ServiceUnavailable'}): fixture`);
+        return true;
+      },
+      {
+        timeoutMs: 2500,
+        description: 'candidate owner',
+        clock: {
+          now: () => time,
+          sleep: async (ms) => {
+            time += ms;
+          },
+        },
+      },
+    );
+    if (scenario === 'recover') {
+      await work;
+      assert.equal(time, 1000);
+      assert.equal(reads, 2);
+    } else {
+      await assert.rejects(
+        work,
+        scenario === 'missing' ? /NotFound/ : scenario === 'invalid-state' ? /UID changed/ : /Timed out/,
+      );
+      assert.equal(time, ['persistent', 'late'].includes(scenario) ? 2500 : 0);
+    }
+  }
+});
 const runHaKubernetesRollout = (options) =>
   runKubernetesRollingStrategy({
     ...options,
@@ -1649,7 +1691,9 @@ for (const fault of [
       namespace: 'fixture',
       manifestDigest: 'candidate',
       resources: [candidate, { kind: 'Service', metadata: { name: 'public' }, spec: {} }],
-      timeoutMs: fault === 'slow-checkpoint-artifact' ? 1_200_000 : 1000,
+      // Removal deliberately needs a second poll. Leave room for that interval;
+      // the fake-clock observation test separately rejects late success.
+      timeoutMs: fault === 'slow-checkpoint-artifact' ? 1_200_000 : 3000,
       artifact: async (name, contents) => {
         artifactCount++;
         if (fault !== 'slow-checkpoint-artifact' || name !== 'ha-rollout.json' || slowArtifactObserved) return;
