@@ -139,6 +139,23 @@ Live or unknown containers still require metrics, and final acceptance still
 requires every proxy settled and healthy.
 See [headroom semantics](deployment-operations.md#ordinary-seven-pod-qualification-and-headroom).
 
+During an ordinary protected update, external node eviction can temporarily
+reduce proxy capacity while a replacement starts. Before retiring another owner,
+the proxy guard observes recovery for at most five minutes (or its shorter
+configured timeout). It proceeds only after both the Deployment's available
+replicas and the current healthy endpoint count meet the configured floor,
+with at least two proxies across two zones. The wait does not lower that floor
+or restart a rollout action.
+
+Each observation rechecks the lease, captured resource identities, routing,
+public readiness, actual regional backend health and drain protection. At least
+one current healthy endpoint must remain while waiting. Public request errors,
+invalid backend evidence, lost owners and expired leases fail immediately;
+unrecovered capacity fails at the observation deadline. Final settled acceptance
+still requires the full current pool healthy. The local adapter regression
+covers replacement recovery, persistent capacity loss and failures during the
+wait; the failed cloud attempt is not qualification evidence for this repair.
+
 ### Routing verification during updates
 
 HTTPRoute comparisons accept equivalent backend references: omitted `group`,

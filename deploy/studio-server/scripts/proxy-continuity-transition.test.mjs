@@ -13,6 +13,7 @@ import {
   assertGkeProxyBackendHealth,
   hasReadyGkeNegGate,
   assertGkeProxyServingFloor,
+  ProxyPoolNotReady,
 } from './lib/gke-proxy-health.mjs';
 
 const profile = {
@@ -595,6 +596,8 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     drainingNormal = true,
     foreignDraining = false,
     replaceOnWait = false,
+    recoverCapacityOnWait = false,
+    publicStatus = 200,
     timeoutReadDelay = 0,
     staleServiceRead = false;
   const types = {
@@ -784,6 +787,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     wait: async () => {
       clock += 60000;
       if (replaceOnWait) f.live.get('Deployment/rivet-proxy').metadata.uid = 'replaced-while-waiting';
+      if (recoverCapacityOnWait) available = true;
     },
     observeBackend: async (service) => ({
       healthy: backendHealthy,
@@ -808,7 +812,10 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
       const probe = options.headers['X-Rivet-Continuity-Probe'];
       const filters = f.live.get('HTTPRoute/route').spec.rules[0].filters;
       const target = probe ? 'bridge' : filters?.at(-1).responseHeaderModifier.set[0].value;
-      return new Response('{}', { status: 200, headers: target ? { 'X-Rivet-Continuity-Serving': target } : {} });
+      return new Response('{}', {
+        status: publicStatus,
+        headers: target ? { 'X-Rivet-Continuity-Serving': target } : {},
+      });
     },
   });
   const before = commands.length;
@@ -920,7 +927,46 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
   foreignDraining = false;
   f.live.get('Deployment/rivet-proxy').spec.replicas = 2;
   pendingNormalReads = 1;
-  await assert.rejects(adapter.verify(next), /serving floor/);
+  available = false;
+  recoverCapacityOnWait = true;
+  const beforeCapacityRecovery = clock;
+  const beforeCapacityCommands = commands.length;
+  await adapter.verify(next);
+  assert.equal(clock - beforeCapacityRecovery, 60000, 'Wait for a replacement after external proxy eviction');
+  assert.ok(
+    commands.slice(beforeCapacityCommands).every((args) => args[0] === 'get'),
+    'Capacity recovery only observes; it cannot retire or mutate another owner',
+  );
+  recoverCapacityOnWait = false;
+  pendingNormalReads = 1;
+  const beforeEndpointRecovery = clock;
+  await adapter.verify(next);
+  assert.equal(clock - beforeEndpointRecovery, 60000, 'Pending endpoints cannot borrow stale Deployment availability');
+  available = false;
+  const beforeCapacityTimeout = clock;
+  await assert.rejects(
+    adapter.verify(next),
+    /Timed out waiting for proxy serving capacity.*available serving capacity/,
+  );
+  assert.equal(clock - beforeCapacityTimeout, 300000, 'An unrecovered pool has a five-minute observation limit');
+  backendHealthy = false;
+  const beforeFatalHealth = clock;
+  await assert.rejects(adapter.verify(next), /readiness\/NEG gate|Regional backend is not healthy/);
+  assert.equal(clock, beforeFatalHealth, 'Failed backend health is not a recoverable capacity observation');
+  backendHealthy = true;
+  publicStatus = 503;
+  await assert.rejects(adapter.verify(next), /Public ingress readiness request failed/);
+  assert.equal(clock, beforeFatalHealth, 'Public request failures must stop immediately');
+  publicStatus = 200;
+  replaceOnWait = true;
+  await assert.rejects(adapter.verify(next), /Ingress owner replaced|Deployment identity changed/);
+  assert.equal(clock - beforeFatalHealth, 60000, 'Recheck captured owner identities while waiting');
+  replaceOnWait = false;
+  f.live.get('Deployment/rivet-proxy').metadata.uid = originalUid;
+  const leaseDeadline = clock + 60000;
+  next.assertLease = () => assert.ok(clock < leaseDeadline, 'Fixture lease expired');
+  await assert.rejects(adapter.verify(next), /Fixture lease expired/);
+  assert.equal(clock, leaseDeadline, 'Recheck the lease before another capacity poll');
   assert.ok(commands.some((a) => a[0] === 'delete' && a[1] === '--raw'));
 });
 
@@ -1142,28 +1188,49 @@ test('native proxy overlap tolerates pending replacements only with an actual zo
     /healthy regional endpoint/,
     'Final acceptance must still reject an incomplete replacement',
   );
-  for (const change of [
-    (f) => {
-      f.pods[0].metadata.deletionTimestamp = new Date().toISOString();
-    },
-    (f) => {
-      f.backend.healthyEndpoints.pop();
-    },
-    (f) => {
-      f.backend.observedAt -= 60001;
-    },
-    (f) => {
-      f.backend.serviceUid = 'foreign';
-    },
-    (f) => {
-      f.backend.healthyEndpoints[1].zone = f.backend.healthyEndpoints[0].zone;
-    },
+  for (const [change, recovering] of [
+    [
+      (f) => {
+        f.pods[0].metadata.deletionTimestamp = new Date().toISOString();
+      },
+      true,
+    ],
+    [
+      (f) => {
+        f.backend.healthyEndpoints.pop();
+      },
+      true,
+    ],
+    [
+      (f) => {
+        f.backend.observedAt -= 60001;
+      },
+      false,
+    ],
+    [
+      (f) => {
+        f.backend.serviceUid = 'foreign';
+      },
+      false,
+    ],
+    [
+      (f) => {
+        f.backend.healthyEndpoints[1].zone = f.backend.healthyEndpoints[0].zone;
+      },
+      false,
+    ],
+    [
+      (f) => {
+        f.backend.healthyEndpoints = [];
+      },
+      false,
+    ],
   ]) {
     const broken = regionalEndpointFixture();
     change(broken);
     assert.throws(
       () => assertGkeProxyServingFloor(broken.pods, broken.service, broken.backend),
-      /serving floor|zonal redundancy/,
+      (error) => (recovering ? error instanceof ProxyPoolNotReady : error.code === 'ERR_ASSERTION'),
     );
   }
 });
