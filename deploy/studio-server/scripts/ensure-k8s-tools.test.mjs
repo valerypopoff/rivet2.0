@@ -6,6 +6,7 @@ import path from 'node:path';
 import { configurePinnedHelmForCi } from './ensure-k8s-tools.mjs';
 import { HELM_VERSION } from './lib/k8s-tools.mjs';
 
+// test-style: fixture-read: assertions inspect only the test-owned generated GitHub environment file.
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-ci-helm-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
