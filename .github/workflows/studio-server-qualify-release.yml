@@ -150,6 +150,9 @@ jobs:
         with:
           node-version: 24
       - run: corepack yarn install --immutable
+      - name: Select pinned release Helm
+        timeout-minutes: 2
+        run: corepack yarn studio-server:setup:k8s-tools --github-env
 
       - name: Validate approved test window before cloud access
         run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-window
@@ -230,6 +233,9 @@ jobs:
         with:
           node-version: 24
       - run: corepack yarn install --immutable
+      - name: Select pinned release Helm
+        timeout-minutes: 2
+        run: corepack yarn studio-server:setup:k8s-tools --github-env
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:

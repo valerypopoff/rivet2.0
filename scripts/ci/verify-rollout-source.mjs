@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 
 // Source-only: no compiled workspace exports, Docker, browser or cloud access.
 const suites = [
+  'deploy/studio-server/scripts/ensure-k8s-tools.test.mjs',
   'deploy/studio-server/scripts/release-tooling.test.mjs',
   'deploy/studio-server/scripts/ha-background-probe.test.mjs',
   'deploy/studio-server/scripts/ha-runner-space.test.mjs',

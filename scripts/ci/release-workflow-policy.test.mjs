@@ -1,6 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertFastReleasePolicy } from './release-workflow-policy.mjs';
+import { assertFastReleasePolicy, assertPinnedProviderHelm } from './release-workflow-policy.mjs';
+
+test('each provider job must pin Helm before credentials and stop if selection fails', () => {
+  const workflow = {
+    jobs: Object.fromEntries(
+      ['qualified', 'deploy'].map((name) => [
+        name,
+        {
+          steps: [
+            { run: 'corepack yarn studio-server:setup:k8s-tools --github-env', 'timeout-minutes': 2 },
+            { uses: 'google-github-actions/auth@fixture' },
+          ],
+        },
+      ]),
+    ),
+  };
+  assert.doesNotThrow(() => assertPinnedProviderHelm(workflow));
+  for (const name of ['qualified', 'deploy']) {
+    for (const change of [
+      (s) => s.reverse(),
+      (s) => s.shift(),
+      (s) => {
+        s[0].if = 'false';
+      },
+      (s) => {
+        s[0]['continue-on-error'] = true;
+      },
+    ]) {
+      const broken = structuredClone(workflow);
+      change(broken.jobs[name].steps);
+      assert.throws(() => assertPinnedProviderHelm(broken));
+    }
+  }
+});
 
 function fixture() {
   const shared = { uses: './.github/workflows/studio-server-source-contracts.yml' };

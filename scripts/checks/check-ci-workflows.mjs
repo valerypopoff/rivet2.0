@@ -5,7 +5,7 @@ import { parseDocument } from 'yaml';
 import { imagePlatforms, nginxImage, runtimeNodeImage, esbuildCompilerImage } from '../ci/scan-container-images.mjs';
 import { browserCiEndpoint } from '../ci/verify-browser-environment.mjs';
 import { ACTIONS_QUALIFICATION_MAX_SECONDS } from '../../deploy/studio-server/scripts/lib/runtime-qualification-execution.mjs';
-import { assertFastReleasePolicy } from '../ci/release-workflow-policy.mjs';
+import { assertFastReleasePolicy, assertPinnedProviderHelm } from '../ci/release-workflow-policy.mjs';
 
 const rootDir = process.cwd();
 
@@ -64,6 +64,7 @@ assert.equal(
   '${{ jobs.publish.outputs.manifest_digest }}',
 );
 const automaticQualification = parseWorkflow('.github/workflows/studio-server-qualify-release.yml').workflow;
+assertPinnedProviderHelm(automaticQualification);
 const qualificationPublisher = parseWorkflow(
   '.github/workflows/studio-server-publish-qualification-images.yml',
 ).workflow;

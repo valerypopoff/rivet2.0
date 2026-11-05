@@ -3,13 +3,26 @@
 Delivery now separates application build identity from optional independent
 tooling publication. Reuse requires unchanged committed application inputs;
 actor bootstrap, qualification, publication and production bind the same tooling
-source/publication/input fingerprint. This is a repository implementation,
-not a new image publication, cloud attempt or completed production release. The
-next activation must select the verified application build plus verified tooling
-publication and pass the ordinary pair-specific qualification and cleanup gates.
+source/publication/input fingerprint. The latest qualification below used the
+default same-source application/tooling path. A separately selected source pair
+still needs its own qualification and cleanup proof.
 See [independent tooling](automated-runtime-qualification.md#application-builds-and-independent-tooling).
 
-The 2026-11-05 follow-up remains unqualified. Its first attempt stopped when an
+On 2026-11-06, source `441dd191f13932ffcbbef39e222ab91a182dea30` passed
+[Build Images 42103950900](https://github.com/valerypopoff/rivet2.0/actions/runs/42103950900)
+and [focused staging 42109424575](https://github.com/valerypopoff/rivet2.0/actions/runs/42109424575).
+The measured rollout completed 4,528 workflow and 1,547 web requests without
+failures, plus all six complete 300-second transport proofs. Minimum Ready
+execution/proxy counts stayed at two. Independent cleanup confirmed the fixture
+namespace, actor and all eight cloud resources absent; qualification was published.
+The hosted production leg then stopped before workload changes because its
+runner-supplied Helm rejected `list --all`. Provider jobs now select and verify
+the checksum-verified repository Helm pin before cloud authentication, bounded
+to two minutes. An inspected production-only recovery can preserve this exact
+qualification instead of rebuilding images or repeating staging. Fresh preflight,
+adequate checkpoint disk space and final production acceptance remain required.
+
+The preceding 2026-11-05 attempts did not qualify. The first stopped when an
 external node eviction temporarily reduced proxy availability; the bounded
 read-only capacity-recovery repair passed CI and Build Images42019915093. The
 replacement attempt returned one Envoy503 during a fixture-induced Nginx reload,
@@ -30,8 +43,8 @@ the pinned background run after routing withdrawal and before admission fencing,
 so it cannot saturate an owner still receiving public traffic. The three public
 transport requests retain pre-withdrawal admission. Boundary/failure/recovery,
 bundled serialization, and stalled-response regressions run locally; deadline
-tests use a deterministic clock. It is not yet image- or
-provider-qualified; no further cloud attempt is automatic.
+tests use a deterministic clock. The latest qualification above covers this
+repair; it does not retroactively qualify the earlier failed attempts.
 The focused observer/certificate is also aligned with the guarded recovery path:
 a temporary single serving proxy can recover without hiding request failures,
 while retirement and final healthy-capacity requirements remain at two proxies.

@@ -23,6 +23,13 @@ Studio Server verification and managed release jobs explicitly override the
 shared setup to Node `24`. Validate server changes on that runtime as well;
 the default workspace pin is not the server CI runtime.
 
+Release Rivet selects the repository's checksum-verified Helm pin with
+`yarn studio-server:setup:k8s-tools --github-env` in both provider jobs, before
+Google authentication. This writes the absolute `RIVET_K8S_HELM_BIN` override
+after checking the installed version, so an Ubuntu runner's preinstalled Helm
+cannot change deployment command semantics. Keep the staging-host and production
+steps together; the ordinary local setup command retains its existing PATH/override behavior.
+
 ### Rust
 
 Required for:

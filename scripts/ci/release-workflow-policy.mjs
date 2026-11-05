@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
 
 const needs = (job) => [job.needs ?? []].flat();
+
+export function assertPinnedProviderHelm(workflow) {
+  for (const name of ['qualified', 'deploy']) {
+    const steps = workflow.jobs[name].steps;
+    const pin = steps.findIndex((s) => s.run === 'corepack yarn studio-server:setup:k8s-tools --github-env');
+    const auth = steps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));
+    assert.ok(pin >= 0 && auth > pin, `${name} must select pinned Helm before cloud authentication`);
+    assert.equal(steps[pin].if, undefined, 'Pinned Helm selection must not be conditional');
+    assert.equal(steps[pin]['continue-on-error'], undefined, 'Pinned Helm failure must stop provider work');
+    assert.equal(steps[pin]['timeout-minutes'], 2, 'Tool setup must fail before a long provider wait');
+  }
+}
 const depends = (job, expected) => {
   assert.ok(needs(job).includes(expected), `Missing required dependency: ${expected}`);
   assert.doesNotMatch(
