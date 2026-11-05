@@ -14,6 +14,8 @@ test('structural authoring preserves real PostgreSQL/MinIO data after lost creat
 }, testInfo) => {
   test.setTimeout(240_000);
   const runtime = await startHostedSubgraphRuntime();
+  let releaseTree!: () => void;
+  const initialTree = new Promise<void>((resolve) => (releaseTree = resolve));
   const writes = new Map<string, number>();
   let recoveries = 0;
   try {
@@ -43,8 +45,16 @@ test('structural authoring preserves real PostgreSQL/MinIO data after lost creat
       return route.fulfill({ response });
     });
     await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', async (route) => {
+      await initialTree;
+      await route.fallback();
+    });
     await page.goto('/');
     await waitForDashboardReady(page);
+    const createFolder = page.getByRole('button', { name: '+ New folder', exact: true });
+    await expect(createFolder).toBeDisabled();
+    releaseTree();
+    await expect(createFolder).toBeEnabled();
     const newFolder = async (name: string) => {
       page.once('dialog', (dialog) => dialog.accept(name));
       await page.getByRole('button', { name: '+ New folder', exact: true }).click();
@@ -130,6 +140,7 @@ test('structural authoring preserves real PostgreSQL/MinIO data after lost creat
     await expect(folderRow()).toBeVisible();
     await expect(page.getByRole('button', { name: /Structural UI copy bundle$/, exact: true })).toHaveCount(0);
   } finally {
+    releaseTree();
     await testInfo.attach('isolated-runtime-log', { body: runtime.logs, contentType: 'text/plain' });
     await page.unrouteAll({ behavior: 'ignoreErrors' });
     await context.close();
