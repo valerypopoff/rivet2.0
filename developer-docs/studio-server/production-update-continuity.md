@@ -158,6 +158,13 @@ wait; the failed cloud attempt is not qualification evidence for this repair.
 
 ### Routing verification during updates
 
+The isolated continuity fixture completes its runtime timeout configuration before
+starting protected traffic. That setup PATCH can reload Nginx; it is not part of
+the version rollout. Its existing per-proxy configuration check still runs, and
+all request failures after the observation window starts remain disqualifying.
+There is no additional warmup batch, ignored failure or POST retry. The source
+gate covers this ordering with a real HTTP regression before image builds.
+
 HTTPRoute comparisons accept equivalent backend references: omitted `group`,
 `kind`, `namespace` and `weight` mean the core API group, `Service`, the route's
 namespace and weight `1`. These are the documented
@@ -478,6 +485,16 @@ The qualification command derives its read-only production preflight timeout
 from the qualified profile (at least 20 minutes), including termination headroom.
 
 ## Verification and activation gates
+
+Incoming proxy connections use a 620-second idle keepalive, exceeding the regional
+load balancer's 600-second backend pooling timeout. A five-second minimum keeps
+a recently used connection available to a queued POST while Nginx workers reload.
+It is short enough to fit the existing shutdown allowance. These settings follow
+[GCP backend keepalive guidance](https://docs.cloud.google.com/load-balancing/docs/https/request-distribution)
+and [Nginx graceful keepalive support](https://nginx.org/en/docs/http/ngx_http_core_module.html#keepalive_min_timeout).
+The Docker DNS/reload fixture uses the production client keepalive directives
+and verifies that one POST after reload uses its original incoming TCP connection
+and executes exactly once. Removing the minimum reproduced `ECONNRESET` locally.
 
 API and execution upstream groups explicitly use `keepalive 0` in production,
 Compose and development proxies. Nginx 1.29.7+ enables upstream connection caching

@@ -202,7 +202,8 @@ export class ProviderRequestContinuity {
       ? 'already-protected'
       : 'passed';
   }
-  async prepare(template) {
+  async prepareProxySettings() {
+    if (this.proxySettingsPrepared) return;
     const gate = this.gate,
       base = gate.config.baseUrl;
     // Only this operation's isolated installation is changed. Production must
@@ -245,6 +246,13 @@ export class ProviderRequestContinuity {
       assert.ok(performance.now() < deadline, 'Runtime proxy settings did not reach all original proxies');
       await new Promise((r) => setTimeout(r, 1000));
     }
+    this.proxySettingsPrepared = true;
+  }
+  async prepare(template) {
+    await this.prepareProxySettings();
+    const gate = this.gate,
+      base = gate.config.baseUrl;
+    await gate.assertProofContext();
     const project = parse(template);
     project.data.metadata.id = randomUUID();
     delete project.data.uiGraphs;

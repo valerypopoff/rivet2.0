@@ -137,6 +137,9 @@ export async function runOrdinaryRuntimeUpgrade({
       return check();
     }),
   );
+  // This fixture-only settings change reloads nginx. Finish it before the
+  // protected observation window, which still includes the actual handoff/roll.
+  await gate.continuityProbes?.prepareProxySettings?.();
   const report = {
     qualification: 'local-functional-only',
     purpose: 'ordinary-upgrade',

@@ -50,6 +50,70 @@ async function until(label, check, timeout = 45000) {
   throw new Error(`${label} timed out: ${last ?? 'condition not met'}`);
 }
 
+async function verifyPooledPostDuringReload(base, container) {
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 });
+  const request = (method, body = '') =>
+    new Promise((resolve, reject) => {
+      let socket;
+      const req = http.request(
+        `${base}/workflows/fixture`,
+        {
+          agent,
+          method,
+          headers: { cookie: 'fixture-auth=yes', 'content-length': Buffer.byteLength(body) },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.once('error', reject);
+          res.once('end', () => {
+            try {
+              resolve({
+                status: res.statusCode,
+                reused: req.reusedSocket,
+                socket,
+                data: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+              });
+            } catch (error) {
+              reject(error);
+            }
+          });
+        },
+      );
+      req.once('socket', (value) => {
+        socket = value;
+      });
+      req.once('error', reject); // Never replay a non-idempotent request.
+      req.setTimeout(5000, () => req.destroy(Error('Pooled reload request timed out')));
+      req.end(body);
+    });
+  const worker = () => {
+    const logs = spawnSync('docker', ['logs', container], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(logs.status, 0);
+    return [...logs.stderr.matchAll(/start worker process (\d+)/g)].at(-1)?.[1];
+  };
+  try {
+    const before = await request('GET');
+    assert.equal(before.status, 200);
+    const oldWorker = worker();
+    assert.ok(oldWorker);
+    docker('kill', '--signal=HUP', container);
+    await until('reload starts a replacement worker', async () => {
+      const next = worker();
+      return !!next && next !== oldWorker;
+    });
+    const after = await request('POST', 'reload accepted once');
+    assert.equal(after.status, 200);
+    assert.equal(after.reused, true, 'Reload must retain an idle load-balancer connection for its next POST');
+    assert.equal(after.socket, before.socket, 'The POST must use the original connection without reconnecting');
+    assert.equal(after.data.body, 'reload accepted once');
+    assert.equal(after.data.acceptedPosts, before.data.acceptedPosts + 1, 'The POST must execute exactly once');
+    return after.data.acceptedPosts;
+  } finally {
+    agent.destroy();
+  }
+}
+
 async function verifyUpgrades(base, identity) {
   for (const [route, upstreamPath] of [
     ['/ws/latest-debugger', '/ws/latest-debugger'],
@@ -153,12 +217,17 @@ map $rivet_resolved_forwarding_peer $rivet_client_ip {
   );
   // One worker guarantees each request uses the DNS cache warmed before the
   // replacement, instead of accidentally succeeding through a fresh worker.
+  const keepaliveDirectives = (
+    await readFile(path.join(root, 'deploy/studio-server/images/proxy/nginx.conf'), 'utf8')
+  ).match(/^\s*keepalive_(?:min_)?timeout\s+[^;\r\n]+;/gm);
+  assert.ok(keepaliveDirectives?.length, 'The fixture must use the production client keepalive policy');
   await writeFile(
     path.join(fixture, 'nginx.conf'),
     `worker_processes 1;
 error_log /dev/stderr notice;
 events {}
 http {
+    ${keepaliveDirectives.join('\n    ')}
     log_format fixture 'fixture-worker=$pid status=$status path=$uri';
     access_log /dev/stdout fixture;
     include /etc/nginx/conf.d/default.conf;
@@ -352,6 +421,20 @@ http {
         connections.add(data.connectionId);
       }
       if (execution && route === '/workflows/fixture') executionPosts = accepted;
+    }
+    // Keep this intentional reload separate from the DNS proxy, whose log must
+    // still prove address recovery without any reload.
+    const clientReloadProxy = `${network}-client-reload`;
+    try {
+      const clientReloadBase = startProxy(clientReloadProxy);
+      await until(
+        'client reload proxy startup',
+        async () => (await fetch(`${clientReloadBase}/readyz`, { signal: AbortSignal.timeout(2500) })).status === 200,
+      );
+      const acceptedAfterReload = await verifyPooledPostDuringReload(clientReloadBase, clientReloadProxy);
+      if (execution) executionPosts = acceptedAfterReload;
+    } finally {
+      remove(clientReloadProxy);
     }
     assert.equal(await (await request('/', { headers: {} })).text(), 'Fixture login');
     // A frontend fallback or login page must never certify API readiness.

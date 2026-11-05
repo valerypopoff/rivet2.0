@@ -303,6 +303,7 @@ for (const scenario of [
   'overlap',
   'overlap-failure',
   'focused',
+  'focused-proxy-settings',
   'focused-502',
   'focused-missing-recording',
   'focused-slow-web',
@@ -320,7 +321,7 @@ for (const scenario of [
     const overlap = scenario.startsWith('overlap'),
       focused = scenario.startsWith('focused'),
       variant = focused
-        ? ['focused', 'focused-grown', 'focused-late-growth'].includes(scenario)
+        ? ['focused', 'focused-proxy-settings', 'focused-grown', 'focused-late-growth'].includes(scenario)
           ? 'pass'
           : scenario.slice(8)
         : scenario,
@@ -337,6 +338,7 @@ for (const scenario of [
       rolls = 0,
       independence = 0,
       continuityFinished = false;
+    let proxySettingsPrepared = false;
     const requests = [],
       artifacts = new Map(),
       captures = [];
@@ -351,6 +353,10 @@ for (const scenario of [
     );
     const server = createServer((req, res) => {
       requests.push({ id: req.headers['x-rivet-ha-probe-id'], method: req.method, route: req.url });
+      if (scenario === 'focused-proxy-settings' && !proxySettingsPrepared) {
+        res.writeHead(503);
+        return res.end('Proxy configuration is still reloading');
+      }
       if (req.url.endsWith('/download')) return res.end(archive);
       if (variant === 'slow-web' && req.url === '/apps/release-gate-web-app')
         return nativeSetTimeout(() => res.end('Managed release gate app'), 60);
@@ -449,6 +455,10 @@ for (const scenario of [
     if (focused) {
       gate.operation = { qualification: { tier: 'focused' }, policy: autoscalerPolicy({}) };
       gate.continuityProbes = {
+        prepareProxySettings: async () => {
+          assert.ok(!requests.some((r) => r.id), 'Configure the proxy before starting protected traffic');
+          proxySettingsPrepared = true;
+        },
         prepare: async () => {},
         startCohort: async (stage) => assert.equal(stage, 'execution-retirement'),
         finish: async () => {

@@ -590,8 +590,13 @@ test('fixture admissions are observed on execution owners and shared container m
   await assert.rejects(probes.waitForAcceptance('stage'), /Duplicate synchronous/);
 });
 test('published fixture enforces duration/input bounds and exclusive admission markers', async (t) => {
-  t.mock.method(globalThis, 'fetch', async () => new Response('{}', { headers: { etag: 'revision' } }));
-  let uploaded;
+  let uploaded,
+    settingsReads = 0,
+    settingsPatches = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    settingsReads++;
+    return new Response('{}', { headers: { etag: 'revision' } });
+  });
   const gate = {
     operation: { installed: { qualificationValues: {} } },
     config: { baseUrl: 'https://fixture.invalid' },
@@ -603,6 +608,12 @@ test('published fixture enforces duration/input bounds and exclusive admission m
     ],
     kube: async () => ({ stdout: 'proxy_read_timeout 3600s;' }),
     requestWorkflow: async (_base, route, options) => {
+      if (route === '/api/app-settings/runtime-limits') {
+        assert.equal(options.method, 'PATCH');
+        assert.equal(options.headers['If-Match'], 'revision');
+        settingsPatches++;
+        return {};
+      }
       if (route.endsWith('/upload')) {
         uploaded = parse(JSON.parse(options.body).contents);
         return { project: { id: 'workflow', relativePath: 'fixture' } };
@@ -613,9 +624,14 @@ test('published fixture enforces duration/input bounds and exclusive admission m
     },
   };
   const probes = new ProviderRequestContinuity(gate, { hpaOnly: true });
+  await probes.prepareProxySettings();
+  assert.equal(settingsReads, 1);
+  assert.equal(settingsPatches, 1);
   await probes.prepare(
     await fs.readFile('deploy/studio-server/scripts/fixtures/managed-release-gate.rivet-project', 'utf8'),
   );
+  assert.equal(settingsReads, 1, 'Fixture preparation must not reconfigure the proxy inside protected traffic');
+  assert.equal(settingsPatches, 1, 'The acknowledged setup PATCH is not repeated');
   const nodes = uploaded.data.graphs[uploaded.data.metadata.mainGraphId].nodes;
   const code = nodes['[admission]:code "Admission"'].data.code,
     markers = new Map();
