@@ -303,6 +303,9 @@ for (const scenario of [
   'overlap',
   'overlap-failure',
   'focused',
+  'focused-proxy-settings',
+  'focused-proxy-recovery',
+  'focused-proxy-zero',
   'focused-502',
   'focused-missing-recording',
   'focused-slow-web',
@@ -320,7 +323,13 @@ for (const scenario of [
     const overlap = scenario.startsWith('overlap'),
       focused = scenario.startsWith('focused'),
       variant = focused
-        ? ['focused', 'focused-grown', 'focused-late-growth'].includes(scenario)
+        ? [
+            'focused',
+            'focused-proxy-settings',
+            'focused-proxy-recovery',
+            'focused-grown',
+            'focused-late-growth',
+          ].includes(scenario)
           ? 'pass'
           : scenario.slice(8)
         : scenario,
@@ -337,6 +346,9 @@ for (const scenario of [
       rolls = 0,
       independence = 0,
       continuityFinished = false;
+    let proxySettingsPrepared = false;
+    let proxyRecoveryArmed = false,
+      proxyRecoverySampled = false;
     const requests = [],
       artifacts = new Map(),
       captures = [];
@@ -351,6 +363,10 @@ for (const scenario of [
     );
     const server = createServer((req, res) => {
       requests.push({ id: req.headers['x-rivet-ha-probe-id'], method: req.method, route: req.url });
+      if (scenario === 'focused-proxy-settings' && !proxySettingsPrepared) {
+        res.writeHead(503);
+        return res.end('Proxy configuration is still reloading');
+      }
       if (req.url.endsWith('/download')) return res.end(archive);
       if (variant === 'slow-web' && req.url === '/apps/release-gate-web-app')
         return nativeSetTimeout(() => res.end('Managed release gate app'), 60);
@@ -385,6 +401,16 @@ for (const scenario of [
       pods: async () => {
         const grown = scenario === 'focused-grown' || (continuityFinished && scenario.startsWith('focused-late-'));
         const observed = pods(images, grown ? { proxy: 4, execution: 3 } : {});
+        if (proxyRecoveryArmed && !proxyRecoverySampled) {
+          proxyRecoverySampled = true;
+          let retained = false;
+          return observed.filter((p) => {
+            if (p.metadata.labels['app.kubernetes.io/component'] !== 'proxy') return true;
+            if (scenario === 'focused-proxy-zero' || retained) return false;
+            retained = true;
+            return true;
+          });
+        }
         if (continuityFinished && scenario === 'focused-late-image-drift')
           observed[3].spec.containers[0].image = `${previous.images.proxy.repository}@${previous.images.proxy.digest}`;
         return observed;
@@ -416,6 +442,10 @@ for (const scenario of [
       roll: async (_images, singleton, hooks) => {
         rolls++;
         assert.equal(singleton, true);
+        if (['focused-proxy-recovery', 'focused-proxy-zero'].includes(scenario)) {
+          proxyRecoveryArmed = true;
+          while (!proxyRecoverySampled) await new Promise((resolve) => nativeSetTimeout(resolve, 5));
+        }
         failing = variant === '502';
         if (failing) {
           await failedRequest;
@@ -449,6 +479,10 @@ for (const scenario of [
     if (focused) {
       gate.operation = { qualification: { tier: 'focused' }, policy: autoscalerPolicy({}) };
       gate.continuityProbes = {
+        prepareProxySettings: async () => {
+          assert.ok(!requests.some((r) => r.id), 'Configure the proxy before starting protected traffic');
+          proxySettingsPrepared = true;
+        },
         prepare: async () => {},
         startCohort: async (stage) => assert.equal(stage, 'execution-retirement'),
         finish: async () => {
@@ -516,7 +550,9 @@ for (const scenario of [
       assert.ok(report.readiness.samples > 0);
       assert.deepEqual(
         report.readiness.minimumReady,
-        scenario === 'focused-grown' ? { execution: 3, proxy: 4 } : { execution: 2, proxy: 2 },
+        scenario === 'focused-grown'
+          ? { execution: 3, proxy: 4 }
+          : { execution: 2, proxy: scenario === 'focused-proxy-recovery' ? 1 : 2 },
       );
       if (scenario === 'focused-grown') {
         assert.equal(report.initialApplicationPods, 10);

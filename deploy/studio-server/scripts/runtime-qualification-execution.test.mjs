@@ -1498,6 +1498,9 @@ test('focused policy evidence is validated inside the real rollout with fresh sa
   };
   assert.doesNotThrow(() => assertOrdinaryProviderReport(report, operation));
   assert.throws(() => assertProviderAutoscalingReport(report, operation), /with its rollout/);
+  const recovering = structuredClone(report);
+  recovering.readiness.minimumReady.proxy = 1;
+  assert.doesNotThrow(() => assertOrdinaryProviderReport(recovering, operation));
   for (const change of [
     (x) => {
       x.capacity.final.proxy = 5;
@@ -1521,7 +1524,14 @@ test('focused policy evidence is validated inside the real rollout with fresh sa
       x.outcomes.finalAutoscaler.sampleAt = x.outcomes.initialAutoscaler.sampleAt;
     },
     (x) => {
-      x.readiness.minimumReady.proxy = 1;
+      x.readiness.minimumReady.proxy = 0;
+    },
+    (x) => {
+      x.readiness.minimumReady.execution = 1;
+    },
+    (x) => {
+      x.capacity.final.proxy = 1;
+      x.finalApplicationPods = 7;
     },
     (x) => {
       x.outcomes.initialAutoscaler.sampleAt = String(x.outcomes.initialAutoscaler.sampleAt);

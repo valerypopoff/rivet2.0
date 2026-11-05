@@ -69,13 +69,19 @@ export function assertGkeProxyBackendHealth(pods, service, backend, { now = Date
     Number.isFinite(backend.observedAt) && now >= backend.observedAt && now - backend.observedAt <= 60000,
     'Compute health observation is stale',
   );
-  assert.equal(backend.healthy, true, 'Regional backend is not healthy');
   assert.ok(
     typeof backend.backendService === 'string' && backend.backendService,
     'Regional backend identity is missing',
   );
   assert.match(backend.backendServiceId ?? '', /^[1-9][0-9]*$/);
   assert.ok(Array.isArray(backend.healthyEndpoints), 'Regional endpoint health is missing');
+  // The observer's aggregate flag requires two healthy zones. A one-zone pool
+  // can still supply a real endpoint while a guarded recovery waits for HA.
+  const partial =
+    minimumZones === 1 &&
+    backend.healthy === false &&
+    new Set(backend.healthyEndpoints.map((endpoint) => endpoint.zone)).size === 1;
+  assert.ok(backend.healthy === true || partial, 'Regional backend is not healthy');
   const status = JSON.parse(service.metadata.annotations?.['cloud.google.com/neg-status'] ?? '{}');
   const ports = Object.keys(status.network_endpoint_groups ?? {});
   assert.equal(ports.length, 1, 'Service NEG port is ambiguous');
@@ -124,11 +130,16 @@ export function isGkeProxyBackendReady(pods, service, backend, options) {
 export function assertGkeProxyServingFloor(pods, service, backend, minimum = 2) {
   assert.ok(Number.isSafeInteger(minimum) && minimum >= 2);
   const serving = pods.filter((pod) => isGkeProxyBackendReady([pod], service, backend, { minimumZones: 1 }));
-  if (serving.length < minimum) {
-    // A recovering pool must still have a real, current healthy endpoint. Invalid
-    // backend evidence and complete capacity loss remain immediate failures.
-    assertGkeProxyBackendHealth(serving, service, backend, { minimumZones: 1 });
-    throw new ProxyPoolNotReady(`Proxy rollout has ${serving.length}/${minimum} healthy current-Pod serving floor`);
-  }
-  return assertGkeProxyBackendHealth(serving, service, backend);
+  // A recovering pool must still have a real, current healthy endpoint. Invalid
+  // backend evidence and complete capacity loss remain immediate failures.
+  const matched = assertGkeProxyBackendHealth(serving, service, backend, { minimumZones: 1 });
+  if (
+    serving.length < minimum ||
+    backend.healthy !== true ||
+    new Set(matched.map((endpoint) => endpoint.zone)).size < 2
+  )
+    throw new ProxyPoolNotReady(
+      `Proxy rollout is waiting for ${minimum} healthy current-Pod endpoints across two zones (${serving.length} serving)`,
+    );
+  return matched;
 }

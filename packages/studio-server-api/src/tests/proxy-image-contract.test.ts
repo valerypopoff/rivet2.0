@@ -15,6 +15,17 @@ const proxyTemplatePaths = [
   'deploy/studio-server/compose/nginx/default.dev.conf.template',
 ] as const;
 
+void test('proxy client keepalive outlives GKE pooling and bounds graceful reload protection', () => {
+  const config = readRepoFile('deploy/studio-server/images/proxy/nginx.conf');
+  const idle = /^\s*keepalive_timeout\s+(\d+)s;/m.exec(config);
+  const minimum = /^\s*keepalive_min_timeout\s+(\d+)s;/m.exec(config);
+  assert.ok(idle && Number(idle[1]) > 600, 'Nginx idle keepalive must exceed the GKE backend pool timeout');
+  assert.ok(
+    minimum && Number(minimum[1]) > 0 && Number(minimum[1]) <= 10,
+    'Protect queued POSTs during reload without a long worker-shutdown delay',
+  );
+});
+
 function readProxyTemplates(): string[] {
   return proxyTemplatePaths.map((templatePath) => readRepoFile(templatePath));
 }

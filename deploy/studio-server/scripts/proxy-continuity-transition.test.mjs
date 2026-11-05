@@ -1203,6 +1203,13 @@ test('native proxy overlap tolerates pending replacements only with an actual zo
     ],
     [
       (f) => {
+        f.backend.healthy = false;
+        f.backend.healthyEndpoints.pop();
+      },
+      true,
+    ],
+    [
+      (f) => {
         f.backend.observedAt -= 60001;
       },
       false,
@@ -1217,7 +1224,7 @@ test('native proxy overlap tolerates pending replacements only with an actual zo
       (f) => {
         f.backend.healthyEndpoints[1].zone = f.backend.healthyEndpoints[0].zone;
       },
-      false,
+      true,
     ],
     [
       (f) => {

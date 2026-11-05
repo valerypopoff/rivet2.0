@@ -148,15 +148,36 @@ with at least two proxies across two zones. The wait does not lower that floor
 or restart a rollout action.
 
 Each observation rechecks the lease, captured resource identities, routing,
-public readiness, actual regional backend health and drain protection. At least
+public readiness, actual regional endpoint health and drain protection. At least
 one current healthy endpoint must remain while waiting. Public request errors,
 invalid backend evidence, lost owners and expired leases fail immediately;
 unrecovered capacity fails at the observation deadline. Final settled acceptance
 still requires the full current pool healthy. The local adapter regression
 covers replacement recovery, persistent capacity loss and failures during the
 wait; the failed cloud attempt is not qualification evidence for this repair.
+The regional observer's aggregate health flag requires two healthy zones; loss
+of that redundancy can wait only while a fresh, owned current endpoint is still
+healthy. Both the current serving floor and zonal redundancy must recover before
+the guard returns. Zero healthy endpoints and invalid provider identities remain
+immediate failures.
+
+The focused traffic observer and certificate accept a transient single Ready
+proxy while recovery is pending. They continue to require successful public
+requests and at least one Ready proxy; execution still requires two Ready owners.
+The retirement guard still waits for two available, healthy proxy endpoints before
+advancing, and final acceptance requires the full current pool healthy with at
+least two proxies. Full stress qualification retains its two-proxy observation
+floor. Recovery, zero-capacity rejection and final capacity are covered in the
+early source checks and report validation, without another polling phase.
 
 ### Routing verification during updates
+
+The isolated continuity fixture completes its runtime timeout configuration before
+starting protected traffic. That setup PATCH can reload Nginx; it is not part of
+the version rollout. Its existing per-proxy configuration check still runs, and
+all request failures after the observation window starts remain disqualifying.
+There is no additional warmup batch, ignored failure or POST retry. The source
+gate covers this ordering with a real HTTP regression before image builds.
 
 HTTPRoute comparisons accept equivalent backend references: omitted `group`,
 `kind`, `namespace` and `weight` mean the core API group, `Service`, the route's
@@ -478,6 +499,17 @@ The qualification command derives its read-only production preflight timeout
 from the qualified profile (at least 20 minutes), including termination headroom.
 
 ## Verification and activation gates
+
+Incoming proxy connections use a 620-second idle keepalive, exceeding the regional
+load balancer's 600-second backend pooling timeout. A five-second minimum keeps
+a recently used connection available to a queued POST while Nginx workers reload.
+It is short enough to fit the existing shutdown allowance. These settings follow
+[GCP backend keepalive guidance](https://docs.cloud.google.com/load-balancing/docs/https/request-distribution)
+and [Nginx graceful keepalive support](https://nginx.org/en/docs/http/ngx_http_core_module.html#keepalive_min_timeout).
+The Docker DNS/reload fixture uses the production client keepalive directives
+and verifies that one POST after reload uses its original incoming TCP connection
+and executes exactly once. Removing the minimum reproduced `ECONNRESET` locally.
+Its owned-resource finalizer retains the request error together with any cleanup failure.
 
 API and execution upstream groups explicitly use `keepalive 0` in production,
 Compose and development proxies. Nginx 1.29.7+ enables upstream connection caching

@@ -1,5 +1,18 @@
 # Production update continuity implementation plan
 
+The 2026-11-05 follow-up remains unqualified. Its first attempt stopped when an
+external node eviction temporarily reduced proxy availability; the bounded
+read-only capacity-recovery repair passed CI and Build Images42019915093. The
+replacement attempt returned one Envoy503 during a fixture-induced Nginx reload,
+before the actual image update. Both failed attempts have independently verified
+cleanup; neither deployed application images to production. The separately
+approved restoration of the live proxy minimum to Helm's two replicas is verified.
+The incoming keepalive and fixture-ordering repair is a local candidate until its
+source, image and provider gates pass; no further cloud attempt is automatic.
+The focused observer/certificate is also aligned with the guarded recovery path:
+a temporary single serving proxy can recover without hiding request failures,
+while retirement and final healthy-capacity requirements remain at two proxies.
+
 As of 2026-11-04, [PR 240](https://github.com/valerypopoff/rivet2.0/pull/240), source `7b42dabdeab8b312c2ee50ca198a385bc2acd2a2`, passed [Build Images 41788374693](https://github.com/valerypopoff/rivet2.0/actions/runs/41788374693) and [focused GKE qualification 41793031762](https://github.com/valerypopoff/rivet2.0/actions/runs/41793031762). The qualified manifest was published and staging cleanup independently verified.
 
 Production activation completed on 2026-11-04 with that same qualified release. Independent final verification confirmed manifest `sha256:399452eb945530d430390b5ff194ea588a84d184d265d25b329e1c178349fce5`, all qualified images, seven ready Pods, schema 18, two healthy GCP proxy endpoints and the protected shutdown profile. The original handoff was resumed with its original token after updating the legacy controller to its already-qualified image. The normal route and HPA are restored, all six temporary handoff resources are absent, the owned observer project is cleaned, and the operation lock is released with absence verified. No second staging qualification or application build was needed.

@@ -310,7 +310,11 @@ export function assertOrdinaryProviderReport(report, operation) {
   }
   assertPublicTraffic(report);
   assert.ok(count(report.readiness.samples) > 0);
-  for (const role of ['execution', 'proxy']) assert.ok(count(report.readiness.minimumReady[role]) >= 2);
+  for (const role of ['execution', 'proxy'])
+    assert.ok(
+      count(report.readiness.minimumReady[role]) >=
+        (operation.qualification?.tier === 'focused' && role === 'proxy' ? 1 : 2),
+    );
   const work = report.outcomes.acceptedWork;
   assert.equal(work.length, 2);
   assert.equal(new Set(work.map((r) => nonempty(r.uid))).size, 2);
