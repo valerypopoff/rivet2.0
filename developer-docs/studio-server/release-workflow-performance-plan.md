@@ -37,8 +37,10 @@ HTTP regression also runs before expensive work.
 The follow-up image run exposed a recycled-port shutdown assertion and missing
 hosted-runner disk preparation. Shutdown evidence now identifies the child process,
 with a deliberate unrelated-port-reuse regression. Kind runners reclaim only
-unused preinstalled SDKs before provisioning; the 20 GiB floor remains unchanged
-and reports actual free space. Both contracts fail in the early gate. See
+unused preinstalled SDKs when capacity is insufficient; the 20 GiB floor remains unchanged
+and reports actual free space. The November 5 follow-up handles a cleanup timeout
+by measuring recovered capacity once, without replaying removal or accepting a
+runner below the floor. Both contracts run in the early gate. See
 [runner preparation and ownership](../BUILD-AND-CI.md#runner-capacity-and-process-shutdown-fixture-ownership).
 
 The first publication ([PR 236](https://github.com/valerypopoff/rivet2.0/pull/236),
