@@ -495,6 +495,7 @@ and [Nginx graceful keepalive support](https://nginx.org/en/docs/http/ngx_http_c
 The Docker DNS/reload fixture uses the production client keepalive directives
 and verifies that one POST after reload uses its original incoming TCP connection
 and executes exactly once. Removing the minimum reproduced `ECONNRESET` locally.
+Its owned-resource finalizer retains the request error together with any cleanup failure.
 
 API and execution upstream groups explicitly use `keepalive 0` in production,
 Compose and development proxies. Nginx 1.29.7+ enables upstream connection caching

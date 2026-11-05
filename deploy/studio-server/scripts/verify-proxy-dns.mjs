@@ -425,17 +425,16 @@ http {
     // Keep this intentional reload separate from the DNS proxy, whose log must
     // still prove address recovery without any reload.
     const clientReloadProxy = `${network}-client-reload`;
-    try {
-      const clientReloadBase = startProxy(clientReloadProxy);
-      await until(
-        'client reload proxy startup',
-        async () => (await fetch(`${clientReloadBase}/readyz`, { signal: AbortSignal.timeout(2500) })).status === 200,
-      );
-      const acceptedAfterReload = await verifyPooledPostDuringReload(clientReloadBase, clientReloadProxy);
-      if (execution) executionPosts = acceptedAfterReload;
-    } finally {
-      remove(clientReloadProxy);
-    }
+    const clientReloadBase = startProxy(clientReloadProxy);
+    await until(
+      'client reload proxy startup',
+      async () => (await fetch(`${clientReloadBase}/readyz`, { signal: AbortSignal.timeout(2500) })).status === 200,
+    );
+    const acceptedAfterReload = await verifyPooledPostDuringReload(clientReloadBase, clientReloadProxy);
+    if (execution) executionPosts = acceptedAfterReload;
+    // The outer owned-resource finalizer preserves the primary failure if this
+    // removal also fails; an inner finally would overwrite the POST error.
+    remove(clientReloadProxy);
     assert.equal(await (await request('/', { headers: {} })).text(), 'Fixture login');
     // A frontend fallback or login page must never certify API readiness.
     // Exercise public health routes without an operator session through real nginx.
