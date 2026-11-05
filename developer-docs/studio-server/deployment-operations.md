@@ -209,6 +209,8 @@ whole snapshot, including ownership, serving readiness and fresh CPU/admission
 data, for at most five minutes within the original caller deadline. Started sibling reads settle
 before a recheck; no cached or zero-valued replacement for unavailable CPU is used.
 There is no new retry loop or independent timeout.
+The detached autoscaler bundle explicitly permits this shared concurrency helper;
+its packaging guard still excludes deployment and qualification implementations.
 
 Missing workloads, authorization failures, unclassified errors, malformed JSON or
 CPU values, cancellation and changed ownership remain failures. A persistent
