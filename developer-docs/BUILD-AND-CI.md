@@ -1059,6 +1059,22 @@ the current VM stack; it does not start a storage conversion. See
 [the VM procedure](./studio-server/development.md#deploying-a-verified-staging-build-to-a-vm)
 for environment/TLS handling and production-data risks.
 
+### Independent rollout-tool repairs
+
+Rollout-only changes under `deploy/studio-server/scripts/` and qualification
+actor recipes no longer automatically build the four application images. The
+embedded API autoscaler closure retains image-build triggers. General PR checks
+remain unchanged. Use the existing **Publish qualification images** workflow,
+optionally passing `application_build_run_id` for an early compatibility check,
+then select that tooling run and an existing verified application build in
+**Release Rivet**. The release verifies unchanged application inputs and binds
+the exact tooling identity through staging, publication and production. Runtime,
+chart, dependency, application-image recipe or application-build-workflow changes
+require a new application build. The initial pipeline migration therefore uses
+normal application-build validation once. Local tests do not publish tooling or
+authorize GCP work. See
+[release inputs and evidence](./studio-server/automated-runtime-qualification.md#application-builds-and-independent-tooling).
+
 ### Candidate image download failures
 
 [Build Images 41903036853](https://github.com/valerypopoff/rivet2.0/actions/runs/41903036853)

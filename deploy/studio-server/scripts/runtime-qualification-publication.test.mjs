@@ -6,6 +6,7 @@ import {
   createStudioServerReleaseManifest,
   promoteStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
+  assertReleaseManifestMatchesCurrentSource,
 } from './lib/studio-server-release-manifest.mjs';
 import {
   HA_REQUIRED_CHECKS,
@@ -198,6 +199,63 @@ test('qualification publication requires the exact successful main image-build r
     );
   for (const runId of ['../123', '123;echo bad', '', '0'])
     assert.throws(() => assertRuntimeQualificationBuild(run, { repository, sourceSha, runId }));
+});
+
+test('publication keeps application images/source and binds the exact independently tested tooling', () => {
+  const f = fixture();
+  f.tooling = {
+    sourceSha: 'd'.repeat(40),
+    runId: '456',
+    runAttempt: 1,
+    publicationDigest: 'sha256:' + 'e'.repeat(64),
+    applicationInputsDigest: 'sha256:' + 'f'.repeat(64),
+  };
+  const qualification = {
+    protocol: 2,
+    tier: 'full',
+    safetyDigest: 'a'.repeat(64),
+    configurationDigest: 'b'.repeat(64),
+    tooling: f.tooling,
+  };
+  f.safetyDigest = qualification.safetyDigest;
+  Object.assign(f.control.evidence, {
+    protocol: 2,
+    purpose: 'ordinary-upgrade',
+    controlPlaneMode: 'singleton',
+    edgeProfiles: ['compact'],
+    predecessorManifestDigest: f.candidate.lineage.predecessor.manifestDigest,
+    autoscalerPolicyDigest: autoscalerPolicyDigest(f.autoscaling.policy),
+    checks: [...HA_ORDINARY_RUNTIME_CHECKS],
+    qualification,
+  });
+  Object.assign(f.autoscaling.evidence, { protocol: 2, checks: [...HA_COOPERATIVE_AUTOSCALING_CHECKS], qualification });
+  const result = prepareRuntimeQualification(f);
+  assert.deepEqual(result.candidate.images, f.candidate.images);
+  assert.equal(result.candidate.source.sha, sourceSha);
+  assert.deepEqual(result.candidate.evidence.runtimeControl.qualification.tooling, f.tooling);
+  const qualified = promoteStudioServerReleaseManifest(result.candidate, { promotionEvidence: evidence });
+  assert.doesNotThrow(() => assertReleaseManifestMatchesCurrentSource(qualified, f.tooling.sourceSha));
+  assert.throws(() => assertReleaseManifestMatchesCurrentSource(qualified, sourceSha), /does not match/);
+  for (const change of [
+    (x) => {
+      delete x.tooling;
+    },
+    (x) => {
+      x.tooling.sourceSha = 'e'.repeat(40);
+    },
+    (x) => {
+      x.tooling.publicationDigest = 'sha256:' + '1'.repeat(64);
+    },
+    (x) => {
+      x.autoscaling.evidence.qualification.tooling.runId = '999';
+    },
+  ]) {
+    const broken = structuredClone(f);
+    // Keep the selected input independent from the attested evidence objects.
+    broken.tooling = structuredClone(broken.tooling);
+    change(broken);
+    assert.throws(() => prepareRuntimeQualification(broken));
+  }
 });
 
 test('qualification promotion uses the frozen publication baseline, not a separately selected installed predecessor', () => {

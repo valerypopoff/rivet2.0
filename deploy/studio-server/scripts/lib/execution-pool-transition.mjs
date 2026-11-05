@@ -132,6 +132,7 @@ export async function runExecutionPoolTransition({
     for (const owner of operation.record.executionPool.owners) {
       const { pod } = await ownerStatus(owner);
       if (owner.beginIssued) continue;
+      await io.prepareFence?.(pod);
       await io.assertCapacity(operation.record.executionPool);
       await editOwner(owner.uid, { beginIssued: true });
       operation.assertLease();

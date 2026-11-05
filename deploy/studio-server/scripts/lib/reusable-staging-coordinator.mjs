@@ -11,6 +11,7 @@ import { verifyTemporaryActorExport } from './temporary-staging-actor.mjs';
 import { assertStagingRecord, stagingRecordPath } from './reusable-staging-state.mjs';
 import { describeProviderPhaseReceipt } from './provider-phase-receipt.mjs';
 import { observeProviderProgress } from './provider-progress.mjs';
+import { operationToolingSource } from './release-tooling.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const ready = (pod) =>
@@ -344,10 +345,10 @@ export async function prepareStagingActor(
   const version = await api.json('GET', '/version');
   const preflight = await rpc(['node', actorFile, 'preflight'], {
     sourceRoot: '/app',
-    sourceSha: operation.candidate.source.sha,
+    sourceSha: operationToolingSource(operation),
     kubernetesVersion: version.gitVersion,
   });
-  assert.equal(preflight.sourceSha, operation.candidate.source.sha);
+  assert.equal(preflight.sourceSha, operationToolingSource(operation));
   assert.equal(preflight.offlineFixturePassed, true);
   const files = {};
   for (const name of await fs.readdir(bundle)) {

@@ -2,6 +2,33 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runExecutionPoolTransition } from './lib/execution-pool-transition.mjs';
 
+test('pinned work starts after both routing withdrawals and before each admission fence', async () => {
+  const f = fixture();
+  const withdrawn = new Set();
+  f.io.waitForRoutingWithdrawal = async (pod) => {
+    withdrawn.add(pod.uid);
+  };
+  f.io.prepareFence = async (pod) => {
+    assert.equal(withdrawn.size, 2);
+    assert.equal(f.participants.get(pod.name).state, 'withdrawing');
+    f.calls.push('pinned:' + pod.name);
+  };
+  await f.run();
+  for (const ordinal of [0, 1]) {
+    const name = 'execution-' + ordinal;
+    assert.ok(f.calls.indexOf('pinned:' + name) < f.calls.indexOf('begin:' + name));
+  }
+});
+
+test('failed pinned admission never closes execution admission', async () => {
+  const f = fixture();
+  f.io.prepareFence = async () => {
+    throw Error('pinned admission failed');
+  };
+  await assert.rejects(f.run(), /pinned admission failed/);
+  assert.ok(!f.calls.some((call) => call.startsWith('begin:')));
+});
+
 function fixture() {
   const plan = {
     protocol: 1,

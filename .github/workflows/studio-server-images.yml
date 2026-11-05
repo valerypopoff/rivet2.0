@@ -9,11 +9,6 @@ on:
       - '.github/actions/setup-yarn/**'
       - '.github/actions/build-cache-runtime/**'
       - '.github/workflows/studio-server-images.yml'
-      - '.github/workflows/studio-server-verify.yml'
-      - '.github/workflows/studio-server-source-contracts.yml'
-      - '.github/workflows/studio-server-publish-qualification-images.yml'
-      - 'scripts/build-and-publish-qualification-images.mjs'
-      - 'scripts/qualification-image-publication.mjs'
       - '.pnp.cjs'
       - '.pnp.loader.mjs'
       - '.yarn/**'
@@ -27,8 +22,16 @@ on:
       - 'packages/node/**'
       - 'packages/studio-server-*/**'
       - 'scripts/build-wrapper-target.mjs'
-      - 'scripts/ci/**'
       - 'yarn.lock'
+      # Rollout/test-tool repairs publish through Publish qualification images.
+      # The embedded autoscaler closure is application runtime and remains here.
+      - '!deploy/studio-server/scripts/**'
+      - '!deploy/studio-server/images/qualification/**'
+      - '!packages/studio-server-api/src/tests/**'
+      - 'deploy/studio-server/scripts/lib/execution-autoscaler*.mjs'
+      - 'deploy/studio-server/scripts/lib/release-operation-journal.mjs'
+      - 'deploy/studio-server/scripts/lib/release-operation-state.mjs'
+      - 'deploy/studio-server/scripts/lib/read-concurrently.mjs'
     tags:
       - 'v*'
   schedule:

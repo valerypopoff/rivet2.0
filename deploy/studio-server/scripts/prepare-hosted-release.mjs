@@ -19,6 +19,7 @@ import {
 } from './lib/hosted-staging-setup.mjs';
 import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
 import { sizingInput } from './lib/resource-sizing.mjs';
+import { assertToolingRun, toolingPublicationIdentity, applicationInputDigest } from './lib/release-tooling.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const runCommand = (bin, args, env = process.env) =>
@@ -160,6 +161,18 @@ async function prepareHostedReleaseWork(
     variables.RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256 = p.valuesDigest;
     const publication = JSON.parse(await fs.readFile(publicationFile, 'utf8'));
     assert.equal(publication.sourceSha, environment.GITHUB_SHA);
+    if (environment.TOOLING_RUN_ID) {
+      const packet = path.join(root, 'artifacts/automated-runtime-qualification');
+      const tooling = assertToolingRun(JSON.parse(await fs.readFile(path.join(packet, 'tooling-run.json'), 'utf8')), {
+        repository: environment.GITHUB_REPOSITORY,
+        sourceSha: environment.GITHUB_SHA,
+        runId: environment.TOOLING_RUN_ID,
+      });
+      const proof = JSON.parse(await fs.readFile(path.join(packet, 'application-inputs.json'), 'utf8'));
+      assert.equal(proof.toolingSha, environment.GITHUB_SHA);
+      assert.equal(applicationInputDigest(root, environment.GITHUB_SHA), proof.applicationInputsDigest);
+      toolingPublicationIdentity(publication, tooling, proof.applicationInputsDigest);
+    }
     for (const [name, image] of [
       ['qualification', publication.actor.image],
       ['qualification-minio', publication.minio.image],

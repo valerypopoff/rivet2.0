@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { assertToolingIdentity } from './release-tooling.mjs';
 
 const canonical = (value) =>
   Array.isArray(value)
@@ -78,6 +79,7 @@ export function assertQualificationPlan(plan) {
       'tier',
       'safetyDigest',
       'configurationDigest',
+      ...(plan.tooling ? ['tooling'] : []),
       ...(plan.protocol === 1 ? ['fullBaselineManifestDigest'] : []),
     ].sort(),
   );
@@ -92,6 +94,7 @@ export function assertQualificationPlan(plan) {
     tier: plan.tier,
     safetyDigest: plan.safetyDigest,
     configurationDigest: plan.configurationDigest,
+    ...(plan.tooling ? { tooling: assertToolingIdentity(plan.tooling) } : {}),
     ...(plan.protocol === 1 ? { fullBaselineManifestDigest: plan.fullBaselineManifestDigest } : {}),
   };
 }
@@ -100,7 +103,7 @@ export function assertQualificationPlan(plan) {
  * Full autoscaler stress is a separate protected configuration choice; overlap
  * and releases without the bounded continuity contract retain the full suite.
  * Neither tier reuses test results from a predecessor. */
-export function releaseQualificationPlan({ safetyDigest, installed, policy, profile, overlap, suite }) {
+export function releaseQualificationPlan({ safetyDigest, installed, policy, profile, overlap, suite, tooling }) {
   assert.match(safetyDigest, /^[a-f0-9]{64}$/);
   assert.ok(suite === undefined || ['focused', 'full'].includes(suite), 'Unknown qualification suite');
   const configurationDigest = qualificationConfigurationDigest(installed, policy, profile, overlap);
@@ -111,5 +114,6 @@ export function releaseQualificationPlan({ safetyDigest, installed, policy, prof
     tier: focused ? 'focused' : 'full',
     safetyDigest,
     configurationDigest,
+    ...(tooling ? { tooling: assertToolingIdentity(tooling) } : {}),
   });
 }

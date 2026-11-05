@@ -7,6 +7,10 @@ on:
         description: Successful exact-source main Build Images run to qualify and release without rebuilding.
         required: true
         type: string
+      tooling_run_id:
+        description: Optional successful main Publish qualification images run. Reuses the application build only when runtime inputs are unchanged.
+        type: string
+        default: ''
       deploy_production:
         description: Deploy after qualification and publication using the protected production environment.
         type: boolean
@@ -37,8 +41,11 @@ jobs:
       packages: read
     outputs:
       run_attempt: ${{ steps.build.outputs.run_attempt }}
+      tooling_run_id: ${{ steps.build.outputs.tooling_run_id }}
+      tooling_run_attempt: ${{ steps.build.outputs.tooling_run_attempt }}
     env:
       BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      TOOLING_RUN_ID: ${{ inputs.tooling_run_id }}
       RIVET_QUALIFICATION_SIZING_REQUESTS: ${{ inputs.sizing_requests }}
       RIVET_QUALIFICATION_DEPLOY_PRODUCTION: ${{ inputs.deploy_production }}
       RIVET_AUTOMATED_QUALIFICATION_ENABLED: ${{ vars.RIVET_AUTOMATED_QUALIFICATION_ENABLED }}
@@ -63,6 +70,12 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > "$PACKET/build-run.json"
+          if [[ -n "$TOOLING_RUN_ID" ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TOOLING_RUN_ID" > "$PACKET/tooling-run.json"
+            app_source="$(jq -r .head_sha "$PACKET/build-run.json")"
+            [[ "$app_source" =~ ^[a-f0-9]{40}$ ]]
+            git fetch --depth=1 --filter=blob:none --no-tags origin "$app_source"
+          fi
           corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-build
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -79,6 +92,15 @@ jobs:
       - name: Validate original artifacts before any provider access
         id: candidate
         run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-candidate
+      - name: Download selected tooling publication before provider access
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-image-publication-${{ steps.build.outputs.tooling_run_id }}-${{ steps.build.outputs.tooling_run_attempt }}
+          run-id: ${{ steps.build.outputs.tooling_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/qualification-image-publication
+      - name: Verify application and tooling binding
+        run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-tooling
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -113,6 +135,7 @@ jobs:
       autoscaling: ${{ steps.execute.outputs.autoscaling }}
     env:
       RIVET_QUALIFICATION_ENVIRONMENT_MODE: reusable-cluster
+      TOOLING_RUN_ID: ${{ inputs.tooling_run_id }}
       RIVET_QUALIFICATION_COORDINATOR_MODE: external
       RIVET_QUALIFICATION_SIZING_REQUESTS: ${{ inputs.sizing_requests }}
       RIVET_QUALIFICATION_DEPLOY_PRODUCTION: ${{ inputs.deploy_production }}
@@ -136,10 +159,12 @@ jobs:
           path: artifacts/automated-runtime-qualification
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: qualification-image-publication-${{ inputs.build_run_id }}-${{ needs.built.outputs.run_attempt }}
-          run-id: ${{ inputs.build_run_id }}
+          name: qualification-image-publication-${{ needs.built.outputs.tooling_run_id }}-${{ needs.built.outputs.tooling_run_attempt }}
+          run-id: ${{ needs.built.outputs.tooling_run_id }}
           github-token: ${{ github.token }}
           path: artifacts/qualification-image-publication
+      - name: Recheck selected tooling before cloud credentials
+        run: corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-tooling
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.RIVET_GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
@@ -178,6 +203,7 @@ jobs:
     uses: ./.github/workflows/studio-server-runtime-qualification.yml
     with:
       build_run_id: ${{ inputs.build_run_id }}
+      tooling_run_id: ${{ inputs.tooling_run_id }}
       runtime_control_declaration: ${{ needs.qualified.outputs.control }}
       runtime_autoscaling_declaration: ${{ needs.qualified.outputs.autoscaling }}
 

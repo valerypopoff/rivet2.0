@@ -7,6 +7,8 @@ import { getStudioServerReleaseManifestDigest } from './studio-server-release-ma
 import { continuityTimeoutMs } from './request-continuity.mjs';
 import { prepareQualificationPolicy } from './runtime-qualification-readiness.mjs';
 import { privateCloudEvidence } from './private-cloud-evidence.mjs';
+import { applicationInputDigest, releaseToolingSource } from './release-tooling.mjs';
+import { qualificationSafetyDigest } from './release-qualification-policy.mjs';
 
 /** One deployment invocation owns live checks, checkpoint, rollout and acceptance.
  * Inputs come from the successful qualification and protected runner settings;
@@ -27,7 +29,16 @@ export async function deployQualifiedRelease({
 }) {
   assert.ok(!operation.sizingRequests, 'Sizing observations cannot authorize production deployment');
   assert.equal(getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }), digest);
-  assert.equal(manifest.source.sha, sourceSha);
+  assert.equal(releaseToolingSource(manifest), sourceSha);
+  assert.deepEqual(manifest.evidence.runtimeControl?.qualification?.tooling, operation.tooling);
+  if (operation.tooling) {
+    assert.deepEqual(manifest.evidence.runtimeControl?.qualification?.tooling, operation.tooling);
+    assert.equal(applicationInputDigest(root, sourceSha), operation.tooling.applicationInputsDigest);
+    assert.equal(
+      await qualificationSafetyDigest(root, sourceSha),
+      manifest.evidence.runtimeControl.qualification.safetyDigest,
+    );
+  } else assert.equal(manifest.source.sha, sourceSha);
   assert.equal(manifest.source.sha, operation.candidate.sourceSha);
   assert.deepEqual(manifest.images, operation.candidate.images);
   assert.equal(manifest.chart.contentDigest, operation.candidate.chartDigest);
@@ -127,5 +138,11 @@ export async function deployQualifiedRelease({
   assert.equal(result.state, 'complete');
   assert.equal(result.candidateManifestDigest, digest);
   assert.deepEqual(result.outcome, { infrastructure: 'applied', autoscaling: 'verified', application: 'passed' });
-  return { status: 'deployed', manifestDigest: digest, sourceSha, observedAt: new Date().toISOString() };
+  return {
+    status: 'deployed',
+    manifestDigest: digest,
+    sourceSha: manifest.source.sha,
+    ...(operation.tooling ? { tooling: operation.tooling } : {}),
+    observedAt: new Date().toISOString(),
+  };
 }

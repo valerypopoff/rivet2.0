@@ -1627,6 +1627,15 @@ test('production action invokes the normal command once with bound inputs and pu
     (x) => {
       x.operation.candidate.images.api.digest = `sha256:${'4'.repeat(64)}`;
     },
+    (x) => {
+      x.operation.tooling = {
+        sourceSha: 'e'.repeat(40),
+        runId: '42',
+        runAttempt: 1,
+        publicationDigest: 'sha256:' + 'f'.repeat(64),
+        applicationInputsDigest: 'sha256:' + '1'.repeat(64),
+      };
+    },
   ]) {
     const invalid = { ...args, operation: structuredClone(operation) };
     invalid.packet = await fs.mkdtemp(path.join(directory, 'invalid-'));

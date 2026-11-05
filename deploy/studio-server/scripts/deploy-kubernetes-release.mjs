@@ -244,7 +244,20 @@ export async function assertReleaseManifestMatchesCurrentCheckout(manifest) {
       `Could not resolve the current Git checkout for release verification: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return assertReleaseManifestMatchesCurrentSource(manifest, result.stdout.trim());
+  const release = assertReleaseManifestMatchesCurrentSource(manifest, result.stdout.trim());
+  if (release.evidence.runtimeControl?.qualification?.tooling) {
+    const { applicationInputDigest } = await import('./lib/release-tooling.mjs');
+    assert.equal(
+      applicationInputDigest(rootDir, result.stdout.trim()),
+      release.evidence.runtimeControl.qualification.tooling.applicationInputsDigest,
+    );
+    const { qualificationSafetyDigest } = await import('./lib/release-qualification-policy.mjs');
+    assert.equal(
+      await qualificationSafetyDigest(rootDir, result.stdout.trim()),
+      release.evidence.runtimeControl.qualification.safetyDigest,
+    );
+  }
+  return release;
 }
 
 export async function assertCleanTrackedCheckout() {

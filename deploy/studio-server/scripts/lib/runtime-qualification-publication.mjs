@@ -160,6 +160,16 @@ export function prepareRuntimeQualification(input) {
       input.safetyDigest,
       'Qualification does not match the committed runtime and infrastructure source',
     );
+  assert.deepEqual(
+    runtimeControl.qualification?.tooling,
+    input.tooling,
+    'Qualification tooling differs from the selected publication',
+  );
+  assert.deepEqual(
+    runtimeAutoscaling.qualification?.tooling,
+    input.tooling,
+    'Autoscaling tooling differs from the selected publication',
+  );
   if ([2, 3, 4, 5].includes(runtimeControl.protocol))
     assert.equal(
       runtimeControl.autoscalerPolicyDigest,

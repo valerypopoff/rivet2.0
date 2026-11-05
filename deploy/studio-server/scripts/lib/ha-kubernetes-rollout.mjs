@@ -279,6 +279,7 @@ export async function runHaKubernetesRollout({
   timeoutMs = 900_000,
   artifact = async () => {},
   beforeRetirement = async () => {},
+  afterRoutingWithdrawal = async () => {},
   afterWithdrawal = async () => {},
   routingWithdrawalClock,
   settle,
@@ -628,6 +629,7 @@ export async function runHaKubernetesRollout({
         observePod,
         status: async (pod) => assertHaRetirement(await exec(pod)),
         beforeRetirement,
+        afterRoutingWithdrawal,
         withdraw: (pod, op, inc) => exec(pod, [op, inc, '--withdraw-only']),
         begin: (pod, op, inc) => exec(pod, [op, inc, '--begin-only']),
         waitForRoutingWithdrawal,
@@ -737,6 +739,7 @@ export async function runHaKubernetesRollout({
       return !!revision && pod.image === workload.image && pod.revision === revision;
     },
     prepareRetirement: beforeRetirement,
+    prepareAdmissionFence: afterRoutingWithdrawal,
     checkHeadroom: async ({ stage, departing, workload }) => {
       await waitForHaHeadroom(
         async () => {

@@ -1,5 +1,23 @@
 # Release workflow timing audit and improvement plan
 
+The November 5 independent-tooling path separates the already-built application
+candidate from the actor/cleanup-worker publication. The release workflow accepts
+an optional `tooling_run_id`, verifies unchanged runtime inputs and the exact
+publication before cloud setup, and binds that identity through qualification
+and production. It preserves the same-source default and original application
+build/Kind evidence. Tool-only pushes do not automatically build the application
+containers; the embedded autoscaler closure remains a runtime input. See
+[operator inputs and compatibility rules](automated-runtime-qualification.md#application-builds-and-independent-tooling).
+This removes the application-image path from tooling-repair iterations. Tooling
+build/scan, PR checks, pair-specific GKE qualification and protected draining
+still take time; no hosted duration reduction or new cloud qualification is
+claimed by local validation.
+The initial migration edits the application-image workflow itself and therefore
+still needs its ordinary build validation once. Subsequent isolated controller
+or probe repairs use the independent tooling path. Supplying the application
+build ID to tooling publication catches incompatible runtime changes before
+expensive actor builds, rather than discovering them after publication.
+
 For the successful staging and completed production rollout timing audit on
 2026-11-04, see [faster ordinary updates](rolling-update-performance-plan.md).
 It separates the one-time bridge from normal releases. Shared frontend/worker

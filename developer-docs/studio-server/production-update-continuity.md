@@ -455,6 +455,33 @@ instead of certifying requests that reached survivors. The test does not manuall
 shrink the Deployment or start a replacement cohort on survivors and call it a
 drain test. Its deadline covers stabilization in addition to the protected
 termination grace and cleanup headroom.
+
+Pinned background admission uses the same enforced per-Pod capacity as ordinary
+execution. Continuous public traffic and the protected cohorts can temporarily
+occupy all four slots on a targeted original owner, even while other owners have
+capacity. In ordinary qualification, the three public transport requests are admitted before withdrawal;
+the pinned background run starts after the existing routing-withdrawal barrier
+and before the admission fence. It cannot consume the last slot while new public
+traffic is still being routed to that owner. Both cooperative owner replacement
+and execution-pool replacement use that same boundary, skipping it once fencing
+has already been issued during recovery. A failed probe blocks fencing/deletion.
+The 315-second background proof starts later in retirement; it adds no new
+propagation wait but can extend accepted-work observation by that existing
+propagation interval. No admission limit, replica requirement or transport
+coverage is changed. The synthetic probe honors `Retry-After` only for HTTP429 with the
+application's explicit `execution_capacity_exceeded` code, which means no run
+was accepted. All attempts share the existing ten-second admission deadline;
+an exhausted deadline still fails. Transport errors, malformed responses,
+draining, other HTTP errors and accepted requests are never replayed. Admission
+must still succeed on each exact original owner, and its correlated successful
+recording must survive retirement. Public request failures remain fatal.
+The local HTTP regression executes the exact serialized Pod probe against the
+real four-slot admission implementation, proving one rejection followed by one
+accepted run retaining its permit. Fast source checks also cover no-replay and
+deadline behavior before image builds.
+Deadline accounting is tested with a deterministic clock, and local HTTP tests
+verify that stalled headers/bodies abort without replay. A compiler regression
+checks that the serialized Pod function remains self-contained after bundling.
 An idle pre-transition WebSocket starts a late action, then resumes the accepted
 run through a new connection. Persisted acceptance/completion events must show
 one run, one start and one completion. Existing published browser/OAuth, schedule,

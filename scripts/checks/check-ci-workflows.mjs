@@ -68,11 +68,22 @@ const qualificationPublisher = parseWorkflow(
   '.github/workflows/studio-server-publish-qualification-images.yml',
 ).workflow;
 assert.deepEqual(Object.keys(qualificationPublisher.on).sort(), ['workflow_call', 'workflow_dispatch']);
-assert.deepEqual(qualificationPublisher.permissions, { contents: 'read', packages: 'write' });
+assert.deepEqual(qualificationPublisher.permissions, { actions: 'read', contents: 'read', packages: 'write' });
 assert.equal(qualificationPublisher.concurrency['cancel-in-progress'], false);
 assert.equal(qualificationPublisher.jobs.publish.if, "${{ github.ref == 'refs/heads/main' }}");
 assert.equal(qualificationPublisher.jobs.publish['runs-on'], 'ubuntu-latest');
 assert.equal(qualificationPublisher.jobs.publish.permissions?.['id-token'], undefined);
+assert.equal(qualificationPublisher.on.workflow_dispatch.inputs.application_build_run_id.type, 'string');
+const toolingPreflight = qualificationPublisher.jobs.publish.steps.find((s) =>
+  s.run?.includes('execute-runtime-qualification.mjs validate-application-reuse'),
+);
+assert.equal(toolingPreflight.if, "${{ inputs.application_build_run_id != '' }}");
+assert.ok(
+  qualificationPublisher.jobs.publish.steps.indexOf(toolingPreflight) <
+    qualificationPublisher.jobs.publish.steps.findIndex((s) =>
+      s.run?.includes('build-and-publish-qualification-images.mjs'),
+    ),
+);
 assert.ok(
   qualificationPublisher.jobs.publish.steps.every(
     (s) => !s.uses || s.uses === './.github/actions/build-cache-runtime' || /@[a-f0-9]{40}$/.test(s.uses),
@@ -81,6 +92,7 @@ assert.ok(
 assert.deepEqual(Object.keys(automaticQualification.on), ['workflow_dispatch']);
 assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs), [
   'build_run_id',
+  'tooling_run_id',
   'deploy_production',
   'sizing_requests',
 ]);
@@ -94,6 +106,18 @@ assert.equal(automaticQualification.jobs.qualified.env.RIVET_QUALIFICATION_ENVIR
 assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.type, 'boolean');
 assert.equal(automaticQualification.on.workflow_dispatch.inputs.deploy_production.default, true);
 assert.equal(automaticQualification.jobs.qualified.needs, 'built');
+assert.equal(automaticQualification.on.workflow_dispatch.inputs.tooling_run_id.default, '');
+assert.equal(automaticQualification.jobs.built.env.TOOLING_RUN_ID, '${{ inputs.tooling_run_id }}');
+assert.equal(automaticQualification.jobs.qualified.env.TOOLING_RUN_ID, '${{ inputs.tooling_run_id }}');
+const selectedTooling = automaticQualification.jobs.qualified.steps.find((s) =>
+  s.with?.name?.startsWith('qualification-image-publication-'),
+);
+assert.equal(selectedTooling.with['run-id'], '${{ needs.built.outputs.tooling_run_id }}');
+assert.equal(
+  selectedTooling.with.name,
+  'qualification-image-publication-${{ needs.built.outputs.tooling_run_id }}-${{ needs.built.outputs.tooling_run_attempt }}',
+);
+assert.equal(automaticQualification.jobs.publish.with.tooling_run_id, '${{ inputs.tooling_run_id }}');
 assert.equal(
   automaticQualification.jobs.qualified['timeout-minutes'],
   ACTIONS_QUALIFICATION_MAX_SECONDS / 60 + 60 + 30,
@@ -103,6 +127,13 @@ const windowCheck = qualifiedSteps.findIndex((s) =>
   s.run?.endsWith('execute-runtime-qualification.mjs validate-window'),
 );
 const googleAuth = qualifiedSteps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));
+const toolingCheck = qualifiedSteps.findIndex((s) =>
+  s.run?.endsWith('execute-runtime-qualification.mjs validate-tooling'),
+);
+assert.ok(
+  toolingCheck >= 0 && toolingCheck < googleAuth,
+  'Verify the exact tooling publication before cloud credentials',
+);
 assert.ok(windowCheck >= 0 && windowCheck < googleAuth, 'Validate qualification window before cloud credentials');
 const prepareSetup = qualifiedSteps.findIndex((s) => s.id === 'prepare');
 const inspectSetup = qualifiedSteps.findIndex((s) => s.id === 'inspect');
@@ -697,6 +728,31 @@ assert.match(
 
 const images = parseWorkflow('.github/workflows/studio-server-images.yml');
 const imageJobs = images.workflow.jobs;
+for (const pattern of [
+  '!deploy/studio-server/scripts/**',
+  '!deploy/studio-server/images/qualification/**',
+  '!packages/studio-server-api/src/tests/**',
+  'deploy/studio-server/scripts/lib/execution-autoscaler*.mjs',
+  'deploy/studio-server/scripts/lib/release-operation-journal.mjs',
+  'deploy/studio-server/scripts/lib/release-operation-state.mjs',
+  'deploy/studio-server/scripts/lib/read-concurrently.mjs',
+])
+  assert.ok(images.workflow.on.push.paths.includes(pattern), `Missing image/tooling build boundary: ${pattern}`);
+for (const runtime of [
+  'execution-autoscaler*.mjs',
+  'release-operation-journal.mjs',
+  'release-operation-state.mjs',
+  'read-concurrently.mjs',
+])
+  assert.ok(
+    images.workflow.on.push.paths.indexOf('deploy/studio-server/scripts/lib/' + runtime) >
+      images.workflow.on.push.paths.indexOf('!deploy/studio-server/scripts/**'),
+    'Embedded runtime inclusions must follow tooling exclusions in GitHub path filters',
+  );
+assert.ok(
+  images.workflow.on.push.paths.indexOf('!packages/studio-server-api/src/tests/**') >
+    images.workflow.on.push.paths.indexOf('packages/studio-server-*/**'),
+);
 assert.equal(
   imageJobs['release-manifest'].env.INSTALLED_PREDECESSOR_DIGEST,
   "${{ github.ref == 'refs/heads/main' && (inputs.installed_predecessor_digest || vars.RIVET_INSTALLED_PREDECESSOR_DIGEST) || '' }}",
