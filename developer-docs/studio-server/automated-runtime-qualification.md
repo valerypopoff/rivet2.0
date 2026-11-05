@@ -709,11 +709,24 @@ validation compiles that proof once, before retained cleanup.
 ### Optional retained application
 
 Focused reusable staging can additionally specify `retainedApplication` with
-`protocol: 1`, a fixed `rivet-staging-*` namespace and permanent ConfigMap
+`protocol: 2`, a fixed `rivet-staging-*` namespace and permanent ConfigMap
 `recordName`, plus the existing fixed staging hostname. This is an opt-in
 application lifecycle change, not merely retaining the cluster. Its first use
 installs the disposable application; later tests verify its exact installed
 production predecessor and secret/namespace/registry UIDs before reuse.
+
+Publication changes a tested candidate's semantic manifest digest when it adds
+promotion and qualification evidence. Reuse accepts that metadata transition only
+through the same retained application's closed, cleanup-verified prior operation.
+The original build identity, source, images, chart, schema, creation identity and
+lineage must all match the currently installed production predecessor. The actual
+tested manifest remains the staging Helm/journal predecessor; it is not rewritten
+to production's later evidence digest. Changed application inputs still require
+explicit recovery/reseed. Candidate rendering and rollout identity remain distinct
+even when the candidate and predecessor reuse every image.
+Protocol 2 selects this publication-aware lifecycle and makes older tooling fail
+at local settings validation before provider setup. Updated tooling still reads
+protocol 1 configurations; new activations use protocol 2.
 
 Each attempt owns one fixture folder. Success settles producers and accepted
 work, logically deletes only that exact folder, verifies final installed images
@@ -729,6 +742,14 @@ Retained staging is restricted to the focused suite, excludes sizing/developer
 overlap, and needs an explicit ongoing-resource allowance before activation.
 The matching cleanup worker and driver must be installed together. No persistent
 application or new profile was activated by the local performance implementation.
+To activate an existing installation, update only its protected staging
+configuration with the retained namespace/record above while admission is closed.
+The next approved qualification packages those exact settings into both the driver
+and matching cleanup-worker update. Do not reuse a driver from the disposable
+configuration. The first run bootstraps the application; subsequent runs retain
+its dependencies, route, volumes and identities and remove only the owned fixture.
+This configuration change does not authorize a test dispatch or a production
+update. Keep the existing per-operation allowance and failure/quarantine rules.
 
 The coordinator accepts the full report and compiles its behavioral evidence
 before cleanup. It supplies `qualificationPassed` in the cleanup request over

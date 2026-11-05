@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import {
+  assertStudioServerReleaseManifest,
+  getStudioServerReleaseManifestDigest,
+} from './studio-server-release-manifest.mjs';
+
+const applicationIdentity = (manifest) => {
+  const { state: _state, evidence, ...application } = assertStudioServerReleaseManifest(manifest);
+  return { ...application, candidate: evidence.candidate };
+};
 
 export function retainedApplicationSettings(input) {
-  assert.equal(input.protocol, 1);
+  assert.ok([1, 2].includes(input.protocol), 'Unsupported retained staging application protocol');
   for (const key of ['namespace', 'recordName']) assert.match(input[key], /^rivet-staging-[a-z0-9][a-z0-9-]{0,38}$/);
-  return { protocol: 1, namespace: input.namespace, recordName: input.recordName };
+  return { protocol: input.protocol, namespace: input.namespace, recordName: input.recordName };
 }
 
 /** The application has a durable owner separate from per-test cleanup. Time or
@@ -50,27 +59,15 @@ export class RetainedStagingApplication {
       operation = state.operation;
     let current = await this.read();
     const binding = { operationId: operation.operationId, inputHash: operation.inputHash, registryUid };
+    let predecessorManifest;
     if (current) {
       assert.equal(
         current.record.phase,
         'idle',
         'Retained staging is busy or quarantined; recover it before another attempt',
       );
-      assert.equal(
-        current.record.manifestDigest,
-        operation.predecessorManifestDigest,
-        'Retained staging differs from installed production; explicit recovery/reseed is required',
-      );
       assert.ok(current.record.namespaceUid);
-      const previous = await state.api.json(
-        'GET',
-        `/api/v1/namespaces/${state.settings.controlNamespace}/configmaps/${current.record.lastOperationId}`,
-      );
-      const receipt = previous && JSON.parse(previous.data.record);
-      assert.ok(
-        receipt?.closed && receipt.cleanupVerified,
-        'Previous retained cleanup acknowledgement is not confirmed',
-      );
+      predecessorManifest = await this.matchingPredecessor(current);
       await this.change((record) => {
         assert.equal(record.phase, 'idle');
         record.phase = 'owned';
@@ -112,6 +109,7 @@ export class RetainedStagingApplication {
       uid: current.object.metadata.uid,
       nonce: current.record.nonce,
       bootstrap: !current.record.namespaceUid,
+      ...(predecessorManifest ? { predecessorManifest } : {}),
     };
     await state.change((record) => {
       record.namespace = this.settings.namespace;
@@ -120,6 +118,34 @@ export class RetainedStagingApplication {
       record.retainedApplication = identity;
     });
     return identity;
+  }
+  async matchingPredecessor(current) {
+    const { operation, settings, api } = this.state;
+    const previous = await api.json(
+      'GET',
+      `/api/v1/namespaces/${settings.controlNamespace}/configmaps/${current.record.lastOperationId}`,
+    );
+    const receipt = previous && JSON.parse(previous.data.record);
+    assert.ok(receipt?.closed && receipt.cleanupVerified, 'Previous retained cleanup acknowledgement is not confirmed');
+    if (current.record.manifestDigest === operation.predecessorManifestDigest) return;
+    // Staging tested the build candidate. Publication adds promotion/GKE
+    // evidence, changing the semantic digest without changing application bits.
+    // Bind that transition to the exact prior owner and original build; preserve
+    // the actual staging manifest for Helm and the completed rollout journal.
+    const message = 'Retained staging differs from installed production; explicit recovery/reseed is required';
+    assert.equal(receipt.retainedApplication?.uid, current.object.metadata.uid, message);
+    assert.equal(receipt.namespaceUid, current.record.namespaceUid, message);
+    assert.equal(receipt.operation?.candidateManifestDigest, current.record.manifestDigest, message);
+    const tested = receipt.operation.candidate;
+    assert.ok(tested && operation.previous, message);
+    assert.equal(getStudioServerReleaseManifestDigest(tested), current.record.manifestDigest, message);
+    assert.equal(
+      getStudioServerReleaseManifestDigest(operation.previous, { requirePromoted: true }),
+      operation.predecessorManifestDigest,
+      message,
+    );
+    assert.deepEqual(applicationIdentity(tested), applicationIdentity(operation.previous), message);
+    return tested;
   }
   async owned() {
     const current = await this.read(),
@@ -185,6 +211,7 @@ export class RetainedStagingApplication {
       return false;
     }
     // Observe an acknowledged/uncertain acquisition; never send another PUT.
+    const predecessorManifest = current.record.namespaceUid ? await this.matchingPredecessor(current) : undefined;
     await this.state.change((value) => {
       value.namespace = this.settings.namespace;
       value.namespaceUid = current.record.namespaceUid;
@@ -194,6 +221,7 @@ export class RetainedStagingApplication {
         uid: current.object.metadata.uid,
         nonce: current.record.nonce,
         bootstrap: !current.record.namespaceUid,
+        ...(predecessorManifest ? { predecessorManifest } : {}),
       };
     });
     await this.owned();

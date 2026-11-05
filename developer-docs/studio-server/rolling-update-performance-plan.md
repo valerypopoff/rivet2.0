@@ -74,12 +74,20 @@ remain required. Speed is not an additional pass/fail deadline.
 
 ### Retained staging application
 
-`reusable-staging` settings can opt into `retainedApplication: {protocol: 1,
+`reusable-staging` settings can opt into `retainedApplication: {protocol: 2,
 namespace: "rivet-staging-persistent", recordName: "rivet-staging-application"}`
 with a fixed staging hostname and the focused suite. This retains the disposable
 application namespace, database, object store, secrets, route and NEG. The first
 use still installs them; subsequent tests reuse them only when their recorded and
 actual installed manifest/images match the exact production predecessor.
+
+The publication boundary must preserve application identity: staging records the
+tested candidate, whereas production installs that build with added promotion/GKE
+evidence and a different manifest digest. Reuse binds the prior closed operation
+and original build, compares all immutable application fields and retains the
+actual staging manifest for Helm and rollout-journal checks. A different image,
+chart, schema, source, lineage or original build remains a reseed/recovery case.
+Identical-image releases still render and journal the intended candidate identity.
 
 A separate permanent ConfigMap owns application identity. Each test acquires it
 by resourceVersion CAS, binds namespace/registry UIDs, and creates one unique

@@ -115,6 +115,38 @@ test('actual workload admission precedes dependency or route creation and checks
   }
 });
 
+test('retained preparation preserves the installed staging manifest instead of its later publication digest', async () => {
+  const tested = { images: { api: 'same' }, state: 'candidate' };
+  const published = { ...tested, state: 'promoted' };
+  const candidate = { images: { api: 'new' } },
+    calls = [];
+  const record = { retainedApplication: { bootstrap: false, predecessorManifest: tested } };
+  const gate = {
+    config: {},
+    verifySharedPrerequisites: async () => {},
+    values: (images, _singleton, manifest = candidate) => ({ images, manifest }),
+    verifyAdmission: async ({ manifest }) => calls.push(manifest),
+    retainedSecrets: async () => {},
+    verifyRetainedInstallation: async () => {
+      assert.equal(gate.currentManifest, tested);
+      assert.equal(gate.config.previousManifest, tested);
+      throw Error('retained predecessor verified');
+    },
+  };
+  const state = {
+    application: {},
+    admission: async () => {},
+    read: async () => ({ record }),
+    change: async () => {},
+    namespace: async () => {},
+  };
+  await assert.rejects(
+    executeProviderPhase({ phase: 'prepare', operation: { previous: published, candidate }, state, gate }),
+    /retained predecessor verified/,
+  );
+  assert.deepEqual(calls, [tested, candidate]);
+});
+
 test('workload admission uses server dry runs and records provider adjustments without enforcing exact resources', async () => {
   const resources = { requests: { cpu: '50m', memory: '128Mi' } };
   const desired = ['Deployment', 'StatefulSet', 'Job'].map((kind, i) => ({
@@ -827,6 +859,23 @@ test('concrete provider Helm render retains installed production timing, real ma
   assert.equal(values.rollout.minReadySeconds, 120);
   assert.equal(values.lifecycle.preStopDelaySeconds, 60);
   assert.equal(values.release.production.manifestDigest, getStudioServerReleaseManifestDigest(candidate));
+  // Tool-only qualification can reuse every image. Rendering must still
+  // distinguish the actual predecessor from the candidate's evidence identity.
+  const publishedSameImages = promoteStudioServerReleaseManifest(candidate, { promotionEvidence: evidence });
+  gate.currentManifest = publishedSameImages;
+  gate.config.previousManifest = publishedSameImages;
+  gate.operation.previous = publishedSameImages;
+  assert.equal(
+    gate.values(candidate.images).release.production.manifestDigest,
+    getStudioServerReleaseManifestDigest(candidate),
+  );
+  assert.equal(
+    gate.values(candidate.images, true, publishedSameImages).release.production.manifestDigest,
+    getStudioServerReleaseManifestDigest(publishedSameImages),
+  );
+  gate.currentManifest = previous;
+  gate.config.previousManifest = previous;
+  gate.operation.previous = previous;
   assert.equal(values.env.RIVET_REQUIRE_UI_GATE_KEY, 'true');
   assert.equal(values.env.RIVET_TRUST_INCOMING_FORWARDED_HEADERS, 'true');
   assert.equal(values.env.RIVET_TRUSTED_FORWARDING_PROXIES, settings().trustedForwardingProxies.join(','));

@@ -304,12 +304,15 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       },
     });
   }
-  values(images = this.config.images) {
+  values(images = this.config.images, _singleton = true, targetManifest) {
     const values = super.values(images, true);
-    const manifest = [this.operation.previous, this.operation.candidate].find((m) =>
-      isDeepStrictEqual(m.images, images),
-    );
+    const manifest =
+      targetManifest ??
+      [this.operation.candidate, this.currentManifest, this.operation.previous].find((m) =>
+        isDeepStrictEqual(m.images, images),
+      );
     assert.ok(manifest);
+    assert.deepEqual(manifest.images, images);
     const envelope = this.operation.installed.qualificationValues;
     assert.ok(envelope, 'Production runtime sizing must be explicitly observed');
     this.providerValues = {
@@ -414,7 +417,9 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       this.continuityProbes.proxyTemplate = resources.find(
         (r) => r.kind === 'Deployment' && r.metadata.name === `${this.config.release}-proxy`,
       ).spec.template;
-    const target = [this.operation.previous, this.operation.candidate].find((m) => isDeepStrictEqual(m.images, images));
+    const target = [this.operation.candidate, this.currentManifest, this.operation.previous].find((m) =>
+      isDeepStrictEqual(m.images, images),
+    );
     const { artifact: observeArtifact, ...rolloutProbes } = probes;
     const timing = createHaProofTiming({ artifact: (...args) => this.artifact(...args), log: () => {} });
     let result;
@@ -658,7 +663,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       current.fixtureFolder = this.fixtureFolder;
     });
   }
-  async verifyRetainedInstallation(manifest = this.operation.previous) {
+  async verifyRetainedInstallation(manifest = this.currentManifest) {
     await this.assertProofContext();
     const values = JSON.parse(
       (
