@@ -1,5 +1,15 @@
 # Bounded production request continuity
 
+Hosted provider jobs explicitly select the checksum-verified Helm version from
+`lib/k8s-tools.mjs` before cloud authentication. Runner-supplied Helm 4 rejects
+the deployment's Helm 3 `list --all` command; the November 6 production attempt
+stopped at that read-only boundary after successful staging qualification.
+An inspected production-only recovery can retain that exact qualification and
+select the supported toolchain after confirming unchanged production and closing
+the failed attempt's owned bookkeeping lock. It must still pass fresh preflight
+and checkpoint capacity checks; do not rebuild images or repeat staging merely
+to correct the operator tool environment.
+
 Status: implemented as an **opt-in repository contract**. Local tests and renders
 do not qualify a GKE release. No new provider certificate has been produced and
 production has not been changed by this implementation. The
