@@ -10,6 +10,7 @@ import {
   assertGkeProxyBackendHealth,
   assertGkeProxyPoolReady,
   assertGkeProxyServingFloor,
+  ProxyPoolNotReady,
 } from './gke-proxy-health.mjs';
 
 const exec = promisify(execFile);
@@ -35,7 +36,6 @@ const paths = {
   PodDisruptionBudget: '/apis/policy/v1',
 };
 const negReady = (p) => hasReadyGkeNegGate(p, { allowStandalone: true });
-class ProxyPoolNotReady extends Error {}
 
 async function defaultAccessToken() {
   const bin = process.env.RIVET_GCLOUD_BIN || 'gcloud';
@@ -434,8 +434,13 @@ export function createKubernetesProxyContinuity({
       const current = selected.filter((pod) => !pod.metadata.deletionTimestamp);
       if (allowUpdating) {
         const minimum = Math.max(2, config.hpaSpec?.minReplicas ?? 2);
-        assert.ok(deployment.status?.availableReplicas >= minimum, 'Proxy rollout lost available serving capacity');
+        assert.ok(
+          backend.backendServiceDrainSeconds >= profile.backendServiceDrainSeconds,
+          'Adopted provider drain has regressed',
+        );
         assertGkeProxyServingFloor(current, service, backend, minimum);
+        if (!(deployment.status?.availableReplicas >= minimum))
+          throw new ProxyPoolNotReady('Proxy rollout is waiting for available serving capacity');
       } else assertGkeProxyBackendHealth(current, service, backend);
       // The old backend must have received its longer drain before switching.
       const original = target === 'bridge' ? oldBackend : backend;
@@ -497,6 +502,19 @@ export function createKubernetesProxyContinuity({
   const transition = createProxyContinuityTransition({ config, io, timeoutMs, now, wait });
   return {
     ...transition,
+    async verify(operation, options) {
+      // Re-observe only recoverable capacity loss. Each pass revalidates the
+      // lease, captured owners, routing and public/backend health before any
+      // further retirement. Never replay a transition mutation here.
+      await until(
+        'proxy serving capacity before owner retirement',
+        async () => {
+          await transition.verify(operation, options);
+          return true;
+        },
+        now() + Math.min(timeoutMs, 300000),
+      );
+    },
     async inspect({ timeoutMs: inspectionTimeoutMs = timeoutMs } = {}) {
       assert.ok(
         Number.isSafeInteger(inspectionTimeoutMs) && inspectionTimeoutMs > 0 && inspectionTimeoutMs <= timeoutMs,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { isIP } from 'node:net';
 
 const condition = 'cloud.google.com/load-balancer-neg-ready';
+export class ProxyPoolNotReady extends Error {}
 
 /** Pod Ready precedes Deployment Available when minReadySeconds is positive. */
 export function assertGkeProxyDeploymentAvailable(deployment, minimum = 2) {
@@ -123,6 +124,11 @@ export function isGkeProxyBackendReady(pods, service, backend, options) {
 export function assertGkeProxyServingFloor(pods, service, backend, minimum = 2) {
   assert.ok(Number.isSafeInteger(minimum) && minimum >= 2);
   const serving = pods.filter((pod) => isGkeProxyBackendReady([pod], service, backend, { minimumZones: 1 }));
-  assert.ok(serving.length >= minimum, 'Proxy rollout lost its healthy current-Pod serving floor');
+  if (serving.length < minimum) {
+    // A recovering pool must still have a real, current healthy endpoint. Invalid
+    // backend evidence and complete capacity loss remain immediate failures.
+    assertGkeProxyBackendHealth(serving, service, backend, { minimumZones: 1 });
+    throw new ProxyPoolNotReady(`Proxy rollout has ${serving.length}/${minimum} healthy current-Pod serving floor`);
+  }
   return assertGkeProxyBackendHealth(serving, service, backend);
 }
