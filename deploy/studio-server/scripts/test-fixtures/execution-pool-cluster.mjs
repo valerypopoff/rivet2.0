@@ -258,7 +258,9 @@ export async function exerciseExecutionPoolRollout({ previous, candidate, render
     routingWithdrawalClock: {
       now: () => virtualTime,
       wait: async () => {
-        virtualTime += 60000;
+        // Several owners poll in parallel. A whole-minute jump per waiter
+        // would advance their shared clock past each other's deadline.
+        virtualTime += 1000;
       },
     },
     applyTemplates: async (_workloads, values) => {

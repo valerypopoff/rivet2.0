@@ -19,6 +19,37 @@ import { matchesKubernetesTemplate } from './kubernetes-template-match.mjs';
 import { continuityFromResources } from './request-continuity.mjs';
 import { createKubernetesProxyContinuity } from './proxy-continuity-kubernetes.mjs';
 import { waitForHaTemplateReadiness } from './ha-template-readiness.mjs';
+import { kubernetesReadRetryReason } from './kubernetes-read-errors.mjs';
+
+/** Read-only readiness/removal polling. A preceding scale/delete intent is
+ * never repeated when a Kubernetes observation is temporarily unavailable. */
+export async function waitForHaObservation(
+  check,
+  {
+    timeoutMs,
+    description,
+    clock = { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
+  },
+) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw Error('HA observation requires a bounded timeout');
+  const deadline = clock.now() + timeoutMs;
+  let pending;
+  const timeout = () =>
+    new Error(`Timed out waiting for ${description}; no owner was force deleted.`, { cause: pending });
+  for (;;) {
+    if (clock.now() >= deadline) throw timeout();
+    try {
+      const ready = await check();
+      if (clock.now() >= deadline) throw timeout();
+      if (ready) return;
+      pending = undefined;
+    } catch (error) {
+      if (!kubernetesReadRetryReason(error)) throw error;
+      pending = error;
+    }
+    await clock.sleep(Math.max(0, Math.min(1000, deadline - clock.now())));
+  }
+}
 
 export function haCandidateReady(podName, pod, image, revision) {
   if (!revision || !pod) return false;
@@ -432,13 +463,7 @@ export async function runHaKubernetesRollout({
     throw new Error(
       'Cooperative HA scaling requires capacity for at least three execution owners within the approved maximum.',
     );
-  const deadlineWait = async (check, description) => {
-    const deadline = Date.now() + timeoutMs;
-    while (!(await check())) {
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}; no owner was force deleted.`);
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  };
+  const deadlineWait = (check, description) => waitForHaObservation(check, { timeoutMs, description });
   const desiredRevision = async (workloadName) => {
     const workload = JSON.parse((await kube(['get', 'statefulset', workloadName, '-o', 'json'])).stdout);
     if (workload.metadata.uid !== ownedWorkloads.find((w) => w.name === workloadName)?.uid)

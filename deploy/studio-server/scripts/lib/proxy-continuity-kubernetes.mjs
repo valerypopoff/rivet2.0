@@ -70,15 +70,29 @@ export function createComputeBackendObserver(
       token = await accessToken();
       expires = now() + 300000;
     }
-    const response = await fetchImpl(`https://compute.googleapis.com/compute/v1/projects/${project}/${path}`, {
-      method: body ? 'POST' : 'GET',
-      redirect: 'error',
-      signal: AbortSignal.timeout(15000),
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    assert.equal(response.status, 200, 'Compute backend observation failed');
-    return response.json();
+    // This private helper only lists backends or invokes read-only getHealth.
+    // Reuse its original 15-second request budget, never replay a cloud mutation.
+    const deadline = performance.now() + 15000;
+    for (let attempt = 0; ; attempt++) {
+      const remaining = deadline - performance.now();
+      assert.ok(remaining > 0, 'Compute backend observation failed: request deadline exceeded');
+      const response = await fetchImpl(`https://compute.googleapis.com/compute/v1/projects/${project}/${path}`, {
+        method: body ? 'POST' : 'GET',
+        redirect: 'error',
+        signal: AbortSignal.timeout(Math.max(1, Math.ceil(remaining))),
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      if (response.status === 200) return response.json();
+      await response.body?.cancel().catch(() => {});
+      assert.ok(
+        attempt < 2 && [429, 500, 502, 503, 504].includes(response.status),
+        'Compute backend observation failed',
+      );
+      const delay = Math.min(250 * 2 ** attempt, deadline - performance.now());
+      assert.ok(delay > 0, 'Compute backend observation failed: request deadline exceeded');
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   };
   return async (service, { allowPending = false } = {}) => {
     const observedAt = now();

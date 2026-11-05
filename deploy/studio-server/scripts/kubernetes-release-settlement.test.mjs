@@ -663,6 +663,47 @@ test('replacement HPA identity resets the stable window', async () => {
   assert.equal(runner.time, 3_000);
 });
 
+test('temporary settlement GET errors reset continuous health evidence within the original deadline', async () => {
+  for (const scenario of ['recover', 'persistent', 'denied']) {
+    const state = fixture();
+    let time = 0,
+      reads = 0;
+    const cause = new Error(
+      `Error from server (${scenario === 'denied' ? 'Forbidden' : 'ServiceUnavailable'}): fixture`,
+    );
+    const receipts = [];
+    const work = waitForReleaseSettlement({
+      resources: state.resources,
+      release,
+      namespace,
+      timeoutMs: 6000,
+      stableMs: 2000,
+      clock: {
+        now: () => time,
+        sleep: async (ms) => {
+          time += ms;
+        },
+      },
+      artifact: async (_name, text) => receipts.push(JSON.parse(text)),
+      kube: async (args) => {
+        assert.equal(args[0], 'get');
+        reads++;
+        if (reads === 2 || scenario === 'persistent' || scenario === 'denied') throw cause;
+        return { stdout: JSON.stringify({ items: state.items }) };
+      },
+    });
+    if (scenario === 'recover') {
+      const report = await work;
+      assert.equal(time, 4000);
+      assert.equal(report.stableMs, 2000);
+    } else {
+      await assert.rejects(work, scenario === 'persistent' ? /settlement timed out/ : /Forbidden/);
+      assert.equal(time, scenario === 'persistent' ? 6000 : 0);
+      assert.equal(receipts.at(-1).settled, false);
+    }
+  }
+});
+
 test('a stalled management read cannot count a blind interval as continuous settlement', async () => {
   const state = fixture();
   let time = 0;

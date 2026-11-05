@@ -1177,6 +1177,7 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
   );
   const extraGroup = groups[0].replace('central2-a/', 'central2-c/');
   let mode = 'healthy';
+  const unavailable = new Set();
   const server = createServer(async (request, response) => {
     assert.equal(request.headers.authorization, 'Bearer local-only');
     const chunks = [];
@@ -1184,6 +1185,13 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : undefined;
     calls.push({ path: request.url, method: request.method, body });
     response.setHeader('content-type', 'application/json');
+    const observation = request.method + request.url;
+    if (mode === 'unavailable' || (mode === 'transient' && !unavailable.has(observation))) {
+      unavailable.add(observation);
+      response.writeHead(503);
+      response.end('{}');
+      return;
+    }
     if (mode === 'denied') {
       response.writeHead(403);
       response.end('{}');
@@ -1245,6 +1253,13 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
       fetch(`http://127.0.0.1:${server.address().port}${new URL(url).pathname}${new URL(url).search}`, options),
   });
   assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, await observe(f.service)).length, 2);
+  mode = 'transient';
+  assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, await observe(f.service)).length, 2);
+  assert.equal(unavailable.size, 2, 'Both backend-list GET and read-only getHealth POST may recover');
+  mode = 'unavailable';
+  const beforeUnavailable = calls.length;
+  await assert.rejects(observe(f.service), /Compute backend observation failed/);
+  assert.equal(calls.length - beforeUnavailable, 3, 'Persistent service failure has a fixed attempt bound');
   mode = 'extra-empty-zone';
   assert.equal(assertGkeProxyBackendHealth(f.pods, f.service, await observe(f.service)).length, 2);
   assert.ok(
@@ -1271,6 +1286,8 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
   mode = 'ambiguous';
   await assert.rejects(observe(f.service, { allowPending: true }), /exactly one/);
   mode = 'denied';
+  const beforeDenied = calls.length;
   await assert.rejects(observe(f.service, { allowPending: true }), /Compute backend observation failed/);
+  assert.equal(calls.length - beforeDenied, 1, 'Authorization errors are not retried');
   assert.ok(calls.some((c) => c.method === 'POST' && c.body?.group === groups[1]));
 });

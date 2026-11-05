@@ -279,3 +279,42 @@ test('final frontend join accepts HPA growth within its bounds and rechecks cont
   f.frontend.live.spec.replicas = 5;
   await assert.rejects(waitForHaTemplateReadiness({ ...f.options, includeFrontends: true }), /capacity is outside/);
 });
+
+test('temporary prerequisite GET errors can recover without extending the readiness deadline or losing the lease', async () => {
+  for (const scenario of ['recover', 'persistent', 'denied', 'lost-lease']) {
+    const f = fixture(),
+      read = f.options.kube,
+      sleep = f.options.clock.sleep;
+    const cause = new Error(
+      `Error from server (${scenario === 'denied' ? 'Forbidden' : 'ServiceUnavailable'}): fixture`,
+    );
+    let attempts = 0,
+      pauses = 0;
+    f.options.kube = async (args) => {
+      assert.equal(args[0], 'get');
+      if (++attempts === 1 || scenario === 'persistent' || scenario === 'denied') throw cause;
+      return read(args);
+    };
+    f.options.clock.sleep = async (ms) => {
+      pauses++;
+      await sleep(ms);
+    };
+    if (scenario === 'lost-lease')
+      f.options.assertLease = () => {
+        if (attempts) throw Error('Lease lost');
+      };
+    const work = waitForHaTemplateReadiness(f.options);
+    if (scenario === 'recover') {
+      await work;
+      assert.equal(attempts, 2);
+      assert.equal(pauses, 1);
+    } else {
+      await assert.rejects(
+        work,
+        scenario === 'persistent' ? /Timed out/ : scenario === 'denied' ? /Forbidden/ : /Lease lost/,
+      );
+      assert.equal(pauses, scenario === 'persistent' ? 3 : 0);
+      assert.deepEqual(f.artifacts, []);
+    }
+  }
+});

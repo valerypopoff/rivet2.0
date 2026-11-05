@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { runManagedGateCommand } from './lib/managed-gate-command.mjs';
 import {
   assessHaExecutionHeadroom,
   createHaExecutionHeadroomGuard,
@@ -504,6 +505,328 @@ function addProxyPod(f, { terminating = false, cpu = '100m' } = {}) {
   });
   return pod;
 }
+
+function metricsReadError(reason = 'NotFound') {
+  return new Error(
+    `Command failed with exit code 1: kubectl get --raw /apis/metrics.k8s.io/v1beta1/namespaces/rivet/pods\nError from server (${reason}): metrics unavailable`,
+  );
+}
+
+test('an 80-second metrics API gap recovers before allowing an execution or proxy capacity decision', async () => {
+  for (const role of ['execution', 'proxy']) {
+    const f = role === 'execution' ? fixture(3) : proxyFixture(3);
+    const kube = f.options.kube;
+    let reads = 0,
+      clock = 0,
+      pauses = 0,
+      decisions = 0;
+    f.options.now = () => 1_000_000 + clock;
+    f.options.kube = async (args) => {
+      if (args[0] === 'get' && args[2].includes('/metrics.k8s.io/') && ++reads <= 80) throw metricsReadError();
+      return kube(args);
+    };
+    const guard =
+      role === 'execution' ? createHaExecutionHeadroomGuard(f.options) : createHaProxyHeadroomGuard(f.options);
+    await waitForHaHeadroom(
+      async () => {
+        await guard({ stage: 'preflight' });
+        decisions++;
+      },
+      {
+        timeoutMs: 120_000,
+        now: () => clock,
+        pause: async (ms) => {
+          assert.equal(decisions, 0);
+          clock += ms;
+          pauses++;
+          for (const sample of f.metrics) sample.timestamp = new Date(f.options.now()).toISOString();
+        },
+      },
+    );
+    assert.equal(pauses, 80);
+    assert.equal(clock, 80_000);
+    assert.equal(reads, 81);
+    assert.equal(decisions, 1);
+    assert.equal(f.receipts.at(-1).outcome, 'passed');
+    assert.ok(f.calls.every((args) => args[0] === 'get' || args[0] === 'exec'));
+  }
+});
+
+test('persistent metrics GET failure expires within the existing deadline with no capacity decision', async () => {
+  for (const role of ['execution', 'proxy']) {
+    const f = role === 'execution' ? fixture(3) : proxyFixture(3),
+      kube = f.options.kube;
+    let clock = 0,
+      reads = 0,
+      decisions = 0;
+    f.options.kube = async (args) => {
+      if (args[0] === 'get' && args[2].includes('/metrics.k8s.io/')) {
+        reads++;
+        throw metricsReadError();
+      }
+      return kube(args);
+    };
+    const guard =
+      role === 'execution' ? createHaExecutionHeadroomGuard(f.options) : createHaProxyHeadroomGuard(f.options);
+    await assert.rejects(
+      waitForHaHeadroom(
+        async () => {
+          await guard({ stage: 'preflight' });
+          decisions++;
+        },
+        {
+          timeoutMs: 2500,
+          now: () => clock,
+          pause: async (ms) => {
+            clock += ms;
+          },
+        },
+      ),
+      /headroom is unconfirmed/,
+    );
+    assert.equal(clock, 2500);
+    assert.equal(reads, 3);
+    assert.equal(decisions, 0);
+    assert.ok(f.receipts.every((r) => r.outcome === 'blocked'));
+  }
+});
+
+test('metrics rechecking joins started sibling reads before the next observation', async () => {
+  for (const role of ['execution', 'proxy']) {
+    const f = role === 'execution' ? fixture(3) : proxyFixture(3),
+      kube = f.options.kube;
+    let metricsReads = 0,
+      held = false,
+      siblingSettled = false,
+      clock = 0;
+    f.options.kube = async (args) => {
+      if (args[0] === 'get') {
+        const pathname = args[2].split('?')[0];
+        if ((pathname.endsWith('/horizontalpodautoscalers') || pathname.endsWith('/replicasets')) && !held) {
+          held = true;
+          await new Promise(setImmediate);
+          siblingSettled = true;
+        }
+        if (pathname.includes('/metrics.k8s.io/') && ++metricsReads === 1) throw metricsReadError();
+      }
+      return kube(args);
+    };
+    const guard =
+      role === 'execution' ? createHaExecutionHeadroomGuard(f.options) : createHaProxyHeadroomGuard(f.options);
+    await waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+      timeoutMs: 2500,
+      now: () => clock,
+      pause: async (ms) => {
+        assert.equal(siblingSettled, true, 'Prior reads must settle before retry');
+        clock += ms;
+      },
+    });
+    assert.equal(metricsReads, 2);
+  }
+});
+
+test('only eligible API Status reasons can wait, while authorization and cancellation fail immediately', async () => {
+  for (const role of ['execution', 'proxy']) {
+    for (const reason of [
+      'TooManyRequests',
+      'ServiceUnavailable',
+      'InternalError',
+      'Timeout',
+      'ServerTimeout',
+      'BadGateway',
+      'GatewayTimeout',
+    ]) {
+      const f = role === 'execution' ? fixture(3) : proxyFixture(3),
+        kube = f.options.kube;
+      let reads = 0,
+        clock = 0;
+      f.options.kube = async (args) => {
+        if (args[0] === 'get' && args[2].includes('/metrics.k8s.io/') && ++reads === 1) throw metricsReadError(reason);
+        return kube(args);
+      };
+      const guard =
+        role === 'execution' ? createHaExecutionHeadroomGuard(f.options) : createHaProxyHeadroomGuard(f.options);
+      await waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+        timeoutMs: 2000,
+        now: () => clock,
+        pause: async (ms) => {
+          clock += ms;
+        },
+      });
+      assert.equal(clock, 1000);
+      assert.equal(reads, 2);
+    }
+    for (const failure of [
+      metricsReadError('Forbidden'),
+      metricsReadError('Unauthorized'),
+      metricsReadError('BadRequest'),
+      metricsReadError('MethodNotAllowed'),
+      new Error('Unexpected 404 while fetching data'),
+      Object.assign(metricsReadError('ServiceUnavailable'), { name: 'AbortError' }),
+      Object.assign(metricsReadError('Timeout'), { name: 'TimeoutError' }),
+    ]) {
+      const f = role === 'execution' ? fixture(3) : proxyFixture(3),
+        kube = f.options.kube;
+      let pauses = 0;
+      f.options.kube = async (args) => {
+        if (args[0] === 'get' && args[2].includes('/metrics.k8s.io/')) throw failure;
+        return kube(args);
+      };
+      const guard =
+        role === 'execution' ? createHaExecutionHeadroomGuard(f.options) : createHaProxyHeadroomGuard(f.options);
+      await assert.rejects(
+        waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+          timeoutMs: 2000,
+          pause: async () => {
+            pauses++;
+          },
+        }),
+        (error) => error.cause === failure,
+      );
+      assert.equal(pauses, 0);
+    }
+  }
+});
+
+test('headroom inventory GETs may recover a temporary server failure while missing workloads still fail', async () => {
+  for (const role of ['execution', 'proxy']) {
+    const f = role === 'execution' ? fixture(3) : proxyFixture(3),
+      kube = f.options.kube;
+    let failed = false,
+      clock = 0;
+    f.options.kube = async (args) => {
+      if (!failed && args[0] === 'get' && /\/(statefulsets|deployments)\//.test(args[2])) {
+        failed = true;
+        throw metricsReadError('ServiceUnavailable');
+      }
+      return kube(args);
+    };
+    const guard =
+      role === 'execution' ? createHaExecutionHeadroomGuard(f.options) : createHaProxyHeadroomGuard(f.options);
+    await waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+      timeoutMs: 2000,
+      now: () => clock,
+      pause: async (ms) => {
+        clock += ms;
+      },
+    });
+    assert.equal(clock, 1000);
+    assert.equal(f.receipts.at(-1).outcome, 'passed');
+  }
+});
+
+test('paired-pool headroom retries temporary owner reads but still rejects missing or invalid active owners', async () => {
+  for (const fault of ['temporary', 'missing', 'malformed', 'forbidden']) {
+    const f = fixture(3),
+      kube = f.options.kube;
+    const env = f.options.resources[0].spec.template.spec.containers[0].env[0];
+    env.value = JSON.stringify({ ...JSON.parse(env.value), poolWorkloads: ['execution', 'execution-next'] });
+    let reads = 0,
+      clock = 0;
+    f.options.kube = async (args) => {
+      if (args[0] === 'get' && args[1] === 'statefulset') {
+        if (args[2] === 'execution-next') return { stdout: '' };
+        reads++;
+        if (fault === 'missing') return { stdout: '' };
+        if (fault === 'malformed') return { stdout: 'invalid JSON' };
+        if (reads === 1 || fault === 'forbidden')
+          throw metricsReadError(fault === 'forbidden' ? 'Forbidden' : 'ServiceUnavailable');
+        return { stdout: JSON.stringify(f.owner) };
+      }
+      return kube(args);
+    };
+    const guard = createHaExecutionHeadroomGuard(f.options);
+    const work = waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+      timeoutMs: 2000,
+      now: () => clock,
+      pause: async (ms) => {
+        clock += ms;
+      },
+    });
+    if (fault === 'temporary') {
+      await work;
+      assert.equal(clock, 1000);
+      assert.equal(f.receipts.at(-1).outcome, 'passed');
+    } else {
+      await assert.rejects(work);
+      assert.equal(clock, 0);
+      assert.equal(f.receipts.at(-1).outcome, 'blocked');
+    }
+  }
+});
+
+test('a missing workload, malformed metrics or changed ownership cannot become a metrics retry', async () => {
+  for (const role of ['execution', 'proxy']) {
+    for (const fault of ['workload-not-found', 'malformed-json', 'changed-uid', 'malformed-cpu']) {
+      const f = role === 'execution' ? fixture(3) : proxyFixture(3),
+        kube = f.options.kube;
+      let reads = 0,
+        clock = 0,
+        pauses = 0;
+      f.options.kube = async (args) => {
+        if (args[0] === 'get') {
+          if (fault === 'workload-not-found' && /\/(statefulsets|deployments)\//.test(args[2]))
+            throw metricsReadError();
+          if (args[2].includes('/metrics.k8s.io/')) {
+            if (fault === 'malformed-json') return { stdout: 'Error from server (NotFound): not JSON' };
+            if (++reads === 1) throw metricsReadError();
+          }
+        }
+        return kube(args);
+      };
+      const guard =
+        role === 'execution' ? createHaExecutionHeadroomGuard(f.options) : createHaProxyHeadroomGuard(f.options);
+      await assert.rejects(
+        waitForHaHeadroom(() => guard({ stage: 'preflight' }), {
+          timeoutMs: 2000,
+          now: () => clock,
+          pause: async (ms) => {
+            pauses++;
+            clock += ms;
+            if (fault === 'changed-uid') (f.owner ?? f.deployment).metadata.uid = 'foreign';
+            if (fault === 'malformed-cpu') f.metrics[0].containers[0].usage.cpu = 'invalid';
+          },
+        }),
+      );
+      assert.equal(pauses, ['changed-uid', 'malformed-cpu'].includes(fault) ? 1 : 0);
+      assert.ok(f.receipts.every((r) => r.outcome === 'blocked'));
+    }
+  }
+});
+
+test('a real command failure preserves kubectl status diagnostics through the bounded metrics wait', async () => {
+  const f = fixture(3),
+    kube = f.options.kube;
+  let reads = 0,
+    clock = 0;
+  f.options.kube = async (args) => {
+    if (args[0] === 'get' && args[2].includes('/metrics.k8s.io/') && ++reads === 1) {
+      assert.equal(
+        args[2],
+        '/apis/metrics.k8s.io/v1beta1/namespaces/rivet/pods?labelSelector=app.kubernetes.io%2Finstance%3Drivet%2Capp.kubernetes.io%2Fcomponent%3Dexecution',
+      );
+      return runManagedGateCommand(
+        process.execPath,
+        [
+          '-e',
+          `process.stderr.write('Error from server (NotFound): the server could not find the requested resource\\n');process.exit(1);`,
+        ],
+        { capture: true },
+      );
+    }
+    return kube(args);
+  };
+  await waitForHaHeadroom(() => createHaExecutionHeadroomGuard(f.options)({ stage: 'preflight' }), {
+    timeoutMs: 2000,
+    now: () => clock,
+    pause: async (ms) => {
+      clock += ms;
+    },
+  });
+  assert.equal(clock, 1000);
+  assert.equal(reads, 2);
+  assert.equal(f.receipts.at(-1).outcome, 'passed');
+});
 
 test('proxy rollout allows four desired pods, one surge and terminating predecessors', async () => {
   const f = proxyFixture(4);

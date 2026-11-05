@@ -1,26 +1,43 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { HA_ROUTING_PROPAGATION_MS, hasHaPublicEndpoint, waitForHaRoutingWithdrawal } from './lib/ha-routing-withdrawal.mjs';
+import {
+  HA_ROUTING_PROPAGATION_MS,
+  hasHaPublicEndpoint,
+  waitForHaRoutingWithdrawal,
+} from './lib/ha-routing-withdrawal.mjs';
 
 function fixture() {
   let time = 0;
   const pod = { name: 'execution-0', uid: 'owned-uid' };
   const options = {
-    pod, publicServices: new Set(['public']), timeoutMs: 10_000,
-    clock: { now: () => time, wait: async () => { time += 1000; } },
+    pod,
+    publicServices: new Set(['public']),
+    timeoutMs: 10_000,
+    clock: {
+      now: () => time,
+      wait: async () => {
+        time += 1000;
+      },
+    },
     observePod: async () => pod,
     readSlices: async () => [],
   };
   return { options, now: () => time };
 }
-const slices = (ready, service = 'public', uid = 'owned-uid') => [{
-  metadata: { labels: { 'kubernetes.io/service-name': service } },
-  endpoints: [{ targetRef: { uid }, conditions: { ready } }],
-}];
+const slices = (ready, service = 'public', uid = 'owned-uid') => [
+  {
+    metadata: { labels: { 'kubernetes.io/service-name': service } },
+    endpoints: [{ targetRef: { uid }, conditions: { ready } }],
+  },
+];
 
 test('routing withdrawal keeps admission open for a full minute after endpoint exclusion', async () => {
-  const f = fixture(); let reads = 0;
-  f.options.readSlices = async () => { reads++; return []; };
+  const f = fixture();
+  let reads = 0;
+  f.options.readSlices = async () => {
+    reads++;
+    return [];
+  };
   await waitForHaRoutingWithdrawal(f.options);
   assert.equal(f.now(), HA_ROUTING_PROPAGATION_MS);
   assert.equal(reads, 61, 'do not sleep blindly without rechecking actual endpoint state');
@@ -28,20 +45,22 @@ test('routing withdrawal keeps admission open for a full minute after endpoint e
 
 test('a returning endpoint resets the propagation observation without extending the deadline', async () => {
   const f = fixture();
-  f.options.readSlices = async () => f.now() === 5000 ? slices(true) : [];
+  f.options.readSlices = async () => (f.now() === 5000 ? slices(true) : []);
   await waitForHaRoutingWithdrawal(f.options);
   assert.equal(f.now(), 66_000);
   const repeated = fixture();
-  repeated.options.readSlices = async () => repeated.now() % 20_000 === 19_000 ? slices(true) : [];
+  repeated.options.readSlices = async () => (repeated.now() % 20_000 === 19_000 ? slices(true) : []);
   await assert.rejects(waitForHaRoutingWithdrawal(repeated.options), /endpoint withdrawal propagation/);
   assert.equal(repeated.now(), 70_000, 'routing flaps cannot extend the operation indefinitely');
 });
 
-for (const ready of [undefined, null, true]) test(`readiness ${ready} is still routable and never fences admission`, async () => {
-  const f = fixture(); f.options.readSlices = async () => slices(ready);
-  await assert.rejects(waitForHaRoutingWithdrawal(f.options), /endpoint withdrawal propagation/);
-  assert.equal(f.now(), 10_000);
-});
+for (const ready of [undefined, null, true])
+  test(`readiness ${ready} is still routable and never fences admission`, async () => {
+    const f = fixture();
+    f.options.readSlices = async () => slices(ready);
+    await assert.rejects(waitForHaRoutingWithdrawal(f.options), /endpoint withdrawal propagation/);
+    assert.equal(f.now(), 10_000);
+  });
 
 test('only public Service membership for the exact owner counts', async () => {
   const f = fixture();
@@ -53,17 +72,53 @@ test('only public Service membership for the exact owner counts', async () => {
 
 test('owner replacement, missing owner or observation errors abort without fencing admission', async () => {
   for (const replacement of [null, { uid: 'replacement' }]) {
-    const f = fixture(); f.options.observePod = async () => f.now() >= 2000 ? replacement : f.options.pod;
+    const f = fixture();
+    f.options.observePod = async () => (f.now() >= 2000 ? replacement : f.options.pod);
     await assert.rejects(waitForHaRoutingWithdrawal(f.options), /owner changed/);
   }
-  const f = fixture(); f.options.readSlices = async () => { throw Error('API unavailable'); };
+  const f = fixture();
+  f.options.readSlices = async () => {
+    throw Error('API unavailable');
+  };
   await assert.rejects(waitForHaRoutingWithdrawal(f.options), /API unavailable/);
 });
 
 test('explicit recovery observes a new full window, not a stale sleep receipt', async () => {
-  const f = fixture(); await waitForHaRoutingWithdrawal(f.options);
+  const f = fixture();
+  await waitForHaRoutingWithdrawal(f.options);
   await waitForHaRoutingWithdrawal(f.options);
   assert.equal(f.now(), 120_000);
+});
+
+test('temporary routing GET errors restart the continuous propagation window without extending it', async () => {
+  for (const read of ['observePod', 'readSlices']) {
+    const f = fixture(),
+      original = f.options[read];
+    f.options[read] = async (...args) => {
+      if (f.now() === 5000) throw Error('Error from server (ServiceUnavailable): fixture');
+      return original(...args);
+    };
+    await waitForHaRoutingWithdrawal(f.options);
+    assert.equal(f.now(), 66000, 'A blind interval cannot count toward the required minute');
+  }
+  for (const reason of ['ServiceUnavailable', 'Forbidden', 'NotFound']) {
+    const f = fixture();
+    f.options.readSlices = async () => {
+      throw Error(`Error from server (${reason}): fixture`);
+    };
+    await assert.rejects(
+      waitForHaRoutingWithdrawal(f.options),
+      reason === 'ServiceUnavailable' ? /propagation/ : new RegExp(reason),
+    );
+    assert.equal(f.now(), reason === 'ServiceUnavailable' ? 10000 : 0);
+  }
+  const changed = fixture();
+  changed.options.observePod = async () => ({ uid: 'replacement' });
+  changed.options.readSlices = async () => {
+    throw Error('Error from server (ServiceUnavailable): fixture');
+  };
+  await assert.rejects(waitForHaRoutingWithdrawal(changed.options), /owner changed/);
+  assert.equal(changed.now(), 0, 'An unrelated read error cannot mask a known ownership failure');
 });
 
 test('invalid observation inputs fail closed', async () => {
