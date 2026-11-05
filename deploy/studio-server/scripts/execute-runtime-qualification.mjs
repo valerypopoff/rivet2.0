@@ -27,6 +27,13 @@ import { assertReleaseManifestMatchesCurrentChart } from './lib/studio-server-re
 import { continuityTimeoutMs } from './lib/request-continuity.mjs';
 import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
 import { qualificationSafetyDigest } from './lib/release-qualification-policy.mjs';
+import {
+  assertToolingCompatibleSource,
+  toolingPublicationIdentity,
+  applicationInputDigest,
+  operationToolingSource,
+} from './lib/release-tooling.mjs';
+import { selectReleaseInputs } from './lib/release-inputs.mjs';
 import { deployQualifiedRelease } from './lib/deploy-qualified-release.mjs';
 import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
 import { coordinatorKubernetes, prepareStagingActor } from './lib/reusable-staging-coordinator.mjs';
@@ -87,26 +94,73 @@ async function main(mode) {
   if (mode === 'validate-run-id') {
     assert.equal(process.env.RIVET_AUTOMATED_QUALIFICATION_ENABLED, 'true');
     assert.match(process.env.BUILD_RUN_ID ?? '', /^[1-9][0-9]*$/);
+    if (process.env.TOOLING_RUN_ID) assert.match(process.env.TOOLING_RUN_ID, /^[1-9][0-9]*$/);
+    return;
+  }
+  if (mode === 'validate-application-reuse') {
+    const application = await read(path.join(packet, 'build-run.json'));
+    assertRuntimeQualificationBuild(application, {
+      repository: process.env.GITHUB_REPOSITORY,
+      sourceSha: application.head_sha,
+      runId: process.env.BUILD_RUN_ID,
+    });
+    assertToolingCompatibleSource(root, application.head_sha, process.env.GITHUB_SHA);
     return;
   }
   if (mode === 'validate-build') {
-    const build = assertRuntimeQualificationBuild(await read(path.join(packet, 'build-run.json')), {
+    const selected = selectReleaseInputs({
+      root,
       repository: process.env.GITHUB_REPOSITORY,
       sourceSha: process.env.GITHUB_SHA,
-      runId: process.env.BUILD_RUN_ID,
+      applicationRunId: process.env.BUILD_RUN_ID,
+      applicationRun: await read(path.join(packet, 'build-run.json')),
+      toolingRunId: process.env.TOOLING_RUN_ID,
+      toolingRun: process.env.TOOLING_RUN_ID ? await read(path.join(packet, 'tooling-run.json')) : undefined,
     });
-    await write(path.join(packet, 'build-identity.json'), build);
-    await emitText('run_attempt', String(build.runAttempt));
+    if (selected.compatibility) {
+      assert.ok(!sizing, 'Independent tooling is for release qualification, not sizing trials');
+      await write(path.join(packet, 'application-inputs.json'), selected.compatibility);
+    }
+    await write(path.join(packet, 'build-identity.json'), selected.build);
+    await emitText('tooling_run_attempt', String(selected.toolingRunAttempt));
+    await emitText('tooling_run_id', selected.toolingRunId);
+    await emitText('run_attempt', String(selected.build.runAttempt));
     return;
   }
-  const artifacts = async () =>
-    assertRuntimeQualificationArtifacts({
+  if (mode === 'validate-tooling') {
+    const build = await read(path.join(packet, 'build-identity.json'));
+    const selected = await read(path.join(packet, process.env.TOOLING_RUN_ID ? 'tooling-run.json' : 'build-run.json'));
+    const publication = await read(path.join(root, 'artifacts/qualification-image-publication/publication.json'));
+    const proof = process.env.TOOLING_RUN_ID ? await read(path.join(packet, 'application-inputs.json')) : undefined;
+    if (proof) {
+      assert.equal(proof.applicationSha, build.sourceSha);
+      assert.equal(proof.toolingSha, process.env.GITHUB_SHA);
+      assert.equal(proof.applicationInputsDigest, applicationInputDigest(root, process.env.GITHUB_SHA));
+    }
+    const identity = toolingPublicationIdentity(
+      publication,
+      selected,
+      proof?.applicationInputsDigest ?? applicationInputDigest(root, process.env.GITHUB_SHA),
+    );
+    assert.equal(identity.sourceSha, process.env.GITHUB_SHA);
+    try {
+      assert.deepEqual(await read(path.join(packet, 'tooling-identity.json')), identity);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      await write(path.join(packet, 'tooling-identity.json'), identity);
+    }
+    return;
+  }
+  const artifacts = async () => {
+    const build = await read(path.join(packet, 'build-identity.json'));
+    return assertRuntimeQualificationArtifacts({
       repository: process.env.GITHUB_REPOSITORY,
-      sourceSha: process.env.GITHUB_SHA,
-      build: await read(path.join(packet, 'build-identity.json')),
+      sourceSha: build.sourceSha ?? process.env.GITHUB_SHA,
+      build,
       candidate: await read(path.join(packet, 'candidate/candidate-release-manifest.json')),
       promoted: await read(path.join(packet, 'original/promoted-release-manifest.json')),
     });
+  };
   if (mode === 'validate-candidate') {
     const { candidate } = await artifacts();
     assertReleaseManifestMatchesCurrentChart(candidate, root, { requirePromoted: false });
@@ -243,10 +297,19 @@ async function main(mode) {
   assert.equal(mode, 'execute');
   const { candidate } = await artifacts();
   const previous = await read(path.join(packet, 'predecessor.json'));
-  assert.equal(candidate.source.sha, process.env.GITHUB_SHA);
+  assert.equal(
+    candidate.source.sha,
+    (await read(path.join(packet, 'build-identity.json'))).sourceSha ?? process.env.GITHUB_SHA,
+  );
   assert.equal(candidate.source.repository, process.env.GITHUB_REPOSITORY);
   assertReleaseManifestMatchesCurrentChart(candidate, root, { requirePromoted: false });
   const installed = await read(path.join(packet, 'installed.json'));
+  if (process.env.TOOLING_RUN_ID)
+    assert.equal(
+      process.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE,
+      'reusable-cluster',
+      'Independent tooling uses the retained staging cluster only',
+    );
   assert.ok(
     ['', 'reusable-cluster', 'temporary'].includes(process.env.RIVET_QUALIFICATION_ENVIRONMENT_MODE ?? ''),
     'Unknown staging environment mode',
@@ -286,7 +349,16 @@ async function main(mode) {
     operationId: `rivet-q-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`,
     approval: {
       ...(driverManifest.files['settings.json']
-        ? { safetyDigest: await qualificationSafetyDigest(root, candidate.source.sha) }
+        ? { safetyDigest: await qualificationSafetyDigest(root, process.env.GITHUB_SHA) }
+        : {}),
+      ...(process.env.TOOLING_RUN_ID
+        ? {
+            tooling: toolingPublicationIdentity(
+              await read(path.join(root, 'artifacts/qualification-image-publication/publication.json')),
+              await read(path.join(packet, 'tooling-run.json')),
+              (await read(path.join(packet, 'application-inputs.json'))).applicationInputsDigest,
+            ),
+          }
         : {}),
       developerOverlapProfile: settings.developerOverlapProfile,
       requestContinuityProfile: settings.requestContinuityProfile,
@@ -338,7 +410,9 @@ async function main(mode) {
           prefix: 'qualification',
         })
       : undefined;
-    const owner = Buffer.from(JSON.stringify({ operationId: operation.operationId, sourceSha: candidate.source.sha }));
+    const owner = Buffer.from(
+      JSON.stringify({ operationId: operation.operationId, sourceSha: operationToolingSource(operation) }),
+    );
     const cloudGeneration = process.env.RIVET_QUALIFICATION_LOCK_GENERATION;
     if (cloud) await cloud.assertOwner(cloudGeneration, owner);
     const journal = cloud
@@ -399,6 +473,7 @@ async function main(mode) {
         predecessorManifestDigest: operation.predecessorManifestDigest,
         installed: operation.installed,
         driverBundleSha256: bundleDigest,
+        ...(operation.qualification?.tooling ? { tooling: operation.qualification.tooling } : {}),
         ...(operation.sizingRequests ? { sizingRequests: operation.sizingRequests } : {}),
         candidate: {
           sourceSha: candidate.source.sha,
@@ -430,7 +505,14 @@ async function main(mode) {
     if (succeeded) await fs.unlink(path.join(store, 'active.lock'));
   }
 }
-main(process.argv[2]).catch(() => {
+main(process.argv[2]).catch((error) => {
+  if (
+    error?.code === 'RIVET_APPLICATION_REBUILD_REQUIRED' &&
+    ['validate-build', 'validate-application-reuse'].includes(process.argv[2])
+  )
+    console.error(
+      '[runtime-qualification-execution] Application/runtime build inputs changed. Run Build Images for this source; this tooling-only selection cannot reuse the older application. No provider operation was started.',
+    );
   console.error(
     '[runtime-qualification-execution] Phase failed. Inspect private qualification/deployment receipts; no uncertain write was retried and no receipt contents were logged.',
   );

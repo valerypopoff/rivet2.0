@@ -52,6 +52,20 @@ function fixture() {
   return input;
 }
 
+test('qualification pins tooling independently without changing its application identity', () => {
+  const tooling = {
+    sourceSha: 'b'.repeat(40),
+    runId: '42',
+    runAttempt: 1,
+    publicationDigest: 'sha256:' + 'c'.repeat(64),
+    applicationInputsDigest: 'sha256:' + 'd'.repeat(64),
+  };
+  const plan = releaseQualificationPlan({ ...fixture(), tooling });
+  assert.deepEqual(plan.tooling, tooling);
+  assert.throws(() => assertQualificationPlan({ ...plan, tooling: { ...tooling, runAttempt: 0 } }));
+  assert.throws(() => assertQualificationPlan({ ...plan, tooling: { ...tooling, sourceSha: 'main' } }));
+});
+
 test('ordinary continuity qualification is focused even for first adoption and changed source/configuration', () => {
   const f = fixture();
   const plan = releaseQualificationPlan(f);

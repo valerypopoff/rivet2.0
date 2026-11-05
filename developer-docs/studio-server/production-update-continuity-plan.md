@@ -1,5 +1,14 @@
 # Production update continuity implementation plan
 
+Delivery now separates application build identity from optional independent
+tooling publication. Reuse requires unchanged committed application inputs;
+actor bootstrap, qualification, publication and production bind the same tooling
+source/publication/input fingerprint. This is a repository implementation,
+not a new image publication, cloud attempt or completed production release. The
+next activation must select the verified application build plus verified tooling
+publication and pass the ordinary pair-specific qualification and cleanup gates.
+See [independent tooling](automated-runtime-qualification.md#application-builds-and-independent-tooling).
+
 The 2026-11-05 follow-up remains unqualified. Its first attempt stopped when an
 external node eviction temporarily reduced proxy availability; the bounded
 read-only capacity-recovery repair passed CI and Build Images42019915093. The
@@ -7,8 +16,22 @@ replacement attempt returned one Envoy503 during a fixture-induced Nginx reload,
 before the actual image update. Both failed attempts have independently verified
 cleanup; neither deployed application images to production. The separately
 approved restoration of the live proxy minimum to Helm's two replicas is verified.
-The incoming keepalive and fixture-ordering repair is a local candidate until its
-source, image and provider gates pass; no further cloud attempt is automatic.
+The incoming keepalive and fixture-ordering repair passed PR244 and Build Images
+42039506923. Its single replacement qualification, Release42044734820, reached
+owner replacement but stopped when the pinned background probe received HTTP429
+before execution-owner retirement. All 2,252 public workflow and 765 web samples
+succeeded, with at least two ready execution and proxy owners throughout; the
+accepted-work retirement proof remained incomplete. Cleanup and lock absence
+were independently verified, and production deployment was skipped.
+The local admission repair now handles only explicit pre-acceptance capacity
+rejection within the original ten-second budget, retaining exact-owner admission,
+recording preservation and strict public traffic checks. Reassessment also moved
+the pinned background run after routing withdrawal and before admission fencing,
+so it cannot saturate an owner still receiving public traffic. The three public
+transport requests retain pre-withdrawal admission. Boundary/failure/recovery,
+bundled serialization, and stalled-response regressions run locally; deadline
+tests use a deterministic clock. It is not yet image- or
+provider-qualified; no further cloud attempt is automatic.
 The focused observer/certificate is also aligned with the guarded recovery path:
 a temporary single serving proxy can recover without hiding request failures,
 while retirement and final healthy-capacity requirements remain at two proxies.

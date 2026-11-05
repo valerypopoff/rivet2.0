@@ -7,11 +7,12 @@ import {
   getStudioServerReleaseManifestDigest,
 } from './lib/studio-server-release-manifest.mjs';
 import {
-  assertRuntimeQualificationBuild,
   prepareRuntimeQualification,
   assertRuntimeQualificationPointer,
 } from './lib/runtime-qualification-publication.mjs';
 import { qualificationSafetyDigest } from './lib/release-qualification-policy.mjs';
+import { toolingPublicationIdentity } from './lib/release-tooling.mjs';
+import { selectReleaseInputs } from './lib/release-inputs.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const dir = path.join(root, 'artifacts/runtime-qualification-publication');
@@ -19,9 +20,9 @@ const read = (name) => fs.readFile(path.join(dir, name), 'utf8').then(JSON.parse
 const write = (name, value) =>
   fs.writeFile(path.join(dir, name), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
 const output = (name, value) => fs.appendFile(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
-const context = () => ({
+const context = async () => ({
   repository: process.env.GITHUB_REPOSITORY,
-  sourceSha: process.env.GITHUB_SHA,
+  sourceSha: (await read('build-identity.json')).sourceSha ?? process.env.GITHUB_SHA,
   runId: process.env.BUILD_RUN_ID,
 });
 const jsonInput = (key) => {
@@ -36,15 +37,35 @@ async function main() {
   const mode = process.argv[2];
   if (mode === 'validate-run-id') {
     assert.match(process.env.BUILD_RUN_ID ?? '', /^[1-9][0-9]*$/);
+    if (process.env.TOOLING_RUN_ID) assert.match(process.env.TOOLING_RUN_ID, /^[1-9][0-9]*$/);
     await fs.mkdir(dir, { recursive: true });
     await output('run_id', process.env.BUILD_RUN_ID);
   } else if (mode === 'metadata') {
-    const build = assertRuntimeQualificationBuild(await read('build-run.json'), context());
-    await write('build-identity.json', build);
-    await output('run_attempt', build.runAttempt);
+    const selected = selectReleaseInputs({
+      root,
+      repository: process.env.GITHUB_REPOSITORY,
+      sourceSha: process.env.GITHUB_SHA,
+      applicationRunId: process.env.BUILD_RUN_ID,
+      applicationRun: await read('build-run.json'),
+      toolingRunId: process.env.TOOLING_RUN_ID,
+      toolingRun: process.env.TOOLING_RUN_ID ? await read('tooling-run.json') : undefined,
+    });
+    if (selected.compatibility) await write('tooling-inputs.json', selected.compatibility);
+    await output('tooling_run_attempt', selected.toolingRunAttempt);
+    await write('build-identity.json', selected.build);
+    await output('run_attempt', selected.build.runAttempt);
   } else if (mode === 'prepare') {
     const result = prepareRuntimeQualification({
-      ...context(),
+      ...(await context()),
+      ...(process.env.TOOLING_RUN_ID
+        ? {
+            tooling: toolingPublicationIdentity(
+              await read('tooling/publication.json'),
+              await read('tooling-run.json'),
+              (await read('tooling-inputs.json')).applicationInputsDigest,
+            ),
+          }
+        : {}),
       safetyDigest: await qualificationSafetyDigest(root, process.env.GITHUB_SHA),
       build: await read('build-identity.json'),
       candidate: await read('candidate/candidate-release-manifest.json'),
@@ -77,7 +98,11 @@ async function main() {
     console.log(`Runtime-qualified immutable manifest verified: ${expected}. No GCP workload was changed.`);
   } else throw Error('Unknown publication phase');
 }
-main().catch(() => {
+main().catch((error) => {
+  if (error?.code === 'RIVET_APPLICATION_REBUILD_REQUIRED')
+    console.error(
+      '[runtime-qualification] Application/runtime build inputs changed; run Build Images before selecting this tooling release.',
+    );
   // Declarations must not contain secrets, but even malformed operator input
   // must not be echoed by assert's actual/expected diagnostic rendering.
   const phase = ['validate-run-id', 'metadata', 'prepare', 'verify-pointer', 'verify-published'].includes(

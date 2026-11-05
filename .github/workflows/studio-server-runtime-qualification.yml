@@ -6,6 +6,9 @@ on:
       build_run_id:
         required: true
         type: string
+      tooling_run_id:
+        type: string
+        default: ''
       runtime_control_declaration:
         required: true
         type: string
@@ -18,6 +21,10 @@ on:
         value: ${{ jobs.publish.outputs.manifest_digest }}
   workflow_dispatch:
     inputs:
+      tooling_run_id:
+        description: Optional main tooling publication used by the successful staging operation.
+        type: string
+        default: ''
       build_run_id:
         description: Successful main Build Images run whose exact candidate was qualified in isolated GKE.
         required: true
@@ -52,6 +59,7 @@ jobs:
       manifest_digest: ${{ steps.publication.outputs.manifest_digest }}
     env:
       BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      TOOLING_RUN_ID: ${{ inputs.tooling_run_id }}
       PACKET: artifacts/runtime-qualification-publication
       RELEASE_MANIFEST_REPOSITORY: ghcr.io/${{ github.repository }}-studio-server/release-manifest
     steps:
@@ -69,7 +77,21 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > "$PACKET/build-run.json"
+          if [[ -n "$TOOLING_RUN_ID" ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TOOLING_RUN_ID" > "$PACKET/tooling-run.json"
+            app_source="$(jq -r .head_sha "$PACKET/build-run.json")"
+            [[ "$app_source" =~ ^[a-f0-9]{40}$ ]]
+            git fetch --depth=1 --filter=blob:none --no-tags origin "$app_source"
+          fi
           node deploy/studio-server/scripts/prepare-runtime-qualification.mjs metadata
+      - name: Download selected tooling publication
+        if: ${{ inputs.tooling_run_id != '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-image-publication-${{ inputs.tooling_run_id }}-${{ steps.build.outputs.tooling_run_attempt }}
+          run-id: ${{ inputs.tooling_run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts/runtime-qualification-publication/tooling
       - name: Download original immutable candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

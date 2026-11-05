@@ -25,6 +25,7 @@ import { waitForManagedGateCommands } from '../kubernetes-managed-release-gate.m
 import { withManagedGateSignal } from '../lib/managed-gate-command.mjs';
 import { adoptProviderOverlap, startProviderOverlapProbe } from './provider-overlap.mjs';
 import { verifyActorSource } from '../../images/qualification/verify-source.mjs';
+import { applicationInputDigest, operationToolingSource } from '../lib/release-tooling.mjs';
 import { ProviderRequestContinuity } from './provider-request-continuity.mjs';
 import { qualificationSafetyDigest, releaseQualificationPlan } from '../lib/release-qualification-policy.mjs';
 import { describeProviderPhaseReceipt, writeProviderPhaseReceipt } from '../lib/provider-phase-receipt.mjs';
@@ -277,12 +278,17 @@ export async function executeProviderPhase({
 }
 
 export async function assertProviderCheckout(operation, settings = {}) {
-  await verifyActorSource(root, operation.candidate.source.sha);
+  const source = operationToolingSource(operation);
+  await verifyActorSource(root, source);
+  // The immutable actor intentionally contains only one Git commit, no remote.
+  if (operation.qualification?.tooling)
+    assert.equal(applicationInputDigest(root, source), operation.qualification.tooling.applicationInputsDigest);
   if (operation.qualification)
     assert.deepEqual(
       operation.qualification,
       releaseQualificationPlan({
-        safetyDigest: await qualificationSafetyDigest(root, operation.candidate.source.sha),
+        safetyDigest: await qualificationSafetyDigest(root, source),
+        tooling: operation.qualification.tooling,
         previous: operation.previous,
         predecessorDigest: operation.predecessorManifestDigest,
         candidate: operation.candidate,

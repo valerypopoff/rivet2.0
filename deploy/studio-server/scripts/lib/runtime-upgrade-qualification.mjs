@@ -254,8 +254,11 @@ export async function runOrdinaryRuntimeUpgrade({
         checkpoint();
         if (/-ha-execution(?:-next)?-[01]$/.test(pod.name))
           await gate.continuityProbes?.startCohort('execution-retirement');
-        return /-ha-execution(?:-next)?-[01]$/.test(pod.name) ? probes.beforeRetirement(pod) : undefined;
       },
+      // Keep synthetic background work from taking the last slot while public
+      // traffic still routes to this owner. Admission remains open until fencing.
+      afterRoutingWithdrawal: (pod) =>
+        /-ha-execution(?:-next)?-[01]$/.test(pod.name) ? probes.beforeRetirement(pod) : undefined,
       afterWithdrawal: (pod) =>
         /-ha-execution(?:-next)?-[01]$/.test(pod.name) ? probes.afterWithdrawal(pod) : undefined,
     };

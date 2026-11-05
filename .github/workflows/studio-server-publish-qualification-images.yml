@@ -2,9 +2,19 @@ name: Publish qualification images
 
 on:
   workflow_dispatch:
+    inputs:
+      application_build_run_id:
+        description: Optional existing successful main application build; reject incompatible runtime changes before building tooling.
+        type: string
+        default: ''
   workflow_call:
+    inputs:
+      application_build_run_id:
+        type: string
+        default: ''
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -31,6 +41,20 @@ jobs:
           node-version: 24
       - name: Install pinned workspace dependencies
         run: corepack yarn install --immutable
+      - name: Validate selected application before expensive tooling work
+        if: ${{ inputs.application_build_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.application_build_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          mkdir -p artifacts/automated-runtime-qualification
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > artifacts/automated-runtime-qualification/build-run.json
+          app_source="$(jq -r .head_sha artifacts/automated-runtime-qualification/build-run.json)"
+          [[ "$app_source" =~ ^[a-f0-9]{40}$ ]]
+          git fetch --depth=1 --filter=blob:none --no-tags origin "$app_source"
+          corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs validate-application-reuse
       - name: Use configuration digests for local publication image IDs
         # Docker 29 defaults to containerd IDs (manifest/index digests). This
         # archive/scanner contract uses configuration digests on its fresh host.

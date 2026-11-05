@@ -541,6 +541,31 @@ test('a migration or prerequisite failure cannot retire an owner', async () => {
   }
 });
 
+test('synthetic pinned admission runs after routing withdrawal and before fencing', async () => {
+  const f = fixture();
+  f.options.prepareAdmissionFence = async (pod) => {
+    assert.equal(f.pods.get(pod.name).state, 'withdrawing');
+    assert.equal(f.pods.get(pod.name).ready, false);
+    f.operations.push('pinned:' + pod.name);
+  };
+  await runHaRollingUpgrade(f.options);
+  for (const operation of f.operations.filter((entry) => entry.startsWith('pinned:'))) {
+    const name = operation.slice('pinned:'.length);
+    assert.ok(f.operations.indexOf('withdraw-command:' + name) < f.operations.indexOf(operation));
+    assert.ok(f.operations.indexOf(operation) < f.operations.indexOf('begin:' + name));
+  }
+  assert.ok(f.operations.some((entry) => entry.startsWith('pinned:')));
+});
+
+test('failed synthetic admission retains the withdrawn owner without fencing or deleting it', async () => {
+  const f = fixture();
+  f.options.prepareAdmissionFence = async () => {
+    throw Error('pinned admission failed');
+  };
+  await assert.rejects(runHaRollingUpgrade(f.options), /pinned admission failed/);
+  assert.ok(!f.operations.some((entry) => /^(begin|delete):/.test(entry)));
+});
+
 function fixture() {
   let journal,
     revision = 0,
@@ -1572,6 +1597,7 @@ for (const fault of [
       templateApplied = false,
       slowArtifactObserved = false,
       artifactCount = 0;
+    const fencedProbes = new Set();
     const kube = async (args, extra) => {
       calls.push(args);
       const result = (value) => ({ stdout: value == null ? '' : JSON.stringify(value) });
@@ -1653,6 +1679,7 @@ for (const fault of [
           Object.assign(pod, { state: 'withdrawing', operationId: args[7], ready: false });
         }
         if (args.includes('--begin-only')) {
+          assert.ok(fencedProbes.has(pod.uid), 'pinned admission must precede fencing');
           assert.ok(
             routingTime - routingWithdrawals.get(pod.uid) >= 60_000,
             'ordinary roll cannot close admission on the control-plane acknowledgement alone',
@@ -1713,6 +1740,12 @@ for (const fault of [
         wait: async () => {
           routingTime += 1000;
         },
+      },
+      afterRoutingWithdrawal: async (pod) => {
+        assert.equal(f.pods.get(pod.name).state, 'withdrawing');
+        assert.ok(routingTime - routingWithdrawals.get(pod.uid) >= 60_000);
+        assert.ok(!fencedProbes.has(pod.uid), 'do not replay a pinned request during recovery');
+        fencedProbes.add(pod.uid);
       },
       applyTemplates: async (_workloads, guardedValues) => {
         assert.deepEqual(guardedValues, {

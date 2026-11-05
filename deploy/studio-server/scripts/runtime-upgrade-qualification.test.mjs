@@ -454,6 +454,11 @@ for (const scenario of [
         for (const ordinal of [0, 1]) {
           const pod = { name: `fixture-ha-execution-${ordinal}`, uid: `owner-${ordinal}` };
           await hooks.beforeRetirement(pod);
+          assert.ok(
+            !probes.background.some((entry) => entry.uid === pod.uid),
+            'background must not compete with routed public traffic',
+          );
+          await hooks.afterRoutingWithdrawal(pod);
           await hooks.afterWithdrawal(pod);
         }
         images = candidate.images;

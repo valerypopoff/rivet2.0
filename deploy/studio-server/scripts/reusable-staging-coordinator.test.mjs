@@ -73,7 +73,7 @@ async function fixture(t, operationOverride = operation) {
     job: null,
     deleted: false,
     uid: 'actor-pod',
-    preflightSha: operation.candidate.source.sha,
+    preflightSha: operation.qualification?.tooling?.sourceSha ?? operation.candidate.source.sha,
     commands: [],
     progress: [],
     losePhase: false,
@@ -336,6 +336,17 @@ test('hosted coordinator crosses real HTTP/WebSocket stdin/EOF boundaries, journ
   assert.equal(f.state.deleted, true);
   assert.equal(f.state.commands.filter((c) => c.phase === 'export').length, 1);
   assert.equal(f.state.creates, 1);
+});
+
+test('independent tooling preflight verifies the actor tooling source while retaining the application source', async (t) => {
+  const input = structuredClone(operation);
+  input.qualification = { tooling: { sourceSha: 'd'.repeat(40) } };
+  input.inputHash = qualificationHash(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'inputHash')));
+  const f = await fixture(t, input),
+    actor = await f.prepare();
+  assert.equal(f.state.commands[0].payload.sourceSha, 'd'.repeat(40));
+  assert.equal(input.candidate.source.sha, 'a'.repeat(40));
+  await actor.close({ cleanupVerified: true });
 });
 
 test('lost remote phase acknowledgement is never replayed or treated as safe deletion', async (t) => {

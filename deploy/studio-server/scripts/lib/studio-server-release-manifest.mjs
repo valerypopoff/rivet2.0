@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { assertImageOrigins } from './component-image-origin.mjs';
+import { releaseToolingSource } from './release-tooling.mjs';
 import {
   assertHaReleaseEvidence,
   assertRuntimeControlEvidence,
@@ -409,9 +410,10 @@ export function assertReleaseManifestMatchesCurrentSource(manifest, currentSourc
   if (!sourceShaPattern.test(checkoutSha)) {
     throw new Error('[studio-server-release-manifest] current source SHA must be a 40-character Git commit');
   }
-  if (release.source.sha !== checkoutSha) {
+  const deploymentSource = releaseToolingSource(release);
+  if (deploymentSource !== checkoutSha) {
     throw new Error(
-      `[studio-server-release-manifest] The current checkout (${checkoutSha}) does not match release manifest source (${release.source.sha}). Check out the manifest source before deploying.`,
+      `[studio-server-release-manifest] The current checkout (${checkoutSha}) does not match release manifest source (${deploymentSource}). Check out the manifest deployment source before deploying.`,
     );
   }
   return release;

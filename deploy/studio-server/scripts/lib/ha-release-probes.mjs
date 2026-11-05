@@ -5,6 +5,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 import { HA_ROUTING_PROPAGATION_MS } from './ha-routing-withdrawal.mjs';
+import { submitHaBackgroundProbe } from './ha-background-probe.mjs';
 import { withHaLatestAdmission } from '../fixtures/ha-latest-controls.mjs';
 import {
   createHostedEvaluationSubmission,
@@ -249,7 +250,7 @@ export class HaReleaseProbes {
       this.evaluations.push({ pod: pod.name, uid: pod.uid, runId, jobs });
     }
     if (/-ha-execution(?:-next)?-[01]$/.test(pod.name)) {
-      const source = `const r=await fetch('http://127.0.0.1:'+process.env.PORT+'/workflows/${this.backgroundEndpoint}',{method:'POST',headers:{authorization:'Bearer '+process.env.RIVET_KEY,'content-type':'application/json'},body:JSON.stringify({input:'preserved'}),signal:AbortSignal.timeout(10000)});console.log(JSON.stringify({status:r.status,correlationId:r.headers.get('x-rivet-correlation-id'),body:await r.json()}));`;
+      const source = `const response=await (${submitHaBackgroundProbe.toString()})('http://127.0.0.1:'+process.env.PORT+'/workflows/${this.backgroundEndpoint}',process.env.RIVET_KEY);console.log(JSON.stringify(response));`;
       const response = JSON.parse(
         (await this.kube(['exec', pod.name, '-c', pod.container, '--', 'node', '--input-type=module', '-e', source]))
           .stdout,

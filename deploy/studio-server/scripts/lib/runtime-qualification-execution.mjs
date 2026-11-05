@@ -98,6 +98,11 @@ export function qualificationOperation({
   }
   const normalized = autoscalerPolicy(policy);
   const sizing = approval.sizingRequests ? sizingRequests(approval.sizingRequests) : undefined;
+  if (approval.tooling)
+    assert.ok(
+      approval.safetyDigest && !sizing,
+      'Independent tooling requires a source-bound qualification plan and cannot run a sizing trial',
+    );
   const retainedApplication = approval.retainedApplication
     ? retainedApplicationSettings(approval.retainedApplication)
     : undefined;
@@ -184,6 +189,7 @@ export function qualificationOperation({
             profile: approval.requestContinuityProfile,
             overlap: approval.developerOverlapProfile,
             suite: approval.qualificationSuite,
+            tooling: approval.tooling,
           }),
         }
       : {}),

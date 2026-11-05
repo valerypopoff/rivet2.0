@@ -91,6 +91,7 @@ export async function runHaRollingUpgrade({
   clearHeartbeat = clearInterval,
   isCurrentPod = (pod, workload) => pod.image === workload.image,
   prepareRetirement = async () => {},
+  prepareAdmissionFence = async () => {},
   checkHeadroom = async () => {},
   settle,
   handoverHousekeeping,
@@ -302,6 +303,7 @@ export async function runHaRollingUpgrade({
         }
         await measure(`routing:${pod.name}`, () => waitForRoutingWithdrawal(pod));
         if (!operation.record.owner.beginIssued) {
+          await prepareAdmissionFence(pod);
           // Peers can fail while endpoint removal propagates. Reconfirm surviving
           // owners at the admission fence even when no autoscaler supplies metrics.
           await checkRetirementCapacity(pod, workload);

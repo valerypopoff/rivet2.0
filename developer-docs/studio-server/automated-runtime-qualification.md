@@ -503,7 +503,58 @@ resource identities remain excluded. Local tests are not provider qualification.
 
 ## Release stages
 
-1. **Built:** requested main Build Images run succeeded for this commit. Its
+### Application builds and independent tooling
+
+Keep application builds and deployment-tool publication in this repository, with
+independent immutable identities. For an application change, use **Build Images**
+and supply its successful `build_run_id` to **Release Rivet** as before; leave
+`tooling_run_id` empty. This preserves existing release and certificate behavior.
+
+For a deployment/test-tool repair, first pass CI and merge it, then run **Publish
+qualification images** on main. This builds/scans the actor and cleanup worker,
+not the four application containers. Supply its optional
+`application_build_run_id` with the existing application build ID so incompatibility
+fails before building/scanning tooling. In **Release Rivet**, supply:
+
+| Input | Value |
+| --- | --- |
+| `build_run_id` | Existing successful main **Build Images** run for the application candidate |
+| `tooling_run_id` | Successful main **Publish qualification images** dispatch run for the current tooling commit |
+| `deploy_production` | The authorized rollout choice; production still requires qualification and cleanup |
+
+No run is automatically retried, published, or deployed because a tooling repair
+was merged. Numeric operation allowances, protected environments, workload
+values, IAM, certificate custody and cleanup rules are unchanged. Independent
+tooling supports release qualification on retained staging, not sizing trials
+or the archived temporary-cluster path. Check artifact retention before reuse;
+an unavailable or failed original build fails before cloud setup.
+
+Before cloud credentials, Built validates both successful main workflow runs,
+the unchanged original candidate/promotion, and the exact tooling publication.
+It compares committed application inputs between the two source revisions.
+Application packages, chart/schema, dependencies, container recipes, and the
+autoscaler closure embedded in the API image must be unchanged. Unknown changes
+require a new application build. Tool-only script/docs/test changes may reuse
+the application images; declarations cannot substitute other image digests.
+
+The operation and qualification certificate bind the tooling commit, publication
+run/attempt, publication-content digest, and unchanged application-input digest.
+The single-commit offline actor verifies its current input tree without fetching
+older source. Publication rechecks the selected pair. Production requires the
+same tooling source and qualification safety digest, matching public operation
+receipt, chart, exact application images, settings and predecessor. Swapping
+tooling after staging requires new qualification. Older same-source certificates
+remain readable; no prior result is reclassified as qualified.
+
+Rollout-only script changes no longer automatically launch application-image
+builds. Embedded autoscaler code, image recipes, application/dependency changes
+and the application-image workflow itself retain their build triggers. The
+general PR checks and relevant rollout/native source tests still run. This
+avoids application rebuilds, scans and container rehearsals already proven by
+the selected successful application build; fresh pair-specific GKE request,
+accepted-work, recording and cleanup observations remain mandatory.
+
+1. **Built:** requested main Build Images run succeeded for the application source. Its
    candidate/promotion agree on exact images, chart, schema, source, creation and
    lineage. Pull the predecessor by immutable digest, never the moving registry
    `production` pointer. Compare it with the actual installation before paid work.
