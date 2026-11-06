@@ -6,6 +6,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS helm-security
 ARG TARGETARCH
+COPY source/deploy/studio-server/images/qualification/helm /helm-policy
 COPY source/deploy/studio-server/images/qualification/rebuild-helm.sh /rebuild-helm.sh
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build sh /rebuild-helm.sh "$TARGETARCH"
 

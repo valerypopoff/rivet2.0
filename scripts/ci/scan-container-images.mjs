@@ -267,6 +267,7 @@ async function scan(target, output, cache) {
     { flag: 'wx' },
   );
   console.log(`${target.platform}: ${result.blockers.length} High/Critical findings, ${result.findings.length} total`);
+  if (result.blockers.length) console.error(JSON.stringify({ platform: target.platform, blockers: result.blockers }));
   return result;
 }
 
