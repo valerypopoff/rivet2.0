@@ -255,6 +255,11 @@ async function fixture(t, mode, fault, schemaChange = false) {
     merge(base, await read('deploy/studio-server/helm/overlays/gke-runtime-ha.yaml'));
     merge(base, await read('deploy/studio-server/helm/overlays/gke-compact-edge.yaml'));
     merge(base, await read('deploy/studio-server/helm/overlays/gke-runtime-autoscaling.yaml'));
+    // Ownership transfer is a separate two-proxy operation, not the compact
+    // ordinary rolling-update profile. Keep this fixture independent of defaults.
+    base.replicaCount.proxy = 2;
+    base.autoscaling.proxy.minReplicas = 2;
+    base.availability.topologySpread.minDomains = 2;
     base.autoscaling.execution.maxReplicas = 7;
     base.postgres = {
       ...base.postgres,
@@ -712,6 +717,9 @@ describe('isolated deployment command journeys', { concurrency: 3 }, () => {
     test(`certified same-image overlap adoption ${stage} runs the actual command`, { timeout: 930000 }, async (t) => {
       const f = await fixture(t, `adoption-${stage}`, 'lostTemplate');
       const before = await f.state();
+      assert.equal(before.installed.replicaCount.proxy, 2);
+      assert.equal(before.installed.autoscaling.proxy.minReplicas, 2);
+      assert.equal(before.installed.availability.topologySpread.minDomains, 2);
       const preflight = await f.invoke(['--preflight-only']);
       assert.equal(preflight.code, 0, preflight.stdout + preflight.stderr);
       assert.equal(
