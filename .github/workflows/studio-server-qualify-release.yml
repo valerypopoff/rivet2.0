@@ -31,6 +31,10 @@ on:
         description: SHA256 of the recovered receipt (sha256:...). Required only with recovered_operation_uri.
         type: string
         default: ''
+      production_preflight_only:
+        description: 'Check an existing qualified publication with the production CI identity, without backup or rollout. Requires qualified_publication_run_id and deploy_production=true.'
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -70,7 +74,8 @@ jobs:
         env:
           RECOVERED_OPERATION_URI: ${{ inputs.recovered_operation_uri }}
           RECOVERED_OPERATION_SHA256: ${{ inputs.recovered_operation_sha256 }}
-        run: test -z "$RECOVERED_OPERATION_URI" && test -z "$RECOVERED_OPERATION_SHA256"
+          QUALIFIED_PREFLIGHT_ONLY: ${{ inputs.production_preflight_only }}
+        run: test -z "$RECOVERED_OPERATION_URI" && test -z "$RECOVERED_OPERATION_SHA256" && test "$QUALIFIED_PREFLIGHT_ONLY" != true
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
@@ -245,6 +250,7 @@ jobs:
     env:
       QUALIFIED_MANIFEST_DIGEST: ${{ needs.publish.outputs.manifest_digest }}
       QUALIFIED_PUBLICATION_RUN_ID: ${{ inputs.qualified_publication_run_id }}
+      QUALIFIED_PREFLIGHT_ONLY: ${{ inputs.production_preflight_only }}
       RECOVERED_OPERATION_URI: ${{ inputs.recovered_operation_uri }}
       RECOVERED_OPERATION_SHA256: ${{ inputs.recovered_operation_sha256 }}
     defaults:

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { qualifiedDeploymentCommand } from './lib/qualified-deployment-command.mjs';
+import { deployQualifiedRelease as preflightQualifiedRelease } from './lib/deploy-qualified-release.mjs';
 
 const controller = fileURLToPath(new URL('../../../', import.meta.url));
 const read = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
@@ -24,12 +25,19 @@ export async function deployQualifiedProduction({
   const selected = await read(path.join(controllerRoot, 'artifacts/qualified-deployment-inputs/selection.json'));
   assert.equal(environment.DEPLOYMENT_SOURCE_SHA, selected.sourceSha);
   assert.equal(environment.QUALIFIED_MANIFEST_DIGEST, selected.digest);
-  const { deployQualifiedRelease } = await load('lib/deploy-qualified-release.mjs');
+  assert.ok(['true', 'false'].includes(environment.QUALIFIED_PREFLIGHT_ONLY ?? 'false'));
+  const preflightOnly = environment.QUALIFIED_PREFLIGHT_ONLY === 'true';
+  // Preflight preparation uses current controller code, but invokes the original
+  // qualified CLI with --preflight-only. Actual rollout stays entirely qualified.
+  const deployQualifiedRelease = preflightOnly
+    ? preflightQualifiedRelease
+    : (await load('lib/deploy-qualified-release.mjs')).deployQualifiedRelease;
   const { runManagedGateCommand, waitForManagedGateCommands } = await load('lib/managed-gate-command.mjs');
   try {
     const result = await deployQualifiedRelease({
       root,
       packet,
+      ...(preflightOnly ? { preflightOnly: true } : {}),
       operation: await read(path.join(packet, 'operation-public.json')),
       manifest: await read(path.join(packet, 'qualified-manifest.json')),
       digest: selected.digest,

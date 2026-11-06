@@ -1691,6 +1691,47 @@ test('production action invokes the normal command once with bound inputs and pu
     await assert.rejects(deployQualifiedRelease(invalid));
     assert.equal(calls, 0);
   }
+  const preflightPacket = await fs.mkdtemp(path.join(directory, 'preflight-'));
+  let preflightCalls = 0;
+  const preflight = {
+    ...args,
+    packet: preflightPacket,
+    privateStore: undefined,
+    preflightOnly: true,
+    evidenceBucket: 'fixture-evidence',
+    cloudEvidence: ({ bucket, prefix }) => {
+      assert.equal(bucket, 'fixture-evidence');
+      assert.ok(prefix.startsWith(`production-preflight/${operation.operationId}/`));
+      return {
+        acquire: () => assert.fail('Read-only preflight must not acquire a production admission fence'),
+        saveDirectory: async (artifacts) => assert.equal(artifacts, path.join(preflightPacket, 'private-preflight')),
+      };
+    },
+    run: async (_bin, argv) => {
+      preflightCalls++;
+      assert.ok(argv.includes('--preflight-only'));
+      assert.ok(!argv.includes('--confirm'));
+      await fs.writeFile(
+        path.join(preflightPacket, 'private-preflight/deployment-preflight.json'),
+        JSON.stringify({
+          passed: true,
+          workloadMutations: false,
+          applicationJourneysRun: false,
+          candidateManifestDigest: digest,
+          installedManifestDigest: operation.predecessorManifestDigest,
+          namespaceUid: operation.installed.namespaceUid,
+        }),
+      );
+    },
+  };
+  const checked = await deployQualifiedRelease(preflight);
+  assert.equal(checked.status, 'preflight-passed');
+  assert.equal(checked.workloadMutations, false);
+  assert.equal(preflightCalls, 1);
+  assert.equal(calls, 0);
+  await assert.rejects(fs.stat(path.join(privateStore, operation.operationId)), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(path.join(preflightPacket, 'private-deployment')), { code: 'ENOENT' });
+  await assert.rejects(deployQualifiedRelease(preflight), { code: 'EEXIST' });
   const result = await deployQualifiedRelease(args);
   assert.equal(result.status, 'deployed');
   assert.equal(calls, 1);

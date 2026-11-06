@@ -33,6 +33,13 @@ There is no separate readiness job. `--expected-installed-settings-digest`
 compares the canonical live Helm settings already read by the command with the
 qualification baseline, rejecting drift before adapters or Kubernetes writes.
 The action also binds namespace UID, operator values, source, images and manifest.
+The production principal must be able to list the complete namespace workload
+inventory used by settlement: Deployments, StatefulSets, DaemonSets,
+ReplicationControllers, CronJobs, ReplicaSets, Jobs, Pods and HPAs. Missing access
+is a production installation prerequisite, even when the chart creates none of
+that resource kind. Staging's different principal does not prove production
+access. Keep the inventory complete; review and authorize any required RBAC
+change separately instead of skipping denied resource types or retrying a rollout.
 Protected ordinary singleton HA updates overlap native proxy/web replacement
 with backend/execution retirement. Only their template apply omits Helm's
 broad resource wait; the pre-upgrade schema hook remains enabled and blocking.
