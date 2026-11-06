@@ -210,7 +210,7 @@ assert.equal(productionSteps[qualifiedCheckout].with.ref, '${{ steps.reuse.outpu
 assert.equal(productionSteps[qualifiedCheckout].with['persist-credentials'], false);
 assert.equal(productionSteps[resolveQualified]['working-directory'], '.');
 assert.equal(productionSteps[materializeQualified]['working-directory'], '.');
-assert.match(productionSteps[productionDeploy].run, /GITHUB_SHA="\$DEPLOYMENT_SOURCE_SHA" corepack yarn node/);
+assert.match(productionSteps[productionDeploy].run, /deploy-qualified-production\.mjs/);
 assert.equal(
   automaticQualification.jobs.deploy.defaults.run['working-directory'],
   "${{ inputs.qualified_publication_run_id != '' && 'qualified' || '.' }}",
