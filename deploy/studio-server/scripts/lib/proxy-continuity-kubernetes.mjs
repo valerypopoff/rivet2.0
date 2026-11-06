@@ -4,7 +4,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { assertProtectedProxyTemplate } from './request-continuity.mjs';
-import { createProxyContinuityTransition, buildProxyBridge } from './proxy-continuity-transition.mjs';
+import {
+  createProxyContinuityTransition,
+  assertProxyContinuityBaseline,
+  buildProxyBridge,
+} from './proxy-continuity-transition.mjs';
 import {
   hasReadyGkeNegGate,
   assertGkeProxyBackendHealth,
@@ -525,7 +529,7 @@ export function createKubernetesProxyContinuity({
       const deadline = now() + inspectionTimeoutMs;
       const baseline = await io.baseline({ deadline });
       assert.ok(now() < deadline, 'Timed out inspecting protected proxy availability');
-      buildProxyBridge(baseline, config, '00000000-0000-4000-8000-000000000000');
+      assertProxyContinuityBaseline(baseline, config);
       let protectedProxies = true;
       try {
         for (const p of [...baseline.proxyPods, baseline.deployment.spec.template])
@@ -533,6 +537,15 @@ export function createKubernetesProxyContinuity({
       } catch {
         protectedProxies = false;
       }
+      if (
+        !(
+          protectedProxies &&
+          baseline.backendServiceDrainSeconds >= config.profile.backendServiceDrainSeconds &&
+          baseline.policy.spec.default?.connectionDraining?.drainingTimeoutSec >=
+            config.profile.backendServiceDrainSeconds
+        )
+      )
+        buildProxyBridge(baseline, config, '00000000-0000-4000-8000-000000000000');
       return {
         protocol: 1,
         profile: config.profile,

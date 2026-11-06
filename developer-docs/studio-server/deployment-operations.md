@@ -40,6 +40,12 @@ is a production installation prerequisite, even when the chart creates none of
 that resource kind. Staging's different principal does not prove production
 access. Keep the inventory complete; review and authorize any required RBAC
 change separately instead of skipping denied resource types or retrying a rollout.
+Installed-state preflight also permits a proxy HPA policy already matching the
+exact qualified candidate on the same release-owned target. This covers an
+independently approved minimum change before Helm has saved the new policy.
+The installed policy remains valid until that change is applied; unrelated HPA
+drift, foreign targets, unhealthy scaling, missing capacity and workload drift
+still fail. Final rollout settlement always requires the actual rendered target.
 Protected ordinary singleton HA updates overlap native proxy/web replacement
 with backend/execution retirement. Only their template apply omits Helm's
 broad resource wait; the pre-upgrade schema hook remains enabled and blocking.

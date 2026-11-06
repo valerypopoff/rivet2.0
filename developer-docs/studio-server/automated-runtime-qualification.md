@@ -821,6 +821,13 @@ tests dispatch these branches through `providerProgressStep`, so an unregistered
 progress name fails locally rather than blocking a paid test or its cleanup.
 Quarantine verification closes cleanup only; it never qualifies a failed release.
 
+Retained accepted-work settlement reads the published-execution gauge on every
+execution worker and any combined backend. An explicitly configured `control`
+backend has no published-execution admission and does not initialize that gauge;
+its absence there is expected. Owner/controller identity and stable Pod membership
+remain checked for both roles. Missing worker/combined-backend metrics and nonzero
+accepted work still block settlement; they are never treated as zero.
+
 A failed first bootstrap before any fixture-folder intent can be recovered by an
 explicit operator inspection rather than reinstalling the application. Require
 the exact closed, cleanup-verified operation, absent actor, unchanged application,

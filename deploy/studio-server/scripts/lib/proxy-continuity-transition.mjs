@@ -66,24 +66,14 @@ const subset = (actual, expected) =>
       ? actual && typeof actual === 'object' && Object.entries(expected).every(([k, v]) => subset(actual[k], v))
       : equal(actual, expected);
 
-/** Only a new, separately selected ingress pool is created. No serving pod is
- * relabelled, adopted or deleted to retrofit its immutable lifecycle. */
-export function buildProxyBridge(baseline, config, token) {
-  const { profile, network, namespace, release } = config;
+/** Shared ingress ownership and routing checks also apply to ordinary updates. */
+export function assertProxyContinuityBaseline(baseline, config) {
+  const { profile, network, namespace } = config;
   assertRequestContinuityProfile(profile);
   assert.match(config.proxyImage ?? '', /^[^\s@]+@sha256:[a-f0-9]{64}$/, 'A pinned candidate proxy image is required');
   identity(baseline.hpa);
   assert.equal(baseline.hpa.spec.scaleTargetRef.kind, 'Deployment');
   assert.equal(baseline.hpa.spec.scaleTargetRef.name, baseline.deployment.metadata.name);
-  assert.ok(
-    subset(baseline.hpa.spec, config.hpaSpec),
-    'Changing proxy HPA policy during first adoption needs separate qualification',
-  );
-  const bridgeReplicas = baseline.hpa.spec.maxReplicas;
-  assert.ok(
-    Number.isSafeInteger(bridgeReplicas) && bridgeReplicas >= 2 && bridgeReplicas <= 4,
-    'Bridge capacity must retain the qualified proxy HPA ceiling',
-  );
   for (const r of [baseline.route, baseline.policy, baseline.service, baseline.deployment, baseline.gateway])
     identity(r);
   assert.equal(baseline.gateway.spec.gatewayClassName, 'gke-l7-regional-external-managed');
@@ -130,6 +120,31 @@ export function buildProxyBridge(baseline, config, token) {
       'Public route references an unknown proxy port',
     );
   }
+  const containers = baseline.deployment.spec.template.spec.containers;
+  assert.ok(containers?.length === 1, 'Only the reviewed single-container proxy is supported');
+  for (const c of containers) {
+    assert.match(c.image, /@sha256:[a-f0-9]{64}$/);
+    assert.ok(
+      !c.env?.some((e) => /KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL/.test(e.name) && e.value),
+      'Plaintext proxy credentials must not enter the operation journal',
+    );
+  }
+}
+
+/** Only a new, separately selected ingress pool is created. No serving pod is
+ * relabelled, adopted or deleted to retrofit its immutable lifecycle. */
+export function buildProxyBridge(baseline, config, token) {
+  assertProxyContinuityBaseline(baseline, config);
+  const { profile, namespace, release } = config;
+  assert.ok(
+    subset(baseline.hpa.spec, config.hpaSpec),
+    'Changing proxy HPA policy during first adoption needs separate qualification',
+  );
+  const bridgeReplicas = baseline.hpa.spec.maxReplicas;
+  assert.ok(
+    Number.isSafeInteger(bridgeReplicas) && bridgeReplicas >= 2 && bridgeReplicas <= 4,
+    'Bridge capacity must retain the qualified proxy HPA ceiling',
+  );
   const name = `${release.slice(0, 24)}-pc-${hash(token).slice(0, 10)}`;
   const labels = { 'app.kubernetes.io/instance': name, 'app.kubernetes.io/component': 'proxy-bridge', [marker]: token };
   const metadata = { name, namespace, labels, annotations: { [marker]: token } };
@@ -139,16 +154,10 @@ export function buildProxyBridge(baseline, config, token) {
   template.metadata.labels = { ...template.metadata.labels, ...labels };
   template.metadata.annotations = { ...template.metadata.annotations, [marker]: token };
   template.spec.terminationGracePeriodSeconds = profile.proxyTerminationGracePeriodSeconds;
-  assert.ok(template.spec.containers?.length === 1, 'Only the reviewed single-container proxy is supported');
   for (const c of template.spec.containers) {
-    assert.match(c.image, /@sha256:[a-f0-9]{64}$/);
     // The bridge serves throughout API retirement, so it must carry the
     // candidate's connection policy while preserving installation settings.
     c.image = config.proxyImage;
-    assert.ok(
-      !c.env?.some((e) => /KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL/.test(e.name) && e.value),
-      'Plaintext proxy credentials must not enter the operation journal',
-    );
     c.lifecycle = { preStop: { exec: { command: ['/bin/sh', '-c', `sleep ${profile.proxyPreStopDelaySeconds}`] } } };
   }
   // Rebind only selectors that actually selected the original proxy peers.
@@ -489,9 +498,7 @@ export function createProxyContinuityTransition({
       if (!stateOf(operation)) {
         const baseline = await io.baseline(config);
         assert.ok(baseline.namespaceUid && baseline.proxyPods?.length >= config.hpaSpec.minReplicas);
-        // Validate the same route, HPA and source-template contract under the
-        // owned lease even when no bootstrap resources will be needed.
-        const bridge = buildProxyBridge(baseline, config, operation.record.token);
+        assertProxyContinuityBaseline(baseline, config);
         const protectedAlready = baseline.proxyPods.every((p) => {
           try {
             assertProtectedProxyTemplate(p, config.profile);
@@ -523,6 +530,7 @@ export function createProxyContinuityTransition({
           });
           return;
         }
+        const bridge = buildProxyBridge(baseline, config, operation.record.token);
         // Verify provider admission before creating any pool or freezing HPA.
         // Autopilot can reduce a requested Pod termination budget on admission.
         if (io.admit) {

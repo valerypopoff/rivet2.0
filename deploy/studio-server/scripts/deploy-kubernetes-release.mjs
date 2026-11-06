@@ -1196,6 +1196,11 @@ async function main() {
       await waitForReleaseSettlement({
         kube: kubeForRelease,
         resources: currentResources,
+        candidateProxyHpa: renderedResources.find(
+          (resource) =>
+            resource.kind === 'HorizontalPodAutoscaler' &&
+            resource.metadata.labels?.['app.kubernetes.io/component'] === 'proxy',
+        ),
         release,
         namespace,
         timeoutMs: Math.min(timeoutMs, 30_000),

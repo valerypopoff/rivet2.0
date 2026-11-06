@@ -180,9 +180,46 @@ export function releaseReplicaBounds(resources, release, namespace) {
 
 /** Inspect a read-only namespace inventory. No settings, environment values or
  * Kubernetes error messages are copied into the returned diagnostic receipt. */
-export function inspectReleaseSettlement({ resources, items, release, namespace, retainedExecution = [] }) {
+export function inspectReleaseSettlement({
+  resources,
+  items,
+  release,
+  namespace,
+  retainedExecution = [],
+  candidateProxyHpa,
+}) {
   if (!Array.isArray(resources) || !Array.isArray(items) || !release || !namespace)
     throw new Error('Release settlement requires rendered resources and a namespace inventory.');
+  // Fresh production preflight can encounter the qualified proxy policy already
+  // applied independently of Helm. Accept only that exact policy on the same
+  // existing target; normal/final settlement keeps its strict rendered contract.
+  if (
+    candidateProxyHpa?.kind === 'HorizontalPodAutoscaler' &&
+    candidateProxyHpa.metadata?.labels?.[releaseLabel] === release &&
+    candidateProxyHpa.metadata?.labels?.[componentLabel] === 'proxy' &&
+    (!candidateProxyHpa.metadata.namespace || candidateProxyHpa.metadata.namespace === namespace)
+  ) {
+    resources = resources.map((resource) => {
+      if (
+        resource.kind !== 'HorizontalPodAutoscaler' ||
+        resource.metadata?.name !== candidateProxyHpa.metadata.name ||
+        resource.metadata?.labels?.[releaseLabel] !== release ||
+        resource.metadata?.labels?.[componentLabel] !== 'proxy' ||
+        (resource.metadata.namespace && resource.metadata.namespace !== namespace) ||
+        serialized(resource.spec.scaleTargetRef) !== serialized(candidateProxyHpa.spec.scaleTargetRef)
+      )
+        return resource;
+      const live = items.filter(
+        (item) =>
+          item.kind === resource.kind &&
+          item.metadata?.name === resource.metadata.name &&
+          item.metadata.namespace === namespace,
+      );
+      if (live.length !== 1 || serialized(hpaPolicy(live[0])) !== serialized(hpaPolicy(candidateProxyHpa)))
+        return resource;
+      return { ...resource, spec: structuredClone(candidateProxyHpa.spec) };
+    });
+  }
   const expected = resources.filter((resource) => workloadKinds.has(resource.kind));
   if (
     !expected.length ||
@@ -524,6 +561,7 @@ export async function waitForReleaseSettlement({
   timeoutMs,
   stableMs = 30_000,
   retainedExecution = [],
+  candidateProxyHpa,
   clock = { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
   artifact = async () => {},
 }) {
@@ -597,7 +635,14 @@ export async function waitForReleaseSettlement({
     } catch {
       throw new Error('Could not parse release settlement inventory.');
     }
-    const inspection = inspectReleaseSettlement({ resources, items, release, namespace, retainedExecution });
+    const inspection = inspectReleaseSettlement({
+      resources,
+      items,
+      release,
+      namespace,
+      retainedExecution,
+      candidateProxyHpa,
+    });
     const now = clock.now();
     if (!inspection.settled) stableSince = null;
     else if (

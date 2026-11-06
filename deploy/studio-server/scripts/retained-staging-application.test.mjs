@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, settings, operation, actor } from './test-fixtures/reusable-staging.mjs';
-import { ReusableStagingState, reusableStagingSettings } from './lib/reusable-staging-state.mjs';
+import { ReusableStagingState, reusableStagingSettings, stagingOwner } from './lib/reusable-staging-state.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
 import { cleanupStaging } from './lib/reusable-staging-cleanup.mjs';
 import { retainedApplicationSettings } from './lib/retained-staging-application.mjs';
@@ -234,6 +234,85 @@ test('an expired/failed test without accepted fixtures quarantines safely and pr
     false,
   );
 });
+
+for (const [profile, missing, active] of [
+  ['control', undefined, false],
+  ['combined', undefined, false],
+  ['control', 'execution', false],
+  ['combined', 'backend', false],
+  ['control', undefined, true],
+]) {
+  test(`retained settlement follows published-execution capability (${profile}, missing ${missing}, active ${active})`, async (t) => {
+    const { state, store } = await retained(t);
+    await state.arm(actor);
+    const namespace = await state.namespace({ create: true });
+    await state.change((record) => {
+      record.fixtureFolder = { relativePath: 'owned', namespaceId: 'owned-id' };
+    });
+    const { record } = await state.read(),
+      probes = [];
+    for (const role of ['backend', 'execution']) {
+      const name = `${record.release}-${role}`;
+      const metadata = {
+        name,
+        namespace: namespace.metadata.name,
+        labels: {
+          [stagingOwner]: state.operation.operationId,
+          'app.kubernetes.io/instance': record.release,
+          'app.kubernetes.io/component': role,
+        },
+      };
+      const controller = store(`/apis/apps/v1/namespaces/${namespace.metadata.name}/statefulsets/${name}`, {
+        metadata,
+      });
+      store(`/api/v1/namespaces/${namespace.metadata.name}/pods/${name}-0`, {
+        metadata: {
+          ...metadata,
+          name: `${name}-0`,
+          ownerReferences: [{ name, uid: controller.metadata.uid, controller: true, kind: 'StatefulSet' }],
+        },
+        spec: {
+          containers: [
+            {
+              name: role === 'backend' ? 'backend' : 'api',
+              env: [{ name: 'RIVET_API_PROFILE', value: role === 'backend' ? profile : 'execution' }],
+            },
+          ],
+        },
+        status: { phase: 'Running' },
+      });
+    }
+    let executionSamples = 0,
+      observations = 0;
+    state.api.exec = async (url, _command, options) => {
+      const role = url.includes('-backend-') ? 'backend' : 'execution';
+      probes.push(role);
+      assert.equal(options.container, role === 'backend' ? 'backend' : 'api');
+      if (role === missing || (role === 'backend' && profile === 'control')) return '';
+      const running = role === 'execution' && active && executionSamples++ === 0;
+      return `rivet_published_execution_active_runs{profile="${role === 'backend' ? profile : 'execution'}"} ${running ? 1 : 0}\n`;
+    };
+    const settle = () =>
+      settleRetainedStaging(state, actor, async (_label, check) => {
+        for (let i = 0; i < 3; i++) {
+          observations++;
+          if (await check()) return;
+          assert.notEqual((await state.read()).record.acceptedWorkSettled, true);
+        }
+        assert.fail('Accepted work did not settle');
+      });
+    if (missing) {
+      await assert.rejects(settle(), /Accepted work inventory is unconfirmed/);
+      assert.notEqual((await state.read()).record.acceptedWorkSettled, true);
+    } else {
+      await settle();
+      assert.equal((await state.read()).record.acceptedWorkSettled, true);
+      assert.equal(observations, active ? 2 : 1);
+      assert.equal(probes.includes('backend'), profile === 'combined');
+      assert.ok(probes.includes('execution'));
+    }
+  });
+}
 
 test('retained cleanup and verification run through the actual provider progress wrapper', async (t) => {
   const { state, requests } = await retained(t);
