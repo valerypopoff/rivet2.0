@@ -687,7 +687,8 @@ for (const fault of ['none', 'admission', 'lost-ack', 'interrupt'])
       assert.equal(summary.admitted[0].containers[0].resources.requests.cpu, '500m');
       assert.deepEqual(app.failures, []);
       assert.ok(app.requests.length >= 20);
-      assert.ok(steps.includes('oauth') && steps.includes('inventory'));
+      assert.ok(steps.includes('persistence') && steps.includes('inventory'));
+      assert.equal(app.requests.filter((route) => route.endsWith('/web-app-auth')).length, 1);
     }
     t.diagnostic(
       JSON.stringify({ tools, nativeAdmissionWorkloads: admitted.length, steps, cleanup: cleanup.inventoryComplete }),

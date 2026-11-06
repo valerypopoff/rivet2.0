@@ -1507,6 +1507,81 @@ test('shared persistence seed carries real UI/Bearer authentication through ever
   assert.ok(requests.length >= 20);
 });
 
+for (const oauth of [false, true])
+  test(`provider persistence authenticates HTML, actions and sockets with ${oauth ? 'retained OAuth' : 'fresh settings'}`, async (t) => {
+    const gate = Object.create(ReusableProviderGate.prototype);
+    gate.secrets = { rivetKey: 'staging-only' };
+    gate.uiCookie = 'rivet_ui_token=fixture-only';
+    gate.operation = { startedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 7200000).toISOString() };
+    const app = await persistenceFixture(t, { headers: () => gate.probeHeaders, oauth });
+    gate.config = { baseUrl: app.origin };
+    const before = await fetch(`${app.origin}/apps/release-gate-web-app`, { headers: gate.probeHeaders });
+    assert.equal(before.status, oauth ? 401 : 200);
+    await before.body?.cancel();
+    const result = await gate.exercisePersistence(app.origin);
+    assert.equal(result.projectId, app.projectId);
+    assert.deepEqual(app.failures, []);
+    assert.equal(app.requests.filter((route) => route.endsWith('/web-app-auth')).length, 1);
+    assert.ok(
+      app.requests.indexOf('/api/workflows/projects/web-apps/access') <
+        app.requests.indexOf('/apps-latest/release-gate-web-app'),
+    );
+  });
+
+test('web-app diagnostics reject login pages, redirects and bad responses without exporting secrets or following redirects', async (t) => {
+  let response = { status: 401, type: 'text/html', body: '<title>Sign in required</title>private-test-sentinel' };
+  let followed = false;
+  const server = http.createServer((req, res) => {
+    if (req.url === '/unexpected-redirect') followed = true;
+    res.writeHead(response.status, {
+      'content-type': response.type,
+      location: '/unexpected-redirect',
+      'set-cookie': 'private-test-sentinel=do-not-export',
+    });
+    res.end(response.body);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const gate = new ManagedReleaseGate({}, 'unused-kubectl', 'unused-helm');
+  const artifacts = new Map();
+  gate.artifact = async (name, content) => artifacts.set(name, JSON.parse(content));
+  for (const [status, type, body] of [
+    [401, 'text/html', response.body],
+    [302, 'text/html', 'Managed release gate app'],
+    [502, 'text/html', 'private-test-sentinel'],
+    [200, 'text/html', 'Wrong app private-test-sentinel'],
+    [200, 'application/json', 'Managed release gate app'],
+  ]) {
+    response = { status, type, body };
+    await assert.rejects(
+      gate.readWebAppHtml(`http://127.0.0.1:${server.address().port}`, '/apps/release-gate-web-app'),
+      (error) => {
+        assert.match(error.message, new RegExp(`GET /apps/release-gate-web-app returned ${status}`));
+        assert.equal(error.httpEvidence.status, status);
+        assert.equal(error.httpEvidence.bodyBytes, Buffer.byteLength(body));
+        assert.equal(error.httpEvidence.signInRequired, status === 401);
+        assert.doesNotMatch(
+          JSON.stringify({ message: error.message, evidence: error.httpEvidence }),
+          /private-test-sentinel/,
+        );
+        return true;
+      },
+    );
+    assert.equal(artifacts.get('web-app-response-published.json').status, status);
+  }
+  assert.equal(followed, false);
+  gate.artifact = async () => {
+    throw new Error('diagnostic disk unavailable');
+  };
+  await assert.rejects(
+    gate.readWebAppHtml(`http://127.0.0.1:${server.address().port}`, '/apps-latest/release-gate-web-app'),
+    /returned 200/,
+  );
+});
+
 test('actual package has a closed hash manifest, import-safe CLI boundaries and independent pinned janitor manifests', async (t) => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-staging-package-'));
   t.after(() => fs.rm(folder, { recursive: true }));

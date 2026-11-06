@@ -778,6 +778,33 @@ count when the reviewed provider installation has one proxy.
 
 ### Optional retained application
 
+The persistence fixture publishes its project, configures its isolated dummy OAuth
+provider and allowlisted test account, and obtains a web-app session **before**
+reading HTML or submitting actions. This order applies to fresh and retained
+installations: retained settings can already require OAuth. Reconfiguring OAuth
+after seeding would invalidate the session, so preparation performs this once and
+stores the project identity with the persisted fixture state.
+
+The configured `trustedClients` in the qualification settings becomes
+`RIVET_DEVELOPMENT_AUTH_CLIENTS`: it authorizes the dummy sign-in flow. It is not
+the persisted app-settings trusted-client policy and does not bypass web-app
+authentication. Editor key/UI authentication alone cannot satisfy web-app OAuth.
+Both `/apps/` and `/apps-latest/`, including HTTP actions and the initial published
+WebSocket action, use the web-app session alongside the existing editor cookie.
+Other API requests keep their editor credentials only.
+
+Fixture HTML probes reject redirects, non-200 responses and unexpected HTML.
+Failures include the route and HTTP status and save `web-app-response-*.json`
+with status, format, byte count, body SHA-256 and a fixed sign-in-page indicator.
+They do not export raw HTML, cookies, response headers or redirect targets.
+These failures remain qualification failures; authentication is fixed in setup
+rather than bypassed or retried.
+
+Local regressions: `reusable-staging.test.mjs` exercises fresh/retained fixture
+setup through HTTP and WebSockets; API test `release-gate-web-app-auth.test.ts`
+uses the real settings, dummy OAuth, published/latest HTML and action routes.
+These local checks do not replace provider qualification.
+
 Focused reusable staging can additionally specify `retainedApplication` with
 `protocol: 2`, a fixed `rivet-staging-*` namespace and permanent ConfigMap
 `recordName`, plus the existing fixed staging hostname. This is an opt-in
@@ -827,6 +854,44 @@ backend has no published-execution admission and does not initialize that gauge;
 its absence there is expected. Owner/controller identity and stable Pod membership
 remain checked for both roles. Missing worker/combined-backend metrics and nonzero
 accepted work still block settlement; they are never treated as zero.
+
+### Explicit cleanup-only recovery
+
+`lib/retained-qualification-recovery.mjs` supports an operator-approved recovery
+when a focused retained rollout passed but settlement/cleanup prevented the final
+qualification. It revalidates the original hash-bound guard, preparation and
+rollout receipts through the existing coordinator; it does not create fixtures,
+roll Pods or invent a new observation window. Invalid traffic, changed report
+bytes, a failed rollout-validation phase, unknown writes or different application
+identities cannot use this path. Recovery must fit inside the original operation
+window and its separately bounded cleanup deadline.
+
+Hold the shared qualification lock, verify the exact candidate remains installed,
+and inspect the closed, cleanup-verified quarantine with the actor physically
+absent. Persist the reviewed plan before CAS changes. The application is acquired
+for the same operation/registry/input identities; the old cleanup receipt and failed
+worker history stay under `retainedRecovery`. The original cleanup-owner UID is
+only a fencing token for the authorized operator, not a claim that its deleted
+actor is running. No new provider worker or paid test is admitted.
+
+The operator driver runs fresh accepted-work settlement, guarded fixture cleanup,
+installed-image/LB/authenticated-route checks and retained cleanup verification.
+Only an idle, healthy, data-cleaned application permits qualification compilation.
+The operator uses its existing credentials for read-only GCP health observations;
+it does not repeat the synthetic actor-network/OAuth login proof already captured
+by the rollout. Original report hashes, timestamps and tested tooling identity are
+preserved, and the original failed GitHub run remains failed. Persist recovery
+intent, phase records and final cleanup receipt in a separate private evidence
+prefix; never overwrite the original journal.
+
+Publish the resulting operator declarations with the existing **Publish qualified
+runtime HA** manual workflow, selecting the original successful application build
+and tested tooling publication. Its normal source, chart, safety fingerprint and
+publication-pointer checks still apply. Do not rebind the observations to newer
+untested tooling or bypass a changed pointer. Source repairs can remain reviewed
+locally during this recovery; publication uses the original clean tested main
+revision. A later tooling repair publication does not require rebuilding the
+application images. This recovery does not authorize production deployment.
 
 A failed first bootstrap before any fixture-folder intent can be recovered by an
 explicit operator inspection rather than reinstalling the application. Require

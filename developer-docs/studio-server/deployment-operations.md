@@ -10,6 +10,38 @@ The **Release Rivet** Actions workflow supplies those fixed inputs from an
 existing Build Images run and successful reusable-staging qualification. Its
 protected production action runs this command once; `deploy_production=false`
 stops at publication. See [automated qualification](automated-runtime-qualification.md).
+For operator-controlled, single-attempt staging activations, keep the repository
+and `rivet-managed-staging` copies of `RIVET_AUTOMATED_QUALIFICATION_ENABLED`
+closed between attempts. One operator command runs read-only preflight, checks
+both flags and approved limits, and binds the application/tooling/source to the
+fresh approval before enabling admission. Persist each write intent first,
+enable and verify both flags, dispatch once, then monitor the recorded run.
+Close admission after the staging execution step captures its environment, or
+when the workflow stops earlier. Never reopen a completed campaign.
+
+Recovery observes the recorded run or uniquely identifies it by workflow, main
+branch, actor, source and the frozen dispatch creation window. The private
+operator limits that window to sixty seconds; a later same-source run cannot
+stand in for the original dispatch. Check active statuses directly, including
+queued/waiting runs outside the latest history page. Only reads receive bounded
+retries; uncertain writes are not replayed. Interrupted closure may observe an
+already-false flag and close an untouched scope. An issued close still reading
+true requires explicit reconciliation. Keep private failure diagnostics and
+simulate the complete activation/recovery path locally before a paid test.
+
+Preflight exit codes distinguish ready (0), failed checks (1) and a known pending
+handoff (2). Verify the exact tooling publication artifact, not an unrelated live
+artifact. A zero-work proof needs execution workers, explicit zero metrics and
+unchanged owner identities across sampling; only an explicit control backend is
+exempt from that gauge. Report namespace identity separately from storage
+durability, and secret metadata separately from unreadable payload contents.
+Resolve the retained release from its verified rollout journal; connection
+settings do not carry a Helm release name for Pod selectors.
+Hosted setup and qualification still validate their actual settings and data.
+Restoring the previous qualified channel during cleanup can require a reviewed
+same-application metadata handoff before another dispatch. It does not require a
+new baseline rollout or image build. Input-validation failure is not evidence
+that a staging rollout ran and failed.
 For an already published qualification, dispatch the same workflow with only
 `qualified_publication_run_id` and `deploy_production=true`. Its production-only
 mode skips build admission, staging and publication and checks out the exact

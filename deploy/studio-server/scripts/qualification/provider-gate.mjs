@@ -54,7 +54,13 @@ export async function until(label, check, timeoutMs = 1200000) {
 const imageDigest = (manifest) =>
   getStudioServerReleaseManifestDigest(manifest, { requirePromoted: manifest.state === 'promoted' });
 export class ReusableProviderGate extends RuntimeControlLocalGate {
-  constructor(operation, settings, state, privateDirectory, { runRollout = runHaKubernetesRollout } = {}) {
+  constructor(
+    operation,
+    settings,
+    state,
+    privateDirectory,
+    { runRollout = runHaKubernetesRollout, accessToken = stagingAccessToken } = {},
+  ) {
     const namespace = operation.retainedApplication?.namespace ?? `rivet-staging-${operation.operationId}`,
       release = 'rivet-qualification';
     const config = {
@@ -90,9 +96,10 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.identity = { clusterServer: settings.clusterServer, expiresAt: operation.expiresAt };
     this.journalName = releaseOperationJournalName(release);
     this.runRollout = runRollout;
+    this.accessToken = accessToken;
     this.observeProxyBackend = createComputeBackendObserver(
       { gcpProject: settings.projectId, gcpRegion: settings.region },
-      { accessToken: stagingAccessToken, minimumRequestSeconds: 0 },
+      { accessToken: this.accessToken, minimumRequestSeconds: 0 },
     );
   }
   async assertLocalContext() {
@@ -444,7 +451,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         createProxyContinuity: (args) =>
           createKubernetesProxyContinuity({
             ...args,
-            observeBackend: createComputeBackendObserver(args.config.network, { accessToken: stagingAccessToken }),
+            observeBackend: createComputeBackendObserver(args.config.network, { accessToken: this.accessToken }),
           }),
         timeoutMs: this.operation.requestContinuityProfile
           ? continuityTimeoutMs(this.operation.requestContinuityProfile)
@@ -831,7 +838,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       redirect: 'manual',
       headers: {
         ...options.headers,
-        cookie: [this.uiCookie, route.startsWith('/apps/') ? this.publicAppCookie : ''].filter(Boolean).join('; '),
+        cookie: this.uiCookie,
       },
     });
   }
@@ -863,7 +870,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
         )?.spec,
       },
       timeoutMs: continuityTimeoutMs(continuity.profile),
-      observeBackend: createComputeBackendObserver(continuity.network, { accessToken: stagingAccessToken }),
+      observeBackend: createComputeBackendObserver(continuity.network, { accessToken: this.accessToken }),
     }).inspect({ timeoutMs });
   }
   async readyPublic() {
@@ -873,6 +880,8 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     await this.verifyClientProvenance();
   }
   async verifyClientProvenance() {
+    // This allowlist grants development-provider login, not the persisted
+    // trusted-client bypass. Web-app requests still need their OAuth session.
     const observed = await this.requestWorkflow(
       this.config.baseUrl,
       '/api/app-settings/trusted-clients/current-request',

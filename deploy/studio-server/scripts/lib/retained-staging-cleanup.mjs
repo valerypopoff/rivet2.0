@@ -21,6 +21,17 @@ export async function settleRetainedStaging(state, owner, wait) {
     return [];
   }
   await settleStagingProcesses(state, wait);
+  await waitForRetainedAcceptedWork(state, wait);
+  await state.change((current) => {
+    current.phase = 'settled';
+    current.inventory = [];
+    current.acceptedWorkSettled = true;
+  });
+  return [];
+}
+
+/** Read-only accepted-work proof, also used by explicit cleanup-only recovery. */
+export async function waitForRetainedAcceptedWork(state, wait) {
   const { record } = await state.read(),
     ns = encodeURIComponent(record.namespace);
   if (record.fixtureFolder && !['idle', 'quarantined'].includes(record.retainedCleanup?.phase))
@@ -85,12 +96,6 @@ export async function settleRetainedStaging(state, owner, wait) {
         JSON.stringify(after.map((pod) => pod.metadata.uid).sort())
       );
     });
-  await state.change((current) => {
-    current.phase = 'settled';
-    current.inventory = [];
-    current.acceptedWorkSettled = true;
-  });
-  return [];
 }
 
 async function cleanupFixtureProjects(state, gate, folder) {
