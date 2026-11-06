@@ -5,6 +5,7 @@ import { handoverHousekeeping } from './housekeeping-handover.mjs';
 import { inspectBackendOverlap } from './backend-overlap-preflight.mjs';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { readReleaseOperationJournal } from './release-operation-journal-reader.mjs';
+import { claimHaReleaseJournal } from './deployment-readiness.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { hasHaPublicEndpoint, waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
@@ -305,6 +306,7 @@ export async function runHaKubernetesRollout({
     throw Error('singleton-overlap requires authenticated per-backend developer acceptance before cluster access.');
   const name = releaseOperationJournalName(release);
   let observedJournalVersion;
+  let observedJournalResource;
   const readJournal = () =>
     readReleaseOperationJournal({
       kind: 'ha',
@@ -314,9 +316,11 @@ export async function runHaKubernetesRollout({
         const raw = (await kube(['get', 'configmap', name, '--ignore-not-found', '-o', 'json'])).stdout;
         if (!raw.trim()) {
           observedJournalVersion = undefined;
+          observedJournalResource = null;
           return { record: null };
         }
         const cm = JSON.parse(raw);
+        observedJournalResource = cm;
         observedJournalVersion = cm.metadata.resourceVersion;
         return {
           uid: cm.metadata.uid,
@@ -673,13 +677,19 @@ export async function runHaKubernetesRollout({
     timeoutMs,
     readJournal,
     saveJournal: async (record, resourceVersion) => {
-      if (!record.resourceVersion) {
-        const latest = await readJournal();
-        if (latest && latest.phase !== 'complete')
-          throw Error('Another release operation acquired the journal during preflight.');
-        resourceVersion = observedJournalVersion;
-      }
       const { resourceVersion: _, ...data } = record;
+      if (!record.resourceVersion) {
+        const saved = await claimHaReleaseJournal({
+          kube,
+          name,
+          release,
+          namespace,
+          timeoutMs,
+          previousResource: observedJournalResource,
+          record: data,
+        });
+        return { ...data, resourceVersion: saved.metadata.resourceVersion };
+      }
       const expectedVersion = resourceVersion ?? observedJournalVersion;
       const cm = {
         apiVersion: 'v1',

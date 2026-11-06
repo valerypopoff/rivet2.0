@@ -218,6 +218,16 @@ acknowledgements retain the existing exact-token recovery fence. The live
 Kubernetes journal is authoritative for lease state; private artifacts capture
 transition snapshots rather than every heartbeat.
 
+Initial HA journal acquisition tolerates a completed autoscaler sample racing
+the ownership CAS. Only the exact Kubernetes resourceVersion-conflict response
+for that ConfigMap permits a fresh claim, with at most three writes within a
+30-second admission window. Every attempt rechecks the original journal UID,
+release/manifest/policy bindings, completed state, lack of pending autoscaler
+work and settled sampling lease. A changed journal or competing release stops
+admission. Creates, lost/malformed acknowledgements and later owned checkpoints
+are never replayed. Local regressions cover the real initial-claim race and its
+failure boundaries; they do not qualify a cloud rollout.
+
 ## Ordinary seven-pod qualification and headroom
 
 The opt-in [bounded request-continuity profile](production-update-continuity.md)

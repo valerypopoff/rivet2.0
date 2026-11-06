@@ -12,6 +12,7 @@ const suites = [
   'deploy/studio-server/scripts/candidate-image-smoke.test.mjs',
   'deploy/studio-server/scripts/ha-rolling-upgrade.test.mjs',
   'deploy/studio-server/scripts/deployment-workflow.test.mjs',
+  'deploy/studio-server/scripts/deployment-readiness.test.mjs',
   'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',
   'deploy/studio-server/scripts/release-operation-journal.test.mjs',
   'deploy/studio-server/scripts/read-concurrently.test.mjs',

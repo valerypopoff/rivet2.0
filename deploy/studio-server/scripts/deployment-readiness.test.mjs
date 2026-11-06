@@ -7,6 +7,7 @@ import {
   assertCutoverVerificationTarget,
   assertNoExecutionStartupFences,
   readAvailableReleaseJournal,
+  claimHaReleaseJournal,
 } from './lib/deployment-readiness.mjs';
 
 test('final configuration comparison ignores only hooks and private CAS guards, not application policy', () => {
@@ -322,4 +323,199 @@ test('claim refresh accepts only the original journal and bindings; completed sa
       /owner changed/,
     );
   }
+});
+
+function initialClaimFixture({ absent = false, autoscaling = true } = {}) {
+  const oldRecord = {
+    release: 'rivet',
+    namespace: 'ns',
+    manifestDigest: 'installed',
+    policyDigest: 'policy',
+    phase: 'complete',
+    token: 'sample',
+    runner: 'controller',
+    leaseExpiresAt: 0,
+    ...(autoscaling ? { autoscalingProtocol: 1 } : { protocol: 1 }),
+  };
+  const f = {
+    reads: 0,
+    writes: 0,
+    time: 100,
+    current: absent
+      ? null
+      : {
+          metadata: { name: 'journal', namespace: 'ns', uid: 'original', resourceVersion: '1' },
+          data: { record: JSON.stringify(oldRecord) },
+        },
+  };
+  const previousResource = structuredClone(f.current);
+  f.conflict = (name = 'journal') =>
+    Error(
+      `Error from server (Conflict): error when replacing "STDIN": Operation cannot be fulfilled on configmaps "${name}": the object has been modified; please apply your changes to the latest version and try again`,
+    );
+  f.advance = () => {
+    f.current.metadata.resourceVersion = String(Number(f.current.metadata.resourceVersion) + 1);
+    f.current.data.record = JSON.stringify({ ...JSON.parse(f.current.data.record), lastSampleAt: f.time++ });
+  };
+  f.claim = () =>
+    claimHaReleaseJournal({
+      name: 'journal',
+      release: 'rivet',
+      namespace: 'ns',
+      timeoutMs: 300,
+      previousResource,
+      record: {
+        protocol: 1,
+        release: 'rivet',
+        namespace: 'ns',
+        manifestDigest: 'candidate',
+        token: 'new-operation',
+        runner: 'updater',
+        phase: 'preflight',
+        leaseExpiresAt: 1000,
+      },
+      now: () => f.time,
+      sleep: async (ms) => {
+        f.time += ms;
+      },
+      kube: async (args, extra) => {
+        if (args[0] === 'get') {
+          f.reads++;
+          return { stdout: f.current ? JSON.stringify(f.current) : '' };
+        }
+        f.writes++;
+        const next = JSON.parse(extra.input);
+        await f.beforeWrite?.(next);
+        assert.equal(next.metadata.resourceVersion, f.current?.metadata.resourceVersion);
+        f.current = {
+          ...next,
+          metadata: { ...next.metadata, uid: 'original', resourceVersion: String(f.writes + 10) },
+        };
+        await f.afterWrite?.();
+        return { stdout: f.malformed ? '{' : JSON.stringify(f.current) };
+      },
+    });
+  return f;
+}
+
+test('initial HA claim refreshes a rejected completed autoscaler sample, preserving operation identity', async () => {
+  const f = initialClaimFixture();
+  f.beforeWrite = () => {
+    if (f.writes === 1) {
+      f.advance();
+      throw f.conflict();
+    }
+  };
+  const saved = await f.claim();
+  assert.equal(f.writes, 2);
+  assert.equal(f.reads, 2);
+  assert.equal(saved.metadata.uid, 'original');
+  assert.equal(JSON.parse(saved.data.record).token, 'new-operation');
+});
+
+test('claim refresh refuses replacement journals, changed bindings, pending work and competing owners', async () => {
+  for (const edit of [
+    (f) => {
+      f.current = null;
+    },
+    (f) => {
+      f.current.metadata.uid = 'replacement';
+    },
+    (f) => {
+      f.current.metadata.deletionTimestamp = 'now';
+    },
+    ...[
+      'manifestDigest',
+      'policyDigest',
+      'release',
+      'namespace',
+      'protocol',
+      'autoscalingProtocol',
+      'formatVersion',
+    ].map((key) => (f) => {
+      f.current.data.record = JSON.stringify({ ...JSON.parse(f.current.data.record), [key]: 'changed' });
+    }),
+    ...['scale', 'target', 'fence', 'fenceRepair', 'removal'].map((key) => (f) => {
+      f.current.data.record = JSON.stringify({ ...JSON.parse(f.current.data.record), [key]: { pending: true } });
+    }),
+    (f) => {
+      f.current.data.record = JSON.stringify({ ...JSON.parse(f.current.data.record), phase: 'fencing' });
+    },
+    (f) => {
+      f.current.data.record = JSON.stringify({ ...JSON.parse(f.current.data.record), leaseExpiresAt: 10000 });
+    },
+  ]) {
+    const f = initialClaimFixture();
+    f.beforeWrite = () => {
+      f.advance();
+      edit(f);
+      throw f.conflict();
+    };
+    await assert.rejects(f.claim());
+    assert.equal(f.writes, 1, 'Changed authority must stop before another ownership write');
+  }
+});
+
+test('claim never retries creates, ambiguous acknowledgements, unrelated conflicts or completed HA writes', async () => {
+  for (const scenario of [
+    'create',
+    'lost-ack',
+    'malformed-ack',
+    'wrong-uid-ack',
+    'wrong-token-ack',
+    'wrong-object',
+    'timeout',
+    'generic-conflict',
+    'forbidden',
+    'completed-ha',
+  ]) {
+    const f = initialClaimFixture({ absent: scenario === 'create', autoscaling: scenario !== 'completed-ha' });
+    if (scenario === 'lost-ack')
+      f.afterWrite = () => {
+        throw Error('Connection closed after accepted write');
+      };
+    else if (scenario === 'malformed-ack') f.malformed = true;
+    else if (scenario === 'wrong-uid-ack')
+      f.afterWrite = () => {
+        f.current.metadata.uid = 'different';
+      };
+    else if (scenario === 'wrong-token-ack')
+      f.afterWrite = () => {
+        f.current.data.record = JSON.stringify({ ...JSON.parse(f.current.data.record), token: 'different' });
+      };
+    else
+      f.beforeWrite = () => {
+        if (scenario === 'wrong-object') throw f.conflict('foreign');
+        if (scenario === 'timeout') {
+          const error = f.conflict();
+          error.name = 'TimeoutError';
+          throw error;
+        }
+        if (scenario === 'generic-conflict') throw Error('Error from server (Conflict): unknown conflict');
+        if (scenario === 'forbidden') throw Error('Error from server (Forbidden): access denied');
+        throw f.conflict();
+      };
+    await assert.rejects(f.claim());
+    assert.equal(f.writes, 1, scenario);
+    assert.equal(f.reads, 1, scenario);
+  }
+});
+
+test('initial claim bounds conflict refreshes by both count and deadline', async () => {
+  for (const expired of [false, true]) {
+    const f = initialClaimFixture();
+    f.beforeWrite = () => {
+      f.advance();
+      if (expired) f.time += 301;
+      throw f.conflict();
+    };
+    await assert.rejects(f.claim());
+    assert.equal(f.writes, expired ? 1 : 3);
+  }
+  const leased = initialClaimFixture({ autoscaling: false });
+  leased.current.data.record = JSON.stringify({ ...JSON.parse(leased.current.data.record), leaseExpiresAt: 10000 });
+  await assert.rejects(leased.claim(), /acquired the journal/);
+  assert.equal(leased.writes, 0);
+  await assert.rejects(claimHaReleaseJournal({ timeoutMs: 0 }), /bounded positive timeout/);
+  await assert.rejects(claimHaReleaseJournal({ timeoutMs: 300 }), /preflight resource or explicit absence/);
 });
