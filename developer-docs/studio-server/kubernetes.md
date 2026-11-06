@@ -57,6 +57,9 @@ updated chart/tooling before the next approved rollout; do not combine an edge
 resize with `--ha-control-plane-transition`. That separate ownership-transfer
 procedure still requires at least two compact proxies; restore spare edge
 capacity before requesting it.
+The deployment-command ownership-transfer fixture therefore explicitly selects
+two proxies, HPA minimum two and two-zone placement; ordinary compact defaults
+must not silently change that separate recovery test.
 
 The locally prepared installation bundle now encodes those three one-proxy
 settings together. Its verifier compares decoded values against the successful
