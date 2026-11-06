@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { parseAllDocuments, stringify } from 'yaml';
 import { packageReusableStaging } from './package-reusable-staging.mjs';
 import { privateCloudEvidence } from './lib/private-cloud-evidence.mjs';
@@ -142,6 +143,10 @@ async function prepareHostedReleaseWork(
   };
   const p = configuration.production;
   assertClusterIdentity(p);
+  if (p.proxyMinimum !== undefined) {
+    assert.ok([1, 2].includes(p.proxyMinimum), 'Reviewed proxy minimum must be one or two');
+    variables.RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM = String(p.proxyMinimum);
+  }
   for (const [key, value] of Object.entries({
     CONTEXT: p.context,
     NAMESPACE: p.namespace,
@@ -315,7 +320,19 @@ async function prepareHostedReleaseWork(
     const installation = JSON.parse(await fs.readFile(file, 'utf8'));
     const values = path.join(directory, 'values.json'),
       policy = path.join(directory, 'policy.json');
-    await fs.writeFile(values, Buffer.from(installation.valuesBase64, 'base64'), { flag: 'wx', mode: 0o600 });
+    const valuesBytes = Buffer.from(installation.valuesBase64, 'base64');
+    if (p.proxyMinimum !== undefined) {
+      assert.equal(
+        `sha256:${createHash('sha256').update(valuesBytes).digest('hex')}`,
+        p.valuesDigest,
+        'Prepared installation values differ from the staging configuration',
+      );
+      const target = JSON.parse(valuesBytes);
+      assert.equal(target.replicaCount?.proxy, p.proxyMinimum);
+      assert.equal(target.autoscaling?.proxy?.minReplicas, p.proxyMinimum);
+      assert.equal(target.availability?.topologySpread?.minDomains, p.proxyMinimum);
+    }
+    await fs.writeFile(values, valuesBytes, { flag: 'wx', mode: 0o600 });
     for (const name of ['backup', 'acceptance']) {
       const script = path.join(directory, `${name}.mjs`);
       await fs.writeFile(script, Buffer.from(installation.adapters[name], 'base64'), { flag: 'wx', mode: 0o600 });

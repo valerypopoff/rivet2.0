@@ -69,6 +69,43 @@ The prepared private adapter overlaps independent final journeys and finishes
 accepted long probes while short availability observation continues. Enabling
 this policy requires its matching checksummed adapter, not the old bundle.
 
+A reviewed policy can independently opt into `longProbeCutoff: "after-rollout"`.
+Immediately after the owned rollout finishes, the workflow invokes the bound
+`long-probe-cutoff` acceptance stage before autoscaler verification or final
+journeys. Its `rivet-deployment-observer-cutoff` receipt must prove
+`longProbeAdmissionClosed` with private evidence. The matching adapter persists a
+binding-checked `stop-long` marker; it does not request final observer shutdown.
+Before preparation reports the observer ready, its first three long requests must
+be dispatched after the existing connection setup. This prevents a fast rollout
+from closing admission before its initial evidence cohort exists. Readiness
+records `longCohortStarted`; it does not wait for those requests to finish.
+Local readiness is published only after its private durable upload succeeds.
+An upload still pending cannot release preparation. If this sequential opted-in
+preparation later fails during backup, final safety checks or result saving,
+before any infrastructure command starts, it uses the existing
+`abort-preparation` stage to stop its acknowledged observer, settle accepted
+requests and recordings, and remove only the owned fixture. This cleanup does
+not qualify a rollout. An uncertain initial launch is preserved for inspection;
+once infrastructure mutation may have started, automatic preparation cleanup
+does not stop observation.
+Already admitted 300-second requests finish, and short workflow/web checks remain
+active through final acceptance. No extra long batch starts just to accompany
+post-rollout reads. Existing full stress tests retain their disruption cohorts.
+
+The cutoff is separate from `parallel-online` preparation and execution pools.
+Use the successfully deployed backup and workload values unchanged. Repackage the
+acceptance adapter, policy checksum and encoded installation payload together.
+Publish the public workflow support and that exact private bundle before opting
+in; the earlier live bundle does not implement the cutoff stage. An uncertain
+cutoff acknowledgement stops verification without replaying deployment. Its
+original request is accepted by `--acceptance-only --acceptance-request` to retain
+the observer's original identity and window. Post-cutoff autoscaler failures and
+uncertain result writes give that same bound recovery command. A completed
+observer is revalidated, not restarted. Marker reads validate the full binding, and an existing matching
+marker is observed without another write. Local packaged-observer tests cover
+complete bodies, short-check continuation/failure, duplicate admission and marker
+recovery. No GCP rollout is implied by these local checks.
+
 Installation-owned adapter bundles need a cold entry-point check as well as
 `node --check`: invoke their packaged request and observer modes with invalid
 arguments and no production credentials, and require the owning adapter's
@@ -102,9 +139,11 @@ any update. Keep public workflow/web availability probes; exercise the full
 300-second response against the live, installation-verified Gateway address
 using the original hostname and normal TLS verification. Record which route
 each probe exercised; do not claim that this changes the public edge's timeout.
-Write observer acknowledgements locally before awaiting private cloud
-persistence. A cloud failure must still reject acceptance, while leaving enough
-local evidence to settle accepted work and clean only the owned fixture.
+Write stop markers and terminal diagnostics locally before awaiting private
+cloud persistence, so a slow upload cannot admit another long cohort or hide
+accepted work. Readiness is the exception: its local publication follows durable
+acknowledgement. A cloud failure still rejects acceptance, while local evidence
+permits settlement and cleanup of only the owned fixture.
 Private policy/adapters are materialized outside the checkout from a protected,
 generation-pinned installation object on hosted CI. Private GCS keeps the
 operation replay fence and journal after runner loss; the command durably saves

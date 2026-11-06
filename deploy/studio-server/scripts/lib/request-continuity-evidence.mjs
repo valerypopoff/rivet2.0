@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { ordinaryRuntimeReplicaBounds } from './ha-release-evidence.mjs';
+import { ordinaryRuntimeReplicaBounds, qualificationProxyMinimum } from './ha-release-evidence.mjs';
 import {
   continuityChecks,
   requestContinuityProfile,
@@ -89,7 +89,10 @@ export function assertContinuityProviderFacts(report, operation, kind) {
     }
     const replacement = facts.replacement;
     if (focused) {
-      const { min, max } = ordinaryRuntimeReplicaBounds(operation.policy).proxy;
+      const { min, max } = ordinaryRuntimeReplicaBounds(
+        operation.policy,
+        qualificationProxyMinimum(operation.installed),
+      ).proxy;
       for (const uids of [replacement.before, replacement.after])
         assert.ok(uids.length >= min && uids.length <= max, 'Proxy observation is outside its approved bounds');
     } else {

@@ -17,7 +17,7 @@ Existing/local/non-HA installations keep their behavior. Ordinary HA execution
 HPA still adds capacity only. The new controller replaces that HPA when enabled;
 it is never a second writer of the same replica count.
 
-The compact singleton layout has **seven baseline pods**: two proxies, one web,
+The compact singleton layout has **six baseline pods**: one proxy, one web,
 one developer backend (including rare maintenance), two execution owners, and
 one independent controller. Developer workloads do not scale with customer
 traffic. The controller uses the API image but starts only a small Node program,
@@ -25,7 +25,7 @@ with no application DB pool, app key, storage credentials, editor or workflow.
 
 Apply `gke-runtime-autoscaling.yaml` after `gke-ha.yaml`, `gke-runtime-ha.yaml`
 and `gke-compact-edge.yaml` in a qualified installation. This policy enables
-proxy HPA (2–4), with a five-minute downscale window and at most one removal per
+proxy HPA (1 to 4), with a five-minute downscale window and at most one removal per
 minute, and execution controller scaling (2–10). These bounds are not measured
 throughput. Never raise `postgres.maxConnections` just to pass rendering: use the
 Rivet connection allowance within the real provider limit, preserving capacity

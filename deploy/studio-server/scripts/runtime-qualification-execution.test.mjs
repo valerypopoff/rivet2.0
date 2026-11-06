@@ -896,120 +896,144 @@ process.stdout.write(JSON.stringify({ phase }));
   );
 });
 
-test('installation observation reads exact context and never returns raw credentials; preflight freshness is separate from qualification', async () => {
-  const f = fixture();
-  const values = {
-    ha: { enabled: true, controlPlane: { mode: 'singleton' } },
-    availability: { gkeGatewayProfile: 'compact' },
-    replicaCount: { backend: 1, web: 1, execution: 3, proxy: 3 },
-    autoscaling: {
-      execution: { enabled: false, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
-      executionController: { enabled: true, ...f.operation.policy },
-      proxy: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
-    },
-    release: {
-      production: {
-        manifestDigest: f.operation.predecessorManifestDigest,
-        database: { managedWorkflowSchemaVersion: f.operation.installed.schemaVersion },
+for (const proxyMinimum of [1, 2])
+  test(`installation observation preserves proxy minimum ${proxyMinimum} and never returns raw credentials`, async () => {
+    const f = fixture();
+    const values = {
+      ha: { enabled: true, controlPlane: { mode: 'singleton' } },
+      availability: { gkeGatewayProfile: 'compact', topologySpread: { minDomains: proxyMinimum } },
+      replicaCount: { backend: 1, web: 1, execution: 3, proxy: proxyMinimum },
+      autoscaling: {
+        execution: { enabled: false, minReplicas: 2, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
+        executionController: { enabled: true, ...f.operation.policy },
+        proxy: { enabled: true, minReplicas: proxyMinimum, maxReplicas: 4, targetCPUUtilizationPercentage: 75 },
       },
-    },
-    images: f.operation.previous.images,
-    secret: 'PRIVATE-TEST-CREDENTIAL',
-  };
-  const calls = [];
-  const observe = (run, options = {}) =>
-    inspectQualificationInstallation({
-      context: 'read-only',
-      namespace: 'prod',
-      release: 'rivet',
-      expectedNamespaceUid: 'production-ns',
-      valuesText: 'operator-values',
-      ...options,
-      run,
-    });
-  const snapshot = await observe(async (bin, args) => {
-    calls.push(args);
-    return {
-      stdout: JSON.stringify(
-        bin === 'kubectl'
-          ? { metadata: { uid: args.includes('kube-system') ? 'production-cluster' : 'production-ns' } }
-          : values,
-      ),
+      release: {
+        production: {
+          manifestDigest: f.operation.predecessorManifestDigest,
+          database: { managedWorkflowSchemaVersion: f.operation.installed.schemaVersion },
+        },
+      },
+      images: f.operation.previous.images,
+      secret: 'PRIVATE-TEST-CREDENTIAL',
     };
-  });
-  assert.ok(calls.every((args) => args.includes('read-only') && args.includes('get')));
-  assert.ok(!JSON.stringify(snapshot).includes(values.secret));
-  const digestOnly = await observe(
-    async (bin, args) => ({
-      stdout: JSON.stringify(
-        bin === 'kubectl'
-          ? { metadata: { uid: args.includes('kube-system') ? 'production-cluster' : 'production-ns' } }
-          : values,
-      ),
-    }),
-    { valuesText: undefined, valuesDigest: snapshot.valuesDigest },
-  );
-  assert.equal(digestOnly.valuesDigest, snapshot.valuesDigest);
-  await assert.rejects(
-    observe(
-      () => {
-        throw Error('Must reject before cluster read');
-      },
-      { valuesText: undefined, valuesDigest: 'invalid' },
-    ),
-    { code: 'ERR_ASSERTION' },
-  );
-  assertQualificationInstallationMatches(snapshot, snapshot);
-  for (const key of ['manifestDigest', 'namespaceUid', 'clusterUid', 'settingsDigest', 'valuesDigest'])
-    assert.throws(() => assertQualificationInstallationMatches({ ...snapshot, [key]: 'changed' }, snapshot));
-  for (const changed of ['prod', 'kube-system']) {
-    const reads = new Map();
-    await assert.rejects(
-      observe(async (bin, args) => {
-        if (bin !== 'kubectl') return { stdout: JSON.stringify(values) };
-        const name = args[args.indexOf('namespace') + 1];
-        reads.set(name, (reads.get(name) ?? 0) + 1);
-        return {
-          stdout: JSON.stringify({
-            metadata: {
-              uid:
-                name === changed && reads.get(name) > 1
-                  ? 'replacement'
-                  : name === 'kube-system'
-                    ? 'production-cluster'
-                    : 'production-ns',
-            },
-          }),
-        };
+    const calls = [];
+    const observe = (run, options = {}) =>
+      inspectQualificationInstallation({
+        context: 'read-only',
+        namespace: 'prod',
+        release: 'rivet',
+        expectedNamespaceUid: 'production-ns',
+        valuesText: 'operator-values',
+        ...options,
+        run,
+      });
+    const snapshot = await observe(async (bin, args) => {
+      calls.push(args);
+      return {
+        stdout: JSON.stringify(
+          bin === 'kubectl'
+            ? { metadata: { uid: args.includes('kube-system') ? 'production-cluster' : 'production-ns' } }
+            : values,
+        ),
+      };
+    });
+    assert.ok(calls.every((args) => args.includes('read-only') && args.includes('get')));
+    assert.ok(!JSON.stringify(snapshot).includes(values.secret));
+    assert.equal(snapshot.baseline.proxy, proxyMinimum);
+    assert.equal(snapshot.qualificationValues.replicaCount.proxy, proxyMinimum);
+    assert.equal(snapshot.qualificationValues.autoscaling.proxy.minReplicas, proxyMinimum);
+    assert.equal(snapshot.qualificationValues.availability.topologySpread.minDomains, proxyMinimum);
+    const digestOnly = await observe(
+      async (bin, args) => ({
+        stdout: JSON.stringify(
+          bin === 'kubectl'
+            ? { metadata: { uid: args.includes('kube-system') ? 'production-cluster' : 'production-ns' } }
+            : values,
+        ),
       }),
-      /namespace changed/,
+      { valuesText: undefined, valuesDigest: snapshot.valuesDigest },
     );
-  }
-  const receipt = {
-    formatVersion: 1,
-    passed: true,
-    scope: 'installed-state-and-local-readiness',
-    workloadMutations: false,
-    applicationJourneysRun: false,
-    observedAt: new Date().toISOString(),
-    installedManifestDigest: f.operation.predecessorManifestDigest,
-    candidateManifestDigest: 'sha256:' + 'f'.repeat(64),
-    namespaceUid: 'production-ns',
-    valuesDigest: f.operation.installed.valuesDigest,
-  };
-  assert.equal(
-    assertQualificationPreflight(receipt, f.operation, receipt.candidateManifestDigest).deploymentAuthorized,
-    false,
-  );
-  for (const patch of [
-    { workloadMutations: true },
-    { installedManifestDigest: 'changed' },
-    { observedAt: '2020-01-01T00:00:00Z' },
-  ])
-    assert.throws(() =>
-      assertQualificationPreflight({ ...receipt, ...patch }, f.operation, receipt.candidateManifestDigest),
+    assert.equal(digestOnly.valuesDigest, snapshot.valuesDigest);
+    await assert.rejects(
+      observe(
+        () => {
+          throw Error('Must reject before cluster read');
+        },
+        { valuesText: undefined, valuesDigest: 'invalid' },
+      ),
+      { code: 'ERR_ASSERTION' },
     );
-});
+    if (proxyMinimum === 2) {
+      const target = await observe(
+        async (bin, args) => ({
+          stdout: JSON.stringify(
+            bin === 'kubectl'
+              ? { metadata: { uid: args.includes('kube-system') ? 'production-cluster' : 'production-ns' } }
+              : values,
+          ),
+        }),
+        { proxyMinimum: 1 },
+      );
+      assert.equal(target.baseline.proxy, 2, 'Keep the observed production floor accurate');
+      assert.equal(target.qualificationValues.replicaCount.proxy, 1);
+      assert.equal(target.qualificationValues.autoscaling.proxy.minReplicas, 1);
+      assert.equal(target.qualificationValues.availability.topologySpread.minDomains, 1);
+      assert.equal(target.settingsDigest, snapshot.settingsDigest);
+      assert.equal(target.valuesDigest, snapshot.valuesDigest);
+      assert.throws(() => assertQualificationInstallationMatches(target, snapshot), /qualificationValues/);
+    }
+    assertQualificationInstallationMatches(snapshot, snapshot);
+    for (const key of ['manifestDigest', 'namespaceUid', 'clusterUid', 'settingsDigest', 'valuesDigest'])
+      assert.throws(() => assertQualificationInstallationMatches({ ...snapshot, [key]: 'changed' }, snapshot));
+    for (const changed of ['prod', 'kube-system']) {
+      const reads = new Map();
+      await assert.rejects(
+        observe(async (bin, args) => {
+          if (bin !== 'kubectl') return { stdout: JSON.stringify(values) };
+          const name = args[args.indexOf('namespace') + 1];
+          reads.set(name, (reads.get(name) ?? 0) + 1);
+          return {
+            stdout: JSON.stringify({
+              metadata: {
+                uid:
+                  name === changed && reads.get(name) > 1
+                    ? 'replacement'
+                    : name === 'kube-system'
+                      ? 'production-cluster'
+                      : 'production-ns',
+              },
+            }),
+          };
+        }),
+        /namespace changed/,
+      );
+    }
+    const receipt = {
+      formatVersion: 1,
+      passed: true,
+      scope: 'installed-state-and-local-readiness',
+      workloadMutations: false,
+      applicationJourneysRun: false,
+      observedAt: new Date().toISOString(),
+      installedManifestDigest: f.operation.predecessorManifestDigest,
+      candidateManifestDigest: 'sha256:' + 'f'.repeat(64),
+      namespaceUid: 'production-ns',
+      valuesDigest: f.operation.installed.valuesDigest,
+    };
+    assert.equal(
+      assertQualificationPreflight(receipt, f.operation, receipt.candidateManifestDigest).deploymentAuthorized,
+      false,
+    );
+    for (const patch of [
+      { workloadMutations: true },
+      { installedManifestDigest: 'changed' },
+      { observedAt: '2020-01-01T00:00:00Z' },
+    ])
+      assert.throws(() =>
+        assertQualificationPreflight({ ...receipt, ...patch }, f.operation, receipt.candidateManifestDigest),
+      );
+  });
 
 test('hosted qualification rejects invalid windows before private setup and accepts the four-hour CLI boundary', async (t) => {
   for (const seconds of [1, 7200, 14400]) assert.equal(assertActionsQualificationWindow(seconds), seconds);
@@ -1217,11 +1241,19 @@ test('source safety basis survives compilation/publication and cannot be mixed a
   assert.throws(() => assertStudioServerReleaseManifest(invalid), /same operation/);
 });
 
-for (const profile of ['disposable', 'retained', 'serial pools', 'parallel pools'])
+for (const profile of [
+  'disposable',
+  'retained',
+  'serial pools',
+  'parallel pools',
+  'single proxy',
+  'one proxy against two-proxy production',
+])
   test(`focused adoption publishes continuity evidence: ${profile}`, async () => {
     const retained = profile !== 'disposable';
     const serialPools = profile === 'serial pools';
     const parallelPools = profile === 'parallel pools';
+    const singleProxy = ['single proxy', 'one proxy against two-proxy production'].includes(profile);
     const f = fixture(),
       continuity = focusedContinuityProviderFacts();
     f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
@@ -1229,6 +1261,13 @@ for (const profile of ['disposable', 'retained', 'serial pools', 'parallel pools
     f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
     f.input.approval.safetyDigest = '9'.repeat(64);
     f.input.approval.requestContinuityProfile = continuity.operation.requestContinuityProfile;
+    if (profile === 'single proxy') f.input.installed.baseline.proxy = 1;
+    if (profile === 'one proxy against two-proxy production')
+      Object.assign(f.input.installed.qualificationValues, {
+        replicaCount: { proxy: 1 },
+        autoscaling: { proxy: { minReplicas: 1 } },
+        availability: { topologySpread: { minDomains: 1 } },
+      });
     if (serialPools || parallelPools) f.input.approval.executionPoolsEnabled = true;
     if (retained)
       f.input.approval.retainedApplication = {
@@ -1275,6 +1314,15 @@ for (const profile of ['disposable', 'retained', 'serial pools', 'parallel pools
         final: { proxy: 2, execution: 2, backend: 1, web: 1, autoscaler: 1 },
       },
     });
+    if (singleProxy) {
+      for (const stage of ['initial', 'final']) {
+        f.facts.upgrade.capacity[stage].proxy = 1;
+        f.facts.upgrade[`${stage}ApplicationPods`] = 6;
+      }
+      f.facts.upgrade.readiness.minimumReady.proxy = 1;
+      requestContinuity.replacement.before = requestContinuity.replacement.before.slice(0, 1);
+      requestContinuity.replacement.after = requestContinuity.replacement.after.slice(0, 1);
+    }
     if (serialPools) {
       f.facts.upgrade.outcomes.executionPools = true;
       f.facts.upgrade.capacity.initial.execution = 3;
@@ -1673,4 +1721,14 @@ test('production action invokes the normal command once with bound inputs and pu
   );
   await assert.rejects(deployQualifiedRelease(failed), { code: 'EEXIST' });
   assert.equal(failedCalls, 1);
+});
+
+test('one-proxy full eviction stress is rejected before provider setup', () => {
+  const f = fixture();
+  f.input.installed.baseline.proxy = 1;
+  f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
+  f.input.approval.safetyDigest = '9'.repeat(64);
+  f.input.approval.requestContinuityProfile = focusedContinuityProviderFacts().operation.requestContinuityProfile;
+  f.input.approval.qualificationSuite = 'full';
+  assert.throws(() => qualificationOperation(f.input), /full eviction stress needs spare proxy/);
 });

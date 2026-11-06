@@ -813,7 +813,15 @@
 {{- if or (not .Values.ha.enabled) (ne .Values.gateway.mode "embedded") (ne .Values.deploymentProfile "cluster") -}}
 {{- fail "availability.gkeGateway requires cluster HA with the embedded proxy" -}}
 {{- end -}}
-{{- $zoneFloor := ternary 2 3 (eq .Values.availability.gkeGatewayProfile "compact") -}}
+{{- /* Frozen autoscaling preserves a possibly grown count, not a new edge policy. */ -}}
+{{- $proxyMinimum := ternary (int .Values.autoscaling.proxy.minReplicas) (min (int .Values.replicaCount.proxy) (int .Values.autoscaling.proxy.minReplicas)) .Values.autoscaling.proxy.enabled -}}
+{{- $zoneFloor := ternary (min 2 $proxyMinimum) 3 (eq .Values.availability.gkeGatewayProfile "compact") -}}
+{{- if and .Values.workflowSchema.maintenanceValidation (eq .Values.availability.gkeGatewayProfile "compact") -}}
+{{- $zoneFloor = int .Values.availability.topologySpread.minDomains -}}
+{{- if not (has $zoneFloor (list 1 2)) -}}
+{{- fail "compact maintenance validation requires minDomains=1 or 2" -}}
+{{- end -}}
+{{- end -}}
 {{- if or (not .Values.availability.topologySpread.enabled) (ne .Values.availability.topologySpread.topologyKey "topology.kubernetes.io/zone") (ne .Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule") (ne (int .Values.availability.topologySpread.maxSkew) 1) (ne (int .Values.availability.topologySpread.minDomains) $zoneFloor) -}}
 {{- fail (printf "availability.gkeGateway requires hard zone spread, maxSkew=1 and minDomains=%d" $zoneFloor) -}}
 {{- end -}}
@@ -834,7 +842,7 @@
 {{- $autoscaling := index $.Values.autoscaling $component -}}
 {{- $minimum := ternary (int $autoscaling.minReplicas) (int (index $.Values.replicaCount $component)) $autoscaling.enabled -}}
 {{- $webFloor := ternary 1 2 (has $.Values.ha.controlPlane.mode (list "singleton" "singleton-overlap")) -}}
-{{- $proxyFloor := ternary 2 6 (eq $.Values.availability.gkeGatewayProfile "compact") -}}
+{{- $proxyFloor := ternary 1 6 (eq $.Values.availability.gkeGatewayProfile "compact") -}}
 {{- $floor := ternary $proxyFloor $webFloor (eq $component "proxy") -}}
 {{- if or (lt $minimum $floor) (lt (int (index $.Values.replicaCount $component)) $floor) -}}
 {{- fail (printf "availability.gkeGateway requires an effective minimum of %d %s replicas, including the initial count" $floor $component) -}}

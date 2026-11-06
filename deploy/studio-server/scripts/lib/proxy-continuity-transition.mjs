@@ -488,7 +488,7 @@ export function createProxyContinuityTransition({
     async prepare(operation) {
       if (!stateOf(operation)) {
         const baseline = await io.baseline(config);
-        assert.ok(baseline.namespaceUid && baseline.proxyPods?.length >= 2);
+        assert.ok(baseline.namespaceUid && baseline.proxyPods?.length >= config.hpaSpec.minReplicas);
         // Validate the same route, HPA and source-template contract under the
         // owned lease even when no bootstrap resources will be needed.
         const bridge = buildProxyBridge(baseline, config, operation.record.token);

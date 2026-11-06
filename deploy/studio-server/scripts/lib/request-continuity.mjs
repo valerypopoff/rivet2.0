@@ -269,7 +269,12 @@ export function continuityRecoveryLayout(
   target,
   { journal, resumeToken, configurationDigest, manifestDigest, release, namespace },
 ) {
-  if (installed?.autoscaling?.proxy?.minReplicas === 2 || !target || !resumeToken || !journal?.proxyContinuity)
+  if (
+    [1, 2].includes(installed?.autoscaling?.proxy?.minReplicas) ||
+    !target ||
+    !resumeToken ||
+    !journal?.proxyContinuity
+  )
     return installed;
   const state = journal.proxyContinuity,
     identity = journal.proxyContinuityIdentity;
@@ -292,7 +297,7 @@ export function continuityRecoveryLayout(
   assert.equal(identity?.profileDigest, continuityProfileDigest(target.profile));
   assert.equal(state.hpaFreezeIntent, true);
   assert.ok(!state.hpaReleased);
-  assert.equal(state.hpa.spec.minReplicas, 2);
+  assert.ok([1, 2].includes(state.hpa.spec.minReplicas));
   assert.equal(state.hpa.spec.maxReplicas, 4);
   assert.equal(state.bridgeReplicas, 4);
   assert.equal(installed.autoscaling.proxy.minReplicas, 4);
@@ -300,7 +305,10 @@ export function continuityRecoveryLayout(
   assert.equal(installed.autoscaling.proxy.scaleDownPaused, true);
   return {
     ...installed,
-    autoscaling: { ...installed.autoscaling, proxy: { ...installed.autoscaling.proxy, minReplicas: 2 } },
+    autoscaling: {
+      ...installed.autoscaling,
+      proxy: { ...installed.autoscaling.proxy, minReplicas: state.hpa.spec.minReplicas },
+    },
   };
 }
 export function assertContinuityUpgrade(release, installed, target) {

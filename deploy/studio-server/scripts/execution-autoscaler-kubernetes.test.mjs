@@ -250,7 +250,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
   assert.throws(() => assertOrdinaryRuntimeResources(proof, layout), /own observed layout/);
   assert.doesNotThrow(() => assertOrdinaryRuntimeResources({ ...proof, executionPools: true }, layout));
 });
-test('chart has exactly one execution writer, seven baseline pods, fixed developers and tightly scoped controller capability', () => {
+test('chart has exactly one execution writer, six baseline pods, fixed developers and tightly scoped controller capability', () => {
   const resources = render();
   assert.equal(resources.filter((r) => r.kind === 'HorizontalPodAutoscaler').length, 1);
   assert.equal(
@@ -260,7 +260,7 @@ test('chart has exactly one execution writer, seven baseline pods, fixed develop
   const workloads = resources.filter((r) => ['Deployment', 'StatefulSet'].includes(r.kind));
   assert.equal(
     workloads.reduce((sum, w) => sum + w.spec.replicas, 0),
-    7,
+    6,
   );
   assert.equal(workloads.find((w) => w.metadata.labels['app.kubernetes.io/component'] === 'backend').spec.replicas, 1);
   assert.equal(workloads.find((w) => w.metadata.labels['app.kubernetes.io/component'] === 'web').spec.replicas, 1);

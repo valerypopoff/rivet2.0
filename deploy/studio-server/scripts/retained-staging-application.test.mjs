@@ -281,6 +281,166 @@ test('a rejected acquisition closes its empty attempt without touching the activ
   assert.equal((await f.state.application.owned()).record.owner.operationId, f.state.operation.operationId);
 });
 
+for (const failure of ['none', 'web-before', 'web-after', 'endpoint-after', 'delete-after', 'revision-changed'])
+  test(`retained fixture cleanup follows publication guards and observes interrupted writes (${failure})`, async (t) => {
+    const f = await retained(t),
+      state = f.state;
+    await state.arm(actor);
+    await state.namespace({ create: true });
+    await state.claimCleanup(actor);
+    await state.change((record) => {
+      record.phase = 'settled';
+      record.acceptedWorkSettled = true;
+      record.testPhases = { upgrade: { state: 'acknowledged' } };
+      record.fixtureFolder = { relativePath: 'owned-test', namespaceId: 'owned-id' };
+    });
+    const folders = [{ relativePath: 'owned-test', namespaceId: 'owned-id' }];
+    const projects = [
+      {
+        id: 'owned-project',
+        relativePath: 'owned-test/fixture.rivet-project',
+        revisionId: 'draft-1',
+        published: true,
+        webApps: ['ui-1', 'ui-2'],
+        version: 1,
+      },
+      {
+        id: 'owned-unpublished',
+        relativePath: 'owned-test/unpublished.rivet-project',
+        revisionId: 'draft-2',
+        published: false,
+        webApps: [],
+        version: 1,
+      },
+      {
+        id: 'unrelated-project',
+        relativePath: 'keep/fixture.rivet-project',
+        revisionId: 'draft-keep',
+        published: true,
+        webApps: [],
+        version: 1,
+      },
+    ];
+    const unrelated = structuredClone(projects.at(-1));
+    const calls = [];
+    let interrupted = false;
+    const gate = {
+      config: { baseUrl: 'https://fixture.test' },
+      retainedSecrets: async () => {},
+      loadWorkflowKey: async () => {},
+      verifyProtectedProxyAvailability: async () => {},
+      readyPublic: async () => {},
+      verifyRetainedInstallation: async () => {},
+      requestWorkflow: async (_base, route, options = {}) => {
+        if (route.endsWith('/tree'))
+          return structuredClone({
+            folders: folders.map((folder) => ({
+              ...folder,
+              folders: [],
+              projects: projects.filter((p) => p.relativePath.startsWith(folder.relativePath + '/')),
+            })),
+            projects: projects.filter((p) => !p.relativePath.includes('/')),
+          });
+        if (route.startsWith('/api/workflows/projects/web-apps?')) {
+          const selected = projects.find(
+            (p) => p.relativePath === new URL(route, 'https://fixture.test').searchParams.get('relativePath'),
+          );
+          assert.ok(selected);
+          return {
+            projectId: selected.id,
+            draftRevisionId: failure === 'revision-changed' ? 'changed' : selected.revisionId,
+            publicationVersion: String(selected.version),
+            project: { ...selected, settings: { status: selected.published ? 'published' : 'unpublished' } },
+            webApps: selected.webApps.map((uiGraphId) => ({
+              uiGraphId,
+              status: 'published',
+              publishedSlug: uiGraphId,
+            })),
+          };
+        }
+        const body = JSON.parse(options.body);
+        const selected = projects.find(
+          (p) => p.relativePath === body.relativePath || p.relativePath === body.command?.relativePath,
+        );
+        calls.push(`${route}:${selected?.id ?? 'folder'}:${body.uiGraphId ?? ''}`);
+        const stage = route.includes('/web-apps/') ? 'web' : route.endsWith('/unpublish') ? 'endpoint' : 'delete';
+        const interrupt = (when) => {
+          if (!interrupted && selected?.id === 'owned-project' && failure === `${stage}-${when}`) {
+            interrupted = true;
+            throw Error('write acknowledgement unknown');
+          }
+        };
+        interrupt('before');
+        if (route.endsWith('/unpublish')) {
+          assert.equal(selected?.id, 'owned-project');
+          assert.deepEqual(body.preconditions, {
+            expectedProjectId: selected.id,
+            expectedDraftRevisionId: selected.revisionId,
+            expectedPublicationVersion: String(selected.version),
+          });
+          if (route.includes('/web-apps/')) selected.webApps = selected.webApps.filter((id) => id !== body.uiGraphId);
+          else selected.published = false;
+          selected.version++;
+          interrupt('after');
+          return {};
+        }
+        assert.equal(route, '/api/workflows/namespace/mutate');
+        if (body.command.itemType === 'project') {
+          assert.ok(['owned-project', 'owned-unpublished'].includes(selected?.id));
+          assert.ok(!selected.published && selected.webApps.length === 0, 'Unpublish projects before deletion');
+          assert.deepEqual(body.expectedSource, { id: selected.id, revisionId: selected.revisionId });
+          projects.splice(projects.indexOf(selected), 1);
+          interrupt('after');
+        } else {
+          assert.equal(body.command.relativePath, 'owned-test');
+          assert.ok(
+            !projects.some((p) => p.relativePath.startsWith('owned-test/')),
+            'Only empty folders can be deleted',
+          );
+          folders.pop();
+        }
+        return { deleted: true };
+      },
+    };
+    if (failure === 'revision-changed') {
+      await assert.rejects(
+        cleanupRetainedStaging(state, gate, actor, { qualificationPassed: true }),
+        /project changed/,
+      );
+      assert.deepEqual(calls, []);
+      assert.equal((await state.application.owned()).record.phase, 'owned');
+      return;
+    }
+    if (failure !== 'none') {
+      await assert.rejects(
+        cleanupRetainedStaging(state, gate, actor, { qualificationPassed: true }),
+        /write acknowledgement unknown/,
+      );
+      if (failure === 'web-before') {
+        const before = [...calls];
+        await assert.rejects(
+          cleanupRetainedStaging(state, gate, actor, { qualificationPassed: true }),
+          /observe without replay/,
+        );
+        assert.deepEqual(calls, before, 'Never replay a write whose effect is still unconfirmed');
+        assert.equal((await state.application.owned()).record.phase, 'owned');
+        return;
+      }
+    }
+    const result = await cleanupRetainedStaging(state, gate, actor, { qualificationPassed: true });
+    assert.equal(result.phase, 'idle');
+    assert.deepEqual(calls, [
+      '/api/workflows/projects/web-apps/unpublish:owned-project:ui-1',
+      '/api/workflows/projects/web-apps/unpublish:owned-project:ui-2',
+      '/api/workflows/projects/unpublish:owned-project:',
+      '/api/workflows/namespace/mutate:owned-project:',
+      '/api/workflows/namespace/mutate:owned-unpublished:',
+      '/api/workflows/namespace/mutate:folder:',
+    ]);
+    assert.deepEqual(projects, [unrelated]);
+    await verifyRetainedStagingCleanup(state);
+  });
+
 for (const failure of ['none', 'delete-ack', 'finish-ack'])
   test(`retained cleanup deletes only its exact fixture folder and observes lost acknowledgements (${failure})`, async (t) => {
     const f = await retained(t),
@@ -304,7 +464,8 @@ for (const failure of ['none', 'delete-ack', 'finish-ack'])
       retainedSecrets: async () => {},
       loadWorkflowKey: async () => {},
       requestWorkflow: async (_base, route, options) => {
-        if (route.endsWith('/tree')) return { folders: structuredClone(folders) };
+        if (route.endsWith('/tree'))
+          return { folders: folders.map((folder) => ({ ...folder, folders: [], projects: [] })), projects: [] };
         const command = JSON.parse(options.body);
         assert.deepEqual(command.expectedSource, { id: 'owned-id' });
         assert.equal(command.command.relativePath, 'owned-test');

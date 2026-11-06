@@ -77,7 +77,8 @@ observations. It records configured and admitted requests/limits as information;
 provider adjustments do not fail the trial or certify the proposed savings.
 Readiness, restarts/OOMs, public traffic, fresh CPU/RAM samples and HPA health
 remain the observation checks. Healthy HPA growth is allowed; reaching the ceiling or
-returning to exactly two proxies is not required. No CPU-burn or separate
+returning to an exact proxy count is not required. Observations use the installed
+one- or two-proxy minimum. No CPU-burn or separate
 autoscaler stress phase is added. This is a sizing observation, not a measured
 throughput ceiling or a seven-day peak guarantee.
 

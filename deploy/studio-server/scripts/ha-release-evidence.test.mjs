@@ -13,6 +13,7 @@ import {
   HA_COMPACT_EDGE_CHECKS,
   HA_ORDINARY_RUNTIME_CHECKS,
   assertOrdinaryRuntimeLayout,
+  qualificationProxyMinimum,
 } from './lib/ha-release-evidence.mjs';
 
 test('full-HA receipts cannot authorize singleton control; its qualification binds the exact image pair and chart', () => {
@@ -600,4 +601,29 @@ test('pre-recording-continuity browsers cannot become the supported rolling base
       }),
     /browser|maintenance/i,
   );
+});
+
+test('qualification uses its coherent target proxy floor while retaining the observed production baseline', () => {
+  assert.equal(qualificationProxyMinimum(), 2);
+  for (const observed of [1, 2])
+    for (const target of [1, 2]) {
+      const installed = {
+        baseline: { proxy: observed },
+        qualificationValues: {
+          replicaCount: { proxy: target },
+          autoscaling: { proxy: { minReplicas: target } },
+          availability: { topologySpread: { minDomains: target } },
+        },
+      };
+      assert.equal(qualificationProxyMinimum(installed), target);
+      assert.equal(installed.baseline.proxy, observed);
+      for (const mismatch of ['hpa', 'spread']) {
+        const changed = structuredClone(installed);
+        if (mismatch === 'hpa') changed.qualificationValues.autoscaling.proxy.minReplicas = target === 1 ? 2 : 1;
+        else changed.qualificationValues.availability.topologySpread.minDomains = target === 1 ? 2 : 1;
+        assert.throws(() => qualificationProxyMinimum(changed), /change together/);
+      }
+    }
+  for (const target of [0, 3, '1'])
+    assert.throws(() => qualificationProxyMinimum({ qualificationValues: { replicaCount: { proxy: target } } }));
 });

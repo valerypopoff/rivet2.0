@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { parse, stringify } from 'yaml';
 import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
 import { matchesKubernetesTemplate } from '../lib/kubernetes-template-match.mjs';
-import { ordinaryRuntimeReplicaBounds } from '../lib/ha-release-evidence.mjs';
+import { ordinaryRuntimeReplicaBounds, qualificationProxyMinimum } from '../lib/ha-release-evidence.mjs';
 import { extractWebAppRevisionKey, openWebSocketAction } from '../kubernetes-managed-release-gate.mjs';
 import {
   requestContinuityProfile,
@@ -242,7 +242,11 @@ export class ProviderRequestContinuity {
             ).stdout,
         ),
       );
-      if (includes.length >= 2 && includes.every((v) => /proxy_read_timeout\s+3600s;/.test(v))) break;
+      if (
+        includes.length >= qualificationProxyMinimum(gate.operation.installed) &&
+        includes.every((v) => /proxy_read_timeout\s+3600s;/.test(v))
+      )
+        break;
       assert.ok(performance.now() < deadline, 'Runtime proxy settings did not reach all original proxies');
       await new Promise((r) => setTimeout(r, 1000));
     }
@@ -425,7 +429,10 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     await cohort.completion;
   }
   async readyProxyPool({ settled = false } = {}) {
-    const { min, max } = ordinaryRuntimeReplicaBounds(this.gate.operation.policy).proxy;
+    const { min, max } = ordinaryRuntimeReplicaBounds(
+      this.gate.operation.policy,
+      qualificationProxyMinimum(this.gate.operation.installed),
+    ).proxy;
     const timeoutMs = settled ? continuityTimeoutMs(this.gate.operation.requestContinuityProfile) : 300000;
     const deadline = performance.now() + timeoutMs;
     let observed,

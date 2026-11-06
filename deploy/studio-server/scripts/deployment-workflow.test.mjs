@@ -179,7 +179,7 @@ if(r.stage==='backup'){
  objectReferencesCovered:true,encryptionKeysRecoverable:true,unrelatedDataExcluded:true,artifacts:[]};
  for(const role of ['database','objects','keys','verification']){const text=role+' recovery bytes';await fs.writeFile(path.join(directory,role),text);
  receipt.artifacts.push({role,path:role,sha256:'sha256:'+createHash('sha256').update(text).digest('hex')});}
-}else{receipt.kind=r.stage==='abort-preparation'?'rivet-deployment-preparation-abort':'rivet-deployment-acceptance';receipt.checks={};for(const name of (r.stage==='abort-preparation'?['observerStopped','acceptedWorkSettled','fixtureCleaned']:r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
+}else{receipt.kind=r.stage==='long-probe-cutoff'?'rivet-deployment-observer-cutoff':r.stage==='abort-preparation'?'rivet-deployment-preparation-abort':'rivet-deployment-acceptance';receipt.checks={};for(const name of (r.stage==='long-probe-cutoff'?['longProbeAdmissionClosed']:r.stage==='abort-preparation'?['observerStopped','acceptedWorkSettled','fixtureCleaned']:r.stage==='backend'?['developerApi','editorSession']:['workflow','webApp','remoteDebugger'])){
  await fs.writeFile(path.join(directory,name),'observed fixture journey');receipt.checks[name]={passed:true,observed:true,evidence:name};}}
 await fs.writeFile(out,JSON.stringify(receipt));`;
 
@@ -215,7 +215,7 @@ async function fixture(t) {
 
 test('real private adapters bind online recovery and before/after application journeys to each attempt', async (t) => {
   const f = await fixture(t);
-  for (const stage of ['before', 'backup', 'after', 'abort-preparation']) {
+  for (const stage of ['before', 'backup', 'after', 'abort-preparation', 'long-probe-cutoff']) {
     const report = await runDeploymentStage(f.approval, stage, f.context, f.options);
     assert.equal(report.verified, true);
     assert.equal(JSON.stringify(report).includes('private adapter log'), false);
@@ -716,3 +716,177 @@ test('failure-report IO cannot hide the original preparation or deployment error
   }
 });
 // test-style: fixture-read: Read only test-generated adapter requests, private logs and verification receipts.
+
+for (const cutoffFails of [false, true])
+  test(`long-probe admission closes before post-rollout verification (${cutoffFails ? 'unknown acknowledgement' : 'success'})`, async () => {
+    const order = [],
+      reports = [];
+    const work = executeDeploymentWorkflow({
+      approval: { policy: { longProbeCutoff: 'after-rollout' } },
+      context: { operationId: 'operation' },
+      stage: async (_approval, name) => {
+        order.push(name);
+        if (name === 'long-probe-cutoff' && cutoffFails) throw Error('cutoff acknowledgement unknown');
+        return { stage: name };
+      },
+      run: async () => order.push('deploy'),
+      verifyActivation: async () => order.push('activation'),
+      artifact: async (_name, body) => reports.push(JSON.parse(body)),
+    });
+    if (cutoffFails) {
+      await assert.rejects(work, /Long-probe admission.*unconfirmed/);
+      assert.deepEqual(order, ['before', 'backup', 'deploy', 'long-probe-cutoff']);
+      assert.equal(reports.at(-1).state, 'infrastructure-complete-observation-unconfirmed');
+      assert.equal(reports.at(-1).outcome.infrastructure, 'applied');
+    } else {
+      await work;
+      assert.deepEqual(order, ['before', 'backup', 'deploy', 'long-probe-cutoff', 'activation', 'after']);
+    }
+  });
+
+test('cutoff requests preserve the original observer identity for acceptance-only recovery', async (t) => {
+  const f = await fixture(t);
+  const cutoff = await runDeploymentStage(f.approval, 'long-probe-cutoff', f.context, f.options);
+  const restored = await readAcceptanceVerificationContext(
+    path.join(cutoff.directory, 'request.json'),
+    f.root,
+    { ...f.context, operationId: 'later', installedManifestDigest: f.context.candidateManifestDigest },
+    f.approval.digest,
+  );
+  assert.equal(restored.operationId, f.context.operationId);
+  assert.equal(restored.installedManifestDigest, f.context.installedManifestDigest);
+  assert.equal(restored.recovering, true);
+});
+
+test('unknown cutoff policies are rejected before adapter invocation', async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(
+    path.join(f.root, 'policy.json'),
+    JSON.stringify({ ...f.policy, longProbeCutoff: 'cancel-active' }),
+  );
+  await assert.rejects(readDeploymentPolicy('policy.json', f.root, f.context), /Unknown long-probe/);
+});
+
+test('a legacy or incomplete adapter receipt cannot confirm early long-probe cutoff', async (t) => {
+  const f = await fixture(t);
+  for (const incomplete of ['legacy-kind', 'missing-check', 'unobserved'])
+    await assert.rejects(
+      runDeploymentStage(f.approval, 'long-probe-cutoff', f.context, {
+        ...f.options,
+        runAdapter: async (script, request, receipt, options) => {
+          const { executeMaintenanceBackupAdapter } = await import('./lib/maintenance-deployment-plan.mjs');
+          await executeMaintenanceBackupAdapter(script, request, receipt, options);
+          const result = JSON.parse(await fs.readFile(receipt, 'utf8'));
+          if (incomplete === 'legacy-kind') result.kind = 'rivet-deployment-acceptance';
+          if (incomplete === 'missing-check') delete result.checks.longProbeAdmissionClosed;
+          if (incomplete === 'unobserved') result.checks.longProbeAdmissionClosed.observed = false;
+          await fs.writeFile(receipt, JSON.stringify(result));
+        },
+      }),
+      /acceptance failed or is incomplete/,
+    );
+});
+
+test('post-cutoff verification failures point to the original cutoff request instead of a new observer', async () => {
+  const order = [];
+  await assert.rejects(
+    executeDeploymentWorkflow({
+      approval: { policy: { longProbeCutoff: 'after-rollout' } },
+      context: { operationId: 'original' },
+      stage: async (_approval, stage) => {
+        order.push(stage);
+        return { stage };
+      },
+      run: async () => order.push('rollout'),
+      verifyActivation: async () => {
+        throw Error('metrics unavailable');
+      },
+    }),
+    /--acceptance-only --acceptance-request <original long-probe-cutoff request.json>/,
+  );
+  assert.deepEqual(order, ['before', 'backup', 'rollout', 'long-probe-cutoff']);
+});
+
+for (const lostState of ['infrastructure-complete', 'complete'])
+  test(`lost ${lostState} acknowledgement retains the cutoff observer recovery hint`, async () => {
+    let rollouts = 0;
+    await assert.rejects(
+      executeDeploymentWorkflow({
+        approval: { policy: { longProbeCutoff: 'after-rollout' } },
+        context: { operationId: 'original' },
+        stage: async (_approval, stage) => ({ stage }),
+        run: async () => {
+          rollouts++;
+        },
+        artifact: async (_name, body) => {
+          if (JSON.parse(body).state === lostState) throw Error('receipt write unknown');
+        },
+      }),
+      /--acceptance-only --acceptance-request <original long-probe-cutoff request.json>/,
+    );
+    assert.equal(rollouts, 1);
+  });
+
+for (const failure of ['backup', 'safety', 'result-write'])
+  test(`sequential cutoff preparation settles its observer after ${failure} failure`, async () => {
+    const stages = [],
+      primary = Error('preparation failed'),
+      cleanup = Error('cleanup uncertain');
+    await assert.rejects(
+      executeDeploymentWorkflow({
+        approval: { policy: { longProbeCutoff: 'after-rollout' } },
+        context: { operationId: 'original' },
+        stage: async (_approval, name) => {
+          stages.push(name);
+          if (name === 'backup' && failure === 'backup') throw primary;
+          if (name === 'abort-preparation') throw cleanup;
+          return { stage: name };
+        },
+        prepareSafety: async () => {
+          if (failure === 'safety') throw primary;
+        },
+        run: async () => assert.fail('Preparation failure cannot deploy'),
+        artifact: async (_name, body) => {
+          if (failure === 'result-write' && JSON.parse(body).state === 'checking-recovery') throw primary;
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.ok(error.errors.includes(primary));
+        assert.ok(error.errors.includes(cleanup));
+        return true;
+      },
+    );
+    assert.equal(stages.filter((name) => name === 'abort-preparation').length, 1);
+    assert.equal(stages[0], 'before');
+  });
+
+for (const failure of ['before', 'backup', 'rollout'])
+  test(`sequential observer cleanup respects the ${failure} ownership boundary`, async () => {
+    const stages = [],
+      reports = [],
+      primary = Error('original failure');
+    await assert.rejects(
+      executeDeploymentWorkflow({
+        approval: { policy: { longProbeCutoff: 'after-rollout' } },
+        context: { operationId: 'original' },
+        stage: async (_approval, name) => {
+          stages.push(name);
+          if (name === failure) throw primary;
+          return { stage: name };
+        },
+        run: async () => {
+          assert.equal(failure, 'rollout');
+          throw primary;
+        },
+        artifact: async (_name, body) => reports.push(JSON.parse(body)),
+      }),
+      (error) => {
+        if (failure === 'backup') assert.deepEqual(error.errors, [primary]);
+        else assert.equal(error, primary);
+        return true;
+      },
+    );
+    assert.equal(stages.filter((name) => name === 'abort-preparation').length, failure === 'backup' ? 1 : 0);
+    assert.equal(reports.at(-1).state, failure === 'rollout' ? 'deployment-incomplete' : 'preparation-failed');
+  });

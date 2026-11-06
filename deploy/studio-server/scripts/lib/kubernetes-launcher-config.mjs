@@ -275,7 +275,7 @@ export function buildKubernetesLauncherConfig(env, { singleMachine = false } = {
       localClusterProvider === 'docker-desktop' || localClusterProvider === 'minikube',
     ),
     replicas: {
-      proxy: parsePositiveInt(readEnv(env, 'RIVET_K8S_PROXY_REPLICAS'), deploymentProfile === 'single-machine' ? 1 : 2),
+      proxy: parsePositiveInt(readEnv(env, 'RIVET_K8S_PROXY_REPLICAS'), 1),
       web: parsePositiveInt(readEnv(env, 'RIVET_K8S_WEB_REPLICAS'), 1),
       execution: parsePositiveInt(
         readEnv(env, 'RIVET_K8S_EXECUTION_REPLICAS'),

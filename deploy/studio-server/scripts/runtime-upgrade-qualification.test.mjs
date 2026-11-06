@@ -152,6 +152,10 @@ test('rendered ordinary scope rejects topology, suspended controller and proxy H
   });
   const proof = { protocol: 2, autoscalerPolicyDigest: autoscalerPolicyDigest({}) };
   assertOrdinaryRuntimeResources(proof, resources);
+  const single = structuredClone(resources);
+  single.find((r) => r.metadata?.name === 'proxy').spec.replicas = 1;
+  single.find((r) => r.kind === 'HorizontalPodAutoscaler').spec.minReplicas = 1;
+  assertOrdinaryRuntimeResources(proof, single);
   const grown = structuredClone(resources);
   grown.find((r) => r.metadata?.name === 'execution').spec.replicas = 7;
   grown.find((r) => r.metadata?.name === 'proxy').spec.replicas = 4;
@@ -598,3 +602,24 @@ for (const scenario of [
     assert.equal(new Set(ids).size, ids.length, 'no modifying request is replayed');
   });
 }
+
+test('focused one-proxy settlement follows the installed minimum and still rejects total edge loss', async () => {
+  const { previous } = pair(),
+    policy = autoscalerPolicy({ maxReplicas: 7 });
+  const replicaBounds = ordinaryRuntimeReplicaBounds(policy, 1);
+  const owners = pods(previous.images, { proxy: 1 });
+  assert.equal(assertOrdinaryRuntimePods(owners, previous.images, { baseline: true, replicaBounds }).proxy, 1);
+  const gate = {
+    operation: { qualification: { tier: 'focused' }, policy, installed: { baseline: { proxy: 1 } } },
+    pods: async () => owners,
+  };
+  const result = await waitForOrdinaryRuntime(gate, previous.images, async (_label, check) =>
+    assert.equal(await check(), true),
+  );
+  assert.equal(result.proxy, 1);
+  assert.throws(
+    () => assertOrdinaryRuntimePods(pods(previous.images, { proxy: 0 }), previous.images, { replicaBounds }),
+    /floor/,
+  );
+  assert.throws(() => ordinaryRuntimeReplicaBounds(policy, 0));
+});

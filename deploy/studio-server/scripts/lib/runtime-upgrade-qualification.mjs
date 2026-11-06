@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './ha-workflow-traffic.mjs';
-import { ordinaryRuntimeReplicaBounds } from './ha-release-evidence.mjs';
+import { ordinaryRuntimeReplicaBounds, qualificationProxyMinimum } from './ha-release-evidence.mjs';
 import {
   assertStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
@@ -39,7 +39,7 @@ export function runtimeQualificationPurpose(value = 'ordinary-upgrade') {
 }
 
 export function assertOrdinaryRuntimePods(pods, images, { baseline = false, replicaBounds } = {}) {
-  const counts = { proxy: 2, web: 1, backend: 1, execution: 2, autoscaler: 1 };
+  const counts = { proxy: replicaBounds?.proxy.min ?? 2, web: 1, backend: 1, execution: 2, autoscaler: 1 };
   const live = pods.filter((p) => !p.metadata.deletionTimestamp);
   if (baseline || replicaBounds)
     assert.equal(live.length, pods.length, 'A terminating owner still prevents runtime settlement');
@@ -91,7 +91,9 @@ export function assertOrdinaryRuntimePods(pods, images, { baseline = false, repl
 
 export async function waitForOrdinaryRuntime(gate, images, until) {
   const replicaBounds =
-    gate.operation?.qualification?.tier === 'focused' ? ordinaryRuntimeReplicaBounds(gate.operation.policy) : undefined;
+    gate.operation?.qualification?.tier === 'focused'
+      ? ordinaryRuntimeReplicaBounds(gate.operation.policy, qualificationProxyMinimum(gate.operation.installed))
+      : undefined;
   let observed;
   await until(
     replicaBounds
@@ -217,7 +219,7 @@ export async function runOrdinaryRuntimeUpgrade({
         ).length;
         const minimum = report.readiness.minimumReady[role];
         report.readiness.minimumReady[role] = minimum === null ? count : Math.min(minimum, count);
-        // The retirement guard waits for two healthy/available proxies before
+        // The retirement guard waits for the configured healthy proxy floor before
         // advancing. A transient external eviction is not itself an outage.
         assert.ok(count >= (focused && role === 'proxy' ? 1 : 2), 'Published runtime lost its ready serving floor');
       }

@@ -22,30 +22,54 @@ scale-down stays disabled. The separate opt-in
 removal through owned retirement rather than killing accepted runs; it requires
 its own qualification before production enablement.
 
-For an explicitly accepted lower-redundancy edge, compose
-`gke-compact-edge.yaml` after `gke-ha.yaml` and `gke-runtime-ha.yaml`. This sets
-`availability.gkeGatewayProfile: compact` and two proxy replicas: six total
-steady-state pods with singleton developer tools. Proxies must occupy distinct
-nodes and at least two zones. The regional default remains six proxies, two per
-zone across three zones; do not describe the compact profile as equivalent zonal
-fault tolerance. Rolling replacement still has zero unavailable, one surge,
-positive NEG-health observations and unchanged drain/stabilization windows.
+For the lower-redundancy edge, compose `gke-compact-edge.yaml` after
+`gke-ha.yaml` and `gke-runtime-ha.yaml`. Its default is now **one proxy** with
+`availability.gkeGatewayProfile: compact` and `topologySpread.minDomains: 1`.
+The launcher also defaults to one proxy when no explicit count is provided.
+There are five application Pods, or six including the execution autoscaler.
+`gke-runtime-autoscaling.yaml` permits proxy growth from one to four; execution
+retains its two-owner minimum and two-zone placement. Regional HA remains six
+proxies across three zones. One proxy provides no redundancy against a Pod/node
+failure; the zero-unavailable rolling-update policy covers planned replacement.
 
-Prepare/qualify 13 -> 10 first, then reduce the proxies through the normal HA
-rollout with the same qualified images and reviewed compact values (10 -> 6).
-Do not combine proxy scaling with `--ha-control-plane-transition`. Reverse edge
-capacity first when returning to the regional ownership configuration. Deployment
-requires exact `evidence.runtimeControl.edgeProfiles` coverage, including compact
-rolling, eviction and cross-profile transition checks; old regional receipts
-cannot authorize compact. These are preparation instructions, not deployment
-approval or a claim that the new profile has passed GKE qualification.
-The source policy matters too: leaving a compact installation requires compact
-qualification even when restoring six proxies, including same-image changes.
-The compact provider qualification must observe exactly two settled proxy pods;
-surge or autoscaler headroom cannot stand in for a minimum-capacity test. Freeze
-the qualification fixture at that floor and wait for replacement/surge cleanup
-before its settled availability checkpoints. This restriction applies to the
-isolated proof, not an arbitrary two-pod ceiling on live scaling or rollout surge.
+Proxy updates keep `maxUnavailable: 0`, `maxSurge: 1`, NEG endpoint health,
+readiness stabilization and draining. A one-proxy PDB uses `minAvailable: 1`
+to block voluntary eviction of the sole endpoint; node maintenance needs spare
+capacity before that eviction can proceed. Existing two-proxy compact values
+remain supported with minimum two and `minDomains: 2`.
+
+Use focused request-continuity qualification for ordinary one-proxy releases.
+Staging defaults to the observed installation's proxy replica/HPA/spread settings.
+A protected `production.proxyMinimum` of one or two can select the reviewed
+target profile before production changes; the staging projection changes all
+three edge settings together. The recorded production baseline and settings
+digest still describe the actual live installation. Readiness and evidence use
+the target minimum and allow healthy autoscaler growth. Full frontend-eviction stress remains a separate multi-proxy test and is
+rejected locally for a one-proxy installation, before provider setup. Zero Ready
+or healthy current proxy endpoints still fail qualification.
+
+These are source defaults, not a live resize. Explicit installed Helm values
+continue to override chart defaults. Applying the reduction requires reviewed
+values setting `replicaCount.proxy: 1`, `autoscaling.proxy.minReplicas: 1` and
+`availability.topologySpread.minDomains: 1`, together, while keeping the existing
+HPA ceiling, CPU target, shutdown profile and workload reservations. Publish the
+updated chart/tooling before the next approved rollout; do not combine an edge
+resize with `--ha-control-plane-transition`. That separate ownership-transfer
+procedure still requires at least two compact proxies; restore spare edge
+capacity before requesting it.
+
+The locally prepared installation bundle now encodes those three one-proxy
+settings together. Its verifier compares decoded values against the successful
+installation, permits only those three changes, and renders the actual private
+values with the current chart. It checks the one-proxy HPA/PDB, zero-unavailable
+surge, unchanged reservations/shutdown settings and two-zone execution placement.
+Regeneration preserves this alignment. This prepares a candidate; it does not
+publish the installation object, change protected CI configuration or resize
+live Pods. The matching local staging configuration now carries the new values
+hash and `production.proxyMinimum: 1`. Pair those fields with the production
+configuration and the new immutable installation object when publishing. Hosted
+production setup verifies the decoded values hash and all three edge settings
+before materializing adapters; a stale or mixed configuration cannot deploy.
 Both HA control modes require at least two initial execution owners; enabled
 execution autoscaling must retain that minimum and have a maximum covering both
 its minimum and initial capacity. Enabled GKE frontend HPAs must also have maxima

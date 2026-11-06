@@ -318,6 +318,12 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.providerValues = {
       ...values,
       ...structuredClone(envelope),
+      replicaCount: { ...values.replicaCount, ...envelope.replicaCount },
+      autoscaling: { ...values.autoscaling, proxy: { ...values.autoscaling.proxy, ...envelope.autoscaling?.proxy } },
+      availability: {
+        ...values.availability,
+        topologySpread: { ...values.availability.topologySpread, ...envelope.availability?.topologySpread },
+      },
       ha: { ...values.ha, ...envelope.ha, controlPlane: { ...values.ha.controlPlane, ...envelope.ha?.controlPlane } },
       release: {
         production: {

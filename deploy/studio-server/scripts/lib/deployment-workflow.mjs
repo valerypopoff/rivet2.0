@@ -46,6 +46,8 @@ export async function readDeploymentPolicy(file, root, identity) {
   const scripts = {};
   if (policy.preparation !== undefined && policy.preparation !== 'parallel-online')
     throw Error('Unknown deployment preparation contract.');
+  if (policy.longProbeCutoff !== undefined && policy.longProbeCutoff !== 'after-rollout')
+    throw Error('Unknown long-probe admission cutoff contract.');
   for (const name of ['backup', 'acceptance']) {
     const entry = policy[name];
     if (
@@ -68,7 +70,7 @@ export async function readAcceptanceVerificationContext(file, root, context, pol
   const originalAcceptanceStartedAt = request.originalAcceptanceStartedAt ?? request.startedAt;
   if (
     request.formatVersion !== 1 ||
-    request.stage !== 'after' ||
+    !['after', 'long-probe-cutoff'].includes(request.stage) ||
     typeof request.requestId !== 'string' ||
     !request.requestId ||
     typeof request.operationId !== 'string' ||
@@ -108,7 +110,7 @@ export async function runDeploymentStage(
   { artifactsDir, timeoutMs, runAdapter = executeMaintenanceBackupAdapter, now = Date.now } = {},
 ) {
   if (
-    !['preflight', 'backup', 'before', 'after', 'backend', 'abort-preparation'].includes(stage) ||
+    !['preflight', 'backup', 'before', 'after', 'backend', 'abort-preparation', 'long-probe-cutoff'].includes(stage) ||
     context.namespaceUid !== approval.policy.namespaceUid ||
     context.release !== approval.policy.release ||
     context.namespace !== approval.policy.namespace ||
@@ -213,11 +215,13 @@ export async function runDeploymentStage(
     report = { verified: true, requestId, checks: ['dependencies', 'capacity'] };
   } else {
     const checks =
-      stage === 'abort-preparation'
-        ? ['observerStopped', 'acceptedWorkSettled', 'fixtureCleaned']
-        : stage === 'backend'
-          ? ['developerApi', 'editorSession']
-          : ['workflow', 'webApp', 'remoteDebugger'];
+      stage === 'long-probe-cutoff'
+        ? ['longProbeAdmissionClosed']
+        : stage === 'abort-preparation'
+          ? ['observerStopped', 'acceptedWorkSettled', 'fixtureCleaned']
+          : stage === 'backend'
+            ? ['developerApi', 'editorSession']
+            : ['workflow', 'webApp', 'remoteDebugger'];
     if (
       stage === 'backend' &&
       (!context.backendCandidate?.uid ||
@@ -228,7 +232,11 @@ export async function runDeploymentStage(
       throw Error('Developer acceptance belongs to another backend incarnation.');
     if (
       receipt.kind !==
-        (stage === 'abort-preparation' ? 'rivet-deployment-preparation-abort' : 'rivet-deployment-acceptance') ||
+        (stage === 'long-probe-cutoff'
+          ? 'rivet-deployment-observer-cutoff'
+          : stage === 'abort-preparation'
+            ? 'rivet-deployment-preparation-abort'
+            : 'rivet-deployment-acceptance') ||
       receipt.passed !== true ||
       !checks.every(
         (name) =>
@@ -293,6 +301,10 @@ export async function executeDeploymentWorkflow({
           ? 'online'
           : 'not-configured',
   };
+  const earlyCutoff = context && !maintenance && approval?.policy?.longProbeCutoff === 'after-rollout';
+  const acceptanceRecovery = earlyCutoff
+    ? '--acceptance-only --acceptance-request <original long-probe-cutoff request.json>'
+    : '--acceptance-only';
   const save = async (state) => {
     report.state = state;
     await artifact('deployment-result.json', JSON.stringify(report, null, 2));
@@ -316,9 +328,10 @@ export async function executeDeploymentWorkflow({
   const unconfirmedEvidence = (cause) =>
     failAfterInfrastructure(
       'infrastructure-complete-evidence-unconfirmed',
-      'Infrastructure deployment completed but saving its result is unconfirmed. Inspect diagnostics before any retry; no rollback was attempted.',
+      `Infrastructure deployment completed but saving its result is unconfirmed. Inspect diagnostics before any retry; no rollback was attempted.${earlyCutoff ? ` Retain the observer with ${acceptanceRecovery}.` : ''}`,
       cause,
     );
+  let sequentialObserverReady = false;
   const abortOnlinePreparation = async (failures) => {
     try {
       report.stages.push(await stage(approval, 'abort-preparation', context, { artifactsDir, timeoutMs }));
@@ -352,6 +365,7 @@ export async function executeDeploymentWorkflow({
         [before, backup] = results.map((result) => result.value);
       } else if (!context.recovering) {
         before = await stage(approval, 'before', context, { artifactsDir, timeoutMs });
+        sequentialObserverReady = Boolean(earlyCutoff);
         report.stages.push(before);
       }
       if (!parallelPreparation) await save('checking-recovery');
@@ -377,6 +391,15 @@ export async function executeDeploymentWorkflow({
     report.outcome.infrastructure = verificationOnly ? 'existing-verified' : 'applied';
     if (applied?.phase === 'complete') report.operation = { token: applied.token, phase: applied.phase };
   } catch (error) {
+    // Only an acknowledged before stage grants cleanup authority. Never stop an
+    // observer once workload mutation may have started, or replay a partial seed.
+    if (sequentialObserverReady && report.outcome.infrastructure === 'not-started') {
+      try {
+        await abortOnlinePreparation([error]);
+      } catch (settlementError) {
+        error = settlementError;
+      }
+    }
     if (error?.deploymentOperation) report.operation = error.deploymentOperation;
     if (verificationOnly && report.state === 'verifying') {
       report.outcome.infrastructure = 'verification-incomplete';
@@ -397,6 +420,20 @@ export async function executeDeploymentWorkflow({
     if (report.state === 'deploying') report.outcome.infrastructure = 'unconfirmed';
     throw await saveFailure(report.state === 'deploying' ? 'deployment-incomplete' : 'preparation-failed', error);
   }
+  // Stop admitting new five-minute requests before slower autoscaler checks and
+  // final acceptance. Already accepted probes and short availability monitoring
+  // remain owned by the observer until the normal after stage settles them.
+  if (earlyCutoff) {
+    try {
+      report.stages.push(await stage(approval, 'long-probe-cutoff', context, { artifactsDir, timeoutMs }));
+    } catch (cause) {
+      await failAfterInfrastructure(
+        'infrastructure-complete-observation-unconfirmed',
+        `Long-probe admission cutoff is unconfirmed after infrastructure completed. Inspect the retained observer; recover with ${acceptanceRecovery}, not another deployment.`,
+        cause,
+      );
+    }
+  }
   try {
     await save('infrastructure-complete');
   } catch (cause) {
@@ -409,7 +446,7 @@ export async function executeDeploymentWorkflow({
     report.outcome.autoscaling = 'unconfirmed';
     await failAfterInfrastructure(
       'infrastructure-complete-activation-unverified',
-      'Workloads settled, but post-deployment autoscaler verification is unconfirmed. No workloads were stopped or rolled back. Inspect diagnostics and use --acceptance-only after resolving the cause; do not replay the deployment.',
+      `Workloads settled, but post-deployment autoscaler verification is unconfirmed. No workloads were stopped or rolled back. Inspect diagnostics and use ${acceptanceRecovery} after resolving the cause; do not replay the deployment.`,
       cause,
     );
   }

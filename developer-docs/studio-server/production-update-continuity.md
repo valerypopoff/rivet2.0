@@ -154,7 +154,8 @@ reduce proxy capacity while a replacement starts. Before retiring another owner,
 the proxy guard observes recovery for at most five minutes (or its shorter
 configured timeout). It proceeds only after both the Deployment's available
 replicas and the current healthy endpoint count meet the configured floor,
-with at least two proxies across two zones. The wait does not lower that floor
+with one proxy/zone for the one-proxy compact profile, or two proxies/zones for
+the existing two-proxy compact profile. The wait does not lower that floor
 or restart a rollout action.
 
 Each observation rechecks the lease, captured resource identities, routing,
@@ -167,18 +168,32 @@ covers replacement recovery, persistent capacity loss and failures during the
 wait; the failed cloud attempt is not qualification evidence for this repair.
 The regional observer's aggregate health flag requires two healthy zones; loss
 of that redundancy can wait only while a fresh, owned current endpoint is still
-healthy. Both the current serving floor and zonal redundancy must recover before
-the guard returns. Zero healthy endpoints and invalid provider identities remain
+healthy. The current serving floor and its configured zone requirement must
+recover before the guard returns; a one-proxy profile needs one actual healthy
+current-Pod endpoint and does not claim two-zone redundancy. Zero healthy endpoints and invalid provider identities remain
 immediate failures.
 
 The focused traffic observer and certificate accept a transient single Ready
 proxy while recovery is pending. They continue to require successful public
 requests and at least one Ready proxy; execution still requires two Ready owners.
-The retirement guard still waits for two available, healthy proxy endpoints before
-advancing, and final acceptance requires the full current pool healthy with at
-least two proxies. Full stress qualification retains its two-proxy observation
-floor. Recovery, zero-capacity rejection and final capacity are covered in the
+The retirement guard waits for the configured one- or two-proxy minimum before
+advancing, and final acceptance requires the full current pool healthy. One-proxy
+rollouts preserve zero unavailable and one surge, and a `minAvailable: 1` PDB
+protects the sole endpoint from voluntary eviction. Full stress qualification
+retains its separate two-proxy observation floor. Recovery, zero-capacity rejection and final capacity are covered in the
 early source checks and report validation, without another polling phase.
+
+### Long-probe cutoff after rollout
+
+`longProbeCutoff: "after-rollout"` is an installation-owned acceptance policy,
+independent of proxy replica count. The workflow closes new long-probe admission
+as soon as the owned rollout has finished, before subsequent verification reads.
+The adapter's bound `stop-long` marker leaves short health observation active and
+never cancels an accepted five-minute request. The final after stage still
+requires complete responses, recordings, exact request/correlation identities,
+actual observer exit and scoped fixture cleanup. Failure is not hidden by the
+cutoff. See [deployment operations](deployment-operations.md) for bundle activation
+and recovery; source/local tests alone do not activate the production adapter.
 
 ### Routing verification during updates
 

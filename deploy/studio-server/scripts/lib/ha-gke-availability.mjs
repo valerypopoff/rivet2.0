@@ -12,18 +12,18 @@ const ready = (pod) => !pod.metadata?.deletionTimestamp &&
 /** A Pod Ready bit alone is not load-balancer health evidence on GKE. Standalone
  * NEG gates require fresh regional Compute endpoint health; timeouts fail.
  * It is an observation, not a custom readiness controller or a PDB substitute. */
-export function assertGkeFrontendAvailability(pods, nodes, release, controlPlaneMode = 'replicated', edgeProfile = 'regional', regionalHealth) {
+export function assertGkeFrontendAvailability(pods, nodes, release, controlPlaneMode = 'replicated', edgeProfile = 'regional', regionalHealth, { proxyMinimum = edgeProfile === 'compact' ? 2 : 6, settled = true } = {}) {
   assert.ok(['replicated', 'singleton', 'singleton-overlap'].includes(controlPlaneMode), 'unknown control availability policy');
   assert.ok(['regional', 'compact'].includes(edgeProfile), 'unknown GKE edge profile');
   const compact = edgeProfile === 'compact';
-  const proxyMinimum = compact ? 2 : 6;
-  const zoneMinimum = compact ? 2 : 3;
+  assert.ok(compact ? [1, 2].includes(proxyMinimum) : proxyMinimum === 6);
+  const zoneMinimum = compact ? Math.min(proxyMinimum, 2) : 3;
   const frontend = pods.filter(p => ['proxy', 'web'].includes(component(p)) &&
     p.metadata?.labels?.['app.kubernetes.io/instance'] === release);
   const proxies = frontend.filter(p => component(p) === 'proxy');
   // This is qualification at the compact floor, not general live monitoring.
   // Surplus replicas could hide the endpoint-loss risk we need to exercise.
-  if (compact) assert.equal(proxies.length, 2, 'Compact qualification requires exactly two steady-state proxies');
+  if (compact && settled) assert.equal(proxies.length, proxyMinimum, 'Compact qualification requires its configured steady-state proxy floor');
   const web = frontend.filter(p => component(p) === 'web');
   const webMinimum = controlPlaneMode !== 'replicated' ? 1 : 2;
   assert.ok(proxies.length >= proxyMinimum && web.length >= webMinimum, `GKE proof requires ${proxyMinimum} proxies and ${webMinimum} web replicas`);
@@ -50,8 +50,8 @@ export function assertGkeFrontendAvailability(pods, nodes, release, controlPlane
       zones.set(zone, (zones.get(zone) ?? 0) + 1);
     }
   }
-  assert.ok(compact ? zones.size >= 2 : zones.size === 3 && [...zones.values()].every(n => n >= 2),
-    compact ? 'Compact GKE proof requires healthy proxies in at least two zones'
+  assert.ok(compact ? zones.size >= zoneMinimum : zones.size === 3 && [...zones.values()].every(n => n >= 2),
+    compact ? `Compact GKE proof requires healthy proxies in at least ${zoneMinimum} zone(s)`
       : 'GKE proof requires at least two healthy proxy endpoints in each of exactly three zones');
   if (regionalHealth) assertGkeProxyPoolReady(proxies, regionalHealth.service, regionalHealth.backend, {
     deployment: regionalHealth.deployment, minimum: proxyMinimum, minimumZones: zoneMinimum,
@@ -81,16 +81,17 @@ export async function waitForGkeFrontendAvailability(gate, removed = []) {
     const nodes = await read(['get', 'nodes', '-o', 'json']);
     const deployment = JSON.parse((await gate.kubectl(['-n', namespace, 'get', 'deployment', `${gate.config.release}-proxy`, '-o', 'json'], { capture: true })).stdout);
     await gate.assertProofContext();
+    const proxyMinimum = gate.providerValues?.availability?.gkeGatewayProfile === 'compact' ? (gate.providerValues?.autoscaling?.proxy?.enabled ? gate.providerValues.autoscaling.proxy.minReplicas : gate.providerValues?.replicaCount?.proxy) ?? 2 : 6;
     try {
       assert.ok(!pods.some(p => removed.includes(p.metadata.uid)), 'evicted frontend UID still exists');
       let regionalHealth;
       if (gate.observeProxyBackend) {
         const service = JSON.parse((await gate.kubectl(['-n', namespace, 'get', 'service', `${gate.config.release}-proxy`, '-o', 'json'], { capture: true })).stdout);
         regionalHealth = { deployment, service, backend: await gate.observeProxyBackend(service, { allowPending: true }) };
-      } else assertGkeProxyDeploymentAvailable(deployment, gate.providerValues?.availability?.gkeGatewayProfile === 'compact' ? 2 : 6);
+      } else assertGkeProxyDeploymentAvailable(deployment, proxyMinimum);
       return assertGkeFrontendAvailability(pods, nodes, gate.config.release,
         gate.providerValues?.ha?.controlPlane?.mode ?? 'replicated',
-        gate.providerValues?.availability?.gkeGatewayProfile ?? 'regional', regionalHealth);
+        gate.providerValues?.availability?.gkeGatewayProfile ?? 'regional', regionalHealth, { proxyMinimum, settled: gate.operation?.qualification?.tier !== 'focused' });
     } catch (error) { last = error; }
     assertManagedGateActive();
     await new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(1000, deadline - Date.now()))));
@@ -111,6 +112,7 @@ export async function verifyGkeFrontendEvictions(gate, baseUrl) {
     JSON.stringify({ at: new Date().toISOString(), namespace, release: gate.config.release }), { flag: 'wx' });
   const report = { phase: 'preflight', evictions: [], before };
   const targets = report.before.filter(p => p.component === 'proxy').slice(0, 2);
+  assert.equal(targets.length, 2, 'Frontend eviction stress requires spare proxy capacity; use focused qualification for the one-proxy baseline');
   assert.notEqual(targets[0].node, targets[1].node);
   const workflow = startHaWorkflowTraffic(gate, baseUrl, () => report.phase);
   const web = startHaWebAppTraffic(gate, baseUrl, () => report.phase);
