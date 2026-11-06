@@ -516,11 +516,11 @@ not the four application containers. Supply its optional
 `application_build_run_id` with the existing application build ID so incompatibility
 fails before building/scanning tooling. In **Release Rivet**, supply:
 
-| Input | Value |
-| --- | --- |
-| `build_run_id` | Existing successful main **Build Images** run for the application candidate |
-| `tooling_run_id` | Successful main **Publish qualification images** dispatch run for the current tooling commit |
-| `deploy_production` | The authorized rollout choice; production still requires qualification and cleanup |
+| Input               | Value                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| `build_run_id`      | Existing successful main **Build Images** run for the application candidate                  |
+| `tooling_run_id`    | Successful main **Publish qualification images** dispatch run for the current tooling commit |
+| `deploy_production` | The authorized rollout choice; production still requires qualification and cleanup           |
 
 No run is automatically retried, published, or deployed because a tooling repair
 was merged. Numeric operation allowances, protected environments, workload
@@ -720,6 +720,13 @@ placement. Full eviction stress requires a separate multi-proxy profile; ordinar
 one-proxy releases use the focused suite. See [Kubernetes](kubernetes.md) for the
 coordinated Helm values and rollout/eviction policy.
 
+Developer-route recovery uses the rendered provider proxy HPA minimum/maximum
+(or its fixed replica count), while local-only fixtures retain their explicit
+local topology. A successful public GET is followed by authenticated safe GETs
+through every Ready proxy; valid HPA growth is accepted, zero capacity and failed
+individual routes are not. This avoids waiting for the local two-proxy fixture
+count when the reviewed provider installation has one proxy.
+
 ### Optional retained application
 
 Focused reusable staging can additionally specify `retainedApplication` with
@@ -758,6 +765,22 @@ An expired/failed attempt quarantines the retained application and preserves
 data; the independent janitor never deletes it. Busy/quarantined state or staging
 ahead of production requires explicit recovery/reseed. A failed acquisition can
 close its empty operation without changing another application's owner.
+
+Retained bootstrap/reuse, fixture-folder preparation, cleanup and verification
+use the same source-owned progress descriptions as the provider worker. Regression
+tests dispatch these branches through `providerProgressStep`, so an unregistered
+progress name fails locally rather than blocking a paid test or its cleanup.
+Quarantine verification closes cleanup only; it never qualifies a failed release.
+
+A failed first bootstrap before any fixture-folder intent can be recovered by an
+explicit operator inspection rather than reinstalling the application. Require
+the exact closed, cleanup-verified operation, absent actor, unchanged application,
+namespace and Secret UIDs, the predecessor's Helm manifest and image digests,
+Ready workloads, authenticated public reads and an empty project tree. Record a
+private recovery intent, then compare-and-swap only the retained application's
+idle state and verified predecessor manifest. Preserve the failed attempt and its
+unhealthy cleanup receipt. Any fixture write, identity mismatch or unknown write
+requires its own investigation; it is not this empty-bootstrap recovery case.
 
 Retained staging is restricted to the focused suite, excludes sizing/developer
 overlap, and needs an explicit ongoing-resource allowance before activation.

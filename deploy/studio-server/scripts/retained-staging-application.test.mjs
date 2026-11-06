@@ -5,6 +5,8 @@ import { ReusableStagingState, reusableStagingSettings } from './lib/reusable-st
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
 import { cleanupStaging } from './lib/reusable-staging-cleanup.mjs';
 import { retainedApplicationSettings } from './lib/retained-staging-application.mjs';
+import { providerProgressStep } from './lib/provider-progress.mjs';
+import { executeProviderPhase } from './qualification/provider-entry.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   createStudioServerReleaseManifest,
@@ -232,6 +234,86 @@ test('an expired/failed test without accepted fixtures quarantines safely and pr
     false,
   );
 });
+
+test('retained cleanup and verification run through the actual provider progress wrapper', async (t) => {
+  const { state, requests } = await retained(t);
+  await state.arm(actor);
+  const namespace = await state.namespace({ create: true });
+  await settleRetainedStaging(state, actor, async (_label, check) => assert.ok(await check()));
+  for (const phase of ['cleanup', 'verifyCleanup']) {
+    const id = `worker-${phase}`;
+    await state.change((record) => record.workers.push({ id, phase, closed: false }));
+    await executeProviderPhase({
+      phase,
+      state,
+      operation: state.operation,
+      actor,
+      gate: null,
+      step: providerProgressStep(state, phase, id, Date.now() + 60_000),
+    });
+    await state.change((record) => {
+      record.workers.find((w) => w.id === id).closed = true;
+    });
+  }
+  const { record } = await state.read();
+  assert.equal(record.cleanupVerified, true);
+  assert.equal(record.retainedCleanup.phase, 'quarantined');
+  assert.equal(record.retainedCleanup.dataCleaned, false);
+  assert.equal(record.retainedCleanup.namespaceUid, namespace.metadata.uid);
+  assert.equal(
+    requests.some((request) => request.method === 'DELETE'),
+    false,
+  );
+});
+
+for (const bootstrap of [true, false]) {
+  test(`retained ${bootstrap ? 'bootstrap' : 'reuse'} reaches fixture preparation through real progress reporting`, async (t) => {
+    const { state } = await retained(t);
+    await state.arm(actor);
+    await state.namespace({ create: true });
+    await state.change((record) => {
+      record.retainedApplication.bootstrap = bootstrap;
+      record.workers.push({ id: 'prepare-worker', phase: 'prepare', closed: false });
+    });
+    const reached = Error('Fixture preparation reached'),
+      calls = [];
+    const gate = {
+      config: {},
+      values: () => ({}),
+      prepareRetainedFixture: async () => {
+        throw reached;
+      },
+    };
+    for (const method of [
+      'verifySharedPrerequisites',
+      'verifyAdmission',
+      'installDependencies',
+      'createPublicRoute',
+      'apply',
+      'retainedSecrets',
+      'verifyRetainedInstallation',
+      'readyPublic',
+    ])
+      gate[method] = async () => {
+        calls.push(method);
+      };
+    await assert.rejects(
+      executeProviderPhase({
+        phase: 'prepare',
+        state,
+        actor,
+        gate,
+        operation: { ...state.operation, previous: { images: {} }, candidate: { images: {} } },
+        wait: async () => {}, // Owner readiness is tested separately; exercise phase dispatch here.
+        step: providerProgressStep(state, 'prepare', 'prepare-worker', Date.now() + 60_000),
+      }),
+      (error) => error === reached,
+    );
+    assert.equal(calls.includes('installDependencies'), bootstrap);
+    assert.equal(calls.includes('verifyRetainedInstallation'), !bootstrap);
+    assert.equal((await state.read()).record.workers[0].progress.step, 'owned-fixture-folder');
+  });
+}
 
 test('replaced retained namespace blocks further fixture admission', async (t) => {
   const f = await retained(t);

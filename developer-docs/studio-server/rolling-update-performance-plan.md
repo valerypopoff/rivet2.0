@@ -1,10 +1,29 @@
 # Faster ordinary staging and production updates
 
-Status: **implemented and locally validated; not activated or provider-qualified** (2026-11-04).
+Status: **implemented; first retained/one-proxy trial failed before rollout** (2026-11-06).
 The four larger optimizations below are implemented alongside the initial frontend
 and worker overlap. The public source is included in the develop update; a separate
-private production adapter copy remains local and excluded from Git. No image publication, workflow dispatch, persistent
-staging application, production update or access change was performed.
+private production adapter copy remains local and excluded from Git. The first
+retained staging trial is recorded below; the combined process is not yet
+provider-qualified and no production update was performed by that trial.
+
+### First retained/one-proxy trial (2026-11-06)
+
+Build Images 42186077940 passed all release gates. Focused staging attempt
+[42190089595](https://github.com/valerypopoff/rivet2.0/actions/runs/42190089595)
+bootstrapped the retained application but failed during preparation, before any
+rolling update. The inherited developer-route check still required the local
+two-proxy count despite the reviewed one-proxy provider profile. Cleanup then
+hit missing retained-operation names in the progress-description allowlist.
+The same omission also affected subsequent retained fixture/reuse preparation.
+These are automation defects, not evidence of request loss during replacement.
+
+Local regressions now cover provider HPA bounds, each proxy's safe route probe,
+and actual retained prepare/cleanup dispatch through the progress wrapper. Scoped
+operator cleanup quarantines the failed application, preserves its data and
+namespace, and removes only its test actor. This attempt provides no rollout
+timing or release qualification. Production remains unchanged; no automatic
+second attempt is authorized by the failed run.
 
 ## Measured baseline
 

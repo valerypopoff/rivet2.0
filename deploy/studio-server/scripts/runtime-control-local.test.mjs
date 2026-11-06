@@ -13,6 +13,7 @@ import {
 
 test('developer readiness propagates cancellation even when a safe GET is caught as transient', async () => {
   const gate = Object.create(RuntimeControlLocalGate.prototype);
+  gate.config = {};
   const cancellation = new AbortController(),
     reason = new Error('fixture phase cancelled');
   let calls = 0;
@@ -118,6 +119,81 @@ test('local edge selection is explicit, defaults to six proxies and rejects unkn
   gate.config.runtimeEdgeProfile = 'typo';
   assert.throws(() => gate.proxyCount, /unknown local/);
 });
+
+for (const [count, autoscaling] of [
+  [1, true],
+  [2, true],
+  [4, true],
+  [1, false],
+]) {
+  test(`provider developer recovery probes all ${count} proxies with autoscaling ${autoscaling}`, async () => {
+    const gate = Object.create(RuntimeControlLocalGate.prototype),
+      cancellation = new AbortController();
+    gate.config = { runtimeEdgeProfile: 'compact' };
+    gate.providerValues = {
+      replicaCount: { proxy: 1 },
+      autoscaling: { proxy: { enabled: autoscaling, minReplicas: 1, maxReplicas: 4 } },
+    };
+    gate.requestWorkflow = async () => ({});
+    gate.pods = async () =>
+      Array.from({ length: count }, (_, i) => ({
+        metadata: { name: `proxy-${i}`, labels: { 'app.kubernetes.io/component': 'proxy' } },
+        status: { conditions: [{ type: 'Ready', status: 'True' }] },
+        spec: { containers: [{ name: 'proxy', ports: [{ name: 'proxy-http', containerPort: 8080 }] }] },
+      }));
+    const probed = [];
+    gate.kube = async (args) => {
+      probed.push(args[1]);
+      return { exitCode: 0 };
+    };
+    const timer = setTimeout(() => cancellation.abort(Error('Valid provider capacity must recover')), 100);
+    try {
+      await withManagedGateSignal(cancellation.signal, () => gate.waitForDeveloperRoute('https://staging.invalid'));
+    } finally {
+      clearTimeout(timer);
+    }
+    assert.deepEqual(
+      probed,
+      Array.from({ length: count }, (_, i) => `proxy-${i}`),
+    );
+  });
+}
+
+for (const [count, failedProbe] of [
+  [0, false],
+  [5, false],
+  [1, true],
+]) {
+  test(`provider developer recovery rejects invalid capacity or a failed proxy (${count}, ${failedProbe})`, async () => {
+    const gate = Object.create(RuntimeControlLocalGate.prototype),
+      cancellation = new AbortController(),
+      reason = Error('Recovery still unavailable');
+    gate.config = { runtimeEdgeProfile: 'compact' };
+    gate.providerValues = { autoscaling: { proxy: { enabled: true, minReplicas: 1, maxReplicas: 4 } } };
+    gate.requestWorkflow = async () => ({});
+    gate.pods = async () =>
+      Array.from({ length: count }, (_, i) => ({
+        metadata: { name: `proxy-${i}`, labels: { 'app.kubernetes.io/component': 'proxy' } },
+        status: { conditions: [{ type: 'Ready', status: 'True' }] },
+        spec: { containers: [{ name: 'proxy', ports: [{ name: 'proxy-http', containerPort: 8080 }] }] },
+      }));
+    let probes = 0;
+    gate.kube = async () => {
+      probes++;
+      return { exitCode: failedProbe ? 1 : 0 };
+    };
+    const timer = setTimeout(() => cancellation.abort(reason), 100);
+    try {
+      await assert.rejects(
+        withManagedGateSignal(cancellation.signal, () => gate.waitForDeveloperRoute('https://staging.invalid')),
+        (error) => error === reason,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    assert.equal(probes, failedProbe ? count : 0);
+  });
+}
 
 for (const [profile, proxyCount] of [
   ['regional', 6],

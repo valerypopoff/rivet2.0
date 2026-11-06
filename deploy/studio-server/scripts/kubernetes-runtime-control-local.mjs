@@ -500,6 +500,10 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
     return snapshot.projectId;
   }
   async waitForDeveloperRoute(base) {
+    const hpa = this.providerValues?.autoscaling?.proxy;
+    const minimum = hpa?.enabled ? hpa.minReplicas : this.providerValues?.replicaCount?.proxy ?? this.proxyCount;
+    const maximum = hpa?.enabled ? hpa.maxReplicas : minimum;
+    assert.ok(Number.isSafeInteger(minimum) && minimum > 0 && Number.isSafeInteger(maximum) && maximum >= minimum);
     // The singleton contract permits a developer-only interruption. Pod Ready
     // can precede Service propagation to the proxy's UI-auth subrequest. Poll
     // only this safe GET before submitting any new mutation; never retry POSTs.
@@ -507,9 +511,10 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
       try {
         await this.requestWorkflow(base, '/api/config', { method: 'GET', timeoutMs: 10_000 });
         // A successful load-balanced GET only proves one node has observed the
-        // new Service endpoints. Check every local proxy before the next POST.
+        // new Service endpoints. Check every ready proxy before the next POST,
+        // using the provider's HPA bounds rather than the local fixture count.
         const proxies = (await this.pods()).filter((p) => role(p) === 'proxy' && ready(p));
-        if (proxies.length !== this.proxyCount) return false;
+        if (proxies.length < minimum || proxies.length > maximum) return false;
         const probes = await Promise.all(
           proxies.map((p) => {
             const port = p.spec.containers
