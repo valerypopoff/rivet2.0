@@ -10,6 +10,15 @@ The **Release Rivet** Actions workflow supplies those fixed inputs from an
 existing Build Images run and successful reusable-staging qualification. Its
 protected production action runs this command once; `deploy_production=false`
 stops at publication. See [automated qualification](automated-runtime-qualification.md).
+For an already published qualification, dispatch the same workflow with only
+`qualified_publication_run_id` and `deploy_production=true`. Its production-only
+mode skips build admission, staging and publication and checks out the exact
+qualified tooling separately from the current workflow controller. It retains
+the existing main-only federation, production environment, concurrency group,
+immutable operation fence, live drift checks, recovery checkpoint and acceptance.
+The controller does not replace qualified rollout code with current main code.
+No local Linux/WSL runner, new image build or staging allowance is required.
+See the qualification guide for the explicit cleanup-recovery receipt path.
 There is no separate readiness job. `--expected-installed-settings-digest`
 compares the canonical live Helm settings already read by the command with the
 qualification baseline, rejecting drift before adapters or Kubernetes writes.

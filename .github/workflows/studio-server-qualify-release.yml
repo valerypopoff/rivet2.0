@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: Successful exact-source main Build Images run to qualify and release without rebuilding.
-        required: true
+        description: Successful main Build Images run for a new staging qualification. Leave empty when reusing a qualified publication.
+        default: ''
         type: string
       tooling_run_id:
         description: Optional successful main Publish qualification images run. Reuses the application build only when runtime inputs are unchanged.
@@ -17,6 +17,18 @@ on:
         default: true
       sizing_requests:
         description: 'Optional sizing-only web/proxy CPU and memory request JSON. Requires deploy_production=false; no qualification publication. Values must be compatible with GKE placement.'
+        type: string
+        default: ''
+      qualified_publication_run_id:
+        description: 'Production only: successful qualified publication run to deploy, without staging or rebuilding. Leave build/tooling/sizing inputs empty.'
+        type: string
+        default: ''
+      recovered_operation_uri:
+        description: Optional generation-pinned private qualification receipt, only when cleanup recovery did not retain the normal staging artifact.
+        type: string
+        default: ''
+      recovered_operation_sha256:
+        description: SHA256 of the recovered receipt (sha256:...). Required only with recovered_operation_uri.
         type: string
         default: ''
 
@@ -33,6 +45,7 @@ concurrency:
 jobs:
   built:
     name: Built — validate immutable inputs
+    if: ${{ inputs.qualified_publication_run_id == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -53,6 +66,11 @@ jobs:
     steps:
       - name: Require main without a successful skipped qualification
         run: test "$GITHUB_REF" = refs/heads/main
+      - name: Reject recovery inputs outside production-only mode
+        env:
+          RECOVERED_OPERATION_URI: ${{ inputs.recovered_operation_uri }}
+          RECOVERED_OPERATION_SHA256: ${{ inputs.recovered_operation_sha256 }}
+        run: test -z "$RECOVERED_OPERATION_URI" && test -z "$RECOVERED_OPERATION_SHA256"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
@@ -118,6 +136,7 @@ jobs:
 
   qualified:
     name: Staging — observe candidate and verify cleanup
+    if: ${{ inputs.qualified_publication_run_id == '' }}
     needs: built
     runs-on: ubuntu-latest
     environment: rivet-managed-staging
@@ -201,7 +220,7 @@ jobs:
 
   publish:
     name: Publish qualified exact release
-    if: ${{ inputs.sizing_requests == '' }}
+    if: ${{ inputs.qualified_publication_run_id == '' && inputs.sizing_requests == '' }}
     needs: qualified
     uses: ./.github/workflows/studio-server-runtime-qualification.yml
     with:
@@ -212,7 +231,7 @@ jobs:
 
   deploy:
     name: Deploy — live checks, rolling update and acceptance
-    if: ${{ inputs.deploy_production && inputs.sizing_requests == '' }}
+    if: ${{ !cancelled() && ((inputs.qualified_publication_run_id != '' && needs.qualified.result == 'skipped' && needs.publish.result == 'skipped') || (inputs.qualified_publication_run_id == '' && inputs.deploy_production && inputs.sizing_requests == '' && needs.qualified.result == 'success' && needs.publish.result == 'success')) }}
     needs: [qualified, publish]
     runs-on: ubuntu-latest
     environment: rivet-production
@@ -225,6 +244,12 @@ jobs:
       id-token: write
     env:
       QUALIFIED_MANIFEST_DIGEST: ${{ needs.publish.outputs.manifest_digest }}
+      QUALIFIED_PUBLICATION_RUN_ID: ${{ inputs.qualified_publication_run_id }}
+      RECOVERED_OPERATION_URI: ${{ inputs.recovered_operation_uri }}
+      RECOVERED_OPERATION_SHA256: ${{ inputs.recovered_operation_sha256 }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.qualified_publication_run_id != '' && 'qualified' || '.' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -233,6 +258,28 @@ jobs:
         with:
           node-version: 24
       - run: corepack yarn install --immutable
+        working-directory: .
+      - name: Resolve an existing qualified publication before cloud access
+        if: ${{ inputs.qualified_publication_run_id != '' }}
+        id: reuse
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_DEPLOY_PRODUCTION: ${{ inputs.deploy_production }}
+          REUSE_BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          REUSE_TOOLING_RUN_ID: ${{ inputs.tooling_run_id }}
+          REUSE_SIZING_REQUESTS: ${{ inputs.sizing_requests }}
+        run: corepack yarn node deploy/studio-server/scripts/prepare-qualified-deployment.mjs resolve
+      - name: Check out the exact qualified deployment source
+        if: ${{ inputs.qualified_publication_run_id != '' }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.reuse.outputs.source_sha }}
+          path: qualified
+          persist-credentials: false
+      - name: Install the qualified source dependencies
+        if: ${{ inputs.qualified_publication_run_id != '' }}
+        run: corepack yarn install --immutable
       - name: Select pinned release Helm
         timeout-minutes: 2
         run: corepack yarn studio-server:setup:k8s-tools --github-env
@@ -249,9 +296,17 @@ jobs:
           RIVET_DEPLOYMENT_CONFIGURATION: ${{ secrets.RIVET_DEPLOYMENT_CONFIGURATION }}
         run: corepack yarn node deploy/studio-server/scripts/prepare-hosted-release.mjs production
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ inputs.qualified_publication_run_id == '' }}
         with:
           name: qualification-result-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/automated-runtime-qualification
+      - name: Prepare the original qualification receipt
+        if: ${{ inputs.qualified_publication_run_id != '' }}
+        working-directory: .
+        env:
+          DEPLOYMENT_SOURCE_SHA: ${{ steps.reuse.outputs.source_sha }}
+          QUALIFIED_MANIFEST_DIGEST: ${{ steps.reuse.outputs.manifest_digest }}
+        run: corepack yarn node deploy/studio-server/scripts/prepare-qualified-deployment.mjs materialize
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -260,13 +315,17 @@ jobs:
       - name: Deploy the qualified immutable manifest
         env:
           RELEASE_MANIFEST_REPOSITORY: ghcr.io/${{ github.repository }}-studio-server/release-manifest
+          DEPLOYMENT_SOURCE_SHA: ${{ steps.reuse.outputs.source_sha || github.sha }}
+          QUALIFIED_MANIFEST_DIGEST: ${{ steps.reuse.outputs.manifest_digest || needs.publish.outputs.manifest_digest }}
         run: |
           set -euo pipefail
-          reference="$RELEASE_MANIFEST_REPOSITORY:manifest-${QUALIFIED_MANIFEST_DIGEST#sha256:}"
-          corepack yarn node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$reference" --output artifacts/automated-runtime-qualification/qualified-manifest.json
-          corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs deploy
+          if [[ -z "$QUALIFIED_PUBLICATION_RUN_ID" ]]; then
+            reference="$RELEASE_MANIFEST_REPOSITORY:manifest-${QUALIFIED_MANIFEST_DIGEST#sha256:}"
+            corepack yarn node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$reference" --output artifacts/automated-runtime-qualification/qualified-manifest.json
+          fi
+          GITHUB_SHA="$DEPLOYMENT_SOURCE_SHA" corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs deploy
       - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: deployment-summary-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/automated-runtime-qualification/deployment-summary.json
+          path: ${{ inputs.qualified_publication_run_id != '' && 'qualified/' || '' }}artifacts/automated-runtime-qualification/deployment-summary.json
           if-no-files-found: error
