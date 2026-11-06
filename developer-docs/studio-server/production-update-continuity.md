@@ -277,11 +277,27 @@ its own metadata after transition. It preserves the request timeout (normally
 [draining guidance](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/load-balancing)
 and [Gateway policy reference](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/configure-gateway-resources).
 
-The initial implementation supports the qualified **single-container proxy**,
+First adoption supports the qualified **single-container proxy**,
 an unchanged proxy HPA policy, one explicit HTTPS hostname, one Gateway parent,
 and route rules that each target the normal proxy Service. Proxy exporters,
 multi-backend/shared or mirrored route rules, unknown Service ports and existing response-header modifiers fail
 before mutation. They need their own reviewed transition and qualification.
+
+For an already protected pool, inspection and preparation validate the shared
+ingress ownership/routing contract without constructing a temporary bridge.
+The bridge-only HPA policy comparison and two-to-four replica ceiling apply only
+when adoption is actually needed. A qualified ordinary update may therefore
+change the HPA minimum from two to one without a preparatory live HPA patch.
+Current Pods and the Deployment template must retain their protected lifecycle,
+and both the installed backend policy and actual Compute backend must retain
+the required draining period. Routing, HPA target identity, serving capacity,
+NEG health and request-completion requirements still apply. Local regressions
+cover this boundary; they do not change previously qualified tooling or live GCP.
+Installed-state settlement accepts an already-applied proxy HPA policy only when
+its whole normalized specification matches the qualified target and retains the
+same release-owned Deployment target. That same inventory must prove healthy
+capacity at its live bounds. Saved Helm values/history are never edited to
+manufacture agreement. Normal/final settlement keeps its exact rendered policy.
 
 ## Read-only preflight
 

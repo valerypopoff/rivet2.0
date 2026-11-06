@@ -117,6 +117,57 @@ function fixture({ kind = 'StatefulSet', replicas = 2, rendered = 2, name = 'exe
 }
 const inspect = (state) => inspectReleaseSettlement(state);
 
+test('installed preflight accepts an already-applied qualified proxy policy without accepting other drift', async () => {
+  const state = fixture({ name: 'proxy', kind: 'Deployment', automatic: true, replicas: 1 });
+  state.liveHpa.spec.minReplicas = 1;
+  const candidateProxyHpa = clone(state.hpa);
+  candidateProxyHpa.spec.minReplicas = 1;
+  const original = clone(state.resources);
+  assert.equal(inspect(state).settled, false, 'Ordinary settlement still requires its exact rendered policy');
+  const preflight = { ...state, candidateProxyHpa };
+  assert.equal(inspect(preflight).settled, true);
+  await waitForReleaseSettlement({
+    ...preflight,
+    timeoutMs: 1000,
+    stableMs: 0,
+    kube: async () => ({ stdout: JSON.stringify({ items: state.items }) }),
+  });
+  assert.deepEqual(state.resources, original, 'Stored Helm resources are never rewritten');
+  for (const change of [
+    (value) => {
+      value.liveHpa.spec.maxReplicas++;
+    },
+    (value) => {
+      value.liveHpa.spec.metrics[0].resource.target.averageUtilization++;
+    },
+    (value) => {
+      value.candidateProxyHpa.spec.scaleTargetRef.name = 'foreign';
+    },
+    (value) => {
+      value.candidateProxyHpa.metadata.labels[instance] = 'foreign';
+    },
+    (value) => {
+      value.candidateProxyHpa.metadata.namespace = 'foreign';
+    },
+    (value) => {
+      value.pods[0].status.conditions[0].status = 'False';
+    },
+    (value) => {
+      value.liveHpa.status.conditions[0].status = 'False';
+    },
+  ]) {
+    const changed = clone(preflight);
+    change(changed);
+    assert.equal(inspect(changed).settled, false);
+  }
+  const notYetApplied = fixture({ name: 'proxy', kind: 'Deployment', automatic: true });
+  assert.equal(
+    inspect({ ...notYetApplied, candidateProxyHpa }).settled,
+    true,
+    'The unchanged installed policy remains valid before application',
+  );
+});
+
 test('final verification preserves the stable health, identity, capacity and freshness window', () => {
   const state = fixture(),
     time = Date.now();

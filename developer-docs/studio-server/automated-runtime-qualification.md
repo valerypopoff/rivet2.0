@@ -66,6 +66,23 @@ credentials or workload values. The controller verifies its operation, candidate
 predecessor, tooling and staged configuration against the published certificate.
 Missing or inconsistent artifacts stop the run; there is no automatic staging
 fallback, alternative source, retry of deployment, or refresh of the baseline.
+For a hosted readiness check, additionally set `production_preflight_only=true`.
+This requires the same existing publication and `deploy_production=true`; it
+cannot select a new build/staging operation. The current controller prepares the
+original inputs, then runs the exact qualified CLI with `--preflight-only` using
+the real production environment and CI identity. It does not invoke the qualified
+deployment wrapper, acquire its local/cloud admission fence, run a backup or
+application journey, or change workloads. Private readiness evidence goes under
+`production-preflight/<qualification operation>/<unique check>/`, separately from
+deployment recovery evidence. A successful summary reports `preflight-passed`,
+never `deployed`. Preflight and rollout are separate explicit dispatches; no
+workflow automatically falls through from a readiness check to deployment.
+The reviewed private preflight adapter can additionally prove Cloud SQL
+connectivity with a read-only settings query, plus bucket metadata, object list
+and one exact-generation object metadata GET. It must settle both access probes
+before reporting success/failure, retain only bounded private diagnostics, and
+leave database/object contents unchanged. These cheap reads do not replace the
+real rollout's recovery checkpoint or its request-completion acceptance.
 After an uncertain production result, inspect the existing journal and live state
 before another dispatch; a reused qualification is not permission to replay a write.
 
@@ -803,6 +820,13 @@ use the same source-owned progress descriptions as the provider worker. Regressi
 tests dispatch these branches through `providerProgressStep`, so an unregistered
 progress name fails locally rather than blocking a paid test or its cleanup.
 Quarantine verification closes cleanup only; it never qualifies a failed release.
+
+Retained accepted-work settlement reads the published-execution gauge on every
+execution worker and any combined backend. An explicitly configured `control`
+backend has no published-execution admission and does not initialize that gauge;
+its absence there is expected. Owner/controller identity and stable Pod membership
+remain checked for both roles. Missing worker/combined-backend metrics and nonzero
+accepted work still block settlement; they are never treated as zero.
 
 A failed first bootstrap before any fixture-folder intent can be recovered by an
 explicit operator inspection rather than reinstalling the application. Require

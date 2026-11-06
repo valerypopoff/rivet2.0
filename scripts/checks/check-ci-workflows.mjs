@@ -99,6 +99,7 @@ assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs)
   'qualified_publication_run_id',
   'recovered_operation_uri',
   'recovered_operation_sha256',
+  'production_preflight_only',
 ]);
 assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);
 assert.equal(automaticQualification.jobs.built.if, "${{ inputs.qualified_publication_run_id == '' }}");
@@ -197,6 +198,18 @@ assert.equal(
 );
 assert.equal(automaticQualification.on.workflow_dispatch.inputs.build_run_id.required, undefined);
 const productionSteps = automaticQualification.jobs.deploy.steps;
+assert.equal(automaticQualification.on.workflow_dispatch.inputs.production_preflight_only.default, false);
+assert.equal(
+  automaticQualification.jobs.deploy.env.QUALIFIED_PREFLIGHT_ONLY,
+  '${{ inputs.production_preflight_only }}',
+);
+assert.ok(
+  automaticQualification.jobs.built.steps.some(
+    (step) =>
+      step.env?.QUALIFIED_PREFLIGHT_ONLY === '${{ inputs.production_preflight_only }}' &&
+      step.run.includes('test "$QUALIFIED_PREFLIGHT_ONLY" != true'),
+  ),
+);
 const resolveQualified = productionSteps.findIndex((s) => s.run?.endsWith('prepare-qualified-deployment.mjs resolve'));
 const qualifiedCheckout = productionSteps.findIndex((s) => s.with?.path === 'qualified');
 const productionAuth = productionSteps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));

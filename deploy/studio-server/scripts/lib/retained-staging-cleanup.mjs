@@ -56,10 +56,18 @@ export async function settleRetainedStaging(state, owner, wait) {
           'Retained work owner is foreign',
         );
         if (pod.metadata.deletionTimestamp || pod.status.phase !== 'Running') return false;
+        const containerName = pod.metadata.labels['app.kubernetes.io/component'] === 'backend' ? 'backend' : 'api';
+        const container = pod.spec.containers.find((item) => item.name === containerName);
+        assert.ok(container, 'Retained work container is missing');
+        const profile = container.env?.find((item) => item.name === 'RIVET_API_PROFILE');
+        // A split control backend never initializes published-execution admission
+        // or its gauge. Combined backends and every execution worker still must
+        // report an explicit zero; a missing metric is not evidence of no work.
+        if (containerName === 'backend' && profile?.value === 'control' && !profile.valueFrom) continue;
         const metrics = await state.api.exec(
           `/api/v1/namespaces/${ns}/pods/${encodeURIComponent(pod.metadata.name)}/exec`,
           executionSampleCommand(8080),
-          { container: pod.metadata.labels['app.kubernetes.io/component'] === 'backend' ? 'backend' : 'api' },
+          { container: containerName },
         );
         const samples = metrics
           .split('\n')

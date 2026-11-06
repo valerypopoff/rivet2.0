@@ -982,9 +982,24 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
 
   // A settled single-proxy installation retains the same ingress/ownership checks.
   available = true;
-  backendHealthy = false; // The aggregate observer flag reports two-zone redundancy.
+  backendHealthy = true;
   pendingNormalReads = 0;
   const one = { ...config, hpaSpec: { ...config.hpaSpec, minReplicas: 1 } };
+  const policyChange = createKubernetesProxyContinuity({ ...adapterOptions, config: one });
+  assertContinuityAcceptance(await policyChange.inspect(), profile);
+  const policyOperation = { ...f.operation, record: { token: 'policy-change', phase: 'preflight' } };
+  const beforePolicyChange = commands.length;
+  await policyChange.prepare(policyOperation);
+  assert.deepEqual(policyOperation.record.proxyContinuity.entries, []);
+  assert.ok(
+    commands.slice(beforePolicyChange).every((args) => args[0] === 'get' || (args[0] === 'exec' && args[5] === 'cat')),
+    'Changing the qualified HPA minimum on protected proxies needs no bridge or live policy patch',
+  );
+  const drain = f.live.get('GCPBackendPolicy/policy').spec.default.connectionDraining;
+  drain.drainingTimeoutSec = 60;
+  await assert.rejects(policyChange.inspect(), /Changing proxy HPA policy during first adoption/);
+  drain.drainingTimeoutSec = 600;
+  backendHealthy = false; // The aggregate observer flag reports two-zone redundancy.
   f.live.get('Deployment/rivet-proxy').spec.replicas = 1;
   f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec = structuredClone(one.hpaSpec);
   const single = createKubernetesProxyContinuity({ ...adapterOptions, config: one });
@@ -1001,7 +1016,14 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
 });
 
 test('already-protected pools still enforce ingress invariants under the operation lease', async () => {
-  for (const unsupported of [false, true]) {
+  for (const [unsupported, error] of [
+    [undefined],
+    ['route', /Unsupported public route/],
+    ['hpa', /foreign-proxy/],
+    ['sidecar', /single-container/],
+    ['image', /sha256/],
+    ['credentials', /Plaintext/],
+  ]) {
     const f = fixture(),
       template = f.baseline.deployment.spec.template;
     template.spec.terminationGracePeriodSeconds = 900;
@@ -1010,9 +1032,17 @@ test('already-protected pools still enforce ingress invariants under the operati
     f.baseline.policy.spec.default.connectionDraining.drainingTimeoutSec = 600;
     f.live.set('Deployment/rivet-proxy', structuredClone(f.baseline.deployment));
     f.live.set('GCPBackendPolicy/policy', structuredClone(f.baseline.policy));
-    if (unsupported) f.baseline.route.spec.rules[0].backendRefs.push({ name: 'another-service', port: 80 });
+    if (unsupported === 'route') f.baseline.route.spec.rules[0].backendRefs.push({ name: 'another-service', port: 80 });
+    if (unsupported === 'hpa')
+      f.baseline.hpa = {
+        ...f.baseline.hpa,
+        spec: { ...config.hpaSpec, scaleTargetRef: { kind: 'Deployment', name: 'foreign-proxy' } },
+      };
+    if (unsupported === 'sidecar') template.spec.containers.push(structuredClone(template.spec.containers[0]));
+    if (unsupported === 'image') template.spec.containers[0].image = 'proxy:latest';
+    if (unsupported === 'credentials') template.spec.containers[0].env = [{ name: 'API_TOKEN', value: 'private' }];
     if (unsupported) {
-      await assert.rejects(f.transition().prepare(f.operation), /Unsupported public route/);
+      await assert.rejects(f.transition().prepare(f.operation), error);
       assert.equal(f.operation.record.proxyContinuity, undefined);
     } else {
       await f.transition().prepare(f.operation);
@@ -1021,6 +1051,20 @@ test('already-protected pools still enforce ingress invariants under the operati
     }
     assert.deepEqual(f.events, [], 'Validation never creates a bridge for an already-protected pool');
   }
+});
+
+test('only first adoption requires the existing HPA policy and bridge capacity', async () => {
+  const one = { ...config, hpaSpec: { ...config.hpaSpec, minReplicas: 1 } };
+  const f = fixture();
+  const transition = createProxyContinuityTransition({
+    config: one,
+    io: f.io,
+    timeoutMs: 1200000,
+    now: () => 0,
+  });
+  await assert.rejects(transition.prepare(f.operation), /Changing proxy HPA policy during first adoption/);
+  assert.equal(f.operation.record.proxyContinuity, undefined);
+  assert.deepEqual(f.events, []);
 });
 
 test('deadlines that cannot cover a protected phase fail before any mutation', () => {

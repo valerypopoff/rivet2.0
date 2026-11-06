@@ -139,4 +139,12 @@ test('the hosted production controller delegates once to the qualified implement
     deployQualifiedProduction({ ...options, environment: { ...environment, DEPLOYMENT_SOURCE_SHA: 'b'.repeat(40) } }),
   );
   assert.equal(invoked, 2);
+  await assert.rejects(
+    deployQualifiedProduction({ ...options, environment: { ...environment, QUALIFIED_PREFLIGHT_ONLY: 'invalid' } }),
+  );
+  assert.equal(invoked, 2, 'Malformed preflight selection cannot fall through to deployment');
+  await assert.rejects(
+    deployQualifiedProduction({ ...options, environment: { ...environment, QUALIFIED_PREFLIGHT_ONLY: 'true' } }),
+  );
+  assert.equal(invoked, 2, 'A failed preflight cannot invoke the qualified deployment implementation');
 });

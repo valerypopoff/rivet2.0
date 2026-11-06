@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readDeploymentPolicy } from './deployment-workflow.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
 import { continuityTimeoutMs } from './request-continuity.mjs';
@@ -26,7 +26,10 @@ export async function deployQualifiedRelease({
   evidenceBucket,
   identity,
   run,
+  preflightOnly = false,
+  cloudEvidence = privateCloudEvidence,
 }) {
+  assert.equal(typeof preflightOnly, 'boolean');
   assert.ok(!operation.sizingRequests, 'Sizing observations cannot authorize production deployment');
   assert.equal(getStudioServerReleaseManifestDigest(manifest, { requirePromoted: true }), digest);
   assert.equal(releaseToolingSource(manifest), sourceSha);
@@ -55,7 +58,7 @@ export async function deployQualifiedRelease({
     operation.installed.valuesDigest,
     'Production settings changed since staging qualification',
   );
-  const artifacts = path.join(packet, 'private-deployment');
+  const artifacts = path.join(packet, preflightOnly ? 'private-preflight' : 'private-deployment');
   const relative = path.relative(await fs.realpath(root), await fs.realpath(packet));
   assert.ok(
     relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative),
@@ -69,20 +72,24 @@ export async function deployQualifiedRelease({
   const values = path.join(artifacts, 'values.yaml');
   await fs.writeFile(file, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
   await fs.writeFile(values, bytes, { flag: 'wx', mode: 0o600 });
-  assert.ok(privateStore && path.isAbsolute(privateStore), 'A durable private deployment store is required');
-  await fs.mkdir(privateStore, { recursive: true, mode: 0o700 });
-  const storeRelative = path.relative(await fs.realpath(root), await fs.realpath(privateStore));
-  assert.ok(
-    storeRelative === '..' || storeRelative.startsWith(`..${path.sep}`) || path.isAbsolute(storeRelative),
-    'Deployment receipts must survive checkout cleaning outside the repository',
-  );
-  assert.match(operation.operationId, /^rivet-q-[1-9][0-9]*-[1-9][0-9]*$/);
-  const archive = path.join(privateStore, operation.operationId);
-  await fs.mkdir(archive, { mode: 0o700 }); // Persistent replay fence, even after checkout cleaning.
-  const cloud = evidenceBucket
-    ? privateCloudEvidence({ bucket: evidenceBucket, prefix: `production/${operation.operationId}` })
-    : undefined;
-  await cloud?.acquire(Buffer.from(JSON.stringify({ operationId: operation.operationId, digest })));
+  let archive;
+  if (!preflightOnly) {
+    assert.ok(privateStore && path.isAbsolute(privateStore), 'A durable private deployment store is required');
+    await fs.mkdir(privateStore, { recursive: true, mode: 0o700 });
+    const storeRelative = path.relative(await fs.realpath(root), await fs.realpath(privateStore));
+    assert.ok(
+      storeRelative === '..' || storeRelative.startsWith(`..${path.sep}`) || path.isAbsolute(storeRelative),
+      'Deployment receipts must survive checkout cleaning outside the repository',
+    );
+    assert.match(operation.operationId, /^rivet-q-[1-9][0-9]*-[1-9][0-9]*$/);
+    archive = path.join(privateStore, operation.operationId);
+    await fs.mkdir(archive, { mode: 0o700 }); // Persistent replay fence, even after checkout cleaning.
+  }
+  const prefix = preflightOnly
+    ? `production-preflight/${operation.operationId}/${randomUUID()}`
+    : `production/${operation.operationId}`;
+  const cloud = evidenceBucket ? cloudEvidence({ bucket: evidenceBucket, prefix }) : undefined;
+  if (!preflightOnly) await cloud?.acquire(Buffer.from(JSON.stringify({ operationId: operation.operationId, digest })));
   await cloud?.saveDirectory(artifacts);
   const profile = manifest.evidence.runtimeControl.requestContinuity?.profile;
   try {
@@ -104,8 +111,7 @@ export async function deployQualifiedRelease({
         identity.namespace,
         '--release',
         identity.release,
-        '--confirm',
-        identity.release,
+        ...(preflightOnly ? ['--preflight-only'] : ['--confirm', identity.release]),
         '--artifacts',
         artifacts,
         ...(profile ? ['--timeout', `${continuityTimeoutMs(profile) / 1000}s`] : []),
@@ -117,7 +123,7 @@ export async function deployQualifiedRelease({
           ...(evidenceBucket
             ? {
                 RIVET_PRODUCTION_EVIDENCE_BUCKET: evidenceBucket,
-                RIVET_PRODUCTION_EVIDENCE_PREFIX: `production/${operation.operationId}`,
+                RIVET_PRODUCTION_EVIDENCE_PREFIX: prefix,
               }
             : {}),
         },
@@ -131,8 +137,25 @@ export async function deployQualifiedRelease({
     );
     throw error;
   } finally {
-    await fs.cp(artifacts, path.join(archive, 'receipts'), { recursive: true, errorOnExist: true, force: false });
+    if (archive)
+      await fs.cp(artifacts, path.join(archive, 'receipts'), { recursive: true, errorOnExist: true, force: false });
     await cloud?.saveDirectory(artifacts);
+  }
+  if (preflightOnly) {
+    const result = JSON.parse(await fs.readFile(path.join(artifacts, 'deployment-preflight.json'), 'utf8'));
+    assert.equal(result.passed, true);
+    assert.equal(result.workloadMutations, false);
+    assert.equal(result.applicationJourneysRun, false);
+    assert.equal(result.candidateManifestDigest, digest);
+    assert.equal(result.installedManifestDigest, operation.predecessorManifestDigest);
+    assert.equal(result.namespaceUid, operation.installed.namespaceUid);
+    return {
+      status: 'preflight-passed',
+      manifestDigest: digest,
+      sourceSha: manifest.source.sha,
+      workloadMutations: false,
+      observedAt: new Date().toISOString(),
+    };
   }
   const result = JSON.parse(await fs.readFile(path.join(artifacts, 'deployment-result.json'), 'utf8'));
   assert.equal(result.state, 'complete');

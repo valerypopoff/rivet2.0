@@ -55,6 +55,7 @@ test('application reuse rejects runtime/container/chart/dependency changes inclu
     'deploy/studio-server/scripts/lib/ha-background-probe.mjs',
     'deploy/studio-server/scripts/qualification/provider-entry.mjs',
     'scripts/ci/verify-rollout-source.mjs',
+    'scripts/checks/check-rollout-entrypoints.mjs',
     'developer-docs/studio-server/production-update-continuity.md',
     'packages/studio-server-api/src/tests/ha-background-admission.test.ts',
   ])
@@ -77,6 +78,8 @@ test('real committed-tree comparison permits tooling-only changes and rejects re
   const app = git('rev-parse', 'HEAD');
   await fs.mkdir(path.join(dir, 'deploy/studio-server/scripts'), { recursive: true });
   await fs.writeFile(path.join(dir, 'deploy/studio-server/scripts/probe.mjs'), 'export const probe=1');
+  await fs.mkdir(path.join(dir, 'scripts/checks'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'scripts/checks/check-rollout-entrypoints.mjs'), 'export const validate=1');
   git('add', '.');
   git('commit', '-m', 'tooling');
   const tools = git('rev-parse', 'HEAD');

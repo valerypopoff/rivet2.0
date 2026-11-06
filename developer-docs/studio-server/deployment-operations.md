@@ -20,7 +20,8 @@ The controller does not replace qualified rollout code with current main code.
 No local Linux/WSL runner, new image build or staging allowance is required.
 See the qualification guide for the explicit cleanup-recovery receipt path.
 The production CLI imports Node's strict assertion module explicitly. The source
-gate also lints entry-point bindings: staging exercises the shared rollout
+gate also lints entry-point bindings. That lint script is a tooling input and
+does not require rebuilding unchanged application images. Staging exercises the shared rollout
 libraries, so it cannot establish that an otherwise unused production-only branch
 has all its imports. For the already-qualified tooling revision `cf1bba99c` only,
 the hosted controller supplies that same strict module through a Node preload to
@@ -33,6 +34,19 @@ There is no separate readiness job. `--expected-installed-settings-digest`
 compares the canonical live Helm settings already read by the command with the
 qualification baseline, rejecting drift before adapters or Kubernetes writes.
 The action also binds namespace UID, operator values, source, images and manifest.
+The production principal must be able to list the complete namespace workload
+inventory used by settlement: Deployments, StatefulSets, DaemonSets,
+ReplicationControllers, CronJobs, ReplicaSets, Jobs, Pods and HPAs. Missing access
+is a production installation prerequisite, even when the chart creates none of
+that resource kind. Staging's different principal does not prove production
+access. Keep the inventory complete; review and authorize any required RBAC
+change separately instead of skipping denied resource types or retrying a rollout.
+Installed-state preflight also permits a proxy HPA policy already matching the
+exact qualified candidate on the same release-owned target. This covers an
+independently approved minimum change before Helm has saved the new policy.
+The installed policy remains valid until that change is applied; unrelated HPA
+drift, foreign targets, unhealthy scaling, missing capacity and workload drift
+still fail. Final rollout settlement always requires the actual rendered target.
 Protected ordinary singleton HA updates overlap native proxy/web replacement
 with backend/execution retirement. Only their template apply omits Helm's
 broad resource wait; the pre-upgrade schema hook remains enabled and blocking.
