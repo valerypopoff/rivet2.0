@@ -96,9 +96,13 @@ assert.deepEqual(Object.keys(automaticQualification.on.workflow_dispatch.inputs)
   'tooling_run_id',
   'deploy_production',
   'sizing_requests',
+  'qualified_publication_run_id',
+  'recovered_operation_uri',
+  'recovered_operation_sha256',
 ]);
 assert.equal(automaticQualification.concurrency['cancel-in-progress'], false);
-assert.equal(automaticQualification.jobs.built.if, undefined);
+assert.equal(automaticQualification.jobs.built.if, "${{ inputs.qualified_publication_run_id == '' }}");
+assert.equal(automaticQualification.jobs.qualified.if, "${{ inputs.qualified_publication_run_id == '' }}");
 assert.equal(automaticQualification.jobs.built.steps[0].run, 'test "$GITHUB_REF" = refs/heads/main');
 assert.equal(automaticQualification.jobs.qualified.environment, 'rivet-managed-staging');
 assert.equal(automaticQualification.jobs.qualified['runs-on'], 'ubuntu-latest');
@@ -178,8 +182,39 @@ assert.equal(
 );
 assert.deepEqual(automaticQualification.jobs.deploy.needs, ['qualified', 'publish']);
 assert.equal(automaticQualification.jobs.preflight, undefined);
-assert.equal(automaticQualification.jobs.deploy.if, "${{ inputs.deploy_production && inputs.sizing_requests == '' }}");
-assert.equal(automaticQualification.jobs.publish.if, "${{ inputs.sizing_requests == '' }}");
+assert.match(automaticQualification.jobs.deploy.if, /!cancelled\(\)/);
+assert.match(
+  automaticQualification.jobs.deploy.if,
+  /qualified_publication_run_id != '' && needs\.qualified\.result == 'skipped' && needs\.publish\.result == 'skipped'/,
+);
+assert.match(
+  automaticQualification.jobs.deploy.if,
+  /qualified_publication_run_id == '' && inputs\.deploy_production && inputs\.sizing_requests == '' && needs\.qualified\.result == 'success' && needs\.publish\.result == 'success'/,
+);
+assert.equal(
+  automaticQualification.jobs.publish.if,
+  "${{ inputs.qualified_publication_run_id == '' && inputs.sizing_requests == '' }}",
+);
+assert.equal(automaticQualification.on.workflow_dispatch.inputs.build_run_id.required, undefined);
+const productionSteps = automaticQualification.jobs.deploy.steps;
+const resolveQualified = productionSteps.findIndex((s) => s.run?.endsWith('prepare-qualified-deployment.mjs resolve'));
+const qualifiedCheckout = productionSteps.findIndex((s) => s.with?.path === 'qualified');
+const productionAuth = productionSteps.findIndex((s) => s.uses?.startsWith('google-github-actions/auth@'));
+const materializeQualified = productionSteps.findIndex((s) =>
+  s.run?.endsWith('prepare-qualified-deployment.mjs materialize'),
+);
+const productionDeploy = productionSteps.findIndex((s) => s.run?.includes('execute-runtime-qualification.mjs deploy'));
+assert.ok(resolveQualified >= 0 && resolveQualified < qualifiedCheckout && qualifiedCheckout < productionAuth);
+assert.ok(productionAuth < materializeQualified && materializeQualified < productionDeploy);
+assert.equal(productionSteps[qualifiedCheckout].with.ref, '${{ steps.reuse.outputs.source_sha }}');
+assert.equal(productionSteps[qualifiedCheckout].with['persist-credentials'], false);
+assert.equal(productionSteps[resolveQualified]['working-directory'], '.');
+assert.equal(productionSteps[materializeQualified]['working-directory'], '.');
+assert.match(productionSteps[productionDeploy].run, /GITHUB_SHA="\$DEPLOYMENT_SOURCE_SHA" corepack yarn node/);
+assert.equal(
+  automaticQualification.jobs.deploy.defaults.run['working-directory'],
+  "${{ inputs.qualified_publication_run_id != '' && 'qualified' || '.' }}",
+);
 for (const job of [automaticQualification.jobs.built, automaticQualification.jobs.qualified]) {
   assert.equal(job.env.RIVET_QUALIFICATION_SIZING_REQUESTS, '${{ inputs.sizing_requests }}');
   assert.equal(job.env.RIVET_QUALIFICATION_DEPLOY_PRODUCTION, '${{ inputs.deploy_production }}');

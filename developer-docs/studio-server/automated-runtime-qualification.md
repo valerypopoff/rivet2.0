@@ -37,6 +37,38 @@ not install credentials, provision shared infrastructure or enable itself. It is
 main-only and dispatch-only and fails when
 `RIVET_AUTOMATED_QUALIFICATION_ENABLED` is not exactly `true`.
 
+### Deploying an existing qualification
+
+Use **Release Rivet** on main with `qualified_publication_run_id=<successful
+publication run>` and `deploy_production=true`. Leave `build_run_id`,
+`tooling_run_id` and `sizing_requests` empty. This mode skips the build-admission,
+staging and publication jobs. It verifies the selected successful main run and
+its published manifest/declarations, retrieves the original operation receipt,
+and invokes the existing deployment command once. It does not republish the
+release, run another GKE test or rebuild images.
+
+The current workflow is only the input controller. Deployment uses a separate
+clean checkout of the manifest's qualified tooling source, with its original
+source fingerprint and dependencies. A workflow-only repair therefore does not
+invalidate the existing application or qualification. The production job keeps
+the same protected environment, exact-workflow federation and non-cancelling
+release concurrency as the full path. Live predecessor/settings/namespace checks,
+the private checkpoint, continuous observation and final acceptance remain.
+
+Normally the controller downloads `qualification-result-<original run>-<attempt>`
+from the operation named in the published declarations. If an explicit cleanup
+recovery published the certificate without that normal artifact, an operator may
+provide `recovered_operation_uri` plus `recovered_operation_sha256`. The URI must
+pin an exact object generation under `qualification-receipts/` in the configured
+private production evidence bucket; its bytes must match the supplied SHA256.
+It contains only the original sanitized `operation-public.json`, never adapters,
+credentials or workload values. The controller verifies its operation, candidate,
+predecessor, tooling and staged configuration against the published certificate.
+Missing or inconsistent artifacts stop the run; there is no automatic staging
+fallback, alternative source, retry of deployment, or refresh of the baseline.
+After an uncertain production result, inspect the existing journal and live state
+before another dispatch; a reused qualification is not permission to replay a write.
+
 The standard workflow uses a **dedicated reusable staging cluster**. Install its
 cluster, Gateway/TLS, access and independent janitor once. GitHub-hosted
 Linux jobs coordinate short-lived in-cluster actors; no permanent runner VM is
