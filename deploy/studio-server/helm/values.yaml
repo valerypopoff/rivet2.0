@@ -35,7 +35,7 @@ images:
     pullPolicy: IfNotPresent
 
 replicaCount:
-  proxy: 2
+  proxy: 1
   web: 1
   # Raising backend from 1 to 2 is not a safe shortcut to redundancy: the
   # control-plane ownership mode and chart validation must also support it.
@@ -144,7 +144,7 @@ autoscaling:
     enabled: false
     # Owned HA upgrades permit HPA growth while keeping every serving replica.
     scaleDownPaused: false
-    minReplicas: 2
+    minReplicas: 1
     maxReplicas: 5
     targetCPUUtilizationPercentage: 75
   web:

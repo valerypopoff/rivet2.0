@@ -157,7 +157,7 @@ test('compact observation still needs distinct zones, distinct nodes and positiv
 test('a compact minimum-capacity proof cannot borrow the headroom of six healthy proxies', () => {
   const f = fixture();
   for (const p of f.pods) p.spec.topologySpreadConstraints[0].minDomains = 2;
-  assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'compact'), /exactly two/);
+  assert.throws(() => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'replicated', 'compact'), /configured steady-state proxy floor/);
 });
 
 test('regional Gateway standalone gates wait for every current endpoint and preserve topology checks', async () => {
@@ -498,4 +498,43 @@ test('real HTTP failure evidence retains a fingerprint and fixed classifications
       bodyBytes: Buffer.byteLength(body), bodySha256: createHash('sha256').update(body).digest('hex') });
     assert.doesNotMatch(JSON.stringify(report), /secret|set-cookie|authorization|<html>/);
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+
+test('single-proxy compact Helm policy protects the serving Pod and permits a ready surge', () => {
+  const settings = ['ha.controlPlane.mode=singleton', 'replicaCount.backend=1', 'replicaCount.web=1',
+    'publishedExecutionAdmission.mode=enforce', 'availability.gkeGatewayProfile=compact',
+    'availability.topologySpread.minDomains=1', 'replicaCount.proxy=1',
+    'autoscaling.proxy.enabled=true', 'autoscaling.proxy.minReplicas=1', 'autoscaling.proxy.maxReplicas=4'];
+  const resources = parseAllDocuments(render(settings)).map(d => d.toJS()).filter(Boolean);
+  const proxy = resources.find(r => r.kind === 'Deployment' && r.metadata.labels['app.kubernetes.io/component'] === 'proxy');
+  assert.equal(proxy.spec.replicas, 1);
+  assert.deepEqual(proxy.spec.strategy.rollingUpdate, { maxUnavailable: 0, maxSurge: 1 });
+  assert.equal(proxy.spec.template.spec.topologySpreadConstraints[0].minDomains, 1);
+  const pdb = resources.find(r => r.kind === 'PodDisruptionBudget' && r.metadata.labels['app.kubernetes.io/component'] === 'proxy');
+  const execution = resources.find(r => r.kind === 'StatefulSet' && r.metadata.labels['app.kubernetes.io/component'] === 'execution');
+  assert.equal(execution.spec.template.spec.topologySpreadConstraints[0].minDomains, 2);
+  assert.equal(pdb.spec.minAvailable, 1);
+  assert.equal(pdb.spec.maxUnavailable, undefined);
+  assert.throws(() => render([...settings, 'replicaCount.proxy=0']));
+  assert.throws(() => render([...settings, 'autoscaling.proxy.minReplicas=0']));
+  assert.throws(() => render([...settings, 'rollout.maxUnavailable=1']));
+  for (const minimum of [1, 2]) {
+    const stopped = parseAllDocuments(render([...settings,
+      `availability.topologySpread.minDomains=${minimum}`, `autoscaling.proxy.minReplicas=${minimum}`,
+      'workflowSchema.maintenanceValidation=true', 'replicaCount.proxy=0', 'replicaCount.web=0',
+      'autoscaling.proxy.enabled=false', 'autoscaling.execution.enabled=false',
+    ])).map(d => d.toJS()).filter(Boolean);
+    assert.equal(stopped.find(r => r.kind === 'Deployment' && r.metadata.labels['app.kubernetes.io/component'] === 'proxy').spec.replicas, 0);
+  }
+});
+
+test('single-proxy compact observations require the exact ready endpoint without demanding two zones', () => {
+  const f = fixture();
+  f.pods = f.pods.filter(p => ['proxy-0', 'web-0'].includes(p.metadata.name));
+  for (const p of f.pods) p.spec.topologySpreadConstraints[0].minDomains = 1;
+  const observe = () => assertGkeFrontendAvailability(f.pods, f.nodes, release, 'singleton', 'compact', undefined, { proxyMinimum: 1 });
+  assert.equal(observe().length, 2);
+  f.pods[0].status.conditions = [];
+  assert.throws(observe, /not ready/);
 });

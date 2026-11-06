@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { executionSampleCommand } from './execution-autoscaler-kubernetes.mjs';
 import { settleStagingProcesses } from './reusable-staging-cleanup.mjs';
 import { qualificationHash } from './runtime-qualification-execution.mjs';
@@ -84,6 +85,95 @@ export async function settleRetainedStaging(state, owner, wait) {
   return [];
 }
 
+async function cleanupFixtureProjects(state, gate, folder) {
+  assert.ok(Array.isArray(folder.projects) && Array.isArray(folder.folders));
+  assert.equal(folder.folders.length, 0, 'Unexpected nested fixture folder');
+  const owned = folder.projects;
+  let { record } = await state.read();
+  if (!record.fixtureProjects) {
+    const projects = owned.map(({ id, relativePath, revisionId }) => {
+      assert.ok(id && revisionId && path.posix.dirname(relativePath) === folder.relativePath);
+      return { id, relativePath, revisionId };
+    });
+    await state.change((current) => {
+      current.fixtureProjects = projects;
+    });
+    record = (await state.read()).record;
+  }
+  const projects = record.fixtureProjects;
+  assert.ok(
+    owned.every((item) => projects.some((p) => p.id === item.id && p.relativePath === item.relativePath)),
+    'Fixture project inventory changed during cleanup',
+  );
+  const write = async (key, route, body) => {
+    await state.change((current) => {
+      current.fixtureProjectWrites ??= {};
+      assert.ok(
+        !Object.hasOwn(current.fixtureProjectWrites, key),
+        'Fixture write acknowledgement is unknown; observe without replay',
+      );
+      current.fixtureProjectWrites[key] = { route, body };
+    });
+    await gate.requestWorkflow(gate.config.baseUrl, route, {
+      method: 'POST',
+      headers: { 'X-Rivet-Namespace-Intent': '1' },
+      body: JSON.stringify(body),
+    });
+  };
+  for (const project of projects) {
+    if (!owned.some((item) => item.id === project.id && item.relativePath === project.relativePath)) {
+      assert.ok(
+        record.fixtureProjectWrites?.[`${project.id}:delete`],
+        'Fixture project disappeared without deletion intent',
+      );
+      continue;
+    }
+    const snapshot = async () => {
+      const value = await gate.requestWorkflow(
+        gate.config.baseUrl,
+        `/api/workflows/projects/web-apps?relativePath=${encodeURIComponent(project.relativePath)}`,
+      );
+      assert.equal(value.projectId, project.id, 'Fixture project was replaced');
+      assert.equal(value.draftRevisionId, project.revisionId, 'Fixture project changed during cleanup');
+      assert.ok(
+        typeof value.publicationVersion === 'string' && value.publicationVersion && Array.isArray(value.webApps),
+      );
+      return value;
+    };
+    const preconditions = (value) => ({
+      expectedProjectId: value.projectId,
+      expectedDraftRevisionId: value.draftRevisionId,
+      expectedPublicationVersion: value.publicationVersion,
+    });
+    let current = await snapshot();
+    for (const app of current.webApps.filter((item) => item.status !== 'unpublished')) {
+      assert.ok(app.uiGraphId);
+      await write(`${project.id}:web:${app.uiGraphId}`, '/api/workflows/projects/web-apps/unpublish', {
+        relativePath: project.relativePath,
+        uiGraphId: app.uiGraphId,
+        preconditions: preconditions(current),
+      });
+      current = await snapshot(); // Every publication mutation advances its version.
+    }
+    assert.ok(['published', 'unpublished_changes', 'unpublished'].includes(current.project?.settings?.status));
+    if (current.project.settings.status !== 'unpublished') {
+      await write(`${project.id}:endpoint`, '/api/workflows/projects/unpublish', {
+        relativePath: project.relativePath,
+        preconditions: preconditions(current),
+      });
+      current = await snapshot();
+    }
+    assert.equal(current.project.settings.status, 'unpublished');
+    assert.ok(current.webApps.every((item) => item.status === 'unpublished'));
+    await write(`${project.id}:delete`, '/api/workflows/namespace/mutate', {
+      operationId: randomUUID(),
+      expiresAt: new Date(Date.now() + 600000).toISOString(),
+      command: { kind: 'delete', itemType: 'project', relativePath: project.relativePath },
+      expectedSource: { id: project.id, revisionId: project.revisionId },
+    });
+  }
+}
+
 export async function cleanupRetainedStaging(state, gate, owner, { qualificationPassed = false } = {}) {
   assert.equal(typeof qualificationPassed, 'boolean');
   const { record } = await state.read();
@@ -103,6 +193,7 @@ export async function cleanupRetainedStaging(state, gate, owner, { qualification
     if (folder) {
       assert.equal(folder.namespaceId, record.fixtureFolder.namespaceId, 'Fixture folder was replaced');
       assert.ok(!record.fixtureFolderDelete, 'Fixture deletion acknowledgement is unknown; observe without replay');
+      await cleanupFixtureProjects(state, gate, folder);
       const request = {
         operationId: randomUUID(),
         expiresAt: new Date(Date.now() + 600000).toISOString(),

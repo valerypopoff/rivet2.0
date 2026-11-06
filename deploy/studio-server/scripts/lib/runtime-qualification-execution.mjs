@@ -10,6 +10,7 @@ import {
   HA_FOCUSED_RUNTIME_CHECKS,
   HA_PROVIDER_OVERLAP_CHECKS,
   ordinaryRuntimeReplicaBounds,
+  qualificationProxyMinimum,
 } from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
 import { assertRequestContinuityProfile, requestContinuityProfile } from './request-continuity.mjs';
@@ -158,7 +159,14 @@ export function qualificationOperation({
     );
   }
   assert.equal(installed.policyDigest, autoscalerPolicyDigest(normalized));
-  assert.deepEqual(installed.baseline, { backend: 1, web: 1, execution: 2, proxy: 2, autoscaler: 1 });
+  assert.ok([1, 2].includes(installed.baseline?.proxy));
+  assert.deepEqual(installed.baseline, {
+    backend: 1,
+    web: 1,
+    execution: 2,
+    proxy: installed.baseline.proxy,
+    autoscaler: 1,
+  });
   const input = {
     protocol: 1,
     operationId,
@@ -207,6 +215,12 @@ export function qualificationOperation({
     predecessorManifestDigest,
     policyDigest: autoscalerPolicyDigest(normalized),
   };
+  if (qualificationProxyMinimum(installed) === 1)
+    assert.equal(
+      input.qualification?.tier,
+      'focused',
+      'One-proxy installations use focused rolling-update qualification; full eviction stress needs spare proxy capacity',
+    );
   if (retainedApplication || input.executionPools)
     assert.equal(
       input.qualification?.tier,
@@ -294,7 +308,7 @@ export function assertOrdinaryProviderReport(report, operation) {
   assert.equal(report.chartDigest, operation.candidate.chart.contentDigest);
   assert.equal(report.policyDigest, operation.policyDigest);
   if (operation.qualification?.tier === 'focused') {
-    const bounds = ordinaryRuntimeReplicaBounds(operation.policy);
+    const bounds = ordinaryRuntimeReplicaBounds(operation.policy, qualificationProxyMinimum(operation.installed));
     for (const stage of ['initial', 'final']) {
       const observed = report.capacity?.[stage];
       assert.ok(observed && typeof observed === 'object', 'Observed runtime capacity is missing');
@@ -537,7 +551,7 @@ export async function executeRuntimeQualification(
     facts.upgrade = await phase('upgrade');
     if (operation.sizingRequests) {
       window(facts.upgrade, operation);
-      assertSizingReport(facts.upgrade, operation.sizingRequests);
+      assertSizingReport(facts.upgrade, operation.sizingRequests, qualificationProxyMinimum(operation.installed));
     } else {
       executionPoolEvidence = assertOrdinaryProviderReport(facts.upgrade, operation);
       if (operation.qualification?.tier === 'focused') {

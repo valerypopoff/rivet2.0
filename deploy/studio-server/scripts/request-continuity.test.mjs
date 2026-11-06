@@ -69,6 +69,10 @@ test('only exact owned recovery can admit a temporarily raised proxy floor', () 
   };
   assert.equal(continuityRecoveryLayout(installed, { profile }, context).autoscaling.proxy.minReplicas, 2);
   assert.equal(installed.autoscaling.proxy.minReplicas, 4, 'Raw Helm settings are never rewritten for admission');
+  const single = structuredClone(context);
+  single.journal.proxyContinuity.hpa.spec.minReplicas = 1;
+  assert.equal(continuityRecoveryLayout(installed, { profile }, single).autoscaling.proxy.minReplicas, 1);
+
   assert.equal(continuityRecoveryLayout(installed, { profile }, { ...context, resumeToken: undefined }), installed);
   for (const change of [
     (c) => {

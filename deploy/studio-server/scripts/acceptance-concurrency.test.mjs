@@ -82,3 +82,18 @@ test('final stop cannot settle the observer before an already accepted cohort fi
   await task;
   assert.equal(finished, true);
 });
+
+test('a closed admission gate starts no extra cohort and still waits for final observer shutdown', async () => {
+  let stop = false,
+    waits = 0;
+  await runLongProbeCohorts({
+    shouldStop: async () => stop,
+    shouldStopLong: async () => true,
+    runCohort: async () => assert.fail('No late long batch'),
+    wait: async () => {
+      waits++;
+      stop = true;
+    },
+  });
+  assert.equal(waits, 1);
+});

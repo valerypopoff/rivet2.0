@@ -706,6 +706,20 @@ that release. Parallel handoff requires its separately observed transition proof
 legacy receipts without the layout claim cannot enable the new topology. Report
 validation compiles that proof once, before retained cleanup.
 
+### Proxy capacity in ordinary qualification
+
+The compact chart defaults to one proxy, with an HPA minimum of one and maximum
+of four. Qualification reads the installed replica count, HPA policy and spread
+minimum and carries only these safe chart fields into staging, alongside existing
+sizing/timing fields. It does not fall back to the old hard-coded two-proxy floor.
+One- and two-proxy installations use their own bound readiness and replacement
+counts; actual GCP endpoint health, complete requests and zero-capacity rejection
+remain required. Proxy timeout preparation also follows that minimum, avoiding a
+wait for a nonexistent second Pod. Execution keeps two Ready owners and two-zone
+placement. Full eviction stress requires a separate multi-proxy profile; ordinary
+one-proxy releases use the focused suite. See [Kubernetes](kubernetes.md) for the
+coordinated Helm values and rollout/eviction policy.
+
 ### Optional retained application
 
 Focused reusable staging can additionally specify `retainedApplication` with
@@ -729,10 +743,17 @@ at local settings validation before provider setup. Updated tooling still reads
 protocol 1 configurations; new activations use protocol 2.
 
 Each attempt owns one fixture folder. Success settles producers and accepted
-work, logically deletes only that exact folder, verifies final installed images
-and public health, then records retained application identity/health and releases
-ownership. The empty transient deletion inventory does not mean the application
-was deleted. Legacy disposable tests still require namespace/NEG/CSI absence.
+work, reads its projects from the folder's nested tree entry, unpublishes each
+project's web apps and endpoint, then deletes each project by its exact ID/draft
+revision before deleting the empty folder by namespace ID. Each unpublish uses a
+fresh publication-version snapshot. Cleanup persists the project inventory and
+write intents before mutations: recovery observes completed effects without
+replaying an uncertain write. Replaced/edited projects or unexpected child folders
+stop cleanup; projects outside the owned folder are untouched. Cleanup verifies
+final installed images and public health, then records retained application
+identity/health and releases ownership. The empty transient deletion inventory
+does not mean the application was deleted. Legacy disposable tests still require
+namespace/NEG/CSI absence.
 An expired/failed attempt quarantines the retained application and preserves
 data; the independent janitor never deletes it. Busy/quarantined state or staging
 ahead of production requires explicit recovery/reseed. A failed acquisition can
@@ -911,6 +932,19 @@ configuration has `protocol:1`, the same `production` identity, its separate
 That private object contains `valuesBase64`, checksum-pinned installation `policy`,
 and `adapters.backup` / `adapters.acceptance` as base64 files. Never put those
 bytes in a public workflow variable, log, source file or uploaded artifact.
+
+Both protected configurations may specify `production.proxyMinimum: 1` or `2`
+for a reviewed compact-edge change. It selects only proxy replicas, HPA minimum
+and minimum zone count in the sanitized staging projection. The observed live
+baseline, namespace identity and installed-settings digest remain unchanged.
+Qualification readiness/evidence use the target floor, and the configuration
+digest binds it. Without this field, staging continues to mirror production.
+Keep `production.valuesDigest` equal to the exact prepared installation values
+bytes in both configurations. Production setup checks that hash and all three
+proxy settings before writing private adapter files; final preflight also
+rechecks the sanitized target projection. This prevents qualifying two proxies
+and silently deploying one, or discovering a stale values hash after a cloud
+test. No additional infrastructure or test phase is introduced.
 
 An administrator installs initial ServiceAccounts, RBAC and janitor-health
 ConfigMap once. The coordinator can create/exec/delete Jobs only in the runner

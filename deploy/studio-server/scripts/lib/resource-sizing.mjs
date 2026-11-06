@@ -38,7 +38,8 @@ export function applySizingRequests(values, requests) {
   return result;
 }
 
-export function assertSizingReport(report, requests) {
+export function assertSizingReport(report, requests, proxyMinimum = 2) {
+  assert.ok([1, 2].includes(proxyMinimum));
   assert.equal(report.purpose, 'resource-sizing');
   assert.deepEqual(report.requests, requests);
   assert.ok(
@@ -60,7 +61,7 @@ export function assertSizingReport(report, requests) {
   assert.ok(typeof hpaUid === 'string' && hpaUid);
   for (const sample of report.observations) {
     assert.equal(sample.hpa?.uid, hpaUid, 'Sizing HPA identity changed');
-    assert.ok(Number.isSafeInteger(sample.proxyCount) && sample.proxyCount >= 2 && sample.proxyCount <= 4);
+    assert.ok(Number.isSafeInteger(sample.proxyCount) && sample.proxyCount >= proxyMinimum && sample.proxyCount <= 4);
     assert.equal(sample.observations.filter((p) => p.role === 'web').length, 1);
     assert.equal(sample.observations.filter((p) => p.role === 'proxy').length, sample.proxyCount);
     assert.equal(sample.observations.length, sample.proxyCount + 1);

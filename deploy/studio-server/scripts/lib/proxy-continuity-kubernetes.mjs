@@ -99,7 +99,7 @@ export function createComputeBackendObserver(
     assert.ok(service.metadata.uid, 'Service identity missing');
     const status = JSON.parse(service.metadata.annotations?.['cloud.google.com/neg-status'] ?? '{}');
     assert.ok(
-      status.zones?.length >= 2 &&
+      status.zones?.length >= 1 &&
         new Set(status.zones).size === status.zones.length &&
         Object.keys(status.network_endpoint_groups ?? {}).length === 1,
       'Service NEG identity missing',
@@ -249,7 +249,7 @@ export function createKubernetesProxyContinuity({
     assert.equal(response.status, 200, 'Public ingress readiness request failed');
     return response.headers.get('X-Rivet-Continuity-Serving') === target ? target : undefined;
   };
-  const healthyPool = async (name, protectedPool, minimum = 2) => {
+  const healthyPool = async (name, protectedPool, minimum = config.hpaSpec?.minReplicas ?? 2) => {
     const deployment = await read({ kind: 'Deployment', name });
     // Normal release and Deployment names differ; use its exact selector instead.
     const observed = (await pods(deployment.spec.template.metadata.labels['app.kubernetes.io/instance'])).filter((p) =>
@@ -261,7 +261,7 @@ export function createKubernetesProxyContinuity({
       throw new ProxyPoolNotReady(`Proxy Deployment ${name} has ${selected.length}/${minimum} required Pods`);
     if (selected.some((p) => !negReady(p)))
       throw new ProxyPoolNotReady(`Proxy Deployment ${name} has Pods without Ready/NEG readiness`);
-    if (new Set(selected.map((p) => p.spec.nodeName)).size < 2)
+    if (new Set(selected.map((p) => p.spec.nodeName)).size < Math.min(minimum, 2))
       throw new ProxyPoolNotReady(`Proxy Deployment ${name} is not spread across two nodes`);
     const sets = JSON.parse((await kube(['get', 'replicasets.apps', '-o', 'json'])).stdout).items;
     const owned = new Set(
@@ -283,7 +283,7 @@ export function createKubernetesProxyContinuity({
     const zones = selected.map(
       (p) => nodes.find((n) => n.metadata.name === p.spec.nodeName)?.metadata.labels?.['topology.kubernetes.io/zone'],
     );
-    if (zones.some((z) => !z) || new Set(zones).size < 2)
+    if (zones.some((z) => !z) || new Set(zones).size < Math.min(minimum, 2))
       throw new ProxyPoolNotReady(`Proxy Deployment ${name} is not spread across two provider zones`);
     if (protectedPool) for (const p of selected) assertProtectedProxyTemplate(p, profile);
     const service = await read({ kind: 'Service', name });
@@ -351,8 +351,7 @@ export function createKubernetesProxyContinuity({
           );
         }),
       );
-      assert.equal(backend.healthy, true, 'Original provider backend is unhealthy');
-      assertGkeProxyBackendHealth(proxyPods, service, backend);
+      assertGkeProxyBackendHealth(proxyPods, service, backend, { minimumZones: Math.min(hpa.spec.minReplicas, 2) });
       if (config.configName) {
         const existing = await read({ kind: 'ConfigMap', name: config.configName }, { optional: true });
         if (existing) {
@@ -382,7 +381,7 @@ export function createKubernetesProxyContinuity({
       await until('bridge NEG discovery before Pod admission', async () => {
         const service = await read({ kind: 'Service', name: state.name });
         const status = JSON.parse(service.metadata.annotations?.['cloud.google.com/neg-status'] ?? '{}');
-        return status.zones?.length >= 2 && Object.keys(status.network_endpoint_groups ?? {}).length === 1;
+        return status.zones?.length >= 1 && Object.keys(status.network_endpoint_groups ?? {}).length === 1;
       });
     },
     async ready(state) {
@@ -433,7 +432,7 @@ export function createKubernetesProxyContinuity({
       );
       const current = selected.filter((pod) => !pod.metadata.deletionTimestamp);
       if (allowUpdating) {
-        const minimum = Math.max(2, config.hpaSpec?.minReplicas ?? 2);
+        const minimum = config.hpaSpec?.minReplicas ?? 2;
         assert.ok(
           backend.backendServiceDrainSeconds >= profile.backendServiceDrainSeconds,
           'Adopted provider drain has regressed',
@@ -441,11 +440,14 @@ export function createKubernetesProxyContinuity({
         assertGkeProxyServingFloor(current, service, backend, minimum);
         if (!(deployment.status?.availableReplicas >= minimum))
           throw new ProxyPoolNotReady('Proxy rollout is waiting for available serving capacity');
-      } else assertGkeProxyBackendHealth(current, service, backend);
+      } else
+        assertGkeProxyBackendHealth(current, service, backend, {
+          minimumZones: Math.min(config.hpaSpec?.minReplicas ?? 2, 2),
+        });
       // The old backend must have received its longer drain before switching.
       const original = target === 'bridge' ? oldBackend : backend;
       return {
-        healthy: backend.healthy,
+        healthy: true, // The configured current-Pod serving floor was verified above.
         backendServiceDrainSeconds: Math.min(backend.backendServiceDrainSeconds, original.backendServiceDrainSeconds),
         routedTo,
       };

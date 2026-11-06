@@ -36,6 +36,16 @@ export function qualificationSizing(values) {
     ]),
   );
   return {
+    replicaCount: pick(values.replicaCount, ['proxy']),
+    autoscaling: {
+      proxy: pick(values.autoscaling?.proxy, [
+        'enabled',
+        'minReplicas',
+        'maxReplicas',
+        'targetCPUUtilizationPercentage',
+      ]),
+    },
+    availability: { topologySpread: pick(values.availability?.topologySpread, ['minDomains']) },
     resources,
     ...(values.ha?.executionPools?.enabled
       ? {
@@ -82,6 +92,11 @@ export function qualificationSizing(values) {
 }
 
 export function assertQualificationInstallationMatches(current, expected) {
+  assert.equal(
+    installedSettingsDigest(current.qualificationValues ?? null),
+    installedSettingsDigest(expected.qualificationValues ?? null),
+    'Installation qualificationValues changed since qualification',
+  );
   for (const key of ['manifestDigest', 'namespaceUid', 'clusterUid', 'settingsDigest', 'valuesDigest']) {
     assert.ok(typeof expected[key] === 'string' && expected[key].length > 0);
     assert.equal(current[key], expected[key], `Production ${key} changed since qualification`);
@@ -96,6 +111,7 @@ export async function inspectQualificationInstallation({
   expectedNamespaceUid,
   valuesText,
   valuesDigest,
+  proxyMinimum,
   run,
   helm = 'helm',
   kubectl = 'kubectl',
@@ -105,6 +121,7 @@ export async function inspectQualificationInstallation({
     assert.ok(typeof value === 'string' && value.length > 0);
   const operatorValuesDigest = valuesDigest ?? `sha256:${createHash('sha256').update(valuesText).digest('hex')}`;
   assert.match(operatorValuesDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.ok(proxyMinimum === undefined || [1, 2].includes(proxyMinimum), 'Reviewed proxy minimum must be one or two');
   const system = JSON.parse(
     (await run(kubectl, ['--context', context, 'get', 'namespace', 'kube-system', '-o', 'json'], { capture: true }))
       .stdout,
@@ -177,6 +194,12 @@ export async function inspectQualificationInstallation({
     assert.equal(current.metadata.uid, uid, 'Installation namespace changed during observation');
     assert.ok(!current.metadata.deletionTimestamp, 'Installation namespace is terminating');
   }
+  const qualificationValues = qualificationSizing(values);
+  if (proxyMinimum !== undefined) {
+    qualificationValues.replicaCount.proxy = proxyMinimum;
+    qualificationValues.autoscaling.proxy.minReplicas = proxyMinimum;
+    qualificationValues.availability.topologySpread.minDomains = proxyMinimum;
+  }
   return {
     scope: 'production-read-only',
     observedAt: new Date(now()).toISOString(),
@@ -196,7 +219,7 @@ export async function inspectQualificationInstallation({
     policyDigest,
     controlPlaneMode,
     edgeProfile: 'compact',
-    baseline: { backend: 1, web: 1, execution: 2, proxy: 2, autoscaler: 1 },
-    qualificationValues: qualificationSizing(values),
+    baseline: { backend: 1, web: 1, execution: 2, proxy: values.autoscaling.proxy.minReplicas, autoscaler: 1 },
+    qualificationValues,
   };
 }

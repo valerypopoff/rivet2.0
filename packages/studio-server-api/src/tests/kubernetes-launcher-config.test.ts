@@ -56,6 +56,7 @@ test('kubernetes launcher config uses managed canonical envs and local rehearsal
   assert.equal(config.databaseSslMode, 'verify-full');
   assert.equal(config.loadLocalImages, true);
   assert.equal(config.replicas.proxy, 3);
+  assert.equal(buildKubernetesLauncherConfig({ ...env, RIVET_K8S_PROXY_REPLICAS: '' }).replicas.proxy, 1);
   assert.equal(config.replicas.web, 2);
   assert.equal(config.replicas.execution, 4);
   assert.equal(config.objectStorage.bucket, 'rivet-prod');

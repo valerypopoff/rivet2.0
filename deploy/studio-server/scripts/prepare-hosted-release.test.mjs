@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs/promises';
@@ -645,49 +646,94 @@ test('janitor health polling has a deadline and never retries denied reads', asy
   );
 });
 
-test('production preparation preserves its pinned read-only installation fetch and private adapter files', async (t) => {
-  const f = await fixture(t),
-    directory = path.dirname(f.jobEnv);
-  f.configuration.installationUri = 'gs://fixture-evidence/installation.json#17';
-  const installation = {
-    valuesBase64: Buffer.from('{"fixture":true}').toString('base64'),
-    adapters: {
-      backup: Buffer.from('export const fixture = "backup";').toString('base64'),
-      acceptance: Buffer.from('export const fixture = "acceptance";').toString('base64'),
-    },
-    policy: { backup: {}, acceptance: {} },
-  };
-  const environment = {
-    GITHUB_REF: 'refs/heads/main',
-    GITHUB_RUN_ID: '123',
-    GITHUB_RUN_ATTEMPT: '1',
-    RUNNER_TEMP: directory,
-    GITHUB_ENV: f.jobEnv,
-    RIVET_DEPLOYMENT_CONFIGURATION: JSON.stringify(f.configuration),
-  };
-  const commands = [];
-  await prepareHostedRelease('production', {
-    environment,
-    cloudEvidence: () => {
-      throw new Error('Production preparation must not claim a staging lock');
-    },
-    run: (bin, args, commandEnvironment) => {
-      assert.equal(bin, 'gcloud');
-      commands.push(args);
-      if (args.includes('get-credentials')) assert.equal(commandEnvironment.RIVET_DEPLOYMENT_CONFIGURATION, undefined);
-      else {
-        assert.deepEqual(args.slice(0, 3), ['storage', 'cp', f.configuration.installationUri]);
-        writeFileSync(args[3], JSON.stringify(installation));
-      }
-      return '';
-    },
+for (const profile of ['legacy', 'one-proxy', 'wrong-hash', 'mixed-policy'])
+  test(`production preparation preserves its pinned installation and rejects target drift: ${profile}`, async (t) => {
+    const f = await fixture(t),
+      directory = path.dirname(f.jobEnv);
+    f.configuration.installationUri = 'gs://fixture-evidence/installation.json#17';
+    const installation = {
+      valuesBase64: Buffer.from(
+        JSON.stringify(
+          profile === 'legacy'
+            ? { fixture: true }
+            : {
+                replicaCount: { proxy: 1 },
+                autoscaling: { proxy: { minReplicas: 1 } },
+                availability: { topologySpread: { minDomains: profile === 'mixed-policy' ? 2 : 1 } },
+              },
+        ),
+      ).toString('base64'),
+      adapters: {
+        backup: Buffer.from('export const fixture = "backup";').toString('base64'),
+        acceptance: Buffer.from('export const fixture = "acceptance";').toString('base64'),
+      },
+      policy: { backup: {}, acceptance: {} },
+    };
+    const valuesText = Buffer.from(installation.valuesBase64, 'base64').toString();
+    if (profile !== 'legacy') {
+      f.configuration.production.proxyMinimum = 1;
+      f.configuration.production.valuesDigest =
+        profile === 'wrong-hash'
+          ? `sha256:${'0'.repeat(64)}`
+          : `sha256:${createHash('sha256').update(valuesText).digest('hex')}`;
+    }
+    const environment = {
+      GITHUB_REF: 'refs/heads/main',
+      GITHUB_RUN_ID: '123',
+      GITHUB_RUN_ATTEMPT: '1',
+      RUNNER_TEMP: directory,
+      GITHUB_ENV: f.jobEnv,
+      RIVET_DEPLOYMENT_CONFIGURATION: JSON.stringify(f.configuration),
+    };
+    const commands = [];
+    const preparation = prepareHostedRelease('production', {
+      environment,
+      cloudEvidence: () => {
+        throw new Error('Production preparation must not claim a staging lock');
+      },
+      run: (bin, args, commandEnvironment) => {
+        assert.equal(bin, 'gcloud');
+        commands.push(args);
+        if (args.includes('get-credentials'))
+          assert.equal(commandEnvironment.RIVET_DEPLOYMENT_CONFIGURATION, undefined);
+        else {
+          assert.deepEqual(args.slice(0, 3), ['storage', 'cp', f.configuration.installationUri]);
+          writeFileSync(args[3], JSON.stringify(installation));
+        }
+        return '';
+      },
+    });
+    if (['wrong-hash', 'mixed-policy'].includes(profile)) {
+      await assert.rejects(preparation);
+      await assert.rejects(fs.stat(path.join(directory, 'rivet-production/values.json')), { code: 'ENOENT' });
+      return;
+    }
+    await preparation;
+    if (profile === 'one-proxy')
+      assert.match(await fs.readFile(f.jobEnv, 'utf8'), /^RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM=1$/m);
+    assert.equal(commands.length, 2);
+    const job = path.join(directory, 'rivet-production');
+    assert.equal(await fs.readFile(path.join(job, 'values.json'), 'utf8'), valuesText);
+    assert.equal(await fs.readFile(path.join(job, 'backup.mjs'), 'utf8'), 'export const fixture = "backup";');
+    const policy = JSON.parse(await fs.readFile(path.join(job, 'policy.json'), 'utf8'));
+    assert.equal(policy.backup.script, 'backup.mjs');
+    assert.equal(policy.acceptance.script, 'acceptance.mjs');
+    assert.equal(environment.RIVET_DEPLOYMENT_CONFIGURATION, undefined);
   });
-  assert.equal(commands.length, 2);
-  const job = path.join(directory, 'rivet-production');
-  assert.equal(await fs.readFile(path.join(job, 'values.json'), 'utf8'), '{"fixture":true}');
-  assert.equal(await fs.readFile(path.join(job, 'backup.mjs'), 'utf8'), 'export const fixture = "backup";');
-  const policy = JSON.parse(await fs.readFile(path.join(job, 'policy.json'), 'utf8'));
-  assert.equal(policy.backup.script, 'backup.mjs');
-  assert.equal(policy.acceptance.script, 'acceptance.mjs');
-  assert.equal(environment.RIVET_DEPLOYMENT_CONFIGURATION, undefined);
+
+test('hosted staging carries the reviewed proxy minimum without changing its production identity', async (t) => {
+  const f = await fixture(t);
+  f.configuration.production.proxyMinimum = 1;
+  await f.prepare();
+  const job = await fs.readFile(f.jobEnv, 'utf8');
+  assert.match(job, /^RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM=1$/m);
+  assert.match(job, /^RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256=sha256:b{64}$/m);
 });
+
+for (const minimum of [0, 3, '1', null])
+  test(`hosted staging rejects invalid reviewed proxy minimum ${JSON.stringify(minimum)} before provider access`, async (t) => {
+    const f = await fixture(t);
+    f.configuration.production.proxyMinimum = minimum;
+    await assert.rejects(f.prepare());
+    assert.deepEqual(f.events, []);
+  });

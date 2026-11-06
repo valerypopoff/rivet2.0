@@ -1,3 +1,4 @@
+import { qualificationProxyMinimum } from '../lib/ha-release-evidence.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -20,9 +21,10 @@ export async function observeSizing(gate, now = Date.now) {
   const pods = all.filter(ready);
   assert.equal(pods.filter((p) => role(p) === 'web').length, 1, 'Sizing requires one ready web frontend');
   const proxyCount = pods.filter((p) => role(p) === 'proxy').length;
-  assert.ok(proxyCount >= 2 && proxyCount <= 4, 'Sizing must retain the approved ready proxy floor/ceiling');
+  const proxyMinimum = qualificationProxyMinimum(gate.operation.installed);
+  assert.ok(proxyCount >= proxyMinimum && proxyCount <= 4, 'Sizing must retain the approved ready proxy floor/ceiling');
   const hpa = JSON.parse((await gate.kube(['get', 'hpa', `${gate.config.release}-proxy`, '-o', 'json'])).stdout);
-  assert.equal(hpa.spec.minReplicas, 2);
+  assert.equal(hpa.spec.minReplicas, proxyMinimum);
   assert.equal(hpa.spec.maxReplicas, 4);
   assert.equal(hpa.spec.metrics.length, 1);
   assert.deepEqual(hpa.spec.metrics[0].resource.target, { type: 'Utilization', averageUtilization: 75 });

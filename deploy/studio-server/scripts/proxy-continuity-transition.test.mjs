@@ -583,6 +583,16 @@ test('actual backend observation binds the exact regional NEG groups and checks 
   backend.timeoutSec = 3600;
   backend.backends.push({ group: 'foreign' });
   await assert.rejects(observe(service), /foreign endpoint group/);
+  backend.backends = [{ group: groups[0] }];
+  const singleZone = structuredClone(service);
+  singleZone.metadata.annotations['cloud.google.com/neg-status'] = JSON.stringify({
+    zones: ['europe-central2-a'],
+    network_endpoint_groups: { 80: 'fixture-neg' },
+  });
+  const singleObservation = await observe(singleZone);
+  assert.equal(singleObservation.healthy, false, 'One healthy zone cannot claim two-zone redundancy');
+  assert.equal(singleObservation.healthyEndpoints.length, 1);
+  assert.equal(singleObservation.healthyEndpoints[0].zone, 'europe-central2-a');
 });
 
 test('Kubernetes adapter runs the full owned handoff with NEG admission, live policy observations and UID-preconditioned cleanup', async () => {
@@ -779,7 +789,7 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
     } else throw Error(`Unexpected fixture command ${action}`);
     return { stdout: JSON.stringify(result) };
   };
-  const adapter = createKubernetesProxyContinuity({
+  const adapterOptions = {
     kube,
     config,
     timeoutMs: 1200000,
@@ -817,7 +827,8 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
         headers: target ? { 'X-Rivet-Continuity-Serving': target } : {},
       });
     },
-  });
+  };
+  const adapter = createKubernetesProxyContinuity(adapterOptions);
   const before = commands.length;
   for (const timeoutMs of [0, -1, 1.5, 1200001])
     await assert.rejects(adapter.inspect({ timeoutMs }), /positive timeout/);
@@ -968,6 +979,25 @@ test('Kubernetes adapter runs the full owned handoff with NEG admission, live po
   await assert.rejects(adapter.verify(next), /Fixture lease expired/);
   assert.equal(clock, leaseDeadline, 'Recheck the lease before another capacity poll');
   assert.ok(commands.some((a) => a[0] === 'delete' && a[1] === '--raw'));
+
+  // A settled single-proxy installation retains the same ingress/ownership checks.
+  available = true;
+  backendHealthy = false; // The aggregate observer flag reports two-zone redundancy.
+  pendingNormalReads = 0;
+  const one = { ...config, hpaSpec: { ...config.hpaSpec, minReplicas: 1 } };
+  f.live.get('Deployment/rivet-proxy').spec.replicas = 1;
+  f.live.get('HorizontalPodAutoscaler/rivet-proxy').spec = structuredClone(one.hpaSpec);
+  const single = createKubernetesProxyContinuity({ ...adapterOptions, config: one });
+  const singleReceipt = await single.inspect();
+  assert.equal(singleReceipt.proxyPodUids.length, 1);
+  assertContinuityAcceptance(singleReceipt, profile);
+  const singleOperation = { ...f.operation, record: { token: 'single-proxy', phase: 'preflight' } };
+  await single.prepare(singleOperation);
+  assert.deepEqual(singleOperation.record.proxyContinuity.entries, []);
+  singleOperation.record.phase = 'owners';
+  await single.verify(singleOperation);
+  available = false;
+  await assert.rejects(single.verify(singleOperation), /available serving capacity/);
 });
 
 test('already-protected pools still enforce ingress invariants under the operation lease', async () => {
@@ -1364,4 +1394,15 @@ test('real regional Compute HTTP reads distinguish pending attachment, unhealthy
   await assert.rejects(observe(f.service, { allowPending: true }), /Compute backend observation failed/);
   assert.equal(calls.length - beforeDenied, 1, 'Authorization errors are not retried');
   assert.ok(calls.some((c) => c.method === 'POST' && c.body?.group === groups[1]));
+});
+
+test('one-proxy serving floor requires a fresh healthy endpoint and never accepts zero ready Pods', () => {
+  const f = regionalEndpointFixture();
+  f.pods.splice(1);
+  f.backend.healthyEndpoints.splice(1);
+  f.backend.healthy = false;
+  assert.equal(assertGkeProxyServingFloor(f.pods, f.service, f.backend, 1).length, 1);
+  assert.throws(() => assertGkeProxyServingFloor(f.pods, f.service, f.backend, 2), /2 healthy/);
+  f.pods[0].status.conditions = [];
+  assert.throws(() => assertGkeProxyServingFloor(f.pods, f.service, f.backend, 1), /readiness/);
 });

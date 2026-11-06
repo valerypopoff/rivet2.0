@@ -25,7 +25,7 @@ export function assertGkeProxyDeploymentAvailable(deployment, minimum = 2) {
 /** Setup and handoff use the same Deployment and actual endpoint criteria. */
 export function assertGkeProxyPoolReady(pods, service, backend, { deployment, minimum = 2, ...options }) {
   assertGkeProxyDeploymentAvailable(deployment, minimum);
-  return assertGkeProxyBackendHealth(pods, service, backend, options);
+  return assertGkeProxyBackendHealth(pods, service, backend, { minimumZones: Math.min(minimum, 2), ...options });
 }
 
 /** Gateway-managed standalone NEGs can remain WithoutHealthCheck even when
@@ -128,18 +128,18 @@ export function isGkeProxyBackendReady(pods, service, backend, options) {
 /** During a native roll, pending replacements do not supply capacity. Preserve
  * a real current-Pod serving floor; final acceptance still checks the full pool. */
 export function assertGkeProxyServingFloor(pods, service, backend, minimum = 2) {
-  assert.ok(Number.isSafeInteger(minimum) && minimum >= 2);
+  assert.ok(Number.isSafeInteger(minimum) && minimum >= 1);
   const serving = pods.filter((pod) => isGkeProxyBackendReady([pod], service, backend, { minimumZones: 1 }));
   // A recovering pool must still have a real, current healthy endpoint. Invalid
   // backend evidence and complete capacity loss remain immediate failures.
   const matched = assertGkeProxyBackendHealth(serving, service, backend, { minimumZones: 1 });
   if (
     serving.length < minimum ||
-    backend.healthy !== true ||
-    new Set(matched.map((endpoint) => endpoint.zone)).size < 2
+    (minimum > 1 && backend.healthy !== true) ||
+    new Set(matched.map((endpoint) => endpoint.zone)).size < Math.min(minimum, 2)
   )
     throw new ProxyPoolNotReady(
-      `Proxy rollout is waiting for ${minimum} healthy current-Pod endpoints across two zones (${serving.length} serving)`,
+      `Proxy rollout is waiting for ${minimum} healthy current-Pod endpoints across ${Math.min(minimum, 2)} zone(s) (${serving.length} serving)`,
     );
   return matched;
 }

@@ -622,8 +622,9 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
     values.replicaCount?.backend !== 1 ||
     values.replicaCount?.web !== 1 ||
     !Number.isSafeInteger(values.replicaCount?.proxy) ||
-    values.replicaCount.proxy < 2 ||
+    values.replicaCount.proxy < 1 ||
     values.replicaCount.proxy > 4 ||
+    values.replicaCount.proxy < values.autoscaling?.proxy?.minReplicas ||
     !Number.isSafeInteger(values.replicaCount?.execution) ||
     values.replicaCount.execution < 2 ||
     values.replicaCount.execution > (values.autoscaling?.execution?.maxReplicas ?? 10) ||
@@ -632,7 +633,7 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
     values.autoscaling.execution?.enabled !== false ||
     values.autoscaling?.execution?.minReplicas !== 2 ||
     values.autoscaling.proxy?.enabled !== true ||
-    values.autoscaling.proxy.minReplicas !== 2 ||
+    ![1, 2].includes(values.autoscaling.proxy.minReplicas) ||
     values.autoscaling.proxy.maxReplicas !== 4 ||
     (values.autoscaling.proxy.targetCPUUtilizationPercentage ?? 75) !== 75 ||
     (policyDigest && proof.autoscalerPolicyDigest !== policyDigest)
@@ -661,9 +662,21 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
     throw Error('Ordinary runtime evidence autoscaler policy differs from the installed configuration.');
 }
 
+/** Staging can exercise a reviewed target edge policy while the observed
+ * production baseline remains accurate. Older operations mirror production. */
+export function qualificationProxyMinimum(installed) {
+  const values = installed?.qualificationValues;
+  const minimum = values?.replicaCount?.proxy ?? installed?.baseline?.proxy ?? 2;
+  if (![1, 2].includes(minimum)) throw Error('Qualification proxy minimum must be one or two.');
+  for (const value of [values?.autoscaling?.proxy?.minReplicas, values?.availability?.topologySpread?.minDomains])
+    if (value !== undefined && value !== minimum) throw Error('Qualification proxy settings must change together.');
+  return minimum;
+}
+
 // The ordinary layout fixes singleton roles and proxy HPA policy; execution's
 // ceiling comes from the frozen installation policy, not the observed Pod count.
-export function ordinaryRuntimeReplicaBounds(policy) {
+export function ordinaryRuntimeReplicaBounds(policy, proxyMinimum = 2) {
+  if (![1, 2].includes(proxyMinimum)) throw Error('Ordinary proxy minimum must be one or two.');
   if (
     !policy ||
     typeof policy !== 'object' ||
@@ -676,7 +689,7 @@ export function ordinaryRuntimeReplicaBounds(policy) {
   if (execution.minReplicas !== 2 || execution.maxReplicas < 3)
     throw Error('Ordinary runtime scaling policy must preserve its floor and surge capacity.');
   return {
-    proxy: { min: 2, max: 4 },
+    proxy: { min: proxyMinimum, max: 4 },
     execution: { min: execution.minReplicas, max: execution.maxReplicas },
     backend: { min: 1, max: 1 },
     web: { min: 1, max: 1 },
@@ -699,7 +712,7 @@ export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizin
       throw Error('Paired execution requires one active and one empty pool');
     workloads = workloads.filter((resource) => !pools.includes(resource) || resource.spec.replicas > 0);
   }
-  const counts = { backend: 1, web: 1, proxy: 2, execution: 2, autoscaler: 1 };
+  const counts = { backend: 1, web: 1, proxy: 1, execution: 2, autoscaler: 1 };
   if (
     workloads.length !== 5 ||
     Object.entries(counts).some(([role, count]) => {
@@ -711,7 +724,7 @@ export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizin
         : replicas !== count;
     })
   )
-    throw Error('Ordinary runtime qualification requires the unchanged seven-pod baseline.');
+    throw Error('Ordinary runtime qualification requires the singleton runtime baseline.');
   const backend = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'backend');
   const modes =
     backend.spec.template.spec.containers
@@ -759,8 +772,9 @@ export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizin
     hpas[0].spec.scaleTargetRef?.kind !== 'Deployment' ||
     hpas[0].spec.scaleTargetRef?.apiVersion !== 'apps/v1' ||
     hpas[0].spec.scaleTargetRef?.name !== proxy.metadata.name ||
-    hpas[0].spec.minReplicas !== 2 ||
+    ![1, 2].includes(hpas[0].spec.minReplicas) ||
     hpas[0].spec.maxReplicas !== 4 ||
+    proxy.spec.replicas < hpas[0].spec.minReplicas ||
     proxy.spec.replicas > 4 ||
     !equal(hpas[0].spec.metrics, [
       {

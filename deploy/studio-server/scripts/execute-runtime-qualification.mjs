@@ -62,6 +62,9 @@ const inspect = async () =>
     ...(process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256
       ? { valuesDigest: process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256 }
       : { valuesText: await fs.readFile(process.env.RIVET_QUALIFICATION_PRODUCTION_VALUES_FILE, 'utf8') }),
+    ...(process.env.RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM !== undefined
+      ? { proxyMinimum: Number(process.env.RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM) }
+      : {}),
     helm: resolveHelmBinOrThrow(root),
     kubectl: process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl',
     run: (bin, args, options) =>

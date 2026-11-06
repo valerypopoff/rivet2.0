@@ -37,7 +37,14 @@ function render(singleton, compact = false, overlap = false) {
         '-f',
         'deploy/studio-server/helm/overlays/gke-ha.yaml',
         ...(singleton ? ['-f', 'deploy/studio-server/helm/overlays/gke-runtime-ha.yaml'] : []),
-        ...(compact ? ['-f', 'deploy/studio-server/helm/overlays/gke-compact-edge.yaml'] : []),
+        ...(compact
+          ? [
+              '-f',
+              'deploy/studio-server/helm/overlays/gke-compact-edge.yaml',
+              '--set',
+              'replicaCount.proxy=2,autoscaling.proxy.minReplicas=2,availability.topologySpread.minDomains=2',
+            ]
+          : []),
         '--set',
         'objectStorage.bucket=fixture',
         '--set',

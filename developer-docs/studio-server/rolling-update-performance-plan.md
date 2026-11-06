@@ -92,8 +92,13 @@ Identical-image releases still render and journal the intended candidate identit
 A separate permanent ConfigMap owns application identity. Each test acquires it
 by resourceVersion CAS, binds namespace/registry UIDs, and creates one unique
 fixture folder. Cleanup joins producers, verifies accepted work has settled,
-deletes only that folder with its namespace ID precondition, checks the candidate
-installation/public route, and releases the application as healthy and idle.
+unpublishes the folder's projects and web apps using fresh publication versions,
+deletes the projects by ID/draft revision, then deletes the empty folder with its
+namespace ID precondition. It checks the candidate installation/public route and
+releases the application as healthy and idle. Persisted write intents allow
+observation of lost acknowledgements without repeating mutations; unrelated
+projects are preserved. Local regression fixtures use the actual nested catalog
+shape and enforce publication, empty-folder and revision guards.
 This is logical data deletion; normal housekeeping handles historical blobs.
 The operation receipt explicitly identifies retained resources, rather than
 claiming their absence. The legacy disposable-namespace path is unchanged.
@@ -121,6 +126,42 @@ automatic downgrade. Persistent application cost must be approved before activat
 
 Owners: `lib/retained-staging-{application,cleanup}.mjs`, staging state/janitor,
 provider entry/gate and runtime qualification receipt validation.
+
+### One steady-state proxy
+
+The compact chart and autoscaling overlay now default to one proxy. Ordinary
+staging/prod tooling accepts a configured one- or two-proxy minimum, preserves
+that policy in the staging projection, and uses it for settlement, GCP health,
+headroom, recovery and evidence validation. The replacement policy remains zero
+unavailable/one surge; the single-proxy PDB protects one available endpoint.
+A frozen autoscaler retains its configured edge policy even when its preserved
+Pod count has grown. Execution replicas and their two-zone placement are unchanged. A failure of the
+sole proxy can interrupt service; this change preserves planned rolling-update
+continuity, not multi-Pod failure redundancy.
+
+Local coverage includes single-proxy chart rendering, scoped production adapter
+inspection/verification, loss of all serving capacity, proxy settings propagation,
+six-Pod settlement and focused evidence compilation/publication. Live Helm values
+still explicitly select two until an approved deployment applies the coordinated
+one-proxy values described in [Kubernetes](kubernetes.md). The local installation
+bundle now includes those three overrides in its raw and encoded values; its
+generator and verifier preserve the HPA ceiling, workload reservations, shutdown
+settings and execution placement. Actual-value chart rendering passes locally;
+the bundle remains unpublished. Full multi-Pod eviction
+stress is separate and rejects one-proxy inputs before provider setup.
+
+The pre-test review reproduced a target-profile handoff gap: default observation
+still mirrored two live proxies even when the prepared installation selected
+one, and the staged configuration retained the older values hash. The local
+handoff now pairs the new values hash with protected `production.proxyMinimum`.
+Staging exercises that target with matching observation/evidence bounds while
+retaining the true production baseline. Production materialization rejects a
+stale hash or mixed edge settings, and preflight detects a changed target
+projection. These fixes add no cloud phase or retry.
+The November 6 pre-test review passed 572 local source-gate checks, 521 native
+rollout/provider/retained-cleanup tests and 49 observer/workflow tests (the suites
+overlap). Actual-value Helm renders, paired private configuration hashes and
+packaged CLI guards passed. These are local checks, not a new GKE qualification.
 
 ### Unchanged proxy images
 
@@ -223,6 +264,38 @@ production evidence/bundle is unchanged. Prepared bundle hashes and encoded
 installation contents are regenerated together; publishing its pointer remains
 a separate reviewed operational action.
 
+### Cut off redundant late long-probe batches
+
+The workflow now supports an independent `longProbeCutoff: "after-rollout"`
+policy. Its bound cutoff stage runs immediately after infrastructure rollout and
+before autoscaler verification or final application journeys. The matching
+private adapter closes only new long-request admission; all accepted requests
+finish and short health checks continue. Cutoff failure preserves the applied
+infrastructure and original observer for acceptance-only recovery. Staging's
+focused suite already omits the redundant late-admission cohort; actual proxy
+replacement and execution-retirement cohorts remain required.
+
+A minimal private bundle has been prepared locally from the exact acceptance and
+backup adapters used in the successful November 6 deployment. Acceptance
+behavior, its policy checksum and the cutoff opt-in change. The prepared values
+also align the three compact-edge settings with one proxy; all other values,
+backup bytes, preparation mode and execution-pool settings are preserved.
+The bundle and public workflow still require publication before this path is
+active. Startup readiness now waits for dispatch of the first long cohort after
+its existing connection setup, closing the fast-rollout/early-cutoff race. Local
+readiness publication also waits for durable upload acknowledgement. Sequential
+preparation failures after observer readiness now use the existing abort handler
+to settle requests and recordings and remove the owned fixture before any
+deployment starts; aborted preparation does not require qualification sample
+counts or certify a release. No automatic observer cleanup runs after workload
+mutation may have started. Later verification or result-write failures retain
+the cutoff request in their recovery
+guidance instead of opening a replacement observer. Packaged local tests verify
+cutoff receipts and binding, no repeated marker write, complete accepted bodies,
+continued short probes, health failure and original-window recovery.
+The measured 3m29s late tail is an opportunity,
+not a guaranteed saving: in-flight long requests still finish naturally.
+
 ## Expected speed and limits
 
 These are counterfactual budgets from the historical trace, **not measured new
@@ -275,7 +348,7 @@ bundle, alongside the source contracts. It adds no new cloud test or release gat
 | Moving baseline, reservation policy or excessive synthetic checks obscured the deployment objective | Keep the installed immutable predecessor and exact successful build. The focused suite observes one actual update with approved capacity ranges; it adds no warmup, forced proxy restart, architecture disruption or second release. Preserve real availability, complete response bodies, accepted work and recording/data checks.                                                                                                      |
 | Production-only adapter, checkpoint and observation failures                                        | Bind/check the reviewed adapter bytes and encoded installation together. Local adapter/prerequisite contracts and real command recovery tests cover invocation and receipts; historical database/object recovery evidence remains private. Final application failure uses verification-only recovery, not another rollout. The new private adapter's authenticated production journeys remain untested until activation.                 |
 
-The new overlap does not relax the proxy safety floor. If native replacement
+The new overlap preserves the configured proxy safety floor. If native replacement
 changes a sampled serving Pod into a draining Pod, the headroom guard pauses
 retirement, waits within its existing observation deadline, and recomputes demand
 including the draining CPU. Both a previously visible surge and a surge arriving
@@ -350,7 +423,9 @@ failed or incomplete observations; it uses synthetic recordings and no live API.
 Next operational sequence:
 
 1. Review and publish one candidate plus its prepared private adapter/configuration.
-   Keep credentials and private values out of public Git.
+   Pair the installation values hash and protected target proxy minimum in both
+   configurations; use the matching immutable installation object and current
+   chart/tooling. Keep credentials and private values out of public Git.
 2. With a fresh allowance covering persistent application use and one test, install
    the matching retained-staging settings/cleanup worker and enable the paired
    profile. Reuse the existing cluster, hostname and access. First bootstrap cost

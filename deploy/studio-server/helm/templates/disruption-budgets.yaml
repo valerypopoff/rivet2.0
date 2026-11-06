@@ -5,7 +5,7 @@
 {{- $replicas := int (index $root.Values.replicaCount $component) }}
 {{- $autoscaling := index $root.Values.autoscaling $component }}
 {{- $minimumReplicas := ternary (int $autoscaling.minReplicas) $replicas $autoscaling.enabled }}
-{{- if gt $minimumReplicas 1 }}
+{{- if or (gt $minimumReplicas 1) (and (eq $component "proxy") (eq $minimumReplicas 1)) }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -15,7 +15,10 @@ metadata:
     {{- include "rivet.labels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ $component }}
 spec:
-  {{- if and (eq $component "execution") $root.Values.autoscaling.executionController.enabled }}
+  {{- if and (eq $component "proxy") (eq $minimumReplicas 1) }}
+  # Keep the sole serving endpoint during voluntary node eviction.
+  minAvailable: 1
+  {{- else if and (eq $component "execution") $root.Values.autoscaling.executionController.enabled }}
   # Voluntary node eviction must not bypass accepted-work retirement.
   minAvailable: "100%"
   {{- else }}

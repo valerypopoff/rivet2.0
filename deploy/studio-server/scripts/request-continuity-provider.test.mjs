@@ -598,14 +598,11 @@ test('published fixture enforces duration/input bounds and exclusive admission m
     return new Response('{}', { headers: { etag: 'revision' } });
   });
   const gate = {
-    operation: { installed: { qualificationValues: {} } },
+    operation: { installed: { qualificationValues: {}, baseline: { proxy: 1 } } },
     config: { baseUrl: 'https://fixture.invalid' },
     probeHeaders: {},
     assertProofContext: async () => {},
-    pods: async () => [
-      { metadata: { name: 'proxy', labels: { 'app.kubernetes.io/component': 'proxy' } } },
-      { metadata: { name: 'proxy2', labels: { 'app.kubernetes.io/component': 'proxy' } } },
-    ],
+    pods: async () => [{ metadata: { name: 'proxy', labels: { 'app.kubernetes.io/component': 'proxy' } } }],
     kube: async () => ({ stdout: 'proxy_read_timeout 3600s;' }),
     requestWorkflow: async (_base, route, options) => {
       if (route === '/api/app-settings/runtime-limits') {

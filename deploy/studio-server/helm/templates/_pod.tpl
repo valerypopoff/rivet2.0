@@ -145,7 +145,12 @@ topologySpreadConstraints:
     topologyKey: {{ $root.Values.availability.topologySpread.topologyKey | quote }}
     whenUnsatisfiable: {{ $root.Values.availability.topologySpread.whenUnsatisfiable }}
     {{- if eq $root.Values.availability.topologySpread.whenUnsatisfiable "DoNotSchedule" }}
+    {{- if and (eq $component "execution") $root.Values.availability.gkeGateway (eq $root.Values.availability.gkeGatewayProfile "compact") }}
+    # Reducing the edge must not weaken the execution workers' zone spread.
+    minDomains: {{ max 2 (int $root.Values.availability.topologySpread.minDomains) }}
+    {{- else }}
     minDomains: {{ $root.Values.availability.topologySpread.minDomains }}
+    {{- end }}
     {{- end }}
     {{- with $root.Values.availability.topologySpread.nodeTaintsPolicy }}
     nodeTaintsPolicy: {{ . }}
