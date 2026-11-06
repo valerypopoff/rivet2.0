@@ -20,7 +20,8 @@ The controller does not replace qualified rollout code with current main code.
 No local Linux/WSL runner, new image build or staging allowance is required.
 See the qualification guide for the explicit cleanup-recovery receipt path.
 The production CLI imports Node's strict assertion module explicitly. The source
-gate also lints entry-point bindings: staging exercises the shared rollout
+gate also lints entry-point bindings. That lint script is a tooling input and
+does not require rebuilding unchanged application images. Staging exercises the shared rollout
 libraries, so it cannot establish that an otherwise unused production-only branch
 has all its imports. For the already-qualified tooling revision `cf1bba99c` only,
 the hosted controller supplies that same strict module through a Node preload to

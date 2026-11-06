@@ -26,6 +26,7 @@ export function isToolingOnlyPath(file) {
       '.github/workflows/studio-server-source-contracts.yml',
       '.github/workflows/studio-server-verify.yml',
       'scripts/checks/check-ci-workflows.mjs',
+      'scripts/checks/check-rollout-entrypoints.mjs',
       'scripts/build-and-publish-qualification-images.mjs',
       'scripts/qualification-image-publication.mjs',
     ].includes(file)
