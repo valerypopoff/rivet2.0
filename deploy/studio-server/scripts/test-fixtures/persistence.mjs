@@ -6,7 +6,7 @@ const { WebSocketServer } = createRequire(
   new URL('../../../../packages/studio-server-api/package.json', import.meta.url),
 )('ws');
 
-export async function persistenceFixture(t, { headers, key = () => 'staging-only' }) {
+export async function persistenceFixture(t, { headers, key = () => 'staging-only', oauth = false }) {
   const relativePath = 'fixture.rivet-project';
   const projectId = randomUUID(),
     revision = randomUUID(),
@@ -15,7 +15,15 @@ export async function persistenceFixture(t, { headers, key = () => 'staging-only
     failures = [];
   const authenticate = (req) => {
     const expected = typeof headers === 'function' ? headers() : headers;
-    if (req.headers.authorization !== expected.authorization || req.headers.cookie !== expected.cookie) {
+    const cookies = (req.headers.cookie ?? '').split(';').map((value) => value.trim());
+    if (req.headers.authorization !== expected.authorization || !cookies.includes(expected.cookie)) {
+      failures.push(req.url);
+      return false;
+    }
+    if (
+      !/^\/apps(?:-latest)?\//.test(req.url) &&
+      cookies.some((cookie) => cookie.startsWith('rivet_web_app_oauth_session='))
+    ) {
       failures.push(req.url);
       return false;
     }
@@ -57,6 +65,19 @@ export async function persistenceFixture(t, { headers, key = () => 'staging-only
       res.statusCode = 401;
       return json({});
     }
+    if (route.endsWith('/web-app-auth') && req.method === 'PUT') {
+      assert.equal(body.mode, 'oauth');
+      oauth = true;
+      return json({});
+    }
+    if (
+      /^\/apps(?:-latest)?\//.test(route) &&
+      oauth &&
+      !(req.headers.cookie ?? '').split(';').some((cookie) => cookie.trim() === 'rivet_web_app_oauth_session=fixture')
+    ) {
+      res.writeHead(401, { 'content-type': 'text/html' });
+      return res.end('<title>Sign in required</title>');
+    }
     if (route.endsWith('/trusted-clients/current-request')) return json({ clientAddress: '10.128.0.2' });
     if (route.endsWith('/projects/upload')) return json({ project: { relativePath } });
     if (route.endsWith('/projects/web-apps'))
@@ -91,6 +112,7 @@ export async function persistenceFixture(t, { headers, key = () => 'staging-only
   const ws = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
     assert.ok(authenticate(req));
+    assert.ok(!oauth || req.headers.cookie?.includes('rivet_web_app_oauth_session=fixture'));
     ws.handleUpgrade(req, socket, head, (client) =>
       client.on('message', (raw) => {
         const input = JSON.parse(raw.toString());
@@ -110,5 +132,5 @@ export async function persistenceFixture(t, { headers, key = () => 'staging-only
     server.close();
   });
 
-  return { relativePath, requests, failures, origin: 'http://127.0.0.1:' + server.address().port };
+  return { relativePath, projectId, requests, failures, origin: 'http://127.0.0.1:' + server.address().port };
 }

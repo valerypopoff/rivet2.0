@@ -6,6 +6,11 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import {
+  recoverRetainedQualification,
+  inspectRetainedCleanupRecovery,
+  beginRetainedCleanupRecovery,
+} from './lib/retained-qualification-recovery.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   createStudioServerReleaseManifest,
@@ -1484,6 +1489,156 @@ for (const profile of [
       }),
     );
     if (retained) {
+      const archive = {
+        terminal: {
+          protocol: 1,
+          operationId: f.operation.operationId,
+          inputHash: f.operation.inputHash,
+          phase: 'terminal',
+          outcome: 'failed',
+          cleanupVerified: false,
+        },
+        armExpiry: f.facts.armExpiry,
+        prepare: f.facts.prepare,
+        upgrade: f.facts.upgrade,
+        reportSha256: qualificationHash(f.facts.upgrade),
+      };
+      const original = structuredClone(archive),
+        recovery = driver(f);
+      const recovered = await recoverRetainedQualification(f.operation, archive, recovery.api, async () => {}, {
+        now: f.now,
+      });
+      assert.deepEqual(recovered, result);
+      assert.deepEqual(
+        recovery.calls,
+        ['settle', 'cleanup', 'verifyCleanup'],
+        'No rollout or fixture creation is repeated',
+      );
+      assert.deepEqual(archive, original, 'The failed operation and its observed report remain unchanged');
+      const registry = {
+        metadata: { uid: archive.armExpiry.identity },
+        record: {
+          closed: true,
+          cleanupVerified: true,
+          acceptedWorkSettled: true,
+          phase: 'cleaned',
+          retainedCleanup: { phase: 'quarantined', healthy: false },
+          workers: [
+            { phase: 'prepare', closed: true },
+            { phase: 'upgrade', closed: true },
+            { phase: 'settle', closed: true, failed: true },
+          ],
+          testPhases: { prepare: { state: 'acknowledged' }, upgrade: { state: 'acknowledged' } },
+          processes: [],
+          fixtureFolder: { relativePath: 'owned' },
+          namespaceUid: 'retained-namespace',
+          actor: { namespace: 'runners', name: 'old-actor' },
+          creationNonce: 'nonce',
+          retainedApplication: { uid: 'app-uid' },
+        },
+      };
+      const application = {
+        object: { metadata: { uid: 'app-uid', resourceVersion: '1' } },
+        record: {
+          nonce: 'nonce',
+          namespaceUid: 'retained-namespace',
+          phase: 'quarantined',
+          lastOperationId: f.operation.operationId,
+          lastReceipt: { healthy: false },
+        },
+      };
+      const writes = [],
+        state = {
+          operation: f.operation,
+          settings: { runnerNamespace: 'runners' },
+          read: async () => ({
+            object: structuredClone({ metadata: registry.metadata }),
+            record: structuredClone(registry.record),
+          }),
+          namespace: async () => ({ metadata: { uid: 'retained-namespace' } }),
+          api: {
+            json: async (method) => {
+              assert.equal(method, 'GET');
+              return null;
+            },
+          },
+          change: async (transform) => {
+            const next = structuredClone(registry.record);
+            await transform(next);
+            registry.record = next;
+            writes.push('registry');
+          },
+          application: {
+            read: async () => structuredClone(application),
+            change: async (transform, expected) => {
+              assert.deepEqual(expected, application.object);
+              await transform(application.record);
+              writes.push('application');
+            },
+          },
+        };
+      const plan = await inspectRetainedCleanupRecovery(state, archive, { now: f.now(), deadlineAt: f.now() + 60000 });
+      assert.deepEqual(writes, []);
+      state.api.json = async () => ({ metadata: { uid: 'live-actor' } });
+      await assert.rejects(
+        inspectRetainedCleanupRecovery(state, archive, { now: f.now(), deadlineAt: plan.deadlineAt }),
+        /physically absent/,
+      );
+      state.api.json = async () => null;
+      await assert.rejects(
+        beginRetainedCleanupRecovery(
+          state,
+          archive,
+          { ...plan, applicationUid: 'foreign' },
+          {
+            now: f.now(),
+            persistIntent: async () => writes.push('intent'),
+          },
+        ),
+        /changed after inspection/,
+      );
+      assert.deepEqual(writes, []);
+      await beginRetainedCleanupRecovery(state, archive, plan, {
+        now: f.now(),
+        persistIntent: async () => writes.push('intent'),
+      });
+      assert.deepEqual(writes, ['intent', 'registry', 'application']);
+      assert.equal(registry.record.retainedRecovery.previousCleanup.phase, 'quarantined');
+      assert.equal(registry.record.cleanupVerified, false);
+      assert.equal(registry.record.phase, 'settled');
+      assert.equal(application.record.phase, 'owned');
+      assert.equal(application.record.owner.inputHash, f.operation.inputHash);
+      assert.equal(archive.terminal.outcome, 'failed');
+      await assert.rejects(
+        beginRetainedCleanupRecovery(state, archive, plan, {
+          now: f.now(),
+          persistIntent: async () => writes.push('replay'),
+        }),
+      );
+      assert.deepEqual(writes, ['intent', 'registry', 'application']);
+      for (const mutate of [
+        (a) => {
+          a.terminal.failedPhase = 'upgrade';
+        },
+        (a) => {
+          a.upgrade.workflow.failures.push({ status: 502 });
+        },
+        (a) => {
+          a.upgrade.readiness.minimumReady.execution = 1;
+          a.reportSha256 = qualificationHash(a.upgrade);
+        },
+        (a) => {
+          a.prepare.retainedApplication.namespaceUid = '';
+        },
+      ]) {
+        const bad = structuredClone(archive),
+          untouched = driver(f);
+        mutate(bad);
+        await assert.rejects(
+          recoverRetainedQualification(f.operation, bad, untouched.api, async () => {}, { now: f.now }),
+        );
+        assert.deepEqual(untouched.calls, [], 'Invalid archived evidence cannot authorize cleanup');
+      }
       // Both report validation and certificate compilation must happen before
       // cleanup is allowed to discard a failed attempt's fixtures.
       const pooled = qualificationOperation({

@@ -455,12 +455,20 @@ export class RuntimeControlLocalGate extends HaReleaseGate {
     ]);
     await this.kube(['delete', 'pod/runtime-control-scratch-prepare', '--wait=true']);
   }
+  get webAppHeaders() {
+    const headers = { ...this.probeHeaders };
+    const cookie = [headers.cookie, this.publicAppCookie].filter(Boolean).join('; ');
+    return { ...headers, ...(cookie ? { cookie } : {}) };
+  }
+  prepareWebAppAuthentication(base, relativePath) {
+    return this.enableOAuth(base, relativePath);
+  }
   requestWorkflow(base, route, options = {}) {
     return super.requestWorkflow(base, route, {
       ...options,
       headers: {
         ...options.headers,
-        ...(this.publicAppCookie && route.startsWith('/apps/') ? { cookie: this.publicAppCookie } : {}),
+        ...(/^\/apps(?:-latest)?\//.test(route) ? this.webAppHeaders : {}),
       },
     });
   }
@@ -842,7 +850,7 @@ async function adoptionMain() {
     await gate.apply(gate.values(baseline), `old-${fullCount}.json`);
     const base = await gate.openProxy();
     const state = await gate.exercisePersistence(base);
-    const projectId = await gate.enableOAuth(base, state.relativePath);
+    const projectId = state.projectId;
     await gate.prepareLocalRestoreVolume();
     const sentinel = randomUUID();
     await gate.kube([
@@ -1039,7 +1047,6 @@ async function ordinaryMain() {
     await gate.waitForDeveloperRoute(baseUrl);
     const state = await gate.exercisePersistence(baseUrl);
     await gate.artifact('ha-persisted-state.json', JSON.stringify(state));
-    await gate.enableOAuth(baseUrl, state.relativePath);
     await gate.prepareLocalRestoreVolume();
     const probes = new HaReleaseProbes(gate, baseUrl, root);
     await runOrdinaryRuntimeUpgrade({

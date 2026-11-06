@@ -1,11 +1,12 @@
 # Faster ordinary staging and production updates
 
-Status: **implemented; first retained/one-proxy trial failed before rollout** (2026-11-06).
+Status: **retained/one-proxy rollout qualified through explicit cleanup recovery** (2026-11-06).
 The four larger optimizations below are implemented alongside the initial frontend
 and worker overlap. The public source is included in the develop update; a separate
 private production adapter copy remains local and excluded from Git. The first
-retained staging trial is recorded below; the combined process is not yet
-provider-qualified and no production update was performed by that trial.
+retained staging trials and the separately authorized cleanup recovery are
+recorded below. Qualification uses the preserved successful rollout evidence. No production
+update was performed by these staging operations.
 
 ### First retained/one-proxy trial (2026-11-06)
 
@@ -24,6 +25,37 @@ operator cleanup quarantines the failed application, preserves its data and
 namespace, and removes only its test actor. This attempt provides no rollout
 timing or release qualification. Production remains unchanged; no automatic
 second attempt is authorized by the failed run.
+
+The separately authorized retry
+[42201194237](https://github.com/valerypopoff/rivet2.0/actions/runs/42201194237)
+reused application Build 42186077940 with repaired tooling 42199201207. Retained
+preparation and the rolling-update phase completed, but settlement incorrectly
+required a published-execution gauge from the split `control` backend. That
+backend intentionally does not initialize published-execution admission. The
+local correction skips that gauge only for an explicitly configured control
+backend, preserving owner identity and explicit-zero checks on execution workers
+and combined backends. The failed workflow remains unqualified; scoped operator
+cleanup cannot convert its result into a successful qualification.
+Its durable rolling-update report records 28m 38s, 4,830 workflow requests and
+1,674 web requests without reported failures. All three 300-second transport
+probes completed with full response bodies and recordings; both retiring workers'
+315-second accepted-work probes also completed with successful recordings. These
+are successful rollout-phase observations, separate from overall qualification.
+
+The separately authorized cleanup-only recovery revalidated the original guard,
+preparation and rollout receipts, completed fresh settlement, removed the three
+owned fixture projects, and verified candidate images, proxy/LB health and the
+idle retained application. The original failed workflow and report were unchanged.
+[Publication 42212568313](https://github.com/valerypopoff/rivet2.0/actions/runs/42212568313)
+passed and published qualified manifest
+`sha256:4a0ad1cb8f96926674a3245a6b3b7b9fe62f41a01def20403c39c72ff14eb836`.
+It reuses application Build 42186077940 and tested tooling 42199201207; no images
+were rebuilt and no rolling update was repeated. New local recovery/settlement
+code was used only for cleanup recovery, not represented as newly tested rollout
+tooling. The registry artifact was verified independently; production was not
+deployed. Local verification passed 86 route/retention/coordinator regressions and
+seven qualification sequencing/compilation tests, including recovery rejection
+of altered reports, failed traffic/rollout evidence, live actors and identity drift.
 
 ## Measured baseline
 

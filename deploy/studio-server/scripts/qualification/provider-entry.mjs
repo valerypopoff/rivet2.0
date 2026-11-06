@@ -165,10 +165,11 @@ export async function executeProviderPhase({
     await step('frontend', () => gate.readyPublic());
     if (state.application) await step('owned-fixture-folder', () => gate.prepareRetainedFixture());
     // Fixture writes occur once, only after auth, LB health and installed images
-    // are proven. A lost response is retained as an uncertain phase, not retried.
+    // are proven. Seeding establishes OAuth before any protected app probes,
+    // including when OAuth settings survived a retained run. A lost response is
+    // retained as an uncertain phase, not retried.
     const seed = await step('persistence', () => gate.exercisePersistence(gate.config.baseUrl));
     await gate.artifact('ha-persisted-state.json', JSON.stringify(seed));
-    await step('oauth', () => gate.enableOAuth(gate.config.baseUrl, seed.relativePath));
     const { object } = await state.read();
     result = {
       stagingClusterUid: operation.staging.clusterUid,

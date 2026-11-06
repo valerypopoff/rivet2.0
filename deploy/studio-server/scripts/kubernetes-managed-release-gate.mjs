@@ -1205,6 +1205,48 @@ export class ManagedReleaseGate {
     return baseUrl;
   }
 
+  get webAppHeaders() {
+    return this.probeHeaders;
+  }
+
+  async prepareWebAppAuthentication(_baseUrl, _relativePath) {
+    // The generic local gate uses its existing UI gate. Runtime-control gates
+    // override this to establish OAuth before checking a fresh or retained app.
+  }
+
+  async readWebAppHtml(baseUrl, route, { timeoutMs = 30_000 } = {}) {
+    const response = await fetch(`${baseUrl}${route}`, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: this.webAppHeaders,
+    });
+    const html = await response.text();
+    const evidence = {
+      route,
+      status: response.status,
+      format: /text\/html/i.test(response.headers.get('content-type') ?? '') ? 'html' : 'other',
+      bodyBytes: Buffer.byteLength(html),
+      bodySha256: createHash('sha256').update(html).digest('hex'),
+      signInRequired: html.includes('<title>Sign in required</title>'),
+    };
+    if (response.status !== 200 || evidence.format !== 'html' || !html.includes('Managed release gate app')) {
+      const error = new Error(`GET ${route} returned ${response.status}: expected release-gate web-app HTML`);
+      error.httpEvidence = evidence;
+      // Preserve useful diagnostics without copying cookies, redirects or HTML
+      // (which can include credentials) into exported evidence or public logs.
+      try {
+        await this.artifact(
+          `web-app-response-${route.startsWith('/apps-latest/') ? 'latest' : 'published'}.json`,
+          JSON.stringify(evidence),
+        );
+      } catch {
+        // A diagnostic write must not hide the HTTP failure.
+      }
+      throw error;
+    }
+    return html;
+  }
+
   async exercisePersistence(baseUrl) {
     const fixtureContents = await fs.readFile(
       path.join(rootDir, 'deploy', 'studio-server', 'scripts', 'fixtures', 'managed-release-gate.rivet-project'),
@@ -1261,6 +1303,7 @@ export class ManagedReleaseGate {
       }),
     });
 
+    const projectId = await this.prepareWebAppAuthentication(baseUrl, relativePath);
     await this.requestWorkflow(baseUrl, '/workflows/managed-release-workflow', {
       method: 'POST',
       body: JSON.stringify({ input: 'published' }),
@@ -1269,21 +1312,8 @@ export class ManagedReleaseGate {
       method: 'POST',
       body: JSON.stringify({ input: 'latest' }),
     });
-    const publishedHtml = await (
-      await fetch(`${baseUrl}/apps/release-gate-web-app`, {
-        signal: AbortSignal.timeout(30_000),
-        headers: this.probeHeaders,
-      })
-    ).text();
-    const latestHtml = await (
-      await fetch(`${baseUrl}/apps-latest/release-gate-web-app`, {
-        signal: AbortSignal.timeout(30_000),
-        headers: this.probeHeaders,
-      })
-    ).text();
-    if (!publishedHtml.includes('Managed release gate app') || !latestHtml.includes('Managed release gate app')) {
-      throw new Error('Published/latest web-app HTML did not contain the expected app');
-    }
+    const publishedHtml = await this.readWebAppHtml(baseUrl, '/apps/release-gate-web-app');
+    const latestHtml = await this.readWebAppHtml(baseUrl, '/apps-latest/release-gate-web-app');
     const publishedRevision = extractWebAppRevisionKey(publishedHtml);
     const latestRevision = extractWebAppRevisionKey(latestHtml);
     for (const [route, revisionKey, prompt] of [
@@ -1300,7 +1330,7 @@ export class ManagedReleaseGate {
         }),
       });
     }
-    const socketMessages = await runWebSocketAction(baseUrl, publishedRevision, this.probeHeaders);
+    const socketMessages = await runWebSocketAction(baseUrl, publishedRevision, this.webAppHeaders);
     if (
       !socketMessages.some((message) => message.type === 'action.accepted') ||
       !socketMessages.some((message) => message.type === 'action.completed')
@@ -1379,7 +1409,14 @@ export class ManagedReleaseGate {
       90_000,
     );
     if (typeof replayRecordingId !== 'string') throw new Error('recording replay identity did not converge');
-    return { environmentVariableId, publishedRevision, relativePath, replayRecordingId, replayProjectDigest };
+    return {
+      environmentVariableId,
+      publishedRevision,
+      relativePath,
+      replayRecordingId,
+      replayProjectDigest,
+      ...(projectId == null ? {} : { projectId }),
+    };
   }
 
   async verifyManagedPublicationConflict(baseUrl, relativePath) {

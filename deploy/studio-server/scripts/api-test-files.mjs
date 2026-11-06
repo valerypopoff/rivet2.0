@@ -125,6 +125,7 @@ export const defaultApiTestFiles = [
   'src/tests/recording-statistics.test.ts',
   'src/tests/recording-workflow-scope.test.ts',
   'src/tests/recordings-store.test.ts',
+  'src/tests/release-gate-web-app-auth.test.ts',
   'src/tests/release-maintenance.test.ts',
   'src/tests/remap-bundle-project.test.ts',
   'src/tests/request-correlation.test.ts',
