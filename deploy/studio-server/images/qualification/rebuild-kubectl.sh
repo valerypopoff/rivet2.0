@@ -17,6 +17,6 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$target_arch" GOTOOLCHAIN=local \
   -o /out/kubectl k8s.io/kubernetes/cmd/kubectl
 go version -m /out/kubectl > /out/kubectl-build.txt
 grep -F "$(printf '\tmod\tk8s.io/kubernetes\tv1.36.6\th1:')" /out/kubectl-build.txt
-grep -F "$(printf '\tdep\tgolang.org/x/net\tv0.60.0\th1:')" /out/kubectl-build.txt
-grep -F "$(printf '\tdep\tgolang.org/x/text\tv0.42.0\th1:')" /out/kubectl-build.txt
+grep -F "$(printf '\tdep\tgolang.org/x/net\tv0.62.0\th1:')" /out/kubectl-build.txt
+grep -F "$(printf '\tdep\tgolang.org/x/text\tv0.43.0\th1:')" /out/kubectl-build.txt
 cp "$(go env GOPATH)/pkg/mod/k8s.io/kubernetes@v1.36.6/LICENSE" /out/kubectl-LICENSE

@@ -7,6 +7,10 @@ stay on their matching 0.36.6 release; the networking/text libraries retain the
 reviewed security minimums. The retained
 tooling/test-only compression dependency also resolves to its patched source.
 
+The network-library minimum is now `golang.org/x/net v0.62.0`, fixing
+[CVE-2026-78661](https://pkg.go.dev/vuln/GO-2026-6860). Keep the Kubernetes release
+and the real main package unchanged when applying this dependency-only repair.
+
 `go.mod` and `go.sum` freeze the complete graph. The normal image build uses
 `-mod=readonly`, the pinned Go compiler and Go's checksum database. It must not
 run `go get` or `go mod tidy`. Both Helm and kubectl retain real release versions

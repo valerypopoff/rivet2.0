@@ -1034,11 +1034,16 @@ assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildComp
 assert.match(actorDockerfile, /sh \/rebuild-helm\.sh "\$TARGETARCH"/);
 assert.match(actorDockerfile, /COPY --from=helm-security \/out\/helm \/usr\/local\/bin\/helm/);
 assert.match(read('deploy/studio-server/images/qualification/rebuild-helm.sh'), /version=3\.22\.1/);
-assert.match(read('deploy/studio-server/images/qualification/rebuild-helm.sh'), /go install[^\n]+-mod=readonly/);
+assert.match(read('deploy/studio-server/images/qualification/rebuild-helm.sh'), /go build[^\n]+-mod=readonly/);
 assert.match(
   read('deploy/studio-server/images/qualification/rebuild-helm.sh'),
-  /helm\.sh\/helm\/v3\/cmd\/helm@v\$\{version\}/,
+  /-o \/out\/helm helm\.sh\/helm\/v3\/cmd\/helm/,
 );
+assert.match(actorDockerfile, /COPY source\/deploy\/studio-server\/images\/qualification\/helm \/helm-policy/);
+const helmPolicy = read('deploy/studio-server/images/qualification/helm/go.mod');
+assert.match(helmPolicy, /tool helm\.sh\/helm\/v3\/cmd\/helm/);
+assert.match(helmPolicy, /helm\.sh\/helm\/v3 v3\.22\.1/);
+assert.match(helmPolicy, /golang\.org\/x\/net v0\.62\.0/);
 assert.ok(
   actorDockerfile.indexOf('ARG SOURCE_SHA') > actorDockerfile.indexOf('USER 10001:10001'),
   'Source revisions must not invalidate independent tool-install layers',
@@ -1049,8 +1054,8 @@ assert.match(actorDockerfile, /COPY --from=kubectl-security \/out\/kubectl \/usr
 const kubectlPolicy = read('deploy/studio-server/images/qualification/kubectl/go.mod');
 assert.match(kubectlPolicy, /tool k8s\.io\/kubernetes\/cmd\/kubectl/);
 assert.match(kubectlPolicy, /k8s\.io\/kubernetes v1\.36\.6/);
-assert.match(kubectlPolicy, /golang\.org\/x\/net v0\.60\.0/);
-assert.match(kubectlPolicy, /golang\.org\/x\/text v0\.42\.0/);
+assert.match(kubectlPolicy, /golang\.org\/x\/net v0\.62\.0/);
+assert.match(kubectlPolicy, /golang\.org\/x\/text v0\.43\.0/);
 assert.doesNotMatch(read('deploy/studio-server/images/qualification/rebuild-kubectl.sh'), /go (?:get|mod tidy)/);
 assert.match(actorDockerfile, /AS qualification-toolchain/);
 assert.match(actorDockerfile, /node \/opt\/rivet\/verify-toolchain\.mjs/);

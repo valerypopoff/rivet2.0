@@ -358,6 +358,30 @@ normal CI and release approval separately before changing a running installation
 
 ## Temporary qualification actor boundary
 
+The November 6 tooling publication exposed two High findings for the same
+[CVE-2026-78661](https://pkg.go.dev/vuln/GO-2026-6860), one in Helm and one in
+kubectl. The earlier scan classified it as Unknown; rescanning the previously
+published immutable actor reproduced the High classification without rebuilding
+it. Both locked CLI graphs now require `golang.org/x/net v0.62.0` and its
+compatible transitive dependencies. Helm 3.22.1, kubectl 1.36.6 and the pinned
+Go compiler remain unchanged. No vulnerability exclusion or application-image
+rebuild is needed for this tooling-only repair. Normal builds use readonly
+module graphs; inspect real build inventories and run the existing non-root
+CLI/TLS/HTTP2 fixture before the full actor scan.
+
+The repaired linux/amd64 binaries passed that fixture locally. A rootfs binary
+scan using the same November 6 database detected both Go inventories, confirmed
+the fixed module in each, and reported zero High/Critical findings. A filesystem
+scan with no detected inventory is not evidence of a pass. This local binary
+check does not replace the final complete-actor image scan or GKE qualification.
+
+Scan failures print the validated package/advisory/version records as JSON.
+Qualification publication also preserves available sanitized failing assessments
+in a separate `qualification-image-publication-failure-*` artifact. Raw scanner
+reports, image environment/history and credentials are not uploaded. Successful
+publication still requires its normal receipt artifact; failure evidence cannot
+substitute for a successful publication or authorize deployment.
+
 The persistent cleanup worker has its own small image under
 `deploy/studio-server/images/janitor/`. Only pinned Node, system CA certificates
 and `ws` 8.21.0 (matching `yarn.lock`) enter the final image; package managers and
@@ -396,9 +420,10 @@ security evidence. Do not switch Helm majors or use an incompatible kubectl
 minor merely to reduce findings. Kubernetes documents the supported
 [kubectl version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl).
 Helm 3.22.1 is rebuilt from its checksum-verified upstream module using the pinned
-Go 1.27.3 compiler without changing its module graph (`-mod=readonly`). The
-versioned `go install` preserves its actual main-module version/checksum in Go's
-build inventory; a `(devel)` main module is rejected, not relabeled or ignored.
+Go 1.27.3 compiler and a locked build-only dependency policy (`-mod=readonly`).
+Building the actual upstream command as a dependency preserves its real
+main-module version/checksum in Go's build inventory; a `(devel)` main module is
+rejected, not relabeled or ignored.
 This preserves future advisory matching in addition to fixing today's findings.
 The official binary still uses Go 1.26.9. The local build identifies itself with
 `+rivet.go1.27.3`, not a fabricated upstream Git commit; its build inventory and
