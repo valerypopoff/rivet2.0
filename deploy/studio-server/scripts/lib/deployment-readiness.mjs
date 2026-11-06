@@ -83,6 +83,94 @@ export async function readAvailableReleaseJournal({
   }
 }
 
+/** Initial HA ownership only. A precise resourceVersion rejection proves the
+ * attempted replace did not commit. Refresh the same idle autoscaler journal;
+ * never retry an uncertain acknowledgement, create, or owned checkpoint. */
+export async function claimHaReleaseJournal({
+  kube,
+  name,
+  release,
+  namespace,
+  timeoutMs,
+  previousResource,
+  record,
+  now = Date.now,
+  sleep,
+}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647)
+    throw Error('Journal claim requires a bounded positive timeout.');
+  if (previousResource === undefined)
+    throw Error('Initial journal claim requires its preflight resource or explicit absence.');
+  const deadline = now() + Math.min(timeoutMs, 30_000);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const remaining = deadline - now();
+    if (remaining <= 0) throw Error('Initial journal claim did not settle before its deadline.');
+    const { resource, record: current } = await readAvailableReleaseJournal({
+      kube,
+      name,
+      kind: 'ha',
+      release,
+      namespace,
+      timeoutMs: remaining,
+      previousResource,
+      now,
+      sleep,
+    });
+    if (
+      resource?.metadata.deletionTimestamp ||
+      (current && (current.phase !== 'complete' || current.leaseExpiresAt > now()))
+    )
+      throw Error('Another release operation acquired the journal during preflight.');
+    if (now() >= deadline) throw Error('Initial journal claim did not settle before its deadline.');
+    const original = resource && JSON.parse(resource.data.record);
+    const next = {
+      apiVersion: 'v1',
+      kind: 'ConfigMap',
+      metadata: {
+        name,
+        namespace,
+        ...(resource
+          ? {
+              uid: resource.metadata.uid,
+              resourceVersion: resource.metadata.resourceVersion,
+            }
+          : {}),
+      },
+      data: { record: JSON.stringify(record) },
+    };
+    let result;
+    try {
+      result = await kube([resource ? 'replace' : 'create', '-f', '-', '-o', 'json'], { input: JSON.stringify(next) });
+    } catch (error) {
+      const conflicts = [
+        ...String(error?.message ?? '').matchAll(
+          /^Error from server \(Conflict\): error when replacing "STDIN": Operation cannot be fulfilled on configmaps "([^"]+)": the object has been modified; please apply your changes to the latest version and try again\.?\s*$/gm,
+        ),
+      ];
+      if (
+        attempt === 2 ||
+        original?.autoscalingProtocol !== 1 ||
+        original.phase !== 'complete' ||
+        error?.name !== 'Error' ||
+        conflicts.length !== 1 ||
+        conflicts[0][1] !== name
+      )
+        throw error;
+      continue;
+    }
+    const saved = JSON.parse(result.stdout);
+    if (
+      saved.metadata?.name !== name ||
+      saved.metadata.namespace !== namespace ||
+      !saved.metadata.resourceVersion ||
+      (resource && saved.metadata.uid !== resource.metadata.uid) ||
+      !isDeepStrictEqual(JSON.parse(saved.data.record), record)
+    )
+      throw Error('Initial journal ownership acknowledgement is unconfirmed.');
+    return saved;
+  }
+}
+
 export function parseReleaseResources(text) {
   return parseAllDocuments(text)
     .map((document) => {

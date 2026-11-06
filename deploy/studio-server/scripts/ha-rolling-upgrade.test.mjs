@@ -1564,6 +1564,8 @@ for (const fault of [
   'missing-final-revision',
   'foreign-pod-controller',
   'slow-checkpoint-artifact',
+  'initial-autoscaler-conflict',
+  'owned-checkpoint-conflict',
 ])
   test(`Kubernetes surge removal is capacity/UID guarded and recoverable: ${fault}`, async (t) => {
     if (fault === 'slow-checkpoint-artifact') t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
@@ -1597,6 +1599,32 @@ for (const fault of [
       templateApplied = false,
       slowArtifactObserved = false,
       artifactCount = 0;
+    let initialClaims = 0,
+      checkpointConflicts = 0;
+    if (fault === 'initial-autoscaler-conflict') {
+      cm = {
+        metadata: {
+          name: releaseOperationJournalName('fixture'),
+          namespace: 'fixture',
+          uid: 'journal-uid',
+          resourceVersion: '1',
+        },
+        data: {
+          record: JSON.stringify({
+            autoscalingProtocol: 1,
+            release: 'fixture',
+            namespace: 'fixture',
+            manifestDigest: 'previous',
+            policyDigest: 'policy',
+            phase: 'complete',
+            token: 'sample',
+            runner: 'controller',
+            leaseExpiresAt: 0,
+          }),
+        },
+      };
+      revision = 1;
+    }
     const fencedProbes = new Set();
     const kube = async (args, extra) => {
       calls.push(args);
@@ -1604,6 +1632,23 @@ for (const fault of [
       if (args[0] === 'get' && args[1] === 'configmap') return result(cm);
       if (['create', 'replace'].includes(args[0])) {
         const next = JSON.parse(extra.input);
+        if (fault === 'owned-checkpoint-conflict' && cm) {
+          checkpointConflicts++;
+          throw Error(
+            `Error from server (Conflict): error when replacing "STDIN": Operation cannot be fulfilled on configmaps "${next.metadata.name}": the object has been modified; please apply your changes to the latest version and try again`,
+          );
+        }
+        if (fault === 'initial-autoscaler-conflict' && JSON.parse(cm.data.record).autoscalingProtocol === 1) {
+          initialClaims++;
+          if (initialClaims === 1) {
+            cm.metadata.resourceVersion = String(++revision);
+            const sampled = JSON.parse(cm.data.record);
+            cm.data.record = JSON.stringify({ ...sampled, lastSampleAt: Date.now() });
+            throw Error(
+              `Error from server (Conflict): error when replacing "STDIN": Operation cannot be fulfilled on configmaps "${next.metadata.name}": the object has been modified; please apply your changes to the latest version and try again`,
+            );
+          }
+        }
         assert.equal(next.metadata.resourceVersion, cm?.metadata.resourceVersion);
         cm = { ...next, metadata: { ...next.metadata, resourceVersion: String(++revision) } };
         return result(cm);
@@ -1763,6 +1808,13 @@ for (const fault of [
         restored = true;
       },
     };
+    if (fault === 'owned-checkpoint-conflict') {
+      await assert.rejects(runHaKubernetesRollout(options), /Conflict/);
+      assert.equal(checkpointConflicts, 1, 'An owned checkpoint is never retried');
+      assert.equal(templateApplied, false);
+      assert.equal(restored, false);
+      return;
+    }
     if (fault === 'foreign-pod-controller') {
       await assert.rejects(runHaKubernetesRollout(options), /pod controller ownership/);
       assert.equal(cm, undefined, 'foreign pods must be rejected before journal ownership or Helm changes');
@@ -1840,6 +1892,7 @@ for (const fault of [
       await runHaKubernetesRollout({ ...options, resumeToken: JSON.parse(cm.data.record).token });
     } else await runHaKubernetesRollout(options);
     assert.equal(restored, true);
+    if (fault === 'initial-autoscaler-conflict') assert.equal(initialClaims, 2);
     if (fault === 'slow-checkpoint-artifact') assert.equal(slowArtifactObserved, true);
     assert.equal(calls.filter((a) => a[0] === 'scale').length, 2);
   });
