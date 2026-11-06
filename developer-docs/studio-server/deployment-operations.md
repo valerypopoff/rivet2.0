@@ -19,6 +19,16 @@ immutable operation fence, live drift checks, recovery checkpoint and acceptance
 The controller does not replace qualified rollout code with current main code.
 No local Linux/WSL runner, new image build or staging allowance is required.
 See the qualification guide for the explicit cleanup-recovery receipt path.
+The production CLI imports Node's strict assertion module explicitly. The source
+gate also lints entry-point bindings: staging exercises the shared rollout
+libraries, so it cannot establish that an otherwise unused production-only branch
+has all its imports. For the already-qualified tooling revision `cf1bba99c` only,
+the hosted controller supplies that same strict module through a Node preload to
+the production CLI child. This compatibility binding repairs the missing import
+without editing the qualified checkout, changing its fingerprint or skipping an
+assertion. It sets no `NODE_OPTIONS` and is not applied to other commands or newer
+tooling sources. The controller delegates the entire operation to that qualified
+revision's existing `deployQualifiedRelease` implementation.
 There is no separate readiness job. `--expected-installed-settings-digest`
 compares the canonical live Helm settings already read by the command with the
 qualification baseline, rejecting drift before adapters or Kubernetes writes.

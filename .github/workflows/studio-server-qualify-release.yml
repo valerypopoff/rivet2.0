@@ -323,7 +323,11 @@ jobs:
             reference="$RELEASE_MANIFEST_REPOSITORY:manifest-${QUALIFIED_MANIFEST_DIGEST#sha256:}"
             corepack yarn node deploy/studio-server/scripts/release-manifest-oci.mjs pull --reference "$reference" --output artifacts/automated-runtime-qualification/qualified-manifest.json
           fi
-          GITHUB_SHA="$DEPLOYMENT_SOURCE_SHA" corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs deploy
+          if [[ -n "$QUALIFIED_PUBLICATION_RUN_ID" ]]; then
+            corepack yarn node "$GITHUB_WORKSPACE/deploy/studio-server/scripts/deploy-qualified-production.mjs"
+          else
+            corepack yarn node deploy/studio-server/scripts/execute-runtime-qualification.mjs deploy
+          fi
       - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: deployment-summary-${{ github.run_id }}-${{ github.run_attempt }}

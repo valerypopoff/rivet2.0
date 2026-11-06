@@ -5,6 +5,7 @@ const suites = [
   'deploy/studio-server/scripts/ensure-k8s-tools.test.mjs',
   'deploy/studio-server/scripts/release-tooling.test.mjs',
   'deploy/studio-server/scripts/qualified-deployment-inputs.test.mjs',
+  'deploy/studio-server/scripts/qualified-deployment-command.test.mjs',
   'deploy/studio-server/scripts/ha-background-probe.test.mjs',
   'deploy/studio-server/scripts/ha-runner-space.test.mjs',
   'deploy/studio-server/scripts/fast-rollout-failure.test.mjs',
@@ -51,6 +52,7 @@ for (const args of [
     'deploy/studio-server/scripts/maintenance-deployment-plan.test.mjs',
   ],
   ['scripts/checks/check-ci-workflows.mjs'],
+  ['scripts/checks/check-rollout-entrypoints.mjs'],
 ]) {
   const result = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
   if (result.error) throw result.error;
