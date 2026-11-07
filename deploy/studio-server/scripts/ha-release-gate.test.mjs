@@ -291,6 +291,45 @@ test('editor retirement probe carries its self-contained control module into the
   assert.equal(probes.editors[0].receipt.phase, 'passed');
 });
 
+test('full release probes cover original worker identities without injecting work into temporary surge Pods', async () => {
+  const executions = [];
+  const probes = new HaReleaseProbes(
+    {
+      config: { namespace: 'fixture' },
+      kubectl: async (args) => {
+        executions.push(args);
+        return {
+          stdout: JSON.stringify({
+            status: 200,
+            body: { output: { value: JSON.stringify({ input: 'preserved' }) } },
+            correlationId: `correlation-${executions.length}`,
+          }),
+        };
+      },
+    },
+    'http://unused.invalid',
+    rootDir,
+  );
+  const originals = [0, 1].map((i) => ({ metadata: { name: `fixture-ha-execution-${i}`, uid: `old-${i}` } }));
+  for (const p of originals)
+    await probes.beforeRetirement({ name: p.metadata.name, uid: p.metadata.uid, container: 'backend' }, originals);
+  for (const pod of [
+    { name: 'fixture-ha-execution-2', uid: 'surge' },
+    { name: 'fixture-ha-backend-2', uid: 'backend-surge' },
+    { name: originals[0].metadata.name, uid: 'replacement' },
+  ])
+    await probes.beforeRetirement({ ...pod, container: 'backend' }, originals);
+  assert.equal(executions.length, 2);
+  assert.deepEqual(
+    probes.background.map(({ pod, uid }) => ({ pod, uid })),
+    originals.map(({ metadata }) => ({ pod: metadata.name, uid: metadata.uid })),
+  );
+  // Focused/provider probes still cover a third starting owner when no fixed
+  // full-release baseline was supplied.
+  await probes.beforeRetirement({ name: 'fixture-ha-execution-2', uid: 'third', container: 'backend' });
+  assert.equal(probes.background.length, 3);
+});
+
 test('an uncertain latest fixture publication cannot be recreated by a later probe call', async () => {
   const failure = Error('publication acknowledgement lost');
   const projectId = randomUUID();
