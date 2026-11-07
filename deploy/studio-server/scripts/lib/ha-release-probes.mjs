@@ -214,7 +214,10 @@ export class HaReleaseProbes {
       assert.equal(observed.housekeeping.podUid, owner.metadata.uid);
     } else assert.match(restoreOwners[0].metadata.name, /-maintenance-backend-0$/);
   }
-  async beforeRetirement(pod) {
+  async beforeRetirement(pod, originalPods) {
+    // Full-release evidence covers the original owners. Temporary surge Pods
+    // still use normal retirement/draining, without adding another fixture run.
+    if (originalPods && !originalPods.some((p) => p.metadata.name === pod.name && p.metadata.uid === pod.uid)) return;
     const match = /-ha-backend-([01])$/.exec(pod.name);
     if (match) {
       const neighbor = pod.name.slice(0, -1) + (match[1] === '0' ? '1' : '0');

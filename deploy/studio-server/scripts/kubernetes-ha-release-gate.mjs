@@ -389,7 +389,7 @@ export async function runHaReleaseRollout(gate, baseUrl, images = gate.config.im
           await oldestBrowser.resumeAfterFrontendReplacement(before);
           frontendReplaced = true;
         }
-        await measureHaPhase(gate, `accepted-work:${pod.name}`, () => probes.beforeRetirement(pod));
+        await measureHaPhase(gate, `accepted-work:${pod.name}`, () => probes.beforeRetirement(pod, before));
       },
       afterWithdrawal: (pod) =>
         measureHaPhase(gate, `withdrawn-acceptance:${pod.name}`, () => probes.afterWithdrawal(pod)),

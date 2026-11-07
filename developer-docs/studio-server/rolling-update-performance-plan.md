@@ -68,6 +68,16 @@ No cloud test, production change, rebuild or publication is performed by local
 validation. The November 6 history below describes earlier implementation and
 activation states; it is not the current deployment status.
 
+Build Images 42370869645 built/scanned the candidate images and passed both
+recovery scenarios, but its local full-upgrade rehearsal failed after Pod
+replacement: the two-worker baseline checker also counted a temporary surge
+worker's synthetic background run. Its 3,179 request samples reported no traffic
+failures. Full-release fixture injection now uses the original Pod name/UID
+inventory; temporary surge owners retain ordinary withdrawal and draining but
+do not add baseline probes. Focused/provider checks keep their dynamic starting
+worker coverage. This correction requires fresh CI evidence before publication
+can be reported successful; the failed run is not a qualified build.
+
 ### Historical implementation and trial notes
 
 The four larger optimizations below were implemented alongside the initial frontend
