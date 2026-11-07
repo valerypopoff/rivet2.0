@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http2 from 'node:http2';
 import { once } from 'node:events';
-import { requestHttp2 } from './qualification/provider-request-continuity.mjs';
+import { requestHttp2 } from './lib/continuity-http-transport.mjs';
 
 async function fixture(t, handle) {
   const server = http2.createServer();
@@ -59,9 +59,15 @@ test('HTTP/2 partial response cannot count as a complete protected body', { time
   const session = await fixture(t, (stream) => {
     stream.respond({ ':status': 200, 'content-length': '100' });
     stream.write('partial');
-    setImmediate(() => stream.close(http2.constants.NGHTTP2_CANCEL));
+    setTimeout(() => stream.close(http2.constants.NGHTTP2_CANCEL), 30);
   });
-  await assert.rejects(requestHttp2(session, '/', { timeoutMs: 1000 }), /interrupted|closed|Stream/);
+  await assert.rejects(requestHttp2(session, '/', { timeoutMs: 1000 }), (error) => {
+    assert.match(error.message, /interrupted|closed|Stream/);
+    assert.equal(error.continuityResponse.status, 200);
+    assert.equal(error.continuityResponse.bodyBytes, 7);
+    assert.equal(error.continuityResponse.fullBody, false);
+    return true;
+  });
 });
 
 test('HTTP/2 complete body settles and releases its deadline', { timeout: 5000 }, async (t) => {

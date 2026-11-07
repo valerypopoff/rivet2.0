@@ -14,6 +14,12 @@ import { observeProviderProgress } from './provider-progress.mjs';
 import { operationToolingSource } from './release-tooling.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+class ProviderPhaseFailed extends Error {
+  constructor(phase) {
+    super(`Provider ${phase} failed; inspect private diagnostics`);
+    this.name = 'ProviderPhaseFailed';
+  }
+}
 const ready = (pod) =>
   !pod.metadata.deletionTimestamp && pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
 export async function waitForStagingActor(label, check, timeoutMs = 600000) {
@@ -274,7 +280,8 @@ export async function prepareStagingActor(
         })
         .catch((error) => {
           if (!finished) {
-            actorLoss = 'Actor liveness or phase receipt could not be confirmed';
+            if (!(error instanceof ProviderPhaseFailed))
+              actorLoss = 'Actor liveness or phase receipt could not be confirmed';
             completion?.reject(error);
             signal.abort();
           }
@@ -467,7 +474,7 @@ export async function prepareStagingActor(
     assert.ok(workers.length <= 1, 'Ambiguous phase worker');
     const worker = workers[0];
     await report({ record, worker });
-    if (worker?.failed) throw Error(`Provider ${phase} failed; inspect private diagnostics`);
+    if (worker?.failed) throw new ProviderPhaseFailed(phase);
     if (phase !== 'verifyCleanup') {
       if (!worker?.closed) return worker && { state: 'pending' };
       assert.ok(worker.receipt, 'Closed phase has no successful receipt; command outcome is unknown');

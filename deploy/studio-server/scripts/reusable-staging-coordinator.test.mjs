@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import { createKubernetesTransport } from './lib/execution-autoscaler-kubernetes.mjs';
 import { prepareStagingActor, stagingActorJob, stagingActorRole } from './lib/reusable-staging-coordinator.mjs';
 import { qualificationHash } from './lib/runtime-qualification-execution.mjs';
-import { providerProgressStep, observeProviderProgress } from './lib/provider-progress.mjs';
+import { providerProgressStep, observeProviderProgress, markProviderFailure } from './lib/provider-progress.mjs';
 import {
   acknowledgeProviderPhase,
   acknowledgeProviderFailure,
@@ -552,6 +552,51 @@ test('phase recovery rejects altered bytes, rebound identities, missing receipts
     assert.equal(f.state.commands.filter((c) => c.phase === 'prepare').length, 1);
     assert.equal(f.state.deleted, false);
   }
+});
+
+test('a known failed worker is not misdiagnosed as actor loss or replayed', async (t) => {
+  for (const closePhaseSocket of [false, true]) {
+    const f = await fixture(t),
+      actor = await f.prepare();
+    await actor.driver.armExpiry();
+    f.state.registry.closed = false;
+    f.state.durablePhase = 'prepare';
+    f.state.closePhaseSocket = closePhaseSocket;
+    f.state.mutatePhaseReceipt = (record) => {
+      record.workers[0].failed = true;
+    };
+    await assert.rejects(actor.driver.prepare(), { name: 'ProviderPhaseFailed' });
+    await assert.rejects(actor.driver.prepare(), /Never replay/);
+    assert.equal(f.state.commands.filter((c) => c.phase === 'prepare').length, 1);
+    assert.ok(!(await fs.readdir(f.options.privateDirectory)).some((name) => name.startsWith('actor-loss-')));
+    assert.equal(f.state.deleted, false);
+  }
+});
+
+test('early failure remains visible across progress updates without declaring worker closure', async () => {
+  const worker = { id: 'worker', phase: 'upgrade', closed: false },
+    record = { workers: [worker] };
+  const state = { change: async (fn) => fn(record) };
+  await markProviderFailure(state, 'upgrade', 'worker', () => 100);
+  await markProviderFailure(state, 'upgrade', 'worker', () => 200);
+  await providerProgressStep(state, 'upgrade', 'worker', 1000, () => 250)('rollout-work', async () => {});
+  assert.equal(worker.failureDetectedAt, 100);
+  assert.equal(worker.closed, false);
+  assert.equal(worker.failed, undefined);
+  const output = [],
+    observe = observeProviderProgress({
+      phase: 'upgrade',
+      deadlineAt: 1000,
+      now: () => 300,
+      log: (value) => output.push(value),
+      snapshot: async () => {},
+    });
+  await observe({ record, worker });
+  assert.equal(output[0].state, 'failure-detected-settling');
+  worker.closed = true;
+  worker.failed = true;
+  await observe({ record, worker });
+  assert.equal(output.at(-1).state, 'failed');
 });
 
 test('valid receipt bytes cannot recover a result for another operation', async (t) => {

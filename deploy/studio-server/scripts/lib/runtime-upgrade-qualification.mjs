@@ -193,12 +193,30 @@ export async function runOrdinaryRuntimeUpgrade({
     firstFailureDiagnostics,
     syntheticWorkStopped = false;
   const captureFirstFailure = () => {
-    firstFailureDiagnostics ??= Promise.resolve()
-      .then(() => gate.capture('ordinary-upgrade-first-failure'))
-      .then(
-        () => true,
-        () => false,
-      );
+    firstFailureDiagnostics ??= Promise.resolve().then(async () => {
+      // Each diagnostic is independent. A failed observation/write must not
+      // suppress the other evidence or interrupt already-issued retirement.
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => gate.onQualificationFailure?.()),
+        Promise.resolve().then(() =>
+          gate.artifact(
+            'first-traffic-failure.json',
+            JSON.stringify(
+              {
+                detectedAt: new Date().toISOString(),
+                continuity: gate.continuityProbes?.diagnostics?.(),
+                workflow: workflow?.report,
+                web: web?.report,
+              },
+              null,
+              2,
+            ),
+          ),
+        ),
+        Promise.resolve().then(() => gate.capture('ordinary-upgrade-first-failure')),
+      ]);
+      return results.every((result) => result.status === 'fulfilled');
+    });
   };
   const stopSyntheticWork = () => {
     syntheticWorkStopped = true;
@@ -386,6 +404,8 @@ export async function runOrdinaryRuntimeUpgrade({
     }
     report.workflow = workflow.report;
     report.web = web.report;
+    if (failure && gate.continuityProbes?.diagnostics)
+      report.requestContinuityFailure = gate.continuityProbes.diagnostics();
     report.outcome = failure ? 'failed' : 'passed';
     report.terminalPhase = phase;
     report.finishedAt = new Date().toISOString();

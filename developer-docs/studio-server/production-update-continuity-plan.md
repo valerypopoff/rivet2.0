@@ -1,5 +1,232 @@
 # Production update continuity implementation plan
 
+## Current follow-up: investigate the November 7 response failure
+
+Status: **diagnostic/reporting repairs implemented locally; the response reset
+remains unexplained and the release is not qualified**.
+This follow-up governs the remaining investigation. Historical results below remain unchanged.
+The goal remains ordinary rolling updates with complete protected requests, not
+an expanded architecture/stress suite. No new cloud attempt or production change
+is authorized by this plan.
+
+### Confirmed evidence and remaining uncertainty
+
+[Release Rivet 42408772885](https://github.com/valerypopoff/rivet2.0/actions/runs/42408772885)
+used application Build 42392213047 and tooling publication 42397725153. It ran
+once, from 19:58:39 to 20:32:11 UTC (33m32s). Saved HA timing records 22m24s for
+the rollout, excluding the earlier local recovery/preparation. Application and
+tooling publication workflows succeeded; the qualification workflow failed.
+
+- Pod replacement completed, including three-worker parallel replacement.
+  Minimum observed Ready execution/proxy counts were three/one. There were
+  2,093 successful short workflow and 732 successful short web requests, with
+  no failures recorded by those two traffic observers.
+- At 20:19:03 UTC, Nginx recorded an upstream connection reset for the long
+  continuity endpoint. Its access log contains two 16,568-byte responses and
+  one 11,959-byte response, all with status 200. Status 200 alone therefore
+  cannot establish delivery of the complete body.
+- The 20:19:54 observation still had the execution pool in preparation, before
+  old-worker withdrawal/deletion. All six execution Pods had zero restarts in
+  the first-failure snapshot. The earlier retirement-only diagnosis does not
+  explain this timing by itself.
+- Read-only inspection of the quarantined database found exactly three matching
+  recordings, all succeeded, with graph durations of 300,009, 300,013 and
+  300,116 milliseconds. All three existing recording artifacts were retrieved.
+  This narrows the fault to response delivery after successful graph execution;
+  it does not identify the resetting endpoint or the failed client transport.
+- A surviving candidate worker retained an admission marker for one request.
+  Other marker owners were removed by retirement or ordinary idle autoscaling.
+  Admission/transport ownership must be persisted before those Pods disappear.
+- At least one delivered response was incomplete. The exact number and type of
+  client-side assertion failures cannot be established from the saved report:
+  detailed continuity receipts were exported only on the success path.
+- Safe settlement and cleanup verification succeeded; actor Job/Pods were
+  removed and admission flags closed. Fixture data/application remain
+  quarantined and the failed operation retains the lock. Cleanup verification
+  here means safe quarantine, not fixture deletion or permission to retry.
+
+Private evidence remains under the ignored attempt directory. Do not commit raw
+recordings, configuration, logs, credentials or cloud evidence paths. The retained
+record's baseline manifest is historical metadata; observe actual Helm values
+and Pod images before planning recovery.
+
+### Local repair status
+
+Implemented the diagnostic/reporting repairs in steps 2 and 3: persisted
+acceptance ownership, sanitized first-error and settled continuity receipts,
+independent diagnostic collection, early failure/settling progress, and distinct
+known-phase-failure versus actor-loss reporting. Complete-response checks,
+accepted-work draining, no-replay behavior and qualification criteria remain.
+The native transport helper is isolated from application/cloud dependencies for
+Linux testing. No application/runtime, cluster or routing repair is claimed.
+
+The next focused test is now implemented and locally validated; see the
+[connection-reset diagnostic](connection-reset-diagnostic.md). It changes one
+disposable Service selector with three responses held open and preserves both
+backends. Its positive and deliberate-truncation controls pass locally, and an
+offline Kubernetes bundle is prepared. The November 8 staging setup then stopped
+before the client Job: a ConfigMap symlink bypassed the fixture launch guard.
+That failure is reproduced locally and documented in the diagnostic guide; no
+provider traffic proof was produced. Existing staging quarantine, the failed
+qualification and production remain untouched.
+The follow-up tooling repair now canonicalizes projected entry-point paths,
+exercises that layout in local Docker, and rejects terminated setup Pods
+immediately. Its projected-path/import and fail-fast regressions pass locally.
+A fresh isolated staging diagnostic then passed all six responses across one
+Service switch, with verified cleanup (89 seconds overall). Both backend owners
+were on one node. This is not full rolling-update qualification; the next
+milestone is a timed staging rolling update with complete-request checks.
+
+### Ordered repair plan
+
+1. **Keep and reconcile this evidence.** Preserve the failed result and its
+   SHA-verified actor export, recording metadata, first-failure snapshots and
+   rollout timing. Distinguish graph success, response completion, rollout
+   completion, qualification, and quarantine. Do not rerun the workflow merely
+   to obtain better diagnostics or relabel the failed window as passed.
+
+2. **Repair failure diagnostics before changing deployment behavior.** Owners:
+   `deploy/studio-server/scripts/qualification/provider-request-continuity.mjs`
+   and `deploy/studio-server/scripts/lib/runtime-upgrade-qualification.mjs`.
+   Preserve sanitized partial continuity receipts after `close()` on both
+   success and failure; diagnostic extraction must not call success-only
+   `finish()` or produce a certificate. Retain stage, transport, request ID,
+   accepted Pod UID, start/end/elapsed time, response status/byte count,
+   completion state, and bounded error classification. Keep headers, keys and
+   bodies private/excluded. Persist acceptance ownership before handoff and the
+   first failure when detected, then a final snapshot after settlement. Three
+   small snapshots suffice; do not add per-request cloud uploads or a new
+   observability subsystem. Preserve the original error through wrapper errors.
+
+3. **Report known failures accurately while safe shutdown continues.** Owners:
+   `lib/provider-progress.mjs`, `lib/reusable-staging-coordinator.mjs`, and
+   `qualification/provider-entry.mjs` under the same scripts directory.
+   First-failure notification must be separate from terminal worker closure.
+   Show failure-detected/settling in existing progress output without aborting
+   the issued rollout or claiming its writer has stopped. A closed worker with
+   a recorded failure is a known phase failure; it must not also create the
+   misleading actor-loss/unknown-outcome diagnosis observed in this attempt.
+   Keep genuine actor disappearance, unreadable state and lost write
+   acknowledgements classified as uncertain. No phase/POST replay is added.
+
+4. **Reproduce the delivery failure in the actual runtime family.** Use Linux,
+   Node 24.22.1 and Nginx 1.30.6, with real sockets and the recorded 16-KiB input
+   and response shape. Windows/Node 22 tests and mocked streams are useful unit
+   checks but do not reproduce that environment. Reuse existing image digests
+   when practical; do not build the application to debug tooling.
+   Begin with fresh HTTP/1, pooled HTTP/1 and HTTP/2 together, with no retirement
+   or routing mutation. Then introduce one variable at a time: routing/backend
+   membership change, followed by the retirement response-close path. Record
+   which API image, socket and transport produced the first failure. Use short
+   delays for protocol/fragmentation cases; run a real near-boundary case only
+   after those controls pass. Stop expanding the matrix once a deterministic
+   failing case and a matching fix are established.
+
+   The fixture currently requests 300,000ms of graph work before HTTP overhead,
+   so it exceeds the user's end-to-end 300-second protection limit. Review this
+   boundary explicitly. A 295-second workload with a 300-second client budget
+   can exercise near-limit requests with overhead margin, but any such change
+   must update the evidence claim/validator together and retain complete-body
+   checking. Do not call a 295-second sample proof of exactly 300 seconds, or
+   use this boundary observation to excuse the recorded reset retroactively.
+
+   Endpoint changes are a hypothesis worth isolating, not the established root
+   cause. Google documents connection resets during backend-set changes in
+   [GKE Dataplane V2](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/dataplane-v2#maglev_support).
+   If the problem cannot be reproduced outside GKE, stop and prepare one small,
+   separately approved provider-specific diagnostic with the new receipts and
+   a single controlled routing change. Do not run repeated complete rollouts or
+   change cluster networking based on this hypothesis alone.
+
+5. **Fix only the demonstrated cause.** A probe/client bug changes tooling and
+   retains the application build. An API response-handling bug requires a
+   runtime repair and the affected image build. A routing bug requires a
+   narrowly journaled handoff repair that preserves already accepted
+   connections. Require the same reproducer to fail before and pass after the
+   fix. Preserve serving floors, no-duplicate execution, accepted-work drain
+   and recording checks. Do not add blanket retries, count truncated status-200
+   responses as success, delete a live Service, or introduce a general recovery
+   framework for this one failure.
+
+6. **Validate locally before publication.** Extend the existing tests rather
+   than creating another test suite:
+   - `request-continuity-transport.test.mjs`: complete and truncated bodies,
+     failure byte/timing evidence, one POST, deadline and HTTP/2 reset handling.
+   - `request-continuity-provider.test.mjs`: acceptance owner survives Pod
+     removal, first error retained, no later cohorts, accepted responses drain,
+     and partial diagnostics survive failure/close.
+   - `runtime-upgrade-qualification.test.mjs`: an isolated continuity failure
+     with successful short traffic remains visible in the saved failed report;
+     later cleanup errors cannot replace the first cause or produce a pass.
+   - `reusable-staging-coordinator.test.mjs`: known worker failure, actual actor
+     loss and unreadable receipt remain distinct; early failure progress never
+     closes a live writer or replays the phase.
+   - Run `legacy-execution-http-handoff.test.mjs` when changing routing/retirement.
+   Use the Linux/Node-24 transport reproducer as the runtime check. Run the
+   required headless Playwright check only if the repair changes application
+   response/browser behavior. Update the owning developer docs with actual
+   results, not proposed completion.
+
+7. **Prepare one reviewed activation after the local stop conditions clear.**
+   Publish tooling independently when application inputs are unchanged; reuse
+   Build 42392213047 only if normal source/input checks still admit it. Otherwise
+   build the affected runtime. Prepare exact quarantine/fixture recovery using
+   observed UIDs, images and the original owner, with preserved evidence and
+   confirmed writer absence. Use the existing hosted Linux execution path and
+   CI identity; normal delivery should not depend on local WSL or repeated
+   local credential workarounds. Do not clear the lock before recovery is safe.
+   Keep preparation bounds fixed and surface a missed bound rather than
+   repeatedly extending internal estimates. Any next paid operation needs a
+   fresh explicit allowance; this closed attempt is not reusable authority.
+   Run one justified qualification (or the separately needed narrow diagnostic),
+   without automatic retry. Production stays disabled until qualification,
+   closure and publication are independently verified and deployment is approved.
+
+### Validation and completion criteria
+
+The repaired four-file transport/provider/upgrade/coordinator checks pass all
+96 tests on Windows/Node 22.22.3 with loopback access. The existing continuity
+policy/evidence and source-reuse checks pass another 19 tests. These cover
+partial and complete-but-invalid bodies, retained ownership, no request replay,
+no new demand after failure, independent diagnostics, settlement, known phase
+failure and genuine actor loss. Syntax, test style, local documentation links
+and production entry-point checks pass. All changed/new source paths classify
+as tooling-only; no application input was changed. This working-tree check is
+not a committed-source publication or qualification.
+
+An isolated Linux control using Node 24.22.1 and Nginx 1.30.6 passed fresh
+HTTP/1, pooled HTTP/1 and negotiated HTTP/2 concurrently, first with 50ms work,
+then with 300,000ms work. Each returned the complete 16,568-byte response; the
+long requests finished in 300,007-300,010ms. This was a bare HTTP handler using
+the existing retirement-response tracker with withdrawal disabled, not the full
+Rivet API or a Kubernetes Service. There was no routing/endpoint mutation or
+retirement. It did not reproduce the reset or test the provider dataplane. Exact
+local resources and the disposable self-signed certificate were removed. The
+next investigation must isolate the routing/endpoint change or the full runtime;
+a passing no-change control cannot justify another complete cloud rollout.
+
+The native socket transport tests also pass under Linux/Node 24.22.1. Sandbox
+socket/Git-fixture permission errors are environment failures, not reproductions
+of the GKE reset. Neither local unit tests nor a passing transport control
+qualify the failed release.
+
+Use the repository Yarn runner for the targeted checks:
+
+```sh
+node .yarn/releases/yarn-4.17.1.cjs exec node --test \
+  deploy/studio-server/scripts/request-continuity-transport.test.mjs \
+  deploy/studio-server/scripts/request-continuity-provider.test.mjs \
+  deploy/studio-server/scripts/runtime-upgrade-qualification.test.mjs \
+  deploy/studio-server/scripts/reusable-staging-coordinator.test.mjs
+```
+
+Do not request another cloud attempt until the failed response has an explained,
+tested cause or an explicit provider-only evidence gap requiring the small
+diagnostic above. Completion requires preserved first-error evidence, a
+reproducer and verified repair, honest progress classification, passing targeted
+tests, source/image admission, one successful applicable provider proof, safe
+closure, and publication. Keep the existing failed operation failed throughout.
+
 Delivery now separates application build identity from optional independent
 tooling publication. Reuse requires unchanged committed application inputs;
 actor bootstrap, qualification, publication and production bind the same tooling
