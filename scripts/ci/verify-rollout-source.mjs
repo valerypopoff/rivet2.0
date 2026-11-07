@@ -37,6 +37,8 @@ const suites = [
   'deploy/studio-server/scripts/retained-staging-application.test.mjs',
   'scripts/ci/release-workflow-policy.test.mjs',
   'scripts/ci/qualification-build-cache.test.mjs',
+  'scripts/ci/qualification-admission.test.mjs',
+  'scripts/ci/qualification-operator.test.mjs',
 ];
 for (const args of [
   ['--test', ...suites],
