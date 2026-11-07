@@ -37,6 +37,18 @@ not install credentials, provision shared infrastructure or enable itself. It is
 main-only and dispatch-only and fails when
 `RIVET_AUTOMATED_QUALIFICATION_ENABLED` is not exactly `true`.
 
+Normal qualification publication consumes the successful staging packet
+`qualification-result-<current run>-<current attempt>` as an artifact. JSON job
+outputs can be discarded by GitHub's secret detector even when the declarations
+contain only the approved public evidence. The publisher therefore sets
+`use_qualification_artifact=true`, downloads the artifact within the same run,
+and binds its qualified result to the original operation receipt, run/attempt,
+input hash, application images/chart, predecessor and selected tooling identity.
+The existing declaration, source, configuration, cleanup and publication-pointer
+checks still apply. A missing or mismatched artifact fails without falling back to
+job outputs or rerunning staging. The standalone publication workflow continues
+to accept explicit sanitized declaration inputs for an already completed test.
+
 ### Recovering GitHub admission-flag setup
 
 The host-side `scripts/ci/qualification-operator.mjs` and

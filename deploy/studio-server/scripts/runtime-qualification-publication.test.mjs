@@ -21,6 +21,7 @@ import {
   assertRuntimeQualificationBuild,
   prepareRuntimeQualification,
   assertRuntimeQualificationPointer,
+  qualificationArtifactDeclarations,
 } from './lib/runtime-qualification-publication.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
@@ -113,6 +114,94 @@ function fixture() {
     },
   };
 }
+
+function artifactFixture() {
+  const input = fixture();
+  const operationId = 'rivet-q-456-1';
+  input.control.operationId = operationId;
+  input.autoscaling.operationId = operationId;
+  const operation = {
+    protocol: 1,
+    operationId,
+    inputHash: 'd'.repeat(64),
+    predecessorManifestDigest: input.candidate.lineage.predecessor.manifestDigest,
+    candidate: {
+      sourceSha,
+      images: structuredClone(input.candidate.images),
+      chartDigest: input.candidate.chart.contentDigest,
+    },
+  };
+  const result = {
+    status: 'qualified',
+    operationId,
+    inputHash: operation.inputHash,
+    control: structuredClone(input.control),
+    autoscaling: structuredClone(input.autoscaling),
+  };
+  const context = { runId: '456', runAttempt: 1, candidate: input.candidate };
+  return { input, operation, result, context };
+}
+
+test('same-run artifact declarations publish with empty/redacted job outputs', () => {
+  const f = artifactFixture();
+  const declarations = qualificationArtifactDeclarations(f.result, f.operation, f.context);
+  assert.deepEqual(declarations, { control: f.input.control, autoscaling: f.input.autoscaling });
+  assert.ok(prepareRuntimeQualification({ ...f.input, ...declarations }));
+});
+
+test('artifact handoff rejects another run, attempt, receipt, source, image or tooling', () => {
+  const changes = [
+    (f) => {
+      f.context.runId = '457';
+    },
+    (f) => {
+      f.context.runAttempt = 2;
+    },
+    (f) => {
+      f.operation.inputHash = 'e'.repeat(64);
+    },
+    (f) => {
+      f.operation.candidate.sourceSha = 'e'.repeat(40);
+    },
+    (f) => {
+      f.operation.candidate.images = images('other');
+    },
+    (f) => {
+      f.operation.candidate.chartDigest = 'sha256:' + 'f'.repeat(64);
+    },
+    (f) => {
+      f.operation.predecessorManifestDigest = 'sha256:' + 'f'.repeat(64);
+    },
+    (f) => {
+      f.operation.tooling = { sourceSha: 'f'.repeat(40) };
+    },
+    (f) => {
+      f.result.operationId = 'rivet-q-457-1';
+    },
+    (f) => {
+      f.result.status = 'failed';
+    },
+    (f) => {
+      f.operation.sizingRequests = {};
+    },
+    (f) => {
+      f.result.control.operationId = 'rivet-q-457-1';
+    },
+    (f) => {
+      f.result.autoscaling.cleanupVerified = false;
+    },
+  ];
+  for (const change of changes) {
+    const f = artifactFixture();
+    change(f);
+    assert.throws(() =>
+      prepareRuntimeQualification({
+        ...f.input,
+        ...qualificationArtifactDeclarations(f.result, f.operation, f.context),
+      }),
+    );
+  }
+});
 
 test('temporary infrastructure declarations cannot publish before matching outer cleanup is verified', () => {
   const f = fixture();

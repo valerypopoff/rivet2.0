@@ -154,9 +154,6 @@ jobs:
       actions: read
       packages: read
       id-token: write
-    outputs:
-      control: ${{ steps.execute.outputs.control }}
-      autoscaling: ${{ steps.execute.outputs.autoscaling }}
     env:
       RIVET_QUALIFICATION_ENVIRONMENT_MODE: reusable-cluster
       TOOLING_RUN_ID: ${{ inputs.tooling_run_id }}
@@ -231,8 +228,7 @@ jobs:
     with:
       build_run_id: ${{ inputs.build_run_id }}
       tooling_run_id: ${{ inputs.tooling_run_id }}
-      runtime_control_declaration: ${{ needs.qualified.outputs.control }}
-      runtime_autoscaling_declaration: ${{ needs.qualified.outputs.autoscaling }}
+      use_qualification_artifact: true
 
   deploy:
     name: Deploy — live checks, rolling update and acceptance

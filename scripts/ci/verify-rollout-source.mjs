@@ -14,6 +14,7 @@ const suites = [
   'deploy/studio-server/scripts/deployment-workflow.test.mjs',
   'deploy/studio-server/scripts/deployment-readiness.test.mjs',
   'deploy/studio-server/scripts/runtime-qualification-execution.test.mjs',
+  'deploy/studio-server/scripts/runtime-qualification-publication.test.mjs',
   'deploy/studio-server/scripts/release-operation-journal.test.mjs',
   'deploy/studio-server/scripts/read-concurrently.test.mjs',
   'deploy/studio-server/scripts/acceptance-concurrency.test.mjs',

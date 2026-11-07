@@ -9,6 +9,7 @@ import {
 import {
   prepareRuntimeQualification,
   assertRuntimeQualificationPointer,
+  qualificationArtifactDeclarations,
 } from './lib/runtime-qualification-publication.mjs';
 import { qualificationSafetyDigest } from './lib/release-qualification-policy.mjs';
 import { toolingPublicationIdentity } from './lib/release-tooling.mjs';
@@ -55,23 +56,40 @@ async function main() {
     await write('build-identity.json', selected.build);
     await output('run_attempt', selected.build.runAttempt);
   } else if (mode === 'prepare') {
+    const candidate = await read('candidate/candidate-release-manifest.json');
+    const tooling = process.env.TOOLING_RUN_ID
+      ? toolingPublicationIdentity(
+          await read('tooling/publication.json'),
+          await read('tooling-run.json'),
+          (await read('tooling-inputs.json')).applicationInputsDigest,
+        )
+      : undefined;
+    const artifactMode = process.env.RUNTIME_QUALIFICATION_ARTIFACT ?? 'false';
+    assert.ok(['true', 'false'].includes(artifactMode), 'Unknown declaration transport');
+    const declarations =
+      artifactMode === 'true'
+        ? qualificationArtifactDeclarations(
+            await read('staging-result/qualification-result.json'),
+            await read('staging-result/operation-public.json'),
+            {
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              candidate,
+              tooling,
+            },
+          )
+        : {
+            control: jsonInput('RUNTIME_CONTROL_DECLARATION'),
+            autoscaling: jsonInput('RUNTIME_AUTOSCALING_DECLARATION'),
+          };
     const result = prepareRuntimeQualification({
       ...(await context()),
-      ...(process.env.TOOLING_RUN_ID
-        ? {
-            tooling: toolingPublicationIdentity(
-              await read('tooling/publication.json'),
-              await read('tooling-run.json'),
-              (await read('tooling-inputs.json')).applicationInputsDigest,
-            ),
-          }
-        : {}),
+      ...(tooling ? { tooling } : {}),
       safetyDigest: await qualificationSafetyDigest(root, process.env.GITHUB_SHA),
       build: await read('build-identity.json'),
-      candidate: await read('candidate/candidate-release-manifest.json'),
+      candidate,
       promoted: await read('original/promoted-release-manifest.json'),
-      control: jsonInput('RUNTIME_CONTROL_DECLARATION'),
-      autoscaling: jsonInput('RUNTIME_AUTOSCALING_DECLARATION'),
+      ...declarations,
     });
     assertReleaseManifestMatchesCurrentChart(result.candidate, root, { requirePromoted: false });
     await write('qualified-candidate.json', result.candidate);

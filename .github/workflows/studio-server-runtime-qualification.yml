@@ -10,11 +10,15 @@ on:
         type: string
         default: ''
       runtime_control_declaration:
-        required: true
         type: string
+        default: ''
       runtime_autoscaling_declaration:
-        required: true
         type: string
+        default: ''
+      use_qualification_artifact:
+        description: Bind declarations from this run's successful staging artifact instead of job outputs.
+        type: boolean
+        default: false
     outputs:
       manifest_digest:
         description: Exact verified published qualified manifest; not permission to deploy.
@@ -106,9 +110,16 @@ jobs:
           run-id: ${{ inputs.build_run_id }}
           github-token: ${{ github.token }}
           path: artifacts/runtime-qualification-publication/original
+      - name: Download this run's successful staging result
+        if: ${{ inputs.use_qualification_artifact }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qualification-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/runtime-qualification-publication/staging-result
       - name: Bind isolated provider declarations without rebuilding images
         id: qualification
         env:
+          RUNTIME_QUALIFICATION_ARTIFACT: ${{ inputs.use_qualification_artifact && 'true' || 'false' }}
           RUNTIME_CONTROL_DECLARATION: ${{ inputs.runtime_control_declaration }}
           RUNTIME_AUTOSCALING_DECLARATION: ${{ inputs.runtime_autoscaling_declaration }}
         run: node deploy/studio-server/scripts/prepare-runtime-qualification.mjs prepare
