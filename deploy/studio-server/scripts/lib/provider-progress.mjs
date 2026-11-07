@@ -55,6 +55,16 @@ export function providerProgressStep(state, phase, workerId, phaseDeadline, now 
   };
 }
 
+// A detected failure is not writer closure. Keep the original worker alive to
+// settle its already-issued commands, while making its failure visible now.
+export async function markProviderFailure(state, phase, workerId, now = Date.now) {
+  await state.change((record) => {
+    const worker = record.workers.find((w) => w.id === workerId && w.phase === phase);
+    assert.ok(worker && !worker.closed, 'Exact active failure worker is required');
+    worker.failureDetectedAt ??= now();
+  });
+}
+
 export function observeProviderProgress({
   phase,
   deadlineAt,
@@ -74,7 +84,15 @@ export function observeProviderProgress({
       progress = worker?.progress;
     const step =
       typeof progress?.step === 'string' && Object.hasOwn(providerSteps, progress.step) ? progress.step : 'starting';
-    const identity = JSON.stringify([worker?.id, worker?.closed, worker?.failed, step, progress?.sequence]);
+    const failureDetected = Number.isFinite(worker?.failureDetectedAt);
+    const identity = JSON.stringify([
+      worker?.id,
+      worker?.closed,
+      worker?.failed,
+      failureDetected,
+      step,
+      progress?.sequence,
+    ]);
     if (identity !== previous) {
       previous = identity;
       lastProgressAt = current;
@@ -95,7 +113,15 @@ export function observeProviderProgress({
       phase,
       step,
       waitingFor: providerSteps[step],
-      state: worker?.failed ? 'failed' : worker?.closed ? 'worker-closed' : worker ? 'running' : 'awaiting-worker',
+      state: worker?.failed
+        ? 'failed'
+        : worker?.closed
+          ? 'worker-closed'
+          : failureDetected
+            ? 'failure-detected-settling'
+            : worker
+              ? 'running'
+              : 'awaiting-worker',
       lastProgressAt: new Date(lastProgressAt).toISOString(),
       deadlineAt: new Date(expectedBy).toISOString(),
       ...(reason && !worker?.closed ? { diagnostic: reason } : {}),

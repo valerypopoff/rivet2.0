@@ -120,55 +120,101 @@ test('lost native-roll acknowledgement never retries or certifies replacement', 
   assert.equal(f.probes.replacement, undefined);
 });
 
-test('a keep-alive agent may reopen a connection while each protected request still completes once', async (t) => {
-  let starts = 0,
-    issued = 0;
-  t.mock.method(performance, 'now', () => (starts++ < 3 ? 0 : 300000));
-  const payload = (body) => (body ? JSON.stringify({ output: { value: body } }) : 'ready');
-  t.mock.method(https, 'request', (_url, _options, callback) => {
-    const req = new EventEmitter();
-    req.reusedSocket = false;
-    req.end = (body) => {
-      if (body) issued++;
-      queueMicrotask(() => {
-        const response = Readable.from([Buffer.from(payload(body))]);
-        response.statusCode = 200;
-        response.headers = { 'x-rivet-correlation-id': randomUUID() };
-        callback(response);
-      });
-    };
-    return req;
-  });
-  t.mock.method(http2, 'connect', () => {
-    const session = new EventEmitter();
-    session.socket = { alpnProtocol: 'h2' };
-    session.destroy = () => {};
-    session.request = () => {
-      const stream = new PassThrough(),
-        end = stream.end.bind(stream);
-      stream.end = (body) => {
+for (const invalidBody of [false, true]) {
+  test(`protected response diagnostics with reopened connections: ${invalidBody ? 'invalid JSON' : 'complete'}`, async (t) => {
+    let starts = 0,
+      issued = 0;
+    t.mock.method(performance, 'now', () => (starts++ < 3 ? 0 : 300000));
+    const payload = (body) => (body ? (invalidBody ? '{' : JSON.stringify({ output: { value: body } })) : 'ready');
+    t.mock.method(https, 'request', (_url, _options, callback) => {
+      const req = new EventEmitter();
+      req.reusedSocket = false;
+      req.end = (body) => {
         if (body) issued++;
         queueMicrotask(() => {
-          stream.emit('response', { ':status': 200, 'x-rivet-correlation-id': randomUUID() });
-          end(payload(body));
+          const response = Readable.from([Buffer.from(payload(body))]);
+          response.statusCode = 200;
+          response.headers = { 'x-rivet-correlation-id': randomUUID() };
+          callback(response);
         });
       };
-      return stream;
+      return req;
+    });
+    t.mock.method(http2, 'connect', () => {
+      const session = new EventEmitter();
+      session.socket = { alpnProtocol: 'h2' };
+      session.destroy = () => {};
+      session.request = () => {
+        const stream = new PassThrough(),
+          end = stream.end.bind(stream);
+        stream.end = (body) => {
+          if (body) issued++;
+          queueMicrotask(() => {
+            stream.emit('response', { ':status': 200, 'x-rivet-correlation-id': randomUUID() });
+            end(payload(body));
+          });
+        };
+        return stream;
+      };
+      return session;
+    });
+    const f = fixture(),
+      probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
+    f.gate.config.baseUrl = 'https://continuity.invalid';
+    probes.prepared = true;
+    probes.endpoint = 'fixture';
+    const artifacts = new Map();
+    f.gate.artifact = async (name, value) => artifacts.set(name, JSON.parse(value));
+    probes.waitForAcceptance = async () => {
+      for (const receipt of probes.requests)
+        Object.assign(receipt, { acceptedAt: new Date().toISOString(), executionPodUid: 'owner-' + receipt.transport });
     };
-    return session;
+    await probes.startCohort('execution-retirement');
+    const acceptance = artifacts.get('request-continuity-acceptance.json');
+    assert.equal(acceptance.requests.length, 3);
+    assert.ok(acceptance.requests.every((r) => r.acceptedAt && r.executionPodUid === 'owner-' + r.transport));
+    if (invalidBody) {
+      await assert.rejects(probes.settleCohort('execution-retirement'));
+      for (const receipt of probes.diagnostics().requests) {
+        assert.equal(receipt.outcome, 'failed');
+        assert.equal(receipt.error.kind, 'response-validation');
+        assert.equal(receipt.error.status, 200);
+        assert.equal(receipt.error.bodyBytes, 1);
+        assert.equal(receipt.error.responseEnded, true);
+        assert.equal(receipt.executionPodUid, 'owner-' + receipt.transport);
+      }
+      assert.equal(probes.admissionClosed, true);
+    } else await probes.settleCohort('execution-retirement');
+    assert.equal(issued, 3, 'Connection replacement must never replay a protected POST');
+    if (!invalidBody) {
+      assert.equal(probes.requests.find((r) => r.transport === 'pooled-http1').reusedConnection, false);
+      assert.ok(probes.requests.every((r) => r.fullBody && r.outcome === 'passed'));
+    }
+    await probes.close();
   });
+}
+
+test('failure diagnostics retain request ownership and source-owned error facts without secret messages or headers', () => {
   const f = fixture(),
-    probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
-  f.gate.config.baseUrl = 'https://continuity.invalid';
-  probes.prepared = true;
-  probes.endpoint = 'fixture';
-  probes.waitForAcceptance = async () => {};
-  await probes.startCohort('execution-retirement');
-  await probes.settleCohort('execution-retirement');
-  assert.equal(issued, 3, 'Connection replacement must never replay a protected POST');
-  assert.equal(probes.requests.find((r) => r.transport === 'pooled-http1').reusedConnection, false);
-  assert.ok(probes.requests.every((r) => r.fullBody && r.outcome === 'passed'));
-  await probes.close();
+    probes = new ProviderRequestContinuity(f.gate);
+  const requestId = randomUUID();
+  probes.requests.push({ stage: 'execution-retirement', requestId, transport: 'http2', executionPodUid: 'owner' });
+  const error = Object.assign(Error('Bearer private-token https://private-url'), {
+    code: 'ECONNRESET',
+    headers: { authorization: 'private-token' },
+    continuityResponse: { status: 200, bodyBytes: 11959, fullBody: false, reason: 'Probe body interrupted' },
+  });
+  probes.recordFailure('execution-retirement', error, requestId);
+  const diagnostic = probes.diagnostics();
+  assert.equal(diagnostic.failures[0].code, 'ECONNRESET');
+  assert.equal(diagnostic.failures[0].kind, 'incomplete-body');
+  assert.equal(diagnostic.failures[0].reason, 'Probe body interrupted');
+  assert.equal(diagnostic.failures[0].bodyBytes, 11959);
+  assert.equal(diagnostic.requests[0].executionPodUid, 'owner');
+  probes.requests[0].executionPodUid = 'changed';
+  assert.equal(diagnostic.requests[0].executionPodUid, 'owner', 'Snapshot survives later owner changes');
+  assert.ok(!JSON.stringify(diagnostic).includes('private-'));
+  assert.equal(probes.admissionClosed, true);
 });
 
 test('starting proxy observation waits for normal HPA growth without another rollout', async () => {

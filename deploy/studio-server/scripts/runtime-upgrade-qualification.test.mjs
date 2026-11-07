@@ -370,6 +370,7 @@ for (const scenario of [
     const requests = [],
       artifacts = new Map(),
       captures = [];
+    let failureNotifications = 0;
     const controller = new AbortController();
     let failedRequestObserved;
     const failedRequest = new Promise((resolve) => (failedRequestObserved = resolve));
@@ -531,6 +532,10 @@ for (const scenario of [
         return { browser: true, schedule: true };
       },
       artifact: async (name, value) => artifacts.set(name, value),
+      onQualificationFailure: async () => {
+        failureNotifications++;
+        if (scenario === 'focused-cohort-failure') throw Error('fixture progress write failed');
+      },
       capture: async (name) => captures.push(name),
     };
     if (focused) {
@@ -543,6 +548,9 @@ for (const scenario of [
       }
       gate.continuityProbes = {
         failures: [],
+        diagnostics() {
+          return { protocol: 1, requests: [], failures: structuredClone(this.failures) };
+        },
         prepareProxySettings: async () => {
           assert.ok(!requests.some((r) => r.id), 'Configure the proxy before starting protected traffic');
           proxySettingsPrepared = true;
@@ -684,6 +692,17 @@ for (const scenario of [
           assert.ok(report.web.failedRequests.some((request) => request.error.code === 'UND_ERR_SOCKET'));
         } else if (variant !== 'cohort-failure') assert.equal(report.workflow.failedRequests[0].error.status, 502);
         assert.equal(captures.filter((name) => name === 'ordinary-upgrade-first-failure').length, 1);
+        const firstFailure = JSON.parse(artifacts.get('first-traffic-failure.json'));
+        assert.ok(firstFailure.detectedAt);
+        assert.equal(failureNotifications, 1);
+        assert.equal(report.firstFailureDiagnosticsCaptured, scenario !== 'focused-cohort-failure');
+        assert.deepEqual(report.requestContinuityFailure, gate.continuityProbes.diagnostics());
+        if (scenario === 'focused-cohort-failure') {
+          assert.equal(report.workflow.failures.length, 0);
+          assert.equal(report.web.failures.length, 0);
+          assert.equal(report.requestContinuityFailure.failures[0].stage, 'execution-retirement');
+          assert.equal(firstFailure.continuity.failures[0].stage, 'execution-retirement');
+        }
       }
     }
     const ids = requests.filter((r) => r.method === 'POST').map((r) => r.id);

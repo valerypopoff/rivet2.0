@@ -34,6 +34,7 @@ const suites = [
   'deploy/studio-server/scripts/managed-disruption-transport.test.mjs',
   'deploy/studio-server/scripts/provider-rollout-observation.test.mjs',
   'deploy/studio-server/scripts/request-continuity-provider.test.mjs',
+  'deploy/studio-server/scripts/connection-reset-diagnostic.test.mjs',
   'deploy/studio-server/scripts/request-continuity-evidence.test.mjs',
   'deploy/studio-server/scripts/proxy-continuity-transition.test.mjs',
   'deploy/studio-server/scripts/resource-sizing.test.mjs',

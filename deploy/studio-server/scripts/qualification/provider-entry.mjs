@@ -29,7 +29,7 @@ import { applicationInputDigest, operationToolingSource } from '../lib/release-t
 import { ProviderRequestContinuity } from './provider-request-continuity.mjs';
 import { qualificationSafetyDigest, releaseQualificationPlan } from '../lib/release-qualification-policy.mjs';
 import { describeProviderPhaseReceipt, writeProviderPhaseReceipt } from '../lib/provider-phase-receipt.mjs';
-import { providerProgressStep } from '../lib/provider-progress.mjs';
+import { providerProgressStep, markProviderFailure } from '../lib/provider-progress.mjs';
 import { qualificationTimeouts } from '../lib/runtime-qualification-driver.mjs';
 import { runProviderSizing } from './provider-sizing.mjs';
 import {
@@ -446,6 +446,7 @@ async function main() {
     phase === 'armExpiry'
       ? undefined
       : providerProgressStep(state, phase, id, Date.now() + qualificationTimeouts()(operation, phase));
+  gate.onQualificationFailure = () => markProviderFailure(state, phase, id);
   let result,
     commandsClosed = false,
     startupMonitor;

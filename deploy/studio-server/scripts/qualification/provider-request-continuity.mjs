@@ -1,3 +1,5 @@
+import { requestHttp1, requestHttp2 } from '../lib/continuity-http-transport.mjs';
+export { collectContinuityResponse, requestHttp2 } from '../lib/continuity-http-transport.mjs';
 import assert from 'node:assert/strict';
 import https from 'node:https';
 import http2 from 'node:http2';
@@ -117,78 +119,45 @@ export async function qualifyProtectedProxyRoll(gate, probes, { waitFor = waitFo
   assertContinuityAcceptance(await gate.verifyProtectedProxyAvailability(), gate.operation.requestContinuityProfile);
   probes.replacement = replacement;
 }
-/** Consume the complete body. Neither a response header nor a successfully
- * opened stream counts as a completed protected request. No POST is retried. */
-export function collectContinuityResponse(stream, status, headers) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let bytes = 0,
-      ended = false;
-    stream.on('data', (chunk) => {
-      bytes += chunk.length;
-      if (bytes > 131072) stream.destroy(Error('Probe body exceeded bounds'));
-      else chunks.push(chunk);
-    });
-    stream.once('error', reject);
-    stream.once('aborted', () => reject(Error('Probe body interrupted')));
-    stream.once('close', () => {
-      if (!ended) reject(Error('Probe stream closed before its complete body'));
-    });
-    stream.once('end', () => {
-      ended = true;
-      resolve({ status, headers, body: Buffer.concat(chunks), bytes });
-    });
-  });
+// Copy only source-owned classifications and bounded metadata. Native error
+// messages, response bodies and headers can contain credentials or fixture data.
+function continuityErrorFacts(error) {
+  const safe = (value) => (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value) ? value : undefined);
+  const response = error?.continuityResponse;
+  const reasons = [
+    'Probe body stream failed',
+    'Probe body interrupted',
+    'Probe stream closed before its complete body',
+    'Probe body exceeded bounds',
+    'HTTP/2 probe deadline exceeded',
+    'HTTP/2 probe closed before response headers',
+    'Continuity probe deadline exceeded',
+  ];
+  const reason = reasons.includes(error?.message)
+    ? error.message
+    : reasons.includes(response?.reason)
+      ? response.reason
+      : undefined;
+  return {
+    name: safe(error?.name) ?? 'Error',
+    ...(safe(error?.cause?.code ?? error?.code) ? { code: safe(error?.cause?.code ?? error?.code) } : {}),
+    ...(reason ? { reason } : {}),
+    kind:
+      ['AbortError', 'TimeoutError'].includes(error?.name) || error?.message === 'HTTP/2 probe deadline exceeded'
+        ? 'deadline'
+        : response
+          ? 'incomplete-body'
+          : ['AssertionError', 'SyntaxError'].includes(error?.name)
+            ? 'response-validation'
+            : 'transport',
+    ...(Number.isInteger(response?.status) && response.status >= 100 && response.status <= 599
+      ? { status: response.status }
+      : {}),
+    ...(Number.isSafeInteger(response?.bodyBytes) && response.bodyBytes >= 0
+      ? { bodyBytes: response.bodyBytes, fullBody: false }
+      : {}),
+  };
 }
-function requestHttp1(url, { agent, body, headers = {}, timeoutMs = body ? 330000 : 15000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      url,
-      {
-        agent,
-        method: body ? 'POST' : 'GET',
-        headers: {
-          ...headers,
-          ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}),
-        },
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-      (response) => {
-        collectContinuityResponse(response, response.statusCode, response.headers).then(
-          (value) => resolve({ ...value, reusedConnection: req.reusedSocket }),
-          reject,
-        );
-      },
-    );
-    req.once('error', reject);
-    req.end(body);
-  });
-}
-export function requestHttp2(session, path, { body, headers = {}, timeoutMs = body ? 330000 : 15000 } = {}) {
-  assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
-  const stream = session.request({
-    ':path': path,
-    ':method': body ? 'POST' : 'GET',
-    ...headers,
-    ...(body ? { 'content-type': 'application/json' } : {}),
-  });
-  // An inactivity timer resets on each chunk and cannot bound a trickling body.
-  const timer = setTimeout(() => stream.destroy(Error('HTTP/2 probe deadline exceeded')), timeoutMs);
-  const completion = new Promise((resolve, reject) => {
-    let headersReceived = false;
-    stream.once('error', reject);
-    stream.once('close', () => {
-      if (!headersReceived) reject(Error('HTTP/2 probe closed before response headers'));
-    });
-    stream.once('response', (headers) => {
-      headersReceived = true;
-      collectContinuityResponse(stream, headers[':status'], headers).then(resolve, reject);
-    });
-  });
-  stream.end(body);
-  return completion.finally(() => clearTimeout(timer));
-}
-
 export class ProviderRequestContinuity {
   constructor(gate, { hpaOnly = false, waitFor = waitForProxyRoll, onFailure } = {}) {
     this.hpaOnly = hpaOnly;
@@ -368,6 +337,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
           body = JSON.stringify({ requestId, delayMs, input: 'x'.repeat(16384) }),
           start = performance.now();
         const receipt = { stage, transport, requestId, durationMs: delayMs, startedAt: new Date().toISOString() };
+        let responseEvidence;
         cohort.requests.push(receipt);
         this.requests.push(receipt);
         const headers = { ...this.gate.probeHeaders, 'x-rivet-ha-probe-id': requestId };
@@ -385,6 +355,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
         );
         return response
           .then((result) => {
+            responseEvidence = { status: result.status, bodyBytes: result.bytes, responseEnded: true };
             assert.equal(result.status, 200);
             assert.equal(JSON.parse(result.body).output.value, body, 'Complete synthetic response changed');
             const correlationId = result.headers['x-rivet-correlation-id'];
@@ -404,7 +375,12 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
             assert.ok(receipt.elapsedMs >= delayMs, 'The provider must execute the full fixture duration');
           })
           .catch((error) => {
-            receipt.outcome = 'failed';
+            Object.assign(receipt, {
+              outcome: 'failed',
+              elapsedMs: Math.round(performance.now() - start),
+              finishedAt: new Date().toISOString(),
+              error: { ...continuityErrorFacts(error), ...responseEvidence },
+            });
             this.recordFailure(stage, error, requestId);
             throw error;
           });
@@ -424,6 +400,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
         });
       cohort.completion.catch(() => {});
       await this.waitForAcceptance(stage);
+      await this.gate.artifact('request-continuity-acceptance.json', JSON.stringify(this.diagnostics(), null, 2));
     } catch (error) {
       // Once requests are issued, their completion owns transport cleanup.
       // An acceptance-observation failure must not cancel accepted work.
@@ -737,9 +714,17 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     };
   }
   recordFailure(stage, error, requestId) {
-    this.failures.push({ stage, ...(requestId ? { requestId } : {}), name: error.name });
+    this.failures.push({
+      stage,
+      ...(requestId ? { requestId } : {}),
+      detectedAt: new Date().toISOString(),
+      ...continuityErrorFacts(error),
+    });
     this.stopAdmission();
     this.onFailure?.();
+  }
+  diagnostics() {
+    return structuredClone({ protocol: 1, requests: this.requests, failures: this.failures });
   }
   stopAdmission() {
     this.admissionClosed = true;

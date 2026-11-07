@@ -435,6 +435,35 @@ failure between execution owners and admission closure while a cohort is queued.
 Fail-fast regressions count request dispatches, allowing already-issued requests
 to arrive and complete after the failure without mistaking them for new demand.
 
+Continuity diagnostics are independent of the success-only certificate. The
+transport collector retains bounded response status/byte counts on interruption;
+validation failures retain status/bytes even when HTTP framing ended. Receipts
+include stage, transport, request ID, acceptance owner, timing and a sanitized
+error classification, excluding bodies, headers and arbitrary error messages.
+Acceptance ownership is saved before handoff, the first detected failure gets a
+private snapshot, and the final failed upgrade report includes continuity
+receipts after accepted work settles. These diagnostic snapshots cannot qualify
+an attempt or replay a request.
+
+The existing provider progress record separately marks a detected failure while
+its writer continues safe settlement (`failure-detected-settling`). Progress
+notification, first-error evidence and Kubernetes capture run independently; a
+failed diagnostic cannot suppress the other two or interrupt an issued rollout.
+A durably recorded phase failure remains a phase failure when recovered through
+an open or disconnected exec transport. It does not create an actor-loss record;
+actual actor disappearance or unreadable phase state remains uncertain.
+
+Native continuity transports live in `lib/continuity-http-transport.mjs`, without
+application/cloud dependencies, so their real socket regressions can run under
+the pinned Linux/Node runtime without installing the whole application. This is
+local validation, not GKE qualification.
+
+The separate [connection-reset diagnostic](connection-reset-diagnostic.md)
+isolates one endpoint change with six short requests. Its local controls and
+offline Kubernetes preparation do not dispatch qualification, change retained
+application resources, or publish release evidence. Its cheap regression tests
+run in the source-only rollout checks; the Docker exercise remains explicit.
+
 Final cleanup keeps its complete receipt directly in the original registry. It
 requires all workers closed and the usual complete-inventory/absence validation;
 this receipt proves cleanup, never upgrade success. Receipt recovery closes only
