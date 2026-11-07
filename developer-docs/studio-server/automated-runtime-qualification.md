@@ -37,6 +37,45 @@ not install credentials, provision shared infrastructure or enable itself. It is
 main-only and dispatch-only and fails when
 `RIVET_AUTOMATED_QUALIFICATION_ENABLED` is not exactly `true`.
 
+### Recovering GitHub admission-flag setup
+
+The host-side `scripts/ci/qualification-operator.mjs` and
+`qualification-admission.mjs` own the two admission flags. The private operator
+adapter supplies credentials through `qualification-github-api.mjs`; credentials,
+installation values and operation approvals stay outside the repository. These
+helpers are independent of application images. Local changes and tests neither
+reopen a closed campaign nor authorize another cloud operation.
+
+For an uncertain flag PATCH, read back both flags and protected limits before
+considering another write. An owned write observed at its intended value can
+complete without another PATCH, including after a lost acknowledgement or process
+interruption. Changed identity, another flag edit, source/approval drift, competing
+release or expired operation stops recovery. GitHub variables have no conditional
+write/CAS contract; callers must retain their exclusive operation ownership and
+provide a fresh ownership guard before writes and reconciliation.
+
+One PATCH per flag is the default. A separately authorized operation may explicitly
+include `admissionRecovery: { maxAttempts: 2, deadline: "<UTC setup deadline>" }` in
+its frozen scope. The deadline cannot exceed the approved latest test start;
+at most three total PATCH attempts per flag are supported. Only transient API or
+transport failures are eligible. Retries use bounded readback and backoff, respect
+`Retry-After`/primary rate-limit reset, and stop if the required delay exceeds
+30 seconds or the remaining window. Receipts preserve attempt counts on resume;
+restarting cannot reset or enlarge the allowance. A 204 that remains unconfirmed
+stops instead of causing another PATCH. Permanent API rejections stop immediately.
+Closure reconciles an already applied write but does not automatically retry it.
+
+The transport preserves an allowlisted error category, GitHub request ID, response
+date and retry/rate-limit metadata. Never save arbitrary API messages, response
+bodies, authorization headers or cookies in diagnostics. Workflow dispatch and
+deployment commands retain their no-blind-replay rules: this recovery policy
+applies only to the two constant-value flag PATCHes within one approved test.
+
+Run `node --test scripts/ci/qualification-admission.test.mjs
+scripts/ci/qualification-operator.test.mjs` for local transport, recovery and
+whole-operator simulations. These suites are also in the source-only rollout gate;
+they use no GitHub/GCP credentials, application build, browser or cloud resources.
+
 ### Deploying an existing qualification
 
 Use **Release Rivet** on main with `qualified_publication_run_id=<successful
