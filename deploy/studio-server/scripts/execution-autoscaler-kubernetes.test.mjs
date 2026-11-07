@@ -137,7 +137,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
     'ha.executionPools.enabled=true',
     'images.api.digest=sha256:' + 'b'.repeat(64),
   );
-  const exercised = await exerciseExecutionPoolRollout({
+  const options = {
     previous: oldResources,
     candidate: newResources,
     renderFinal: async (guards) =>
@@ -149,7 +149,19 @@ test('native Helm paired pools preserve the old selector and declare exact read/
         'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
         'replicaCount.execution=' + guards.replicaCount.execution,
       ),
-  });
+  };
+  const exercised = await exerciseExecutionPoolRollout(options);
+  const legacy = await exerciseExecutionPoolRollout({ ...options, bufferedResponseSafe: false });
+  assert.equal(legacy.result.phase, 'complete');
+  const handoff = legacy.mutations.indexOf('service-handoff:b');
+  const withdraw = legacy.mutations.findIndex(
+    (mutation) => mutation.startsWith('--withdraw-only:') && mutation.includes('execution'),
+  );
+  const remove = legacy.mutations.findIndex((mutation) => mutation.startsWith('pool-scale-zero:'));
+  const restore = legacy.mutations.indexOf('service-handoff:restore');
+  assert.ok(handoff >= 0 && handoff < withdraw && withdraw < remove && remove < restore);
+  assert.equal(legacy.result.executionPool.legacyHttp.settled, true);
+  assert.ok(!exercised.mutations.some((mutation) => mutation.startsWith('service-handoff:')));
   assert.equal(exercised.result.phase, 'complete');
   assert.equal(exercised.result.executionPool.phase, 'complete');
   assert.ok(

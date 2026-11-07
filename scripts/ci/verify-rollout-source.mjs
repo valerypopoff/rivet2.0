@@ -29,6 +29,7 @@ const suites = [
   'deploy/studio-server/scripts/ha-template-readiness.test.mjs',
   'deploy/studio-server/scripts/kubernetes-release-settlement.test.mjs',
   'deploy/studio-server/scripts/ha-routing-withdrawal.test.mjs',
+  'deploy/studio-server/scripts/legacy-execution-http-handoff.test.mjs',
   'deploy/studio-server/scripts/ha-rollout-headroom.test.mjs',
   'deploy/studio-server/scripts/managed-disruption-transport.test.mjs',
   'deploy/studio-server/scripts/provider-rollout-observation.test.mjs',

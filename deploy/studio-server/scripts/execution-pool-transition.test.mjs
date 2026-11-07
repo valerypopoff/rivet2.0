@@ -29,6 +29,20 @@ test('failed pinned admission never closes execution admission', async () => {
   assert.ok(!f.calls.some((call) => call.startsWith('begin:')));
 });
 
+test('legacy routing preparation and per-owner guard precede every unsafe withdrawal', async () => {
+  const f = fixture();
+  let prepared = false;
+  f.io.prepareHttpHandoff = async () => {
+    prepared = true;
+  };
+  f.io.beforeHttpWithdrawal = async () => {
+    assert.equal(prepared, true);
+    throw Error('legacy route is unconfirmed');
+  };
+  await assert.rejects(f.run(), /legacy route is unconfirmed/);
+  assert.ok(!f.calls.some((call) => /^(withdraw:|begin:|scale)/.test(call)));
+});
+
 function fixture(ownerCount = 2) {
   const plan = {
     protocol: 1,

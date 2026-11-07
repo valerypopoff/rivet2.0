@@ -188,6 +188,45 @@ and upgraded connection preservation. The self-hosted Playwright observation
 without a running installation. These are local regressions, not a replacement
 for exact-image staging qualification.
 
+Replacing an image does not repair the running predecessor. Paired execution
+rollouts therefore probe each original Pod (with UID checks before and after)
+for the compiled `retirement-http-connections.js` module and its exported
+`createRetirementHttpConnections` function. Keep this module as the capability
+marker in fixed API images. A missing module selects the legacy compatibility
+handoff; malformed modules and failed probes stop preparation. Fixed Pods use
+the ordinary fast path without a new delay or Service write.
+
+For a legacy execution pool, the tooling first verifies candidate capacity and
+checks the rendered configuration of running normal/bridge proxies, including
+terminating proxies. Their `rivet_execution` upstream must have `keepalive 0`;
+frontend keepalive remains supported. A UID/resourceVersion/selector-guarded
+Service patch temporarily selects only the ready candidate slot. Before invoking
+the old idle closer, it observes continuous exclusion of **all** old execution
+UIDs and the candidate endpoint floor for 60 seconds of propagation plus the
+supported 300-second response lifetime. A returning endpoint, missing candidate
+capacity or uncertain routing read resets that interval within a bounded deadline.
+No old Pod is deleted or admission-fenced during this compatibility interval.
+
+The existing accepted-work/recording checks and ordinary post-withdrawal routing
+checks still run. Only after the original pool is gone does a second guarded
+patch restore the original Service selector. Both write intents live in the
+owned execution-pool journal; recovery reads back committed writes without
+replaying them and re-observes the interval before a remaining unsafe withdrawal.
+It accepts only the exact journaled temporary selector, never general Service
+drift. The compatibility path protects public execution/published-app traffic;
+it does not change the singleton editor backend's interruption allowance.
+
+Local coverage in `legacy-execution-http-handoff.test.mjs` includes lost write
+acknowledgements, owner/selector/port changes, lease loss and routing flaps. Its
+Linux Node regression reproduces truncation through a streaming loopback proxy,
+then verifies a complete 16 MiB response and reuse of the same frontend connection
+through the handoff. The full Helm simulator exercises selection and restoration
+through the maintained rollout entry point. Virtual time checks the full policy
+interval without adding a six-minute sleep to local tests; this is not GKE
+propagation qualification. These tooling-only changes can reuse verified
+application Build `42392213047`; they still need their own published/qualified
+tooling before cloud use.
+
 With `after-rollout`, immediately after the owned rollout finishes, the workflow invokes the bound
 `long-probe-cutoff` acceptance stage before autoscaler verification or final
 journeys. Its `rivet-deployment-observer-cutoff` receipt must prove
