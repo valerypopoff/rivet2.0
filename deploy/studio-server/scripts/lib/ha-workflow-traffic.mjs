@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks';
 
 /** One non-retrying request stream. Stop settles the last request before callers
  * judge the report; closing observation must never hide a late failure. */
-export function startHaWorkflowTraffic(gate, baseUrl, phase = () => 'rollout') {
+export function startHaWorkflowTraffic(gate, baseUrl, phase = () => 'rollout', onFailure) {
   return startTraffic(
     phase,
     async (requestId) => {
@@ -16,10 +16,11 @@ export function startHaWorkflowTraffic(gate, baseUrl, phase = () => 'rollout') {
       if (!result) throw Error('Empty execution');
     },
     25,
+    onFailure,
   );
 }
 
-export function startHaWebAppTraffic(gate, baseUrl, phase = () => 'rollout') {
+export function startHaWebAppTraffic(gate, baseUrl, phase = () => 'rollout', onFailure) {
   return startTraffic(
     phase,
     async (requestId) => {
@@ -31,6 +32,7 @@ export function startHaWebAppTraffic(gate, baseUrl, phase = () => 'rollout') {
         throw Error('Missing published web app');
     },
     1000,
+    onFailure,
   );
 }
 
@@ -45,7 +47,7 @@ export function startHaDeveloperTraffic(gate, baseUrl) {
   );
 }
 
-function startTraffic(phase, request, intervalMs) {
+function startTraffic(phase, request, intervalMs, onFailure) {
   const report = { samples: 0, failures: [], failedRequests: [], slowestRequest: null };
   let running = true;
   const completion = (async () => {
@@ -78,6 +80,7 @@ function startTraffic(phase, request, intervalMs) {
         }
         report.failures.push(`${observation.phase} request ${requestId}: ${observation.error.name}`);
         report.failedRequests.push(observation);
+        onFailure?.();
       } finally {
         observation.elapsedMs = Math.round(performance.now() - start);
         observation.finishedAt = new Date().toISOString();
@@ -89,6 +92,9 @@ function startTraffic(phase, request, intervalMs) {
   })();
   return {
     report,
+    stopAdmission() {
+      running = false;
+    },
     async stop() {
       running = false;
       await completion;

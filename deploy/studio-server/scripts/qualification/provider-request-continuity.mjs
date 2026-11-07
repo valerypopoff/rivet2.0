@@ -190,10 +190,11 @@ export function requestHttp2(session, path, { body, headers = {}, timeoutMs = bo
 }
 
 export class ProviderRequestContinuity {
-  constructor(gate, { hpaOnly = false, waitFor = waitForProxyRoll } = {}) {
+  constructor(gate, { hpaOnly = false, waitFor = waitForProxyRoll, onFailure } = {}) {
     this.hpaOnly = hpaOnly;
     this.gate = gate;
     this.waitFor = waitFor;
+    this.onFailure = onFailure;
     this.cohorts = new Map();
     this.requests = [];
     this.failures = [];
@@ -334,12 +335,14 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     this.prepared = true;
   }
   async startCohort(stage) {
+    if (this.admissionClosed) return;
     assert.equal(this.prepared, true, 'The owned continuity fixture must be prepared first');
     if (this.cohorts.has(stage)) return;
     // Keep fixture demand bounded independently of how closely deployment
     // checkpoints occur. A new boundary cohort must not overload two workers
     // by overlapping the previous three requests and accepted drain probes.
     await Promise.all([...this.cohorts.values()].map((c) => c.completion));
+    if (this.admissionClosed) return;
     const cohort = { stage, startedAt: new Date().toISOString(), requests: [], outcome: 'running' };
     this.cohorts.set(stage, cohort);
     const base = this.gate.config.baseUrl,
@@ -352,6 +355,13 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       assert.equal((await requestHttp2(session, '/readyz')).status, 200);
       assert.equal(session.socket.alpnProtocol, 'h2', 'The provider must actually negotiate HTTP/2');
       await new Promise(setImmediate); // Let the completed HTTP/1 warm-up socket enter its agent's free pool.
+      if (this.admissionClosed) {
+        agent.destroy();
+        session.destroy();
+        this.sessions.delete(session);
+        this.cohorts.delete(stage);
+        return;
+      }
       const tasks = ['fresh-http1', 'pooled-http1', 'http2'].map((transport) => {
         const requestId = randomUUID(),
           delayMs = CONTINUITY_DURATION_STAGES[stage] ?? 300000,
@@ -395,7 +405,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
           })
           .catch((error) => {
             receipt.outcome = 'failed';
-            this.failures.push({ stage, requestId, name: error.name });
+            this.recordFailure(stage, error, requestId);
             throw error;
           });
       });
@@ -405,7 +415,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
             results.every((r) => r.status === 'fulfilled'),
             'A protected request failed',
           );
-          cohort.outcome = 'passed';
+          if (cohort.outcome !== 'failed') cohort.outcome = 'passed';
         })
         .finally(() => {
           agent.destroy();
@@ -415,11 +425,15 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       cohort.completion.catch(() => {});
       await this.waitForAcceptance(stage);
     } catch (error) {
-      agent.destroy();
-      session.destroy();
-      this.sessions.delete(session);
+      // Once requests are issued, their completion owns transport cleanup.
+      // An acceptance-observation failure must not cancel accepted work.
+      if (!cohort.completion) {
+        agent.destroy();
+        session.destroy();
+        this.sessions.delete(session);
+      }
       cohort.outcome = 'failed';
-      this.failures.push({ stage, name: error.name });
+      this.recordFailure(stage, error);
       throw error;
     }
   }
@@ -722,7 +736,16 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       failures: this.failures,
     };
   }
+  recordFailure(stage, error, requestId) {
+    this.failures.push({ stage, ...(requestId ? { requestId } : {}), name: error.name });
+    this.stopAdmission();
+    this.onFailure?.();
+  }
+  stopAdmission() {
+    this.admissionClosed = true;
+  }
   async close() {
+    this.stopAdmission();
     this.idleAction?.close();
     // Settle already accepted requests before provider cleanup, even on failure.
     await Promise.allSettled([...this.cohorts.values()].map((c) => c.completion));

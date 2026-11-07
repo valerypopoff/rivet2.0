@@ -413,6 +413,28 @@ symptoms. Unknown or failed work follows existing settlement and cleanup. Before
 another cloud attempt, reproduce the observed automation failure locally and
 require its regression to pass; neither an alert nor a diagnostic grants a retry.
 
+The ordinary-upgrade observer closes synthetic admission on the first detected
+traffic/readiness failure or rollout error. A protected-cohort failure notifies
+the observer immediately, without waiting for the next readiness poll. Closing
+admission does not abort issued requests. If continuity cleanup throws, the
+observer and both traffic streams still settle and the final failed report is
+saved; when an earlier failure exists, retain both errors with the original
+failure first.
+
+Both short request streams stop issuing requests, and protected cohorts recheck
+admission after awaiting a prior cohort and after connection warm-up. Later
+retirement callbacks skip new long requests and background runs. An already-issued
+rollout retains its mandatory
+availability, routing, drain and completion checks; it is not cancelled merely
+because the qualification has failed. Accepted background runs still receive
+their recording checks, and existing HTTP cohorts settle before transport
+cleanup. An acceptance-observation error must not destroy transports for issued
+requests. The original failure and first-failure diagnostics remain recorded;
+successful draining cannot turn that attempt into a pass. Local regressions cover
+failure between execution owners and admission closure while a cohort is queued.
+Fail-fast regressions count request dispatches, allowing already-issued requests
+to arrive and complete after the failure without mistaking them for new demand.
+
 Final cleanup keeps its complete receipt directly in the original registry. It
 requires all workers closed and the usual complete-inventory/absence validation;
 this receipt proves cleanup, never upgrade success. Receipt recovery closes only

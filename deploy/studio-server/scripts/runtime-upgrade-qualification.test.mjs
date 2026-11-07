@@ -315,6 +315,11 @@ for (const scenario of [
   'focused-slow-web',
   'focused-grown',
   'focused-grown-parallel',
+  'focused-synthetic-stop',
+  'focused-truncated-web',
+  'focused-cohort-failure',
+  'focused-close-failure',
+  'focused-502-close-failure',
   'focused-late-growth',
   'focused-late-image-drift',
   'focused-service-config-change',
@@ -337,7 +342,9 @@ for (const scenario of [
             'focused-late-growth',
           ].includes(scenario)
           ? 'pass'
-          : scenario.slice(8)
+          : scenario === 'focused-502-close-failure'
+            ? '502'
+            : scenario.slice(8)
         : scenario,
       developerCalls = [];
     const archive = Buffer.from('immutable-fixture-archive');
@@ -352,6 +359,11 @@ for (const scenario of [
       rolls = 0,
       independence = 0,
       continuityFinished = false;
+    let continuityClosed = false,
+      cohortStarts = 0,
+      rollCompleted = false,
+      closeFailed = false,
+      dispatchedRequests = 0;
     let proxySettingsPrepared = false;
     let proxyRecoveryArmed = false,
       proxyRecoverySampled = false;
@@ -376,7 +388,12 @@ for (const scenario of [
       if (req.url.endsWith('/download')) return res.end(archive);
       if (variant === 'slow-web' && req.url === '/apps/release-gate-web-app')
         return nativeSetTimeout(() => res.end('Managed release gate app'), 60);
-      if (failing && req.method === 'POST') {
+      if (failing && variant === 'truncated-web' && req.url === '/apps/release-gate-web-app') {
+        res.writeHead(200, { 'content-type': 'text/html', 'content-length': 10000 });
+        res.write('Managed release gate app');
+        return setImmediate(() => res.destroy());
+      }
+      if (failing && variant !== 'truncated-web' && req.method === 'POST') {
         res.writeHead(502, { server: 'nginx', 'content-type': 'text/html' });
         return res.end('<html>Bad gateway</html>');
       }
@@ -395,7 +412,8 @@ for (const scenario of [
       prepare: async (options) => assert.equal(options.embeddedMaintenance, overlap ? true : 'singleton'),
       beforeRetirement: async (pod) => probes.background.push({ uid: pod.uid }),
       afterWithdrawal: async (pod) => {
-        if (variant !== 'missing-recording') probes.background.find((p) => p.uid === pod.uid).recordingId = pod.uid;
+        const accepted = probes.background.find((p) => p.uid === pod.uid);
+        if (variant !== 'missing-recording' && accepted) accepted.recordingId = pod.uid;
       },
     };
     const gate = {
@@ -405,6 +423,7 @@ for (const scenario of [
       secrets: { rivetKey: 'local-test-only-key' },
       assertLocalContext: async () => {},
       pods: async () => {
+        if (closeFailed) throw Error('fixture observer stopped after cleanup failure');
         const grown =
           scenario.startsWith('focused-grown') || (continuityFinished && scenario.startsWith('focused-late-'));
         const observed = pods(images, grown ? { proxy: 4, execution: 3 } : {});
@@ -439,6 +458,7 @@ for (const scenario of [
         }),
       }),
       requestWorkflow: async function (...args) {
+        dispatchedRequests++;
         try {
           return await ManagedReleaseGate.prototype.requestWorkflow.apply(this, args);
         } catch (error) {
@@ -458,7 +478,12 @@ for (const scenario of [
           await failedRequest;
           await new Promise(setImmediate); // Let traffic record the response before the checkpoint.
         }
-        const parallelPool = scenario === 'focused-grown-parallel';
+        const parallelPool = [
+          'focused-grown-parallel',
+          'focused-synthetic-stop',
+          'focused-truncated-web',
+          'focused-cohort-failure',
+        ].includes(scenario);
         for (const ordinal of parallelPool ? [0, 1, 2] : [0, 1]) {
           const pod = { name: `fixture-ha-execution-${ordinal}`, uid: `owner-${ordinal}` };
           await hooks.beforeRetirement(pod, { parallelPool });
@@ -467,9 +492,27 @@ for (const scenario of [
             'background must not compete with routed public traffic',
           );
           await hooks.afterRoutingWithdrawal(pod, { parallelPool });
+          if (
+            ['focused-synthetic-stop', 'focused-truncated-web', 'focused-cohort-failure'].includes(scenario) &&
+            ordinal === 0
+          ) {
+            if (variant === 'cohort-failure') {
+              gate.continuityProbes.failures.push({ stage: 'execution-retirement', name: 'Error' });
+              gate.continuityProbes.onFailure?.();
+            } else {
+              failing = true;
+              await failedRequest;
+            }
+            await new Promise(setImmediate);
+            const dispatchedAtFailure = dispatchedRequests;
+            await new Promise((resolve) => nativeSetTimeout(resolve, 50));
+            assert.equal(dispatchedRequests, dispatchedAtFailure, 'No new short requests after the first failure');
+            assert.equal(continuityClosed, true);
+          }
           await hooks.afterWithdrawal(pod);
         }
         images = candidate.images;
+        rollCompleted = true;
         if (scenario === 'storage-drift') storageUid = 'replacement';
         if (variant === 'service-config-change') servicePort = 9090;
         if (variant === 'claim-resize') storageSize = '2Gi';
@@ -499,17 +542,30 @@ for (const scenario of [
         };
       }
       gate.continuityProbes = {
+        failures: [],
         prepareProxySettings: async () => {
           assert.ok(!requests.some((r) => r.id), 'Configure the proxy before starting protected traffic');
           proxySettingsPrepared = true;
         },
         prepare: async () => {},
-        startCohort: async (stage) => assert.equal(stage, 'execution-retirement'),
+        startCohort: async (stage) => {
+          assert.equal(continuityClosed, false, 'No new protected cohort after failure');
+          cohortStarts++;
+          assert.equal(stage, 'execution-retirement');
+        },
+        stopAdmission: () => {
+          continuityClosed = true;
+        },
         finish: async () => {
           continuityFinished = true;
           return { protocol: 4 };
         },
-        close: async () => {},
+        close: async () => {
+          if (scenario.endsWith('close-failure')) {
+            closeFailed = true;
+            throw Error('fixture continuity cleanup failed');
+          }
+        },
       };
     }
     const until = async (_name, check) => {
@@ -529,7 +585,7 @@ for (const scenario of [
       until,
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
       // Force the checkpoint to see a real 502 before the observer's next tick.
-      sampleIntervalMs: variant === '502' ? 500 : 5,
+      sampleIntervalMs: ['502', 'cohort-failure'].includes(variant) ? 500 : 5,
       ...(overlap
         ? {
             prepareDeveloperOverlap: async () => {
@@ -590,7 +646,19 @@ for (const scenario of [
       assert.equal(probes.background.length, scenario === 'focused-grown-parallel' ? 3 : 2);
       if (overlap) assert.deepEqual(report.outcomes.developerOverlap, { observed: true });
     } else {
-      await assert.rejects(work, variant === 'late-image-drift' ? /fixture timeout/ : undefined);
+      await assert.rejects(
+        work,
+        scenario === 'focused-502-close-failure'
+          ? (error) => {
+              assert.ok(error instanceof AggregateError);
+              assert.match(error.errors[0].message, /traffic failed/i);
+              assert.match(error.errors[1].message, /continuity cleanup failed/);
+              return true;
+            }
+          : variant === 'late-image-drift'
+            ? /fixture timeout/
+            : undefined,
+      );
       const report = JSON.parse(artifacts.get('runtime-ordinary-upgrade-report.json'));
       assert.equal(report.outcome, 'failed');
       assert.equal(rolls, 1);
@@ -607,6 +675,15 @@ for (const scenario of [
         assert.ok(report.firstFailureDiagnosticsCaptured);
         assert.equal(captures.filter((name) => name === 'ordinary-upgrade-first-failure').length, 1);
         assert.ok(!JSON.stringify(report).includes('<html>'));
+      }
+      if (['focused-synthetic-stop', 'focused-truncated-web', 'focused-cohort-failure'].includes(scenario)) {
+        assert.equal(rollCompleted, true, 'Failure must not interrupt the issued safe rollout');
+        assert.equal(cohortStarts, 1);
+        assert.deepEqual(probes.background, [{ uid: 'owner-0', recordingId: 'owner-0' }]);
+        if (variant === 'truncated-web') {
+          assert.ok(report.web.failedRequests.some((request) => request.error.code === 'UND_ERR_SOCKET'));
+        } else if (variant !== 'cohort-failure') assert.equal(report.workflow.failedRequests[0].error.status, 502);
+        assert.equal(captures.filter((name) => name === 'ordinary-upgrade-first-failure').length, 1);
       }
     }
     const ids = requests.filter((r) => r.method === 'POST').map((r) => r.id);

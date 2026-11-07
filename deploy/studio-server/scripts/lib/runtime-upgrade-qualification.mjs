@@ -185,13 +185,13 @@ export async function runOrdinaryRuntimeUpgrade({
   };
   const before = await inventory();
   let phase = focused ? 'predecessor-runtime-preparation' : 'predecessor-seven-preparation';
-  const workflow = startHaWorkflowTraffic(gate, baseUrl, () => phase);
-  const web = startHaWebAppTraffic(gate, baseUrl, () => phase);
+  let workflow, web;
   let observing = true,
     developer,
     observationFailure,
     failure,
-    firstFailureDiagnostics;
+    firstFailureDiagnostics,
+    syntheticWorkStopped = false;
   const captureFirstFailure = () => {
     firstFailureDiagnostics ??= Promise.resolve()
       .then(() => gate.capture('ordinary-upgrade-first-failure'))
@@ -200,10 +200,30 @@ export async function runOrdinaryRuntimeUpgrade({
         () => false,
       );
   };
+  const stopSyntheticWork = () => {
+    syntheticWorkStopped = true;
+    workflow?.stopAdmission();
+    web?.stopAdmission();
+    gate.continuityProbes?.stopAdmission?.();
+    captureFirstFailure();
+  };
+  if (gate.continuityProbes) gate.continuityProbes.onFailure = stopSyntheticWork;
+  const trafficFailed = () =>
+    observationFailure ||
+    workflow.report.failures.length ||
+    web.report.failures.length ||
+    gate.continuityProbes?.failures?.length;
+  const mayStartSyntheticWork = () => {
+    signal?.throwIfAborted();
+    if (trafficFailed()) stopSyntheticWork();
+    return !syntheticWorkStopped;
+  };
+  workflow = startHaWorkflowTraffic(gate, baseUrl, () => phase, stopSyntheticWork);
+  web = startHaWebAppTraffic(gate, baseUrl, () => phase, stopSyntheticWork);
   const checkpoint = () => {
     signal?.throwIfAborted();
-    if (observationFailure || workflow.report.failures.length || web.report.failures.length) {
-      captureFirstFailure();
+    if (trafficFailed()) {
+      stopSyntheticWork();
       throw observationFailure ?? Error('Protected public traffic failed');
     }
   };
@@ -231,14 +251,12 @@ export async function runOrdinaryRuntimeUpgrade({
         assert.ok(count >= (focused && role === 'proxy' ? 1 : 2), 'Published runtime lost its ready serving floor');
       }
       report.readiness.samples++;
-      if (workflow.report.failures.length || web.report.failures.length) throw Error('Public traffic failed');
+      if (trafficFailed()) throw Error('Public traffic failed');
       await new Promise((r) => setTimeout(r, sampleIntervalMs));
     }
   })().catch((error) => {
     observationFailure = error;
-    // Keep the request IDs and contemporaneous upstream logs together. Waiting
-    // until a long rollout finishes can lose the first 502 to log truncation.
-    captureFirstFailure();
+    stopSyntheticWork();
   });
   try {
     gate.config.images = previous.images;
@@ -260,13 +278,16 @@ export async function runOrdinaryRuntimeUpgrade({
     phase = focused ? 'ordinary-runtime-upgrade' : 'ordinary-seven-to-seven-upgrade';
     const callbacks = {
       beforeRetirement: async (pod, { parallelPool = false } = {}) => {
-        checkpoint();
+        // A failed qualification must not add another long fixture. Let the
+        // already-issued rollout finish its normal retirement and safety checks.
+        if (!mayStartSyntheticWork()) return;
         if ((parallelPool ? /-ha-execution(?:-next)?-\d+$/ : /-ha-execution(?:-next)?-[01]$/).test(pod.name))
           await gate.continuityProbes?.startCohort('execution-retirement');
       },
       // Keep synthetic background work from taking the last slot while public
       // traffic still routes to this owner. Admission remains open until fencing.
       afterRoutingWithdrawal: (pod, { parallelPool = false } = {}) =>
+        mayStartSyntheticWork() &&
         (parallelPool ? /-ha-execution(?:-next)?-\d+$/ : /-ha-execution(?:-next)?-[01]$/).test(pod.name)
           ? probes.beforeRetirement(pod)
           : undefined,
@@ -341,8 +362,14 @@ export async function runOrdinaryRuntimeUpgrade({
     checkpoint();
   } catch (error) {
     failure = error;
+    stopSyntheticWork();
   } finally {
-    await gate.continuityProbes?.close();
+    try {
+      await gate.continuityProbes?.close();
+    } catch (error) {
+      failure = failure ? new AggregateError([failure, error], 'Qualification and continuity cleanup failed') : error;
+      stopSyntheticWork();
+    }
     if (developer) {
       try {
         await developer.close();
