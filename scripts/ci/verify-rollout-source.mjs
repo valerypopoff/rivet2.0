@@ -50,7 +50,7 @@ for (const args of [
   [
     '--test',
     '--test-name-pattern',
-    'ordinary observation keeps a single truthful window:.*(?:502|proxy-(?:settings|recovery|zero))$',
+    'ordinary observation keeps a single truthful window:.*(?:502|synthetic-stop|truncated-web|cohort-failure|close-failure|proxy-(?:settings|recovery|zero))$',
     'deploy/studio-server/scripts/runtime-upgrade-qualification.test.mjs',
   ],
   [

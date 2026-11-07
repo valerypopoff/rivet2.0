@@ -9,6 +9,7 @@ import {
   beginScheduledRunsDrain,
 } from './scheduled-runs/runtime.js';
 import { AcceptedWork, ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
+import { createRetirementHttpConnections } from './retirement-http-connections.js';
 import { settleBeforeDeadline } from './shutdown-deadline.js';
 import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
@@ -165,7 +166,7 @@ const retirement =
           // Stop background producers and flush recordings only after accepted runs finish.
           await drainWorkflowStorageAcceptedWork();
         },
-        () => server.closeIdleConnections(),
+        () => retirementConnections.closeIdleConnections(),
       )
     : undefined;
 const app = createApiApp(apiRuntimeProfile, {
@@ -177,12 +178,10 @@ const app = createApiApp(apiRuntimeProfile, {
 const server = createServer((req, res) => {
   // Withdrawal keeps admission open while routing converges, but does not leave
   // keep-alive connections pinned to an owner that is about to fence admission.
-  if (retirement?.isWithdrawing) res.setHeader('Connection', 'close');
-  res.once('finish', () => {
-    if (retirement?.isWithdrawing) server.closeIdleConnections();
-  });
+  retirementConnections.observeResponse(res);
   app(req, res);
 });
+const retirementConnections = createRetirementHttpConnections(server, () => retirement?.isWithdrawing === true);
 const ownerRouting = readOwnerRoutingConfig();
 const disposeOwnerRouting =
   ownerRouting && isControlPlaneApiProfile(apiRuntimeProfile)

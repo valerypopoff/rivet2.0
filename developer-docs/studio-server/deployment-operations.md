@@ -170,6 +170,24 @@ withdrawal, a changed process, and missing helpers retain the full configured
 delay. Web/proxy hooks and termination grace remain unchanged. Existing Pods
 retain their original lifecycle command until replaced.
 
+HTTP withdrawal uses `retirement-http-connections.ts` to close idle keep-alive
+connections without truncating buffered responses. Node's native idle closer
+checks `response.finished`, which becomes true at `end()` even if socket
+backpressure leaves bytes unwritten. Calling it then can turn a published HTML
+HTTP 200 into an incomplete response. Defer idle closure while an ended response
+has not reached `writableFinished`; retry on response finish/close. Unfinished
+accepted requests do not prevent other idle sockets from closing, and upgraded
+WebSocket connections remain outside the idle closer. This adds no fixed shutdown
+wait or application-request retry.
+
+The local regression pauses a real 16 MiB HTTP response under Linux Node 24,
+withdraws its owner, completes another response, and verifies the full byte count
+and SHA-256. Separate coverage checks idle socket removal, accepted-work draining
+and upgraded connection preservation. The self-hosted Playwright observation
+`published-html-retirement.spec.ts` verifies complete published HTML in a browser
+without a running installation. These are local regressions, not a replacement
+for exact-image staging qualification.
+
 With `after-rollout`, immediately after the owned rollout finishes, the workflow invokes the bound
 `long-probe-cutoff` acceptance stage before autoscaler verification or final
 journeys. Its `rivet-deployment-observer-cutoff` receipt must prove

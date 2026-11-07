@@ -188,6 +188,72 @@ test('starting proxy observation waits for normal HPA growth without another rol
   assert.ok(!f.events.includes('patch'));
 });
 
+test('an acceptance-observation failure stops admission but lets all issued responses finish before transport cleanup', async (t) => {
+  const pending = [];
+  let sessionDestroyed = false,
+    failureNotifications = 0,
+    starts = 0;
+  t.mock.method(performance, 'now', () => (starts++ < 3 ? 0 : 300000));
+  t.mock.method(https, 'request', (_url, _options, callback) => {
+    const req = new EventEmitter();
+    req.end = (body) => {
+      const complete = () => {
+        const response = Readable.from([Buffer.from(body ? JSON.stringify({ output: { value: body } }) : 'ready')]);
+        response.statusCode = 200;
+        response.headers = { 'x-rivet-correlation-id': randomUUID() };
+        callback(response);
+      };
+      if (body) pending.push(complete);
+      else queueMicrotask(complete);
+    };
+    return req;
+  });
+  t.mock.method(http2, 'connect', () => {
+    const session = new EventEmitter();
+    session.socket = { alpnProtocol: 'h2' };
+    session.destroy = () => {
+      sessionDestroyed = true;
+    };
+    session.request = () => {
+      const stream = new PassThrough(),
+        end = stream.end.bind(stream);
+      stream.end = (body) => {
+        const complete = () => {
+          assert.equal(sessionDestroyed, false);
+          stream.emit('response', { ':status': 200, 'x-rivet-correlation-id': randomUUID() });
+          end(body ? JSON.stringify({ output: { value: body } }) : 'ready');
+        };
+        if (body) pending.push(complete);
+        else queueMicrotask(complete);
+      };
+      return stream;
+    };
+    return session;
+  });
+  const f = fixture(),
+    probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor, onFailure: () => failureNotifications++ });
+  f.gate.config.baseUrl = 'https://continuity.invalid';
+  probes.prepared = true;
+  probes.endpoint = 'fixture';
+  probes.waitForAcceptance = async () => {
+    await new Promise(setImmediate);
+    assert.equal(pending.length, 3);
+    throw Error('acceptance observation failed');
+  };
+  await assert.rejects(probes.startCohort('execution-retirement'), /acceptance observation failed/);
+  assert.equal(failureNotifications, 1, 'Notify the observer before waiting for accepted requests to settle');
+  const closing = probes.close();
+  await probes.startCohort('next');
+  assert.equal(sessionDestroyed, false);
+  assert.equal(probes.cohorts.has('next'), false);
+  pending.forEach((complete) => complete());
+  await closing;
+  assert.equal(sessionDestroyed, true);
+  assert.ok(probes.requests.every((r) => r.fullBody && r.outcome === 'passed'));
+  assert.equal(probes.cohorts.get('execution-retirement').outcome, 'failed');
+  assert.equal(probes.failures.length, 1, 'Draining successful responses cannot erase the original failure');
+});
+
 test('a proxy snapshot completing after its original deadline cannot start a protected request cohort', async (t) => {
   const f = fixture(),
     probes = new ProviderRequestContinuity(f.gate);
@@ -674,4 +740,33 @@ test('a pending cohort cannot create additional fixture demand or hide the previ
   reject(Error('prior cohort failed'));
   await assert.rejects(next, /prior cohort failed/);
   assert.equal(probes.cohorts.has('next'), false);
+});
+
+test('closing admission while a cohort is pending drains it without starting the queued cohort', async () => {
+  const probes = new ProviderRequestContinuity({ operation: { installed: { qualificationValues: {} } } });
+  probes.prepared = true;
+  let complete,
+    drained = false,
+    closed = false;
+  probes.cohorts.set('first', {
+    completion: new Promise((resolve) => {
+      complete = resolve;
+    }),
+  });
+  probes.sessions.add({
+    destroy: () => {
+      assert.equal(drained, true);
+      closed = true;
+    },
+  });
+  const next = probes.startCohort('next');
+  const closing = probes.close();
+  await new Promise(setImmediate);
+  assert.equal(closed, false, 'Accepted work keeps its transport until completion');
+  drained = true;
+  complete();
+  await Promise.all([next, closing]);
+  assert.equal(closed, true);
+  assert.equal(probes.cohorts.has('next'), false);
+  assert.deepEqual(probes.requests, []);
 });
