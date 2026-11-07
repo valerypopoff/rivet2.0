@@ -128,6 +128,29 @@ export function assertRuntimeQualificationArtifacts({
   return { candidate, promoted };
 }
 
+/** Same-run artifacts avoid GitHub dropping JSON job outputs as possible secrets.
+ * This binds transport provenance; prepareRuntimeQualification still owns every
+ * qualification, source, configuration and cleanup check. */
+export function qualificationArtifactDeclarations(result, operation, { runId, runAttempt, candidate, tooling }) {
+  assert.match(String(runId), /^[1-9][0-9]*$/);
+  assert.ok(Number.isSafeInteger(runAttempt) && runAttempt > 0);
+  const operationId = `rivet-q-${runId}-${runAttempt}`;
+  assert.equal(result?.status, 'qualified');
+  assert.equal(result.operationId, operationId);
+  assert.equal(operation?.protocol, 1);
+  assert.equal(operation.operationId, operationId);
+  assert.equal(operation.sizingRequests, undefined);
+  assert.match(operation.inputHash ?? '', /^[a-f0-9]{64}$/);
+  assert.equal(result.inputHash, operation.inputHash);
+  assert.equal(operation.candidate?.sourceSha, candidate.source.sha);
+  assert.deepEqual(operation.candidate.images, candidate.images);
+  assert.equal(operation.candidate.chartDigest, candidate.chart.contentDigest);
+  assert.equal(operation.predecessorManifestDigest, candidate.lineage.predecessor.manifestDigest);
+  assert.deepEqual(operation.tooling, tooling);
+  for (const declaration of [result.control, result.autoscaling]) assert.equal(declaration?.operationId, operationId);
+  return { control: result.control, autoscaling: result.autoscaling };
+}
+
 export function prepareRuntimeQualification(input) {
   const { candidate, promoted } = assertRuntimeQualificationArtifacts(input);
   const { control, autoscaling } = input;

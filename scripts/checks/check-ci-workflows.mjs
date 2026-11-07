@@ -177,9 +177,32 @@ for (const artifactPath of ['artifacts/automated-runtime-qualification', 'artifa
 assert.equal(automaticQualification.jobs.deploy['timeout-minutes'], 90);
 assert.equal(automaticQualification.jobs.publish.needs, 'qualified');
 assert.equal(automaticQualification.jobs.publish.uses, './.github/workflows/studio-server-runtime-qualification.yml');
+assert.equal(automaticQualification.jobs.publish.with.use_qualification_artifact, true);
 assert.equal(
-  automaticQualification.jobs.publish.with.runtime_control_declaration,
-  '${{ needs.qualified.outputs.control }}',
+  automaticQualification.jobs.qualified.outputs,
+  undefined,
+  'Do not transport declarations as secret-filtered job outputs',
+);
+assert.equal(automaticQualification.jobs.publish.with.runtime_control_declaration, undefined);
+assert.equal(automaticQualification.jobs.publish.with.runtime_autoscaling_declaration, undefined);
+const declarationArtifact = runtimeQualification.jobs.publish.steps.find(
+  (s) => s.name === "Download this run's successful staging result",
+);
+assert.equal(declarationArtifact?.if, '${{ inputs.use_qualification_artifact }}');
+assert.equal(declarationArtifact?.with?.name, 'qualification-result-${{ github.run_id }}-${{ github.run_attempt }}');
+assert.equal(declarationArtifact?.with?.path, 'artifacts/runtime-qualification-publication/staging-result');
+assert.equal(declarationArtifact?.with?.['run-id'], undefined, 'Artifact handoff must stay within this run');
+assert.equal(declarationArtifact?.with?.repository, undefined);
+assert.equal(runtimeQualification.on.workflow_call.inputs.use_qualification_artifact.type, 'boolean');
+assert.equal(runtimeQualification.on.workflow_call.inputs.use_qualification_artifact.default, false);
+const declarationBinding = runtimeQualification.jobs.publish.steps.find((s) => s.id === 'qualification');
+assert.equal(
+  declarationBinding.env.RUNTIME_QUALIFICATION_ARTIFACT,
+  "${{ inputs.use_qualification_artifact && 'true' || 'false' }}",
+);
+assert.ok(
+  runtimeQualification.jobs.publish.steps.indexOf(declarationArtifact) <
+    runtimeQualification.jobs.publish.steps.indexOf(declarationBinding),
 );
 assert.deepEqual(automaticQualification.jobs.deploy.needs, ['qualified', 'publish']);
 assert.equal(automaticQualification.jobs.preflight, undefined);
