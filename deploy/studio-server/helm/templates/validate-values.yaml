@@ -710,8 +710,8 @@
 {{- if not (has .Values.ha.executionPools.active (list "a" "b")) -}}
 {{- fail "Execution pool active slot must be a or b" -}}
 {{- end -}}
-{{- if or (not (regexMatch "^[0-2]$" (toString .Values.ha.executionPools.retiringReplicas))) (gt (add (int .Values.replicaCount.execution) (int .Values.ha.executionPools.retiringReplicas)) (int .Values.autoscaling.execution.maxReplicas)) -}}
-{{- fail "Execution pools exceed the approved total capacity or two-owner transition profile" -}}
+{{- if or (not (regexMatch "^(0|[1-9][0-9]*)$" (toString .Values.ha.executionPools.retiringReplicas))) (gt (add (int .Values.replicaCount.execution) (int .Values.ha.executionPools.retiringReplicas)) (int .Values.autoscaling.execution.maxReplicas)) -}}
+{{- fail "Execution pools exceed the approved total capacity" -}}
 {{- end -}}
 {{- end -}}
 {{- if lt (int .Values.lifecycle.preStopDelaySeconds) 0 -}}

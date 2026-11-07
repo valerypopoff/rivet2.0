@@ -61,10 +61,12 @@ export function assertContinuityProviderFacts(report, operation, kind) {
   }
   for (const key of ['requestId', 'correlationId', 'recordingId']) unique(facts.requests.map((r) => r[key]));
   if (kind === 'upgrade') {
-    assert.equal(report.outcomes.acceptedWork.length, 2);
+    const ownerCount = report.outcomes.executionPool?.plan.previous.replicas ?? 2;
+    assert.ok(Number.isSafeInteger(ownerCount) && ownerCount >= 2 && ownerCount <= 50);
+    assert.equal(report.outcomes.acceptedWork.length, ownerCount);
     assert.ok(
       report.outcomes.acceptedWork.every((r) => r.retirementDelayMs === 315000),
-      'Both original execution owners must retain accepted five-minute work',
+      'Every tested execution owner must retain accepted five-minute work',
     );
     assert.equal(facts.bridgeCleaned, true);
     if (focused) {

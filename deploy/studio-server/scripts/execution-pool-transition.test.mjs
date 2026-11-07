@@ -29,15 +29,15 @@ test('failed pinned admission never closes execution admission', async () => {
   assert.ok(!f.calls.some((call) => call.startsWith('begin:')));
 });
 
-function fixture() {
+function fixture(ownerCount = 2) {
   const plan = {
     protocol: 1,
-    previous: { name: 'execution', uid: 'previous', replicas: 2 },
+    previous: { name: 'execution', uid: 'previous', replicas: ownerCount },
     candidate: { name: 'execution-next' },
-    maxReplicas: 7,
+    maxReplicas: Math.max(7, ownerCount * 2),
   };
   const participants = new Map(
-    [0, 1].map((i) => [
+    Array.from({ length: ownerCount }, (_, i) => [
       'execution-' + i,
       {
         name: 'execution-' + i,
@@ -51,7 +51,7 @@ function fixture() {
   );
   const calls = [],
     begun = new Set();
-  let replicas = 2,
+  let replicas = ownerCount,
     time = 0;
   const operation = {
     record: {},
@@ -64,7 +64,7 @@ function fixture() {
     observe: async (name) => participants.get(name) ?? null,
     status: async (pod) => ({
       ...participants.get(pod.name),
-      state: begun.size === 2 ? 'drained' : participants.get(pod.name).state,
+      state: begun.size === ownerCount ? 'drained' : participants.get(pod.name).state,
     }),
     candidate: async () => ({ uid: 'candidate' }),
     assertCapacity: async () => {},
@@ -112,6 +112,25 @@ function fixture() {
   };
 }
 
+for (const count of [3, 4, 7])
+  test(`all ${count} old workers start draining before any is removed; recovery never repeats scale`, async () => {
+    const f = fixture(count);
+    await f.run();
+    assert.equal(f.operation.record.executionPool.owners.length, count);
+    assert.equal(f.operation.record.executionPool.phase, 'complete');
+    const scaleAt = f.calls.indexOf('scale');
+    for (let index = 0; index < count; index++) assert.ok(f.calls.indexOf(`begin:execution-${index}`) < scaleAt);
+    await f.run();
+    assert.equal(f.calls.filter((call) => call === 'scale').length, 1);
+  });
+
+test('insufficient overlap capacity is rejected before probes or mutations', async () => {
+  const f = fixture(4);
+  f.plan.maxReplicas = 7;
+  await assert.rejects(f.run());
+  assert.deepEqual(f.calls, []);
+});
+
 test('both accepted jobs and drains overlap, and the candidate pool becomes steady capacity', async () => {
   const f = fixture();
   await f.run();
@@ -142,25 +161,26 @@ test('candidate capacity loss blocks fencing and preserves both old owners', asy
   );
 });
 
-for (const action of ['withdraw', 'begin', 'scalePrevious'])
-  test(`lost ${action} acknowledgement is observed during recovery without replay`, async () => {
-    const f = fixture(),
-      original = f.io[action];
-    let lost = false;
-    f.io[action] = async (...args) => {
-      await original(...args);
-      if (!lost) {
-        lost = true;
-        throw Error('ack lost');
-      }
-    };
-    await assert.rejects(f.run(), /ack lost/);
-    await f.run();
-    assert.equal(f.operation.record.executionPool.phase, 'complete');
-    assert.equal(f.calls.filter((call) => call === 'withdraw:execution-0').length, 1);
-    assert.equal(f.calls.filter((call) => call === 'begin:execution-0').length, 1);
-    assert.equal(f.calls.filter((call) => call === 'scale').length, 1);
-  });
+for (const count of [2, 3])
+  for (const action of ['withdraw', 'begin', 'scalePrevious'])
+    test(`lost ${action} acknowledgement with ${count} workers is observed during recovery without replay`, async () => {
+      const f = fixture(count),
+        original = f.io[action];
+      let lost = false;
+      f.io[action] = async (...args) => {
+        await original(...args);
+        if (!lost) {
+          lost = true;
+          throw Error('ack lost');
+        }
+      };
+      await assert.rejects(f.run(), /ack lost/);
+      await f.run();
+      assert.equal(f.operation.record.executionPool.phase, 'complete');
+      assert.equal(f.calls.filter((call) => call === 'withdraw:execution-0').length, 1);
+      assert.equal(f.calls.filter((call) => call === 'begin:execution-0').length, 1);
+      assert.equal(f.calls.filter((call) => call === 'scale').length, 1);
+    });
 
 test('an issued but unapplied withdrawal is not retried, and foreign pod replacement blocks removal', async () => {
   const f = fixture();

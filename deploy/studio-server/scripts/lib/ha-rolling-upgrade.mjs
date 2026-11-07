@@ -98,6 +98,7 @@ export async function runHaRollingUpgrade({
   verifyPoolPreparationTemplates,
   proxyContinuity,
   executionPool,
+  afterRoutingReady,
   measure = async (_name, action) => action(),
 }) {
   requireDeploymentSafety(safety, 'rolling', identity);
@@ -522,6 +523,9 @@ export async function runHaRollingUpgrade({
       await restoreAutoscalers(operation);
       await measure('handoff:final-routing', () => proxyContinuity?.afterRestoreAutoscalers?.(operation));
       await verifyCompletedOwners();
+      // All original workers and frontends have been replaced/withdrawn. Long
+      // requests already accepted remain observed through final settlement.
+      if (afterRoutingReady) await measure('observation:cutoff', () => afterRoutingReady());
       safety.confirmSettlement(await measure('settlement', () => settle()));
       await measure('handoff:cleanup', () => proxyContinuity?.finish(operation));
       if (proxyContinuity) safety.confirmSettlement(await measure('settlement:after-bridge', () => settle()));

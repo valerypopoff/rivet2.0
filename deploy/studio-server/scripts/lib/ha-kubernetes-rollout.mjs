@@ -7,6 +7,7 @@ import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { readReleaseOperationJournal } from './release-operation-journal-reader.mjs';
 import { claimHaReleaseJournal } from './deployment-readiness.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import { readConcurrently } from './read-concurrently.mjs';
 import { createHash } from 'node:crypto';
 import { hasHaPublicEndpoint, waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
 import {
@@ -290,7 +291,8 @@ export async function runHaKubernetesRollout({
   verifyDeveloperReady,
   createProxyContinuity = createKubernetesProxyContinuity,
   allowExecutionPoolTransition = true,
-  measure,
+  measure = async (_name, action) => action(),
+  afterRoutingReady,
 }) {
   requireDeploymentSafety(safety, 'rolling', { release, namespace, manifestDigest });
   settle = safety.requireSettlement(settle);
@@ -399,6 +401,20 @@ export async function runHaKubernetesRollout({
     allowTransition: allowExecutionPoolTransition,
   });
   const poolPlan = paired?.plan;
+  await artifact(
+    'ha-strategy.json',
+    JSON.stringify(
+      {
+        strategy: poolPlan ? 'parallel-pool' : 'serial',
+        reason: paired?.strategyReason ?? 'paired-pool-disabled',
+        startingWorkers:
+          paired?.previous.spec.replicas ??
+          inventory.find((r) => r.metadata.labels?.['app.kubernetes.io/component'] === 'execution')?.spec.replicas,
+      },
+      null,
+      2,
+    ),
+  );
   const headroomResources = structuredClone(resources);
   if (paired) {
     const variable = headroomResources
@@ -552,18 +568,18 @@ export async function runHaKubernetesRollout({
         !(
           other &&
           Number.isSafeInteger(other.spec.replicas) &&
-          other.spec.replicas >= 2 &&
+          other.spec.replicas >= poolPlan.previous.replicas &&
           other.spec.replicas <= config.policy.maxReplicas
         )
       )
         throw Error('Bound execution candidate lost its capacity');
-      const count = poolPlan ? other?.spec.replicas || 2 : replicas.execution;
+      const count = poolPlan ? other?.spec.replicas || poolPlan.previous.replicas : replicas.execution;
       replicas.execution = count;
       poolValues = {
         executionPools: {
           enabled: true,
           active: paired.slot,
-          retiringReplicas: poolPlan ? (latestRecord?.executionPool?.scaleIssued ? 0 : 2) : 0,
+          retiringReplicas: poolPlan ? (latestRecord?.executionPool?.scaleIssued ? 0 : poolPlan.previous.replicas) : 0,
         },
       };
     }
@@ -671,6 +687,7 @@ export async function runHaKubernetesRollout({
     proxyContinuity,
     executionPool,
     measure,
+    afterRoutingReady,
     workloads,
     safety,
     resumeToken,
@@ -751,10 +768,16 @@ export async function runHaKubernetesRollout({
     prepareRetirement: beforeRetirement,
     prepareAdmissionFence: afterRoutingWithdrawal,
     checkHeadroom: async ({ stage, departing, workload }) => {
+      const sample = `${stage}${departing ? ':' + departing.name : ''}`;
       await waitForHaHeadroom(
         async () => {
-          await checkExecutionHeadroom({ stage, departing: workload?.role === 'execution' ? departing : undefined });
-          await checkProxyHeadroom({ stage });
+          await readConcurrently([
+            () =>
+              measure(`capacity:execution:${sample}`, () =>
+                checkExecutionHeadroom({ stage, departing: workload?.role === 'execution' ? departing : undefined }),
+              ),
+            () => measure(`capacity:proxy:${sample}`, () => checkProxyHeadroom({ stage })),
+          ]);
         },
         { timeoutMs },
       );

@@ -12,7 +12,7 @@
       containerPort: {{ .Values.service.backendHealth.targetPort }}
     {{- end }}
   {{- include "rivet.pod.apiProbes" (dict "root" . "port" (ternary "exec-health" "execution-http" .Values.ha.enabled)) | nindent 2 }}
-  {{- include "rivet.pod.preStop" . | nindent 2 }}
+  {{- include "rivet.pod.backendPreStop" . | nindent 2 }}
   env:
     {{- if .Values.autoscaling.executionController.enabled }}
     - name: RIVET_EXECUTION_STARTUP_FENCE

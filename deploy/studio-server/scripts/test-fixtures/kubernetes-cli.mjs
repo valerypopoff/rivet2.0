@@ -249,6 +249,12 @@ export function nativeKubernetes(packet) {
       value.status = { phase: 'Bound' };
     }
     const saved = store(pathname, value);
+    if (value.kind === 'StatefulSet')
+      for (const pod of objects.values())
+        if (pod.kind === 'Pod' && pod.metadata.labels?.['fixture-owner'] === name)
+          pod.metadata.ownerReferences = [
+            { apiVersion: 'apps/v1', kind: 'StatefulSet', name, uid: saved.metadata.uid, controller: true },
+          ];
     if (value.kind === 'Deployment')
       store(`/apis/apps/v1/namespaces/${namespace}/replicasets/${name}-fixture`, {
         apiVersion: 'apps/v1',
@@ -374,7 +380,12 @@ export function nativeKubernetes(packet) {
       { op: 'test', path: '/metadata/resourceVersion', value: current.metadata.resourceVersion },
     ]);
     assert.equal(input[2].path, '/spec/replicas');
-    current.spec.replicas = input[2].value;
+    if (input[2].op === 'test') {
+      assert.equal(input[2].value, current.spec.replicas);
+      assert.equal(input[3].op, 'replace');
+      assert.equal(input[3].path, '/spec/replicas');
+      current.spec.replicas = input[3].value;
+    } else current.spec.replicas = input[2].value;
     result(save(pathname, current));
     return true;
   }

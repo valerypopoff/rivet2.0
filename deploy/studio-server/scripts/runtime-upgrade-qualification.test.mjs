@@ -314,6 +314,7 @@ for (const scenario of [
   'focused-missing-recording',
   'focused-slow-web',
   'focused-grown',
+  'focused-grown-parallel',
   'focused-late-growth',
   'focused-late-image-drift',
   'focused-service-config-change',
@@ -332,6 +333,7 @@ for (const scenario of [
             'focused-proxy-settings',
             'focused-proxy-recovery',
             'focused-grown',
+            'focused-grown-parallel',
             'focused-late-growth',
           ].includes(scenario)
           ? 'pass'
@@ -403,7 +405,8 @@ for (const scenario of [
       secrets: { rivetKey: 'local-test-only-key' },
       assertLocalContext: async () => {},
       pods: async () => {
-        const grown = scenario === 'focused-grown' || (continuityFinished && scenario.startsWith('focused-late-'));
+        const grown =
+          scenario.startsWith('focused-grown') || (continuityFinished && scenario.startsWith('focused-late-'));
         const observed = pods(images, grown ? { proxy: 4, execution: 3 } : {});
         if (proxyRecoveryArmed && !proxyRecoverySampled) {
           proxyRecoverySampled = true;
@@ -455,14 +458,15 @@ for (const scenario of [
           await failedRequest;
           await new Promise(setImmediate); // Let traffic record the response before the checkpoint.
         }
-        for (const ordinal of [0, 1]) {
+        const parallelPool = scenario === 'focused-grown-parallel';
+        for (const ordinal of parallelPool ? [0, 1, 2] : [0, 1]) {
           const pod = { name: `fixture-ha-execution-${ordinal}`, uid: `owner-${ordinal}` };
-          await hooks.beforeRetirement(pod);
+          await hooks.beforeRetirement(pod, { parallelPool });
           assert.ok(
             !probes.background.some((entry) => entry.uid === pod.uid),
             'background must not compete with routed public traffic',
           );
-          await hooks.afterRoutingWithdrawal(pod);
+          await hooks.afterRoutingWithdrawal(pod, { parallelPool });
           await hooks.afterWithdrawal(pod);
         }
         images = candidate.images;
@@ -473,6 +477,7 @@ for (const scenario of [
         if (variant === 'storage-volume-drift') storageVolume = 'different-volume';
         if (variant === 'service-uid-drift') serviceUid = 'different-service';
         if (scenario === 'aborted') controller.abort(Error('Qualification deadline reached'));
+        if (parallelPool) return { executionPools: true, executionPool: { plan: { previous: { replicas: 3 } } } };
       },
       assertAutoscalerActive: async () => ({ policyDigest: autoscalerPolicyDigest({}) }),
       waitForDeveloperRoute: async () => {},
@@ -487,6 +492,12 @@ for (const scenario of [
     };
     if (focused) {
       gate.operation = { qualification: { tier: 'focused' }, policy: autoscalerPolicy({}) };
+      if (scenario === 'focused-grown-parallel') {
+        gate.operation.executionPools = true;
+        gate.prepareExecutionBaseline = async () => {
+          assert.ok(!requests.some((request) => request.id), 'Prepare three workers before protected traffic starts');
+        };
+      }
       gate.continuityProbes = {
         prepareProxySettings: async () => {
           assert.ok(!requests.some((r) => r.id), 'Configure the proxy before starting protected traffic');
@@ -559,11 +570,11 @@ for (const scenario of [
       assert.ok(report.readiness.samples > 0);
       assert.deepEqual(
         report.readiness.minimumReady,
-        scenario === 'focused-grown'
+        scenario.startsWith('focused-grown')
           ? { execution: 3, proxy: 4 }
           : { execution: 2, proxy: scenario === 'focused-proxy-recovery' ? 1 : 2 },
       );
-      if (scenario === 'focused-grown') {
+      if (scenario.startsWith('focused-grown')) {
         assert.equal(report.initialApplicationPods, 10);
         assert.equal(report.finalApplicationPods, 10);
         assert.deepEqual(report.capacity.initial, report.capacity.final);
@@ -576,7 +587,7 @@ for (const scenario of [
         assert.equal(report.capacity.final.proxy, 4);
         assert.equal(report.capacity.final.execution, 3);
       }
-      assert.equal(probes.background.length, 2);
+      assert.equal(probes.background.length, scenario === 'focused-grown-parallel' ? 3 : 2);
       if (overlap) assert.deepEqual(report.outcomes.developerOverlap, { observed: true });
     } else {
       await assert.rejects(work, variant === 'late-image-drift' ? /fixture timeout/ : undefined);

@@ -3,13 +3,18 @@ import assert from 'node:assert/strict';
 import { compileExecutionPoolEvidence, assertExecutionPoolEvidence } from './lib/execution-pool-evidence.mjs';
 import { executionPoolSettled } from './lib/release-operation-state.mjs';
 
-function fixture() {
+function fixture(count = 2) {
   const operation = {
-    policy: { maxReplicas: 7 },
+    policy: { maxReplicas: Math.max(7, count * 2) },
     candidate: { images: { api: { repository: 'registry/api', digest: 'sha256:fixture' } } },
   };
-  const plan = { protocol: 1, maxReplicas: 7, image: 'registry/api@sha256:fixture', previous: { replicas: 2 } };
-  const owners = [0, 1].map((index) => ({
+  const plan = {
+    protocol: 1,
+    maxReplicas: operation.policy.maxReplicas,
+    image: 'registry/api@sha256:fixture',
+    previous: { replicas: count },
+  };
+  const owners = Array.from({ length: count }, (_, index) => ({
     uid: 'owner-' + index,
     withdrawIssued: true,
     beginIssued: true,
@@ -34,7 +39,7 @@ function fixture() {
           owners,
           candidateUid: 'new-controller',
           scaleIssued: true,
-          capacity: { minimumReady: 2, maximumPhysicalPods: 4 },
+          capacity: { minimumReady: count, maximumPhysicalPods: 2 * count },
         },
       },
     },
@@ -83,5 +88,22 @@ test('an incomplete or stray pool journal cannot be treated as a completed relea
 test('a duplicated recorded owner cannot borrow the other job receipt to qualify a pool handoff', () => {
   const f = fixture();
   f.report.outcomes.executionPool.owners[1] = f.report.outcomes.executionPool.owners[0];
-  assert.throws(() => compileExecutionPoolEvidence(f.report, f.operation), /both recorded original owners/);
+  assert.throws(() => compileExecutionPoolEvidence(f.report, f.operation), /all recorded original owners/);
 });
+
+for (const count of [3, 4, 7])
+  test(`evidence covers every original owner in a ${count}-worker parallel handoff`, () => {
+    const f = fixture(count);
+    const proof = compileExecutionPoolEvidence(f.report, f.operation);
+    assert.equal(proof.acceptedOwners.length, count);
+    assert.equal(
+      executionPoolSettled({
+        executionPoolPlan: f.report.outcomes.executionPool.plan,
+        executionPool: f.report.outcomes.executionPool,
+      }),
+      true,
+    );
+    assert.throws(() => assertExecutionPoolEvidence({ ...proof, maximumPhysicalPods: 2 * count - 1 }));
+    f.report.outcomes.acceptedWork.pop();
+    assert.throws(() => compileExecutionPoolEvidence(f.report, f.operation));
+  });

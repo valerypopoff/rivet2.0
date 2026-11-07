@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import { startHaWorkflowTraffic, startHaWebAppTraffic } from './ha-workflow-traffic.mjs';
-import { ordinaryRuntimeReplicaBounds, qualificationProxyMinimum } from './ha-release-evidence.mjs';
+import {
+  ordinaryRuntimeReplicaBounds,
+  qualificationProxyMinimum,
+  qualificationExecutionBaseline,
+} from './ha-release-evidence.mjs';
 import {
   assertStudioServerReleaseManifest,
   getStudioServerReleaseManifestDigest,
@@ -131,6 +135,8 @@ export async function runOrdinaryRuntimeUpgrade({
   assert.equal(gate.edgeProfile, 'compact');
   assert.equal(gate.purpose, 'ordinary-upgrade');
   const focused = gate.operation?.qualification?.tier === 'focused';
+  const executionBaseline = qualificationExecutionBaseline(gate.operation);
+  if (executionBaseline === 3) await gate.prepareExecutionBaseline();
   // Focused qualification accepts healthy autoscaler-grown capacity. Full
   // regression fixtures retain their deliberately fixed initial/final layout.
   const initialCapacity = await waitForOrdinaryRuntime(gate, previous.images, (name, check) =>
@@ -139,6 +145,7 @@ export async function runOrdinaryRuntimeUpgrade({
       return check();
     }),
   );
+  assert.ok(initialCapacity.execution >= executionBaseline, 'Staging did not reach its execution baseline');
   // This fixture-only settings change reloads nginx. Finish it before the
   // protected observation window, which still includes the actual handoff/roll.
   await gate.continuityProbes?.prepareProxySettings?.();
@@ -252,17 +259,19 @@ export async function runOrdinaryRuntimeUpgrade({
     checkpoint();
     phase = focused ? 'ordinary-runtime-upgrade' : 'ordinary-seven-to-seven-upgrade';
     const callbacks = {
-      beforeRetirement: async (pod) => {
+      beforeRetirement: async (pod, { parallelPool = false } = {}) => {
         checkpoint();
-        if (/-ha-execution(?:-next)?-[01]$/.test(pod.name))
+        if ((parallelPool ? /-ha-execution(?:-next)?-\d+$/ : /-ha-execution(?:-next)?-[01]$/).test(pod.name))
           await gate.continuityProbes?.startCohort('execution-retirement');
       },
       // Keep synthetic background work from taking the last slot while public
       // traffic still routes to this owner. Admission remains open until fencing.
-      afterRoutingWithdrawal: (pod) =>
-        /-ha-execution(?:-next)?-[01]$/.test(pod.name) ? probes.beforeRetirement(pod) : undefined,
+      afterRoutingWithdrawal: (pod, { parallelPool = false } = {}) =>
+        (parallelPool ? /-ha-execution(?:-next)?-\d+$/ : /-ha-execution(?:-next)?-[01]$/).test(pod.name)
+          ? probes.beforeRetirement(pod)
+          : undefined,
       afterWithdrawal: (pod) =>
-        /-ha-execution(?:-next)?-[01]$/.test(pod.name) ? probes.afterWithdrawal(pod) : undefined,
+        /-ha-execution(?:-next)?-\d+$/.test(pod.name) ? probes.afterWithdrawal(pod) : undefined,
     };
     if (developer) await developer.roll(callbacks);
     else {
@@ -290,7 +299,8 @@ export async function runOrdinaryRuntimeUpgrade({
     checkpoint();
     await gate.waitForDeveloperRoute(baseUrl);
     await waitForOrdinaryRuntime(gate, candidate.images, wait);
-    assert.equal(probes.background.length, 2, 'Both original execution owners must accept a drain probe');
+    const acceptedOwners = report.outcomes.executionPool?.plan.previous.replicas ?? 2;
+    assert.equal(probes.background.length, acceptedOwners, 'All tested execution owners must accept a drain probe');
     assert.ok(
       probes.background.every((r) => r.recordingId),
       'Accepted background runs must each retain their recording',

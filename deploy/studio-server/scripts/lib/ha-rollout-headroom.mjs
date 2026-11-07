@@ -179,8 +179,8 @@ export function createHaExecutionHeadroomGuard({
       const snapshot = await io.snapshot();
       if (snapshot.uid !== workload.uid || snapshot.startupFence)
         throw new Error('Execution ownership changed during rollout headroom inspection.');
-      // Sampling executes sequentially. Recheck earlier owners and the complete
-      // set after the last exec, so a late failure/scale cannot leave optimistic
+      // Sampling is bounded and concurrent. Recheck owners and the complete
+      // set after all execs, so a late failure/scale cannot leave optimistic
       // headroom based on identities that no longer serve this workload.
       const ns = encodeURIComponent(namespace);
       const selector = encodeURIComponent(

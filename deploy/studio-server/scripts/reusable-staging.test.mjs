@@ -36,6 +36,104 @@ import {
   getStudioServerReleaseManifestDigest,
 } from './lib/studio-server-release-manifest.mjs';
 import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import { qualificationExecutionBaseline } from './lib/ha-release-evidence.mjs';
+
+test('focused paired qualification starts three workers when the approved ceiling covers both pools', () => {
+  const paired = { qualification: { tier: 'focused' }, executionPools: true, policy: { maxReplicas: 7 } };
+  assert.equal(qualificationExecutionBaseline(paired), 3);
+  assert.equal(qualificationExecutionBaseline({ ...paired, policy: { maxReplicas: 6 } }), 3);
+  for (const operation of [
+    undefined,
+    { ...paired, executionPools: false },
+    { ...paired, qualification: undefined },
+    { ...paired, policy: { maxReplicas: 4 } },
+  ])
+    assert.equal(qualificationExecutionBaseline(operation), 2);
+});
+
+for (const scenario of [
+  'idle-two',
+  'already-three',
+  'grown-four',
+  'conflict',
+  'lost-ack',
+  'foreign-image',
+  'not-ready',
+  'changed-uid',
+])
+  test(`retained execution baseline grows once before observation and preserves ownership: ${scenario}`, async () => {
+    const image = { repository: 'registry.test/api', digest: 'sha256:' + 'a'.repeat(64) };
+    const count = scenario === 'grown-four' ? 4 : scenario === 'already-three' ? 3 : 2;
+    const controller = {
+      metadata: {
+        name: 'test-ha-execution',
+        uid: 'active-controller',
+        resourceVersion: '10',
+        labels: { 'app.kubernetes.io/component': 'execution', 'app.kubernetes.io/instance': 'test' },
+      },
+      spec: {
+        replicas: count,
+        updateStrategy: { type: 'OnDelete' },
+        template: {
+          spec: {
+            containers: [
+              { name: 'api', image: scenario === 'foreign-image' ? 'foreign' : `${image.repository}@${image.digest}` },
+            ],
+          },
+        },
+      },
+    };
+    const writes = [],
+      artifacts = [];
+    const gate = Object.assign(Object.create(ReusableProviderGate.prototype), {
+      operation: { qualification: { tier: 'focused' }, executionPools: true, policy: { maxReplicas: 7 } },
+      currentManifest: { images: { api: image } },
+      config: { release: 'test', deploymentTimeoutSeconds: 1 },
+      assertProofContext: async () => {},
+      artifact: async (name) => artifacts.push(name),
+      pods: async () =>
+        Array.from({ length: controller.spec.replicas }, (_, index) => ({
+          metadata: {
+            uid: 'pod-' + index,
+            ownerReferences: [{ controller: true, kind: 'StatefulSet', uid: controller.metadata.uid }],
+          },
+          status: {
+            conditions: [{ type: 'Ready', status: scenario === 'not-ready' && index === 2 ? 'False' : 'True' }],
+          },
+        })),
+      kube: async (args) => {
+        if (args[0] === 'get') {
+          if (scenario === 'changed-uid' && args[1] === 'statefulset') controller.metadata.uid = 'new-controller';
+          return { stdout: JSON.stringify(args[1] === 'statefulsets' ? { items: [controller] } : controller) };
+        }
+        assert.deepEqual(args.slice(0, 4), ['patch', 'statefulset', controller.metadata.name, '--type=json']);
+        const patch = JSON.parse(args.at(-1));
+        writes.push(patch);
+        assert.deepEqual(patch.slice(0, 3), [
+          { op: 'test', path: '/metadata/uid', value: 'active-controller' },
+          { op: 'test', path: '/metadata/resourceVersion', value: '10' },
+          { op: 'test', path: '/spec/replicas', value: 2 },
+        ]);
+        assert.deepEqual(patch[3], { op: 'replace', path: '/spec/replicas', value: 3 });
+        if (scenario === 'conflict') throw Error('Conflict');
+        controller.spec.replicas = 3;
+        if (scenario === 'lost-ack') throw Error('Unknown acknowledgement');
+        return { stdout: JSON.stringify(controller) };
+      },
+    });
+    if (['conflict', 'lost-ack', 'foreign-image', 'not-ready', 'changed-uid'].includes(scenario)) {
+      await assert.rejects(gate.prepareExecutionBaseline());
+      assert.ok(!artifacts.includes('execution-baseline-ready.json'));
+    } else {
+      await gate.prepareExecutionBaseline();
+      assert.equal(controller.spec.replicas, Math.max(3, count));
+      assert.ok(artifacts.includes('execution-baseline-ready.json'));
+    }
+    assert.equal(
+      writes.length,
+      ['idle-two', 'conflict', 'lost-ack', 'not-ready', 'changed-uid'].includes(scenario) ? 1 : 0,
+    );
+  });
 
 test('provider polling stops on cancellation instead of treating it as another pending observation', async () => {
   const cancellation = new AbortController(),

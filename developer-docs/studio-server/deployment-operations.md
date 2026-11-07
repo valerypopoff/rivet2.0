@@ -106,10 +106,15 @@ diagnostic only and does not change a deadline or release outcome. See the
 [performance plan and evidence limits](rolling-update-performance-plan.md).
 
 The opt-in `ha.executionPools.enabled` profile adds two stable execution slots.
-For a settled two-worker predecessor with approved headroom, two ready candidates
-serve while both predecessors withdraw and drain concurrently; candidates become
-steady capacity and the previous slot settles at zero. Larger pools and shared
-worker PVCs retain serial retirement. Both pools, including terminating Pods,
+For a settled predecessor with approved headroom, an equally sized candidate pool
+serves while all predecessors withdraw and drain concurrently; candidates become
+steady capacity and the previous slot settles at zero. A three-worker predecessor
+therefore starts three replacements: six execution Pods coexist temporarily.
+The existing seven-worker ceiling and database budget cover that case. If twice
+the starting count exceeds the approved ceiling, planning stops before mutation
+with the required capacity; it does not silently select a slower serial rollout.
+Increase the reviewed worker/DB allowance before attempting that larger overlap.
+Shared worker PVCs retain serial retirement. Both pools, including terminating Pods,
 count against the same capacity/connection ceiling. Active-slot identity,
 per-owner commands and scale-to-zero intent are journaled; uncertain writes are
 observed rather than replayed. Existing unfinished serial operations are unchanged.
@@ -119,11 +124,25 @@ fallback authorizes serial retirement only, including at a two-worker production
 floor. Older receipts without the layout observation cannot enable the paired
 profile. This profile is implemented locally and not activated.
 
+Focused paired qualification uses a three-worker starting baseline when the
+approved execution ceiling is at least six. Bootstrap renders three workers.
+Retained staging grows an idle two-worker active pool immediately before the
+protected rollout window, with UID/resourceVersion/replica-count preconditions,
+then waits for three owned ready Pods. A lost write acknowledgement is not
+replayed; larger existing pools are never reduced to fit the test. The initial
+capacity receipt must meet this baseline. Production's minimum and policy digest
+are unchanged; final staging capacity can return to the normal two-worker floor.
+Serial/full suites and smaller capacity envelopes retain their existing baseline.
+
 The old execution pool's final scale intent is persisted before its last owner
-checks. Both original UIDs/incarnations must still report drained, and the
+checks. All original UIDs/incarnations must still report drained, and the
 StatefulSet resourceVersion is refreshed after slow recording/capacity reads.
 The scale remains conditional on its original UID and unchanged replica count;
 unknown acknowledgements are observed without repeating the mutation.
+
+Removal recovery rechecks the replacement's readiness after querying its process.
+A replacement that becomes unready keeps recovery waiting with the startup fence
+intact. Settling an issued removal still does not require CPU/demand metrics.
 
 Reviewed private policies may opt into `preparation: "parallel-online"` for a
 fresh online operation: baseline acceptance and the checkpoint overlap but both
@@ -135,7 +154,23 @@ accepted long probes while short availability observation continues. Enabling
 this policy requires its matching checksummed adapter, not the old bundle.
 
 A reviewed policy can independently opt into `longProbeCutoff: "after-rollout"`.
-Immediately after the owned rollout finishes, the workflow invokes the bound
+The newer `after-routing` choice invokes the same bound stage once all original
+workers/frontends have been replaced or withdrawn and final routing checks pass,
+before settlement. It joins the acknowledged cutoff before proceeding; it never
+cancels accepted requests or stops short availability observation. Older callers
+without that callback retain the after-rollout barrier. An uncertain cutoff is
+not repeated in the same invocation; recovery retains the original observer and
+owned rollout journal. The choice does not bypass settlement or acceptance.
+
+Backend/execution HA containers use a read-only preStop helper. Two matching
+status reads must confirm the same explicitly withdrawn, fully drained operation
+and process incarnation before the repeated sleep can be omitted. Inspection has
+a bounded total deadline. Unavailable/legacy status, direct retirement without
+withdrawal, a changed process, and missing helpers retain the full configured
+delay. Web/proxy hooks and termination grace remain unchanged. Existing Pods
+retain their original lifecycle command until replaced.
+
+With `after-rollout`, immediately after the owned rollout finishes, the workflow invokes the bound
 `long-probe-cutoff` acceptance stage before autoscaler verification or final
 journeys. Its `rivet-deployment-observer-cutoff` receipt must prove
 `longProbeAdmissionClosed` with private evidence. The matching adapter persists a

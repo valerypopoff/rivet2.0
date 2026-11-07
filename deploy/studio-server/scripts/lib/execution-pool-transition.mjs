@@ -15,8 +15,10 @@ export async function runExecutionPoolTransition({
   uuid = randomUUID,
 }) {
   assert.equal(plan.protocol, 1);
-  assert.equal(plan.previous.replicas, 2, 'The fast profile currently qualifies two original workers');
-  assert.ok(plan.maxReplicas >= 4 && plan.candidate.name !== plan.previous.name);
+  const ownerCount = plan.previous.replicas;
+  assert.ok(Number.isSafeInteger(ownerCount) && ownerCount >= 2);
+  assert.ok(Number.isSafeInteger(plan.maxReplicas) && plan.maxReplicas <= 100);
+  assert.ok(2 * ownerCount <= plan.maxReplicas && plan.candidate.name !== plan.previous.name);
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0);
   const save = async (changes) => {
     operation.assertLease();
@@ -52,11 +54,11 @@ export async function runExecutionPoolTransition({
   const saved = operation.record.executionPool;
   assert.equal(saved.protocol, 1);
   assert.ok(['preparing', 'withdrawing', 'draining', 'removing', 'complete'].includes(saved.phase));
-  assert.equal(saved.owners?.length, 2);
-  assert.equal(new Set(saved.owners.map((owner) => owner.uid)).size, 2);
+  assert.equal(saved.owners?.length, ownerCount);
+  assert.equal(new Set(saved.owners.map((owner) => owner.uid)).size, ownerCount);
   assert.deepEqual(
     new Set(saved.owners.map((owner) => owner.name)),
-    new Set([0, 1].map((index) => `${plan.previous.name}-${index}`)),
+    new Set(Array.from({ length: ownerCount }, (_, index) => `${plan.previous.name}-${index}`)),
   );
   for (const owner of saved.owners) {
     for (const key of ['uid', 'incarnation', 'operationId']) assert.ok(typeof owner[key] === 'string' && owner[key]);

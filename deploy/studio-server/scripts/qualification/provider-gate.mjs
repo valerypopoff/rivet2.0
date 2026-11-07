@@ -32,6 +32,7 @@ import { createHaProofTiming } from '../lib/ha-proof-timing.mjs';
 import { applySizingRequests } from '../lib/resource-sizing.mjs';
 import { rootStructuralMutation } from '../lib/structural-fixture-admission.mjs';
 import { assertManagedGateActive } from '../lib/managed-gate-command.mjs';
+import { qualificationExecutionBaseline } from '../lib/ha-release-evidence.mjs';
 
 export const root =
   process.env.RIVET_QUALIFICATION_SOURCE_ROOT ?? fileURLToPath(new URL('../../../../', import.meta.url));
@@ -325,7 +326,11 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.providerValues = {
       ...values,
       ...structuredClone(envelope),
-      replicaCount: { ...values.replicaCount, ...envelope.replicaCount },
+      replicaCount: {
+        ...values.replicaCount,
+        ...envelope.replicaCount,
+        execution: qualificationExecutionBaseline(this.operation),
+      },
       autoscaling: { ...values.autoscaling, proxy: { ...values.autoscaling.proxy, ...envelope.autoscaling?.proxy } },
       availability: {
         ...values.availability,
@@ -398,6 +403,76 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     if (this.operation.sizingRequests)
       this.providerValues = applySizingRequests(this.providerValues, this.operation.sizingRequests);
     return this.providerValues;
+  }
+  async prepareExecutionBaseline() {
+    const minimum = qualificationExecutionBaseline(this.operation);
+    if (minimum === 2) return;
+    await this.assertProofContext();
+    const controllers = JSON.parse((await this.kube(['get', 'statefulsets', '-o', 'json'])).stdout).items.filter(
+      (item) => role(item) === 'execution' && item.spec.replicas > 0,
+    );
+    assert.equal(controllers.length, 1, 'Execution baseline requires one settled active pool');
+    const current = controllers[0];
+    assert.equal(current.metadata.labels?.['app.kubernetes.io/instance'], this.config.release);
+    assert.ok(current.metadata.uid && current.metadata.resourceVersion && !current.metadata.deletionTimestamp);
+    assert.equal(current.spec.updateStrategy?.type, 'OnDelete');
+    assert.ok(Number.isSafeInteger(current.spec.replicas) && current.spec.replicas >= 2);
+    const image = this.currentManifest.images.api;
+    assert.equal(
+      current.spec.template.spec.containers.find((container) => container.name === 'api')?.image,
+      `${image.repository}@${image.digest}`,
+    );
+    if (current.spec.replicas < minimum) {
+      await this.artifact(
+        'execution-baseline-intent.json',
+        JSON.stringify({
+          name: current.metadata.name,
+          uid: current.metadata.uid,
+          resourceVersion: current.metadata.resourceVersion,
+          from: current.spec.replicas,
+          to: minimum,
+        }),
+      );
+      await this.assertProofContext();
+      // Grow only this owner. A lost acknowledgement is never retried; existing
+      // larger pools are preserved and the ordinary rollout validates capacity.
+      await this.kube([
+        'patch',
+        'statefulset',
+        current.metadata.name,
+        '--type=json',
+        '-p',
+        JSON.stringify([
+          { op: 'test', path: '/metadata/uid', value: current.metadata.uid },
+          { op: 'test', path: '/metadata/resourceVersion', value: current.metadata.resourceVersion },
+          { op: 'test', path: '/spec/replicas', value: current.spec.replicas },
+          { op: 'replace', path: '/spec/replicas', value: minimum },
+        ]),
+      ]);
+    }
+    await until(
+      'three ready execution workers before rollout observation',
+      async () => {
+        const controller = JSON.parse(
+          (await this.kube(['get', 'statefulset', current.metadata.name, '-o', 'json'])).stdout,
+        );
+        assert.equal(controller.metadata.uid, current.metadata.uid);
+        assert.ok(!controller.metadata.deletionTimestamp && controller.spec.replicas >= minimum);
+        const pods = (await this.pods()).filter((pod) =>
+          pod.metadata.ownerReferences?.some(
+            (owner) => owner.controller && owner.kind === 'StatefulSet' && owner.uid === current.metadata.uid,
+          ),
+        );
+        return (
+          new Set(pods.filter((pod) => ready(pod) && pod.metadata.uid).map((pod) => pod.metadata.uid)).size >= minimum
+        );
+      },
+      this.config.deploymentTimeoutSeconds * 1000,
+    );
+    await this.artifact(
+      'execution-baseline-ready.json',
+      JSON.stringify({ uid: current.metadata.uid, minimumReady: minimum }),
+    );
   }
   async verifyDeveloperAcceptance(pod) {
     const source = await fs.readFile(

@@ -15,7 +15,8 @@ export function createBackendRetirement({
   let state = 'serving';
   let operationId = null;
   let completion;
-  const snapshot = () => ({ protocol: 1, withdrawalProtocol: 1, incarnation, operationId, state });
+  let routingWithdrawn = false;
+  const snapshot = () => ({ protocol: 1, withdrawalProtocol: 1, incarnation, operationId, state, routingWithdrawn });
   function validate(status, expectedOperation) {
     if (
       !status ||
@@ -73,6 +74,7 @@ export function createBackendRetirement({
       if (withdrawOnly) {
         const status = validate(await api.withdraw(operationId, incarnation), operationId);
         if (status.state !== 'withdrawing') throw new Error('API routing withdrawal is unconfirmed.');
+        routingWithdrawn = true;
         state = 'withdrawing';
       } else await drain();
     })().catch(() => {

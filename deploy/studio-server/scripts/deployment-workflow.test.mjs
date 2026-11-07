@@ -744,6 +744,42 @@ for (const cutoffFails of [false, true])
     }
   });
 
+for (const scenario of ['early', 'legacy-caller', 'uncertain'])
+  test(`after-routing cutoff joins once before settlement and never replays an uncertain write: ${scenario}`, async () => {
+    const order = [];
+    const work = executeDeploymentWorkflow({
+      approval: { policy: { longProbeCutoff: 'after-routing' } },
+      context: { operationId: 'operation' },
+      stage: async (_approval, name) => {
+        order.push(name);
+        if (scenario === 'uncertain' && name === 'long-probe-cutoff') throw Error('Unknown acknowledgement');
+        return { stage: name };
+      },
+      prepareSafety: async () => ({}),
+      run: async (_safety, { afterRoutingReady }) => {
+        order.push('replace');
+        if (scenario !== 'legacy-caller') {
+          await afterRoutingReady();
+          await afterRoutingReady();
+        }
+        order.push('settle');
+      },
+      verifyActivation: async () => order.push('activation'),
+    });
+    if (scenario === 'uncertain') {
+      await assert.rejects(work, /Unknown acknowledgement/);
+      assert.deepEqual(order, ['before', 'backup', 'replace', 'long-probe-cutoff']);
+    } else {
+      await work;
+      assert.deepEqual(
+        order,
+        scenario === 'early'
+          ? ['before', 'backup', 'replace', 'long-probe-cutoff', 'settle', 'activation', 'after']
+          : ['before', 'backup', 'replace', 'settle', 'long-probe-cutoff', 'activation', 'after'],
+      );
+    }
+  });
+
 test('cutoff requests preserve the original observer identity for acceptance-only recovery', async (t) => {
   const f = await fixture(t);
   const cutoff = await runDeploymentStage(f.approval, 'long-probe-cutoff', f.context, f.options);

@@ -14,25 +14,44 @@ export function createHaProofTiming({
   let status = 'starting';
   let closed = false;
   let firstFailure;
-  const snapshot = () => ({
-    version: 1,
-    elapsedMs: Math.round(now() - started),
-    status,
-    phases,
-    ...(firstFailure ? { firstFailure } : {}),
-  });
+  let pendingSave = Promise.resolve();
+  const snapshot = () => {
+    const elapsedMs = Math.max(0, Math.round(now() - started));
+    let measuredMs = 0,
+      end = 0;
+    for (const phase of [...phases].sort((a, b) => a.startedMs - b.startedMs)) {
+      const until = Math.min(elapsedMs, phase.elapsedMs === undefined ? elapsedMs : phase.startedMs + phase.elapsedMs);
+      measuredMs += Math.max(0, until - Math.max(end, phase.startedMs));
+      end = Math.max(end, until);
+    }
+    return {
+      version: 1,
+      elapsedMs,
+      measuredMs,
+      unmeasuredMs: Math.max(0, elapsedMs - measuredMs),
+      status,
+      phases,
+      ...(firstFailure ? { firstFailure } : {}),
+    };
+  };
   const heartbeat = setInterval(() => {
     log(
       `[ha-progress] ${status}; ${Math.round((now() - started) / 1000)}s elapsed; active: ${[...active.keys()].join(', ') || 'none'}`,
     );
   }, heartbeatMs);
   heartbeat.unref();
-  const save = async () => {
-    try {
-      await artifact('ha-timing.json', `${JSON.stringify(snapshot(), null, 2)}\n`);
-    } catch {
-      log('[ha-progress] Timing artifact unavailable; behavioral result is unchanged.');
-    }
+  const save = () => {
+    const bytes = `${JSON.stringify(snapshot(), null, 2)}\n`;
+    // Concurrent phase completions share one receipt. Preserve write order and
+    // avoid overlapping truncations; diagnostics never change the action result.
+    pendingSave = pendingSave.then(async () => {
+      try {
+        await artifact('ha-timing.json', bytes);
+      } catch {
+        log('[ha-progress] Timing artifact unavailable; behavioral result is unchanged.');
+      }
+    });
+    return pendingSave;
   };
   return {
     status(value) {

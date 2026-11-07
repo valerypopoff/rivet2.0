@@ -673,6 +673,13 @@ export function qualificationProxyMinimum(installed) {
   return minimum;
 }
 
+// Exercise a three-worker handoff when the paired staging allowance covers it.
+export function qualificationExecutionBaseline(operation) {
+  return operation?.qualification?.tier === 'focused' && operation.executionPools && operation.policy?.maxReplicas >= 6
+    ? 3
+    : 2;
+}
+
 // The ordinary layout fixes singleton roles and proxy HPA policy; execution's
 // ceiling comes from the frozen installation policy, not the observed Pod count.
 export function ordinaryRuntimeReplicaBounds(policy, proxyMinimum = 2) {

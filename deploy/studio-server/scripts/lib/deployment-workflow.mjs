@@ -46,7 +46,7 @@ export async function readDeploymentPolicy(file, root, identity) {
   const scripts = {};
   if (policy.preparation !== undefined && policy.preparation !== 'parallel-online')
     throw Error('Unknown deployment preparation contract.');
-  if (policy.longProbeCutoff !== undefined && policy.longProbeCutoff !== 'after-rollout')
+  if (policy.longProbeCutoff !== undefined && !['after-rollout', 'after-routing'].includes(policy.longProbeCutoff))
     throw Error('Unknown long-probe admission cutoff contract.');
   for (const name of ['backup', 'acceptance']) {
     const entry = policy[name];
@@ -301,7 +301,15 @@ export async function executeDeploymentWorkflow({
           ? 'online'
           : 'not-configured',
   };
-  const earlyCutoff = context && !maintenance && approval?.policy?.longProbeCutoff === 'after-rollout';
+  const earlyCutoff =
+    context && !maintenance && ['after-rollout', 'after-routing'].includes(approval?.policy?.longProbeCutoff);
+  let cutoff;
+  const closeLongProbes = () =>
+    (cutoff ??= Promise.resolve().then(async () => {
+      const receipt = await stage(approval, 'long-probe-cutoff', context, { artifactsDir, timeoutMs });
+      report.stages.push(receipt);
+      return receipt;
+    }));
   const acceptanceRecovery = earlyCutoff
     ? '--acceptance-only --acceptance-request <original long-probe-cutoff request.json>'
     : '--acceptance-only';
@@ -387,7 +395,10 @@ export async function executeDeploymentWorkflow({
       if (parallelPreparation) await abortOnlinePreparation([error]);
       throw error;
     }
-    const applied = await run(safety);
+    const applied = await run(safety, {
+      afterRoutingReady:
+        earlyCutoff && approval.policy.longProbeCutoff === 'after-routing' ? closeLongProbes : undefined,
+    });
     report.outcome.infrastructure = verificationOnly ? 'existing-verified' : 'applied';
     if (applied?.phase === 'complete') report.operation = { token: applied.token, phase: applied.phase };
   } catch (error) {
@@ -425,7 +436,7 @@ export async function executeDeploymentWorkflow({
   // remain owned by the observer until the normal after stage settles them.
   if (earlyCutoff) {
     try {
-      report.stages.push(await stage(approval, 'long-probe-cutoff', context, { artifactsDir, timeoutMs }));
+      await closeLongProbes();
     } catch (cause) {
       await failAfterInfrastructure(
         'infrastructure-complete-observation-unconfirmed',

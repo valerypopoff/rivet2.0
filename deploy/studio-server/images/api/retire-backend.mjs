@@ -2,7 +2,7 @@ import { request } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 /** Pod-local client. A timeout leaves the owner alive and blocks the rollout. */
-export async function requestBackendRetirement(socketPath, method = 'GET', body) {
+export async function requestBackendRetirement(socketPath, method = 'GET', body, { timeoutMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
     const req = request(
       {
@@ -10,7 +10,7 @@ export async function requestBackendRetirement(socketPath, method = 'GET', body)
         path: '/retirement',
         method,
         headers: body ? { 'content-type': 'application/json' } : {},
-        timeout: 5000,
+        timeout: timeoutMs,
       },
       (response) => {
         const chunks = [];
@@ -40,6 +40,8 @@ export async function requestBackendRetirement(socketPath, method = 'GET', body)
         });
       },
     );
+    const deadline = setTimeout(() => req.destroy(new Error('Retirement acknowledgement timed out')), timeoutMs);
+    req.once('close', () => clearTimeout(deadline));
     req.once('error', reject);
     req.once('timeout', () => req.destroy(new Error('Retirement acknowledgement timed out.')));
     req.end(body ? JSON.stringify(body) : undefined);
@@ -78,19 +80,24 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const socketPath = process.env.RIVET_ROLLING_RETIREMENT_SOCKET || '/tmp/rivet-retirement.sock';
     const status =
       operationId && ['--housekeeping-acquire', '--housekeeping-release'].includes(seconds)
-        ? await requestBackendRetirement(socketPath, 'POST', { protocol: 1, action: seconds.slice(2), operationId, incarnation })
-        : operationId && seconds === '--withdraw-only'
         ? await requestBackendRetirement(socketPath, 'POST', {
             protocol: 1,
-            action: 'withdraw',
+            action: seconds.slice(2),
             operationId,
             incarnation,
           })
-        : operationId && seconds === '--begin-only'
-          ? await requestBackendRetirement(socketPath, 'POST', { protocol: 1, operationId, incarnation })
-          : operationId
-            ? await retireBackend({ socketPath, operationId, incarnation, timeoutMs: Number(seconds) * 1000 })
-            : await requestBackendRetirement(socketPath);
+        : operationId && seconds === '--withdraw-only'
+          ? await requestBackendRetirement(socketPath, 'POST', {
+              protocol: 1,
+              action: 'withdraw',
+              operationId,
+              incarnation,
+            })
+          : operationId && seconds === '--begin-only'
+            ? await requestBackendRetirement(socketPath, 'POST', { protocol: 1, operationId, incarnation })
+            : operationId
+              ? await retireBackend({ socketPath, operationId, incarnation, timeoutMs: Number(seconds) * 1000 })
+              : await requestBackendRetirement(socketPath);
     process.stdout.write(`${JSON.stringify(status)}\n`);
   } catch (error) {
     console.error(error.message);

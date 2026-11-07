@@ -249,7 +249,7 @@ export class HaReleaseProbes {
       });
       this.evaluations.push({ pod: pod.name, uid: pod.uid, runId, jobs });
     }
-    if (/-ha-execution(?:-next)?-[01]$/.test(pod.name)) {
+    if (/-ha-execution(?:-next)?-\d+$/.test(pod.name)) {
       const source = `const response=await (${submitHaBackgroundProbe.toString()})('http://127.0.0.1:'+process.env.PORT+'/workflows/${this.backgroundEndpoint}',process.env.RIVET_KEY);console.log(JSON.stringify(response));`;
       const response = JSON.parse(
         (await this.kube(['exec', pod.name, '-c', pod.container, '--', 'node', '--input-type=module', '-e', source]))
@@ -347,7 +347,7 @@ export class HaReleaseProbes {
       assert.ok(background.workflowId, 'background proof must be bound to its stored workflow');
       // Global traffic keeps creating newer recordings while this delayed
       // background run settles. Its absence from the latest global page does
-      // not mean it was lost. This owned fixture has only two retirement runs;
+      // not mean it was lost. This fixture has at most fifty retirement runs;
       // require a complete project-scoped page rather than relaxing durability.
       const page = await this.request(
         `/api/workflows/recordings/workflows/${encodeURIComponent(background.workflowId)}/runs?page=1&pageSize=100&status=all`,

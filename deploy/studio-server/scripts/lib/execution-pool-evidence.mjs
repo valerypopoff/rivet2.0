@@ -2,19 +2,20 @@ import assert from 'node:assert/strict';
 
 export function assertExecutionPoolEvidence(value) {
   assert.equal(value?.protocol, 1, 'Paired execution needs its own qualified transition');
+  const ownerCount = value.acceptedOwners?.length;
+  assert.ok(Number.isSafeInteger(ownerCount) && ownerCount >= 2 && ownerCount <= 50);
   assert.equal(value.parallelAcceptedWork, true);
   assert.equal(value.previousPoolRemoved, true);
-  assert.ok(Number.isSafeInteger(value.minimumReady) && value.minimumReady >= 2);
+  assert.ok(Number.isSafeInteger(value.minimumReady) && value.minimumReady >= ownerCount);
   assert.ok(Number.isSafeInteger(value.maxReplicas) && value.maxReplicas >= 4 && value.maxReplicas <= 100);
   assert.ok(
     Number.isSafeInteger(value.maximumPhysicalPods) &&
-      value.maximumPhysicalPods >= 4 &&
+      value.maximumPhysicalPods >= 2 * ownerCount &&
       value.maximumPhysicalPods <= value.maxReplicas,
   );
-  assert.equal(value.acceptedOwners?.length, 2);
-  assert.equal(new Set(value.acceptedOwners.map((owner) => owner.uid)).size, 2);
+  assert.equal(new Set(value.acceptedOwners.map((owner) => owner.uid)).size, ownerCount);
   for (const key of ['correlationId', 'recordingId'])
-    assert.equal(new Set(value.acceptedOwners.map((owner) => owner[key])).size, 2);
+    assert.equal(new Set(value.acceptedOwners.map((owner) => owner[key])).size, ownerCount);
   for (const owner of value.acceptedOwners)
     for (const key of ['uid', 'correlationId', 'recordingId']) assert.ok(typeof owner[key] === 'string' && owner[key]);
   return structuredClone(value);
@@ -30,14 +31,15 @@ export function compileExecutionPoolEvidence(report, operation) {
     state.plan.image,
     `${operation.candidate.images.api.repository}@${operation.candidate.images.api.digest}`,
   );
-  assert.equal(state.plan.previous.replicas, 2);
+  const ownerCount = state.plan.previous.replicas;
+  assert.ok(Number.isSafeInteger(ownerCount) && ownerCount >= 2);
   assert.ok(state.candidateUid && state.scaleIssued);
-  assert.equal(state.owners.length, 2);
-  assert.equal(accepted?.length, 2);
+  assert.equal(state.owners.length, ownerCount);
+  assert.equal(accepted?.length, ownerCount);
   assert.deepEqual(
     new Set(state.owners.map((owner) => owner.uid)),
     new Set(accepted.map((run) => run.uid)),
-    'Accepted work must belong to both recorded original owners',
+    'Accepted work must belong to all recorded original owners',
   );
   for (const owner of state.owners) {
     assert.ok(owner.withdrawIssued && owner.beginIssued && owner.probeDone);
