@@ -555,7 +555,6 @@ export function createExecutionAutoscalerIO({
         hpas.items.some((h) => h.spec?.scaleTargetRef?.name === workload)
       )
         throw new Error('Execution inventory/metrics unavailable or a competing HPA exists.');
-      const result = [];
       let poolCapacity;
       if (poolWorkloads.length) {
         const owners = await readConcurrently(
@@ -601,7 +600,7 @@ export function createExecutionAutoscalerIO({
         };
         pods.items = targetPods;
       }
-      // Sequential bounded exec avoids a burst of management requests at scale.
+      // Validate the whole inventory before starting even read-only Pod execs.
       for (const pod of pods.items) {
         const suffix = pod.metadata.name.slice(workload.length + 1);
         if (
@@ -612,62 +611,73 @@ export function createExecutionAutoscalerIO({
           )
         )
           throw new Error('Execution pod has a foreign controller.');
-        const ready = pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true;
-        const entry = {
-          name: pod.metadata.name,
-          uid: pod.metadata.uid,
-          ordinal: Number(suffix),
-          ready,
-          terminating: !!pod.metadata.deletionTimestamp,
-        };
-        if (
-          pod.status?.phase !== 'Running' ||
-          entry.terminating ||
-          (!demand && (!ready || entry.name !== replacement))
-        ) {
-          result.push(entry);
-          continue;
-        }
-        const status = await retirement(entry.name);
-        if (!demand) {
-          await owned({ ...entry, workloadUid: owner.metadata.uid });
-          result.push({ ...entry, ...status });
-          continue;
-        }
-        const text = await api.exec(`${ns}/pods/${enc(entry.name)}/exec`, executionSampleCommand(port));
-        const sample = metrics.items.find((m) => m.metadata.name === entry.name);
-        if (!sample) throw new PendingExecutionCpuSample('Execution CPU sample is not available yet.');
-        const cpu = sample?.containers?.find((c) => c.name === 'api')?.usage?.cpu;
-        const request = pod.spec.containers.find((c) => c.name === 'api')?.resources?.requests?.cpu;
-        const requestCpu = cpuQuantity(request);
-        const age = now() - Date.parse(sample?.timestamp);
-        result.push({
-          ...entry,
-          ...status,
-          active: gauge(text, 'rivet_published_execution_active_runs'),
-          limit: gauge(text, 'rivet_published_execution_admission_limit', 'mode="enforce"'),
-          cpuRatio: cpuQuantity(cpu) / requestCpu,
-          sampleFresh:
-            status.protocol === 1 &&
-            status.withdrawalProtocol === 1 &&
-            Number.isFinite(age) &&
-            age >= -5000 &&
-            age <= policy.metricsMaxAgeSeconds * 1000 &&
-            requestCpu > 0,
-          cpuSampleAt: Date.parse(sample?.timestamp),
-        });
-        // A metrics request must not hide pod replacement during exec.
-        const after = await owned({ ...entry, workloadUid: owner.metadata.uid });
-        result.at(-1).ready = after.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true;
-        if (Number.isFinite(age) && age > policy.metricsMaxAgeSeconds * 1000)
-          throw new PendingExecutionCpuSample('Execution CPU sample is stale; wait for a fresh scrape.');
       }
+      // Independent Pod reads are bounded to four. Every started read settles
+      // before a mutation, and each sample still rechecks its exact owner.
+      const samples = await readConcurrently(
+        pods.items.map((pod) => async () => {
+          const suffix = pod.metadata.name.slice(workload.length + 1);
+          const ready = pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true;
+          const entry = {
+            name: pod.metadata.name,
+            uid: pod.metadata.uid,
+            ordinal: Number(suffix),
+            ready,
+            terminating: !!pod.metadata.deletionTimestamp,
+          };
+          if (
+            pod.status?.phase !== 'Running' ||
+            entry.terminating ||
+            (!demand && (!ready || entry.name !== replacement))
+          ) {
+            return entry;
+          }
+          const status = await retirement(entry.name);
+          if (!demand) {
+            const after = await owned({ ...entry, workloadUid: owner.metadata.uid });
+            return {
+              ...entry,
+              ...status,
+              ready: after.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true,
+            };
+          }
+          const text = await api.exec(`${ns}/pods/${enc(entry.name)}/exec`, executionSampleCommand(port));
+          const sample = metrics.items.find((m) => m.metadata.name === entry.name);
+          if (!sample) throw new PendingExecutionCpuSample('Execution CPU sample is not available yet.');
+          const cpu = sample?.containers?.find((c) => c.name === 'api')?.usage?.cpu;
+          const request = pod.spec.containers.find((c) => c.name === 'api')?.resources?.requests?.cpu;
+          const requestCpu = cpuQuantity(request);
+          const age = now() - Date.parse(sample?.timestamp);
+          const observed = {
+            ...entry,
+            ...status,
+            active: gauge(text, 'rivet_published_execution_active_runs'),
+            limit: gauge(text, 'rivet_published_execution_admission_limit', 'mode="enforce"'),
+            cpuRatio: cpuQuantity(cpu) / requestCpu,
+            sampleFresh:
+              status.protocol === 1 &&
+              status.withdrawalProtocol === 1 &&
+              Number.isFinite(age) &&
+              age >= -5000 &&
+              age <= policy.metricsMaxAgeSeconds * 1000 &&
+              requestCpu > 0,
+            cpuSampleAt: Date.parse(sample?.timestamp),
+          };
+          // A metrics request must not hide pod replacement during exec.
+          const after = await owned({ ...entry, workloadUid: owner.metadata.uid });
+          observed.ready = after.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true;
+          if (entry.ready && !observed.ready) throw Error('Execution readiness changed during observation.');
+          if (Number.isFinite(age) && age > policy.metricsMaxAgeSeconds * 1000)
+            throw new PendingExecutionCpuSample('Execution CPU sample is stale; wait for a fresh scrape.');
+          return observed;
+        }),
+      );
       return {
         ...(poolCapacity ? { poolCapacity } : {}),
         uid: owner.metadata.uid,
         resourceVersion: owner.metadata.resourceVersion,
         replicas: owner.spec.replicas,
-        pods: result.map((pod) => ({
+        pods: samples.map((pod) => ({
           ...pod,
           sampleFresh: pod.sampleFresh && now() - pod.cpuSampleAt <= policy.metricsMaxAgeSeconds * 1000,
         })),

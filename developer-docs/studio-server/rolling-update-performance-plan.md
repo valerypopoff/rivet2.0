@@ -1,7 +1,76 @@
 # Faster ordinary staging and production updates
 
-Status: **retained/one-proxy rollout qualified through explicit cleanup recovery** (2026-11-06).
-The four larger optimizations below are implemented alongside the initial frontend
+Status: **November 7 production update succeeded; performance changes await cloud qualification and activation.**
+
+The measured staging job was 37m18s (run 42319190362, successful staging job);
+production was 41m05s (run 42360497738). Staging's upgrade report was 28m30s.
+Production HA was 24m27s, including only 10s of accepted-work waiting, 7m33s
+replacement readiness and 10m34s outside the old named timing spans. The database
+dump/restore check was 1m28s; another 5m31s preceded checkpoint completion,
+principally recovery object-metadata inventory. GitHub setup was 1m17s.
+The earlier target budget assumed enabled optimizations: both actual runs used
+serial workers, and production did not select `parallel-online` preparation.
+Retained reuse, native frontend overlap and `after-rollout` cutoff were active.
+
+### Next measured performance iteration
+
+Implemented, requiring source/image publication, matching reviewed private
+configuration and a new qualification before activation:
+
+- Prepare paired execution values in both staging and production, plus
+  `preparation: "parallel-online"`. The existing paired path overlaps candidates,
+  backend replacement and every original owner's 315-second accepted-work probe. Its capacity,
+  PVC and observed-transition certificate restrictions remain. No replica floor
+  is forcibly reduced to obtain eligibility.
+- Emit `ha-strategy.json` with the actual serial/parallel selection and reason.
+  The candidate pool matches the starting worker count, including three workers.
+  An absent transition qualification retains the certified serial path. A parallel
+  profile lacking room for both full pools stops during planning with the required
+  worker count, before workloads change; increase reviewed capacity first.
+- Focused paired staging with room for six workers starts from three workers.
+  Fresh installs request three; retained staging grows an idle two-worker pool
+  with a UID/resourceVersion/count-guarded patch before public observation.
+  Existing larger pools are preserved. The report must show at least three
+  starting workers. Production's two-worker minimum and autoscaler policy stay
+  unchanged; serial/full profiles and ceilings below six keep their prior setup.
+- Inventory recovery metadata through at most four disjoint prefix/page chains.
+  Partitions derive from actual reference names, including Unicode/non-hex keys;
+  large alphabets retain bounded root listing. Exact reference coverage, unique
+  current generations, hashes, sizes, fresh bucket protection and SQL restore
+  verification remain mandatory. Private inventory timings record pages/counts.
+- Bound concurrent execution status/metrics reads to four. Validate the entire
+  inventory before exec and recheck each UID/readiness afterward; guards also
+  reconfirm the complete inventory. Independent execution/proxy guards overlap,
+  settling every started read before any later mutation.
+- Select `longProbeCutoff: "after-routing"` to stop new synthetic long requests
+  after owner/frontend replacement and final routing checks, before settlement.
+  The original `after-rollout` ordering remains supported. Cutoff is joined once;
+  short observation and already accepted requests continue to final acceptance.
+- The backend preStop hook can omit its repeated sleep only after two matching
+  reads confirm an explicitly withdrawn, fully drained operation/incarnation.
+  Missing helpers, older protocols, partial/uncertain retirement and ordinary
+  shutdown retain the configured delay. Graceful SIGTERM and proxy protection
+  are unchanged. **Old Pods retain their old sleep during the first transition.**
+- Time capacity observations separately and report measured/unmeasured wall time
+  using the union of overlapping spans. Performance is diagnostic, not another
+  qualification deadline. Concurrent phase completions serialize writes to the
+  shared timing receipt; a failed write does not prevent later timing updates.
+
+Removal recovery also refreshes the replacement Pod's readiness after its process
+query. Losing readiness during inspection keeps recovery waiting rather than
+clearing the startup fence using an earlier ready observation. This path still
+avoids demand/CPU metrics while settling an already-issued removal.
+
+A steady-state 20–25 minute target is an estimate to verify, not a measured result.
+Savings overlap. Unqualified serial paths, schema changes, load and cold scheduling can
+exceed it. The private adapters/configuration stay excluded from this public repo.
+No cloud test, production change, rebuild or publication is performed by local
+validation. The November 6 history below describes earlier implementation and
+activation states; it is not the current deployment status.
+
+### Historical implementation and trial notes
+
+The four larger optimizations below were implemented alongside the initial frontend
 and worker overlap. The public source is included in the develop update; a separate
 private production adapter copy remains local and excluded from Git. The first
 retained staging trials and the separately authorized cleanup recovery are
@@ -247,25 +316,28 @@ only the active pool has replicas after settlement. The original selector stays
 immutable. The new slot has an additional pool selector; all Pods are checked
 against exact controller UIDs. Owned Pods are never orphaned for adoption.
 
-The fast procedure applies to a settled two-worker singleton installation with
-protected continuity, a controller, at least four approved total worker slots
-and no shared PVC worker volume. Larger pools or shared claims keep the serial
-procedure. No capacity or DB connection allowance is raised. The candidate pool
-starts during independent backend/native replacement and must have two ready,
-current serving workers before any old worker withdraws.
+The fast procedure applies to a settled singleton installation with protected
+continuity, a controller, room for twice the starting worker count and no shared
+PVC worker volume. A three-worker pool needs three temporary replacements, so
+six execution Pods coexist within the prepared seven-worker/DB allowance. Shared
+claims retain the serial procedure. Insufficient overlap capacity is reported
+before mutation rather than silently choosing sequential replacement. The
+operator must increase the reviewed worker and database allowance for a larger
+pool. The candidate pool starts during independent backend/native replacement
+and must have at least as many ready, current serving workers as the starting
+pool before any old worker withdraws.
 
 A versioned pool subrecord persists each original Pod UID/incarnation, command
-intent and candidate controller UID. Both old workers accept their own background
+intent and candidate controller UID. All old workers accept their own background
 probe, withdraw, complete routing propagation, then fence admission. Their work
-drains concurrently. Old capacity is scaled to zero only after both report
+drains concurrently. Old capacity is scaled to zero only after all report
 drained and their recording proofs pass. The updater joins actual Pod absence
 and candidate/public health before completion. Timeouts preserve old owners.
 Existing unfinished single-owner journals use their original recovery procedure.
 
-The serial fallback is exercised with an autoscaler-grown three-worker starting
-pool. The newly created zero-replica standby is bound to its acknowledged
-template UID before final restoration. It does not need to become serving
-capacity to count as an acknowledged controller.
+The parallel handoff is exercised with a three-worker starting pool in both slot
+directions. A serial-only qualification still uses the serial path; its empty
+standby is bound to the acknowledged template UID before final restoration.
 
 The autoscaler tracks the active Service annotation, reads both pools, permits
 only monotonic candidate growth during handoff and accounts for logical replicas
@@ -394,7 +466,7 @@ bundle, alongside the source contracts. It adds no new cloud test or release gat
 | Repeated cluster/bootstrap, access, dependency and cleanup setup failures                           | Reuse the cluster and opt into the retained application. Native provider contracts exercise rendering, admission, auth, persistence, phase receipts and cleanup; separate retained tests cover ownership, credential rotation and scoped deletion. Actual GCP admission, TLS, NEG health and current permissions still require provider observations.                                                                                    |
 | Provider defaults or normal intermediate state rejected as an invariant violation                   | Compare Kubernetes/Gateway semantics, retain safe provider-adjusted resource observations, and wait for legitimate bounded progress. A reproduced proxy race now refreshes CPU/readiness when an owned predecessor begins draining during inspection and two proxies remain ready. It does not authorize retirement from the stale sample. Lost floor, replaced identity, foreign owner, unsafe policy and excessive demand still block. |
 | Packaged controller missing a transitive module                                                     | Build and boot the actual detached autoscaler dependency bundle, including `release-operation-state.mjs`. Missing dependency and occupied-port negative cases fail the same startup check.                                                                                                                                                                                                                                               |
-| Autoscaler-filled `OnDelete` surge slot never becomes a candidate automatically                     | Complete rendered updater tests cover both pool directions and the three-worker serial fallback. Serial retirement reconciles existing old ordinals; parallel handoff requires its separately compiled behavior proof.                                                                                                                                                                                                                   |
+| Autoscaler-filled `OnDelete` surge slot never becomes a candidate automatically                     | Complete rendered updater tests cover both pool directions and the three-worker parallel handoff. Serial retirement reconciles existing old ordinals; parallel handoff requires its separately compiled behavior proof.                                                                                                                                                                                                                  |
 | Lease expiry, exec completion handoff, lost acknowledgement or late proof rejection                 | One journal writer, renewal independent of long-probe completion, immutable phase receipts and observation-only recovery. Compile qualification proofs before releasing retained staging; the real deployment-command tests cover interrupted operations and prohibit replay of uncertain writes.                                                                                                                                        |
 | Moving baseline, reservation policy or excessive synthetic checks obscured the deployment objective | Keep the installed immutable predecessor and exact successful build. The focused suite observes one actual update with approved capacity ranges; it adds no warmup, forced proxy restart, architecture disruption or second release. Preserve real availability, complete response bodies, accepted work and recording/data checks.                                                                                                      |
 | Production-only adapter, checkpoint and observation failures                                        | Bind/check the reviewed adapter bytes and encoded installation together. Local adapter/prerequisite contracts and real command recovery tests cover invocation and receipts; historical database/object recovery evidence remains private. Final application failure uses verification-only recovery, not another rollout. The new private adapter's authenticated production journeys remain untested until activation.                 |

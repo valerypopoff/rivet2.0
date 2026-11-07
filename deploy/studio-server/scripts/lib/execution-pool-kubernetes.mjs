@@ -48,7 +48,7 @@ export function createExecutionPoolKubernetes({
     assert.equal(controller.spec.updateStrategy.type, 'OnDelete');
     bindCandidate(controller.metadata.uid);
     const count = controller.spec.replicas;
-    assert.ok(Number.isSafeInteger(count) && count >= 2 && count <= plan.maxReplicas);
+    assert.ok(Number.isSafeInteger(count) && count >= plan.previous.replicas && count <= plan.maxReplicas);
     if (controller.status?.observedGeneration < controller.metadata.generation) return null;
     for (let index = 0; index < count; index++) {
       const pod = await observePod(`${plan.candidate.name}-${index}`);
@@ -111,8 +111,8 @@ export function createExecutionPoolKubernetes({
     assertCapacity,
     observe: observePod,
     status,
-    prepare: beforeRetirement,
-    prepareFence: afterRoutingWithdrawal,
+    prepare: (pod) => beforeRetirement(pod, { parallelPool: true }),
+    prepareFence: (pod) => afterRoutingWithdrawal(pod, { parallelPool: true }),
     withdraw,
     begin,
     waitForRoutingWithdrawal,

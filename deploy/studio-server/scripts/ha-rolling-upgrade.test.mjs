@@ -566,6 +566,28 @@ test('failed synthetic admission retains the withdrawn owner without fencing or 
   assert.ok(!f.operations.some((entry) => /^(begin|delete):/.test(entry)));
 });
 
+for (const frontendFails of [false, true])
+  test(`long admission cutoff follows final routing and precedes settlement: ${frontendFails}`, async () => {
+    const f = fixture(),
+      order = [];
+    f.options.waitForFrontendsReady = async () => {
+      order.push('frontends');
+      if (frontendFails) throw Error('Frontend health unconfirmed');
+    };
+    f.options.afterRoutingReady = async () => order.push('cutoff');
+    f.options.settle = async () => {
+      order.push('settlement');
+    };
+    const work = runHaRollingUpgrade(f.options);
+    if (frontendFails) {
+      await assert.rejects(work, /Frontend health/);
+      assert.deepEqual(order, ['frontends']);
+    } else {
+      await work;
+      assert.deepEqual(order, ['frontends', 'cutoff', 'settlement']);
+    }
+  });
+
 function fixture() {
   let journal,
     revision = 0,

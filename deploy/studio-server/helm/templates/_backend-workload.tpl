@@ -146,7 +146,7 @@ spec:
             periodSeconds: {{ .Values.lifecycle.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.lifecycle.probes.readiness.timeoutSeconds }}
             failureThreshold: {{ .Values.lifecycle.probes.readiness.failureThreshold }}
-          {{- include "rivet.pod.preStop" . | nindent 10 }}
+          {{- include "rivet.pod.backendPreStop" . | nindent 10 }}
           env:
 {{ include "rivet.env.apiWorkload" (dict "root" . "port" .Values.service.api.targetPort "profile" "control" "storageBackend" .Values.workflowStorage.backend "replicaTier" "none" "jobWorkerEnabled" "true") | nindent 12 }}
             - name: RIVET_RUNNER_SLOT_ID

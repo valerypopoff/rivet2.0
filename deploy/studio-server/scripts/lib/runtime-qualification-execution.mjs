@@ -11,6 +11,7 @@ import {
   HA_PROVIDER_OVERLAP_CHECKS,
   ordinaryRuntimeReplicaBounds,
   qualificationProxyMinimum,
+  qualificationExecutionBaseline,
 } from './ha-release-evidence.mjs';
 import { getStudioServerReleaseManifestDigest } from './studio-server-release-manifest.mjs';
 import { assertRequestContinuityProfile, requestContinuityProfile } from './request-continuity.mjs';
@@ -318,6 +319,11 @@ export function assertOrdinaryProviderReport(report, operation) {
           Number.isSafeInteger(observed[role]) && observed[role] >= min && observed[role] <= max,
           `${role} capacity is outside its approved bounds`,
         );
+      if (stage === 'initial')
+        assert.ok(
+          observed.execution >= qualificationExecutionBaseline(operation),
+          'The selected staging execution baseline was not exercised',
+        );
       assert.equal(
         report[`${stage}ApplicationPods`],
         Object.values(observed).reduce((a, b) => a + b, 0),
@@ -336,12 +342,16 @@ export function assertOrdinaryProviderReport(report, operation) {
         (operation.qualification?.tier === 'focused' && role === 'proxy' ? 1 : 2),
     );
   const work = report.outcomes.acceptedWork;
-  assert.equal(work.length, 2);
-  assert.equal(new Set(work.map((r) => nonempty(r.uid))).size, 2);
-  assert.equal(new Set(work.map((r) => nonempty(r.recordingId))).size, 2);
+  const acceptedOwners = report.outcomes.executionPool?.plan.previous.replicas ?? 2;
+  assert.ok(
+    Number.isSafeInteger(acceptedOwners) && acceptedOwners >= 2 && acceptedOwners <= operation.policy.maxReplicas,
+  );
+  assert.equal(work.length, acceptedOwners);
+  assert.equal(new Set(work.map((r) => nonempty(r.uid))).size, acceptedOwners);
+  assert.equal(new Set(work.map((r) => nonempty(r.recordingId))).size, acceptedOwners);
   for (const r of work) {
-    // Both probes use the same synthetic workflow. The second scoped page
-    // legitimately contains both runs; uniqueness belongs to correlationId.
+    // Probes share a synthetic workflow. Its scoped page can contain every
+    // owner's run; uniqueness belongs to correlationId.
     assert.ok(count(r.recordingLookup.totalRuns) >= 1 && r.recordingLookup.totalRuns <= work.length);
     assert.equal(r.recordingLookup.hasMore, false);
     assert.equal(nonempty(r.workflowId), r.recordingLookup.workflowId);

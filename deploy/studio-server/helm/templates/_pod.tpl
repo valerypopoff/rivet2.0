@@ -225,6 +225,18 @@ readinessProbe:
 {{- include "rivet.pod.preStopWithDelay" (dict "root" . "delay" .Values.lifecycle.preStopDelaySeconds) -}}
 {{- end -}}
 
+{{- define "rivet.pod.backendPreStop" -}}
+{{- if and .Values.ha.enabled (not .Values.workflowSchema.maintenanceValidation) -}}
+lifecycle:
+  preStop:
+    exec:
+      # Older images retain the conservative delay when the helper is absent.
+      command: ["/bin/sh", "-c", {{ printf "node /opt/rivet/prestop-backend.mjs %v || sleep %v" .Values.lifecycle.preStopDelaySeconds .Values.lifecycle.preStopDelaySeconds | quote }}]
+{{- else -}}
+{{- include "rivet.pod.preStop" . -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "rivet.pod.preStopWithDelay" -}}
 lifecycle:
   preStop:

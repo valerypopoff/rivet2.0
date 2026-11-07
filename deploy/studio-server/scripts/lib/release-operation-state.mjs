@@ -12,7 +12,10 @@ export function executionPoolSettled(record) {
       record.executionPool.phase === 'complete' &&
       record.executionPool.scaleIssued === true &&
       record.executionPool.candidateUid &&
-      record.executionPool.owners?.length === 2 &&
+      Number.isSafeInteger(record.executionPoolPlan.previous?.replicas) &&
+      record.executionPoolPlan.previous.replicas >= 2 &&
+      record.executionPool.owners?.length === record.executionPoolPlan.previous.replicas &&
+      new Set(record.executionPool.owners.map((owner) => owner.uid)).size === record.executionPool.owners.length &&
       record.executionPool.owners.every((owner) => owner.beginIssued && owner.withdrawIssued))
   );
 }

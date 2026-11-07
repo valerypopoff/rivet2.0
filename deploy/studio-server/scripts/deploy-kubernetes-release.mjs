@@ -1337,7 +1337,7 @@ async function main() {
           );
         return activation;
       },
-      run: async (safety) => {
+      run: async (safety, { afterRoutingReady } = {}) => {
         await safety.checkBaseline();
         if (localConfig && !haRollout && !cutover) {
           await prepareSingleMachine(localConfig, (args, extra = {}) =>
@@ -1442,6 +1442,7 @@ async function main() {
                 await upgrade(['--values', preservePath, '--set', 'workflowSchema.migrationJob.enabled=false']);
               },
               settle: controlTransition ? (options) => settle(renderedResources, options) : settle,
+              afterRoutingReady,
               verifyDeveloperReady: async (backendCandidate) => {
                 if (!deploymentPolicy || !workflowContext)
                   throw Error('Developer overlap requires an installation acceptance policy.');

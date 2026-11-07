@@ -67,6 +67,7 @@ test('routing withdrawal preserves admission until the owner confirms endpoint r
   f.owner.withdraw(id, incarnation);
   await tick();
   assert.equal(f.owner.snapshot().state, 'withdrawing');
+  assert.equal(f.owner.snapshot().routingWithdrawn, true);
   assert.equal(f.api.value.state, 'withdrawing');
   assert.equal(f.executor.value.state, 'serving');
   assert.deepEqual(f.events, []);
@@ -80,6 +81,7 @@ test('routing withdrawal preserves admission until the owner confirms endpoint r
   f.api.value.state = 'drained';
   f.wake();
   assert.equal((await f.owner.wait()).state, 'drained');
+  assert.equal(f.owner.snapshot().routingWithdrawn, true);
 });
 
 test('executor finishes before API retirement; long and paused work blocks replacement without a kill deadline', async () => {

@@ -24,6 +24,7 @@ import { inspectStagingPrerequisites } from './lib/reusable-staging-prerequisite
 import { stagingCloudReader } from './lib/reusable-staging-cloud.mjs';
 import { waitForHaTemplateReadiness } from './lib/ha-template-readiness.mjs';
 import { ReusableProviderGate } from './qualification/provider-gate.mjs';
+import { continuityFixtureProfile } from './fixtures/continuity-provider-facts.mjs';
 
 const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
 const evidence = { workflow: 'Build Images', runId: '123', runAttempt: 1 };
@@ -330,9 +331,18 @@ function providerOperation() {
     previous,
     candidate: make('b', previous),
     qualification: { tier: 'focused' },
+    executionPools: true,
+    requestContinuityProfile: continuityFixtureProfile,
     startedAt: new Date().toISOString(),
     installed: {
       qualificationValues: {
+        requestContinuity: {
+          enabled: true,
+          maxProtectedRequestSeconds: 300,
+          backendServiceDrainSeconds: 360,
+          propagationSeconds: 60,
+        },
+        lifecycle: { proxy: { preStopDelaySeconds: 420, terminationGracePeriodSeconds: 600 } },
         availability: {
           gkeGateway: true,
           gkeGatewayProfile: 'compact',
@@ -595,7 +605,12 @@ for (const fault of ['none', 'admission', 'lost-ack', 'interrupt'])
         wait,
         step: async (name, action) => {
           steps.push(name);
-          return action();
+          const started = Date.now();
+          try {
+            return await action();
+          } finally {
+            t.diagnostic(`${name}: ${Date.now() - started}ms`);
+          }
         },
       });
     await f.state.arm(actor);
@@ -607,6 +622,23 @@ for (const fault of ['none', 'admission', 'lost-ack', 'interrupt'])
       const preparing = withManagedGateSignal(cancellation.signal, () => phase('prepare'));
       if (fault === 'none') {
         await preparing;
+        const execution = [...f.objects.values()].find(
+          (resource) =>
+            resource.kind === 'StatefulSet' &&
+            resource.metadata.namespace === namespace &&
+            resource.metadata.labels?.['app.kubernetes.io/component'] === 'execution' &&
+            resource.spec.replicas > 0,
+        );
+        assert.equal(execution.spec.replicas, 3, 'Bootstrap must install the three-worker staging baseline');
+        // Retained staging can still have the two-worker idle floor. Exercise
+        // its preparation through the shipped method and native kubectl patch.
+        execution.spec.replicas = 2;
+        f.objects.delete(`/api/v1/namespaces/${namespace}/pods/${execution.metadata.name}-2`);
+        await withManagedGateSignal(cancellation.signal, () => gate.prepareExecutionBaseline());
+        assert.equal(
+          f.objects.get(`/apis/apps/v1/namespaces/${namespace}/statefulsets/${execution.metadata.name}`).spec.replicas,
+          3,
+        );
         // Exercise the shipped apply override and real multi-kind kubectl read.
         // A pending frontend must not hold the template/controller prerequisite.
         await withManagedGateSignal(cancellation.signal, async () => {

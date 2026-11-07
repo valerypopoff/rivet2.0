@@ -1251,19 +1251,26 @@ for (const profile of [
   'retained',
   'serial pools',
   'parallel pools',
+  'parallel grown pools',
   'single proxy',
   'one proxy against two-proxy production',
 ])
   test(`focused adoption publishes continuity evidence: ${profile}`, async () => {
     const retained = profile !== 'disposable';
     const serialPools = profile === 'serial pools';
-    const parallelPools = profile === 'parallel pools';
+    const parallelPools = profile.startsWith('parallel');
+    const poolOwners = profile === 'parallel grown pools' ? 3 : 2;
     const singleProxy = ['single proxy', 'one proxy against two-proxy production'].includes(profile);
     const f = fixture(),
       continuity = focusedContinuityProviderFacts();
     f.input.now = Date.parse(continuity.upgrade.startedAt) - 1000;
     f.input.installed.observedAt = new Date(f.input.now).toISOString();
     f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
+    if (poolOwners === 3) {
+      f.input.policy.maxReplicas = 7;
+      f.input.installed.policy = f.input.policy;
+      f.input.installed.policyDigest = autoscalerPolicyDigest(f.input.policy);
+    }
     f.input.approval.safetyDigest = '9'.repeat(64);
     f.input.approval.requestContinuityProfile = continuity.operation.requestContinuityProfile;
     if (profile === 'single proxy') f.input.installed.baseline.proxy = 1;
@@ -1339,6 +1346,20 @@ for (const profile of [
     const start = Date.parse(f.facts.upgrade.startedAt);
     if (parallelPools) {
       const work = f.facts.upgrade.outcomes.acceptedWork;
+      if (poolOwners === 3) {
+        f.facts.upgrade.policyDigest = f.operation.policyDigest;
+        work.push({
+          ...structuredClone(work[0]),
+          uid: 'third-owner',
+          recordingId: 'third-recording',
+          recordingLookup: { ...work[0].recordingLookup, matches: [{ id: 'third-recording', status: 'succeeded' }] },
+        });
+        for (const run of work) run.recordingLookup.totalRuns = poolOwners;
+        for (const stage of ['initial', 'final']) {
+          f.facts.upgrade.capacity[stage].execution = poolOwners;
+          f.facts.upgrade[`${stage}ApplicationPods`] = 8;
+        }
+      }
       work.forEach((run, index) =>
         Object.assign(run, {
           correlationId: 'pool-correlation-' + index,
@@ -1354,11 +1375,11 @@ for (const profile of [
         scaleIssued: true,
         plan: {
           maxReplicas: f.operation.policy.maxReplicas,
-          previous: { replicas: 2 },
+          previous: { replicas: poolOwners },
           image: `${f.operation.candidate.images.api.repository}@${f.operation.candidate.images.api.digest}`,
         },
         owners: work.map(({ uid }) => ({ uid, withdrawIssued: true, beginIssued: true, probeDone: true })),
-        capacity: { minimumReady: 2, maximumPhysicalPods: 4 },
+        capacity: { minimumReady: poolOwners, maximumPhysicalPods: 2 * poolOwners },
       };
     }
     for (const [i, key] of ['initialAutoscaler', 'autoscaler', 'finalAutoscaler'].entries())
@@ -1397,6 +1418,16 @@ for (const profile of [
     if (parallelPools) {
       assert.equal(result.control.evidence.executionPools, true);
       assert.equal(result.control.evidence.executionPool.parallelAcceptedWork, true);
+      assert.equal(result.control.evidence.executionPool.acceptedOwners.length, poolOwners);
+      if (poolOwners === 3) {
+        const insufficient = structuredClone(f.facts.upgrade);
+        insufficient.capacity.initial.execution = 2;
+        insufficient.initialApplicationPods = 7;
+        assert.throws(
+          () => assertOrdinaryProviderReport(insufficient, f.operation),
+          /selected staging execution baseline/,
+        );
+      }
     }
     const packet = prepareRuntimeQualification({
       candidate: f.operation.candidate,

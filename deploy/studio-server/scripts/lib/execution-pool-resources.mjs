@@ -98,35 +98,52 @@ export function prepareExecutionPoolResources({
   if (!recovering) assert.ok(!peer || peer.spec.replicas === 0, 'Inactive execution pool is not empty');
   const image = prior.spec.template.spec.containers.find((container) => container.name === 'api').image;
   const oldImage = previous.spec.template.spec.containers.find((container) => container.name === 'api').image;
+  const previousReplicas = saved?.previous.replicas ?? previous.spec.replicas;
+  assert.ok(Number.isSafeInteger(previousReplicas) && previousReplicas >= 2);
   const eligible =
     allowTransition &&
     !recovering &&
-    previous.spec.replicas === 2 &&
-    config.policy.maxReplicas >= 4 &&
     !previous.spec.template.spec.volumes?.some((volume) => volume.persistentVolumeClaim) &&
     (image !== oldImage || !slot(previous));
+  if (eligible)
+    assert.ok(
+      2 * previousReplicas <= config.policy.maxReplicas,
+      `Parallel replacement needs room for ${2 * previousReplicas} execution workers (${previousReplicas} old + ${previousReplicas} new); the approved ceiling is ${config.policy.maxReplicas}. Increase the worker/DB capacity before rollout. No owners were replaced.`,
+    );
   const plan =
     saved ??
     (eligible
       ? {
           protocol: 1,
-          previous: { name: previous.metadata.name, uid: previous.metadata.uid, replicas: 2 },
+          previous: { name: previous.metadata.name, uid: previous.metadata.uid, replicas: previousReplicas },
           candidate: { name: other.metadata.name },
           image,
           maxReplicas: config.policy.maxReplicas,
         }
       : null);
+  const strategyReason = plan
+    ? recovering
+      ? 'resume-qualified-pool'
+      : 'ready-candidates-before-retirement'
+    : recovering
+      ? 'resume-recorded-serial'
+      : !allowTransition
+        ? 'parallel-transition-not-qualified'
+        : previous.spec.template.spec.volumes?.some((volume) => volume.persistentVolumeClaim)
+          ? 'shared-worker-volume'
+          : 'candidate-image-unchanged';
   if (plan) {
     assert.equal(allowTransition, true, 'Parallel pool recovery requires its qualified transition');
     assert.equal(plan.protocol, 1);
     assert.equal(plan.previous.name, prior.metadata.name);
-    assert.equal(plan.previous.replicas, 2);
+    assert.equal(plan.previous.replicas, previousReplicas);
+    assert.ok(2 * previousReplicas <= plan.maxReplicas);
     assert.equal(plan.candidate.name, other.metadata.name);
     assert.equal(plan.previous.uid, previous.metadata.uid);
     assert.equal(plan.image, image);
     assert.equal(plan.maxReplicas, config.policy.maxReplicas);
   }
   const active = plan ? other : prior;
-  const selected = selectPool(resources, active.metadata.name, Math.max(2, previous.spec.replicas), plan ? 2 : 0);
-  return { plan, previous, prior, other, peer, ...selected };
+  const selected = selectPool(resources, active.metadata.name, previousReplicas, plan ? previousReplicas : 0);
+  return { plan, strategyReason, previous, prior, other, peer, ...selected };
 }

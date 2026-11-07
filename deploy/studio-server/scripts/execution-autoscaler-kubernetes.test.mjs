@@ -91,6 +91,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
     controlPlaneMode: 'singleton',
   });
   assert.ok(pair.plan);
+  assert.equal(pair.strategyReason, 'ready-candidates-before-retirement');
   assert.equal(pair.slot, 'b');
   assert.equal(pair.config.workload, pair.other.metadata.name);
   const old = previous.find((resource) => resource.metadata.labels['app.kubernetes.io/component'] === 'execution');
@@ -160,6 +161,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
       ...protectedValues,
       'ha.executionPools.enabled=true',
       'ha.executionPools.active=b',
+      'replicaCount.execution=3',
       'images.api.digest=sha256:' + 'b'.repeat(64),
     ),
     candidate: render(
@@ -178,6 +180,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
       ),
   });
   assert.equal(back.result.phase, 'complete');
+  assert.equal(back.result.executionPool.owners.length, 3);
   assert.equal(back.guards.at(-1).ha.executionPools.active, 'a');
   const expected = render(...protectedValues, 'ha.executionPools.enabled=true');
   const settled = render(...protectedValues, 'ha.executionPools.enabled=true', 'ha.executionPools.active=b');
@@ -188,19 +191,31 @@ test('native Helm paired pools preserve the old selector and declare exact read/
     (resource) => resource.kind === 'StatefulSet' && resource.metadata.labels['rivet.dev/execution-pool'] === 'a',
   ).spec.replicas = 2;
   assert.throws(() => alignSettledExecutionPoolResources(expected, invalid), /one active/);
-  const oversized = render(...protectedValues, 'ha.executionPools.enabled=true', 'replicaCount.execution=3');
+  const oversized = render(
+    ...protectedValues,
+    'ha.executionPools.enabled=true',
+    'replicaCount.execution=3',
+    'images.api.digest=sha256:' + 'a'.repeat(64),
+  );
   oversized
     .filter((resource) => resource.kind === 'StatefulSet')
     .forEach((resource) => {
       resource.metadata.uid = 'uid-' + resource.metadata.name;
     });
-  const fallback = prepareExecutionPoolResources({
-    resources: render(...protectedValues, 'ha.executionPools.enabled=true'),
+  const grown = prepareExecutionPoolResources({
+    resources: render(
+      ...protectedValues,
+      'ha.executionPools.enabled=true',
+      'images.api.digest=sha256:' + 'b'.repeat(64),
+    ),
     inventory: oversized.filter((resource) => resource.kind === 'StatefulSet'),
     controlPlaneMode: 'singleton',
   });
-  assert.equal(fallback.plan, null, 'Larger live pools retain the existing safe serial procedure');
-  const serial = await exerciseExecutionPoolRollout({
+  assert.equal(grown.plan.previous.replicas, 3);
+  assert.equal(grown.active.spec.replicas, 3);
+  assert.equal(grown.prior.spec.replicas, 3);
+  assert.equal(grown.strategyReason, 'ready-candidates-before-retirement');
+  const parallel = await exerciseExecutionPoolRollout({
     previous: render(...protectedValues, 'replicaCount.execution=3', 'images.api.digest=sha256:' + 'a'.repeat(64)),
     candidate: render(
       ...protectedValues,
@@ -217,9 +232,32 @@ test('native Helm paired pools preserve the old selector and declare exact read/
         'replicaCount.execution=' + guards.replicaCount.execution,
       ),
   });
-  assert.equal(serial.result.phase, 'complete');
-  assert.equal(serial.result.executionPool, undefined);
-  assert.equal(serial.result.executionPools, true);
+  assert.equal(parallel.result.phase, 'complete');
+  assert.equal(parallel.result.executionPool.owners.length, 3);
+  assert.equal(parallel.result.executionPools, true);
+  assert.equal(parallel.guards[0].ha.executionPools.retiringReplicas, 3);
+  assert.equal(parallel.guards[0].replicaCount.execution, 3);
+  assert.equal(parallel.guards.at(-1).ha.executionPools.retiringReplicas, 0);
+  assert.ok(!parallel.mutations.some((mutation) => mutation.startsWith('recreate:') && mutation.includes('execution')));
+  const full = structuredClone(oversized);
+  full.find(
+    (resource) =>
+      resource.metadata.labels?.['app.kubernetes.io/component'] === 'execution' && resource.spec.replicas > 0,
+  ).spec.replicas = 4;
+  assert.throws(
+    () =>
+      prepareExecutionPoolResources({
+        resources: render(
+          ...protectedValues,
+          'ha.executionPools.enabled=true',
+          'autoscaling.execution.maxReplicas=7',
+          'images.api.digest=sha256:' + 'b'.repeat(64),
+        ),
+        inventory: full.filter((resource) => resource.kind === 'StatefulSet'),
+        controlPlaneMode: 'singleton',
+      }),
+    /needs room for 8 execution workers/,
+  );
   const certifiedSerial = await exerciseExecutionPoolRollout({
     previous: oldResources,
     candidate: render(
@@ -468,7 +506,12 @@ test('compact HA maintenance validation preserves workload and storage identitie
       }
     }
     for (const container of before.spec.template.spec.containers)
-      assert.equal(container.lifecycle.preStop.exec.command.at(-1), 'sleep 120');
+      assert.equal(
+        container.lifecycle.preStop.exec.command.at(-1),
+        ['backend', 'execution'].includes(component)
+          ? 'node /opt/rivet/prestop-backend.mjs 120 || sleep 120'
+          : 'sleep 120',
+      );
   }
   assert.throws(() => render('replicaCount.web=0'), /minimum|singleton control requires/);
   assert.throws(() => render(...maintenance, 'replicaCount.web=1'), /maintenance validation requires/);
@@ -1467,3 +1510,41 @@ test(
     await assert.rejects(api.json('GET', '/kube/hang'), /deadline/);
   },
 );
+
+for (const fail of [false, true])
+  test(`snapshot overlaps independent Pod reads and joins failures without mutation: ${fail}`, async (t) => {
+    const f = await clusterFixture(t);
+    const exec = f.transport.exec.bind(f.transport);
+    let active = 0,
+      peak = 0;
+    f.transport.exec = async (...args) => {
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        await new Promise(setImmediate);
+        if (fail && args[0].includes('-0/exec')) throw Error('Injected observation failure');
+        return await exec(...args);
+      } finally {
+        active--;
+      }
+    };
+    if (fail) await assert.rejects(f.io.snapshot(), /Injected observation failure/);
+    else assert.equal((await f.io.snapshot()).pods.length, 3);
+    assert.equal(peak, 3);
+    assert.equal(active, 0, 'All started observations must settle before the caller can mutate');
+    assert.ok(f.logs.every((entry) => !['PATCH', 'POST', 'DELETE', 'PUT'].includes(entry[0])));
+  });
+
+test('removal recovery does not reuse readiness from before the replacement process query', async (t) => {
+  const f = await clusterFixture(t);
+  const replacement = [...f.pods.values()][0];
+  const exec = f.transport.exec.bind(f.transport);
+  f.transport.exec = async (...args) => {
+    const result = await exec(...args);
+    if (args[0].includes(`/${replacement.metadata.name}/exec`)) replacement.status.conditions[0].status = 'False';
+    return result;
+  };
+  const snapshot = await f.io.snapshot({ demand: false, replacement: replacement.metadata.name });
+  assert.equal(snapshot.pods.find((pod) => pod.name === replacement.metadata.name).ready, false);
+  assert.ok(f.logs.every((entry) => !['PATCH', 'POST', 'DELETE', 'PUT'].includes(entry[0])));
+});
