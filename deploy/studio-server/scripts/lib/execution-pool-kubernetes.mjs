@@ -3,6 +3,7 @@ import { createExecutionAutoscalerIO, PendingExecutionCpuSample } from './execut
 import { autoscalerPolicy, executionPoolDemand } from './execution-autoscaler.mjs';
 import { waitForHaHeadroom } from './ha-rollout-headroom.mjs';
 import { runExecutionPoolTransition } from './execution-pool-transition.mjs';
+import { createLegacyExecutionHttpHandoff } from './legacy-execution-http-handoff.mjs';
 
 export function createExecutionPoolKubernetes({
   plan,
@@ -23,6 +24,9 @@ export function createExecutionPoolKubernetes({
   isCurrent,
   verifyProxy,
   artifact,
+  service,
+  candidateTemplate,
+  routingWithdrawalClock,
 }) {
   const policy = autoscalerPolicy(config.policy),
     ns = encodeURIComponent(namespace);
@@ -96,6 +100,18 @@ export function createExecutionPoolKubernetes({
       { timeoutMs },
     );
   };
+  const httpHandoff = createLegacyExecutionHttpHandoff({
+    kube,
+    release,
+    namespace,
+    plan,
+    service,
+    candidateTemplate,
+    observePod,
+    timeoutMs,
+    clock: routingWithdrawalClock,
+    assertCapacity: () => assertCapacity(activeOperation.record.executionPool),
+  });
   const verify = async (state) => {
     const previous = await read(plan.previous.name);
     assert.equal(previous.metadata.uid, plan.previous.uid);
@@ -103,6 +119,7 @@ export function createExecutionPoolKubernetes({
     for (const owner of state.owners) assert.equal(await observePod(owner.name), null);
     const ready = await candidate();
     assert.ok(ready && ready.uid === state.candidateUid, 'Candidate execution pool is not settled');
+    await httpHandoff.finish(activeOperation);
     await verifyProxy(activeOperation);
     return ready;
   };
@@ -112,6 +129,8 @@ export function createExecutionPoolKubernetes({
     observe: observePod,
     status,
     prepare: (pod) => beforeRetirement(pod, { parallelPool: true }),
+    prepareHttpHandoff: httpHandoff.prepare,
+    beforeHttpWithdrawal: httpHandoff.beforeWithdraw,
     prepareFence: (pod) => afterRoutingWithdrawal(pod, { parallelPool: true }),
     withdraw,
     begin,

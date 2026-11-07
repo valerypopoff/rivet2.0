@@ -1,6 +1,7 @@
 import { runHaRollingUpgrade, assertHaRetirement } from './ha-rolling-upgrade.mjs';
 import { prepareExecutionPoolResources } from './execution-pool-resources.mjs';
 import { createExecutionPoolKubernetes } from './execution-pool-kubernetes.mjs';
+import { recoverLegacyHttpService } from './legacy-execution-http-handoff.mjs';
 import { handoverHousekeeping } from './housekeeping-handover.mjs';
 import { inspectBackendOverlap } from './backend-overlap-preflight.mjs';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
@@ -390,7 +391,7 @@ export async function runHaKubernetesRollout({
       : Promise.resolve();
   for (const current of services) {
     const candidate = resources.find((r) => r.kind === 'Service' && r.metadata.name === current.metadata.name);
-    if (!candidate || !hasSameHaServiceRouting(current, candidate))
+    if (!candidate || !hasSameHaServiceRouting(recoverLegacyHttpService(current, candidate, initialJournal), candidate))
       throw new Error('HA Service routing changed. Use a maintenance cutover; no templates were applied.');
   }
   const paired = prepareExecutionPoolResources({
@@ -646,6 +647,9 @@ export async function runHaKubernetesRollout({
         namespace,
         timeoutMs,
         artifact,
+        service: resources.find((r) => r.kind === 'Service' && r.metadata.name === config.service),
+        candidateTemplate: paired.other.spec.template,
+        routingWithdrawalClock,
         observePod,
         status: async (pod) => assertHaRetirement(await exec(pod)),
         beforeRetirement,

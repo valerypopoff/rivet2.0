@@ -103,6 +103,7 @@ export async function runExecutionPoolTransition({
         await editOwner(owner.uid, { probeDone: true });
       }
     }
+    await io.prepareHttpHandoff?.(operation);
     await save({ phase: 'withdrawing' });
   }
   if (operation.record.executionPool.phase === 'withdrawing') {
@@ -110,6 +111,7 @@ export async function runExecutionPoolTransition({
       const { pod } = await ownerStatus(owner);
       if (owner.withdrawIssued) continue;
       await io.assertCapacity(operation.record.executionPool);
+      await io.beforeHttpWithdrawal?.(operation);
       await editOwner(owner.uid, { withdrawIssued: true });
       operation.assertLease();
       await io.withdraw(pod, owner.operationId, owner.incarnation);

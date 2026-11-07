@@ -24,7 +24,13 @@ function difference(actual, expected, field = '') {
 
 /** Real rendered resources, deterministic local Kubernetes/runtime responses.
  * No cloud qualification or application request-duration claim is made here. */
-export async function exerciseExecutionPoolRollout({ previous, candidate, renderFinal, allowExecutionPoolTransition }) {
+export async function exerciseExecutionPoolRollout({
+  previous,
+  candidate,
+  renderFinal,
+  allowExecutionPoolTransition,
+  bufferedResponseSafe = true,
+}) {
   const objects = new Map(),
     participants = new Map(),
     mutations = [],
@@ -169,12 +175,32 @@ export async function exerciseExecutionPoolRollout({ previous, candidate, render
         replicaset: 'replicaset',
       };
       const kinds = args[1].split(',').map((name) => aliases[name] ?? name);
-      if (kinds.includes('endpointslice')) return response({ items: [] });
+      if (kinds.includes('endpointslice'))
+        return response({
+          items: select(['service']).map((service) => ({
+            metadata: { labels: { 'kubernetes.io/service-name': service.metadata.name } },
+            endpoints: select(['pod'])
+              .filter((pod) =>
+                Object.entries(service.spec.selector ?? {}).every(([key, value]) => pod.metadata.labels[key] === value),
+              )
+              .map((pod) => ({
+                conditions: { ready: pod.status.conditions[0].status === 'True' },
+                targetRef: { kind: 'Pod', namespace: 'default', name: pod.metadata.name, uid: pod.metadata.uid },
+              })),
+          })),
+        });
       if (args[2] && !args[2].startsWith('-')) {
         const object = objects.get(key(kinds[0], args[2]));
         return object ? response(object) : { stdout: '' };
       }
-      return response({ items: select(kinds) });
+      const items = select(kinds);
+      return response({
+        items: args.some((arg) => arg.includes('component in (proxy,proxy-bridge)'))
+          ? items.filter((pod) =>
+              ['proxy', 'proxy-bridge'].includes(pod.metadata.labels['app.kubernetes.io/component']),
+            )
+          : items,
+      });
     }
     if (['create', 'replace'].includes(args[0])) {
       const value = JSON.parse(options.input),
@@ -185,6 +211,16 @@ export async function exerciseExecutionPoolRollout({ previous, candidate, render
     if (args[0] === 'exec') {
       const pod = objects.get(key('Pod', args[1])),
         status = participants.get(pod.metadata.uid);
+      if (args.at(-1)?.includes('retirement-http-connections.js'))
+        return response({ protocol: 1, bufferedResponseSafe });
+      if (args.includes('/tmp/nginx/conf.d/default.conf'))
+        return {
+          stdout: `upstream rivet_execution { keepalive 0; server ${
+            select(['service']).find(
+              (service) => service.metadata.labels['app.kubernetes.io/component'] === 'execution',
+            ).metadata.name
+          }.default.svc.cluster.local:80; }`,
+        };
       if (!args.includes('/opt/rivet/retire-backend.mjs'))
         return {
           stdout:
@@ -213,6 +249,17 @@ export async function exerciseExecutionPoolRollout({ previous, candidate, render
       return response({});
     }
     if (args[0] === 'patch') {
+      if (args[1] === 'service') {
+        const service = objects.get(key('Service', args[2])),
+          patch = JSON.parse(args.at(-1));
+        assert.equal(patch[0].value, service.metadata.uid);
+        assert.equal(patch[1].value, service.metadata.resourceVersion);
+        assert.deepEqual(patch[2].value, service.spec.selector);
+        service.spec.selector = patch[3].value;
+        store(service);
+        mutations.push('service-handoff:' + (service.spec.selector['rivet.dev/execution-pool'] ?? 'restore'));
+        return response(service);
+      }
       const owner = objects.get(key('StatefulSet', args[2])),
         patch = JSON.parse(args.at(-1));
       assert.equal(patch[0].value, owner.metadata.uid);

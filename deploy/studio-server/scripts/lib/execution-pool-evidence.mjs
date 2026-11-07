@@ -34,6 +34,13 @@ export function compileExecutionPoolEvidence(report, operation) {
   const ownerCount = state.plan.previous.replicas;
   assert.ok(Number.isSafeInteger(ownerCount) && ownerCount >= 2);
   assert.ok(state.candidateUid && state.scaleIssued);
+  if (state.legacyHttp) {
+    assert.equal(state.legacyHttp.protocol, 1);
+    assert.equal(typeof state.legacyHttp.required, 'boolean');
+    if (state.legacyHttp.required)
+      for (const flag of ['routeIssued', 'settled', 'restoreIssued'])
+        assert.equal(state.legacyHttp[flag], true, 'Legacy HTTP handoff is incomplete');
+  }
   assert.equal(state.owners.length, ownerCount);
   assert.equal(accepted?.length, ownerCount);
   assert.deepEqual(

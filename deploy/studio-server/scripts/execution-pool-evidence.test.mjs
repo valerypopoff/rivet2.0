@@ -91,6 +91,20 @@ test('a duplicated recorded owner cannot borrow the other job receipt to qualify
   assert.throws(() => compileExecutionPoolEvidence(f.report, f.operation), /all recorded original owners/);
 });
 
+test('a legacy handoff cannot qualify before both routing and restoration are confirmed', () => {
+  const complete = { protocol: 1, required: true, routeIssued: true, settled: true, restoreIssued: true };
+  for (const flag of ['routeIssued', 'settled', 'restoreIssued']) {
+    const f = fixture();
+    f.report.outcomes.executionPool.legacyHttp = { ...complete, [flag]: false };
+    assert.throws(() => compileExecutionPoolEvidence(f.report, f.operation), /Legacy HTTP handoff is incomplete/);
+  }
+  for (const legacyHttp of [complete, { protocol: 1, required: false }]) {
+    const f = fixture();
+    f.report.outcomes.executionPool.legacyHttp = legacyHttp;
+    compileExecutionPoolEvidence(f.report, f.operation);
+  }
+});
+
 for (const count of [3, 4, 7])
   test(`evidence covers every original owner in a ${count}-worker parallel handoff`, () => {
     const f = fixture(count);

@@ -20,11 +20,14 @@ export async function waitForHaRoutingWithdrawal({
   pod,
   publicServices,
   timeoutMs,
+  protectedResponseMs = 0,
+  routingReady = () => true,
   clock = { now: () => performance.now(), wait: () => new Promise((resolve) => setTimeout(resolve, 1000)) },
 }) {
   if (
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
+    ![0, 300_000].includes(protectedResponseMs) ||
     !pod?.uid ||
     !(publicServices instanceof Set) ||
     !publicServices.size
@@ -51,16 +54,16 @@ export async function waitForHaRoutingWithdrawal({
       await clock.wait();
       continue;
     }
-    const routed = hasHaPublicEndpoint(slices, publicServices, pod.uid);
+    const routed = hasHaPublicEndpoint(slices, publicServices, pod.uid) || !(await routingReady(slices));
     const now = clock.now();
     if (routed) absentSince = null;
     else {
       absentSince ??= now;
       if (!propagationBudgetAdded) {
-        deadline += HA_ROUTING_PROPAGATION_MS;
+        deadline += HA_ROUTING_PROPAGATION_MS + protectedResponseMs;
         propagationBudgetAdded = true;
       }
-      if (now - absentSince >= HA_ROUTING_PROPAGATION_MS && now < deadline) return;
+      if (now - absentSince >= HA_ROUTING_PROPAGATION_MS + protectedResponseMs && now < deadline) return;
     }
     if (now >= deadline)
       throw Error('Timed out waiting for endpoint withdrawal propagation; admission was not fenced.');

@@ -828,6 +828,20 @@ that release. Parallel handoff requires its separately observed transition proof
 legacy receipts without the layout claim cannot enable the new topology. Report
 validation compiles that proof once, before retained cleanup.
 
+The paired-pool adapter also handles predecessors predating the buffered HTTP
+response fix. It probes the **running** images, temporarily selects only candidate
+execution Pods, and observes propagation plus the supported 300-second response
+lifetime before issuing legacy withdrawal. Running proxy configuration must
+disable execution-upstream pooling; pooled frontend clients remain tested.
+Accepted work and public response/recording assertions remain unchanged. The
+owned journal records the temporary selector and guarded restoration after the
+old pool disappears; an incomplete legacy handoff cannot compile pool evidence.
+Fixed predecessor images skip this one-time wait. See
+[deployment operations](deployment-operations.md) for recovery and local proofs.
+Changing this adapter is a tooling-only repair and does not require rebuilding
+the already verified application images, but local proofs alone do not qualify
+the new tooling on GKE.
+
 ### Proxy capacity in ordinary qualification
 
 The compact chart defaults to one proxy, with an HPA minimum of one and maximum
