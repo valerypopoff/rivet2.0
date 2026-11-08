@@ -281,6 +281,12 @@ local image download. Fresh live readiness and a new operation-specific allowanc
 remain separate requirements before any create. No provider result is implied
 by this preparation.
 
+The offline CLI regression reads only its own temporary manifests and frozen
+input fixture. It declares the repository's `test-style: fixture-read` annotation;
+validate this with `node scripts/checks/check-test-style.mjs` as well as the
+separate Studio Server suite-style guard. No source-reading allowlist entry is
+needed for these generated-file assertions.
+
 ## Retained-reference provider verification passed
 
 The separately approved retained-reference check completed once in 9m55s,

@@ -3,6 +3,7 @@ import test from 'node:test';
 import http from 'node:http';
 import https from 'node:https';
 import { once } from 'node:events';
+// test-style: fixture-read: Read only this test's generated manifests and frozen-input fixture, not implementation source.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
