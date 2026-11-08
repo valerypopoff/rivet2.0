@@ -49,7 +49,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const mergeRuntimeControlGuards = (values, guards) => ({
   ...values,
   ...guards,
-  ha: { ...values.ha, ...guards.ha },
+  ha: {
+    ...values.ha,
+    ...guards.ha,
+    ...(guards.ha?.executionPools
+      ? { executionPools: { ...values.ha?.executionPools, ...guards.ha.executionPools } }
+      : {}),
+  },
   replicaCount: { ...values.replicaCount, ...guards.replicaCount },
   workflowSchema: { ...values.workflowSchema, ...guards.workflowSchema },
   ...(guards.autoscaling

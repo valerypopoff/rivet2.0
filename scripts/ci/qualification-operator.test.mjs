@@ -186,6 +186,19 @@ test('blocked preflight performs no mutation', async () => {
   await assert.rejects(runOperator(f), /preflight/i);
   assert.equal(f.writes.length, 0);
 });
+
+for (const embedded of [true, false])
+  test(`dispatch selects ${embedded ? 'embedded' : 'separate'} tooling without changing the approved build`, async () => {
+    const f = fixture();
+    if (embedded) f.scope.toolingRunId = f.scope.applicationBuildRunId;
+    await runOperator(f);
+    const dispatch = f.writes.find((write) => write.method === 'POST');
+    assert.equal(dispatch.body.inputs.build_run_id, String(f.scope.applicationBuildRunId));
+    assert.equal(dispatch.body.inputs.tooling_run_id, embedded ? '' : String(f.scope.toolingRunId));
+    assert.deepEqual(dispatch.body.inputs, f.records.get('OPERATOR-INTENT.private.json').inputs);
+    assert.equal(dispatch.body.inputs.deploy_production, 'false');
+  });
+
 test('partial enable cannot dispatch or replay activation', async () => {
   const f = fixture({ partialEnable: true });
   await assert.rejects(runOperator(f), /Uncertain/);
