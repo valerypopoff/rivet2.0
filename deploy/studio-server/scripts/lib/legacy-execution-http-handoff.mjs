@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
-import { waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
+import { performance } from 'node:perf_hooks';
+import { HA_ROUTING_PROPAGATION_MS, waitForHaRoutingWithdrawal } from './ha-routing-withdrawal.mjs';
 
 // This module shipped with the buffered-response fix. Probe the immutable
 // running image, not the replacement template or the supervisor protocol (which
@@ -88,6 +89,64 @@ export function createLegacyExecutionHttpHandoff({
     assert.equal(typeof state.required, 'boolean');
   };
   const read = async () => JSON.parse((await kube(['get', 'service', service.metadata.name, '-o', 'json'])).stdout);
+  const connectionServiceName = service.metadata.name + '-connections';
+  const referenceClock = clock ?? {
+    now: () => performance.now(),
+    wait: () => new Promise((resolve) => setTimeout(resolve, 1000)),
+  };
+  const readConnectionService = async (state) => {
+    const current = JSON.parse((await kube(['get', 'service', connectionServiceName, '-o', 'json'])).stdout);
+    assert.equal(current.metadata.name, connectionServiceName);
+    assert.ok(current.metadata.uid && !current.metadata.deletionTimestamp, 'Execution connection Service is missing');
+    if (state.connectionServiceUid)
+      assert.equal(current.metadata.uid, state.connectionServiceUid, 'Execution connection Service identity changed');
+    assert.equal(current.metadata.labels?.['app.kubernetes.io/instance'], release);
+    assert.equal(current.spec.type ?? 'ClusterIP', 'ClusterIP');
+    assert.ok(current.spec.clusterIP && current.spec.clusterIP !== 'None', 'Connection retention needs a ClusterIP');
+    assert.equal(current.spec.publishNotReadyAddresses, true, 'Retain backends after readiness withdrawal');
+    const selector = { ...state.original };
+    delete selector['rivet.dev/execution-pool'];
+    assert.deepEqual(current.spec.selector, selector, 'Connection Service must retain both execution pools');
+    const ports = (values) =>
+      values.map(({ name, port, targetPort = port, protocol = 'TCP' }) => ({ name, port, targetPort, protocol }));
+    assert.deepEqual(ports(current.spec.ports), ports(state.ports), 'Connection Service backend port changed');
+    return current;
+  };
+  const referencesPresent = (slices, owners) =>
+    owners.every((owner) =>
+      slices.some(
+        (slice) =>
+          slice.metadata?.labels?.['kubernetes.io/service-name'] === connectionServiceName &&
+          slice.endpoints?.some(
+            (endpoint) =>
+              endpoint.conditions?.ready === true &&
+              endpoint.targetRef?.kind === 'Pod' &&
+              endpoint.targetRef.namespace === namespace &&
+              endpoint.targetRef.name === owner.name &&
+              endpoint.targetRef.uid === owner.uid,
+          ),
+      ),
+    );
+  const confirmConnectionReferences = async (operation, state) => {
+    // Establish the extra reference BEFORE removing the public one. The later
+    // response barrier cannot repair a backend mapping already deleted by Cilium.
+    const deadline = referenceClock.now() + timeoutMs + HA_ROUTING_PROPAGATION_MS;
+    let presentSince;
+    for (;;) {
+      operation.assertLease();
+      assert.ok(referenceClock.now() < deadline, 'Execution connection references did not converge; route unchanged');
+      await readConnectionService(state);
+      for (const owner of operation.record.executionPool.owners)
+        assert.equal((await observePod(owner.name))?.uid, owner.uid);
+      const slices = JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items;
+      assert.ok(referenceClock.now() < deadline, 'Execution connection reference observation exceeded its deadline');
+      if (referencesPresent(slices, operation.record.executionPool.owners)) {
+        presentSince ??= referenceClock.now();
+        if (referenceClock.now() - presentSince >= HA_ROUTING_PROPAGATION_MS) return;
+      } else presentSince = undefined;
+      await referenceClock.wait();
+    }
+  };
   const save = (operation, state) => {
     operation.assertLease();
     return operation.checkpoint({ executionPool: { ...operation.record.executionPool, legacyHttp: state } });
@@ -205,6 +264,7 @@ export function createLegacyExecutionHttpHandoff({
           selected,
           ports: current.spec.ports,
         };
+        state.connectionServiceUid = (await readConnectionService(state)).metadata.uid;
         await save(operation, state);
       }
       assertState(state);
@@ -213,11 +273,17 @@ export function createLegacyExecutionHttpHandoff({
       assert.deepEqual(state.original, service.spec.selector);
       await assertCapacity();
       await verifyProxies(operation);
+      assert.ok(state.connectionServiceUid, 'Legacy handoff lacks its protected backend reference; inspect recovery');
       if (!state.routeIssued) {
-        const current = await ownedService(state, state.original);
+        await ownedService(state, state.original);
+        await confirmConnectionReferences(operation, state);
+        const confirmed = await ownedService(state, state.original);
         state = { ...state, routeIssued: true };
         await save(operation, state);
-        await patch(operation, current, state.selected);
+        await patch(operation, confirmed, state.selected);
+      } else {
+        await ownedService(state, state.selected);
+        await confirmConnectionReferences(operation, state);
       }
       // A lost patch acknowledgement is observed, never blindly replayed.
       await ownedService(state, state.selected);
@@ -240,7 +306,10 @@ export function createLegacyExecutionHttpHandoff({
           operation.assertLease();
           await ownedService(state, state.selected);
           for (const owner of owners) assert.equal((await observePod(owner.name))?.uid, owner.uid);
-          return JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items;
+          await readConnectionService(state);
+          const slices = JSON.parse((await kube(['get', 'endpointslice', '-o', 'json'])).stdout).items;
+          assert.ok(referencesPresent(slices, owners), 'Execution connection reference lost during response drain');
+          return slices;
         },
         routingReady: (slices) => {
           const endpoints = slices
@@ -280,6 +349,7 @@ export function createLegacyExecutionHttpHandoff({
         assert.equal(state.settled, true);
         assert.equal(state.restoreIssued, undefined);
         await ownedService(state, state.selected);
+        await readConnectionService(state);
       }
     },
     async finish(operation) {
@@ -287,6 +357,7 @@ export function createLegacyExecutionHttpHandoff({
       assertState(state);
       if (!state.required) return;
       assert.equal(state.settled, true);
+      await readConnectionService(state);
       if (!state.restoreIssued) {
         const current = await ownedService(state, state.selected);
         state = { ...state, restoreIssued: true };

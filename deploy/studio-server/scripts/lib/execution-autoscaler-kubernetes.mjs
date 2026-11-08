@@ -1,3 +1,4 @@
+import { KubernetesResponseError } from './kubernetes-response-error.mjs';
 import https from 'node:https';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -39,13 +40,6 @@ function gauge(text, name, labels) {
   return value;
 }
 
-class KubernetesResponseError extends Error {
-  constructor(method, response) {
-    super(`Kubernetes ${method} failed (${response.statusCode}); write acknowledgement may be unknown.`);
-    this.status = response.statusCode;
-    this.retryAfter = response.headers['retry-after'];
-  }
-}
 function readRetryDelay(value, attempt) {
   if (typeof value === 'string') {
     if (/^\d+$/.test(value)) return Number(value) * 1000;
@@ -111,7 +105,7 @@ export function createKubernetesTransport({
               response.once('end', () => {
                 if (response.statusCode === 404 && method === 'GET') return resolve(null);
                 if (response.statusCode < 200 || response.statusCode >= 300)
-                  return reject(new KubernetesResponseError(method, response));
+                  return reject(new KubernetesResponseError(method, response, Buffer.concat(chunks)));
                 try {
                   resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
                 } catch {

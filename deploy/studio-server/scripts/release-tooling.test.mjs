@@ -48,6 +48,7 @@ test('application reuse rejects runtime/container/chart/dependency changes inclu
       'release-operation-journal',
       'release-operation-state',
       'read-concurrently',
+      'kubernetes-response-error',
     ].map((f) => `deploy/studio-server/scripts/lib/${f}.mjs`),
   ])
     assert.equal(isToolingOnlyPath(file), false, file);

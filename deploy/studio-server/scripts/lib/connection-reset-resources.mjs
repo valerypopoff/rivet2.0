@@ -28,16 +28,17 @@ http {
     location /control/ {
       proxy_pass http://rivet_control/;
       proxy_http_version 1.1;
-      proxy_set_header Connection "";
-      proxy_buffering off;
+      # Match the generated public workflow route's upstream defaults.
+      proxy_set_header Connection close;
+      proxy_buffering on;
       proxy_read_timeout 360s;
       proxy_next_upstream off;
     }
     location / {
       proxy_pass http://rivet_execution;
       proxy_http_version 1.1;
-      proxy_set_header Connection "";
-      proxy_buffering off;
+      proxy_set_header Connection close;
+      proxy_buffering on;
       proxy_read_timeout 360s;
       proxy_next_upstream off;
     }
@@ -136,7 +137,12 @@ export function connectionResetResources({
     backend('b'),
     pod('proxy', proxy, { role: 'proxy', 'rivet.dev/diagnostic-wire': '1' }),
   ];
-  for (const item of wirePods)
+  for (const item of wirePods) {
+    // Autopilot raises the minimum requests for Pods using anti-affinity.
+    item.spec.containers[0].resources = {
+      requests: { cpu: '500m', memory: '512Mi' },
+      limits: { memory: '512Mi' },
+    };
     item.spec.affinity = {
       podAntiAffinity: {
         requiredDuringSchedulingIgnoredDuringExecution: [
@@ -147,6 +153,7 @@ export function connectionResetResources({
         ],
       },
     };
+  }
   return {
     apiVersion: 'v1',
     kind: 'List',

@@ -8,13 +8,77 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { changeDiagnosticService, diagnosticLabel, diagnosticPodReady } from './lib/connection-reset-diagnostic.mjs';
+import {
+  changeDiagnosticService,
+  diagnosticLabel,
+  diagnosticPodReady,
+  waitForDiagnosticSilence,
+} from './lib/connection-reset-diagnostic.mjs';
 import { connectionResetResources, diagnosticNodeImage } from './lib/connection-reset-resources.mjs';
 import { diagnosticBackend } from './fixtures/connection-reset-runtime.mjs';
 import { collectContinuityResponse } from './lib/continuity-http-transport.mjs';
 import { cleanupConnectionResetLocal } from './lib/connection-reset-local-cleanup.mjs';
 
 const namespace = 'rivet-reset-123456abcdef';
+
+test('silent hold rechecks its monotonic deadline after an early timer wake-up', async () => {
+  let now = 0;
+  const waits = [];
+  const elapsed = await waitForDiagnosticSilence({
+    startedAt: 0,
+    durationMs: 295000,
+    signal: new AbortController().signal,
+    clock: {
+      now: () => now,
+      wait: async (ms) => {
+        waits.push(ms);
+        now += waits.length === 1 ? ms - 1375 : ms;
+      },
+    },
+  });
+  assert.deepEqual(waits, [295000, 1375]);
+  assert.equal(elapsed, 295000);
+});
+
+test('silent hold counts observed time and ignores wall-clock jumps', async (t) => {
+  let now = 40;
+  t.mock.method(Date, 'now', () => 3_600_000);
+  const waits = [];
+  assert.equal(
+    await waitForDiagnosticSilence({
+      startedAt: 0,
+      durationMs: 100,
+      signal: new AbortController().signal,
+      clock: {
+        now: () => now,
+        wait: async (ms) => {
+          waits.push(ms);
+          now += ms;
+          t.mock.method(Date, 'now', () => -3_600_000);
+        },
+      },
+    }),
+    100,
+  );
+  assert.deepEqual(waits, [60]);
+});
+
+test('a failure during a silent hold rejects before authorizing response release', async () => {
+  const controller = new AbortController();
+  const failure = Error('transport failed');
+  await assert.rejects(
+    waitForDiagnosticSilence({
+      startedAt: 0,
+      durationMs: 100,
+      signal: controller.signal,
+      clock: {
+        now: () => 0,
+        wait: async () => controller.abort(failure),
+      },
+    }),
+    (error) => error === failure,
+  );
+});
 
 function cleanupFixture({ collectError, foreignOwner, removeError, tlsError } = {}) {
   const calls = [],
@@ -251,6 +315,29 @@ test('a denied Kubernetes read preserves its status and never attempts the patch
   assert.equal(calls, 1);
 });
 
+test('cross-node wire Pods meet Autopilot minimums without resizing the client', () => {
+  const bundle = connectionResetResources({
+    namespace,
+    sources: { 'diagnostic.mjs': 'a', 'runtime.mjs': 'b', 'transport.mjs': 'c' },
+    tls: { cert: 'disposable cert', key: 'disposable key' },
+  });
+  const wirePods = bundle.items.filter((item) => item.kind === 'Pod');
+  assert.deepEqual(wirePods.map((pod) => pod.metadata.name).sort(), ['a', 'b', 'proxy']);
+  for (const pod of wirePods) {
+    assert.ok(pod.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution.length);
+    assert.deepEqual(pod.spec.containers[0].resources, {
+      requests: { cpu: '500m', memory: '512Mi' },
+      limits: { memory: '512Mi' },
+    });
+  }
+  const client = bundle.items.find((item) => item.kind === 'Job').spec.template.spec;
+  assert.equal(client.affinity, undefined);
+  assert.deepEqual(client.containers[0].resources, {
+    requests: { cpu: '50m', memory: '128Mi' },
+    limits: { memory: '128Mi' },
+  });
+});
+
 test('offline Kubernetes bundle isolates access and disables automatic Job retries', () => {
   const bundle = connectionResetResources({
     namespace,
@@ -321,7 +408,7 @@ for (const fault of [false, true])
           base + '/workflows/fixture',
           {
             method: 'POST',
-            headers: { 'x-diagnostic-control': control ? '1' : '0' },
+            headers: { 'x-diagnostic-control': control ? '1' : '0', connection: 'close' },
           },
           (res) => {
             responses++;
@@ -353,6 +440,7 @@ for (const fault of [false, true])
     const before = await admitted(2);
     assert.equal(responses, 0, 'No headers or prefix may keep the silent connections active');
     assert.ok(before.requests.every((r) => r.held && !r.finished && r.prefixBytes === 0));
+    assert.ok(before.requests.every((r) => r.upstreamConnection === 'close'));
     assert.equal(before.requests.find((r) => r.requestId === controlId).control, true);
     const release = await fetch(base + '/release', {
       method: 'POST',

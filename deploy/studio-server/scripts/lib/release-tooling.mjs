@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 // inputs even though they live alongside the deployment tools.
 export function isToolingOnlyPath(file) {
   if (file.startsWith('deploy/studio-server/scripts/'))
-    return !/^deploy\/studio-server\/scripts\/lib\/(?:execution-autoscaler[^/]*|release-operation-(?:journal|state)|read-concurrently)\.mjs$/.test(
+    return !/^deploy\/studio-server\/scripts\/lib\/(?:execution-autoscaler[^/]*|release-operation-(?:journal|state)|read-concurrently|kubernetes-response-error)\.mjs$/.test(
       file,
     );
   return (

@@ -73,6 +73,7 @@ export function diagnosticBackend({ uid, fault = false, holdMs = 300000 }) {
         held: input.hold,
         control,
         prefixBytes: input.hold ? 0 : bytes.length,
+        upstreamConnection: req.headers.connection ?? null,
         socket: {
           localAddress: req.socket.localAddress,
           localPort: req.socket.localPort,

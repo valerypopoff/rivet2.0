@@ -102,6 +102,21 @@ test('native Helm paired pools preserve the old selector and declare exact read/
     'ha.executionPools.active=b',
     'ha.executionPools.retiringReplicas=2',
   );
+  const connectionService = actual.find(
+    (resource) => resource.kind === 'Service' && resource.metadata.name === pair.config.service + '-connections',
+  );
+  assert.equal(connectionService.spec.type, 'ClusterIP');
+  assert.equal(connectionService.spec.clusterIP, undefined, 'Headless Services do not retain a load-balancer backend');
+  assert.equal(connectionService.spec.publishNotReadyAddresses, true);
+  assert.deepEqual(
+    connectionService.spec.selector,
+    actual.find((resource) => resource.kind === 'Service' && resource.metadata.name === pair.config.service).spec
+      .selector,
+  );
+  assert.deepEqual(
+    connectionService.spec.ports,
+    actual.find((resource) => resource.kind === 'Service' && resource.metadata.name === pair.config.service).spec.ports,
+  );
   const role = actual.find((resource) => resource.kind === 'Role' && resource.metadata.name.endsWith('-autoscaler'));
   assert.deepEqual(role.rules.find((rule) => rule.resources.includes('statefulsets/scale')).resourceNames, [
     pair.other.metadata.name,
