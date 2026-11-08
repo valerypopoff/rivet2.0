@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { autoscalerPolicyFromConfig, executionPoolLimit } from './execution-autoscaler.mjs';
 
 const role = (resource) => resource.metadata.labels?.['app.kubernetes.io/component'];
 const slot = (resource) => resource.metadata.labels?.['rivet.dev/execution-pool'];
@@ -84,6 +85,7 @@ export function prepareExecutionPoolResources({
     ?.env.find((entry) => entry.name === 'RIVET_AUTOSCALER_CONFIG');
   assert.ok(variable, 'Paired execution requires its controller');
   const config = JSON.parse(variable.value);
+  const physicalLimit = executionPoolLimit(autoscalerPolicyFromConfig(config));
   assert.deepEqual(new Set(config.poolWorkloads), new Set(sets.map((set) => set.metadata.name)));
   const installed = inventory.filter((resource) => role(resource) === 'execution' && resource.spec.replicas > 0);
   const recovering = journal && journal.phase !== 'complete';
@@ -107,8 +109,8 @@ export function prepareExecutionPoolResources({
     (image !== oldImage || !slot(previous));
   if (eligible)
     assert.ok(
-      2 * previousReplicas <= config.policy.maxReplicas,
-      `Parallel replacement needs room for ${2 * previousReplicas} execution workers (${previousReplicas} old + ${previousReplicas} new); the approved ceiling is ${config.policy.maxReplicas}. Increase the worker/DB capacity before rollout. No owners were replaced.`,
+      2 * previousReplicas <= physicalLimit,
+      `Parallel replacement needs room for ${2 * previousReplicas} execution workers (${previousReplicas} old + ${previousReplicas} new); the approved ceiling is ${physicalLimit}. Review ha.executionPools.maxSurgeReplicas and worker/DB capacity before rollout. No owners were replaced.`,
     );
   const plan =
     saved ??
@@ -118,7 +120,7 @@ export function prepareExecutionPoolResources({
           previous: { name: previous.metadata.name, uid: previous.metadata.uid, replicas: previousReplicas },
           candidate: { name: other.metadata.name },
           image,
-          maxReplicas: config.policy.maxReplicas,
+          maxReplicas: physicalLimit,
         }
       : null);
   const strategyReason = plan
@@ -141,7 +143,7 @@ export function prepareExecutionPoolResources({
     assert.equal(plan.candidate.name, other.metadata.name);
     assert.equal(plan.previous.uid, previous.metadata.uid);
     assert.equal(plan.image, image);
-    assert.equal(plan.maxReplicas, config.policy.maxReplicas);
+    assert.equal(plan.maxReplicas, physicalLimit);
   }
   const active = plan ? other : prior;
   const selected = selectPool(resources, active.metadata.name, previousReplicas, plan ? previousReplicas : 0);

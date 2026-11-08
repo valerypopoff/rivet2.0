@@ -16,6 +16,8 @@ export function autoscalerPolicy(input) {
     metricsMaxAgeSeconds: 90,
     ...input,
   };
+  // Keep the zero-surge policy/digest compatible with existing qualifications.
+  if (policy.maxSurgeReplicas === 0) delete policy.maxSurgeReplicas;
   for (const [key, value] of Object.entries(policy)) {
     if (!Number.isSafeInteger(value) || value < 1) throw new Error(`Invalid autoscaler policy: ${key}.`);
   }
@@ -23,6 +25,8 @@ export function autoscalerPolicy(input) {
     policy.minReplicas < 2 ||
     policy.maxReplicas < policy.minReplicas ||
     policy.maxReplicas > 100 ||
+    (policy.maxSurgeReplicas ?? 0) > policy.maxReplicas ||
+    executionPoolLimit(policy) > 100 ||
     policy.targetSlotsPercent > 90 ||
     policy.targetCpuPercent > 90 ||
     policy.stabilizationSeconds < 2 * policy.pollSeconds ||
@@ -32,10 +36,28 @@ export function autoscalerPolicy(input) {
   return policy;
 }
 
-export const autoscalerPolicyDigest = (policy) =>
-  createHash('sha256')
-    .update(JSON.stringify(autoscalerPolicy(policy)))
-    .digest('hex');
+/** Normal demand remains capped at maxReplicas. Extra physical owners exist
+ * only while a journal-owned paired replacement is in progress. */
+export function executionPoolLimit(policy) {
+  return policy.maxReplicas + (policy.maxSurgeReplicas ?? 0);
+}
+
+export function autoscalerPolicyFromConfig(config) {
+  if (Object.hasOwn(config.policy ?? {}, 'maxSurgeReplicas'))
+    throw Error('Temporary capacity belongs in controller configuration, outside its steady scaling policy');
+  return autoscalerPolicy({
+    ...config.policy,
+    maxSurgeReplicas: Object.hasOwn(config, 'maxSurgeReplicas') ? config.maxSurgeReplicas : 0,
+  });
+}
+
+export const autoscalerPolicyDigest = (input) => {
+  const policy = autoscalerPolicy(input);
+  // Temporary overlap is qualified by the configuration and physical-pool
+  // certificate. It must not change the predecessor's steady policy identity.
+  delete policy.maxSurgeReplicas;
+  return createHash('sha256').update(JSON.stringify(policy)).digest('hex');
+};
 
 /** Includes occupied slots on a withdrawing owner: accepted work is still load.
  * Missing owners/metrics never produce a low-demand recommendation. */
@@ -97,12 +119,15 @@ const routingObservationEpochs = new WeakMap();
 
 export function executionPoolDemand(snapshot, peer, policy) {
   const pools = peer ? [snapshot, peer] : [snapshot];
-  return recommendExecutionReplicas(
-    {
-      replicas: pools.reduce((sum, pool) => sum + pool.replicas, 0),
-      pods: pools.flatMap((pool) => pool.pods).map((pod, ordinal) => ({ ...pod, ordinal })),
-    },
-    policy,
+  return Math.min(
+    policy.maxReplicas,
+    recommendExecutionReplicas(
+      {
+        replicas: pools.reduce((sum, pool) => sum + pool.replicas, 0),
+        pods: pools.flatMap((pool) => pool.pods).map((pod, ordinal) => ({ ...pod, ordinal })),
+      },
+      { ...policy, maxReplicas: executionPoolLimit(policy) },
+    ),
   );
 }
 
@@ -121,14 +146,15 @@ async function scaleDuringPoolTransition({
   journalForReleaseOperation(record, 'ha', { release, namespace }, now);
   const plan = record.executionPoolPlan,
     state = record.executionPool;
-  if (plan.protocol !== 1 || plan.maxReplicas !== policy.maxReplicas)
+  if (plan.protocol !== 1 || plan.maxReplicas !== executionPoolLimit(policy))
     throw Error('Execution pool scaling policy changed');
   if (workload === plan.previous.name) return { state: 'previous-pool-observing', scaleDownPaused: true };
   if (workload !== plan.candidate.name || image !== plan.image || manifestDigest !== record.manifestDigest)
     throw Error('Execution pool candidate scaling identity changed');
   if (!state?.candidateUid) return { state: 'candidate-pool-preparing', scaleDownPaused: true };
-  const snapshot = await io.snapshot(),
-    peer = await io.peerSnapshot();
+  const { snapshot, peer } = io.poolSnapshot
+    ? await io.poolSnapshot()
+    : { snapshot: await io.snapshot(), peer: await io.peerSnapshot() };
   if (
     snapshot.uid !== state.candidateUid ||
     peer?.uid !== plan.previous.uid ||
@@ -138,8 +164,8 @@ async function scaleDuringPoolTransition({
     throw Error('Execution pool scaling ownership is unconfirmed');
   const desired = Math.min(
     executionPoolDemand(snapshot, peer, policy),
-    policy.maxReplicas - snapshot.poolCapacity.otherReplicas,
-    snapshot.replicas + Math.max(0, policy.maxReplicas - snapshot.poolCapacity.totalPods),
+    executionPoolLimit(policy) - snapshot.poolCapacity.otherReplicas,
+    snapshot.replicas + Math.max(0, executionPoolLimit(policy) - snapshot.poolCapacity.totalPods),
   );
   if (desired <= snapshot.replicas) return { state: 'candidate-pool-observing', scaleDownPaused: true };
   const confirmed = await io.readJournal();

@@ -138,6 +138,35 @@ for (const count of [3, 4, 7])
     assert.equal(f.calls.filter((call) => call === 'scale').length, 1);
   });
 
+test('pool completion verifies once before its checkpoint and rechecks a completed recovery', async () => {
+  const f = fixture(),
+    verify = f.io.verify,
+    phases = [];
+  f.io.verify = async (state) => {
+    phases.push(state.phase);
+    await verify(state);
+  };
+  await f.run();
+  assert.deepEqual(phases, ['removing']);
+  await f.run();
+  assert.deepEqual(phases, ['removing', 'complete']);
+  assert.equal(f.calls.filter((call) => call === 'scale').length, 1);
+});
+
+test('a failed final verification leaves observation-only recovery without another scale command', async () => {
+  const f = fixture(),
+    verify = f.io.verify;
+  f.io.verify = async () => {
+    throw Error('Final capacity is unconfirmed');
+  };
+  await assert.rejects(f.run(), /Final capacity/);
+  assert.equal(f.operation.record.executionPool.phase, 'removing');
+  f.io.verify = verify;
+  await f.run();
+  assert.equal(f.operation.record.executionPool.phase, 'complete');
+  assert.equal(f.calls.filter((call) => call === 'scale').length, 1);
+});
+
 test('insufficient overlap capacity is rejected before probes or mutations', async () => {
   const f = fixture(4);
   f.plan.maxReplicas = 7;

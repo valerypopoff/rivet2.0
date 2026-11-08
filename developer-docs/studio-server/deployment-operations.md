@@ -122,10 +122,25 @@ Production needs the exact new paired-layout observation. Parallel handoff also
 needs its own transition certificate. An ordinary qualification using the serial
 fallback authorizes serial retirement only, including at a two-worker production
 floor. Older receipts without the layout observation cannot enable the paired
-profile. This profile is implemented locally and not activated.
+profile. The profile passed staging qualification `42486798934` and production
+activation `42493190205` on November 8. That first transition included legacy HTTP
+compatibility protection and old shutdown hooks; it does not establish the target
+ordinary-update speedup. See the
+[current measurements](rolling-update-performance-plan.md#current-activation-and-remaining-measurement)
+before treating historical activation prerequisites as remaining work.
 
 Focused paired qualification uses a three-worker starting baseline when the
 approved execution ceiling is at least six. Bootstrap renders three workers.
+That ceiling includes reviewed `ha.executionPools.maxSurgeReplicas`; the normal
+worker maximum remains unchanged. A larger temporary ceiling is included in the
+database/connection budget and bound into the full qualification configuration
+and physical-pool evidence. It does not change the steady scaling policy digest.
+For a one-time
+increase, `production.executionPoolCapacity` explicitly carries the target surge
+and connection allocation while preserving the observed production snapshot.
+Prepare retained staging's PostgreSQL allowance before its qualification; setup
+checks that preparation rather than resizing the database automatically. This
+does not verify or change the shared production server's actual SQL limit.
 Retained staging grows an idle two-worker active pool immediately before the
 protected rollout window, with UID/resourceVersion/replica-count preconditions,
 then waits for three owned ready Pods. A lost write acknowledgement is not

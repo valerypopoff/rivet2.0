@@ -396,6 +396,7 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     this.providerValues.ha.controlPlane.mode = this.overlap ? 'singleton-overlap' : 'singleton';
     if (manifest === this.operation.candidate && this.operation.executionPools)
       this.providerValues.ha.executionPools = {
+        ...this.providerValues.ha.executionPools,
         enabled: true,
         active: envelope.ha?.executionPools?.active ?? 'a',
         retiringReplicas: 0,
@@ -690,6 +691,28 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
     const identities = {},
       values = {};
     const application = await this.state.application.owned();
+    const target = this.operation?.installed?.qualificationValues;
+    if (target?.ha?.executionPools?.maxSurgeReplicas > 0 && application.record.secrets) {
+      const postgres = await this.state.api.json(
+        'GET',
+        `/apis/apps/v1/namespaces/${this.config.namespace}/deployments/release-gate-postgres`,
+      );
+      const args = postgres?.spec?.template?.spec?.containers?.[0]?.args ?? [];
+      const configured = args.filter((arg) => /^max_connections=[0-9]+$/.test(arg));
+      assert.ok(
+        configured.length === 1 && Number(configured[0].split('=')[1]) >= target.postgres.maxConnections,
+        'Prepare the retained staging PostgreSQL connection allowance before starting the surge qualification; it is never resized automatically',
+      );
+      assert.ok(
+        !postgres.metadata.deletionTimestamp &&
+          postgres.spec.replicas === 1 &&
+          postgres.status?.observedGeneration >= postgres.metadata.generation &&
+          postgres.status.replicas === 1 &&
+          postgres.status.updatedReplicas === 1 &&
+          postgres.status.readyReplicas === 1,
+        'Wait for the retained staging PostgreSQL preparation to settle before starting qualification',
+      );
+    }
     for (const [name, mapping] of Object.entries(fields)) {
       const secret = await this.state.api.json('GET', `/api/v1/namespaces/${this.config.namespace}/secrets/${name}`);
       assert.ok(secret?.metadata.uid && !secret.metadata.deletionTimestamp);

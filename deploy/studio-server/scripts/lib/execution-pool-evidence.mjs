@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { executionPoolLimit } from './execution-autoscaler.mjs';
 
 export function assertExecutionPoolEvidence(value) {
   assert.equal(value?.protocol, 1, 'Paired execution needs its own qualified transition');
@@ -26,7 +27,7 @@ export function compileExecutionPoolEvidence(report, operation) {
     accepted = report.outcomes?.acceptedWork;
   assert.equal(state?.protocol, 1);
   assert.equal(state.phase, 'complete');
-  assert.equal(state.plan.maxReplicas, operation.policy.maxReplicas);
+  assert.equal(state.plan.maxReplicas, executionPoolLimit(operation.policy));
   assert.equal(
     state.plan.image,
     `${operation.candidate.images.api.repository}@${operation.candidate.images.api.digest}`,

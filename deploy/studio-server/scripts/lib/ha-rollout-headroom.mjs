@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { autoscalerPolicy, recommendExecutionReplicas } from './execution-autoscaler.mjs';
+import { autoscalerPolicy, autoscalerPolicyFromConfig, recommendExecutionReplicas } from './execution-autoscaler.mjs';
 import { readConcurrently } from './read-concurrently.mjs';
 import { kubernetesReadRetryReason } from './kubernetes-read-errors.mjs';
 import {
@@ -12,7 +12,7 @@ import {
 class PendingHeadroomObservation extends Error {}
 class PendingHaCapacity extends Error {}
 
-function headroomReader(kube, namespace) {
+export function createHeadroomRead({ kube, namespace }) {
   const metricsPath = `/apis/metrics.k8s.io/v1beta1/namespaces/${encodeURIComponent(namespace)}/pods`;
   return async (requestPath, args = ['get', '--raw', requestPath]) => {
     let response;
@@ -84,6 +84,8 @@ export async function waitForHaHeadroom(
       if (
         !(
           error instanceof PendingHaCapacity ||
+          error instanceof PendingHeadroomObservation ||
+          error instanceof PendingExecutionCpuSample ||
           error?.cause instanceof PendingHaCapacity ||
           error?.cause instanceof PendingHeadroomObservation ||
           error?.cause instanceof PendingExecutionCpuSample
@@ -121,12 +123,12 @@ export function createHaExecutionHeadroomGuard({
   const workload = workloads.find((value) => value.role === 'execution' && value.name === config.workload);
   if (!workload || config.release !== release || config.namespace !== namespace || config.image !== workload.image)
     throw new Error('HA execution headroom policy does not match the rendered release.');
-  const policy = autoscalerPolicy(config.policy);
+  const policy = autoscalerPolicyFromConfig(config);
   const originalImage = inventory
     .find((value) => value.metadata.uid === workload.uid)
     ?.spec.template.spec.containers.find((value) => value.name === 'api')?.image;
   if (!originalImage) throw new Error('Original execution image is unconfirmed for rollout headroom.');
-  const get = headroomReader(kube, namespace);
+  const get = createHeadroomRead({ kube, namespace });
   const transport = {
     async json(method, requestPath) {
       if (method !== 'GET') throw new Error('Rollout headroom transport is read-only.');
@@ -395,7 +397,7 @@ export function createHaProxyHeadroomGuard({
   )}`;
   const ns = encodeURIComponent(namespace),
     workload = proxy.metadata.name;
-  const get = headroomReader(kube, namespace);
+  const get = createHeadroomRead({ kube, namespace });
   let workloadUid;
   return async ({ stage = 'retirement' } = {}) => {
     const base = {

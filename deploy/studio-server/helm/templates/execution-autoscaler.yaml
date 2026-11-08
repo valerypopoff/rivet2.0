@@ -8,6 +8,11 @@
 {{- $apiImage := include "rivet.image" (dict "root" . "image" .Values.images.api) }}
 {{- $manifestDigest := default (printf "local:%s" (sha256sum $apiImage)) .Values.release.production.manifestDigest }}
 {{- $journal := printf "%s-%s-cutover" (.Release.Name | trunc 32) (sha256sum .Release.Name | trunc 8) }}
+{{- $policy := dict "minReplicas" .Values.autoscaling.execution.minReplicas "maxReplicas" .Values.autoscaling.execution.maxReplicas "targetSlotsPercent" .Values.autoscaling.executionController.targetSlotsPercent "targetCpuPercent" .Values.autoscaling.execution.targetCPUUtilizationPercentage "stabilizationSeconds" .Values.autoscaling.executionController.stabilizationSeconds "cooldownSeconds" .Values.autoscaling.executionController.cooldownSeconds "withdrawalSeconds" .Values.autoscaling.executionController.withdrawalSeconds "pollSeconds" .Values.autoscaling.executionController.pollSeconds "metricsMaxAgeSeconds" .Values.autoscaling.executionController.metricsMaxAgeSeconds }}
+{{- $config := dict "release" .Release.Name "namespace" .Release.Namespace "workload" $workload "poolWorkloads" (ternary $poolWorkloads (list) .Values.ha.executionPools.enabled) "service" (include "rivet.executionServiceName" .) "port" .Values.service.execution.targetPort "image" $apiImage "manifestDigest" $manifestDigest "policy" $policy }}
+{{- if gt (int .Values.ha.executionPools.maxSurgeReplicas) 0 }}
+{{- $_ := set $config "maxSurgeReplicas" .Values.ha.executionPools.maxSurgeReplicas }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -138,7 +143,7 @@ spec:
           {{- include "rivet.pod.containerSecurityContext" . | nindent 10 }}
           env:
             - name: RIVET_AUTOSCALER_CONFIG
-              value: {{ dict "release" .Release.Name "namespace" .Release.Namespace "workload" $workload "poolWorkloads" (ternary $poolWorkloads (list) .Values.ha.executionPools.enabled) "service" (include "rivet.executionServiceName" .) "port" .Values.service.execution.targetPort "image" $apiImage "manifestDigest" $manifestDigest "policy" (dict "minReplicas" .Values.autoscaling.execution.minReplicas "maxReplicas" .Values.autoscaling.execution.maxReplicas "targetSlotsPercent" .Values.autoscaling.executionController.targetSlotsPercent "targetCpuPercent" .Values.autoscaling.execution.targetCPUUtilizationPercentage "stabilizationSeconds" .Values.autoscaling.executionController.stabilizationSeconds "cooldownSeconds" .Values.autoscaling.executionController.cooldownSeconds "withdrawalSeconds" .Values.autoscaling.executionController.withdrawalSeconds "pollSeconds" .Values.autoscaling.executionController.pollSeconds "metricsMaxAgeSeconds" .Values.autoscaling.executionController.metricsMaxAgeSeconds) | toJson | quote }}
+              value: {{ $config | toJson | quote }}
           ports: [{ name: health, containerPort: 9090 }]
           readinessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 15 }
           livenessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 30, failureThreshold: 6 }

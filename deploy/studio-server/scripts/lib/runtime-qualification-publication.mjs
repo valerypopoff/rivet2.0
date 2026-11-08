@@ -166,11 +166,9 @@ export function prepareRuntimeQualification(input) {
       runtimeControl.edgeProfiles.includes('regional'),
       'Forward/reverse regional transfer is required for adoption',
     );
-  assert.deepEqual(
-    Object.keys(a.policy).sort(),
-    Object.keys(autoscalerPolicy({})).sort(),
-    'Declare the complete scaling policy',
-  );
+  const policyKeys = Object.keys(autoscalerPolicy({}));
+  if (Object.hasOwn(a.policy, 'maxSurgeReplicas')) policyKeys.push('maxSurgeReplicas');
+  assert.deepEqual(Object.keys(a.policy).sort(), policyKeys.sort(), 'Declare the complete scaling policy');
   const policy = autoscalerPolicy(a.policy);
   const runtimeAutoscaling = (
     [2, 3, 4, 5].includes(runtimeControl.protocol)

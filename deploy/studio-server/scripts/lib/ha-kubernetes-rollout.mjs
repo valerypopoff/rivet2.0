@@ -668,8 +668,8 @@ export async function runHaKubernetesRollout({
           if (prior && prior !== uid) throw Error('Candidate execution template identity changed');
           templateIdentities.set(key, uid);
         },
-        isCurrent: async (pod) =>
-          haCandidateReady(pod.name, pod, poolPlan.image, await desiredRevision(extraPool.name)),
+        isCurrent: async (pod, revision) =>
+          haCandidateReady(pod.name, pod, poolPlan.image, revision ?? (await desiredRevision(extraPool.name))),
       })
     : undefined;
   const result = await runHaRollingUpgrade({

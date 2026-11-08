@@ -57,6 +57,35 @@ before its separate same-image control ownership transition.
 
 ## Policy and demand
 
+Paired HA can explicitly reserve temporary overlap through
+`ha.executionPools.maxSurgeReplicas` (default `0`). Its physical ceiling is the
+normal maximum plus these temporary slots; normal demand and each serving pool
+remain capped by `autoscaling.execution.maxReplicas`. A seven-worker installation
+can therefore replace seven owners together with seven temporary slots, without
+raising everyday autoscaling to fourteen. The chart includes this full physical
+ceiling in its database budget, and planning never shrinks the serving pool to
+fit. Temporary capacity is a top-level controller configuration field, omitted
+when zero. It stays outside the steady scaling policy and its digest so that
+predecessor controllers and installed-upgrade planning retain the same normal
+scaling identity. The full qualification configuration and certified physical
+ceiling bind the temporary allowance; changing it still requires qualification.
+
+Use the explicit protected `production.executionPoolCapacity` target when
+qualifying a larger overlap allowance against an existing paired installation.
+It carries only `maxSurgeReplicas` and the reviewed `maxConnections` allocation;
+it preserves the observed production settings and values digests.
+Staging policy and proposed production values must agree with it. Retained
+staging's PostgreSQL allowance must be prepared and settled before testing; the
+test checks it read-only and never resizes it automatically. This check follows
+the qualified surge settings on every release, including after the one-time
+capacity target is removed. A terminating or still-reconciling database is not
+settled. This metadata is not
+a measurement of the shared production SQL server's actual connection limit.
+Verify its limit and other applications' allocation before activation. Existing
+ten-connection query pools with seven normal and seven temporary workers require
+305 connections under the current restore/scheduler/reserved assumptions; the
+200-connection example above intentionally rejects that overlap.
+
 Capacity remains in `autoscaling.execution.minReplicas`, `maxReplicas` and
 `targetCPUUtilizationPercentage`. Set `autoscaling.execution.enabled=false`,
 `autoscaling.executionController.enabled=true`, `metrics.enabled=true` and
@@ -72,6 +101,26 @@ execution. Targets default to 60% occupied slots and 75% CPU requests.
 Pending/unready/replaced pods, inconsistent limits, stale/missing metrics,
 failed exec, a foreign HPA or unknown ownership block mutations instead of
 becoming zero demand.
+Paired observations share inventories/metrics only within one decision, bound
+combined exec concurrency to four, and refresh both controllers and the complete
+Pod/HPA inventories before authorizing growth or retirement. A restart, scale or
+readiness change requires a new observation. No shared read survives a mutation;
+all started reads settle on error. Complete guard time and pool read/exec counts
+are diagnostic fields in the existing handoff artifact.
+Pool completion uses the same bounded read-only observation wait when permitted
+candidate growth is still becoming Ready while the required serving floor remains
+available, or a confirmed transient controller GET is unavailable. Loss of that
+floor stops completion immediately. Old-owner disappearance, exact pool identities, current images,
+serving state and the current rollout lease remain required. No scale, withdrawal
+or uncertain write is replayed by that wait. A transition verifies once before
+its completion checkpoint; recovery of an already completed pool and the later
+whole-release health checks still verify live state.
+The candidate controller generation must also remain stable and acknowledged
+through the Pod observations; a generation change needs a fresh observation.
+Missing or stale CPU samples already in the inventory are rejected before Pod
+execs. Malformed CPU quantities still fail immediately; valid samples are aged
+again after the commands and final inventory reads. Recovery observations that
+do not need demand continue without CPU metrics.
 After an already-issued scale/removal, observation and journal completion do not
 require load metrics or unrelated worker exec. Missing metrics still block the
 next capacity decision; they cannot strand an otherwise settled retirement.

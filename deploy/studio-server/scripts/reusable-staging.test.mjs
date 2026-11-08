@@ -307,7 +307,7 @@ test('a retained staging endpoint is fixed across releases and cannot escape its
     assert.throws(() => reusableStagingSettings({ ...settings(), hostname }));
 });
 
-test('retained staging refreshes only its bound registry credential from the pinned source, without rotating app secrets', async () => {
+test('retained staging validates database capacity and refreshes only its bound registry credential', async () => {
   const gate = Object.create(ReusableProviderGate.prototype),
     objects = new Map(),
     writes = [];
@@ -368,6 +368,43 @@ test('retained staging refreshes only its bound registry credential from the pin
   objects.get(writes[0]).metadata.uid = 'foreign-target';
   await assert.rejects(gate.retainedSecrets());
   assert.equal(writes.length, 1);
+  objects.get(writes[0]).metadata.uid = target.metadata.uid;
+  gate.operation = {
+    installed: {
+      executionPoolCapacity: { maxSurgeReplicas: 7, maxConnections: 305 },
+      qualificationValues: {
+        ha: { executionPools: { enabled: true, maxSurgeReplicas: 7 } },
+        postgres: { maxConnections: 305 },
+      },
+    },
+  };
+  const database = {
+    metadata: { generation: 2 },
+    spec: { replicas: 1, template: { spec: { containers: [{ args: ['postgres', '-c', 'max_connections=200'] }] } } },
+    status: { observedGeneration: 2, replicas: 1, updatedReplicas: 1, readyReplicas: 1 },
+  };
+  objects.set(`/apis/apps/v1/namespaces/${gate.config.namespace}/deployments/release-gate-postgres`, database);
+  await assert.rejects(gate.retainedSecrets(), /Prepare the retained staging PostgreSQL/);
+  database.spec.template.spec.containers[0].args[2] = 'max_connections=305';
+  database.status.updatedReplicas = 0;
+  await assert.rejects(gate.retainedSecrets(), /preparation to settle/);
+  database.status.updatedReplicas = 1;
+  database.spec.replicas = 2;
+  await assert.rejects(gate.retainedSecrets(), /preparation to settle/);
+  database.spec.replicas = 1;
+  database.metadata.deletionTimestamp = new Date().toISOString();
+  await assert.rejects(gate.retainedSecrets(), /preparation to settle/);
+  delete database.metadata.deletionTimestamp;
+  await gate.retainedSecrets();
+  delete gate.operation.installed.executionPoolCapacity;
+  database.spec.template.spec.containers[0].args[2] = 'max_connections=200';
+  await assert.rejects(gate.retainedSecrets(), /Prepare the retained staging PostgreSQL/);
+  database.spec.template.spec.containers[0].args[2] = 'max_connections=305';
+  await gate.retainedSecrets();
+  gate.operation.installed.qualificationValues.ha.executionPools.maxSurgeReplicas = 0;
+  database.spec.template.spec.containers[0].args[2] = 'max_connections=200';
+  await gate.retainedSecrets();
+  assert.equal(writes.length, 1, 'Capacity preparation only observes; it never resizes the retained database');
 });
 
 import { digest, settings, actor, owner, operation, fixture, cloud, wait } from './test-fixtures/reusable-staging.mjs';
@@ -957,6 +994,11 @@ test('concrete provider Helm render retains installed production timing, real ma
   assert.equal(values.rollout.minReadySeconds, 120);
   assert.equal(values.lifecycle.preStopDelaySeconds, 60);
   assert.equal(values.release.production.manifestDigest, getStudioServerReleaseManifestDigest(candidate));
+  gate.operation.executionPools = true;
+  envelope.ha = { executionPools: { enabled: true, active: 'a', retiringReplicas: 0, maxSurgeReplicas: 4 } };
+  assert.equal(gate.values().ha.executionPools.maxSurgeReplicas, 4);
+  delete envelope.ha;
+  gate.operation.executionPools = false;
   // Tool-only qualification can reuse every image. Rendering must still
   // distinguish the actual predecessor from the candidate's evidence identity.
   const publishedSameImages = promoteStudioServerReleaseManifest(candidate, { promotionEvidence: evidence });

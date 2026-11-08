@@ -1,14 +1,56 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runManagedGateCommand } from './lib/managed-gate-command.mjs';
+import { PendingExecutionCpuSample } from './lib/execution-autoscaler-kubernetes.mjs';
 import {
   assessHaExecutionHeadroom,
   createHaExecutionHeadroomGuard,
   createHaProxyHeadroomGuard,
   waitForHaHeadroom,
+  createHeadroomRead,
 } from './lib/ha-rollout-headroom.mjs';
 
 const policy = { minReplicas: 2, maxReplicas: 7 };
+
+test('a pending direct execution observation waits for fresh capacity without replaying a write', async () => {
+  let time = 0,
+    samples = 0;
+  await waitForHaHeadroom(
+    () => {
+      if (++samples === 1) throw new PendingExecutionCpuSample('fixture: awaiting a fresh sample');
+    },
+    {
+      timeoutMs: 10000,
+      now: () => time,
+      pause: async (ms) => {
+        time += ms;
+      },
+    },
+  );
+  assert.equal(samples, 2);
+  assert.equal(time, 1000);
+});
+
+test('a confirmed transient headroom GET waits for a fresh read within the existing deadline', async () => {
+  let time = 0,
+    reads = 0;
+  const read = createHeadroomRead({
+    namespace: 'fixture',
+    kube: async () => {
+      if (++reads === 1) throw new Error('Error from server (TooManyRequests): fixture read throttled');
+      return { stdout: '{"items":[]}' };
+    },
+  });
+  await waitForHaHeadroom(() => read('/api/v1/namespaces/fixture/pods'), {
+    timeoutMs: 10000,
+    now: () => time,
+    pause: async (ms) => {
+      time += ms;
+    },
+  });
+  assert.equal(reads, 2);
+  assert.equal(time, 1000);
+});
 const snapshot = (replicas = 3) => ({
   uid: 'workload-uid',
   replicas,

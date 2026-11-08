@@ -471,6 +471,9 @@ test('changed build artifacts, source, operation, evidence identities and policy
       f.autoscaling.policy.maxReplicas = 8;
     },
     (f) => {
+      f.autoscaling.policy.unreviewedLimit = 7;
+    },
+    (f) => {
       f.autoscaling.evidence.candidateSourceSha = 'd'.repeat(40);
     },
     (f) => {

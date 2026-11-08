@@ -1024,13 +1024,25 @@ for (const service of ['api', 'executor', 'web']) {
     assert.ok(dockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
     assert.match(dockerfile, /ARG TARGETARCH/);
     assert.match(dockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH"/);
-    assert.match(dockerfile, /COPY --from=esbuild-security \/out\/esbuild \/app\/node_modules\/esbuild\/bin\/esbuild/);
+    assert.match(dockerfile, /COPY --from=esbuild-security \/out \/opt\/rivet-esbuild\//);
+    assert.match(dockerfile, /cp \/opt\/rivet-esbuild\/esbuild \/app\/node_modules\/esbuild\/bin\/esbuild/);
     assert.match(dockerfile, /npm install -g npm@11\.21\.1/);
     assert.match(dockerfile, /--prefix \/tmp\/rivet-npm-security[^\n]+undici@6\.29\.1/);
     assert.match(dockerfile, /node \/opt\/rivet\/harden-package-manager-caches\.mjs npm/);
     assert.match(dockerfile, /node \/tmp\/verify-runtime-dependencies\.mjs npm/);
-    assert.match(dockerfile, /COPY --from=esbuild-security \/out\/@esbuild/);
+    assert.match(dockerfile, /cp -a \/opt\/rivet-esbuild\/@esbuild\/\. \/app\/node_modules\/@esbuild\//);
     assert.match(dockerfile, /remove-dependency-test-fixtures\.mjs \/app\/node_modules/);
+    assert.match(dockerfile, /normalize-runtime-dependencies\.mjs \/app\/node_modules/);
+    assert.match(dockerfile, /cp -al \/app\/node_modules \/runtime-dependencies\/app\//);
+    assert.match(dockerfile, /utimesSync\('\/runtime-dependencies\/app', 0, 0\)/);
+    assert.match(
+      dockerfile,
+      /yarn config set supportedArchitectures --json '\{"os":\["current"\],"cpu":\["current"\],"libc":\["current"\]\}'/,
+    );
+    assert.match(dockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH" runtime/);
+    assert.match(dockerfile, /FROM scratch AS runtime-dependencies/);
+    assert.match(dockerfile, /FROM dependencies AS builder/);
+    assert.match(dockerfile, /COPY --link --from=runtime-dependencies --chown=10001:10001 \/ \//);
   }
 }
 assert.match(read('deploy/studio-server/images/api/Dockerfile'), /pnpm@10\.34\.8/);

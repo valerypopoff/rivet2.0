@@ -189,6 +189,17 @@ test('ordinary installed-to-candidate planning cannot require or authorize histo
   };
   installed.release.production.browserContract = browserContract;
   assert.equal((await planInstalledUpgrade({ candidate: b, installed })).status, 'qualified-route');
+  const surge = structuredClone(b);
+  const surgeDigest = autoscalerPolicyDigest({ maxSurgeReplicas: 7 });
+  surge.evidence.runtimeControl.autoscalerPolicyDigest = surgeDigest;
+  surge.evidence.runtimeAutoscaling.policyDigest = surgeDigest;
+  const paired = structuredClone(installed);
+  paired.ha.executionPools = { enabled: true, maxSurgeReplicas: 0 };
+  assert.equal(
+    (await planInstalledUpgrade({ candidate: surge, installed: paired, autoscalingPolicyDigest: surgeDigest })).status,
+    'qualified-route',
+    'Temporary capacity must not masquerade as a different steady scaling policy',
+  );
   for (const altered of [
     { ...installed, availability: { gkeGatewayProfile: 'regional' } },
     { ...installed, ha: { enabled: true, controlPlane: { mode: 'singleton-overlap' } } },

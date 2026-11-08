@@ -65,6 +65,9 @@ const inspect = async () =>
     ...(process.env.RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM !== undefined
       ? { proxyMinimum: Number(process.env.RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM) }
       : {}),
+    ...(process.env.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_POOL_CAPACITY
+      ? { executionPoolCapacity: JSON.parse(process.env.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_POOL_CAPACITY) }
+      : {}),
     helm: resolveHelmBinOrThrow(root),
     kubectl: process.env.RIVET_K8S_KUBECTL_BIN || 'kubectl',
     run: (bin, args, options) =>

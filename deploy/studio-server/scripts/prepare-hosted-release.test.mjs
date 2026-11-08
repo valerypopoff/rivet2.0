@@ -730,6 +730,21 @@ test('hosted staging carries the reviewed proxy minimum without changing its pro
   assert.match(job, /^RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256=sha256:b{64}$/m);
 });
 
+test('hosted staging carries an explicit surge target and rejects a mismatched steady policy before setup', async (t) => {
+  const f = await fixture(t);
+  f.configuration.production.executionPoolCapacity = { maxSurgeReplicas: 7, maxConnections: 305 };
+  f.configuration.staging.policy = { ...f.configuration.staging.policy, maxReplicas: 7, maxSurgeReplicas: 7 };
+  await f.prepare();
+  const job = await fs.readFile(f.jobEnv, 'utf8');
+  assert.match(
+    job,
+    /RIVET_QUALIFICATION_PRODUCTION_EXECUTION_POOL_CAPACITY=\{"maxConnections":305,"maxSurgeReplicas":7\}/,
+  );
+  const invalid = await fixture(t);
+  invalid.configuration.production.executionPoolCapacity = { maxSurgeReplicas: 7, maxConnections: 305 };
+  await assert.rejects(invalid.prepare(), (error) => /Staging policy must match/.test(error.cause?.message));
+});
+
 for (const minimum of [0, 3, '1', null])
   test(`hosted staging rejects invalid reviewed proxy minimum ${JSON.stringify(minimum)} before provider access`, async (t) => {
     const f = await fixture(t);
