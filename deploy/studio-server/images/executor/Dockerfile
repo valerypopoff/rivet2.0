@@ -2,9 +2,9 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS esbuild-security
 ARG TARGETARCH
 COPY deploy/studio-server/images/lib/rebuild-esbuild.sh /rebuild-esbuild.sh
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build sh /rebuild-esbuild.sh "$TARGETARCH"
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build sh /rebuild-esbuild.sh "$TARGETARCH" runtime
 
-FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS builder
+FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS dependencies
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -45,8 +45,24 @@ COPY packages/studio-server-executor/package.json ./packages/studio-server-execu
 COPY packages/studio-server-shared/package.json ./packages/studio-server-shared/package.json
 COPY packages/studio-server-web/package.json ./packages/studio-server-web/package.json
 
+COPY deploy/studio-server/images/lib/remove-dependency-test-fixtures.mjs deploy/studio-server/images/lib/normalize-runtime-dependencies.mjs /opt/rivet-dependencies/
+COPY --from=esbuild-security /out /opt/rivet-esbuild/
 RUN --mount=type=cache,target=/root/.cache/yarn \
-    YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable
+    yarn config set supportedArchitectures --json '{"os":["current"],"cpu":["current"],"libc":["current"]}' && \
+    YARN_NODE_LINKER=node-modules YARN_CHECKSUM_BEHAVIOR=ignore yarn install --immutable && \
+    node /opt/rivet-dependencies/remove-dependency-test-fixtures.mjs /app/node_modules && \
+    cp -a /opt/rivet-esbuild/@esbuild/. /app/node_modules/@esbuild/ && \
+    cp /opt/rivet-esbuild/esbuild /app/node_modules/esbuild/bin/esbuild && \
+    node /opt/rivet-dependencies/normalize-runtime-dependencies.mjs /app/node_modules && \
+    mkdir -p /runtime-dependencies/app && \
+    cp -al /app/node_modules /runtime-dependencies/app/ && \
+    node -e "require('node:fs').utimesSync('/runtime-dependencies/app', 0, 0)"
+
+FROM scratch AS runtime-dependencies
+# Include the normalized parent: --link otherwise creates it with the build time.
+COPY --link --from=dependencies --chown=10001:10001 /runtime-dependencies/ /
+
+FROM dependencies AS builder
 COPY packages ./packages
 COPY scripts ./scripts
 COPY tsconfig.base.json LICENSE README.md ./
@@ -57,9 +73,6 @@ RUN YARN_NODE_LINKER=node-modules yarn build:runtime && \
     YARN_NODE_LINKER=node-modules yarn workspace @valerypopoff/rivet-studio-server-executor run build
 COPY deploy ./deploy
 RUN mkdir /runtime && node deploy/studio-server/images/lib/prepare-runtime-packages.mjs /runtime/packages executor
-RUN node deploy/studio-server/images/lib/remove-dependency-test-fixtures.mjs /app/node_modules
-COPY --from=esbuild-security /out/@esbuild /app/node_modules/@esbuild
-COPY --from=esbuild-security /out/esbuild /app/node_modules/esbuild/bin/esbuild
 
 FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
 COPY deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
@@ -95,7 +108,7 @@ RUN npm install -g npm@11.21.1 && \
 
 WORKDIR /app
 
-COPY --from=builder --chown=10001:10001 /app/node_modules /app/node_modules
+COPY --link --from=runtime-dependencies --chown=10001:10001 / /
 COPY --from=builder --chown=10001:10001 /runtime/packages /app/packages
 COPY --from=builder --chown=10001:10001 /app/packages/studio-server-executor/dist/executor-bundle.cjs /app/executor-bundle.cjs
 COPY --chown=10001:10001 deploy/studio-server/images/lib/load-env.sh /opt/rivet/lib/load-env.sh
@@ -114,6 +127,6 @@ ENV RIVET_RUNTIME_CONFIG_PROTOCOL=1
 EXPOSE 21889
 USER 10001:10001
 RUN --mount=type=bind,source=deploy/studio-server/images/lib/verify-runtime-dependencies.mjs,target=/tmp/verify-runtime-dependencies.mjs,readonly \
-    node /tmp/verify-runtime-dependencies.mjs npm
+    node /tmp/verify-runtime-dependencies.mjs npm --native-only
 
 ENTRYPOINT ["/opt/rivet/executor-entrypoint.sh"]

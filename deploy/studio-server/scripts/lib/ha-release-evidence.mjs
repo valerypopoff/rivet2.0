@@ -1,4 +1,9 @@
-import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
+import {
+  autoscalerPolicy,
+  autoscalerPolicyFromConfig,
+  autoscalerPolicyDigest,
+  executionPoolLimit,
+} from './execution-autoscaler.mjs';
 import { assertExecutionPoolEvidence } from './execution-pool-evidence.mjs';
 import { assertQualificationPlan } from './release-qualification-policy.mjs';
 import { assertContinuityUpgrade, assertRequestContinuityEvidence } from './request-continuity.mjs';
@@ -645,6 +650,7 @@ export function assertOrdinaryRuntimeLayout(proof, values, policyDigest) {
     Object.entries({
       minReplicas: execution.minReplicas,
       maxReplicas: execution.maxReplicas,
+      maxSurgeReplicas: values.ha?.executionPools?.maxSurgeReplicas ?? 0,
       targetCpuPercent: execution.targetCPUUtilizationPercentage,
       ...Object.fromEntries(
         [
@@ -675,7 +681,10 @@ export function qualificationProxyMinimum(installed) {
 
 // Exercise a three-worker handoff when the paired staging allowance covers it.
 export function qualificationExecutionBaseline(operation) {
-  return operation?.qualification?.tier === 'focused' && operation.executionPools && operation.policy?.maxReplicas >= 6
+  return operation?.qualification?.tier === 'focused' &&
+    operation.executionPools &&
+    operation.policy?.maxReplicas >= 3 &&
+    executionPoolLimit(operation.policy) >= 6
     ? 3
     : 2;
 }
@@ -761,8 +770,8 @@ export function assertOrdinaryRuntimeResources(proof, resources, { adoptionSizin
       ?.env?.filter((e) => e.name === 'RIVET_AUTOSCALER_CONFIG') ?? [];
   if (configs.length !== 1 || configs[0].valueFrom)
     throw Error('Ordinary runtime qualification autoscaler policy changed.');
-  const policy = autoscalerPolicy(JSON.parse(configs[0].value).policy);
-  if (pools.length && proof.executionPool && proof.executionPool.maxReplicas !== policy.maxReplicas)
+  const policy = autoscalerPolicyFromConfig(JSON.parse(configs[0].value));
+  if (pools.length && proof.executionPool && proof.executionPool.maxReplicas !== executionPoolLimit(policy))
     throw Error('Execution pool capacity differs from its qualification');
   const execution = workloads.find((r) => r.metadata.labels['app.kubernetes.io/component'] === 'execution');
   if (

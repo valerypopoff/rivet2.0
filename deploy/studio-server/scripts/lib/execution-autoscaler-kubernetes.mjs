@@ -7,6 +7,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { releaseOperationJournalName } from './release-operation-journal.mjs';
 import { classifyStartupFence, assertFenceIntent } from './execution-autoscaler-fence.mjs';
 import { readConcurrently } from './read-concurrently.mjs';
+import { isDeepStrictEqual } from 'node:util';
 
 const enc = encodeURIComponent;
 const fenceAnnotation = 'rivet.dev/execution-retirement-fence';
@@ -457,7 +458,7 @@ export function createExecutionAutoscalerIO({
       if (!step.confirmed) await confirm(resource);
     }
   };
-  return {
+  const io = {
     inspectFence,
     prepareFence,
     convergeFence,
@@ -626,8 +627,8 @@ export function createExecutionAutoscalerIO({
           ) {
             return entry;
           }
-          const status = await retirement(entry.name);
           if (!demand) {
+            const status = await retirement(entry.name);
             const after = await owned({ ...entry, workloadUid: owner.metadata.uid });
             return {
               ...entry,
@@ -635,19 +636,23 @@ export function createExecutionAutoscalerIO({
               ready: after.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true,
             };
           }
-          const text = await api.exec(`${ns}/pods/${enc(entry.name)}/exec`, executionSampleCommand(port));
+          // The inventory is already in memory. Avoid execs when a fresh scrape
+          // is known to be missing, especially while candidate Pods start.
           const sample = metrics.items.find((m) => m.metadata.name === entry.name);
           if (!sample) throw new PendingExecutionCpuSample('Execution CPU sample is not available yet.');
-          const cpu = sample?.containers?.find((c) => c.name === 'api')?.usage?.cpu;
-          const request = pod.spec.containers.find((c) => c.name === 'api')?.resources?.requests?.cpu;
-          const requestCpu = cpuQuantity(request);
+          const requestCpu = cpuQuantity(pod.spec.containers.find((c) => c.name === 'api')?.resources?.requests?.cpu);
+          const cpu = cpuQuantity(sample.containers?.find((c) => c.name === 'api')?.usage?.cpu);
+          if (now() - Date.parse(sample.timestamp) > policy.metricsMaxAgeSeconds * 1000)
+            throw new PendingExecutionCpuSample('Execution CPU sample is stale; wait for a fresh scrape.');
+          const status = await retirement(entry.name);
+          const text = await api.exec(`${ns}/pods/${enc(entry.name)}/exec`, executionSampleCommand(port));
           const age = now() - Date.parse(sample?.timestamp);
           const observed = {
             ...entry,
             ...status,
             active: gauge(text, 'rivet_published_execution_active_runs'),
             limit: gauge(text, 'rivet_published_execution_admission_limit', 'mode="enforce"'),
-            cpuRatio: cpuQuantity(cpu) / requestCpu,
+            cpuRatio: cpu / requestCpu,
             sampleFresh:
               status.protocol === 1 &&
               status.withdrawalProtocol === 1 &&
@@ -676,6 +681,132 @@ export function createExecutionAutoscalerIO({
           sampleFresh: pod.sampleFresh && now() - pod.cpuSampleAt <= policy.metricsMaxAgeSeconds * 1000,
         })),
         startupFence: owner.spec.template.metadata?.annotations?.[fenceAnnotation],
+      };
+    },
+    /** One observation, not a cache between decisions. Both pools use the same
+     * inventory/metrics, then fresh controllers and Pods confirm the whole read.
+     * The individual snapshot API remains available for serial/recovery paths. */
+    async poolSnapshot() {
+      if (!poolWorkloads.length) return { snapshot: await io.snapshot(), peer: null };
+      const started = performance.now();
+      const controllerPaths = poolWorkloads.map(
+        (name) => `/apis/apps/v1/namespaces/${enc(namespace)}/statefulsets/${enc(name)}`,
+      );
+      const podsPath = `${ns}/pods?labelSelector=${enc(selector)}`;
+      const metricsPath = `/apis/metrics.k8s.io/v1beta1/namespaces/${enc(namespace)}/pods?labelSelector=${enc(selector)}`;
+      const hpasPath = `/apis/autoscaling/v2/namespaces/${enc(namespace)}/horizontalpodautoscalers`;
+      const paths = [...controllerPaths, podsPath, metricsPath, hpasPath];
+      const values = await readConcurrently(paths.map((url) => () => api.json('GET', url)));
+      const cache = new Map(paths.map((url, index) => [url, values[index]]));
+      const pods = cache.get(podsPath);
+      if (!pods?.items) throw Error('Execution inventory is unavailable');
+      const hpas = cache.get(hpasPath);
+      if (
+        !cache.get(metricsPath)?.items ||
+        !hpas?.items ||
+        hpas.items.some((h) => poolWorkloads.includes(h.spec?.scaleTargetRef?.name))
+      )
+        throw Error('Execution pool metrics are unavailable or a competing HPA exists');
+      for (const pod of pods.items) cache.set(`${ns}/pods/${enc(pod.metadata.name)}`, pod);
+      // Two snapshots have their own bounded readers. Bound their combined exec
+      // count as well, and transfer permits to queued reads without replaying any.
+      let running = 0,
+        execs = 0;
+      const waiting = [];
+      const observationTransport = {
+        json: async (method, url) => {
+          if (method !== 'GET' || !cache.has(url)) throw Error('Unexpected shared execution observation');
+          return structuredClone(cache.get(url));
+        },
+        exec: async (...args) => {
+          if (running === 4) await new Promise((resolve) => waiting.push(resolve));
+          else running++;
+          try {
+            execs++;
+            return await transport.exec(...args);
+          } finally {
+            const next = waiting.shift();
+            if (next) next();
+            else running--;
+          }
+        },
+      };
+      const snapshots = await readConcurrently(
+        poolWorkloads.map((name, index) => async () => {
+          const owner = values[index];
+          if (!owner) {
+            if (name === workload) throw Error('Execution controller is missing');
+            return { uid: null, replicas: 0, pods: [] };
+          }
+          return createExecutionAutoscalerIO({
+            transport: observationTransport,
+            release,
+            namespace,
+            workload: name,
+            service,
+            image: name === workload ? image : owner.spec.template.spec.containers.find((c) => c.name === 'api')?.image,
+            expectedUid: name === workload ? expectedUid : owner.metadata.uid,
+            policy,
+            poolWorkloads,
+            port,
+            now,
+          }).snapshot();
+        }),
+      );
+      const finalPaths = [...controllerPaths, podsPath, hpasPath];
+      const confirmed = await readConcurrently(finalPaths.map((url) => () => api.json('GET', url)));
+      for (let index = 0; index < poolWorkloads.length; index++) {
+        const before = values[index],
+          after = confirmed[index];
+        if (
+          before?.metadata.uid !== after?.metadata.uid ||
+          after?.metadata.deletionTimestamp ||
+          (after && after.metadata.labels?.['app.kubernetes.io/instance'] !== release)
+        )
+          throw Error('Execution pool controller identity changed during observation');
+        if (
+          before &&
+          !isDeepStrictEqual(
+            { generation: before.metadata.generation, spec: before.spec },
+            { generation: after.metadata.generation, spec: after.spec },
+          )
+        )
+          throw new PendingExecutionCpuSample('Execution pool capacity changed during observation');
+        if (after) snapshots[index].resourceVersion = after.metadata.resourceVersion;
+      }
+      const signature = (list) =>
+        list?.items
+          ?.map((pod) => ({
+            name: pod.metadata.name,
+            uid: pod.metadata.uid,
+            owners: pod.metadata.ownerReferences,
+            labels: pod.metadata.labels,
+            terminating: pod.metadata.deletionTimestamp,
+            containers: pod.spec.containers,
+            phase: pod.status?.phase,
+            ready: pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True') === true,
+            processes: pod.status?.containerStatuses?.map(({ name, containerID, restartCount }) => ({
+              name,
+              containerID,
+              restartCount,
+            })),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+      if (!isDeepStrictEqual(signature(pods), signature(confirmed[2])))
+        throw new PendingExecutionCpuSample('Execution Pod inventory or readiness changed during observation');
+      if (!confirmed[3]?.items || confirmed[3].items.some((h) => poolWorkloads.includes(h.spec?.scaleTargetRef?.name)))
+        throw Error('Execution pool has a competing HPA or unavailable HPA inventory');
+      for (const snapshot of snapshots)
+        for (const pod of snapshot.pods)
+          if (Number.isFinite(pod.cpuSampleAt) && now() - pod.cpuSampleAt > policy.metricsMaxAgeSeconds * 1000)
+            throw new PendingExecutionCpuSample('Execution CPU sample aged during the paired observation');
+      const active = poolWorkloads.indexOf(workload);
+      return {
+        snapshot: snapshots[active],
+        peer: snapshots[1 - active],
+        controllers: confirmed.slice(0, 2),
+        pods: confirmed[2].items,
+        observation: { reads: paths.length + finalPaths.length, execs, elapsedMs: performance.now() - started },
       };
     },
     async peerSnapshot() {
@@ -759,4 +890,5 @@ export function createExecutionAutoscalerIO({
       });
     },
   };
+  return io;
 }

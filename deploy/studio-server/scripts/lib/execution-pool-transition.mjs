@@ -188,8 +188,11 @@ export async function runExecutionPoolTransition({
     });
     await io.verify(operation.record.executionPool);
     await save({ phase: 'complete' });
+  } else {
+    // A completed recovery must recheck live state. A just-completed transition
+    // already verified it before its checkpoint; do not repeat the same scan.
+    await io.verify(operation.record.executionPool);
   }
   assert.equal(operation.record.executionPool.phase, 'complete');
-  await io.verify(operation.record.executionPool);
   return operation.record.executionPool;
 }

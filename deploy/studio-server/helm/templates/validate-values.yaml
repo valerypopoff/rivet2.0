@@ -529,6 +529,9 @@
 {{- if or .Values.autoscaling.execution.enabled .Values.autoscaling.executionController.enabled -}}
 {{- $executionReplicas = int .Values.autoscaling.execution.maxReplicas -}}
 {{- end -}}
+{{- if .Values.ha.executionPools.enabled -}}
+{{- $executionReplicas = add $executionReplicas (int .Values.ha.executionPools.maxSurgeReplicas) -}}
+{{- end -}}
 {{- $evaluationReplicas := ternary (int .Values.replicaCount.evaluation) 0 (and .Values.compatibility.legacyStartupSettingsFiles .Values.hostedEvaluations.enabled) -}}
 {{- $evaluationCapacityDetail := "" -}}
 {{- if gt $evaluationReplicas 0 -}}
@@ -703,6 +706,13 @@
 {{- if not (kindIs "bool" .Values.ha.executionPools.enabled) -}}
 {{- fail "ha.executionPools.enabled must be a boolean" -}}
 {{- end -}}
+{{- $executionSurge := .Values.ha.executionPools.maxSurgeReplicas -}}
+{{- if or (not (or (kindIs "float64" $executionSurge) (kindIs "int" $executionSurge) (kindIs "int64" $executionSurge))) (not (regexMatch "^(0|[1-9][0-9]*)$" (toString $executionSurge))) (gt (int $executionSurge) (int .Values.autoscaling.execution.maxReplicas)) (gt (add (int .Values.autoscaling.execution.maxReplicas) (int $executionSurge)) 100) -}}
+{{- fail "ha.executionPools.maxSurgeReplicas must be a nonnegative integer no greater than the normal maximum, with total capacity at most 100" -}}
+{{- end -}}
+{{- if and (gt (int $executionSurge) 0) (not .Values.ha.executionPools.enabled) -}}
+{{- fail "Temporary execution surge requires enabled execution pools" -}}
+{{- end -}}
 {{- if .Values.ha.executionPools.enabled -}}
 {{- if or (not .Values.ha.enabled) (ne .Values.ha.controlPlane.mode "singleton") (not .Values.autoscaling.executionController.enabled) (not .Values.requestContinuity.enabled) -}}
 {{- fail "Execution pools require singleton HA with the execution controller" -}}
@@ -710,7 +720,7 @@
 {{- if not (has .Values.ha.executionPools.active (list "a" "b")) -}}
 {{- fail "Execution pool active slot must be a or b" -}}
 {{- end -}}
-{{- if or (not (regexMatch "^(0|[1-9][0-9]*)$" (toString .Values.ha.executionPools.retiringReplicas))) (gt (add (int .Values.replicaCount.execution) (int .Values.ha.executionPools.retiringReplicas)) (int .Values.autoscaling.execution.maxReplicas)) -}}
+{{- if or (not (regexMatch "^(0|[1-9][0-9]*)$" (toString .Values.ha.executionPools.retiringReplicas))) (gt (add (int .Values.replicaCount.execution) (int .Values.ha.executionPools.retiringReplicas)) (add (int .Values.autoscaling.execution.maxReplicas) (int $executionSurge))) -}}
 {{- fail "Execution pools exceed the approved total capacity" -}}
 {{- end -}}
 {{- end -}}

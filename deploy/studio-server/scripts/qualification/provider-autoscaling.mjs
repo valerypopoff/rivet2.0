@@ -11,7 +11,7 @@ const { releaseOperationJournalName } = await load('deploy/studio-server/scripts
 const { createKubernetesTransport, createExecutionAutoscalerIO } = await load(
   'deploy/studio-server/scripts/lib/execution-autoscaler-kubernetes.mjs',
 );
-const { autoscalerPolicy, autoscalerPolicyDigest } = await load(
+const { autoscalerPolicy, autoscalerPolicyFromConfig, autoscalerPolicyDigest } = await load(
   'deploy/studio-server/scripts/lib/execution-autoscaler.mjs',
 );
 const WebSocketClass = createRequire(path.join(root, 'packages/studio-server-api/package.json'))('ws');
@@ -92,8 +92,9 @@ export async function runProviderAutoscaling(gate, owned, { phase, checkpoint })
     const actual = JSON.parse(
       deployment.spec.template.spec.containers[0].env.find((e) => e.name === 'RIVET_AUTOSCALER_CONFIG').value,
     );
-    assert.deepEqual(actual.policy, policy);
-    return { deploymentUid: deployment.metadata.uid, actualPolicy: actual.policy };
+    const actualPolicy = autoscalerPolicyFromConfig(actual);
+    assert.deepEqual(actualPolicy, policy);
+    return { deploymentUid: deployment.metadata.uid, actualPolicy };
   });
   report.cooperative = await step('active-and-paused-upgrade-growth-without-shrink', () =>
     runCooperativeProvider(gate, {

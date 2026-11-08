@@ -427,6 +427,10 @@ ha:
   executionPools:
     enabled: false
     active: a
+    # Temporary physical capacity above autoscaling.execution.maxReplicas.
+    # Opt in only after reviewing worker placement and the database budget.
+    # Does not increase steady-state replicas or the autoscaler's normal maximum.
+    maxSurgeReplicas: 0
     # Private transition override. Steady state retains the other slot at zero.
     retiringReplicas: 0
   controlPlane:

@@ -1,6 +1,263 @@
 # Faster ordinary staging and production updates
 
-Status: **November 7 production update succeeded; performance changes await cloud qualification and activation.**
+Status: **November 8 staging qualification and production activation succeeded.
+The twofold ordinary-update speedup remains unmeasured.**
+
+### Current activation and remaining measurement
+
+Build Images `42480312138` produced source
+`355bf0df59868efd0b240156f973639eeaa9a733`.
+[Staging qualification 42486798934](https://github.com/valerypopoff/rivet2.0/actions/runs/42486798934)
+passed with three original and three replacement workers. The production-only
+[rollout 42493190205](https://github.com/valerypopoff/rivet2.0/actions/runs/42493190205)
+reused that qualification and the same images, and passed with two original and
+two replacement workers. No staging repeat or application rebuild was needed.
+
+| Measured scope                            | Staging | Production |
+| ----------------------------------------- | ------: | ---------: |
+| Successful GitHub workflow                |  44m37s |     45m13s |
+| Maintained rollout                        |  30m17s |     36m47s |
+| Execution-pool phase, included in rollout |  21m13s |     18m16s |
+
+These are first-adoption results, not an ordinary-update speed benchmark. Both
+needed compatibility protection for the old server's buffered HTTP responses and
+retired Pods with their old fixed shutdown hooks. Production's templates,
+migration and prerequisite startup took 9m47s, including cold API-image downloads.
+The production proxy image was unchanged and its Pod was preserved. A proxy
+replacement's duration therefore was not measured by this production run.
+
+Staging passed 7,105 short checks and three complete protected transport responses.
+Production passed 753 published requests, including 24 complete five-minute
+responses, and 728 web checks with zero reported failures. All 753 production
+recordings were verified, synthetic fixtures were removed, and the final paired
+pool settled at two active workers with an empty second slot and one proxy.
+The singleton editor/backend paused during replacement; these continuity results
+cover published execution, not uninterrupted editor access.
+
+The first production dispatch stopped before workload mutation because the
+protected installation still referenced the older values bytes. The exact
+qualified installation was then activated, followed by the successful corrected
+run. Before dispatch, confirm the protected installation's values checksum and
+bound adapters match the qualification. The deployment's own checksum guard
+remains authoritative; a mismatch calls for repairing the handoff, not rebuilding
+the application or repeating a successful staging qualification.
+
+The deployed backend and execution Pods now use the conditional preStop helper,
+and the new API image includes the buffered-response shutdown fix. The next real
+compatible release should measure the ordinary path: verify that the old-image
+capability probe records `legacyHttp.required: false`, both full worker pools
+overlap within the approved ceiling, and coordinated drained owners omit the
+repeated shutdown sleep. Preserve fallback protection whenever those conditions
+are absent. Record startup/download, checkpoint, worker retirement, frontend and
+final acceptance times separately. Do not subtract estimated savings from this
+first-adoption run and report them as measured speedup.
+
+There is no need for a manufactured release or another identical cloud test just
+to produce a faster number. Use the next real release, retained staging and the
+existing production-only promotion path. Keep compatibility protection for any
+legacy predecessor or explicit recovery. Private installation files, credentials
+and detailed provider receipts remain excluded from this repository.
+
+### Local implementation of the revised speedup plan
+
+The changes in this section are implemented locally and are **not published or
+activated**. The source above remains the last qualified production deployment.
+Local checks establish behavior and image reuse, not GKE timing or a twofold
+wall-time improvement. Native packaging and regression checks passed as recorded
+below. No cloud test or production deployment was started for these changes.
+
+- **Keep normal scaling separate from temporary replacement capacity.**
+  `ha.executionPools.maxSurgeReplicas` defaults to zero. Normal execution demand
+  remains capped by `autoscaling.execution.maxReplicas`; the total physical
+  ceiling during a journal-owned paired replacement is their sum. Seven old plus
+  seven new workers can fit a reviewed seven-worker steady maximum with seven
+  temporary slots. This does not request fourteen permanent replicas or shrink
+  the serving pool. Missing capacity still stops planning before replacement.
+  Temporary capacity lives outside the rendered controller's steady policy and
+  is omitted when zero. Predecessor images keep the same steady policy digest;
+  qualification still binds the complete configuration and physical ceiling.
+- **Budget the full overlap.** Helm includes temporary slots in its existing
+  query/LISTEN, scheduler, restore and reserved-connection calculation. The
+  installation's seven-worker example needs a 305-connection Rivet allowance for
+  full overlap with its existing ten-connection query pools; the unchanged
+  200-connection allowance rejects that configuration. This is a declared
+  allocation, not evidence of the shared SQL server's actual limit or headroom.
+  No live budget, pool limit or database setting was changed.
+- **Use one fresh observation for both pools.** Each decision shares two
+  controller reads, one Pod inventory, CPU metrics and HPA inventory. Status and
+  admission execs remain bounded to four across both pools. Fresh final
+  controllers, Pods and HPAs check identity, capacity, readiness, container
+  restarts and competing writers. Metrics age is checked after both pools finish.
+  No cache survives the decision. The former 25/31 snapshot calls become 17/21
+  with two/three workers per pool; the paired guard also omits its two repeated
+  candidate traversals. A known transient GET or pending CPU observation may
+  wait for a fresh read within the existing deadline. Writes, commands with
+  uncertain effects and journal CAS rules retain their existing handling.
+- **Make the large runtime layer independent of application compilation.**
+  API/executor dependency installation, fixture removal and security replacement
+  happen before application source is copied. Runtime modules come from that
+  separate stage. Scoped timestamp normalization runs in the installation's
+  writable layer, avoiding a second copy of the entire tree. A hard-linked export
+  tree includes the normalized `/app` parent itself: otherwise `COPY --link`
+  creates that parent with the build time, changing the complete exported blob.
+  The export adds directory entries, not a second copy of dependency data. A small content-addressed layout marker binds the
+  normalization policy, Node version and platform to the COPY cache key, which
+  otherwise ignores modification times. `COPY --link` keeps the dependency layer
+  independent of changes in preceding runtime layers. Application files, source
+  provenance, permissions and relative workspace links remain intact.
+- **Reduce cold downloads without adding registry infrastructure.** The shared
+  repository Yarn configuration intentionally includes multiple operating
+  systems/CPU architectures. Server-image installation overrides that setting
+  only inside the build container, selecting its current Linux architecture and
+  libc. The esbuild security build's runtime profile emits only that target's
+  binary; its default all-platform profile remains available to the qualification
+  actor. The complete dependency export drops from about 417 MiB to 222 MiB
+  compressed, approximately 47 percent, with the existing registry and gzip image
+  format. JavaScript dependencies, non-hoisted resolution, plugins, Code nodes
+  and security/runtime checks are retained. This smaller payload helps cold
+  nodes; layer reuse additionally helps nodes with the predecessor's layer.
+
+The packaging uses Docker's documented
+[linked COPY behavior](https://docs.docker.com/reference/dockerfile/#copy---link)
+and [cache rules for timestamps](https://docs.docker.com/build/cache/invalidation/),
+with a build-local override of Yarn's
+[supported architectures](https://yarnpkg.com/configuration/yarnrc#supportedArchitectures).
+
+This selects smaller native payloads on the existing delivery path before a
+regional Artifact Registry/Image streaming migration. That migration remains an
+option if cold pulls still dominate measured results; no registry, IAM grant,
+new image identity or preload controller is introduced preemptively. The measured
+production startup was two sequential waves (migration, then controller/workers),
+with 4–5 minute pulls. Schema/app-settings migrations still finish before new
+application code serves. Backend/worker mutation concurrency is unchanged: one
+owner writes the journal, and candidates already overlap other preparation.
+
+The existing modern-image capability probe and conditional preStop helper must
+still be observed taking their fast paths. Their compatibility and old-hook
+savings are already implemented; do not add them again as guaranteed new savings.
+Keep complete 300-second responses, actual GKE health/draining, accepted work,
+recordings, old-owner removal and final acceptance as the completion boundary.
+
+### Local proof and next activation
+
+The ordinary source gate includes the new dependency/OCI contracts. Native Helm
+fixtures run complete four- and seven-worker parallel transitions and check
+steady versus physical limits, exact database-budget boundaries, both pool
+identities and final settlement. Pool observation tests cover mixed images,
+concurrent scaling/restarts/readiness changes, missing/stale/expiring CPU samples,
+terminating peers, bounded concurrency and settlement of started reads after
+failure. Added timings are diagnostic fields in the
+existing `ha-execution-pool.json`; they add no extra release gate or artifact
+write. Guard elapsed time includes proxy/checkpoint work, while its read/exec
+counters explicitly cover the pool observation only.
+
+The manual local packaging verifier is deliberately outside ordinary workflows:
+
+```powershell
+node .yarn/releases/yarn-4.17.1.cjs node deploy/studio-server/scripts/verify-runtime-image-packaging.mjs --builder LOCAL_BUILDER --cold-builder FRESH_LOCAL_BUILDER
+```
+
+Use two local `docker-container` BuildKit builders, the second with an empty
+cache. It compares complete compressed-layer digests and uncompressed diff IDs
+for source-only and genuinely cold builds, rejects cached dependency/toolchain
+instructions in the cold receipt, and verifies that a changed dependency payload
+invalidates reuse. It then builds complete API images, checks actual runtime
+reuse of that layer, fingerprints every dependency file/mode/link/owner, and
+checks that a changed TypeScript module was compiled into the application.
+Failure stops further builds. Reports and local fixtures stay under ignored
+`artifacts/runtime-image-packaging/`; they are not cloud qualification evidence.
+Run the packaged buffered-response capability and Unix-socket retirement checks
+on Linux as well; Windows skips do not establish those native behaviors.
+
+Local validation checkpoint (November 8):
+
+- The complete source gate passed 801 checks with five Windows platform skips.
+  The Linux shutdown, cancellation, HTTP-backpressure and dependency suites then
+  passed all 66 checks with no skips, including those platform-specific cases.
+- The native Helm/provider matrix passed 300 checks with two platform skips.
+  Additional checks covered the complete surge qualification/publication path
+  and both four- and seven-worker transitions. Quoted surge values fail Helm
+  rendering instead of creating a controller that fails at startup.
+- Baseline, source-only and empty-cache exports had the same complete diff ID
+  and compressed-layer digest. The gzip layer measured 233,094,886 bytes,
+  versus 437,341,757 bytes for the all-architecture baseline (46.7 percent less).
+  A changed security/dependency payload produced a different layer.
+- Both complete API image variants reused that layer. All 119,621 dependency
+  files, 15,459 directories and 156 links had identical content/metadata
+  fingerprints, while the changed TypeScript module appeared in compiled output.
+  The API and executor images built successfully and passed their security/plugin
+  and offline-installation checks. Both public SDKs loaded as ESM and CommonJS;
+  packaged API capability and autoscaler startup/shutdown probes passed.
+
+These are local implementation checks, not evidence of GKE scheduling, actual
+shared SQL capacity, public routing continuity or measured rollout speed.
+
+The follow-up review fixed two gaps: retained staging now checks its qualified
+database allowance on ordinary surge-enabled releases as well as adoption, and
+known missing/stale CPU samples avoid Pod execs. The six-worker missing/stale
+fixture goes from twelve execs to zero. Malformed metrics still stop immediately,
+and accepted-removal recovery remains independent of metrics. The updated
+autoscaler closure is packaged and checked on Linux; the dependency-layout inputs
+are unchanged, so the completed cold/source-only image-reuse proof still applies.
+The full source gate passed again. Adjacent Helm/provider/packaging checks passed
+131 cases with two platform skips; all 65 Linux pool/headroom checks and the fresh
+packaged autoscaler startup/shutdown probe passed.
+
+The adjacent completion review reproduced a false failure when cooperative
+candidate growth was still becoming Ready, and found a duplicate full pool scan
+immediately after the successful completion checkpoint. Completion now reobserves
+readiness and confirmed transient controller GETs within the existing bounded
+observation window, with lease checks before observations and before proceeding.
+The required serving floor must remain available during growth; losing it fails
+immediately. Identity changes, unremoved owners, invalid serving state and expired leases
+still stop completion. The duplicate scan is removed; completed recovery and
+later whole-release verification retain their fresh checks. No workload command
+or uncertain write is retried.
+The final controller read must confirm the same generation and acknowledge it;
+a changed generation cannot mark the pool complete using stale Pod observations.
+The holistic local review passed 816 source checks (five Windows skips), 94 Linux
+checks without skips, 58 native Helm checks (one platform skip), and 87 retained
+staging/evidence/packaging checks (one platform skip). The freshly bundled
+controller also passed Linux startup and shutdown. The rendered fixtures include
+complete four- and seven-worker transitions.
+
+Before enabling a nonzero surge, verify the actual shared SQL limit and reviewed
+Rivet allocation, eligible worker placement, quotas and admitted reservations,
+including terminating owners. Keep existing query-pool limits while old Pods
+remain. The protected configuration may explicitly set
+`production.executionPoolCapacity: { maxSurgeReplicas: 7, maxConnections: 305 }`
+with a matching staging policy and proposed Helm values. The read-only production
+snapshot retains its observed settings/values digest; only the separate
+qualification target receives that reviewed capacity. The new target is bound
+into the qualification configuration hash and physical-pool evidence, while
+the steady scaling policy digest remains unchanged.
+Publication accepts the optional surge field while continuing to reject unknown
+policy keys; the local end-to-end certificate fixture preserves a normal maximum
+of seven and a physical ceiling of fourteen.
+A holistic installed-to-candidate check caught temporary capacity changing the
+steady policy digest and incorrectly requiring a different source policy.
+The controller configuration now carries it outside `policy`, which keeps old
+controllers compatible. The installed-upgrade planner regression is part of
+the fast source gate. Rendered-resource checks still reject a physical ceiling
+different from the qualified one, and ordinary scaling changes still require
+matching policy evidence.
+A retained staging database must already have that prepared connection allowance
+and a settled Deployment; a cheap setup check rejects a mismatch instead of
+silently resizing/restarting it during the test. No production SQL setting is
+modified by this option. The example numbers require installation review.
+
+After local/native checks, publish one real candidate, qualify it on retained
+staging and promote the same images to production when authorized. Do not create
+another release or start another cloud attempt merely to improve a number.
+Record warm/cold nodes, changed/unchanged proxies, startup, observations, drains
+and complete acceptance. Keep the approximately twofold updating/settling goal
+separate from functional safety: a safe qualification can pass while speed is
+still insufficient. Halving that phase alone would leave the latest workflows
+at about 29m29s staging and 26m50s production if their other time were unchanged.
+Those are arithmetic budgets, not forecasts. A dependable threefold reduction
+or twofold whole-workflow reduction is not established by local tests.
+
+### Previous measured baseline
 
 The measured staging job was 37m18s (run 42319190362, successful staging job);
 production was 41m05s (run 42360497738). Staging's upgrade report was 28m30s.
@@ -12,10 +269,11 @@ The earlier target budget assumed enabled optimizations: both actual runs used
 serial workers, and production did not select `parallel-online` preparation.
 Retained reuse, native frontend overlap and `after-rollout` cutoff were active.
 
-### Next measured performance iteration
+### Activated performance changes
 
-Implemented, requiring source/image publication, matching reviewed private
-configuration and a new qualification before activation:
+The following changes are implemented and activated by the successful runs above.
+New changes still require matching source/image, private configuration and
+qualification evidence before activation:
 
 - Prepare paired execution values in both staging and production, plus
   `preparation: "parallel-online"`. The existing paired path overlaps candidates,
@@ -61,9 +319,9 @@ query. Losing readiness during inspection keeps recovery waiting rather than
 clearing the startup fence using an earlier ready observation. This path still
 avoids demand/CPU metrics while settling an already-issued removal.
 
-A steady-state 20–25 minute target is an estimate to verify, not a measured result.
-Savings overlap. Unqualified serial paths, schema changes, load and cold scheduling can
-exceed it. The private adapters/configuration stay excluded from this public repo.
+Earlier 20–25 minute estimates are superseded by the assumption review above.
+Savings overlap. Unqualified serial paths, schema changes, load and cold scheduling
+remain separate cases. The private adapters/configuration stay excluded from this public repo.
 No cloud test, production change, rebuild or publication is performed by local
 validation. The November 6 history below describes earlier implementation and
 activation states; it is not the current deployment status.

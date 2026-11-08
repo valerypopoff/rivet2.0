@@ -20,6 +20,14 @@ export const installedSettingsDigest = (value) =>
     .update(JSON.stringify(canonical(value)))
     .digest('hex')}`;
 
+/** An explicit reviewed target, not a claim about the live PostgreSQL limit. */
+export function executionPoolCapacityProfile(value) {
+  assert.deepEqual(Object.keys(value ?? {}).sort(), ['maxConnections', 'maxSurgeReplicas']);
+  assert.ok(Number.isSafeInteger(value.maxConnections) && value.maxConnections > 0);
+  assert.ok(Number.isSafeInteger(value.maxSurgeReplicas) && value.maxSurgeReplicas > 0);
+  return { maxConnections: value.maxConnections, maxSurgeReplicas: value.maxSurgeReplicas };
+}
+
 /** Only chart-owned sizing/timing fields cross into staging; no env, endpoints,
  * secret references, raw settings or operation guards. */
 export function qualificationSizing(values) {
@@ -53,6 +61,9 @@ export function qualificationSizing(values) {
             executionPools: {
               enabled: true,
               active: values.ha.executionPools.active,
+              ...(values.ha.executionPools.maxSurgeReplicas
+                ? { maxSurgeReplicas: values.ha.executionPools.maxSurgeReplicas }
+                : {}),
               retiringReplicas: 0,
             },
           },
@@ -92,6 +103,11 @@ export function qualificationSizing(values) {
 }
 
 export function assertQualificationInstallationMatches(current, expected) {
+  assert.deepEqual(
+    current.executionPoolCapacity ?? null,
+    expected.executionPoolCapacity ?? null,
+    'Reviewed execution capacity target changed since qualification',
+  );
   assert.equal(
     installedSettingsDigest(current.qualificationValues ?? null),
     installedSettingsDigest(expected.qualificationValues ?? null),
@@ -112,6 +128,7 @@ export async function inspectQualificationInstallation({
   valuesText,
   valuesDigest,
   proxyMinimum,
+  executionPoolCapacity,
   run,
   helm = 'helm',
   kubectl = 'kubectl',
@@ -122,6 +139,7 @@ export async function inspectQualificationInstallation({
   const operatorValuesDigest = valuesDigest ?? `sha256:${createHash('sha256').update(valuesText).digest('hex')}`;
   assert.match(operatorValuesDigest, /^sha256:[a-f0-9]{64}$/);
   assert.ok(proxyMinimum === undefined || [1, 2].includes(proxyMinimum), 'Reviewed proxy minimum must be one or two');
+  if (executionPoolCapacity) executionPoolCapacity = executionPoolCapacityProfile(executionPoolCapacity);
   const system = JSON.parse(
     (await run(kubectl, ['--context', context, 'get', 'namespace', 'kube-system', '-o', 'json'], { capture: true }))
       .stdout,
@@ -146,6 +164,7 @@ export async function inspectQualificationInstallation({
       Object.entries({
         minReplicas: e.minReplicas,
         maxReplicas: e.maxReplicas,
+        maxSurgeReplicas: values.ha?.executionPools?.maxSurgeReplicas ?? 0,
         targetCpuPercent: e.targetCPUUtilizationPercentage,
         ...Object.fromEntries(
           [
@@ -200,6 +219,21 @@ export async function inspectQualificationInstallation({
     qualificationValues.autoscaling.proxy.minReplicas = proxyMinimum;
     qualificationValues.availability.topologySpread.minDomains = proxyMinimum;
   }
+  let targetPolicy = policy;
+  if (executionPoolCapacity) {
+    assert.equal(values.ha.executionPools?.enabled, true, 'Surge adoption requires an existing paired installation');
+    assert.ok(
+      executionPoolCapacity.maxSurgeReplicas >= (policy.maxSurgeReplicas ?? 0),
+      'Surge adoption cannot reduce the existing ceiling',
+    );
+    assert.ok(
+      executionPoolCapacity.maxConnections >= values.postgres.maxConnections,
+      'Surge adoption cannot reduce the database budget',
+    );
+    targetPolicy = autoscalerPolicy({ ...policy, maxSurgeReplicas: executionPoolCapacity.maxSurgeReplicas });
+    qualificationValues.ha.executionPools.maxSurgeReplicas = executionPoolCapacity.maxSurgeReplicas;
+    qualificationValues.postgres.maxConnections = executionPoolCapacity.maxConnections;
+  }
   return {
     scope: 'production-read-only',
     observedAt: new Date(now()).toISOString(),
@@ -215,8 +249,9 @@ export async function inspectQualificationInstallation({
     clusterUid: system.metadata.uid,
     settingsDigest: installedSettingsDigest(values),
     valuesDigest: operatorValuesDigest,
-    policy,
-    policyDigest,
+    policy: targetPolicy,
+    policyDigest: autoscalerPolicyDigest(targetPolicy),
+    ...(executionPoolCapacity ? { executionPoolCapacity } : {}),
     controlPlaneMode,
     edgeProfile: 'compact',
     baseline: { backend: 1, web: 1, execution: 2, proxy: values.autoscaling.proxy.minReplicas, autoscaler: 1 },

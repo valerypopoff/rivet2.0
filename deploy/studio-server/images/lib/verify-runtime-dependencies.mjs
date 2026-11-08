@@ -8,6 +8,13 @@ import path from 'node:path';
 // Run inside the final API/executor image, non-root, with only temporary scratch.
 const require = createRequire('/app/package.json');
 assert.equal(process.versions.node, '24.22.1');
+const arguments_ = process.argv.slice(2);
+if (arguments_.includes('--native-only'))
+  assert.deepEqual(
+    await fs.readdir('/app/node_modules/@esbuild'),
+    [`linux-${process.arch}`],
+    'Server images must retain their native esbuild package without shipping other platforms',
+  );
 const esbuild = require('esbuild');
 assert.equal(esbuild.version, '0.25.12');
 const cli = require.resolve('esbuild/bin/esbuild');
@@ -56,7 +63,7 @@ try {
     JSON.stringify({ name: 'rivet-security-fixture', version: '1.0.0', main: 'index.cjs' }),
   );
   await fs.writeFile(path.join(fixture, 'index.cjs'), 'module.exports = 42;');
-  const managers = process.argv.slice(2);
+  const managers = arguments_.filter((argument) => argument !== '--native-only');
   assert.ok(managers.length);
   for (const manager of managers) {
     assert.ok(['npm', 'pnpm'].includes(manager));

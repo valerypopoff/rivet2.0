@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { autoscalerPolicy, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
+import { autoscalerPolicyFromConfig, autoscalerPolicyDigest } from './execution-autoscaler.mjs';
 import { journalForReleaseOperation, releaseOperationJournalName } from './release-operation-journal.mjs';
 import { kubernetesReadRetryReason } from './kubernetes-read-errors.mjs';
 
@@ -132,7 +132,7 @@ function executionAutoscaler(resources, release, namespace) {
     !config.workload
   )
     throw new Error('Release settlement execution autoscaler must be active with the expected target identity.');
-  autoscalerPolicy(config.policy);
+  autoscalerPolicyFromConfig(config);
   return { candidate, binding };
 }
 
@@ -705,7 +705,7 @@ export async function waitForExecutionAutoscalerActivation({
   const { config } = execution.binding;
   if (typeof config.manifestDigest !== 'string' || !config.manifestDigest)
     throw new Error('Execution autoscaler activation requires the rendered manifest identity.');
-  const policy = autoscalerPolicy(config.policy);
+  const policy = autoscalerPolicyFromConfig(config);
   const policyDigest = autoscalerPolicyDigest(policy);
   await artifact(
     'execution-autoscaler-activation.json',

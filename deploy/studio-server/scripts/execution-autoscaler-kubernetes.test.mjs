@@ -55,7 +55,7 @@ function render(...overrides) {
         'objectStorage.bucket=fixture',
         '--set',
         'postgres.maxConnections=500',
-        ...overrides.flatMap((v) => ['--set', v]),
+        ...overrides.flatMap((v) => (Array.isArray(v) ? v : ['--set', v])),
       ],
       { cwd: root, encoding: 'utf8', stdio: 'pipe' },
     ),
@@ -67,18 +67,19 @@ function render(...overrides) {
     .filter(Boolean);
 }
 
+const protectedValues = [
+  'requestContinuity.enabled=true',
+  'requestContinuity.backendServiceDrainSeconds=360',
+  'requestContinuity.routeName=fixture',
+  'requestContinuity.backendPolicyName=fixture',
+  'requestContinuity.gatewayName=fixture',
+  'requestContinuity.gcpProject=isolated-staging',
+  'requestContinuity.gcpRegion=europe-central2',
+  'lifecycle.proxy.preStopDelaySeconds=420',
+  'lifecycle.proxy.terminationGracePeriodSeconds=600',
+];
+
 test('native Helm paired pools preserve the old selector and declare exact read/exec/scale capabilities', async () => {
-  const protectedValues = [
-    'requestContinuity.enabled=true',
-    'requestContinuity.backendServiceDrainSeconds=360',
-    'requestContinuity.routeName=fixture',
-    'requestContinuity.backendPolicyName=fixture',
-    'requestContinuity.gatewayName=fixture',
-    'requestContinuity.gcpProject=isolated-staging',
-    'requestContinuity.gcpRegion=europe-central2',
-    'lifecycle.proxy.preStopDelaySeconds=420',
-    'lifecycle.proxy.terminationGracePeriodSeconds=600',
-  ];
   const previous = render(...protectedValues).filter((resource) => resource.kind === 'StatefulSet');
   previous.forEach((resource, index) => {
     resource.metadata.uid = `controller-${index}`;
@@ -93,6 +94,7 @@ test('native Helm paired pools preserve the old selector and declare exact read/
   assert.ok(pair.plan);
   assert.equal(pair.strategyReason, 'ready-candidates-before-retirement');
   assert.equal(pair.slot, 'b');
+  assert.equal(Object.hasOwn(pair.config, 'maxSurgeReplicas'), false, 'Zero surge preserves predecessor config');
   assert.equal(pair.config.workload, pair.other.metadata.name);
   const old = previous.find((resource) => resource.metadata.labels['app.kubernetes.io/component'] === 'execution');
   assert.deepEqual(pair.prior.spec.selector, old.spec.selector, 'Legacy StatefulSet selector is immutable');
@@ -479,8 +481,92 @@ test('reviewed execution ceiling fits a shared 200-connection allowance without 
   const resources = render('postgres.maxConnections=200', 'autoscaling.execution.maxReplicas=7');
   const controller = resources.find((r) => r.kind === 'Deployment' && r.metadata.name.endsWith('-autoscaler'));
   assert.equal(JSON.parse(controller.spec.template.spec.containers[0].env[0].value).policy.maxReplicas, 7);
+  assert.equal(
+    Object.hasOwn(JSON.parse(controller.spec.template.spec.containers[0].env[0].value).policy, 'maxSurgeReplicas'),
+    false,
+    'The zero-surge configuration must still start the predecessor autoscaler',
+  );
   for (const max of [8, 10])
     assert.throws(() => render('postgres.maxConnections=200', `autoscaling.execution.maxReplicas=${max}`));
+});
+
+test('temporary paired surge is budgeted separately and cannot enlarge normal autoscaling or RBAC', async () => {
+  const settings = [
+    ...protectedValues,
+    'ha.executionPools.enabled=true',
+    'autoscaling.execution.maxReplicas=7',
+    'ha.executionPools.maxSurgeReplicas=7',
+    'legacyRestore.enabled=true',
+  ];
+  const resources = render(...settings, 'postgres.maxConnections=305');
+  const controller = resources.find((r) => r.kind === 'Deployment' && r.metadata.name.endsWith('-autoscaler'));
+  const config = JSON.parse(controller.spec.template.spec.containers[0].env[0].value);
+  assert.equal(config.policy.maxReplicas, 7);
+  assert.equal(config.maxSurgeReplicas, 7);
+  assert.equal(
+    Object.hasOwn(config.policy, 'maxSurgeReplicas'),
+    false,
+    'Predecessor controllers must retain the same steady policy hash',
+  );
+  const proof = {
+    protocol: 5,
+    executionPools: true,
+    autoscalerPolicyDigest: autoscalerPolicyDigest(config.policy),
+    executionPool: {
+      protocol: 1,
+      parallelAcceptedWork: true,
+      previousPoolRemoved: true,
+      minimumReady: 2,
+      maxReplicas: 14,
+      maximumPhysicalPods: 4,
+      acceptedOwners: [0, 1].map((i) => ({
+        uid: `owner-${i}`,
+        correlationId: `run-${i}`,
+        recordingId: `recording-${i}`,
+      })),
+    },
+  };
+  assert.doesNotThrow(() => assertOrdinaryRuntimeResources(proof, resources));
+  const stale = structuredClone(proof);
+  stale.executionPool.maxReplicas = 7;
+  assert.throws(() => assertOrdinaryRuntimeResources(stale, resources), /capacity differs from its qualification/);
+  const role = resources.find((r) => r.kind === 'Role' && r.metadata.name === controller.metadata.name);
+  assert.ok(
+    role.rules
+      .filter((r) => r.resources.includes('pods/exec'))
+      .flatMap((r) => r.resourceNames)
+      .every((name) => Number(name.split('-').at(-1)) <= 7),
+  );
+  for (const budget of [200, 304])
+    assert.throws(() => render(...settings, `postgres.maxConnections=${budget}`), /PostgreSQL capacity/);
+  for (const bad of [
+    'ha.executionPools.maxSurgeReplicas=-1',
+    'ha.executionPools.maxSurgeReplicas=8',
+    'ha.executionPools.maxSurgeReplicas=1.5',
+    ['--set-string', 'ha.executionPools.maxSurgeReplicas=7'],
+    'ha.executionPools.enabled=false',
+  ])
+    assert.throws(() => render(...settings, bad));
+  for (const count of [4, 7]) {
+    const result = await exerciseExecutionPoolRollout({
+      previous: render(...settings, `replicaCount.execution=${count}`, 'images.api.digest=sha256:' + 'a'.repeat(64)),
+      candidate: render(...settings, 'images.api.digest=sha256:' + 'b'.repeat(64)),
+      renderFinal: async (guards) =>
+        render(
+          ...settings,
+          'images.api.digest=sha256:' + 'b'.repeat(64),
+          'ha.executionPools.active=' + guards.ha.executionPools.active,
+          'ha.executionPools.retiringReplicas=' + guards.ha.executionPools.retiringReplicas,
+          'replicaCount.execution=' + guards.replicaCount.execution,
+        ),
+    });
+    assert.equal(result.result.phase, 'complete');
+    assert.equal(result.result.executionPool.plan.maxReplicas, 14);
+    assert.equal(result.result.executionPool.owners.length, count);
+    assert.equal(result.guards.at(-1).ha.executionPools.retiringReplicas, 0);
+    assert.equal(result.guards.at(-1).replicaCount.execution, count);
+    assert.ok(!result.mutations.some((m) => m.startsWith('recreate:') && m.includes('execution')));
+  }
 });
 
 test('compact HA maintenance validation preserves workload and storage identities while fencing traffic and timers', () => {

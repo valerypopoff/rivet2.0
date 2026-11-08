@@ -20,6 +20,8 @@ import {
 } from './lib/hosted-staging-setup.mjs';
 import { deploymentFailureDetails } from './lib/deployment-diagnostics.mjs';
 import { sizingInput } from './lib/resource-sizing.mjs';
+import { executionPoolCapacityProfile } from './lib/runtime-qualification-installation.mjs';
+import { autoscalerPolicy } from './lib/execution-autoscaler.mjs';
 import { assertToolingRun, toolingPublicationIdentity, applicationInputDigest } from './lib/release-tooling.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -147,6 +149,11 @@ async function prepareHostedReleaseWork(
     assert.ok([1, 2].includes(p.proxyMinimum), 'Reviewed proxy minimum must be one or two');
     variables.RIVET_QUALIFICATION_PRODUCTION_PROXY_MINIMUM = String(p.proxyMinimum);
   }
+  if (p.executionPoolCapacity) {
+    variables.RIVET_QUALIFICATION_PRODUCTION_EXECUTION_POOL_CAPACITY = JSON.stringify(
+      executionPoolCapacityProfile(p.executionPoolCapacity),
+    );
+  }
   for (const [key, value] of Object.entries({
     CONTEXT: p.context,
     NAMESPACE: p.namespace,
@@ -162,6 +169,18 @@ async function prepareHostedReleaseWork(
     assert.match(environment.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
     const s = configuration.staging;
     assertClusterIdentity(s);
+    if (p.executionPoolCapacity) {
+      const capacity = executionPoolCapacityProfile(p.executionPoolCapacity);
+      assert.equal(
+        autoscalerPolicy(s.policy).maxSurgeReplicas,
+        capacity.maxSurgeReplicas,
+        'Staging policy must match the reviewed temporary execution capacity',
+      );
+      assert.ok(
+        !sizing && !s.developerOverlapProfile,
+        'Surge capacity cannot be combined with sizing or control-plane adoption',
+      );
+    }
     assert.match(p.valuesDigest, /^sha256:[a-f0-9]{64}$/);
     variables.RIVET_QUALIFICATION_PRODUCTION_VALUES_SHA256 = p.valuesDigest;
     const publication = JSON.parse(await fs.readFile(publicationFile, 'utf8'));
@@ -321,16 +340,24 @@ async function prepareHostedReleaseWork(
     const values = path.join(directory, 'values.json'),
       policy = path.join(directory, 'policy.json');
     const valuesBytes = Buffer.from(installation.valuesBase64, 'base64');
-    if (p.proxyMinimum !== undefined) {
+    if (p.proxyMinimum !== undefined || p.executionPoolCapacity) {
       assert.equal(
         `sha256:${createHash('sha256').update(valuesBytes).digest('hex')}`,
         p.valuesDigest,
         'Prepared installation values differ from the staging configuration',
       );
       const target = JSON.parse(valuesBytes);
-      assert.equal(target.replicaCount?.proxy, p.proxyMinimum);
-      assert.equal(target.autoscaling?.proxy?.minReplicas, p.proxyMinimum);
-      assert.equal(target.availability?.topologySpread?.minDomains, p.proxyMinimum);
+      if (p.proxyMinimum !== undefined) {
+        assert.equal(target.replicaCount?.proxy, p.proxyMinimum);
+        assert.equal(target.autoscaling?.proxy?.minReplicas, p.proxyMinimum);
+        assert.equal(target.availability?.topologySpread?.minDomains, p.proxyMinimum);
+      }
+      if (p.executionPoolCapacity) {
+        const capacity = executionPoolCapacityProfile(p.executionPoolCapacity);
+        assert.equal(target.ha?.executionPools?.enabled, true);
+        assert.equal(target.ha.executionPools.maxSurgeReplicas, capacity.maxSurgeReplicas);
+        assert.equal(target.postgres?.maxConnections, capacity.maxConnections);
+      }
     }
     await fs.writeFile(values, valuesBytes, { flag: 'wx', mode: 0o600 });
     for (const name of ['backup', 'acceptance']) {

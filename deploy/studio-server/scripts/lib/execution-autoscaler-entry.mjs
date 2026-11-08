@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createRequire } from 'node:module';
-import { autoscalerPolicy, reconcileExecutionAutoscaling } from './execution-autoscaler.mjs';
+import { autoscalerPolicyFromConfig, reconcileExecutionAutoscaling } from './execution-autoscaler.mjs';
 import { createKubernetesTransport, createExecutionAutoscalerIO } from './execution-autoscaler-kubernetes.mjs';
 
 const config = JSON.parse(process.env.RIVET_AUTOSCALER_CONFIG);
-const policy = autoscalerPolicy(config.policy);
+const policy = autoscalerPolicyFromConfig(config);
 const transport = createKubernetesTransport({
   origin: `https://${process.env.KUBERNETES_SERVICE_HOST}:${process.env.KUBERNETES_SERVICE_PORT_HTTPS ?? '443'}`,
   WebSocketClass: createRequire(import.meta.url)('ws'),

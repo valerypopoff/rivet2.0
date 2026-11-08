@@ -36,9 +36,12 @@ import {
 import {
   inspectQualificationInstallation,
   assertQualificationInstallationMatches,
+  executionPoolCapacityProfile,
 } from './lib/runtime-qualification-installation.mjs';
 import { prepareRuntimeQualification } from './lib/runtime-qualification-publication.mjs';
 import { autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
+import { qualificationConfigurationDigest } from './lib/release-qualification-policy.mjs';
+
 import { HA_REQUIRED_CHECKS, HA_ORDINARY_RUNTIME_CHECKS } from './lib/ha-release-evidence.mjs';
 import { overlapProfileDigest } from './lib/qualification-overlap-profile.mjs';
 import { prepareQualificationReadinessPolicy } from './lib/runtime-qualification-readiness.mjs';
@@ -50,6 +53,88 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sha = 'a'.repeat(40),
   repository = 'example/rivet';
 const evidence = { workflow: 'Build Images', runId: '123', runAttempt: 1 };
+
+test('reviewed execution surge qualifies a target budget while preserving the observed production snapshot', async () => {
+  const f = fixture();
+  const values = {
+    ha: {
+      enabled: true,
+      controlPlane: { mode: 'singleton' },
+      executionPools: { enabled: true, active: 'b', retiringReplicas: 0 },
+    },
+    availability: { gkeGatewayProfile: 'compact', topologySpread: { minDomains: 1 } },
+    replicaCount: { backend: 1, web: 1, execution: 2, proxy: 1 },
+    autoscaling: {
+      execution: { enabled: false, minReplicas: 2, maxReplicas: 7, targetCPUUtilizationPercentage: 75 },
+      executionController: { enabled: true },
+      proxy: { enabled: true, minReplicas: 1, maxReplicas: 4 },
+    },
+    postgres: { maxConnections: 200, poolMaxPerApiPod: 10, reservedConnections: 30 },
+    release: {
+      production: {
+        manifestDigest: f.operation.predecessorManifestDigest,
+        database: { managedWorkflowSchemaVersion: f.operation.installed.schemaVersion },
+      },
+    },
+    images: f.operation.previous.images,
+  };
+  const original = structuredClone(values),
+    calls = [];
+  const observe = (options = {}) =>
+    inspectQualificationInstallation({
+      context: 'fixture',
+      namespace: 'prod',
+      release: 'rivet',
+      expectedNamespaceUid: 'production-ns',
+      valuesText: 'reviewed-target-values',
+      ...options,
+      run: async (bin, args) => {
+        calls.push(args);
+        return {
+          stdout: JSON.stringify(
+            bin === 'kubectl'
+              ? { metadata: { uid: args.includes('kube-system') ? 'cluster' : 'production-ns' } }
+              : values,
+          ),
+        };
+      },
+    });
+  const baseline = await observe();
+  const target = await observe({ executionPoolCapacity: { maxSurgeReplicas: 7, maxConnections: 305 } });
+  assert.equal(target.policy.maxReplicas, 7);
+  assert.equal(target.policy.maxSurgeReplicas, 7);
+  assert.equal(target.qualificationValues.postgres.maxConnections, 305);
+  assert.equal(target.qualificationValues.ha.executionPools.maxSurgeReplicas, 7);
+  assert.equal(target.policyDigest, baseline.policyDigest);
+  assert.notEqual(
+    qualificationConfigurationDigest(target, target.policy),
+    qualificationConfigurationDigest(baseline, baseline.policy),
+    'Temporary capacity remains bound to a fresh qualification configuration',
+  );
+  assert.equal(target.settingsDigest, baseline.settingsDigest);
+  assert.deepEqual(values, original);
+  assert.ok(calls.every((args) => args.includes('get') || args.includes('values')));
+  assertQualificationInstallationMatches(target, target);
+  assert.throws(
+    () => assertQualificationInstallationMatches({ ...target, executionPoolCapacity: undefined }, target),
+    /capacity target/,
+  );
+  assert.throws(
+    () => assertQualificationInstallationMatches({ ...target, settingsDigest: 'changed' }, target),
+    /Production settingsDigest changed/,
+  );
+  for (const profile of [
+    { maxSurgeReplicas: 8, maxConnections: 305 },
+    { maxSurgeReplicas: 7, maxConnections: 199 },
+  ])
+    await assert.rejects(observe({ executionPoolCapacity: profile }));
+  for (const profile of [
+    { maxSurgeReplicas: 0, maxConnections: 305 },
+    { maxSurgeReplicas: '7', maxConnections: 305 },
+    { maxSurgeReplicas: 7, maxConnections: 305, poolMaxPerApiPod: 1 },
+  ])
+    assert.throws(() => executionPoolCapacityProfile(profile));
+});
 
 test('fresh read-only checkout receives exact reviewed private policy without executing adapters', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-readiness-policy-'));
@@ -1252,6 +1337,7 @@ for (const profile of [
   'serial pools',
   'parallel pools',
   'parallel grown pools',
+  'parallel surge pools',
   'single proxy',
   'one proxy against two-proxy production',
 ])
@@ -1259,7 +1345,7 @@ for (const profile of [
     const retained = profile !== 'disposable';
     const serialPools = profile === 'serial pools';
     const parallelPools = profile.startsWith('parallel');
-    const poolOwners = profile === 'parallel grown pools' ? 3 : 2;
+    const poolOwners = ['parallel grown pools', 'parallel surge pools'].includes(profile) ? 3 : 2;
     const singleProxy = ['single proxy', 'one proxy against two-proxy production'].includes(profile);
     const f = fixture(),
       continuity = focusedContinuityProviderFacts();
@@ -1268,6 +1354,7 @@ for (const profile of [
     f.input.installed.qualificationValues = { resources: {}, postgres: {}, lifecycle: {} };
     if (poolOwners === 3) {
       f.input.policy.maxReplicas = 7;
+      if (profile === 'parallel surge pools') f.input.policy.maxSurgeReplicas = 7;
       f.input.installed.policy = f.input.policy;
       f.input.installed.policyDigest = autoscalerPolicyDigest(f.input.policy);
     }
@@ -1373,7 +1460,7 @@ for (const profile of [
         candidateUid: 'candidate-pool',
         scaleIssued: true,
         plan: {
-          maxReplicas: f.operation.policy.maxReplicas,
+          maxReplicas: f.operation.policy.maxReplicas + (f.operation.policy.maxSurgeReplicas ?? 0),
           previous: { replicas: poolOwners },
           image: `${f.operation.candidate.images.api.repository}@${f.operation.candidate.images.api.digest}`,
         },
@@ -1418,6 +1505,10 @@ for (const profile of [
       assert.equal(result.control.evidence.executionPools, true);
       assert.equal(result.control.evidence.executionPool.parallelAcceptedWork, true);
       assert.equal(result.control.evidence.executionPool.acceptedOwners.length, poolOwners);
+      if (profile === 'parallel surge pools') {
+        assert.equal(result.control.evidence.executionPool.maxReplicas, 14);
+        assert.equal(f.operation.policy.maxReplicas, 7);
+      }
       if (poolOwners === 3) {
         const insufficient = structuredClone(f.facts.upgrade);
         insufficient.capacity.initial.execution = 2;
