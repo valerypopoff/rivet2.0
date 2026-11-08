@@ -15,6 +15,7 @@ import {
   requestContinuityProfile,
   assertProtectedProxyTemplate,
   CONTINUITY_DURATION_STAGES,
+  continuityRequestTiming,
   continuityStages,
   continuityTimeoutMs,
   assertContinuityAcceptance,
@@ -333,7 +334,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       }
       const tasks = ['fresh-http1', 'pooled-http1', 'http2'].map((transport) => {
         const requestId = randomUUID(),
-          delayMs = CONTINUITY_DURATION_STAGES[stage] ?? 300000,
+          { durationMs: delayMs, timeoutMs } = continuityRequestTiming(stage, this.gate.operation.qualification?.tier),
           body = JSON.stringify({ requestId, delayMs, input: 'x'.repeat(16384) }),
           start = performance.now();
         const receipt = { stage, transport, requestId, durationMs: delayMs, startedAt: new Date().toISOString() };
@@ -345,16 +346,17 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
         // (for example an HTTP/2 session that closed after warm-up).
         const response = Promise.resolve().then(() =>
           transport === 'http2'
-            ? requestHttp2(session, `/workflows/${this.endpoint}`, { body, headers, timeoutMs: delayMs + 30000 })
+            ? requestHttp2(session, `/workflows/${this.endpoint}`, { body, headers, timeoutMs })
             : requestHttp1(`${base}/workflows/${this.endpoint}`, {
                 agent: transport === 'pooled-http1' ? agent : false,
                 body,
                 headers,
-                timeoutMs: delayMs + 30000,
+                timeoutMs,
               }),
         );
         return response
           .then((result) => {
+            const elapsedMs = performance.now() - start;
             responseEvidence = { status: result.status, bodyBytes: result.bytes, responseEnded: true };
             assert.equal(result.status, 200);
             assert.equal(JSON.parse(result.body).output.value, body, 'Complete synthetic response changed');
@@ -365,14 +367,15 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
             if (transport === 'pooled-http1') receipt.reusedConnection = result.reusedConnection;
             Object.assign(receipt, {
               correlationId,
-              elapsedMs: Math.round(performance.now() - start),
+              elapsedMs: Math.round(elapsedMs),
               finishedAt: new Date().toISOString(),
               fullBody: true,
               bodyBytes: result.bytes,
               bodySha256: sha(result.body),
               outcome: 'passed',
             });
-            assert.ok(receipt.elapsedMs >= delayMs, 'The provider must execute the full fixture duration');
+            assert.ok(elapsedMs >= delayMs, 'The provider must execute the full fixture duration');
+            assert.ok(elapsedMs <= timeoutMs, 'The complete response exceeded its total request deadline');
           })
           .catch((error) => {
             Object.assign(receipt, {
@@ -699,7 +702,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     }
     assert.equal(this.failures.length, 0);
     return {
-      protocol: focused ? 4 : 2,
+      protocol: focused ? 5 : 2,
       profile: this.gate.operation.requestContinuityProfile,
       bootstrap: this.bootstrap,
       bridgeCleaned: true,

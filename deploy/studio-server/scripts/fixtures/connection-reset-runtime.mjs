@@ -29,7 +29,8 @@ const json = (res, value) => {
   res.end(JSON.stringify(value));
 };
 
-export function diagnosticBackend({ uid, fault = false }) {
+export function diagnosticBackend({ uid, fault = false, holdMs = 300000 }) {
+  assert.ok([100, 300000].includes(holdMs));
   const owner = {
       uid,
       incarnation: randomUUID(),
@@ -46,7 +47,7 @@ export function diagnosticBackend({ uid, fault = false }) {
         return json(res, { owner, requests: [...records.values()].map((r) => r.receipt) });
       if (req.method === 'POST' && req.url === '/release') {
         const { requestIds } = await body(req);
-        assert.ok(Array.isArray(requestIds) && requestIds.length > 0 && requestIds.length <= 3);
+        assert.ok(Array.isArray(requestIds) && requestIds.length > 0 && requestIds.length <= 4);
         assert.equal(new Set(requestIds).size, requestIds.length);
         const selected = requestIds.map((id) => records.get(id));
         assert.ok(selected.every((r) => r?.receipt.held && !r.receipt.released));
@@ -59,7 +60,8 @@ export function diagnosticBackend({ uid, fault = false }) {
       assert.match(input.requestId ?? '', /^[a-f0-9-]{36}$/);
       assert.equal(typeof input.hold, 'boolean');
       assert.equal(input.input, 'x'.repeat(16384));
-      assert.ok(records.size < 6 && !records.has(input.requestId), 'Duplicate or excess request');
+      const control = req.headers['x-diagnostic-control'] === '1';
+      assert.ok(records.size < 7 && !records.has(input.requestId), 'Duplicate or excess request');
       const payload = { output: { type: 'string', value: JSON.stringify(input) }, padding: '' };
       payload.padding = 'p'.repeat(diagnosticResponseBytes - Buffer.byteLength(JSON.stringify(payload)));
       const bytes = Buffer.from(JSON.stringify(payload));
@@ -69,7 +71,8 @@ export function diagnosticBackend({ uid, fault = false }) {
         ownerUid: uid,
         acceptedAt: new Date().toISOString(),
         held: input.hold,
-        prefixBytes: input.hold ? 11959 : bytes.length,
+        control,
+        prefixBytes: input.hold ? 0 : bytes.length,
         socket: {
           localAddress: req.socket.localAddress,
           localPort: req.socket.localPort,
@@ -82,7 +85,7 @@ export function diagnosticBackend({ uid, fault = false }) {
         autoReleased: false,
       };
       let timer;
-      const truncate = input.hold && fault && !faultAssigned;
+      const truncate = input.hold && !control && fault && !faultAssigned;
       if (truncate) faultAssigned = true;
       const release = (automatic) => {
         if (receipt.released) return;
@@ -90,8 +93,8 @@ export function diagnosticBackend({ uid, fault = false }) {
         receipt.held = false;
         receipt.released = true;
         receipt.autoReleased = automatic;
-        if (truncate) res.destroy();
-        else res.end(bytes.subarray(receipt.prefixBytes));
+        if (truncate) res.write(bytes.subarray(0, 11959), () => res.destroy());
+        else res.end(bytes);
       };
       records.set(input.requestId, { receipt, release });
       res.setHeader('content-type', 'application/json');
@@ -107,8 +110,9 @@ export function diagnosticBackend({ uid, fault = false }) {
         clearTimeout(timer);
       });
       if (input.hold) {
-        res.write(bytes.subarray(0, receipt.prefixBytes));
-        timer = setTimeout(() => release(true), 30000);
+        // The failed production-shaped probe was silent until execution ended.
+        // Sending an earlier prefix did not exercise a silent connection.
+        timer = setTimeout(() => release(true), holdMs + 30000);
       } else {
         receipt.released = true;
         res.end(bytes);
@@ -207,7 +211,11 @@ async function kubernetesApi(method, path, payload) {
 if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])) {
   const mode = process.argv[2];
   if (mode === 'backend')
-    diagnosticBackend({ uid: process.env.POD_UID, fault: process.env.LOCAL_TRUNCATE === '1' }).listen(8080, '0.0.0.0');
+    diagnosticBackend({
+      uid: process.env.POD_UID,
+      fault: process.env.LOCAL_TRUNCATE === '1',
+      holdMs: Number(process.env.DIAGNOSTIC_HOLD_MS ?? 300000),
+    }).listen(8080, '0.0.0.0');
   else if (mode === 'router') {
     const r = diagnosticRouter();
     r.tcp.listen(8080, '0.0.0.0');
@@ -253,6 +261,7 @@ if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpath
       backendA: 'http://a:8080',
       backendB: 'http://b:8080',
       change,
+      holdMs: mode === 'client-local' ? 100 : 300000,
       evidence: (event) => console.error(JSON.stringify(event)),
     });
     await writeFile('/tmp/connection-reset-report.json', JSON.stringify(report, null, 2));

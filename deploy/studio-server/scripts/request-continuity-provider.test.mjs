@@ -120,17 +120,27 @@ test('lost native-roll acknowledgement never retries or certifies replacement', 
   assert.equal(f.probes.replacement, undefined);
 });
 
-for (const invalidBody of [false, true]) {
-  test(`protected response diagnostics with reopened connections: ${invalidBody ? 'invalid JSON' : 'complete'}`, async (t) => {
+for (const { focused, invalidBody, elapsedMs, expectedFailure } of [
+  { focused: false, invalidBody: false, elapsedMs: 300000, expectedFailure: false },
+  { focused: false, invalidBody: true, elapsedMs: 300000, expectedFailure: true },
+  { focused: true, invalidBody: false, elapsedMs: 299999, expectedFailure: false },
+  { focused: true, invalidBody: false, elapsedMs: 300001, expectedFailure: true },
+  { focused: true, invalidBody: false, elapsedMs: 294999, expectedFailure: true },
+]) {
+  test(`protected response diagnostics: focused=${focused}, invalidBody=${invalidBody}, elapsed=${elapsedMs}`, async (t) => {
     let starts = 0,
       issued = 0;
-    t.mock.method(performance, 'now', () => (starts++ < 3 ? 0 : 300000));
+    t.mock.method(performance, 'now', () => (starts++ < 3 ? 0 : elapsedMs));
+    const bodies = [];
     const payload = (body) => (body ? (invalidBody ? '{' : JSON.stringify({ output: { value: body } })) : 'ready');
     t.mock.method(https, 'request', (_url, _options, callback) => {
       const req = new EventEmitter();
       req.reusedSocket = false;
       req.end = (body) => {
-        if (body) issued++;
+        if (body) {
+          issued++;
+          bodies.push(JSON.parse(body));
+        }
         queueMicrotask(() => {
           const response = Readable.from([Buffer.from(payload(body))]);
           response.statusCode = 200;
@@ -148,7 +158,10 @@ for (const invalidBody of [false, true]) {
         const stream = new PassThrough(),
           end = stream.end.bind(stream);
         stream.end = (body) => {
-          if (body) issued++;
+          if (body) {
+            issued++;
+            bodies.push(JSON.parse(body));
+          }
           queueMicrotask(() => {
             stream.emit('response', { ':status': 200, 'x-rivet-correlation-id': randomUUID() });
             end(payload(body));
@@ -160,6 +173,7 @@ for (const invalidBody of [false, true]) {
     });
     const f = fixture(),
       probes = new ProviderRequestContinuity(f.gate, { waitFor: f.waitFor });
+    if (focused) f.gate.operation.qualification = { tier: 'focused' };
     f.gate.config.baseUrl = 'https://continuity.invalid';
     probes.prepared = true;
     probes.endpoint = 'fixture';
@@ -173,20 +187,22 @@ for (const invalidBody of [false, true]) {
     const acceptance = artifacts.get('request-continuity-acceptance.json');
     assert.equal(acceptance.requests.length, 3);
     assert.ok(acceptance.requests.every((r) => r.acceptedAt && r.executionPodUid === 'owner-' + r.transport));
-    if (invalidBody) {
+    if (expectedFailure) {
       await assert.rejects(probes.settleCohort('execution-retirement'));
       for (const receipt of probes.diagnostics().requests) {
         assert.equal(receipt.outcome, 'failed');
         assert.equal(receipt.error.kind, 'response-validation');
         assert.equal(receipt.error.status, 200);
-        assert.equal(receipt.error.bodyBytes, 1);
+        assert.ok(receipt.error.bodyBytes > 0);
+        if (invalidBody) assert.equal(receipt.error.bodyBytes, 1);
         assert.equal(receipt.error.responseEnded, true);
         assert.equal(receipt.executionPodUid, 'owner-' + receipt.transport);
       }
       assert.equal(probes.admissionClosed, true);
     } else await probes.settleCohort('execution-retirement');
     assert.equal(issued, 3, 'Connection replacement must never replay a protected POST');
-    if (!invalidBody) {
+    assert.ok(bodies.every((b) => b.delayMs === (focused ? 295000 : 300000)));
+    if (!expectedFailure) {
       assert.equal(probes.requests.find((r) => r.transport === 'pooled-http1').reusedConnection, false);
       assert.ok(probes.requests.every((r) => r.fullBody && r.outcome === 'passed'));
     }

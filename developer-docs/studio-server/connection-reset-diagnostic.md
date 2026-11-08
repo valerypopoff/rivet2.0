@@ -13,40 +13,52 @@ certificate issuance, persistent disk, or new cluster is needed.
    internal Nginx proxy through one ClusterIP Service initially selecting A.
 2. Complete one control request over each of fresh HTTP/1, pooled HTTP/1 and
    negotiated HTTP/2. Each uses a 16-KiB input and a 16,568-byte JSON response.
-3. Start three more requests over the same transport variants. A sends an
-   11,959-byte prefix and holds the rest. Record acceptance, owner UID,
+3. Start three more requests over the same transport variants, plus one HTTP/1
+   control through an unchanged Service and the same proxy. A sends no
+   headers or body until release, matching a synchronous graph execution.
+   Record acceptance, owner UID,
    process incarnation, node, socket and transport before changing routing.
    Acceptance and first-failure events are emitted immediately to private
    container logs. Nginx log lines include the same request IDs.
 4. Change only the disposable execution Service selector from A to B, using
    UID/resourceVersion/selector preconditions. Issue the PATCH once. If its
-   acknowledgement is lost, read back its state without repeating it.
-5. Observe a fresh read reach B, verify both original owners remain alive,
-   release A's three pending responses, and require all their bytes to arrive.
+   acknowledgement is lost, read back its state without repeating it. The whole
+   Service spec must match the original plus that selector change; a concurrent
+   affinity or traffic-policy change makes the observation inconclusive.
+5. Observe a fresh read reach B, keep the accepted requests silent for 300 seconds,
+   verify both original owners remain alive,
+   release A's four pending responses, and require all their bytes to arrive.
 6. Save the result and private proxy logs, then delete only the diagnostic
-   namespace. There are exactly six workflow POSTs, with no retries. A failure
+   namespace. There are exactly seven workflow POSTs, with no retries. A failure
    closes new work and lets accepted requests settle.
 
-The response hold replaces an arbitrary multi-minute sleep: the endpoint change
-is demonstrably inside the response window. Holds expire after 30 seconds;
-an expiry or a failed setup/observation produces an inconclusive result rather
-than evidence that ordinary rollouts are broken. Requests have a 45-second
-deadline. The Job has a three-minute deadline and `backoffLimit: 0`.
-All fixture Pods have a ten-minute lifetime limit as a fallback; explicit
+The provider hold is deliberately five minutes: the previous sub-second,
+partially streamed response did not test the idle connection that failed.
+The backend and proxy Pods must occupy three different nodes, enforced by
+required Pod anti-affinity. Holds auto-release after 330 seconds; an expiry or
+a failed setup/observation is inconclusive. Requests have a 345-second deadline.
+The Job has a seven-minute deadline and `backoffLimit: 0`.
+All fixture Pods have a fifteen-minute lifetime limit as a fallback; explicit
 namespace cleanup is still required.
+The observer measures the silent interval with its own monotonic clock after
+all four requests are confirmed admitted. Backend timestamps are evidence only;
+clock skew cannot shorten or extend the hold. Confirmed routing to B is recorded
+before that wait, so a later response failure retains the routing evidence.
 
 The local runner substitutes a TCP connection router for the ClusterIP. It
 preserves established connections while changing the destination for new ones;
 it does **not** reproduce GKE/Cilium connection tracking. A local pass validates
-the diagnostic. A provider pass only rules out this isolated endpoint-switch
-case under the observed placement. Neither proves the original fault fixed,
-qualifies a release, or tests full Rivet behavior, retirement, the external load
-balancer or 300-second duration. Record node placement; a same-node result does
-not cover every cross-node path.
+the diagnostic, using a 100ms hold to keep local iteration short. A provider pass
+only rules out this isolated five-minute endpoint-switch case under the observed
+placement. Neither qualifies a release nor tests full Rivet behavior, retirement
+or the external load balancer. Record node placement; a same-node run does not
+satisfy the revised scenario.
 
 ## Local validation and offline preparation
 
 The tools image must already exist locally and provide Node 24.22.1 and OpenSSL.
+The runner checks both executables before creating the output directory, so a
+wrong or incomplete tools image fails before any preparation files are written.
 The command refuses to pull images or overwrite a previous output directory.
 All local networking is confined to one internal Docker network; cleanup checks
 ownership before removing its exact containers/network. The self-signed test
@@ -66,9 +78,19 @@ node deploy/studio-server/scripts/connection-reset-diagnostic.mjs prepare --tool
 ```
 
 The negative control deliberately resets one held response after the selector
-change. Exit status 1 and one incomplete response are expected; the other five
+change. Exit status 1 and one incomplete response are expected; the other six
 responses must complete, accepted work must settle, and cleanup must succeed.
-The affected transport depends on arrival order and must be read from evidence.
+The unchanged-route control is excluded from deliberate truncation even if it
+arrives first. The affected handoff transport depends on arrival order and must
+be read from evidence.
+
+Local cleanup removes the verified container/network IDs, not names that could
+be reused between inspection and deletion. Log-reading or log-writing failures
+do not skip those removals. Such errors still fail the command; the separately
+reported `cleanupVerified` describes resource/TLS cleanup, not log completeness.
+Removal failures and TLS cleanup failures remain unconfirmed cleanup. All started
+TLS removals are joined, and a result-write error cannot replace the original
+diagnostic failure.
 
 `prepare` generates three JSON files and `identity.private.json` with their SHA-256
 fingerprints; it never calls
@@ -164,6 +186,51 @@ automatic test retry, qualification publication or production deployment.
 
 Both backend owners were on the same node. This is a successful isolated
 endpoint-switch diagnostic under that placement; it does not establish the
-cause of the earlier reset or qualify the full rolling-update process. The next
-milestone is one timed staging rolling update with the existing complete-request
-and accepted-work checks, not an expanded standalone diagnostic matrix.
+cause of the earlier reset or qualify the full rolling-update process.
+
+## Subsequent rollout failure: investigate before another attempt
+
+The next timed rollout again lost two complete-response checks. Its proxy log
+reported an upstream TCP reset after 11,959 of 16,568 bytes; both affected
+requests belonged to the same old worker. A candidate-worker request completed.
+The old workers had not yet received retirement commands: the rollout was still
+waiting for its legacy Service handoff. The earlier idle-connection retirement
+fix therefore does not, by itself, explain this failure.
+
+CI recorded the first failure promptly and stopped admitting synthetic work.
+It then completed accepted-work settlement and cleanup. Do not confuse that
+settlement time with failure-detection latency. The operator's private summary
+must include `failureDetectedAt`, even while the worker remains running.
+
+The revised diagnostic removes the streamed prefix and exercises a full silent
+interval on distinct nodes. An unchanged-route request runs alongside the three
+handoff requests, so a general idle-connection failure can be distinguished from
+failure limited to the Service change without another five-minute batch.
+Its local positive and negative controls validate the mechanism, not the GKE
+dataplane. This diagnostic is optional: the next acceptance step is the focused
+rollout with 295 seconds of work inside a 300-second total request deadline.
+Use the diagnostic if that correctly scoped test still fails. Production still
+requires successful qualification; a short control does not qualify a rollout.
+
+Local investigation also ran three real five-minute workflow requests against
+the old deployed API image, then three through local Nginx. All returned complete
+bodies. This does not reproduce GKE Service routing and does not identify the
+reset's origin. The revised diagnostic passed 13 focused tests on Windows and
+Linux; its local positive control completed seven responses, and its injected
+failure detected one truncated response while the other six completed. Both
+local controls settled accepted work and verified cleanup. No provider repair
+or new qualification is claimed by these results.
+
+The follow-up local review fixed the clock dependency, kept deliberate failure
+away from the unchanged-route control, preserved routing confirmation on early
+failure, and made log-collection errors independent of owned-resource cleanup.
+Previously frozen diagnostic bundles do not contain these repairs; regenerate
+and review them before any later activation.
+Review validation passed 24 diagnostic/transport regressions on Windows and
+Linux, plus local TLS relay cases for backend clocks one hour ahead/behind and
+a reset during the silent hold. The Docker success control completed seven
+responses. Its deliberate-failure control completed six, detected the intended
+truncation, and preserved the unchanged-route control. Both verified cleanup.
+The additional routing-drift regressions reject changes to session affinity and
+internal traffic policy without replaying the selector write. A local missing-
+OpenSSL check confirms failure before output-directory creation.

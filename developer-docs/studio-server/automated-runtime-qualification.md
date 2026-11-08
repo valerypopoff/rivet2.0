@@ -239,10 +239,21 @@ with the actual patched binaries: trusted native TLS/HTTP2, file-backed mutation
 lost acknowledgement without replay and rejection of stale identity. It uses
 synthetic loopback resources and does not require a cloud attempt.
 
-The focused live gate remains one normal update with complete 300-second public
-responses, surviving serving capacity, preserved recordings/data and verified
-cleanup. No extra warmup, resource-equality policy, feature/stress journey or paid
+The focused live gate remains one normal update with complete public responses
+within a 300-second total request deadline, surviving serving capacity,
+preserved recordings/data and verified cleanup. No extra warmup,
+resource-equality policy, feature/stress journey or paid
 preflight operation was added by this repair.
+
+Focused continuity evidence protocol 5 uses 295 seconds of graph work, leaving
+five seconds for request/response overhead. All three transports run together;
+each must return the complete expected body within 300 seconds and have its
+unique successful recording. The client and evidence validator enforce the same
+deadline. This is a near-boundary sample, not proof of exactly 300 seconds of
+graph execution. Infrastructure draining still protects the full 300-second
+request window. Historical protocols 2–4 remain readable with their original
+timing claims; they are not relabeled, and new focused observations require
+protocol 5. The optional full regression suite retains its older duration matrix.
 
 The ordinary Build workflow runs the source-only image/launcher contract tests
 in its existing static-validation job, before docs/style checks. This includes
@@ -459,8 +470,10 @@ the pinned Linux/Node runtime without installing the whole application. This is
 local validation, not GKE qualification.
 
 The separate [connection-reset diagnostic](connection-reset-diagnostic.md)
-isolates one endpoint change with six short requests. Its local controls and
-offline Kubernetes preparation do not dispatch qualification, change retained
+isolates one endpoint change with three quick controls, three silent
+five-minute requests and a parallel unchanged-route control on distinct nodes.
+Local controls use a 100ms hold. Its local controls and offline Kubernetes
+preparation do not dispatch qualification, change retained
 application resources, or publish release evidence. Its cheap regression tests
 run in the source-only rollout checks; the Docker exercise remains explicit.
 
@@ -846,8 +859,8 @@ The optional paired execution profile (`executionPoolsEnabled: true` in reviewed
 staging settings, or already installed in production) exercises a two-worker
 pool handoff with `ha.executionPools.enabled`. Candidates must be ready before
 both predecessor withdrawals. The original 315-second accepted jobs overlap;
-complete public 300-second responses, distinct successful recordings, the
-two-ready floor and all proxy checks remain required. Its additional certificate
+complete public responses within the supported 300-second window, distinct
+successful recordings, the two-ready floor and all proxy checks remain required. Its additional certificate
 binds actual candidate capacity, physical Pod peak within the existing ceiling
 and removal of the old pool. A larger predecessor or shared worker PVC keeps
 the serial procedure and can qualify its actual paired layout with the normal

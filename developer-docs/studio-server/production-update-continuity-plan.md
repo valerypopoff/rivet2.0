@@ -2,8 +2,41 @@
 
 ## Current follow-up: investigate the November 7 response failure
 
-Status: **diagnostic/reporting repairs implemented locally; the response reset
-remains unexplained and the release is not qualified**.
+### Reassessment: align acceptance with the agreed request limit first
+
+Parallel replacement has completed in the recent staging attempts. Acceptance
+is still blocked, and the latest failures have not established a fault inside
+the user's agreed end-to-end 300-second request window. The previous fixture requested
+300,000ms of graph work before transport overhead and permits another 30 seconds
+at the client. The latest failed receipts ended at 300,099ms and 301,079ms; even
+the successful long receipt took 300,050ms. These remain failed historical runs,
+but they must not be described as proof that a within-limit request was lost.
+
+The focused fixture and evidence validator now use 295 seconds of graph work
+within a total 300-second request deadline. Evidence protocol 5 requires complete
+bodies and describes this as a near-boundary sample. Historical evidence keeps
+its original claims. The change retains the 300-second infrastructure draining protection,
+availability, accepted-work and recording checks. The existing standalone silent
+five-minute diagnostic is optional investigation, not the next acceptance gate.
+Use it only if a properly scoped request still fails and the experiment can
+distinguish the remaining causes. Do not relabel the previous failed runs.
+
+Freeze the application candidate while correcting tooling. The last two full
+attempts took 33m32s and 32m01s without resolving the response question. The latest
+21m38s measured rollout spent 14m40s in the execution-pool phase and includes the
+one-time legacy HTTP handoff and old shutdown hooks. It is not a steady-state
+speed measurement. Measure ordinary-update speed separately after adoption.
+Further general diagnostic hardening must not displace this acceptance decision.
+
+Status: **focused timing correction and diagnostic/reporting repairs implemented
+locally; the response reset remains unexplained and the release is not qualified**.
+Next: publish tooling only with the existing application images, then run one
+approved timed focused staging qualification. Separate ordinary replacement time
+from the first-adoption legacy handoff and cleanup waits in the report.
+The focused regression suites passed on Windows and Linux/Node 24. The local
+rollout source gate passed (745 passing tests, five intentional skips), as did
+documentation links, test-style checks and workflow/entrypoint policy. This is
+local validation; there is no new provider qualification yet.
 This follow-up governs the remaining investigation. Historical results below remain unchanged.
 The goal remains ordinary rolling updates with complete protected requests, not
 an expanded architecture/stress suite. No new cloud attempt or production change
@@ -74,8 +107,23 @@ exercises that layout in local Docker, and rejects terminated setup Pods
 immediately. Its projected-path/import and fail-fast regressions pass locally.
 A fresh isolated staging diagnostic then passed all six responses across one
 Service switch, with verified cleanup (89 seconds overall). Both backend owners
-were on one node. This is not full rolling-update qualification; the next
-milestone is a timed staging rolling update with complete-request checks.
+were on one node. The subsequent timed rollout again truncated two responses
+before old-worker retirement. Do not repeat that full rollout unchanged. The
+diagnostic now keeps the three responses silent for 300 seconds and requires
+the proxy and backends on distinct nodes, with a concurrent unchanged-route
+control; local checks use a 100ms hold. This
+corrects the earlier coverage gap without relaxing response-completion checks.
+The actual reset remains unresolved until that boundary is isolated and its
+repair verified; no additional cloud attempt is implied by local preparation.
+The follow-up review uses the observer's monotonic clock for the hold, preserves
+confirmed routing before a later failure, and keeps deliberate truncation away
+from the unchanged-route control. Local collection errors no longer skip cleanup
+of verified resource IDs. Regenerate previously prepared bundles after these
+source changes; their earlier approval request is superseded.
+The adjacent review also checks the complete Service spec around the one allowed
+selector mutation and rejects incomplete local tools before creating preparation
+files. These checks preserve the diagnostic's meaning; they do not alter the
+ordinary rollout's qualification criteria.
 
 ### Ordered repair plan
 
@@ -122,13 +170,11 @@ milestone is a timed staging rolling update with complete-request checks.
    after those controls pass. Stop expanding the matrix once a deterministic
    failing case and a matching fix are established.
 
-   The fixture currently requests 300,000ms of graph work before HTTP overhead,
-   so it exceeds the user's end-to-end 300-second protection limit. Review this
-   boundary explicitly. A 295-second workload with a 300-second client budget
-   can exercise near-limit requests with overhead margin, but any such change
-   must update the evidence claim/validator together and retain complete-body
-   checking. Do not call a 295-second sample proof of exactly 300 seconds, or
-   use this boundary observation to excuse the recorded reset retroactively.
+   The focused fixture now requests 295,000ms of graph work within a 300-second
+   client budget. Its evidence validator enforces that same budget and retains
+   complete-body checks. Do not call a 295-second sample proof of exactly 300
+   seconds, or excuse the historical reset retroactively. Run the optional
+   isolated diagnostic only if the correctly scoped qualification still fails.
 
    Endpoint changes are a hypothesis worth isolating, not the established root
    cause. Google documents connection resets during backend-set changes in
@@ -150,6 +196,7 @@ milestone is a timed staging rolling update with complete-request checks.
 
 6. **Validate locally before publication.** Extend the existing tests rather
    than creating another test suite:
+
    - `request-continuity-transport.test.mjs`: complete and truncated bodies,
      failure byte/timing evidence, one POST, deadline and HTTP/2 reset handling.
    - `request-continuity-provider.test.mjs`: acceptance owner survives Pod
@@ -162,10 +209,10 @@ milestone is a timed staging rolling update with complete-request checks.
      loss and unreadable receipt remain distinct; early failure progress never
      closes a live writer or replays the phase.
    - Run `legacy-execution-http-handoff.test.mjs` when changing routing/retirement.
-   Use the Linux/Node-24 transport reproducer as the runtime check. Run the
-   required headless Playwright check only if the repair changes application
-   response/browser behavior. Update the owning developer docs with actual
-   results, not proposed completion.
+     Use the Linux/Node-24 transport reproducer as the runtime check. Run the
+     required headless Playwright check only if the repair changes application
+     response/browser behavior. Update the owning developer docs with actual
+     results, not proposed completion.
 
 7. **Prepare one reviewed activation after the local stop conditions clear.**
    Publish tooling independently when application inputs are unchanged; reuse
@@ -256,8 +303,7 @@ replacement attempt returned one Envoy503 during a fixture-induced Nginx reload,
 before the actual image update. Both failed attempts have independently verified
 cleanup; neither deployed application images to production. The separately
 approved restoration of the live proxy minimum to Helm's two replicas is verified.
-The incoming keepalive and fixture-ordering repair passed PR244 and Build Images
-42039506923. Its single replacement qualification, Release42044734820, reached
+The incoming keepalive and fixture-ordering repair passed PR244 and Build Images 42039506923. Its single replacement qualification, Release42044734820, reached
 owner replacement but stopped when the pinned background probe received HTTP429
 before execution-owner retirement. All 2,252 public workflow and 765 web samples
 succeeded, with at least two ready execution and proxy owners throughout; the
