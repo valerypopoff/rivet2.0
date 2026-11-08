@@ -3,6 +3,7 @@ import https from 'node:https';
 import http2 from 'node:http2';
 import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { requestHttp1, requestHttp2 } from './continuity-http-transport.mjs';
 
@@ -56,10 +57,7 @@ export async function changeDiagnosticService(api, namespace) {
   const verified =
     after.metadata?.uid === before.metadata.uid &&
     after.metadata?.labels?.[diagnosticLabel] === namespace &&
-    isDeepStrictEqual(after.spec?.selector, selected) &&
-    isDeepStrictEqual(after.spec?.clusterIPs, before.spec.clusterIPs) &&
-    after.spec?.clusterIP === before.spec.clusterIP &&
-    isDeepStrictEqual(after.spec?.ports, before.spec.ports);
+    isDeepStrictEqual(after.spec, { ...before.spec, selector: selected });
   if (!verified) throw writeError ?? Error('Diagnostic Service change was not confirmed');
   return { serviceUid: before.metadata.uid, before: original, after: selected, acknowledged: !writeError };
 }
@@ -77,21 +75,26 @@ const errorFacts = (error) => ({
     : {}),
 });
 
-/** Six POSTs: a three-transport control, then three responses held across one
- * endpoint change. Existing owners remain alive. This produces diagnostics,
- * never a release qualification or a claim about 300-second requests. */
+/** Seven POSTs: three quick controls, then three responses held across one
+ * endpoint change and a simultaneous unchanged-route control. Existing owners
+ * remain alive. This produces diagnostics,
+ * never a release qualification. Provider requests stay silent for five minutes;
+ * the local adapter uses a short hold to check the same orchestration. */
 export async function runConnectionResetDiagnostic({
   baseUrl,
   backendA,
   backendB,
   change,
   timeoutMs = 20000,
+  holdMs = 300000,
   evidence = () => {},
 }) {
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 20000);
+  assert.ok([100, 300000].includes(holdMs));
   const report = {
     protocol: 1,
     qualification: false,
+    silentHoldMs: holdMs,
     startedAt: new Date().toISOString(),
     requests: [],
     changeState: 'not-attempted',
@@ -104,6 +107,7 @@ export async function runConnectionResetDiagnostic({
     releaseAttempted = false,
     stage = 'control';
   const heldIds = [];
+  const holdAbort = new AbortController();
   const emit = (event, data) => {
     try {
       evidence({ event, at: new Date().toISOString(), ...data });
@@ -114,6 +118,7 @@ export async function runConnectionResetDiagnostic({
   const fail = (error) => {
     if (!firstFailure) {
       firstFailure = error;
+      holdAbort.abort(error);
       emit('first-failure', { stage, error: errorFacts(error), requests: structuredClone(report.requests) });
     }
   };
@@ -140,27 +145,35 @@ export async function runConnectionResetDiagnostic({
     }
     throw Error('Diagnostic observation deadline exceeded');
   };
-  const batch = (hold, expectedOwner) => {
-    return ['fresh-http1', 'pooled-http1', 'http2'].map((transport) => {
+  const batch = (hold, expectedOwner, stable = false) => {
+    return (stable ? ['fresh-http1'] : ['fresh-http1', 'pooled-http1', 'http2']).map((transport) => {
       const requestId = randomUUID();
       const body = JSON.stringify({ requestId, hold, input: 'x'.repeat(16384) });
-      const receipt = { stage, transport, requestId, startedAt: new Date().toISOString(), outcome: 'pending' };
+      const receipt = {
+        stage: stable ? 'unchanged-route' : stage,
+        transport,
+        requestId,
+        startedAt: new Date().toISOString(),
+        outcome: 'pending',
+      };
+      const requestPath = `${stable ? '/control' : ''}/workflows/fixture`;
+      const headers = { 'x-diagnostic-request': requestId, 'x-diagnostic-control': stable ? '1' : '0' };
       if (hold) heldIds.push(requestId);
       report.requests.push(receipt);
       const work = Promise.resolve()
         .then(async () => {
           if (firstFailure) throw firstFailure;
           const result = await (transport === 'http2'
-            ? requestHttp2(session, '/workflows/fixture', {
+            ? requestHttp2(session, requestPath, {
                 body,
-                headers: { 'x-diagnostic-request': requestId },
-                timeoutMs: 45000,
+                headers,
+                timeoutMs: holdMs + 45000,
               })
-            : requestHttp1(baseUrl + '/workflows/fixture', {
+            : requestHttp1(baseUrl + requestPath, {
                 body,
-                headers: { 'x-diagnostic-request': requestId },
+                headers,
                 agent: transport === 'pooled-http1' ? agent : false,
-                timeoutMs: 45000,
+                timeoutMs: holdMs + 45000,
               }));
           Object.assign(receipt, { status: result.status, bodyBytes: result.bytes, responseEnded: true });
           assert.equal(result.status, 200);
@@ -197,12 +210,15 @@ export async function runConnectionResetDiagnostic({
     await Promise.all(batch(false, report.owners.a));
     if (firstFailure) throw firstFailure;
     stage = 'endpoint-change';
-    const pending = batch(true, report.owners.a);
+    const pending = [...batch(true, report.owners.a), ...batch(true, report.owners.a, true)];
     const accepted = await until(async () => {
       const state = await json(backendA + '/state');
       const rows = state.requests.filter((r) => heldIds.includes(r.requestId));
-      return rows.length === 3 && rows.every((r) => r.held && r.prefixBytes > 0 && !r.finished && !r.closed) && state;
+      return rows.length === 4 && rows.every((r) => r.held && r.prefixBytes === 0 && !r.finished && !r.closed) && state;
     });
+    // Measure the hold on the observer's monotonic clock. Backend wall-clock
+    // timestamps are diagnostic metadata, not authority to shorten this wait.
+    const holdStarted = performance.now();
     report.accepted = accepted.requests.filter((r) => heldIds.includes(r.requestId));
     for (const owner of report.accepted)
       Object.assign(
@@ -225,6 +241,10 @@ export async function runConnectionResetDiagnostic({
       assert.equal(response.status, 200);
       return JSON.parse(response.body).uid === report.owners.b.uid;
     });
+    report.newConnectionsReachedB = true;
+    const remainingMs = Math.max(0, holdMs - (performance.now() - holdStarted));
+    emit('silent-hold', { remainingMs: Math.ceil(remainingMs) });
+    await delay(remainingMs, undefined, { signal: holdAbort.signal });
     const beforeRelease = await json(backendA + '/state');
     assert.deepEqual(beforeRelease.owner, report.owners.a, 'Original owner changed');
     assert.deepEqual((await json(backendB + '/state')).owner, report.owners.b, 'Replacement owner changed');
@@ -233,7 +253,6 @@ export async function runConnectionResetDiagnostic({
         beforeRelease.requests.some((r) => r.requestId === id && r.held && !r.closed && !r.finished && !r.autoReleased),
       ),
     );
-    report.newConnectionsReachedB = true;
     releaseAttempted = true;
     await json(backendA + '/release', { requestIds: heldIds });
     await Promise.all(pending);
@@ -268,7 +287,7 @@ export async function runConnectionResetDiagnostic({
       report.acceptedWorkSettled = true;
       assert.ok(
         rows.every((r) => !r.autoReleased),
-        'Observation exceeded the short response hold',
+        'Observation exceeded the bounded response hold',
       );
     } catch (error) {
       report.outcome = 'failed';

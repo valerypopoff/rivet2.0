@@ -17,15 +17,26 @@ export const CONTINUITY_DURATION_STAGES = {
   'duration-180': 180000,
   'duration-295': 295000,
 };
+// Leave transport/serialization headroom inside the user's total request budget.
+export const FOCUSED_CONTINUITY_WORK_MS = 295000;
+export const FOCUSED_CONTINUITY_DEADLINE_MS = 300000;
+export function continuityRequestTiming(stage, tier = 'full') {
+  const durationMs = tier === 'focused' ? FOCUSED_CONTINUITY_WORK_MS : CONTINUITY_DURATION_STAGES[stage] ?? 300000;
+  return { durationMs, timeoutMs: tier === 'focused' ? FOCUSED_CONTINUITY_DEADLINE_MS : durationMs + 30000 };
+}
 const LEGACY_FOCUSED_CONTINUITY_CHECKS = REQUEST_CONTINUITY_CHECKS.filter(
   (check) => !['full-body-duration-matrix', 'bridge-return-handoff', 'proxy-hpa-removal'].includes(check),
 );
-export const FOCUSED_CONTINUITY_CHECKS = [
+const LEGACY_FOCUSED_ROLLOUT_CHECKS = [
   'full-body-300-second-requests',
   'connection-reuse',
   'proxy-pod-and-neg-replacement',
   'execution-owner-300-second-drain',
   'request-recording-and-no-duplicates',
+];
+export const FOCUSED_CONTINUITY_CHECKS = [
+  'full-body-within-300-second-deadline',
+  ...LEGACY_FOCUSED_ROLLOUT_CHECKS.slice(1),
 ];
 export const continuityChecks = (adopted, tier = 'full', proxyReplaced = true) =>
   tier === 'focused'
@@ -177,7 +188,7 @@ export function continuityProfileDigest(profile) {
 export function assertRequestContinuityEvidence(proof, release, profile) {
   assertRequestContinuityProfile(profile);
   assert.ok(
-    proof && [2, 3, 4].includes(proof.protocol),
+    proof && [2, 3, 4, 5].includes(proof.protocol),
     '300-second request continuity requires complete provider evidence',
   );
   assert.equal(proof.provider, 'gke');
@@ -189,7 +200,8 @@ export function assertRequestContinuityEvidence(proof, release, profile) {
   assert.deepEqual(proof.profile, profile);
   assert.equal(proof.profileDigest, continuityProfileDigest(profile));
   assert.equal(proof.failedRequests, 0);
-  const focused = proof.protocol === 4;
+  const focused = proof.protocol >= 4;
+  const boundedRequest = proof.protocol === 5;
   assert.ok(['passed', 'already-protected'].includes(proof.bootstrap));
   const adopted = proof.bootstrap === 'already-protected';
   if (focused) {
@@ -217,13 +229,20 @@ export function assertRequestContinuityEvidence(proof, release, profile) {
   );
   assert.ok(
     Number.isSafeInteger(proof.maximumCompletedDurationMs) &&
-      proof.maximumCompletedDurationMs >= 300_000 &&
-      proof.maximumCompletedDurationMs <= 330_000,
+      proof.maximumCompletedDurationMs >= (boundedRequest ? FOCUSED_CONTINUITY_WORK_MS : 300000) &&
+      proof.maximumCompletedDurationMs <= (boundedRequest ? FOCUSED_CONTINUITY_DEADLINE_MS : 330000),
   );
   const checks =
     proof.protocol === 3
       ? [...LEGACY_FOCUSED_CONTINUITY_CHECKS, ...(!adopted ? ['bridge-return-handoff'] : [])]
-      : continuityChecks(adopted, focused ? 'focused' : 'full', proof.proxyReplaced);
+      : proof.protocol === 4
+        ? [
+            ...LEGACY_FOCUSED_ROLLOUT_CHECKS.filter(
+              (c) => proof.proxyReplaced || c !== 'proxy-pod-and-neg-replacement',
+            ),
+            ...(!adopted ? ['bridge-return-handoff'] : []),
+          ]
+        : continuityChecks(adopted, focused ? 'focused' : 'full', proof.proxyReplaced);
   assert.deepEqual([...proof.checks].sort(), checks.sort());
   assert.match(proof.reportSha256, /^[a-f0-9]{64}$/);
   return structuredClone(proof);

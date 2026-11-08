@@ -19,17 +19,26 @@ http {
   uwsgi_temp_path /tmp/uwsgi_temp;
   scgi_temp_path /tmp/scgi_temp;
   upstream rivet_execution { zone execution 64k; keepalive 0; server execution:8080 resolve; }
+  upstream rivet_control { zone control 64k; keepalive 0; server a:8080 resolve; }
   server {
     listen 8443 ssl;
     http2 on;
     ssl_certificate /tls/cert.pem;
     ssl_certificate_key /tls/key.pem;
+    location /control/ {
+      proxy_pass http://rivet_control/;
+      proxy_http_version 1.1;
+      proxy_set_header Connection "";
+      proxy_buffering off;
+      proxy_read_timeout 360s;
+      proxy_next_upstream off;
+    }
     location / {
       proxy_pass http://rivet_execution;
       proxy_http_version 1.1;
       proxy_set_header Connection "";
       proxy_buffering off;
-      proxy_read_timeout 60s;
+      proxy_read_timeout 360s;
       proxy_next_upstream off;
     }
   }
@@ -98,7 +107,7 @@ export function connectionResetResources({
       metadata: { name, namespace, labels: { ...labels, ...extraLabels } },
       spec: {
         automountServiceAccountToken: token,
-        activeDeadlineSeconds: 600,
+        activeDeadlineSeconds: 900,
         restartPolicy: 'Never',
         securityContext: { fsGroup: 10001, seccompProfile: { type: 'RuntimeDefault' } },
         containers: [c],
@@ -112,7 +121,7 @@ export function connectionResetResources({
   const backend = (pool) => {
     const c = container('backend');
     c.readinessProbe = { httpGet: { path: '/readyz', port: 8080 }, periodSeconds: 1 };
-    return pod(pool, c, { pool });
+    return pod(pool, c, { pool, 'rivet.dev/diagnostic-wire': '1' });
   };
   const proxy = container('unused', proxyImage);
   proxy.command = ['nginx', '-c', '/diagnostic/nginx.conf', '-g', 'daemon off;'];
@@ -122,6 +131,22 @@ export function connectionResetResources({
   client.env.push({ name: 'NODE_EXTRA_CA_CERTS', value: '/tls/cert.pem' });
   const clientSpec = pod('client', client, {}, true).spec;
   clientSpec.serviceAccountName = 'diagnostic';
+  const wirePods = [
+    backend('a'),
+    backend('b'),
+    pod('proxy', proxy, { role: 'proxy', 'rivet.dev/diagnostic-wire': '1' }),
+  ];
+  for (const item of wirePods)
+    item.spec.affinity = {
+      podAntiAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: [
+          {
+            labelSelector: { matchLabels: { ...labels, 'rivet.dev/diagnostic-wire': '1' } },
+            topologyKey: 'kubernetes.io/hostname',
+          },
+        ],
+      },
+    };
   return {
     apiVersion: 'v1',
     kind: 'List',
@@ -134,7 +159,7 @@ export function connectionResetResources({
           ...sources,
           'nginx.conf': diagnosticNginx
             .replace('  resolver 127.0.0.11 valid=1s ipv6=off;\n', '')
-            .replace('execution:8080 resolve;', 'execution:8080;'),
+            .replaceAll(' resolve;', ';'),
         },
       }),
       object('Secret', 'diagnostic-tls', {
@@ -158,16 +183,14 @@ export function connectionResetResources({
         }),
         apiVersion: 'rbac.authorization.k8s.io/v1',
       },
-      backend('a'),
-      backend('b'),
+      ...wirePods,
       service('a', { pool: 'a' }),
       service('b', { pool: 'b' }),
       service('execution', { pool: 'a' }),
-      pod('proxy', proxy, { role: 'proxy' }),
       service('proxy', { role: 'proxy' }, 8443),
       {
         ...object('Job', 'client', {
-          spec: { backoffLimit: 0, activeDeadlineSeconds: 180, template: { metadata: { labels }, spec: clientSpec } },
+          spec: { backoffLimit: 0, activeDeadlineSeconds: 420, template: { metadata: { labels }, spec: clientSpec } },
         }),
         apiVersion: 'batch/v1',
       },

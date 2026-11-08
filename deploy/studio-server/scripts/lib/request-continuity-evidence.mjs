@@ -5,7 +5,7 @@ import {
   continuityChecks,
   requestContinuityProfile,
   continuityProfileDigest,
-  CONTINUITY_DURATION_STAGES,
+  continuityRequestTiming,
   continuityStages,
 } from './request-continuity.mjs';
 
@@ -32,7 +32,7 @@ export function assertContinuityProviderFacts(report, operation, kind) {
   const focused = operation.qualification?.tier === 'focused';
   if (focused) assert.equal(kind, 'upgrade', 'Focused continuity is observed in the real rollout');
   const facts = report.requestContinuity;
-  assert.equal(facts?.protocol, focused ? 4 : 2, 'Missing complete request continuity observations');
+  assert.equal(facts?.protocol, focused ? 5 : 2, 'Missing complete request continuity observations');
   assert.deepEqual(facts.profile, operation.requestContinuityProfile);
   const adopted = !!requestContinuityProfile(operation.installed.qualificationValues);
   assert.equal(facts.bootstrap, adopted ? 'already-protected' : 'passed');
@@ -49,9 +49,9 @@ export function assertContinuityProviderFacts(report, operation, kind) {
     for (const key of ['requestId', 'correlationId', 'recordingId', 'executionPodUid']) nonempty(r[key]);
     assert.equal(r.outcome, 'passed');
     assert.equal(r.fullBody, true);
-    const duration = CONTINUITY_DURATION_STAGES[r.stage] ?? 300000;
-    assert.equal(r.durationMs, duration);
-    assert.ok(Number.isSafeInteger(r.elapsedMs) && r.elapsedMs >= duration && r.elapsedMs <= duration + 30000);
+    const { durationMs, timeoutMs } = continuityRequestTiming(r.stage, focused ? 'focused' : 'full');
+    assert.equal(r.durationMs, durationMs);
+    assert.ok(Number.isSafeInteger(r.elapsedMs) && r.elapsedMs >= durationMs && r.elapsedMs <= timeoutMs);
     assert.ok(Number.isSafeInteger(r.bodyBytes) && r.bodyBytes >= 16384 && r.bodyBytes <= 131072);
     assert.match(r.bodySha256, /^[a-f0-9]{64}$/);
     assert.ok(timestamp(r.startedAt) >= timestamp(report.startedAt));
@@ -129,7 +129,25 @@ export function assertContinuityProviderFacts(report, operation, kind) {
         report.outcomes.acceptedWork.some((r) => r.uid === facts.executionWithdrawal?.podUid),
         'Execution withdrawal must belong to an accepted-work owner',
       );
-      overlaps('execution-retirement', facts.executionWithdrawal.dispatchedAt, facts.executionWithdrawal.observedAt);
+      assert.ok(
+        timestamp(report.startedAt) <= timestamp(facts.executionWithdrawal.dispatchedAt) &&
+          timestamp(facts.executionWithdrawal.dispatchedAt) <= timestamp(facts.executionWithdrawal.observedAt) &&
+          timestamp(facts.executionWithdrawal.observedAt) <= timestamp(report.finishedAt),
+        'Execution withdrawal must be observed within the rollout',
+      );
+      const handoff = report.outcomes.executionPool?.legacyHttp;
+      if (handoff?.required) {
+        assert.equal(handoff.routeConfirmed, true);
+        assert.equal(handoff.settled, true);
+        assert.equal(handoff.restoreIssued, true);
+        nonempty(facts.executionHandoff?.serviceUid);
+        assert.equal(facts.executionHandoff.serviceUid, handoff.serviceUid);
+        overlaps('execution-retirement', facts.executionHandoff.dispatchedAt, facts.executionHandoff.observedAt);
+        assert.ok(timestamp(facts.executionHandoff.observedAt) <= timestamp(facts.executionWithdrawal.dispatchedAt));
+      } else {
+        assert.equal(facts.executionHandoff, undefined);
+        overlaps('execution-retirement', facts.executionWithdrawal.dispatchedAt, facts.executionWithdrawal.observedAt);
+      }
     }
     if (!adopted) overlaps('return-handoff', facts.returnHandoff.dispatchedAt, facts.returnHandoff.observedAt);
     if (focused && !adopted) {
@@ -181,7 +199,7 @@ export function compileRequestContinuityEvidence(operation, upgrade, autoscaling
     requests = reports.flatMap((r) => r.requests);
   for (const key of ['requestId', 'correlationId', 'recordingId']) unique(requests.map((r) => r[key]));
   return {
-    protocol: focused ? 4 : 2,
+    protocol: focused ? 5 : 2,
     ...(focused ? { proxyReplaced: upgrade.requestContinuity.replacement.changed } : {}),
     provider: 'gke',
     gatewayClass: 'gke-l7-regional-external-managed',

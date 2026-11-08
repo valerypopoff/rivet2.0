@@ -224,9 +224,9 @@ export function assertRuntimeControlEvidence(value, release, expectedEdgeProfile
     value.requestContinuity === undefined
       ? undefined
       : assertRequestContinuityEvidence(value.requestContinuity, release, value.requestContinuity.profile);
-  if (focused && requestContinuity?.protocol !== (value.protocol === 5 ? 4 : 3))
-    throw Error('Focused runtime qualification requires its exact five-minute upgrade observations');
-  if (!focused && [3, 4].includes(requestContinuity?.protocol))
+  if (focused && !(value.protocol === 5 ? [4, 5] : [3]).includes(requestContinuity?.protocol))
+    throw Error('Focused runtime qualification requires matching protected-request upgrade observations');
+  if (!focused && [3, 4, 5].includes(requestContinuity?.protocol))
     throw Error('Focused continuity observations cannot qualify a full runtime suite');
   if (
     (value.executionPools !== undefined && value.executionPools !== true) ||

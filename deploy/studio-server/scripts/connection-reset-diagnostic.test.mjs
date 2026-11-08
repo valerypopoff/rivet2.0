@@ -12,8 +12,98 @@ import { changeDiagnosticService, diagnosticLabel, diagnosticPodReady } from './
 import { connectionResetResources, diagnosticNodeImage } from './lib/connection-reset-resources.mjs';
 import { diagnosticBackend } from './fixtures/connection-reset-runtime.mjs';
 import { collectContinuityResponse } from './lib/continuity-http-transport.mjs';
+import { cleanupConnectionResetLocal } from './lib/connection-reset-local-cleanup.mjs';
 
 const namespace = 'rivet-reset-123456abcdef';
+
+function cleanupFixture({ collectError, foreignOwner, removeError, tlsError } = {}) {
+  const calls = [],
+    ids = { first: 'a'.repeat(64), second: 'b'.repeat(64), network: 'c'.repeat(64) };
+  return {
+    calls,
+    ids,
+    options: {
+      namespace,
+      names: ['first', 'second'],
+      docker: async (args) => {
+        calls.push(args);
+        if (args[0] === 'container' || args[1] === 'ls') return { stdout: 'present' };
+        if (args[0] === 'inspect')
+          return {
+            stdout: JSON.stringify([
+              {
+                Id: ids[args[1]],
+                Config: {
+                  Labels: {
+                    'rivet.connection-diagnostic': foreignOwner && args[1] === 'first' ? 'foreign' : namespace,
+                  },
+                },
+              },
+            ]),
+          };
+        if (args[0] === 'logs') {
+          if (collectError === 'read') throw collectError;
+          return { stdout: 'log', stderr: '' };
+        }
+        if (args[0] === 'rm' && removeError && args[2] === ids.first) throw removeError;
+        if (args[0] === 'network' && args[1] === 'inspect')
+          return {
+            stdout: JSON.stringify([
+              {
+                Id: ids.network,
+                Labels: { 'rivet.connection-diagnostic': namespace },
+              },
+            ]),
+          };
+        return { stdout: '' };
+      },
+      writeLog: async () => {
+        if (collectError === 'write') throw collectError;
+      },
+      removeTls: async () => {
+        calls.push(['tls']);
+        if (tlsError) throw tlsError;
+      },
+    },
+  };
+}
+
+for (const collectError of ['read', 'write'])
+  test(`local cleanup removes owned resources despite log ${collectError} failure`, async () => {
+    const f = cleanupFixture({ collectError });
+    const result = await cleanupConnectionResetLocal(f.options);
+    assert.equal(result.cleanupVerified, true);
+    assert.ok(result.errors.includes(collectError));
+    assert.deepEqual(
+      f.calls.filter((args) => args[0] === 'rm').map((args) => args[2]),
+      [f.ids.second, f.ids.first],
+    );
+    assert.ok(f.calls.some((args) => args[0] === 'network' && args[1] === 'rm' && args[2] === f.ids.network));
+    assert.ok(f.calls.some((args) => args[0] === 'tls'));
+  });
+
+test('local cleanup never removes a foreign container and still visits the other resources', async () => {
+  const f = cleanupFixture({ foreignOwner: true });
+  const result = await cleanupConnectionResetLocal(f.options);
+  assert.equal(result.cleanupVerified, false);
+  assert.equal(result.errors.length, 1);
+  assert.deepEqual(
+    f.calls.filter((args) => args[0] === 'rm').map((args) => args[2]),
+    [f.ids.second],
+  );
+  assert.ok(f.calls.some((args) => args[0] === 'tls'));
+});
+
+for (const cause of ['removeError', 'tlsError'])
+  test(`local cleanup preserves ${cause} and reports unconfirmed cleanup`, async () => {
+    const error = Error(cause),
+      f = cleanupFixture({ [cause]: error });
+    const result = await cleanupConnectionResetLocal(f.options);
+    assert.equal(result.cleanupVerified, false);
+    assert.ok(result.errors.includes(error));
+    assert.ok(f.calls.some((args) => args[0] === 'network' && args[1] === 'rm'));
+    assert.ok(f.calls.some((args) => args[0] === 'tls'));
+  });
 
 test('CLI enters through projected paths while imports remain inert', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'rivet-reset-entry-'));
@@ -72,7 +162,7 @@ test('backend readiness stops immediately on terminal or deleting Pods', () => {
   );
 });
 
-function serviceFixture({ lostAck = false, commit = true } = {}) {
+function serviceFixture({ lostAck = false, commit = true, extraSpecAfter = {} } = {}) {
   let service = {
     metadata: {
       name: 'execution',
@@ -87,6 +177,8 @@ function serviceFixture({ lostAck = false, commit = true } = {}) {
       clusterIPs: ['10.0.0.4'],
       ports: [{ port: 8080 }],
       selector: { [diagnosticLabel]: namespace, pool: 'a' },
+      sessionAffinity: 'None',
+      internalTrafficPolicy: 'Cluster',
     },
   };
   const calls = [];
@@ -101,6 +193,7 @@ function serviceFixture({ lostAck = false, commit = true } = {}) {
       { op: 'test', path: '/spec/selector', value: service.spec.selector },
     ]);
     if (commit) service.spec.selector = patch[3].value;
+    Object.assign(service.spec, extraSpecAfter);
     if (lostAck) throw Error('Uncertain acknowledgement');
     return structuredClone(service);
   };
@@ -122,6 +215,13 @@ test('an uncommitted uncertain write is not retried', async () => {
   await assert.rejects(changeDiagnosticService(f.api, namespace), /Uncertain acknowledgement/);
   assert.equal(f.calls.filter((c) => c.method === 'PATCH').length, 1);
 });
+
+for (const extraSpecAfter of [{ sessionAffinity: 'ClientIP' }, { internalTrafficPolicy: 'Local' }])
+  test(`selector confirmation rejects concurrent routing drift: ${Object.keys(extraSpecAfter)[0]}`, async () => {
+    const f = serviceFixture({ extraSpecAfter });
+    await assert.rejects(changeDiagnosticService(f.api, namespace), /change was not confirmed/);
+    assert.equal(f.calls.filter((c) => c.method === 'PATCH').length, 1, 'Never replay the selector write');
+  });
 
 for (const mutation of ['namespace', 'owner', 'selector'])
   test(`foreign ${mutation} stops before mutation`, async () => {
@@ -170,12 +270,12 @@ test('offline Kubernetes bundle isolates access and disables automatic Job retri
   );
   const job = bundle.items.find((r) => r.kind === 'Job');
   assert.equal(job.spec.backoffLimit, 0);
-  assert.equal(job.spec.activeDeadlineSeconds, 180);
+  assert.ok(job.spec.activeDeadlineSeconds >= 300 + 90, 'The job must cover the silent request and observation');
   assert.equal(job.spec.template.spec.restartPolicy, 'Never');
   assert.equal(job.spec.template.spec.automountServiceAccountToken, true);
   assert.ok(bundle.items.filter((r) => r.kind === 'Pod').every((r) => r.spec.automountServiceAccountToken === false));
   for (const spec of [...bundle.items.filter((r) => r.kind === 'Pod').map((r) => r.spec), job.spec.template.spec]) {
-    assert.equal(spec.activeDeadlineSeconds, 600, 'Disposable Pods must stop even if the operator disconnects');
+    assert.equal(spec.activeDeadlineSeconds, 900, 'Disposable Pods must cover setup plus the silent hold, then stop');
     assert.equal(
       spec.securityContext.fsGroup,
       10001,
@@ -185,6 +285,17 @@ test('offline Kubernetes bundle isolates access and disables automatic Job retri
     assert.ok(spec.containers[0].securityContext.runAsUser > 0);
   }
   assert.ok(bundle.items.filter((r) => r.kind === 'Service').every((r) => r.spec.type === 'ClusterIP'));
+  const wirePods = bundle.items.filter((r) => r.kind === 'Pod');
+  assert.equal(wirePods.length, 3);
+  for (const pod of wirePods) {
+    const [rule] = pod.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution;
+    assert.equal(rule.topologyKey, 'kubernetes.io/hostname');
+    assert.ok(
+      wirePods.every((peer) =>
+        Object.entries(rule.labelSelector.matchLabels).every(([key, value]) => peer.metadata.labels[key] === value),
+      ),
+    );
+  }
   assert.ok(!bundle.items.find((r) => r.kind === 'ConfigMap').data['nginx.conf'].includes('127.0.0.11'));
   assert.throws(() => connectionResetResources({ namespace: 'rivet' }));
   assert.throws(() => connectionResetResources({ namespace, nodeImage: 'node:latest' }));
@@ -192,8 +303,8 @@ test('offline Kubernetes bundle isolates access and disables automatic Job retri
 });
 
 for (const fault of [false, true])
-  test(`held response stays open until release; truncate=${fault}`, async (t) => {
-    const server = diagnosticBackend({ uid: 'owner-a', fault });
+  test(`held response stays silent until release; truncate=${fault}`, async (t) => {
+    const server = diagnosticBackend({ uid: 'owner-a', fault, holdMs: 100 });
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     t.after(() => {
@@ -203,26 +314,52 @@ for (const fault of [false, true])
     const base = `http://127.0.0.1:${server.address().port}`;
     const requestId = randomUUID(),
       body = JSON.stringify({ requestId, hold: true, input: 'x'.repeat(16384) });
-    let response;
-    const completion = new Promise((resolve, reject) => {
-      const req = http.request(base + '/workflows/fixture', { method: 'POST' }, (res) => {
-        response = res;
-        collectContinuityResponse(res, res.statusCode, res.headers).then(resolve, reject);
+    let responses = 0;
+    const start = (body, control) => {
+      const completion = new Promise((resolve, reject) => {
+        const req = http.request(
+          base + '/workflows/fixture',
+          {
+            method: 'POST',
+            headers: { 'x-diagnostic-control': control ? '1' : '0' },
+          },
+          (res) => {
+            responses++;
+            collectContinuityResponse(res, res.statusCode, res.headers).then(resolve, reject);
+          },
+        );
+        req.once('error', reject);
+        req.end(body);
       });
-      req.once('error', reject);
-      req.end(body);
-    });
-    completion.catch(() => {});
-    while (!response) await new Promise(setImmediate);
-    const before = await (await fetch(base + '/state')).json();
-    assert.equal(before.requests[0].held, true);
-    assert.equal(before.requests[0].finished, false);
-    assert.equal(before.requests[0].prefixBytes, 11959);
+      completion.catch(() => {});
+      return completion;
+    };
+    const admitted = async (count) => {
+      const deadline = Date.now() + 5000;
+      let state;
+      do {
+        assert.ok(Date.now() < deadline, 'The requests must be admitted');
+        state = await (await fetch(base + '/state')).json();
+        if (state.requests.length < count) await new Promise(setImmediate);
+      } while (state.requests.length < count);
+      return state;
+    };
+    // Even when the unchanged-route control arrives first, it must never be
+    // chosen for deliberate truncation.
+    const controlId = randomUUID();
+    const control = start(JSON.stringify({ requestId: controlId, hold: true, input: 'x'.repeat(16384) }), true);
+    await admitted(1);
+    const completion = start(body, false);
+    const before = await admitted(2);
+    assert.equal(responses, 0, 'No headers or prefix may keep the silent connections active');
+    assert.ok(before.requests.every((r) => r.held && !r.finished && r.prefixBytes === 0));
+    assert.equal(before.requests.find((r) => r.requestId === controlId).control, true);
     const release = await fetch(base + '/release', {
       method: 'POST',
-      body: JSON.stringify({ requestIds: [requestId] }),
+      body: JSON.stringify({ requestIds: [controlId, requestId] }),
     });
     assert.equal(release.status, 200);
+    assert.equal((await control).bytes, 16568, 'The unchanged-route control remains healthy');
     if (fault)
       await assert.rejects(completion, (error) => {
         assert.equal(error.continuityResponse.status, 200);

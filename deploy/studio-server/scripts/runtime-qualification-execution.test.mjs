@@ -1310,7 +1310,6 @@ for (const profile of [
     const stages = continuityStages(false, 'upgrade', 'focused');
     const requestContinuity = {
       ...continuity.upgrade.requestContinuity,
-      protocol: 4,
       requests: continuity.upgrade.requestContinuity.requests.filter((r) => stages.includes(r.stage)),
       executionWithdrawal: {
         ...continuity.upgrade.requestContinuity.executionWithdrawal,
@@ -1462,6 +1461,7 @@ for (const profile of [
     oldControl.protocol = 4;
     oldControl.checks = [...HA_ORDINARY_RUNTIME_CHECKS];
     oldControl.requestContinuity.protocol = 3;
+    oldControl.requestContinuity.maximumCompletedDurationMs = 300000;
     oldControl.requestContinuity.completedRequests = 18;
     oldControl.requestContinuity.checks = [
       'full-body-300-second-requests',

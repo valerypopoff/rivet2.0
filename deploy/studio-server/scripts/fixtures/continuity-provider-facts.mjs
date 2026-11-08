@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { autoscalerPolicy } from '../lib/execution-autoscaler.mjs';
-import { CONTINUITY_DURATION_STAGES, continuityStages } from '../lib/request-continuity.mjs';
+import {
+  CONTINUITY_DURATION_STAGES,
+  FOCUSED_CONTINUITY_WORK_MS,
+  continuityStages,
+} from '../lib/request-continuity.mjs';
 
 export const continuityFixtureProfile = {
   protocol: 1,
@@ -119,7 +123,7 @@ export function focusedContinuityProviderFacts({ adopted = false, proxyReplaced 
       },
     };
   const facts = f.upgrade.requestContinuity;
-  facts.protocol = 4;
+  facts.protocol = 5;
   facts.bootstrap = adopted ? 'already-protected' : 'passed';
   facts.replacement.changed = proxyReplaced;
   facts.replacement.deploymentUid = 'proxy-deployment';
@@ -145,7 +149,9 @@ export function focusedContinuityProviderFacts({ adopted = false, proxyReplaced 
     const offset = order.indexOf(r.stage) * 400000;
     r.startedAt = date(offset + 2000);
     r.acceptedAt = date(offset + 2500);
-    r.finishedAt = date(offset + 302000);
+    r.durationMs = FOCUSED_CONTINUITY_WORK_MS;
+    r.elapsedMs = FOCUSED_CONTINUITY_WORK_MS + 1000;
+    r.finishedAt = date(offset + 2000 + r.elapsedMs);
   }
   f.upgrade.outcomes.acceptedWork.forEach((r, i) => {
     r.uid = `execution-owner${i || ''}`;

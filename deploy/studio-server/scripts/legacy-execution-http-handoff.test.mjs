@@ -122,10 +122,18 @@ export function fixture({ safe = false } = {}) {
 test('legacy owners retain admission for propagation plus 300 seconds before unsafe withdrawal', async () => {
   const f = fixture(),
     handoff = f.create();
+  const checkpoints = [],
+    checkpoint = f.operation.checkpoint.bind(f.operation);
+  f.operation.checkpoint = async (changes) => {
+    checkpoints.push({ time: f.now(), state: structuredClone(changes.executionPool.legacyHttp) });
+    await checkpoint(changes);
+  };
   await handoff.prepare(f.operation);
   assert.equal(f.now(), 360_000);
   assert.equal(f.patchCount(), 1);
   assert.equal(f.operation.record.executionPool.legacyHttp.settled, true);
+  assert.equal(checkpoints.find((r) => r.state.routeConfirmed)?.time, 0);
+  assert.equal(checkpoints.find((r) => r.state.settled)?.time, 360000);
   assert.equal(f.live().spec.selector['rivet.dev/execution-pool'], 'b');
   await handoff.beforeWithdraw(f.operation);
   assert.equal(f.now(), 360_000, 'One barrier per process, not per worker');

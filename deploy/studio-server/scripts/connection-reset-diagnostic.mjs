@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
 import { connectionResetResources, diagnosticNginx, diagnosticProxyImage } from './lib/connection-reset-resources.mjs';
+import { cleanupConnectionResetLocal } from './lib/connection-reset-local-cleanup.mjs';
 
 // There is intentionally no Kubernetes execution mode. Preparation writes an
 // offline bundle; the operator must obtain staging approval before applying it.
@@ -29,7 +30,21 @@ assert.ok(directory.startsWith(artifacts + path.sep), 'Output must be a new dire
 const execute = promisify(execFile);
 const docker = async (args, timeout = 30000) =>
   execute('docker', args, { encoding: 'utf8', windowsHide: true, timeout, maxBuffer: 4 * 1024 * 1024 });
+const toolsUser = `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`;
 for (const image of [values['tools-image'], diagnosticProxyImage]) await docker(['image', 'inspect', image]);
+await docker([
+  'run',
+  '--rm',
+  '--pull=never',
+  '--network=none',
+  '--user',
+  toolsUser,
+  '--entrypoint',
+  '/bin/sh',
+  values['tools-image'],
+  '-ec',
+  `node -e 'if (process.versions.node !== "24.22.1") throw Error("Diagnostic tools require Node 24.22.1")'; openssl version`,
+]);
 await fs.mkdir(directory); // Refuse to overwrite an earlier diagnostic or key.
 await Promise.all(['fixtures', 'lib', 'tls'].map((name) => fs.mkdir(path.join(directory, name))));
 const sourceFiles = {
@@ -50,7 +65,7 @@ await docker([
   '--pull=never',
   '--network=none',
   '--user',
-  `${process.getuid?.() ?? 10001}:${process.getgid?.() ?? 10001}`,
+  toolsUser,
   '--mount',
   tlsMount,
   '--entrypoint',
@@ -92,7 +107,7 @@ if (mode === 'prepare') {
 } else {
   const label = `rivet.connection-diagnostic=${namespace}`;
   const names = ['a', 'b', 'execution', 'proxy', 'client'].map((role) => `${namespace}-${role}`);
-  let failure, report;
+  let failure, report, cleanupVerified;
   await fs.writeFile(
     path.join(directory, 'resources.private.json'),
     JSON.stringify({ namespace, containers: names, cloudOperation: false }, null, 2),
@@ -141,6 +156,8 @@ if (mode === 'prepare') {
               '-e',
               `POD_UID=local-${role}`,
               '-e',
+              'DIAGNOSTIC_HOLD_MS=100',
+              '-e',
               `LOCAL_TRUNCATE=${role === 'a' && values['truncate-response'] ? 1 : 0}`,
               '-e',
               'NODE_EXTRA_CA_CERTS=/tls/cert.pem',
@@ -169,38 +186,31 @@ if (mode === 'prepare') {
       }
     }
   } finally {
-    const cleanupErrors = [];
-    for (const name of names.reverse()) {
-      try {
-        const inspected = await docker(['container', 'ls', '-a', '--filter', `name=^/${name}$`, '--format', '{{.ID}}']);
-        if (!inspected.stdout.trim()) continue;
-        const info = JSON.parse((await docker(['inspect', name])).stdout)[0];
-        assert.equal(info.Config.Labels['rivet.connection-diagnostic'], namespace);
-        const logs = await docker(['logs', name]);
-        await fs.writeFile(path.join(directory, name + '.private.log'), logs.stdout + logs.stderr);
-        await docker(['rm', '-f', name]);
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-    }
+    const cleanup = await cleanupConnectionResetLocal({
+      docker,
+      names,
+      namespace,
+      writeLog: (name, logs) => fs.writeFile(path.join(directory, name + '.private.log'), logs),
+      removeTls: async () => {
+        const removed = await Promise.allSettled(
+          ['tls/key.pem', 'tls/cert.pem'].map((file) => fs.rm(path.join(directory, file), { force: true })),
+        );
+        const errors = removed.filter((result) => result.status === 'rejected').map((result) => result.reason);
+        if (errors.length) throw new AggregateError(errors, 'Diagnostic TLS file cleanup failed');
+      },
+    });
+    cleanupVerified = cleanup.cleanupVerified;
     try {
-      const found = await docker(['network', 'ls', '--filter', `name=^${namespace}$`, '--format', '{{.ID}}']);
-      if (found.stdout.trim()) {
-        const network = JSON.parse((await docker(['network', 'inspect', namespace])).stdout)[0];
-        assert.equal(network.Labels['rivet.connection-diagnostic'], namespace);
-        await docker(['network', 'rm', namespace]);
-      }
+      await fs.writeFile(
+        path.join(directory, 'result.private.json'),
+        JSON.stringify({ namespace, qualification: false, report, cleanupVerified }, null, 2),
+      );
     } catch (error) {
-      cleanupErrors.push(error);
+      cleanup.errors.push(error);
     }
-    for (const file of ['tls/key.pem', 'tls/cert.pem']) await fs.unlink(path.join(directory, file));
-    await fs.writeFile(
-      path.join(directory, 'result.private.json'),
-      JSON.stringify({ namespace, qualification: false, report, cleanupVerified: cleanupErrors.length === 0 }, null, 2),
-    );
-    if (cleanupErrors.length)
+    if (cleanup.errors.length)
       failure = new AggregateError(
-        [...(failure ? [failure] : []), ...cleanupErrors],
+        [...(failure ? [failure] : []), ...cleanup.errors],
         'Local diagnostic or cleanup failed',
       );
   }
@@ -208,7 +218,7 @@ if (mode === 'prepare') {
     JSON.stringify({
       directory,
       outcome: report?.outcome ?? 'setup-failed',
-      cleanupVerified: !(failure instanceof AggregateError),
+      cleanupVerified,
     }),
   );
   if (failure) throw failure;

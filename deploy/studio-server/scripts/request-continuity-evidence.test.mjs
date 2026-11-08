@@ -159,11 +159,12 @@ function focusedFacts() {
   return focusedContinuityProviderFacts({ adopted: true });
 }
 
-test('focused continuity proves fresh full five-minute bodies across real upgrade stages without claiming HPA or duration-matrix tests', () => {
+test('focused continuity proves near-boundary full bodies within the total deadline across real upgrade stages', () => {
   const f = focusedFacts();
   const proof = compileRequestContinuityEvidence(f.operation, f.upgrade, f.autoscaling);
   assert.equal(proof.completedRequests, 6);
-  assert.equal(proof.protocol, 4);
+  assert.equal(proof.protocol, 5);
+  assert.ok(proof.checks.includes('full-body-within-300-second-deadline'));
   assert.ok(!proof.checks.includes('proxy-hpa-removal'));
   const release = {
     ...f.operation.candidate,
@@ -206,6 +207,15 @@ test('focused continuity proves fresh full five-minute bodies across real upgrad
       x.upgrade.requestContinuity.requests[0].elapsedMs = 200;
     },
     (x) => {
+      x.upgrade.requestContinuity.requests[0].elapsedMs = 300001;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.requests[0].durationMs = 300000;
+    },
+    (x) => {
+      x.upgrade.requestContinuity.protocol = 4;
+    },
+    (x) => {
       x.upgrade.requestContinuity.replacement.observedAt = x.upgrade.finishedAt;
     },
     (x) => {
@@ -233,6 +243,51 @@ test('focused continuity proves fresh full five-minute bodies across real upgrad
     const changed = focusedFacts();
     change(changed);
     assert.throws(() => compileRequestContinuityEvidence(changed.operation, changed.upgrade, changed.autoscaling));
+  }
+});
+
+test('legacy first update observes bounded requests across routing, then accepted work across later owner withdrawal', () => {
+  const f = focusedFacts(),
+    facts = f.upgrade.requestContinuity,
+    start = Date.parse(f.upgrade.startedAt),
+    at = (offset) => new Date(start + offset).toISOString();
+  f.upgrade.outcomes.executionPool = {
+    plan: { previous: { replicas: 2 } },
+    legacyHttp: {
+      required: true,
+      serviceUid: 'execution-service',
+      routeConfirmed: true,
+      settled: true,
+      restoreIssued: true,
+    },
+  };
+  facts.executionHandoff = { serviceUid: 'execution-service', dispatchedAt: at(404000), observedAt: at(405000) };
+  facts.executionWithdrawal.dispatchedAt = at(765000);
+  facts.executionWithdrawal.observedAt = at(766000);
+  assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  for (const mutate of [
+    (x) => {
+      delete x.requestContinuity.executionHandoff;
+    },
+    (x) => {
+      x.requestContinuity.executionHandoff.serviceUid = 'unrelated';
+    },
+    (x) => {
+      x.requestContinuity.executionHandoff.observedAt = at(700000);
+    },
+    (x) => {
+      x.outcomes.executionPool.legacyHttp.routeConfirmed = false;
+    },
+    (x) => {
+      x.outcomes.executionPool.legacyHttp.settled = false;
+    },
+    (x) => {
+      x.requestContinuity.executionWithdrawal.observedAt = at(900000);
+    },
+  ]) {
+    const changed = structuredClone(f.upgrade);
+    mutate(changed);
+    assert.throws(() => compileRequestContinuityEvidence(f.operation, changed));
   }
 });
 
@@ -340,6 +395,7 @@ test('historical focused certificates remain readable without being relabeled as
     ...proof,
     protocol: 3,
     completedRequests: 9,
+    maximumCompletedDurationMs: 300000,
     checks: [
       'full-body-300-second-requests',
       'late-admission-and-connection-reuse',
@@ -354,4 +410,17 @@ test('historical focused certificates remain readable without being relabeled as
   assertRequestContinuityEvidence(old, release, profile);
   assert.throws(() => assertRequestContinuityEvidence({ ...old, protocol: 4 }, release, profile));
   assert.throws(() => assertRequestContinuityEvidence({ ...proof, protocol: 3 }, release, profile));
+  const previousFocused = {
+    ...proof,
+    protocol: 4,
+    maximumCompletedDurationMs: 300000,
+    checks: proof.checks.map((c) =>
+      c === 'full-body-within-300-second-deadline' ? 'full-body-300-second-requests' : c,
+    ),
+  };
+  assertRequestContinuityEvidence(previousFocused, release, profile);
+  assert.throws(() => assertRequestContinuityEvidence({ ...previousFocused, protocol: 5 }, release, profile));
+  assert.throws(() =>
+    assertRequestContinuityEvidence({ ...proof, maximumCompletedDurationMs: 300001 }, release, profile),
+  );
 });
