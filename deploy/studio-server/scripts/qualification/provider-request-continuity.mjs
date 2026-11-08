@@ -553,6 +553,13 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
     const state = record.proxyContinuity;
     if (!state) return;
     const focused = this.gate.operation.qualification?.tier === 'focused';
+    const handoff = record.executionPool?.legacyHttp;
+    if (focused && handoff?.required && handoff.routeIssued) {
+      this.executionHandoff ??= { serviceUid: handoff.serviceUid, dispatchedAt: new Date().toISOString() };
+      assert.equal(this.executionHandoff.serviceUid, handoff.serviceUid);
+      if (handoff.routeConfirmed && !this.executionHandoff.observedAt)
+        this.executionHandoff.observedAt = new Date().toISOString();
+    }
     const executionOwner = record.owner?.withdrawIssued
       ? record.owner
       : record.executionPool?.owners?.find((owner) => owner.withdrawIssued);
@@ -713,6 +720,7 @@ return {output:{type:'string',value:body},delay:{type:'number',value:p.delayMs}}
       ...(this.returnHandoff ? { returnHandoff: this.returnHandoff } : {}),
       ...(this.bootstrapHandoff ? { bootstrapHandoff: this.bootstrapHandoff } : {}),
       ...(this.executionWithdrawal ? { executionWithdrawal: this.executionWithdrawal } : {}),
+      ...(this.executionHandoff ? { executionHandoff: this.executionHandoff } : {}),
       failures: this.failures,
     };
   }

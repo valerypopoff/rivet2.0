@@ -129,7 +129,25 @@ export function assertContinuityProviderFacts(report, operation, kind) {
         report.outcomes.acceptedWork.some((r) => r.uid === facts.executionWithdrawal?.podUid),
         'Execution withdrawal must belong to an accepted-work owner',
       );
-      overlaps('execution-retirement', facts.executionWithdrawal.dispatchedAt, facts.executionWithdrawal.observedAt);
+      assert.ok(
+        timestamp(report.startedAt) <= timestamp(facts.executionWithdrawal.dispatchedAt) &&
+          timestamp(facts.executionWithdrawal.dispatchedAt) <= timestamp(facts.executionWithdrawal.observedAt) &&
+          timestamp(facts.executionWithdrawal.observedAt) <= timestamp(report.finishedAt),
+        'Execution withdrawal must be observed within the rollout',
+      );
+      const handoff = report.outcomes.executionPool?.legacyHttp;
+      if (handoff?.required) {
+        assert.equal(handoff.routeConfirmed, true);
+        assert.equal(handoff.settled, true);
+        assert.equal(handoff.restoreIssued, true);
+        nonempty(facts.executionHandoff?.serviceUid);
+        assert.equal(facts.executionHandoff.serviceUid, handoff.serviceUid);
+        overlaps('execution-retirement', facts.executionHandoff.dispatchedAt, facts.executionHandoff.observedAt);
+        assert.ok(timestamp(facts.executionHandoff.observedAt) <= timestamp(facts.executionWithdrawal.dispatchedAt));
+      } else {
+        assert.equal(facts.executionHandoff, undefined);
+        overlaps('execution-retirement', facts.executionWithdrawal.dispatchedAt, facts.executionWithdrawal.observedAt);
+      }
     }
     if (!adopted) overlaps('return-handoff', facts.returnHandoff.dispatchedAt, facts.returnHandoff.observedAt);
     if (focused && !adopted) {

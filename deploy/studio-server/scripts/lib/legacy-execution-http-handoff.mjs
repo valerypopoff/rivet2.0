@@ -221,6 +221,13 @@ export function createLegacyExecutionHttpHandoff({
       }
       // A lost patch acknowledgement is observed, never blindly replayed.
       await ownedService(state, state.selected);
+      // Record the actual routing change before waiting out protected requests.
+      // Qualification must observe those requests across this handoff, not
+      // require them to outlive the later six-minute safety barrier.
+      if (!state.routeConfirmed) {
+        state = { ...state, routeConfirmed: true };
+        await save(operation, state);
+      }
       const owners = operation.record.executionPool.owners;
       await waitForHaRoutingWithdrawal({
         pod: owners[0],

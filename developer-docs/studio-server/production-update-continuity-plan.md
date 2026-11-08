@@ -21,6 +21,14 @@ five-minute diagnostic is optional investigation, not the next acceptance gate.
 Use it only if a properly scoped request still fails and the experiment can
 distinguish the remaining causes. Do not relabel the previous failed runs.
 
+The legacy predecessor has a separate ordering constraint: public requests
+start before the Service handoff, which intentionally waits six minutes before
+owner withdrawal. Protocol 5 proves those requests across the confirmed routing
+change, then uses the existing accepted-work and owner observations for the
+later drain. It does not demand that a request bounded to five minutes remain
+open after a six-minute barrier. Both observations are required; the safety
+wait and full-body checks remain intact.
+
 Freeze the application candidate while correcting tooling. The last two full
 attempts took 33m32s and 32m01s without resolving the response question. The latest
 21m38s measured rollout spent 14m40s in the execution-pool phase and includes the
@@ -34,7 +42,7 @@ Next: publish tooling only with the existing application images, then run one
 approved timed focused staging qualification. Separate ordinary replacement time
 from the first-adoption legacy handoff and cleanup waits in the report.
 The focused regression suites passed on Windows and Linux/Node 24. The local
-rollout source gate passed (745 passing tests, five intentional skips), as did
+rollout source gate passed, as did
 documentation links, test-style checks and workflow/entrypoint policy. This is
 local validation; there is no new provider qualification yet.
 This follow-up governs the remaining investigation. Historical results below remain unchanged.

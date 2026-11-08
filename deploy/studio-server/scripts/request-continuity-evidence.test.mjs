@@ -246,6 +246,51 @@ test('focused continuity proves near-boundary full bodies within the total deadl
   }
 });
 
+test('legacy first update observes bounded requests across routing, then accepted work across later owner withdrawal', () => {
+  const f = focusedFacts(),
+    facts = f.upgrade.requestContinuity,
+    start = Date.parse(f.upgrade.startedAt),
+    at = (offset) => new Date(start + offset).toISOString();
+  f.upgrade.outcomes.executionPool = {
+    plan: { previous: { replicas: 2 } },
+    legacyHttp: {
+      required: true,
+      serviceUid: 'execution-service',
+      routeConfirmed: true,
+      settled: true,
+      restoreIssued: true,
+    },
+  };
+  facts.executionHandoff = { serviceUid: 'execution-service', dispatchedAt: at(404000), observedAt: at(405000) };
+  facts.executionWithdrawal.dispatchedAt = at(765000);
+  facts.executionWithdrawal.observedAt = at(766000);
+  assert.doesNotThrow(() => compileRequestContinuityEvidence(f.operation, f.upgrade));
+  for (const mutate of [
+    (x) => {
+      delete x.requestContinuity.executionHandoff;
+    },
+    (x) => {
+      x.requestContinuity.executionHandoff.serviceUid = 'unrelated';
+    },
+    (x) => {
+      x.requestContinuity.executionHandoff.observedAt = at(700000);
+    },
+    (x) => {
+      x.outcomes.executionPool.legacyHttp.routeConfirmed = false;
+    },
+    (x) => {
+      x.outcomes.executionPool.legacyHttp.settled = false;
+    },
+    (x) => {
+      x.requestContinuity.executionWithdrawal.observedAt = at(900000);
+    },
+  ]) {
+    const changed = structuredClone(f.upgrade);
+    mutate(changed);
+    assert.throws(() => compileRequestContinuityEvidence(f.operation, changed));
+  }
+});
+
 test('focused first adoption proves the bridge and return handoff without autoscaling stress claims', () => {
   const f = focusedContinuityProviderFacts();
   const proof = compileRequestContinuityEvidence(f.operation, f.upgrade, f.autoscaling);

@@ -255,6 +255,13 @@ request window. Historical protocols 2–4 remain readable with their original
 timing claims; they are not relabeled, and new focused observations require
 protocol 5. The optional full regression suite retains its older duration matrix.
 
+For a legacy predecessor, the public requests span the confirmed Service
+handoff. The old owners then remain alive for the existing 300-second drain plus
+propagation before withdrawal. Requiring the same request to outlive that entire
+barrier would contradict the total request deadline. Separate accepted-work
+probes still prove completion across the actual owner withdrawal, and the
+validator requires the handoff, owner identity, drain and route restoration.
+
 The ordinary Build workflow runs the source-only image/launcher contract tests
 in its existing static-validation job, before docs/style checks. This includes
 PRs targeting `main`, where the full Studio Server verifier is not a PR trigger.

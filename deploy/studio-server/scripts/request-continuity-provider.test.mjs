@@ -440,6 +440,24 @@ test('focused journal observes real bridge boundaries without policy or late-adm
   assert.ok(probes.executionWithdrawal.dispatchedAt && probes.executionWithdrawal.observedAt);
 });
 
+test('focused journal captures the confirmed legacy route before the protected drain wait', async () => {
+  const f = fixture(),
+    probes = new ProviderRequestContinuity(f.gate);
+  f.gate.operation.qualification = { tier: 'focused' };
+  probes.prepared = true;
+  const state = { phase: 'bridge-serving', entries: [], mutations: {} };
+  probes.bootstrapHandoff = {};
+  const handoff = { required: true, serviceUid: 'execution-service', routeIssued: true };
+  await probes.observeJournal({ phase: 'owners', executionPool: { legacyHttp: handoff }, proxyContinuity: state });
+  assert.equal(probes.executionHandoff.serviceUid, 'execution-service');
+  assert.ok(probes.executionHandoff.dispatchedAt);
+  assert.equal(probes.executionHandoff.observedAt, undefined, 'Intent alone cannot prove routing changed');
+  handoff.routeConfirmed = true;
+  await probes.observeJournal({ phase: 'owners', executionPool: { legacyHttp: handoff }, proxyContinuity: state });
+  assert.ok(probes.executionHandoff.observedAt);
+  assert.equal(probes.executionWithdrawal, undefined, 'Service handoff is separate from later owner withdrawal');
+});
+
 test('focused admission accepts a healthy pool with draining predecessors without crediting old termination', async () => {
   for (const count of [2, 4]) {
     const f = fixture(),
