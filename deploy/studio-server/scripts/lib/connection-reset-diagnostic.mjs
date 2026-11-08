@@ -53,7 +53,12 @@ export async function changeDiagnosticService(api, namespace) {
   } catch (error) {
     writeError = error;
   }
-  const after = await api('GET', path);
+  let after;
+  try {
+    after = await api('GET', path);
+  } catch (error) {
+    throw writeError ?? error;
+  }
   const verified =
     after.metadata?.uid === before.metadata.uid &&
     after.metadata?.labels?.[diagnosticLabel] === namespace &&
@@ -74,6 +79,21 @@ const errorFacts = (error) => ({
       }
     : {}),
 });
+
+/** A timer wake-up alone is not measured proof of a complete silent interval. */
+export async function waitForDiagnosticSilence({
+  startedAt,
+  durationMs,
+  signal,
+  clock = { now: () => performance.now(), wait: (ms, signal) => delay(ms, undefined, { signal }) },
+}) {
+  for (;;) {
+    signal.throwIfAborted();
+    const elapsedMs = clock.now() - startedAt;
+    if (elapsedMs >= durationMs) return elapsedMs;
+    await clock.wait(durationMs - elapsedMs, signal);
+  }
+}
 
 /** Seven POSTs: three quick controls, then three responses held across one
  * endpoint change and a simultaneous unchanged-route control. Existing owners
@@ -136,8 +156,8 @@ export async function runConnectionResetDiagnostic({
     return response.json();
   };
   const until = async (check) => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
       if (firstFailure) throw firstFailure;
       const value = await check();
       if (value) return value;
@@ -149,6 +169,7 @@ export async function runConnectionResetDiagnostic({
     return (stable ? ['fresh-http1'] : ['fresh-http1', 'pooled-http1', 'http2']).map((transport) => {
       const requestId = randomUUID();
       const body = JSON.stringify({ requestId, hold, input: 'x'.repeat(16384) });
+      const started = performance.now();
       const receipt = {
         stage: stable ? 'unchanged-route' : stage,
         transport,
@@ -194,7 +215,7 @@ export async function runConnectionResetDiagnostic({
         })
         .finally(() => {
           receipt.finishedAt = new Date().toISOString();
-          receipt.elapsedMs = Date.parse(receipt.finishedAt) - Date.parse(receipt.startedAt);
+          receipt.elapsedMs = Math.round(performance.now() - started);
         });
       running.push(work);
       return work;
@@ -220,6 +241,10 @@ export async function runConnectionResetDiagnostic({
     // timestamps are diagnostic metadata, not authority to shorten this wait.
     const holdStarted = performance.now();
     report.accepted = accepted.requests.filter((r) => heldIds.includes(r.requestId));
+    if (!report.accepted.every((request) => request.upstreamConnection === 'close'))
+      throw Object.assign(Error('Diagnostic upstream Connection policy differs from the public workflow route'), {
+        code: 'DIAGNOSTIC_PROXY_POLICY',
+      });
     for (const owner of report.accepted)
       Object.assign(
         report.requests.find((r) => r.requestId === owner.requestId),
@@ -244,7 +269,11 @@ export async function runConnectionResetDiagnostic({
     report.newConnectionsReachedB = true;
     const remainingMs = Math.max(0, holdMs - (performance.now() - holdStarted));
     emit('silent-hold', { remainingMs: Math.ceil(remainingMs) });
-    await delay(remainingMs, undefined, { signal: holdAbort.signal });
+    report.observedSilentHoldMs = await waitForDiagnosticSilence({
+      startedAt: holdStarted,
+      durationMs: holdMs,
+      signal: holdAbort.signal,
+    });
     const beforeRelease = await json(backendA + '/state');
     assert.deepEqual(beforeRelease.owner, report.owners.a, 'Original owner changed');
     assert.deepEqual((await json(backendB + '/state')).owner, report.owners.b, 'Replacement owner changed');

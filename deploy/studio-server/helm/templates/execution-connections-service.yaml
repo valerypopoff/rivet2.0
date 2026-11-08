@@ -1,0 +1,21 @@
+{{- if .Values.ha.enabled }}
+# Keep Cilium's backend reference while public readiness/selectors change.
+# No proxy or client routes through this Service. Removing the final backend
+# reference before a response finishes can reset an established connection.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rivet.executionServiceName" . }}-connections
+  labels:
+    {{- include "rivet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-connections
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "rivet.componentLabels" (dict "root" . "component" "execution") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.execution.port }}
+      targetPort: execution-http
+{{- end }}

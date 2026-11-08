@@ -10,7 +10,7 @@ import {
 } from './scheduled-runs/runtime.js';
 import { AcceptedWork, ProcessRetirement } from '../../studio-server-shared/process-retirement.js';
 import { createRetirementHttpConnections } from './retirement-http-connections.js';
-import { settleBeforeDeadline } from './shutdown-deadline.js';
+import { closeHttpServerBeforeDeadline, settleBeforeDeadline } from './shutdown-deadline.js';
 import { projectBundleJobs } from './routes/workflows/project-bundle-jobs.js';
 import { createServer } from 'node:http';
 import {
@@ -229,21 +229,6 @@ async function waitForActiveWebAppRuns(deadline: number): Promise<boolean> {
 
 async function waitForActiveHttpExecutions(deadline: number): Promise<boolean> {
   return waitForActiveRuns(getActiveHttpExecutionCount, deadline);
-}
-
-async function closeHttpServer(deadline: number): Promise<boolean> {
-  if (!server.listening) return true;
-
-  let closed = false;
-  const closedPromise = new Promise<void>((resolve) => {
-    server.close(() => {
-      closed = true;
-      resolve();
-    });
-    server.closeIdleConnections?.();
-  });
-  await settleBeforeDeadline(closedPromise, deadline);
-  return closed;
 }
 
 const resources = new ServerResourceLifecycle([
@@ -468,6 +453,7 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
 
   shuttingDown = true;
+  requestWork.beginDrain();
   // Retirement has already settled editor owners; idle relays must not hold HTTP close open.
   if (retirement?.snapshot().state === 'drained') disposeOwnerRouting?.();
   runtimeHealth.beginDrain();
@@ -498,7 +484,7 @@ async function shutdown(signal: string): Promise<void> {
   }
 
   const [httpClosed, webAppRunsCompleted, httpRunsCompleted] = await Promise.all([
-    closeHttpServer(deadline),
+    closeHttpServerBeforeDeadline(server, requestWork, deadline),
     waitForActiveWebAppRuns(deadline),
     waitForActiveHttpExecutions(deadline),
     scheduledDrain,

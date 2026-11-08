@@ -59,6 +59,15 @@ Private terminal diagnostics retain up to four error causes (names/messages
 only), so qualification wrappers preserve the underlying transport failure.
 Command-output/environment fields and other error properties are not serialized.
 
+Kubernetes JSON transport errors now retain safe Status reasons, bounded cause
+fields and audit IDs without logging raw response/cause messages, which can echo
+submitted values. HTTP status, reason and audit ID are included in the primary
+error message; direct reporters can also use `kubernetesStatus` and `auditId`.
+The same error helper is packaged into the embedded autoscaler runtime and the
+isolated response-reset client. Its dependency is covered by autoscaler package
+startup and image-input classification checks. Read throttling remains bounded
+and resource writes are not automatically replayed.
+
 The narrowed campaign closed after three failed staging attempts, with zero
 successful qualifications and zero production serving updates. Child and parent
 resource cleanup, temporary access removal, evidence transfer and restoration of
@@ -425,6 +434,47 @@ clear a timeout. Zero-weight backend references follow
 the exact regional provider behavior must still pass qualification.
 
 ## Provider qualification and evidence
+
+### Execution backend references during withdrawal
+
+HA installs an additional ClusterIP Service named `<execution-service>-connections`.
+It selects all execution pools on the same HTTP backend port and sets
+`publishNotReadyAddresses: true`. No product proxy, client or route uses its
+address. It adds no Pods, replica reservations or external load balancer; its
+purpose is to retain the internal backend reference while the public Service
+selector or Pod readiness changes. Headless Services do not supply this reference.
+Keep it installed through ordinary retirement and autoscaler downscale; the old
+backend disappears only after its Pod is removed following accepted-work drain.
+
+The November 8 actual-API diagnostic reproduced a 295-second truncated response
+only through the changed Service route. The same backend completed a concurrent
+direct response, reported full local socket writes and never received shutdown.
+This exposes the rollout's unsafe assumption that removing a backend's last
+Service reference preserves established connections. Cilium documents the
+[backend-reference removal mechanism](https://github.com/cilium/cilium/issues/23761).
+The captured events are consistent with that mechanism; they do not identify
+the emitter of a particular TCP reset.
+
+Before the one-time legacy selector handoff, the operator validates the private
+Service's UID, selector, backend port and readiness-independent publication,
+then observes references to every original owner for a continuous 60 seconds.
+It keeps checking those references during the existing 300+60-second public
+response barrier. A lost reference stops the operation before unsafe retirement;
+there is no automatic Service write replay. The extra initial 60-second
+reference observation applies only to the legacy compatibility path. Updated
+running images continue to skip that handoff and its waits. Old interrupted
+legacy journals without reference protection require inspection, not automatic
+adoption of the new guarantee.
+
+The retained-backend diagnostic variant subsequently passed one focused GKE
+check with the same affected API image: all five responses completed, including
+both 295-second bodies, while the exact reference remained present. Namespace
+cleanup and retained staging health were independently verified. This establishes
+the repaired condition in that observed scenario, not full release acceptance.
+Publish and qualify the final candidate through the ordinary timed staging
+rollout before production; do not repeat the unchanged isolated diagnostic.
+
+### Qualification inputs
 
 Put `requestContinuityProfile` in the private settings supplied to
 `package-reusable-staging.mjs`, together with the explicit staging `region`:

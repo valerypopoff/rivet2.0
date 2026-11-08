@@ -1,8 +1,137 @@
 # Production update continuity implementation plan
 
-## Current follow-up: investigate the November 7 response failure
+## Current high-level plan — November 8
 
-### Reassessment: align acceptance with the agreed request limit first
+This section is the current delivery plan. The investigation and implementation
+record below is historical evidence; its older next-action suggestions do not
+override this sequence.
+
+The goal is a simple, repeatable GitHub-driven process that updates Rivet in GCP
+Kubernetes significantly faster while keeping published production endpoints
+available and completing accepted requests within the agreed 300-second window.
+Requests beyond that window may be interrupted. Ordinary rolling updates are
+the scope; additional editor/browser continuity is a separate feature.
+
+The intended speedup is approximately twofold for comparable ordinary updates.
+It remains a measurement target, not an achieved result. Keep first-adoption
+compatibility waits, preparation, image building and cleanup separately visible
+instead of describing a failed or partial rollout as a successful speed proof.
+
+### Verified position
+
+| Area | Current evidence |
+| --- | --- |
+| Faster mechanism | Implemented; three-worker parallel replacement has run in staging. The faster path is not yet qualified for production. |
+| Full staging acceptance | Remains open for the final candidate. The earlier full rollout failed on a truncated response; the narrower actual-API case reproduced it, and the retained-reference repair subsequently passed that focused GKE check. |
+| Ordinary shutdown defect | Separately reproduced, fixed and validated locally. That fix is not evidence that the captured Service-handoff reset is solved. |
+| Latest provider diagnostic | Retained-reference check passed once in 9m55s including cleanup: five complete responses, both long responses complete at about 295 seconds, accepted work settled and reference proofs intact. Namespace absence and all eight retained staging Pods Ready were independently verified; quarantine/owner are unchanged. No retry or production update followed. |
+| Setup repair | The create-only proxy setup and replacement one-shot operator worked in GKE. Read-only preparation corrected an obsolete spare-node assumption using existing autoscaling and fresh quota checks, before any workload creation. No manual capacity or access change was made. |
+| Service-handoff repair | Implemented locally and passed focused GKE verification using the same affected API image. Retaining the private backend reference preserved the complete changed-route response. This supports the backend-reference diagnosis in the observed scenario; it does not identify a particular TCP reset's emitter or qualify a full release. |
+| Publication | This repair changes API runtime, chart and tooling. Retain one successful main Build Images publication of the reviewed source; final release qualification must cover that candidate, not the older diagnostic image. |
+| Production | Earlier deployments succeeded. This accelerated candidate and process have not yet completed their staging-to-production proof. |
+
+### Remaining sequence
+
+1. **Diagnostic preparation complete.** The create-only one-shot operator,
+   frozen runtime/image inputs, retained-reference checks and cleanup are
+   implemented and have run successfully in GKE. Both diagnostic operations are
+   closed. Do not reopen their namespaces, intent files or single-run allowances.
+
+2. **Original failing condition reproduced.** The no-extra-reference actual-API
+   case truncated its changed-route response at 295 seconds while the concurrent
+   direct route completed. Original server/proxy evidence is preserved. This was
+   investigation evidence, not a successful rollout or release qualification.
+
+3. **Retained-reference provider verification passed.** With the same affected
+   API image and the added private reference, all five responses completed,
+   including both simultaneous 295-second responses. The exact private Service
+   UID and original A/B UID/IP/port references were observed for 60 seconds before
+   client start, during execution and after settlement. No upstream reset or
+   Pod restart was recorded. All accepted work settled; namespace cleanup and
+   retained staging health were independently verified. The run took 9m55s
+   including setup and cleanup. This verifies the repaired condition in the
+   observed GKE scenario; it is not managed-storage/full-handoff acceptance or a
+   speed measurement of an ordinary rolling update. No unchanged diagnostic
+   repeat or new general investigation gate is needed. Continue with publication
+   of the final repaired candidate, once publication is authorized.
+
+4. **Publish one final candidate after that decision.** Review/commit the fixes
+   and documentation, pass CI, merge and complete one required image publication.
+   The shutdown fix and shared autoscaler error helper are API runtime changes:
+   this final release needs an updated API image even though the diagnostic
+   reuses existing images. Reuse unaffected component images through the existing
+   build rules. Pin the predecessor to the release actually installed in
+   production, then freeze the candidate images, deployment tooling and intended
+   installation configuration before qualification.
+
+5. **Pass one full timed staging rollout of that candidate.** Use production's
+   actual starting release and the intended parallel replacement/capacity profile.
+   Keep the existing meaningful checks: public availability, complete protected
+   responses, accepted-work settlement, recording/data preservation, final health
+   and cleanup. Do not add unrelated architecture journeys or weaken body checks.
+   Separate ordinary replacement time from first-adoption delays. A failure
+   stops publication/promotion and is investigated from its captured evidence;
+   there is no automatic unchanged rerun.
+
+6. **Deploy the exact qualified release through the existing production GitHub
+   workflow after production authorization.** Use the normal short live readiness
+   and recovery checks, then observe and measure the update. Reuse the successful
+   qualification and image digests; do not repeat staging or rebuild them merely
+   to start production. Finish with health/settlement verification and a timing
+   report for both environments.
+
+### Completion and future releases
+
+Safe delivery is proven by a successful full staging rollout and the observed
+production rollout of the same qualified release. The speed claim additionally
+needs comparable ordinary-update timings. If legacy shutdown settings or a
+one-time handoff obscure the first production measurement, confirm steady-state
+speed on the next real release rather than manufacturing another release solely
+for a benchmark. Do not mark the twofold speed goal achieved from estimates.
+
+The recurring process should be: build once, qualify once on retained staging,
+approve production, deploy the same release, and report health and timings.
+The targeted reset diagnostic is temporary investigation work, not another
+permanent release gate. No new cloud run, spending allowance, merge or production
+deployment is authorized by this planning update.
+
+## Historical implementation and investigation record
+
+### November 8 local repair and targeted investigation
+
+The first subsequently approved real-Rivet diagnostic stopped during setup:
+the two API backends became Ready, but the operator's proxy ConfigMap PATCH
+was rejected before any proxy/client creation or workflow POST. The attempt
+closed with verified cleanup in 2m50s; retained staging stayed healthy and
+quarantined. It did not test the reset and must not be reported as a failed
+rollout qualification. The local follow-up now creates a dedicated immutable
+proxy configuration once after observing the backend IP, instead of patching
+the shared source ConfigMap. The same phase coordinator is used by local Docker
+and staging preparation; original sanitized Kubernetes error evidence is kept.
+Another provider attempt still requires separate authorization. No automatic
+retry or production change followed.
+
+Ordinary HTTP shutdown had a separate reproduced buffered-response defect.
+The API now fences new request admission before awaiting shutdown work and
+waits for accepted request/response ownership before Node's HTTP close, within
+the unchanged grace deadline. Deadline expiry still closes the listener and
+permits the existing forced socket closure. This is locally validated code,
+not a deployed image and not a demonstrated repair of the earlier 16-KiB reset.
+
+Before another full rollout, use the prepared
+[real-Rivet paired diagnostic](./rivet-response-reset.md) if approved. It runs
+two concurrent 295-second executions on the affected API image, one across a
+single Service selector change and one over an unchanged direct-Pod route.
+It neither retires workers nor touches the retained application. There are no
+per-backend Services that could retain the old Service backend reference.
+Positive and deliberately truncated local controls passed and verified cleanup;
+the first-failure regression also confirms accepted work settles without new
+workflow POSTs. Offline manifests exist; no cloud execution or production
+deployment is authorized by this preparation. This targeted investigation
+supersedes the historical next-action suggestions below until its evidence
+supports a cause-specific decision.
+
+### Historical reassessment before the within-limit failure: align request timing
 
 Parallel replacement has completed in the recent staging attempts. Acceptance
 is still blocked, and the latest failures have not established a fault inside
@@ -36,16 +165,16 @@ one-time legacy HTTP handoff and old shutdown hooks. It is not a steady-state
 speed measurement. Measure ordinary-update speed separately after adoption.
 Further general diagnostic hardening must not displace this acceptance decision.
 
-Status: **focused timing correction and diagnostic/reporting repairs implemented
+Historical status: **focused timing correction and diagnostic/reporting repairs implemented
 locally; the response reset remains unexplained and the release is not qualified**.
-Next: publish tooling only with the existing application images, then run one
+Next at that point: publish tooling only with the existing application images, then run one
 approved timed focused staging qualification. Separate ordinary replacement time
 from the first-adoption legacy handoff and cleanup waits in the report.
 The focused regression suites passed on Windows and Linux/Node 24. The local
 rollout source gate passed, as did
 documentation links, test-style checks and workflow/entrypoint policy. This is
 local validation; there is no new provider qualification yet.
-This follow-up governs the remaining investigation. Historical results below remain unchanged.
+This records the decision at that time. The current high-level plan above now governs the remaining work.
 The goal remains ordinary rolling updates with complete protected requests, not
 an expanded architecture/stress suite. No new cloud attempt or production change
 is authorized by this plan.
@@ -191,6 +320,27 @@ ordinary rollout's qualification criteria.
    separately approved provider-specific diagnostic with the new receipts and
    a single controlled routing change. Do not run repeated complete rollouts or
    change cluster networking based on this hypothesis alone.
+
+   The subsequent within-budget reset remains unresolved by local controls.
+   The confirmed repair aligns the isolated diagnostic's response buffering and
+   upstream Connection header with the production workflow route, and rejects
+   a header mismatch before any Service change. Timing receipts now use the
+   monotonic clock and record the measured silent hold, rather than deriving
+   duration from wall-clock timestamps. This is diagnostic preparation, not a
+   repaired rollout or qualification. See the updated
+   [investigation limits](connection-reset-diagnostic.md#investigation-limits-after-the-within-budget-reset)
+   before activating any further provider work.
+
+   The cross-node fixture also pairs required node anti-affinity with 500m CPU /
+   512Mi memory requests and 512Mi memory limits on its three wire Pods. The
+   client keeps its smaller reservations. A local bundle regression covers the
+   Autopilot minimum that rejected the first setup. A subsequently approved
+   isolated GKE diagnostic passed admission and delivered all seven complete
+   responses across a measured five-minute silent interval and Service switch
+   on three different nodes, with verified cleanup. This did not reproduce the
+   original reset or qualify the real Rivet rollout. See the
+   [cross-node result and limits](connection-reset-diagnostic.md#repaired-cross-node-staging-result-on-november-8)
+   before choosing the next investigation.
 
 5. **Fix only the demonstrated cause.** A probe/client bug changes tooling and
    retains the application build. An API response-handling bug requires a

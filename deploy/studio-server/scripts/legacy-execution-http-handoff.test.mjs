@@ -23,6 +23,11 @@ export function fixture({ safe = false } = {}) {
     spec: { selector: labels, ports: [{ port: 80, targetPort: 'execution-http' }] },
   };
   let live = structuredClone(service);
+  const connectionService = structuredClone(service);
+  connectionService.metadata.name += '-connections';
+  connectionService.metadata.uid = 'connection-service';
+  connectionService.spec.clusterIP = '10.96.0.2';
+  connectionService.spec.publishNotReadyAddresses = true;
   const owners = [0, 1].map((i) => ({ name: 'old-' + i, uid: 'old-uid-' + i }));
   const pods = new Map(owners.map((pod) => [pod.name, pod]));
   const operation = {
@@ -52,7 +57,8 @@ export function fixture({ safe = false } = {}) {
     },
     kube: async (args) => {
       calls.push(args.slice(0, 3).join(':'));
-      if (args[0] === 'get' && args[1] === 'service') return { stdout: JSON.stringify(live) };
+      if (args[0] === 'get' && args[1] === 'service')
+        return { stdout: JSON.stringify(args[2] === connectionService.metadata.name ? connectionService : live) };
       if (args[0] === 'get' && args[1] === 'pod')
         return {
           stdout: JSON.stringify({
@@ -92,6 +98,8 @@ export function fixture({ safe = false } = {}) {
     options,
     operation,
     owners,
+    connectionService,
+    referencePresent: true,
     pods,
     calls,
     extraProxies: [],
@@ -112,6 +120,15 @@ export function fixture({ safe = false } = {}) {
           },
         })),
       },
+      {
+        metadata: { labels: { 'kubernetes.io/service-name': connectionService.metadata.name } },
+        endpoints: f.referencePresent
+          ? owners.map((owner) => ({
+              conditions: { ready: true },
+              targetRef: { kind: 'Pod', namespace: 'default', name: owner.name, uid: owner.uid },
+            }))
+          : [],
+      },
     ],
     create: () => createLegacyExecutionHttpHandoff(options),
     patchCount: () => calls.filter((call) => call.startsWith('patch:')).length,
@@ -129,14 +146,14 @@ test('legacy owners retain admission for propagation plus 300 seconds before uns
     await checkpoint(changes);
   };
   await handoff.prepare(f.operation);
-  assert.equal(f.now(), 360_000);
+  assert.equal(f.now(), 420_000);
   assert.equal(f.patchCount(), 1);
   assert.equal(f.operation.record.executionPool.legacyHttp.settled, true);
-  assert.equal(checkpoints.find((r) => r.state.routeConfirmed)?.time, 0);
-  assert.equal(checkpoints.find((r) => r.state.settled)?.time, 360000);
+  assert.equal(checkpoints.find((r) => r.state.routeConfirmed)?.time, 60000);
+  assert.equal(checkpoints.find((r) => r.state.settled)?.time, 420000);
   assert.equal(f.live().spec.selector['rivet.dev/execution-pool'], 'b');
   await handoff.beforeWithdraw(f.operation);
-  assert.equal(f.now(), 360_000, 'One barrier per process, not per worker');
+  assert.equal(f.now(), 420_000, 'One barrier per process, not per worker');
   await handoff.finish(f.operation);
   await handoff.finish(f.operation);
   assert.equal(f.patchCount(), 2, 'Restore exactly once');
@@ -154,6 +171,54 @@ test('fixed running images skip Service mutations, proxy exec and the compatibil
   assert.ok(!f.calls.some((call) => call === 'exec:proxy-0:-c'));
 });
 
+for (const issue of ['headless', 'readiness', 'selector', 'port', 'endpoints'])
+  test(`missing ${issue} retention prevents the public handoff`, async () => {
+    const f = fixture();
+    if (issue === 'headless') f.connectionService.spec.clusterIP = 'None';
+    if (issue === 'readiness') f.connectionService.spec.publishNotReadyAddresses = false;
+    if (issue === 'selector') f.connectionService.spec.selector['rivet.dev/execution-pool'] = 'a';
+    if (issue === 'port') f.connectionService.spec.ports[0].targetPort = 'other';
+    if (issue === 'endpoints') f.referencePresent = false;
+    await assert.rejects(f.create().prepare(f.operation));
+    assert.equal(f.patchCount(), 0);
+    assert.deepEqual(f.live().spec.selector, f.options.service.spec.selector);
+    assert.equal(f.operation.record.executionPool.legacyHttp?.routeIssued, undefined);
+  });
+
+test('backend references must propagate continuously before the selector changes', async () => {
+  const f = fixture();
+  f.onTick = (time) => {
+    f.referencePresent = time !== 5000;
+  };
+  await f.create().prepare(f.operation);
+  assert.equal(f.now(), 426000);
+  assert.equal(f.patchCount(), 1);
+  assert.equal(f.operation.record.executionPool.legacyHttp.connectionServiceUid, 'connection-service');
+});
+
+for (const issue of ['uid', 'endpoint'])
+  test(`a lost connection ${issue} stops the response barrier before worker retirement`, async () => {
+    const f = fixture();
+    f.onTick = (time) => {
+      if (time === 65000) {
+        if (issue === 'uid') f.connectionService.metadata.uid = 'replacement';
+        else f.referencePresent = false;
+      }
+    };
+    await assert.rejects(f.create().prepare(f.operation), /connection Service identity|connection reference lost/);
+    assert.equal(f.patchCount(), 1);
+    assert.notEqual(f.operation.record.executionPool.legacyHttp.settled, true);
+    assert.equal(f.pods.size, f.owners.length);
+  });
+
+test('completed legacy journals without reference protection cannot authorize recovery', async () => {
+  const f = fixture();
+  await f.create().prepare(f.operation);
+  delete f.operation.record.executionPool.legacyHttp.connectionServiceUid;
+  await assert.rejects(f.create().beforeWithdraw(f.operation), /lacks its protected backend reference/);
+  assert.equal(f.patchCount(), 1, 'Neither selector nor owners are changed by this recovery');
+});
+
 test('committed uncertain routing write is read back on recovery, never repeated', async () => {
   const f = fixture();
   f.failAfterPatch = true;
@@ -161,7 +226,7 @@ test('committed uncertain routing write is read back on recovery, never repeated
   assert.equal(f.operation.record.executionPool.legacyHttp.routeIssued, true);
   await f.create().prepare(f.operation);
   assert.equal(f.patchCount(), 1);
-  assert.equal(f.now(), 360_000);
+  assert.equal(f.now(), 480_000);
 });
 
 test('uncommitted uncertain writes retain original owners and are never replayed', async () => {
@@ -171,7 +236,7 @@ test('uncommitted uncertain writes retain original owners and are never replayed
   f.failBeforePatch = false;
   await assert.rejects(f.create().prepare(f.operation), /selector changed/);
   assert.equal(f.patchCount(), 1);
-  assert.equal(f.now(), 0);
+  assert.equal(f.now(), 60000);
 });
 
 test('restoration after a lost acknowledgement observes the original selector without replay', async () => {
@@ -188,7 +253,7 @@ test('recovery before the first remaining unsafe command observes a fresh respon
   const f = fixture();
   await f.create().prepare(f.operation);
   await f.create().beforeWithdraw(f.operation);
-  assert.equal(f.now(), 720_000);
+  assert.equal(f.now(), 840_000);
   assert.equal(f.patchCount(), 1);
 });
 
@@ -197,7 +262,7 @@ test('a returning old endpoint or insufficient candidate floor restarts the comp
     normal = f.slices;
   f.slices = () => {
     const slices = normal();
-    if (f.now() === 5000)
+    if (f.now() === 65000)
       slices[0].endpoints[1].targetRef = {
         kind: 'Pod',
         namespace: 'default',
@@ -206,7 +271,7 @@ test('a returning old endpoint or insufficient candidate floor restarts the comp
     return slices;
   };
   await f.create().prepare(f.operation);
-  assert.equal(f.now(), 366_000);
+  assert.equal(f.now(), 426_000);
 });
 
 for (const issue of ['uid', 'selector', 'ports', 'owner', 'foreign-endpoint', 'lease'])
@@ -440,7 +505,7 @@ test(
           assert.equal(pendingResponse.writableFinished, false, 'Fixture must exercise real socket backpressure');
           if (protectedHandoff) {
             f.onTick = async (time) => {
-              if (time === 1000 || time === 300_000) {
+              if (time === 61000 || time === 300_000) {
                 const response = await read('/reused');
                 assert.equal(response.text, 'candidate');
                 assert.equal(response.port, warm.port, 'The same frontend connection routes to the candidate');
@@ -455,7 +520,7 @@ test(
             const handoff = f.create();
             await handoff.prepare(f.operation);
             await handoff.beforeWithdraw(f.operation);
-            assert.equal(f.now(), 360_000);
+            assert.equal(f.now(), 420_000);
           }
           withdrawing = true;
           old.closeIdleConnections();

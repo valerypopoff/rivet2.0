@@ -47,6 +47,7 @@ export async function exerciseExecutionPoolRollout({
       resourceVersion: String(++version),
       generation: (prior?.metadata.generation ?? 0) + 1,
     });
+    if (object.kind === 'Service' && !object.spec.clusterIP) object.spec.clusterIP = '10.96.0.10';
     objects.set(key(object.kind, object.metadata.name), object);
     return object;
   };
@@ -184,7 +185,9 @@ export async function exerciseExecutionPoolRollout({
                 Object.entries(service.spec.selector ?? {}).every(([key, value]) => pod.metadata.labels[key] === value),
               )
               .map((pod) => ({
-                conditions: { ready: pod.status.conditions[0].status === 'True' },
+                conditions: {
+                  ready: service.spec.publishNotReadyAddresses === true || pod.status.conditions[0].status === 'True',
+                },
                 targetRef: { kind: 'Pod', namespace: 'default', name: pod.metadata.name, uid: pod.metadata.uid },
               })),
           })),

@@ -144,6 +144,7 @@ export const defaultApiTestFiles = [
   'src/tests/server-resource-lifecycle.test.ts',
   'src/tests/settings-repository.test.ts',
   'src/tests/shutdown-deadline.test.ts',
+  'src/tests/shutdown-http.test.ts',
   'src/tests/sqlite-migration-source.test.ts',
   'src/tests/sqlite-settings-store.test.ts',
   'src/tests/sqlite-workflow-backend.test.ts',
