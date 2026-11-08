@@ -58,13 +58,45 @@ existing production-only promotion path. Keep compatibility protection for any
 legacy predecessor or explicit recovery. Private installation files, credentials
 and detailed provider receipts remain excluded from this repository.
 
-### Local implementation of the revised speedup plan
+### Subsequent speedup trial and confirmed repair
 
-The changes in this section are implemented locally and are **not published or
-activated**. The source above remains the last qualified production deployment.
+PR #267 published these changes in Build Images `42518756693`. Its focused
+[staging attempt 42521976162](https://github.com/valerypopoff/rivet2.0/actions/runs/42521976162)
+stopped before old-worker retirement: the runtime guard overlay replaced the
+entire `ha.executionPools` object, dropping the reviewed temporary surge. The
+applied controller configuration therefore differed from the expected template.
+The readiness guard correctly stopped the update. All three original workers
+remained Ready; captured short-request traffic reported no failures. This did
+not complete or qualify the speedup, and production was not deployed.
+
+Cleanup also attempted a metrics exec before a candidate API's startup probe had
+completed. Explicit cleanup subsequently confirmed zero accepted work, removed
+the actor and released the shared lock. The retained application and data are
+preserved in quarantine; another test requires its recovery to be prepared
+separately, rather than repeating the failed operation.
+
+The follow-up local repair preserves nested pool settings through guard overlays,
+waits for container startup during settlement while allowing already-started
+withdrawn owners to drain, and selects embedded tooling correctly for a
+same-build dispatch. Regression tests reproduce the failures before the repair,
+including a real Helm render with seven temporary slots and a 305-connection
+allowance. The fast source gate now includes the guard-merge suite. These repairs
+are tooling changes; they do not require rebuilding the application images.
+
+Local repair validation passed 842 source checks with five Windows-specific
+skips, plus 97 native Helm/integration checks with one optional Postman simulation
+skipped. The native regression fails on the original merge (`undefined` instead
+of seven surge slots) and passes after the repair. These checks do not replace a
+successful cloud qualification of the repaired tooling.
+
+### Implementation of the revised speedup plan
+
+The changes in this section were published in Build Images `42518756693` but are
+**not qualified or activated in production**. The earlier source above remains
+the last qualified production deployment.
 Local checks establish behavior and image reuse, not GKE timing or a twofold
 wall-time improvement. Native packaging and regression checks passed as recorded
-below. No cloud test or production deployment was started for these changes.
+below. The subsequent staging failure and its local repairs are recorded above.
 
 - **Keep normal scaling separate from temporary replacement capacity.**
   `ha.executionPools.maxSurgeReplicas` defaults to zero. Normal execution demand
@@ -82,7 +114,8 @@ below. No cloud test or production deployment was started for these changes.
   full overlap with its existing ten-connection query pools; the unchanged
   200-connection allowance rejects that configuration. This is a declared
   allocation, not evidence of the shared SQL server's actual limit or headroom.
-  No live budget, pool limit or database setting was changed.
+  Staging's allowance was prepared for that trial; production's allocation and
+  the shared server's actual SQL settings were unchanged.
 - **Use one fresh observation for both pools.** Each decision shares two
   controller reads, one Pod inventory, CPU metrics and HPA inventory. Status and
   admission execs remain bounded to four across both pools. Fresh final
@@ -811,16 +844,18 @@ additional backup or workload writes. A local test of the actual prepared privat
 observer also checks a completed original window during later recovery and rejects
 failed or incomplete observations; it uses synthetic recordings and no live API.
 
-Next operational sequence:
+Next operational sequence after the failed speedup trial:
 
-1. Review and publish one candidate plus its prepared private adapter/configuration.
+1. Review and publish the tooling repair, reusing application Build `42518756693`.
    Pair the installation values hash and protected target proxy minimum in both
    configurations; use the matching immutable installation object and current
    chart/tooling. Keep credentials and private values out of public Git.
-2. With a fresh allowance covering persistent application use and one test, install
-   the matching retained-staging settings/cleanup worker and enable the paired
-   profile. Reuse the existing cluster, hostname and access. First bootstrap cost
-   is reported separately; no automatic retry or manufactured second release.
+2. Prepare and authorize the quarantined staging application's baseline recovery
+   before a fresh single-attempt test. Keep both pools and preserved data under
+   the existing ownership checks; do not mark the partial update healthy or
+   blindly replay the failed operation. Reuse the existing cluster, hostname and
+   access, with matching settings and cleanup worker. Report recovery separately
+   from ordinary rollout timing; no automatic retry or manufactured release.
 3. Run one focused qualification of those exact images against installed production.
    Require unchanged availability, complete responses, accepted-work/recording/data
    preservation, explicit pool evidence and verified scoped cleanup. Compare phase

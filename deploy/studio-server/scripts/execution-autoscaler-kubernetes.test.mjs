@@ -28,6 +28,7 @@ import {
 import { releaseOperationJournalName } from './lib/release-operation-journal.mjs';
 import { haFrozenAutoscalingValues, haRolloutAutoscalingValues } from './lib/ha-kubernetes-rollout.mjs';
 import { childEnvironments } from '../images/api/backend-supervisor.mjs';
+import { mergeRuntimeControlGuards } from './kubernetes-runtime-control-local.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const { WebSocket, WebSocketServer } = createRequire(
@@ -488,6 +489,31 @@ test('reviewed execution ceiling fits a shared 200-connection allowance without 
   );
   for (const max of [8, 10])
     assert.throws(() => render('postgres.maxConnections=200', `autoscaling.execution.maxReplicas=${max}`));
+});
+
+test('native Helm renders guarded runtime values with the reviewed surge and connection allowance', () => {
+  const values = {
+    ha: { executionPools: { enabled: true, maxSurgeReplicas: 7 } },
+    replicaCount: { execution: 3 },
+  };
+  const merged = mergeRuntimeControlGuards(values, {
+    ha: { executionPools: { enabled: true, active: 'b', retiringReplicas: 3 } },
+    replicaCount: { execution: 3 },
+  });
+  const overrides = [
+    ...protectedValues,
+    'autoscaling.execution.maxReplicas=7',
+    'postgres.maxConnections=305',
+    'legacyRestore.enabled=true',
+    ['--set-json', `ha.executionPools=${JSON.stringify(merged.ha.executionPools)}`],
+    `replicaCount.execution=${merged.replicaCount.execution}`,
+  ];
+  const resources = render(...overrides);
+  const controller = resources.find((r) => r.kind === 'Deployment' && r.metadata.name.endsWith('-autoscaler'));
+  const config = JSON.parse(controller.spec.template.spec.containers[0].env[0].value);
+  assert.equal(config.maxSurgeReplicas, 7);
+  assert.equal(config.policy.maxReplicas, 7);
+  assert.throws(() => render(...overrides, 'postgres.maxConnections=304'), /PostgreSQL capacity/);
 });
 
 test('temporary paired surge is budgeted separately and cannot enlarge normal autoscaling or RBAC', async () => {

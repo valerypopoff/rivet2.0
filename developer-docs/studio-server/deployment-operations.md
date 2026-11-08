@@ -16,6 +16,10 @@ closed between attempts. One operator command runs read-only preflight, checks
 both flags and approved limits, and binds the application/tooling/source to the
 fresh approval before enabling admission. Persist each write intent first,
 enable and verify both flags, dispatch once, then monitor the recorded run.
+When the approved application and tooling run IDs are equal, leave the workflow's
+`tooling_run_id` input empty to select that build's embedded actor. Populate it
+only for a separately published tooling run; the recorded approval still binds
+both IDs in either case.
 Close admission after the staging execution step captures its environment, or
 when the workflow stops earlier. Never reopen a completed campaign.
 
@@ -35,6 +39,11 @@ artifact. A zero-work proof needs execution workers, explicit zero metrics and
 unchanged owner identities across sampling; only an explicit control backend is
 exempt from that gauge. Report namespace identity separately from storage
 durability, and secret metadata separately from unreadable payload contents.
+Retained-work settlement waits for each sampled container's startup probe to
+complete before reading its gauge. A Pod's `Running` phase alone is insufficient.
+An already-started owner withdrawn from routing may be unready and must still
+report explicit zero active work; missing metrics or failed execs never count as
+zero. Settlement keeps its original deadline and does not replay execution.
 Resolve the retained release from its verified rollout journal; connection
 settings do not carry a Helm release name for Pod selectors.
 Hosted setup and qualification still validate their actual settings and data.
@@ -85,6 +94,11 @@ broad resource wait; the pre-upgrade schema hook remains enabled and blocking.
 An acknowledged apply must pass `ha-template-readiness.json`: desired OnDelete
 templates and their observed generations/revisions, plus a ready candidate
 controller when configured. Stale ready Pods cannot stand in for that controller.
+Guard overlays merge `ha.executionPools` fields into the reviewed values rather
+than replacing that object. Active-slot/retiring-count guards must preserve the
+temporary surge allowance. A native Helm regression renders the merged overlay
+with a nonzero surge and the exact connection budget; a mismatching applied
+controller configuration remains a hard stop before retiring old workers.
 Deployment failure conditions apply only after its current generation has been
 observed. A prior rollout's `Progressing=False` status must not reject a newly
 applied candidate before controller acknowledgement; the existing deadline bounds

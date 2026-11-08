@@ -258,18 +258,27 @@ test('isolated execution replacement rejects a production context before fixture
 
 test('local guarded values retain frontend capacity and schema bounds like layered Helm values', () => {
   const values = {
-    ha: { enabled: true, controlPlane: { mode: 'singleton' } },
+    ha: {
+      enabled: true,
+      controlPlane: { mode: 'singleton' },
+      executionPools: { enabled: true, maxSurgeReplicas: 7 },
+    },
     replicaCount: { proxy: 6, web: 1, backend: 1, execution: 2 },
     workflowSchema: { compatibility: { minimumVersion: 16, maximumVersion: 16 } },
   };
   const guards = {
-    ha: { rolloutResourceVersions: { backend: '4' } },
+    ha: {
+      rolloutResourceVersions: { backend: '4' },
+      executionPools: { enabled: true, active: 'b', retiringReplicas: 3 },
+    },
     replicaCount: { backend: 1, execution: 2 },
     workflowSchema: { migrationJob: { enabled: false } },
   };
   const merged = mergeRuntimeControlGuards(values, guards);
   assert.deepEqual(merged.replicaCount, values.replicaCount);
   assert.deepEqual(merged.ha.controlPlane, values.ha.controlPlane);
+  assert.deepEqual(merged.ha.executionPools, { ...values.ha.executionPools, ...guards.ha.executionPools });
+  assert.equal(values.ha.executionPools.active, undefined);
   assert.deepEqual(merged.workflowSchema.compatibility, values.workflowSchema.compatibility);
   assert.equal(merged.workflowSchema.migrationJob.enabled, false);
   assert.equal(values.ha.rolloutResourceVersions, undefined);

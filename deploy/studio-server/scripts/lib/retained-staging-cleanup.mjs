@@ -75,6 +75,13 @@ export async function waitForRetainedAcceptedWork(state, wait) {
         // or its gauge. Combined backends and every execution worker still must
         // report an explicit zero; a missing metric is not evidence of no work.
         if (containerName === 'backend' && profile?.value === 'control' && !profile.valueFrom) continue;
+        // Running includes API startup. Withdrawn owners may be unready after
+        // startup, so wait for started rather than requiring Ready for draining.
+        if (
+          container.startupProbe &&
+          pod.status.containerStatuses?.find((item) => item.name === containerName)?.started !== true
+        )
+          return false;
         const metrics = await state.api.exec(
           `/api/v1/namespaces/${ns}/pods/${encodeURIComponent(pod.metadata.name)}/exec`,
           executionSampleCommand(8080),

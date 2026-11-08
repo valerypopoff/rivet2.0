@@ -235,14 +235,17 @@ test('an expired/failed test without accepted fixtures quarantines safely and pr
   );
 });
 
-for (const [profile, missing, active] of [
+for (const [profile, missing, active, startup] of [
   ['control', undefined, false],
   ['combined', undefined, false],
   ['control', 'execution', false],
   ['combined', 'backend', false],
   ['control', undefined, true],
+  ['control', undefined, false, 'starting'],
+  ['combined', undefined, false, 'missing-status'],
+  ['combined', undefined, false, 'withdrawn'],
 ]) {
-  test(`retained settlement follows published-execution capability (${profile}, missing ${missing}, active ${active})`, async (t) => {
+  test(`retained settlement follows published-execution capability (${profile}, missing ${missing}, active ${active}, startup ${startup})`, async (t) => {
     const { state, store } = await retained(t);
     await state.arm(actor);
     const namespace = await state.namespace({ create: true });
@@ -250,7 +253,8 @@ for (const [profile, missing, active] of [
       record.fixtureFolder = { relativePath: 'owned', namespaceId: 'owned-id' };
     });
     const { record } = await state.read(),
-      probes = [];
+      probes = [],
+      pods = [];
     for (const role of ['backend', 'execution']) {
       const name = `${record.release}-${role}`;
       const metadata = {
@@ -265,26 +269,41 @@ for (const [profile, missing, active] of [
       const controller = store(`/apis/apps/v1/namespaces/${namespace.metadata.name}/statefulsets/${name}`, {
         metadata,
       });
-      store(`/api/v1/namespaces/${namespace.metadata.name}/pods/${name}-0`, {
-        metadata: {
-          ...metadata,
-          name: `${name}-0`,
-          ownerReferences: [{ name, uid: controller.metadata.uid, controller: true, kind: 'StatefulSet' }],
-        },
-        spec: {
-          containers: [
-            {
-              name: role === 'backend' ? 'backend' : 'api',
-              env: [{ name: 'RIVET_API_PROFILE', value: role === 'backend' ? profile : 'execution' }],
-            },
-          ],
-        },
-        status: { phase: 'Running' },
-      });
+      pods.push(
+        store(`/api/v1/namespaces/${namespace.metadata.name}/pods/${name}-0`, {
+          metadata: {
+            ...metadata,
+            name: `${name}-0`,
+            ownerReferences: [{ name, uid: controller.metadata.uid, controller: true, kind: 'StatefulSet' }],
+          },
+          spec: {
+            containers: [
+              {
+                name: role === 'backend' ? 'backend' : 'api',
+                env: [{ name: 'RIVET_API_PROFILE', value: role === 'backend' ? profile : 'execution' }],
+                ...(startup ? { startupProbe: { tcpSocket: { port: 8080 } } } : {}),
+              },
+            ],
+          },
+          status: {
+            phase: 'Running',
+            conditions: [{ type: 'Ready', status: 'False' }],
+            ...(startup === 'missing-status'
+              ? {}
+              : {
+                  containerStatuses: [
+                    { name: role === 'backend' ? 'backend' : 'api', started: startup !== 'starting', ready: false },
+                  ],
+                }),
+          },
+        }),
+      );
     }
     let executionSamples = 0,
       observations = 0;
+    const starting = ['starting', 'missing-status'].includes(startup);
     state.api.exec = async (url, _command, options) => {
+      assert.ok(!starting || observations > 1, 'A container still running its startup probe cannot report metrics');
       const role = url.includes('-backend-') ? 'backend' : 'execution';
       probes.push(role);
       assert.equal(options.container, role === 'backend' ? 'backend' : 'api');
@@ -298,6 +317,9 @@ for (const [profile, missing, active] of [
           observations++;
           if (await check()) return;
           assert.notEqual((await state.read()).record.acceptedWorkSettled, true);
+          if (starting)
+            for (const pod of pods)
+              pod.status.containerStatuses = [{ name: pod.spec.containers[0].name, started: true, ready: false }];
         }
         assert.fail('Accepted work did not settle');
       });
@@ -307,7 +329,7 @@ for (const [profile, missing, active] of [
     } else {
       await settle();
       assert.equal((await state.read()).record.acceptedWorkSettled, true);
-      assert.equal(observations, active ? 2 : 1);
+      assert.equal(observations, active || starting ? 2 : 1);
       assert.equal(probes.includes('backend'), profile === 'combined');
       assert.ok(probes.includes('execution'));
     }

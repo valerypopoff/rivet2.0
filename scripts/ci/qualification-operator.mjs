@@ -162,7 +162,7 @@ export async function runOperator({
       previousRunIds: before.map((run) => run.id),
       inputs: {
         build_run_id: String(scope.applicationBuildRunId),
-        tooling_run_id: String(scope.toolingRunId),
+        tooling_run_id: scope.toolingRunId === scope.applicationBuildRunId ? '' : String(scope.toolingRunId),
         deploy_production: 'false',
         production_preflight_only: 'false',
       },
