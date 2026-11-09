@@ -8,7 +8,7 @@ import { readSchemaRepositoryReceipt } from './schema-compatibility-probe.mjs';
 /** Optional local exact-image check on the schema gate's disposable PostgreSQL.
  * No registry pulls, cloud credentials or caller-provided database are accepted.
  * Module mounts are diagnostic source-built checks, never exact-image evidence. */
-export async function verifySchemaImagePair(docker, postgresId, env = process.env) {
+export async function verifySchemaImagePair(docker, postgresId, env = process.env, versions = { from: 17, to: 18 }) {
   const images = [env.RIVET_SCHEMA_PREDECESSOR_IMAGE, env.RIVET_SCHEMA_CANDIDATE_IMAGE];
   if (images.every((i) => !i)) return;
   assert.ok(
@@ -56,9 +56,9 @@ export async function verifySchemaImagePair(docker, postgresId, env = process.en
           '-e',
           `RIVET_SCHEMA_PROBE_ID=${runId}`,
           '-e',
-          `RIVET_SCHEMA_PROBE_VERSION=${i === 0 ? 17 : 18}`,
+          `RIVET_SCHEMA_PROBE_VERSION=${i === 0 ? versions.from : versions.to}`,
           '-e',
-          'RIVET_SCHEMA_PROBE_TARGET=18',
+          `RIVET_SCHEMA_PROBE_TARGET=${versions.to}`,
           '-e',
           'RIVET_SCHEMA_PROBE_DATABASE=rivet_rolling_schema_check',
           '-e',
@@ -102,12 +102,12 @@ export async function verifySchemaImagePair(docker, postgresId, env = process.en
       if (result.status === 'rejected') throw result.reason;
       readSchemaRepositoryReceipt(result.value, {
         role: index === 0 ? 'previous' : 'candidate',
-        version: index === 0 ? 17 : 18,
+        version: index === 0 ? versions.from : versions.to,
         runId,
       });
     }
     console.log(
-      'Schema repositories: historical 17 / candidate 18 mixed writes and cross-reads passed' +
+      `Schema repositories: historical ${versions.from} / candidate ${versions.to} mixed writes and cross-reads passed` +
         (env.RIVET_SCHEMA_PREDECESSOR_MODULES || env.RIVET_SCHEMA_CANDIDATE_MODULES
           ? ' (source overlays; not release-image qualification).'
           : ' (cached exact images).'),

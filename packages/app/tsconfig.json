@@ -19,7 +19,13 @@
     "noUncheckedIndexedAccess": true,
     "composite": true
   },
-  "include": ["src", "scripts", "sidecars", "../../scripts/ci-timing.mjs"],
+  "include": [
+    "src",
+    "scripts",
+    "sidecars",
+    "../../scripts/ci-timing.mjs",
+    "../studio-server-shared/workflow-reference-diagnostics.ts"
+  ],
   "exclude": ["**/dist", "**/node_modules"],
   "ts-node": {
     "swc": true,

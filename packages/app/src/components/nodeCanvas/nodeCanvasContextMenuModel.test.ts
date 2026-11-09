@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createBuiltInRegistry,
+  getGraphBoundary,
+  getSubgraphProjectKey,
   type ChartNode,
   type FrozenNodeOutputsByGraph,
   type GraphId,
@@ -1082,7 +1084,7 @@ test('canRunNodeCanvasContextMenuFromHere hides partial replay inside an async s
   );
 });
 
-test('getNodeCanvasContextMenuContext identifies a hosted Subgraph target outside the current project', () => {
+test('getNodeCanvasContextMenuContext keeps external Subgraph identity without inventing unavailable ports', () => {
   const subGraphNode = makeNode('subGraph', nodeId, 'Hosted Subgraph');
   subGraphNode.data = { graphId: 'external-graph', targetProjectId: 'external-project' };
   const context = getNodeCanvasContextMenuContext({
@@ -1092,7 +1094,63 @@ test('getNodeCanvasContextMenuContext identifies a hosted Subgraph target outsid
     project,
   });
   assert.equal(context.type, 'node');
-  assert.equal(context.data.isExternalSubgraphTarget, true);
+  assert.equal(context.data.nodeType, 'subGraph');
+  assert.equal(context.data.canRearrangeSubgraphPorts, false);
+});
+
+test('external Subgraph rearrange uses its saved boundary or exact referenced version', () => {
+  const output = makeNode('graphOutput', 'external-output' as NodeId);
+  output.data = { ...(output.data as Record<string, unknown>), id: 'answer' };
+  const target: Project = {
+    ...project,
+    metadata: { ...project.metadata, id: 'external-project' as ProjectId },
+    graphs: { [graphId]: { metadata: { id: graphId, name: 'External' }, nodes: [output], connections: [] } },
+  };
+  for (const version of ['latest', 'published'] as const) {
+    for (const savedBoundary of [false, true]) {
+      const call = makeNode('subGraph', nodeId);
+      call.data = {
+        graphId,
+        targetProjectId: target.metadata.id,
+        targetVersion: version,
+        ...(savedBoundary ? { targetBoundary: getGraphBoundary(target, graphId) } : {}),
+      };
+      const context = getNodeCanvasContextMenuContext({
+        ...contextModelOptions,
+        contextMenuData: makeContextMenuData('node-subGraph'),
+        nodesById: { [nodeId]: call },
+        referencedProjects: savedBoundary
+          ? {}
+          : { [getSubgraphProjectKey({ projectId: target.metadata.id, version })]: target },
+      });
+      assert.equal(context.type, 'node');
+      assert.equal(context.data.canRearrangeSubgraphPorts, true, `${version}, saved boundary: ${savedBoundary}`);
+    }
+  }
+  const call = makeNode('subGraph', nodeId);
+  call.data = { graphId, targetProjectId: target.metadata.id, targetVersion: 'published' };
+  const context = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    project: target,
+    contextMenuData: makeContextMenuData('node-subGraph'),
+    nodesById: { [nodeId]: call },
+    referencedProjects: { [getSubgraphProjectKey({ projectId: target.metadata.id, version: 'latest' })]: target },
+  });
+  assert.equal(context.type, 'node');
+  assert.equal(
+    context.data.canRearrangeSubgraphPorts,
+    false,
+    'Do not use a same-ID local graph or a different version',
+  );
+  call.data = { ...(call.data as Record<string, unknown>), targetBoundary: { inputs: [], outputs: [] } };
+  const emptyContract = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-subGraph'),
+    nodesById: { [nodeId]: call },
+    referencedProjects: { [getSubgraphProjectKey({ projectId: target.metadata.id, version: 'published' })]: target },
+  });
+  assert.equal(emptyContract.type, 'node');
+  assert.equal(emptyContract.data.canRearrangeSubgraphPorts, false, 'Saved empty contract remains authoritative');
 });
 
 test('canRunNodeCanvasContextMenuFromHere permits Watch but hides its repeated branch and Stop boundary', () => {

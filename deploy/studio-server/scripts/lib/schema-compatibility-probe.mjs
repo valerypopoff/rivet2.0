@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 
-/** Only the reviewed 17 -> 18 expand currently has a behavioral probe.
+/** Only explicitly reviewed expands have behavioral probes.
  * A future schema change must extend this matrix, not inherit a generic green flag. */
 export function assertProbedSchemaTransition(from, to) {
-  assert.equal(from, 17, 'Schema transition has no reviewed mixed-writer probe');
-  assert.equal(to, 18, 'Schema transition has no reviewed mixed-writer probe');
+  assert.ok(
+    (from === 17 && to === 18) || (from === 18 && to === 19),
+    'Schema transition has no reviewed mixed-writer probe',
+  );
 }
 
 export function assertSchemaCompatibilityEvidence(value, release, from) {
@@ -47,21 +49,21 @@ export function readSchemaRepositoryReceipt(output, { role, version, runId }) {
  * The actual migration SQL and actual rolling budgets come from the candidate. */
 export async function probeSchemaLockContention(pool, schema, migration) {
   assert.match(schema, /^rivet_schema_probe_[a-f0-9]{32}$/);
-  assert.equal(migration.version, 18);
+  assert.ok([18, 19].includes(migration.version));
+  const table = migration.version === 18 ? 'workflow_recordings' : 'workflow_revisions';
+  const id = migration.version === 18 ? 'recording_id' : 'revision_id';
+  const column = migration.version === 18 ? 'cost_json' : 'reference_summary';
   const clients = [];
   try {
     for (let i = 0; i < 3; i++) clients.push(await pool.connect());
     const [blocker, ddl, reader] = clients;
-    await blocker.query(`CREATE TABLE ${schema}.workflow_recordings(recording_id TEXT PRIMARY KEY)`);
-    await blocker.query(`INSERT INTO ${schema}.workflow_recordings VALUES ('preserved')`);
-    await blocker.query(
-      `INSERT INTO ${schema}.workflow_recordings SELECT 'retained-'||n FROM generate_series(1,10000) n`,
-    );
-    const fileNode = (
-      await blocker.query('SELECT pg_relation_filenode($1::regclass) AS id', [`${schema}.workflow_recordings`])
-    ).rows[0].id;
+    await blocker.query(`CREATE TABLE ${schema}.${table}(${id} TEXT PRIMARY KEY)`);
+    await blocker.query(`INSERT INTO ${schema}.${table} VALUES ('preserved')`);
+    await blocker.query(`INSERT INTO ${schema}.${table} SELECT 'retained-'||n FROM generate_series(1,10000) n`);
+    const fileNode = (await blocker.query('SELECT pg_relation_filenode($1::regclass) AS id', [`${schema}.${table}`]))
+      .rows[0].id;
     await blocker.query('BEGIN');
-    await blocker.query(`SELECT * FROM ${schema}.workflow_recordings`);
+    await blocker.query(`SELECT * FROM ${schema}.${table}`);
     await ddl.query('BEGIN');
     await ddl.query(
       `SET LOCAL search_path TO ${schema}; SET LOCAL lock_timeout='1000ms'; SET LOCAL statement_timeout='5000ms'`,
@@ -84,17 +86,15 @@ export async function probeSchemaLockContention(pool, schema, migration) {
     await reader.query("BEGIN; SET LOCAL statement_timeout='2500ms'");
     // The reader may lose its connection before the DDL timeout is observed.
     // Attach both handlers now; still settle the DDL before releasing leases.
-    const ordinaryRead = reader
-      .query(`SELECT * FROM ${schema}.workflow_recordings WHERE recording_id='preserved'`)
-      .then(
-        (result) => ({ result }),
-        (error) => ({ error }),
-      );
+    const ordinaryRead = reader.query(`SELECT * FROM ${schema}.${table} WHERE ${id}='preserved'`).then(
+      (result) => ({ result }),
+      (error) => ({ error }),
+    );
     assert.equal((await settled)?.code, '55P03', 'Contended rolling DDL must time out, not commit');
     await ddl.query('ROLLBACK');
     const observedRead = await ordinaryRead;
     if ('error' in observedRead) throw observedRead.error;
-    assert.deepEqual(observedRead.result.rows, [{ recording_id: 'preserved' }]);
+    assert.deepEqual(observedRead.result.rows, [{ [id]: 'preserved' }]);
     await reader.query('COMMIT');
     assert.ok(Date.now() - started < 2500, 'Queued application read exceeded its bound');
     await blocker.query('COMMIT');
@@ -104,16 +104,14 @@ export async function probeSchemaLockContention(pool, schema, migration) {
     );
     await ddl.query(migration.sql);
     await ddl.query('COMMIT');
-    assert.deepEqual(
-      (await reader.query(`SELECT * FROM ${schema}.workflow_recordings WHERE recording_id='preserved'`)).rows,
-      [{ recording_id: 'preserved', cost_json: null }],
-    );
-    assert.equal((await reader.query(`SELECT count(*)::int AS n FROM ${schema}.workflow_recordings`)).rows[0].n, 10001);
+    assert.deepEqual((await reader.query(`SELECT * FROM ${schema}.${table} WHERE ${id}='preserved'`)).rows, [
+      { [id]: 'preserved', [column]: null },
+    ]);
+    assert.equal((await reader.query(`SELECT count(*)::int AS n FROM ${schema}.${table}`)).rows[0].n, 10001);
     assert.equal(
-      (await reader.query('SELECT pg_relation_filenode($1::regclass) AS id', [`${schema}.workflow_recordings`])).rows[0]
-        .id,
+      (await reader.query('SELECT pg_relation_filenode($1::regclass) AS id', [`${schema}.${table}`])).rows[0].id,
       fileNode,
-      'Reviewed expand must not rewrite retained recording rows',
+      'Reviewed expand must not rewrite retained rows',
     );
   } finally {
     const outcomes = await Promise.allSettled(clients.map((client) => client.query('ROLLBACK')));
@@ -125,7 +123,15 @@ export async function probeSchemaLockContention(pool, schema, migration) {
 
 /** Exercise image-owned insertion and listing code; no reimplemented SQL writer.
  * Both participants read the other's committed rows before either advances. */
-export async function probeSchemaRepositories({ pool, modules, role, runId, version, timeoutMs = 20000 }) {
+export async function probeSchemaRepositories({
+  pool,
+  modules,
+  role,
+  runId,
+  version,
+  targetVersion = 18,
+  timeoutMs = 20000,
+}) {
   assert.ok(['previous', 'candidate'].includes(role));
   assert.match(runId, /^[a-f0-9]{32}$/);
   const schema = `rivet_schema_probe_${runId}`,
@@ -145,9 +151,15 @@ export async function probeSchemaRepositories({ pool, modules, role, runId, vers
     await probeSchemaLockContention(
       pool,
       schema,
-      modules.migrations.MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === 18),
+      modules.migrations.MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === targetVersion),
     );
     lockContention = true;
+    if (targetVersion === 19)
+      await pool.query(
+        `INSERT INTO workflows(workflow_id,name,file_name,relative_path,folder_relative_path,current_draft_revision_id)
+        VALUES($1,'Schema compatibility fixture',$1||'.rivet-project',$1||'.rivet-project','','fixture')`,
+        [workflowId],
+      );
   } else
     await wait(
       async () => (await pool.query('SELECT to_regclass($1) AS name', [`${schema}.participants`])).rows[0].name,
@@ -170,7 +182,35 @@ export async function probeSchemaRepositories({ pool, modules, role, runId, vers
     },
   });
   const cost = { status: 'complete', knownCostUsd: 0.125 };
+  const queries = modules.db.createManagedWorkflowQueries(pool);
+  if (targetVersion === 19)
+    await wait(
+      async () => (await pool.query('SELECT 1 FROM workflows WHERE workflow_id=$1', [workflowId])).rowCount === 1,
+    );
   for (let round = 1; round <= 2; round++) {
+    if (targetVersion === 19) {
+      const revisionId = `${workflowId}-${role}-${round}`;
+      await factory.insertRevision(pool, {
+        revision_id: revisionId,
+        workflow_id: workflowId,
+        project_blob_key: `fixture/${revisionId}`,
+        dataset_blob_key: null,
+        stats_graph_count: 0,
+        stats_total_node_count: 0,
+        stats_web_app_count: 0,
+        ...(version >= 19
+          ? {
+              reference_summary: {
+                version: 1,
+                state: 'complete',
+                projectId: workflowId,
+                graphCalls: [],
+                projectTargets: [],
+              },
+            }
+          : {}),
+      });
+    }
     await factory.insertRecordingRow(
       pool,
       {
@@ -207,6 +247,10 @@ export async function probeSchemaRepositories({ pool, modules, role, runId, vers
         (await pool.query(`SELECT round FROM ${schema}.participants WHERE role=$1`, [peer])).rows[0]?.round >= round,
     );
     const page = await service.listWorkflowRecordingRunsPage(workflowId, 1, 100, 'all');
+    if (targetVersion === 19) {
+      const revision = await queries.getRevision(pool, `${workflowId}-${peer}-${round}`);
+      assert.equal(revision?.workflow_id, workflowId, 'Image could not read peer revision');
+    }
     assert.ok(
       page.runs.some((r) => r.id === `${workflowId}-${peer}-${round}`),
       'Image could not read peer recording',
@@ -231,6 +275,17 @@ export async function probeSchemaRepositories({ pool, modules, role, runId, vers
         row.cost_json === null ? null : JSON.parse(row.cost_json),
         row.recording_id.includes('-candidate-') ? cost : null,
       );
+    if (targetVersion === 19) {
+      const revisions = (
+        await pool.query('SELECT revision_id,reference_summary FROM workflow_revisions WHERE workflow_id=$1', [
+          workflowId,
+        ])
+      ).rows;
+      assert.equal(revisions.length, 4);
+      for (const row of revisions)
+        assert.equal(row.reference_summary?.state ?? null, row.revision_id.includes('-candidate-') ? 'complete' : null);
+      await pool.query('DELETE FROM workflows WHERE workflow_id=$1', [workflowId]);
+    }
     await pool.query('DELETE FROM workflow_recordings WHERE workflow_id=$1 AND recording_id=ANY($2::text[])', [
       workflowId,
       ['previous', 'candidate'].flatMap((r) => [1, 2].map((n) => `${workflowId}-${r}-${n}`)),

@@ -1385,6 +1385,14 @@ It also audits the same lockfile without those ignores before the normal audit,
 so a temporary Rust exception that no longer matches an advisory fails CI and
 must be removed. Remove it as soon as a compatible fix is available.
 
+The November 9, 2026 SQLite repair upgrades the native evaluation-store dependency
+to `rusqlite 0.41.1` / `libsqlite3-sys 0.39.1`, bundling SQLite 3.54.1. This fixes
+[RUSTSEC-2026-0459](https://github.com/rustsec/advisory-db/blob/main/crates/libsqlite3-sys/RUSTSEC-2026-0459.md)
+without an ignore. The desktop's minimum Rust version is 1.89, matching the new
+rusqlite line; desktop CI already uses stable Rust. The existing evaluation-store
+transaction/import tests also check the actual SQLite runtime is at least 3.54.0.
+Keep that runtime check, the lockfile and the fresh unfiltered audit together.
+
 The November 2, 2026 ZIP re-review is deliberately limited to registry `zip 0.6.6`
 with registry `tauri 1.8.3` as its sole consumer. The exception checker pins both
 crate checksums, rejects extra consumers/versions in the generated Cargo lockfile,
@@ -2125,6 +2133,32 @@ that the CLI Dockerfile's local-build fallback matches the lockstep package
 version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
+
+### Prepared release versions (2026-11-09)
+
+Reviewing `488019eb9..70d83c638` prepares these independent release tracks:
+
+| Release track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.33.0` → `2.34.0` | Cross-project history, Subgraph menus/ports, node-ID search, pinned workspace tabs and reference-check diagnostics. |
+| Public Core/Node/Evaluations/CLI | `2.27.0` → `2.27.1` | Core port ordering uses stable caller port IDs; the other packages remain required lockstep companions. |
+| App executor | `2.19.0` → `2.19.1` | Bundles the Core fix without a separate sidecar protocol change. |
+| Five private Studio Server packages | `1.35.0` → `1.36.0` | Indexed graph-reference checks and backfill, additive shared bridge fields, HTTP retirement/Service handoff fixes, and rollout/staging/capacity hardening. |
+| Documentation site | Remains `2.27.0` | No package-local changes since the preceding bump. |
+
+The [package matrix](PACKAGES.md#version-update-2026-11-09--graph-reference-indexing-and-project-navigation)
+records changed workspaces and release companions. Desktop Tauri/Cargo metadata
+and the CLI Docker default follow their owning package versions. Workspace
+ranges, dependency resolutions and Helm metadata remain independent. The existing
+schema-19 expansion still requires the separately operated reference backfill;
+these version edits do not add post-rollout indexing automation.
+
+Validate with `node scripts/sync-desktop-version.mjs --check`,
+`node scripts/publish-npm-packages.mjs --check-versions`,
+`yarn studio-server:verify:repo-structure`,
+`node scripts/checks/check-pnp-install-state.mjs` and
+`node scripts/checks/check-doc-links.mjs`. No registry publication, image build,
+cloud test or production activation is performed by this metadata preparation.
 
 ### Prepared release versions (2026-11-04)
 

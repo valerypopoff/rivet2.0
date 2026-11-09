@@ -530,6 +530,11 @@ That lets the hosted shell behave like a single app even though the editor lives
 
 Rivet owns editor-local find/search UIs, but `Ctrl+F` / `Cmd+F` can fire while focus is still on dashboard chrome.
 
+Project-wide find indexes node IDs alongside names, descriptions, types and
+configured content fields. Full IDs and partial IDs match case-insensitively,
+including queries shorter than six characters. ID matches use the same result
+navigation as other node matches, including nodes in another graph.
+
 - inside the iframe, Rivet's normal handlers keep owning `Ctrl+F` / `Cmd+F` for graph search and fullscreen-output search, and the hosted bridge adds a capture-phase fallback that recognizes the physical `KeyF` shortcut before the browser find UI can open
 - outside the iframe, the dashboard captures that find shortcut only when focus is not already in the iframe or in a real dashboard text input
 - the dashboard prevents the browser find default, focuses the iframe, and sends `trigger-editor-find-shortcut` to `EditorMessageBridge`
@@ -582,6 +587,40 @@ For hosted Browser- and internal-Node-mode local graph runs, the same provider e
 Node-mode editor runs reach the same state through `packages/studio-server-executor/src/executor.mts`. That wrapper entrypoint starts upstream `executorHost.mts` with `createProcessorOptions`, injecting an HTTP-backed `llmProfileHealthStore` and forwarding the validated replay correlation without forking the executor protocol. Compose points it at `http://api:80/api/workflows/llm-profile-health`; the Kubernetes backend sidecar uses the backend pod's loopback API. Both authenticate with the proxy token derived from `RIVET_KEY`.
 
 The reliability API owns the clock and rejects caller timestamp fields. Every hosted runtime request must carry a project id. The outer Project Settings modal loads the list only while its **LLM profile suspension** tab is open, refreshes every five seconds, and can list and clear only the active project's entries. Active suspensions use the red operational treatment; profiles awaiting their one recovery attempt and those with a recovery attempt in progress use yellow. This keeps retained recovery state visible without presenting it as an active block. Even a single-profile clear carries that project id, and the HTTP surface exposes no unscoped list or clear operation. The runtime store exposes atomic begin/finish/renew operations; it is not a browser-local cache and does not fall back to local state when the server call fails.
+
+### Subgraph context menus
+
+Cross-project **Go to subgraph** (node header or context menu) extends the active
+graph-history trail after a successful open. PgUp returns to the caller project
+and graph; PgDn revisits the target. Ordinary graph visits extend the same trail,
+and a new visit after going back discards the forward branch. Entries carry
+project identity so equal graph IDs cannot select a graph in the wrong project.
+History navigation activates existing tabs and restores their live content,
+graph-view context and saved viewport; it never reloads an intact tab from disk.
+Closed projects and removed graphs are skipped. Manual tab selection continues
+to restore that project's own history; saved project history excludes foreign entries.
+History actions expose void callbacks through the shared async-error wrapper, so
+toolbar clicks and keyboard shortcuts report failures without unhandled rejections.
+
+External Subgraph callers retain **Go to subgraph** and **Rearrange inputs/outputs**.
+Port-reorder availability uses the caller's saved target boundary when present,
+otherwise the loaded referenced project's exact latest/published version. Never
+look up an external graph ID in the caller's project. Reordering stores port order
+on the caller node; it does not edit the external graph or its connections.
+The saved boundary remains authoritative even if empty or the target preview is
+unavailable. The browser regression covers live latest ports and offline published
+ports, including saved ordering, target identity and existing connection preservation.
+Port ordering uses the stable caller `portId`, rather than the target's current
+display name (`id`), so renaming an external input/output does not discard the
+caller's order. Both input and output definitions follow this rule.
+
+### Project tab overflow
+
+The project selector reserves the right-hand workspace navigation width so
+Evaluations and Data Studio stay at the right edge as projects open. Project
+tabs shrink within the remaining space and scroll horizontally once their
+minimum widths are reached. Keep that overflow on the project list, not on the
+whole top bar, so workspace buttons remain visible and clickable.
 
 ### Hosted Evaluations providers
 

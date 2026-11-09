@@ -383,24 +383,30 @@ test('qualification preserves candidate lineage/images/schema and binds both pro
 
 test('provider publication cannot turn a legacy startup-only schema check into rolling qualification', () => {
   const f = fixture();
-  f.candidate.lineage.predecessor.managedWorkflowSchemaVersion = 17;
-  f.promoted.lineage.predecessor.managedWorkflowSchemaVersion = 17;
+  const to = f.candidate.database.managedWorkflowSchema.version;
+  const from = to - 1;
+  f.candidate.lineage.predecessor.managedWorkflowSchemaVersion = from;
+  f.promoted.lineage.predecessor.managedWorkflowSchemaVersion = from;
   assert.throws(() => prepareRuntimeQualification(f), /schema compatibility evidence/);
   const runId = 'd'.repeat(32);
   f.promoted.evidence.ha.schemaCompatibility = {
     protocol: 1,
-    from: 17,
-    to: 18,
+    from,
+    to,
     runId,
     predecessorApi: f.candidate.lineage.predecessor.images.api,
     candidateApi: f.candidate.images.api,
     lockContention: true,
     repositories: [
-      ['previous', 17],
-      ['candidate', 18],
+      ['previous', from],
+      ['candidate', to],
     ].map(([role, version]) => ({ role, version, runId, rounds: 2, peerRowsRead: 2 })),
   };
   assert.equal(prepareRuntimeQualification(f).candidate.evidence.ha.schemaCompatibility.runId, runId);
+  const unreviewed = structuredClone(f);
+  unreviewed.candidate.lineage.predecessor.managedWorkflowSchemaVersion = from - 1;
+  unreviewed.promoted.lineage.predecessor.managedWorkflowSchemaVersion = from - 1;
+  assert.throws(() => prepareRuntimeQualification(unreviewed), /no reviewed mixed-writer probe/);
 });
 
 test('local/failed/uncleaned or incomplete declarations cannot become provider evidence', () => {

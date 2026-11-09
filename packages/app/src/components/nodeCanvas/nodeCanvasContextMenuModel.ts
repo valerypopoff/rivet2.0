@@ -4,11 +4,14 @@ import {
   isNodePrefabInstanceNode,
   resolveToolContinuationConnections,
   resolveNodePrefabInstance,
+  getGraphBoundary,
+  getSubgraphProjectKey,
   type ChartNode,
   type FrozenNodeOutputsByGraph,
   type GraphId,
   type NodeId,
   type Project,
+  type ProjectId,
   type SubGraphNode,
 } from '@valerypopoff/rivet2-core';
 import type { ContextMenuContext } from '../ContextMenu.js';
@@ -46,6 +49,7 @@ export function getNodeCanvasContextMenuContext({
   lastRunPerNode,
   nodesById = {},
   project,
+  referencedProjects = {},
   projectNodeRegistry,
   selectedGraphId,
   selectedNodeIds = [],
@@ -64,6 +68,7 @@ export function getNodeCanvasContextMenuContext({
   lastRunPerNode: RunDataByNodeId;
   nodesById?: NodesById;
   project: Project;
+  referencedProjects?: Record<ProjectId, Project>;
   projectNodeRegistry: ProjectNodeRegistry;
   selectedGraphId: GraphId | undefined;
   selectedNodeIds?: readonly NodeId[];
@@ -162,9 +167,6 @@ export function getNodeCanvasContextMenuContext({
     data: {
       nodeType: effectiveTarget.nodeType,
       nodeId: target.nodeId,
-      ...(resolvedTargetNode?.type === 'subGraph' && (resolvedTargetNode as SubGraphNode).data.targetProjectId
-        ? { isExternalSubgraphTarget: true }
-        : {}),
       graphCommandsEnabled,
       isLinkedNode: targetIsPrefabInstance,
       canRunFromEditor: canStartEditorGraphRun,
@@ -177,7 +179,7 @@ export function getNodeCanvasContextMenuContext({
         projectNodeRegistry,
         selectedGraphId,
       }),
-      canRearrangeSubgraphPorts: canRearrangeNodeSubgraphPorts(nodesById[target.nodeId], project),
+      canRearrangeSubgraphPorts: canRearrangeNodeSubgraphPorts(nodesById[target.nodeId], project, referencedProjects),
       canRearrangeVariadicPorts: variadicPortRearrangeKind != null,
       variadicPortRearrangeKind,
       canFreeze: freezeNodeTargets.length > 0,
@@ -193,15 +195,25 @@ export function getNodeCanvasContextMenuContext({
   };
 }
 
-function canRearrangeNodeSubgraphPorts(node: ChartNode | undefined, project: Project): boolean {
+function canRearrangeNodeSubgraphPorts(
+  node: ChartNode | undefined,
+  project: Project,
+  referencedProjects: Record<ProjectId, Project>,
+): boolean {
   if (node?.type !== 'subGraph') {
     return false;
   }
 
-  const graphId = (node.data as { graphId?: GraphId }).graphId;
-  const graph = graphId ? project.graphs[graphId] : undefined;
+  const { graphId, targetProjectId, targetVersion, targetBoundary } = (node as SubGraphNode).data;
+  if (targetProjectId && targetBoundary) {
+    return targetBoundary.inputs.length > 0 || targetBoundary.outputs.length > 0;
+  }
 
-  return Boolean(graph?.nodes.some((graphNode) => graphNode.type === 'graphInput' || graphNode.type === 'graphOutput'));
+  const targetProject = targetProjectId
+    ? referencedProjects[getSubgraphProjectKey({ projectId: targetProjectId, version: targetVersion ?? 'latest' })]
+    : project;
+  const boundary = targetProject ? getGraphBoundary(targetProject, graphId) : undefined;
+  return Boolean(boundary && (boundary.inputs.length > 0 || boundary.outputs.length > 0));
 }
 
 function getFreezeDisabledReason({

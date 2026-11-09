@@ -33,6 +33,7 @@ export type DashboardToEditorCommand =
       reloadFromDisk?: boolean;
       preferredGraphId?: string;
       expectedProjectId?: string;
+      recordGraphHistory?: boolean;
       requestId?: string;
     }
   | { type: 'open-recording'; recordingId: string; replaceCurrent: boolean; requestId?: string }
@@ -204,6 +205,7 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
         (value.reloadFromDisk == null || typeof value.reloadFromDisk === 'boolean') &&
         (value.preferredGraphId == null || typeof value.preferredGraphId === 'string') &&
         (value.expectedProjectId == null || typeof value.expectedProjectId === 'string') &&
+        (value.recordGraphHistory == null || typeof value.recordGraphHistory === 'boolean') &&
         (value.requestId == null || typeof value.requestId === 'string')
       );
     case 'open-recording':

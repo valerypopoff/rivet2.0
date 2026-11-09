@@ -63,6 +63,7 @@
     "studio-server:managed-reconciliation:status": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run managed-reconciliation:status\"",
     "studio-server:workflow-schema:migrate": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-schema:migrate\"",
     "studio-server:workflow-schema:verify": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-schema:verify\"",
+    "studio-server:workflow-references:backfill": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-references:backfill\"",
     "studio-server:workflow-storage:migrate": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-storage:migrate\"",
     "studio-server:workflow-storage:precopy": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-storage:precopy\"",
     "studio-server:workflow-storage:verify": "node deploy/studio-server/scripts/run-with-env.mjs \"yarn workspace @valerypopoff/rivet-studio-server-api run workflow-storage:verify\"",

@@ -1769,21 +1769,23 @@ committing or pushing the source never applies that recovery to a live cluster.
 
 The five private `@valerypopoff/rivet-studio-server-*` workspaces form one
 Studio Server product and use one lockstep package version. Their current
-version is `1.35.0`. `yarn studio-server:verify:repo-structure` rejects version
+version is `1.36.0`. `yarn studio-server:verify:repo-structure` rejects version
 drift between the API, web, executor, shared, and bootstrap manifests.
-This minor release covers changes since `2ec2b7085` through `be4119e95`:
-project-scoped recording inspection and Project wording, mixed-version debugger
-history isolation, request-continuity/recovery tooling and faster rollout paths
-with optional retained staging, paired workers and unchanged-proxy image reuse.
-API/Web change locally; unchanged Bootstrap/Executor/Shared workspaces are
-release companions, not separate implementations of these features.
+This minor release covers changes since `488019eb9` through `70d83c638`:
+indexed graph-reference checks and bounded backfill, coverage diagnostics and
+cross-project editor history, project-tree startup and HTTP retirement/Service
+handoff fixes, plus rollout, retained-staging and capacity hardening.
+API/Web/Shared change locally; unchanged Bootstrap/Executor workspaces are release
+companions, not separate implementations of these features. Existing revisions
+need the [explicit reference backfill](graph-reference-check-plan.md#operating-the-backfill);
+automatic post-rollout indexing remains pending.
 Backend overlap was covered by `1.31.0`; compact HA/autoscaling by `1.30.0`.
 This version update does not enable optional rollout features or establish new
 GKE qualification; see the [performance implementation status](rolling-update-performance-plan.md).
 Bump all five manifests together even when only one workspace has runtime
 changes; run the repository-structure check before
 building a release candidate. See the prepared release matrix in
-[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-04) for the
+[Build and CI](../BUILD-AND-CI.md#prepared-release-versions-2026-11-09) for the
 separate desktop, sidecar, documentation and public runtime version decisions.
 
 These private package versions are release metadata, not npm publication or
@@ -1792,8 +1794,8 @@ commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
 
-The current recording-cost runtime already advances managed storage to schema18.
-Keep the chart's ordinary `workflowSchema.compatibility` defaults at18/18 to match
+The current reference-index runtime advances managed storage to schema 19.
+Keep the chart's ordinary `workflowSchema.compatibility` defaults at 19/19 to match
 that build, independently of package versioning. The promoted release launcher
 still derives exact migration and allowed reader windows from the immutable
 manifest; predecessor compatibility remains a separate contract, not permission

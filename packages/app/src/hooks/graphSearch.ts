@@ -42,7 +42,6 @@ export type GraphSearchMatchLocation =
 type GraphSearchField = {
   location: GraphSearchMatchLocation;
   normalizedText: string;
-  minQueryLength?: number;
 };
 
 export type GraphSearchGraphMatch = {
@@ -136,7 +135,6 @@ export function buildGraphSearchItems(
       {
         location: 'node id',
         normalizedText: normalizeSearchText(node.id),
-        minQueryLength: 6,
       },
       {
         location: 'node description',
@@ -542,7 +540,7 @@ function getFieldTermsForSnippets(item: GraphSearchItem, queryTerms: readonly st
 }
 
 function doesSearchFieldMatch(field: GraphSearchField, term: string): boolean {
-  return term.length >= (field.minQueryLength ?? 1) && field.normalizedText.includes(term);
+  return term.length > 0 && field.normalizedText.includes(term);
 }
 
 function countSearchItemOccurrences(item: GraphSearchItem, queryTerms: readonly string[]): number {
@@ -558,7 +556,7 @@ function countSearchItemOccurrences(item: GraphSearchItem, queryTerms: readonly 
 }
 
 function countSearchFieldOccurrences(field: GraphSearchField, term: string): number {
-  if (term.length < (field.minQueryLength ?? 1)) {
+  if (term.length === 0) {
     return 0;
   }
 

@@ -82,6 +82,35 @@ void describe('GraphBoundaryCache', () => {
     ]);
   });
 
+  void it('orders renamed external ports by stable caller wire IDs', () => {
+    assert.deepEqual(applyGraphBoundaryPortOrder([{ id: 'a' }, { id: 'b' }], ['b']), [{ id: 'b' }, { id: 'a' }]);
+    const project = makeProject([
+      makeGraphInputNode('input-a', 'a', 'string'),
+      makeGraphInputNode('input-b', 'b', 'number'),
+      makeGraphOutputNode('output-a', 'a', 'string'),
+      makeGraphOutputNode('output-b', 'b', 'number'),
+    ]);
+    const saved = getGraphBoundary(project, graphId)!;
+    // Reconciled external boundaries adopt target labels while keeping caller wire IDs.
+    const boundary = {
+      inputs: saved.inputs.map((port) => (port.id === 'b' ? { ...port, id: 'renamed' } : port)),
+      outputs: saved.outputs.map((port) => (port.id === 'b' ? { ...port, id: 'renamed' } : port)),
+    };
+    for (const definitions of [
+      getGraphBoundaryInputDefinitions(boundary, ['b', 'a']),
+      getGraphBoundaryOutputDefinitions(boundary, ['b', 'a']),
+    ]) {
+      assert.deepEqual(
+        definitions.map((port) => port.id),
+        ['b', 'a'],
+      );
+      assert.deepEqual(
+        definitions.map((port) => port.title),
+        ['renamed', 'a'],
+      );
+    }
+  });
+
   void it('preserves default boundary order when persisted port order is absent', () => {
     const project = makeProject([
       makeGraphInputNode('input-c', 'c', 'boolean'),

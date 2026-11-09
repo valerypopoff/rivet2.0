@@ -5,6 +5,40 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+## Develop CI repair: November 9, 2026
+
+The first `8165d45f4` push failed before compilation on four independent gates:
+the schema publication fixture, Editor lint, import-boundary review and a new
+RustSec SQLite finding. Developer Desktop Release then correctly refused to
+reuse a frontend from the failed exact-commit Build. It needs no fallback or
+independent frontend rebuild.
+
+The publication regression derives its predecessor/successor versions from the
+candidate instead of combining the old 17-to-18 receipt with schema 19. It still
+rejects missing rolling evidence and unreviewed jumps. Full Editor lint includes
+existing consumers of changed hooks: history callbacks now use `wrapAsync` to
+retain a void event-handler contract and report rejected navigation consistently
+for toolbar buttons and keyboard shortcuts.
+
+The five reviewed reference-index imports have exact entries in
+`scripts/checks/import-boundary-debt.json`: browser-safe coverage presentation
+and its type, the API's shared workflow response type, and its existing HTTP
+error utility. They introduce no server state or Node runtime into the editor.
+The three-level boundary rule and rejection of new or stale entries remain.
+
+The desktop now bundles patched SQLite through `rusqlite 0.41.1` and
+`libsqlite3-sys 0.39.1`; its declared minimum Rust version is 1.89. The native
+evaluation-store tests enforce the SQLite 3.54.0 security floor alongside atomic
+batch/import behavior. The fresh unfiltered audit must pass the existing exact
+exception policy; this repair adds no security exception.
+
+Before another push, run the complete rollout source gate, the Editor/tooling
+lint lane, `yarn test:style`, native evaluation-store tests and a fresh Rust audit.
+In one local checkout, finish `test:style` before full lint/typechecking: its
+asset checks rebuild Core exports, which must not disappear under a live linter.
+Run the focused cross-project history browser journey after changing its hook.
+These local checks prepare CI; they are not a staging test or production rollout.
+
 ## Release iteration improvements: November 3, 2026
 
 The shared `studio-server-source-contracts.yml` workflow runs
@@ -115,7 +149,7 @@ all recovery/no-replay assertions remain unchanged. A cancelled test still
 fails the release gate; retain its log and require the fresh candidate's complete
 image workflow to pass before provider activation.
 
-Schema 18's current version differs from its rollback floor (17). Helm defaults
+The current schema version (19) differs from its rollback floor (17). Helm defaults
 and migration commands must use the current version. Forward rollback uses the
 previous image's own schema version as its lower reader bound, not that image's
 rollback floor; only the upper bound expands to the already-migrated successor.
@@ -124,13 +158,21 @@ Historical upgrade fixtures still begin
 at their original schema and assert all pending migrations rather than assuming
 that the repair under test is forever the last migration. Keep the chart, compiled
 PostgreSQL gate and release-manifest tests together when changing this contract.
-The existing managed lane now also exercises the real 17 → 18 rolling-policy
+The existing managed lane now exercises the real 18 → 19 rolling-policy
 lock timeout, rollback and queued-reader recovery. Schema-changing HA image
-qualification runs both image-owned recording repositories and binds their
+qualification runs both image-owned recording and revision repositories and binds their
 receipts into the certificate; an old-image startup verifier alone is insufficient.
 Unchanged-schema candidates avoid those extra image workers. See the
 [rolling DB contract](deployment-operations.md#rolling-database-compatibility-contract)
 for budgets, local image/source checks and evidence limits.
+
+Fast incoming-reference unit tests are registered in the deterministic API test
+manifest. The existing managed deployment-contract lane also runs
+`test:references-managed` immediately after schema verification, before longer
+integration checks. This uses its own disposable local PostgreSQL container to
+cover lookup, backfill fencing, concurrent repairs and latency; it creates no
+new CI job or GCP resources. Direct `test:files` runs alone do not prove that a
+new unit test is registered: retain the API manifest/sharding check too.
 
 Node-settings tests assert the full editor group order, including the collapsed
 **Token pricing** section. Generated AI Graph Builder help must be refreshed after

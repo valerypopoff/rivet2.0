@@ -1,56 +1,88 @@
-import { useCallback } from 'react';
-import { graphNavigationStackState } from '../state/graphBuilder.js';
-import { projectState } from '../state/savedGraphs.js';
-import { useLoadGraph } from '../hooks/useLoadGraph.js';
-import { useAtom, useAtomValue } from 'jotai';
-import { getGraphNavigationAvailability, resolveNavigationTarget } from '../domain/graphEditing/navigationActions.js';
+import { useAtomValue, useStore } from 'jotai';
+import { graphHistoryNavigationPendingState, graphNavigationStackState } from '../state/graphBuilder.js';
+import { graphState } from '../state/graph.js';
+import { openedProjectSnapshotsState, projectsState, projectState } from '../state/savedGraphs.js';
+import { useLoadGraph } from './useLoadGraph.js';
+import { useLoadProject } from './useLoadProject.js';
+import { useStableCallback } from './useStableCallback.js';
+import { getProjectActivationRevision } from '../utils/projectActivationCoordinator.js';
+import { wrapAsync } from '../utils/errorHandling.js';
+import {
+  getGraphNavigationAvailability,
+  resolveNavigationTarget,
+  type GraphViewContext,
+} from '../domain/graphEditing/navigationActions.js';
 
 export const useGraphHistoryNavigation = () => {
-  const [graphNavigationStack, setGraphNavigationStack] = useAtom(graphNavigationStackState);
+  const store = useStore();
+  const graphNavigationStack = useAtomValue(graphNavigationStackState);
+  const pending = useAtomValue(graphHistoryNavigationPendingState);
   const loadGraph = useLoadGraph();
+  const loadProject = useLoadProject();
   const project = useAtomValue(projectState);
+  const projects = useAtomValue(projectsState);
+  const snapshots = useAtomValue(openedProjectSnapshotsState);
+  const getProject = (view: GraphViewContext) =>
+    !view.projectId || view.projectId === project.metadata.id
+      ? project
+      : projects.openedProjects[view.projectId]
+        ? snapshots[view.projectId]?.project
+        : undefined;
 
-  const { hasForward, hasBackward } = getGraphNavigationAvailability(graphNavigationStack, project);
+  const { hasForward, hasBackward } = getGraphNavigationAvailability(graphNavigationStack, project, getProject);
 
-  const navigateBack = useCallback(() => {
+  const navigate = useStableCallback(async (direction: 'backward' | 'forward') => {
+    if (store.get(graphHistoryNavigationPendingState)) return;
+    const currentProject = store.get(projectState);
     const target = resolveNavigationTarget({
-      direction: 'backward',
-      navigationStack: graphNavigationStack,
-      project,
+      direction,
+      navigationStack: store.get(graphNavigationStackState),
+      project: currentProject,
+      getProject: (view) =>
+        !view.projectId || view.projectId === currentProject.metadata.id
+          ? currentProject
+          : store.get(projectsState).openedProjects[view.projectId]
+            ? store.get(openedProjectSnapshotsState)[view.projectId]?.project
+            : undefined,
     });
 
     if (!target) {
       return;
     }
 
-    setGraphNavigationStack(target.nextStack);
-
-    const graph = project.graphs[target.targetGraphId];
-
-    if (graph) {
-      loadGraph(graph, { graphView: target.targetView, pushHistory: false });
-    }
-  }, [graphNavigationStack, loadGraph, project, setGraphNavigationStack]);
-
-  const navigateForward = useCallback(() => {
-    const target = resolveNavigationTarget({
-      direction: 'forward',
-      navigationStack: graphNavigationStack,
-      project,
-    });
-
-    if (!target) {
+    const targetProjectId = target.targetView.projectId ?? currentProject.metadata.id;
+    if (targetProjectId !== currentProject.metadata.id) {
+      const info = store.get(projectsState).openedProjects[targetProjectId];
+      if (!info) return;
+      store.set(graphHistoryNavigationPendingState, true);
+      try {
+        const activating = loadProject(info, { preferredGraphId: target.targetGraphId, graphView: target.targetView });
+        const revision = getProjectActivationRevision(store);
+        const loaded = await activating;
+        if (
+          !loaded ||
+          revision !== getProjectActivationRevision(store) ||
+          store.get(projectState).metadata.id !== targetProjectId ||
+          store.get(graphState).metadata?.id !== target.targetGraphId
+        )
+          return;
+        store.set(graphNavigationStackState, target.nextStack);
+      } finally {
+        store.set(graphHistoryNavigationPendingState, false);
+      }
       return;
     }
-
-    setGraphNavigationStack(target.nextStack);
-
-    const graph = project.graphs[target.targetGraphId];
-
+    const graph = currentProject.graphs[target.targetGraphId];
     if (graph) {
+      store.set(graphNavigationStackState, target.nextStack);
       loadGraph(graph, { graphView: target.targetView, pushHistory: false });
     }
-  }, [graphNavigationStack, loadGraph, project, setGraphNavigationStack]);
+  });
 
-  return { navigateBack, navigateForward, hasForward, hasBackward };
+  return {
+    navigateBack: wrapAsync(() => navigate('backward'), 'Could not navigate to the previous graph'),
+    navigateForward: wrapAsync(() => navigate('forward'), 'Could not navigate to the next graph'),
+    hasForward: !pending && hasForward,
+    hasBackward: !pending && hasBackward,
+  };
 };

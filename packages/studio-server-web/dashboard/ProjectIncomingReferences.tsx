@@ -2,6 +2,7 @@ import Button from '@atlaskit/button';
 import { useEffect, useState } from 'react';
 import type { WorkflowProjectReferencesResponse } from '../../studio-server-shared/workflow-types';
 import { fetchWorkflowProjectReferences } from './workflowApi';
+import { describeReferenceCoverage } from '../../studio-server-shared/workflow-reference-diagnostics';
 
 type ReferenceSource = WorkflowProjectReferencesResponse['references'][number]['sources'][number];
 const sourceLabel = (source: ReferenceSource) => {
@@ -86,7 +87,7 @@ export function ProjectIncomingReferences({ relativePath, projectId }: { relativ
           ) : null}
           {!result.complete ? (
             <p className="project-settings-help" role="alert">
-              This check is incomplete. {result.checkedProjects} of {result.totalProjects} other projects checked.
+              This check is incomplete. {describeReferenceCoverage(result)}
               {result.changedDuringScan ? ' Projects changed during the check.' : ''}
               {result.unreadableProjects.length
                 ? ` Could not read: ${result.unreadableProjects.map((project) => project.relativePath).join(', ')}.`

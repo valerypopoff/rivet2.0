@@ -73,7 +73,7 @@ test('buildGraphSearchItems indexes title, description, id, and node type', () =
   assert.deepEqual(searchGraphNodes(items, 'account')[0]?.locations, ['node description']);
   assert.deepEqual(matchNodeIds(searchGraphNodes(items, 'alpha-node')), [asNodeId('alpha-node')]);
   assert.deepEqual(searchGraphNodes(items, 'alpha-node')[0]?.locations, ['node id']);
-  assert.deepEqual(matchNodeIds(searchGraphNodes(items, 'alp')), []);
+  assert.deepEqual(matchNodeIds(searchGraphNodes(items, 'alp')), [asNodeId('alpha-node')]);
   assert.deepEqual(matchNodeIds(searchGraphNodes(items, 'http call')), [asNodeId('alpha-node')]);
   assert.deepEqual(searchGraphNodes(items, 'http call')[0]?.locations, ['node type']);
 });
@@ -139,7 +139,7 @@ test('buildGraphSearchItems indexes explicitly searchable Set/Get Global ID sett
   assert.equal(matches[1]?.contentSnippets[0], 'customerProfile');
 });
 
-test('searchGraphNodes does not return nodes for short random-id or default-setting matches', () => {
+test('searchGraphNodes matches short ID fragments without indexing default settings', () => {
   const items = buildGraphSearchItems(
     createGraph({
       nodes: [
@@ -161,7 +161,29 @@ test('searchGraphNodes does not return nodes for short random-id or default-sett
     () => ({ nodeTypeLabel: 'Http Call', searchableContentKeys: ['headers', 'body'] }),
   );
 
-  assert.deepEqual(matchNodeIds(searchGraphNodes(items, 'f')), []);
+  const matches = searchGraphNodes(items, 'f');
+  assert.deepEqual(matchNodeIds(matches), [asNodeId('http-f-random-id')]);
+  assert.deepEqual(matches[0]?.locations, ['node id']);
+  assert.equal(matches[0]?.occurrenceCount, 1);
+  assert.deepEqual(searchGraphNodes(items, 'GET'), []);
+});
+
+test('project graph search finds short complete node IDs across graphs', () => {
+  const items = buildProjectGraphSearchItems(
+    {
+      [asGraphId('graph-a')]: createGraph({ nodes: [] }),
+      [asGraphId('graph-b')]: createGraph({
+        metadata: { id: asGraphId('graph-b'), name: 'Other graph' },
+        nodes: [createNode({ id: asNodeId('Xy_2') })],
+      }),
+    },
+    () => 'Text',
+  );
+  const matches = searchGraphNodes(items, 'xy_2');
+  assert.deepEqual(matchNodeIds(matches), [asNodeId('Xy_2')]);
+  assert.equal(matches[0]?.graphId, asGraphId('graph-b'));
+  assert.deepEqual(matches[0]?.locations, ['node id']);
+  assert.equal(matches[0]?.occurrenceCount, 1);
 });
 
 test('buildGraphSearchItems indexes nested values only when they belong to configured content fields', () => {

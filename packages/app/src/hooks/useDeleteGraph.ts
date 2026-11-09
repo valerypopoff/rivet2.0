@@ -110,7 +110,7 @@ export function useDeleteGraphs() {
     store.set(graphNavigationStackState, (previousNavigationStack) =>
       currentGraphWasDeleted
         ? { stack: [], index: undefined }
-        : sanitizeNavigationStackForProject(nextProject, previousNavigationStack),
+        : sanitizeNavigationStackForProject(nextProject, previousNavigationStack, { preserveForeignViews: true }),
     );
 
     const projectId = nextProject.metadata.id;

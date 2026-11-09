@@ -231,7 +231,7 @@ export const projectSelectorStyles = css`
 
   .projects-container {
     display: flex;
-    flex: 1 1 auto;
+    flex: 1 1 0%;
     min-width: 0;
     overflow: hidden;
     z-index: 3;
@@ -247,12 +247,19 @@ export const projectSelectorStyles = css`
 
   .projects {
     display: flex;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
     align-items: flex-end;
     height: 100%;
     gap: 4px;
     padding: 4px 10px 0 4px;
     max-width: 100%;
     width: 100%;
+  }
+
+  .projects::-webkit-scrollbar {
+    display: none;
   }
 
   .projects-container.with-window-drag-region .projects {

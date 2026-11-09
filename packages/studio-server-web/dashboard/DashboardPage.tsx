@@ -182,6 +182,7 @@ export const DashboardPage: FC = () => {
             reloadFromDisk: options?.reloadFromDisk === true ? true : undefined,
             preferredGraphId: options?.preferredGraphId,
             expectedProjectId: options?.expectedProjectId,
+            recordGraphHistory: options?.recordGraphHistory,
             requestId,
           },
           'project-open-result',
@@ -230,6 +231,7 @@ export const DashboardPage: FC = () => {
           title: project.name,
           preferredGraphId: graphId,
           expectedProjectId: projectId,
+          recordGraphHistory: true,
         });
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Could not open the selected Subgraph project.');

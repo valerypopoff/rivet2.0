@@ -77,6 +77,9 @@ export const hostedSubgraphProjectCatalog: SubgraphProjectCatalogProvider = {
     return {
       projectId: result.projectId,
       complete: result.complete,
+      checkedProjects: result.checkedProjects,
+      totalProjects: result.totalProjects,
+      incompleteReasons: result.incompleteReasons,
       references: result.graphReferences.map(({ source, ...reference }) => ({
         ...reference,
         sourceDescription:
