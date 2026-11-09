@@ -2,6 +2,32 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-09 — graph-reference indexing and project navigation
+
+Every track last changed versions in `488019eb9`. This preparation covers the
+subsequent committed changes through `70d83c638`.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| App | `2.33.0` → `2.34.0` | Cross-project PgUp/PgDn history, external Subgraph context menus and port ordering, short node-ID search, fixed workspace tabs and reference-check coverage diagnostics. |
+| Core, Node, CLI, Evaluations | `2.27.0` → `2.27.1` | Core fixes caller port ordering after external inputs/outputs are renamed by using stable port IDs. Node, CLI and Evaluations have no package-local changes and follow the required public-family lockstep. |
+| App Executor | `2.19.0` → `2.19.1` | Source-bundled Core fix; no package-local changes or sidecar protocol addition. |
+| All five Studio Server packages | `1.35.0` → `1.36.0` | Adds indexed incoming-reference checks, bounded operator backfill and optional coverage/history bridge fields; fixes project-tree startup, HTTP retirement and Service handoff continuity; includes rollout, retained-staging and capacity hardening. API/Web/Shared change locally; Bootstrap/Executor are lockstep companions. |
+| Docs | Remains `2.27.0` | No changes under `packages/docs` since its last bump. Developer documentation is maintained separately. |
+
+App and Studio Server gain compatible capabilities, while the public runtime
+and bundled executor receive a compatible fix. Tauri/Cargo metadata follows App;
+the CLI Docker fallback follows the public family. Existing workspace dependency
+ranges, Yarn resolutions and Helm metadata retain their independent contracts.
+Managed schema 19 is already part of the implementation; package versioning adds
+no further migration. Existing production revisions still need the explicit
+[reference backfill](studio-server/graph-reference-check-plan.md#operating-the-backfill);
+automatic post-rollout indexing remains pending.
+
+See the [prepared release summary](BUILD-AND-CI.md#prepared-release-versions-2026-11-09)
+for metadata checks. These versions prepare a release; publication and deployment
+remain separate operations.
+
 ## Version update: 2026-11-04 — Decision AI, recording inspection and faster updates
 
 All tracks last changed versions in `2ec2b7085`. This preparation covers the

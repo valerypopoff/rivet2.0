@@ -2126,6 +2126,32 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-09)
+
+Reviewing `488019eb9..70d83c638` prepares these independent release tracks:
+
+| Release track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.33.0` → `2.34.0` | Cross-project history, Subgraph menus/ports, node-ID search, pinned workspace tabs and reference-check diagnostics. |
+| Public Core/Node/Evaluations/CLI | `2.27.0` → `2.27.1` | Core port ordering uses stable caller port IDs; the other packages remain required lockstep companions. |
+| App executor | `2.19.0` → `2.19.1` | Bundles the Core fix without a separate sidecar protocol change. |
+| Five private Studio Server packages | `1.35.0` → `1.36.0` | Indexed graph-reference checks and backfill, additive shared bridge fields, HTTP retirement/Service handoff fixes, and rollout/staging/capacity hardening. |
+| Documentation site | Remains `2.27.0` | No package-local changes since the preceding bump. |
+
+The [package matrix](PACKAGES.md#version-update-2026-11-09--graph-reference-indexing-and-project-navigation)
+records changed workspaces and release companions. Desktop Tauri/Cargo metadata
+and the CLI Docker default follow their owning package versions. Workspace
+ranges, dependency resolutions and Helm metadata remain independent. The existing
+schema-19 expansion still requires the separately operated reference backfill;
+these version edits do not add post-rollout indexing automation.
+
+Validate with `node scripts/sync-desktop-version.mjs --check`,
+`node scripts/publish-npm-packages.mjs --check-versions`,
+`yarn studio-server:verify:repo-structure`,
+`node scripts/checks/check-pnp-install-state.mjs` and
+`node scripts/checks/check-doc-links.mjs`. No registry publication, image build,
+cloud test or production activation is performed by this metadata preparation.
+
 ### Prepared release versions (2026-11-04)
 
 Changes since the last coordinated bump, `2ec2b7085`, through `be4119e95`
