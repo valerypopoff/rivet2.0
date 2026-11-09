@@ -217,6 +217,111 @@ test('folder deletion surfaces failed and incomplete scans and requires an expli
   await expect(fixture.editor.locator('[data-graphid="main"]')).toBeVisible();
 });
 
+test('a stuck graph check allows deletion after ten seconds without waiting for its result', async ({ page }) => {
+  await page.clock.install();
+  const fixture = await setup(page);
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
+  let reply: (() => Promise<void>) | undefined;
+  await page.route('**/api/workflows/projects/references', (route) => {
+    reply = () =>
+      route.fulfill({ json: { projectId: 'target', complete: true, graphReferences: [reference] } }).catch(() => {});
+  });
+  const dialog = await fixture.open();
+  await expect.poll(() => typeof reply).toBe('function');
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await page.clock.fastForward(9999);
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await page.clock.fastForward(1);
+  await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('status')).toContainText('Checking incoming graph references');
+  await expect(dialog).toContainText('The reference check is still running.');
+  await expect(dialog.getByRole('button', { name: 'Check again', exact: true })).toBeDisabled();
+  await dialog.screenshot({ path: test.info().outputPath('pending-reference-override.png') });
+  await dialog.getByRole('button', { name: 'Delete anyway', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(fixture.editor.locator('[data-graphid="child"]')).toHaveCount(0);
+  await reply!();
+  await expect(fixture.editor.locator('[data-graphid="other"]')).toBeVisible();
+});
+
+test('pending folder deletion resets its ten-second override on cancel and retry and accepts late results', async ({
+  page,
+}) => {
+  await page.clock.install();
+  const fixture = await setup(page);
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
+  const replies: Array<() => Promise<void>> = [];
+  await page.route('**/api/workflows/projects/references', (route) => {
+    const graphReferences = replies.length === 0 ? [reference] : [];
+    replies.push(() =>
+      route.fulfill({ json: { projectId: 'target', complete: true, graphReferences } }).catch(() => {}),
+    );
+  });
+  let dialog = await fixture.open(true);
+  await expect.poll(() => replies.length).toBe(1);
+  await page.clock.fastForward(9000);
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  dialog = await fixture.open(true);
+  await expect.poll(() => replies.length).toBe(2);
+  await page.clock.fastForward(1000);
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await page.clock.fastForward(9000);
+  await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toBeEnabled();
+  await replies[1]!();
+  await expect(dialog).toContainText('No incoming cross-project references were found');
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toHaveCount(0);
+  await replies[0]!();
+  await expect(dialog).not.toContainText('Closed caller');
+  await expect(dialog.getByRole('region', { name: 'Graph deletion warning', exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click();
+  await expect.poll(() => replies.length).toBe(3);
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await page.clock.fastForward(9999);
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await page.clock.fastForward(1);
+  await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await replies[2]!();
+  await expect(fixture.editor.locator('[data-graphid="child"]')).toBeVisible();
+  await expect(fixture.editor.locator('[data-graphid="other"]')).toBeVisible();
+});
+
+test('completed checks clear both timers and timed-out checks ignore late results', async ({ page }) => {
+  await page.clock.install();
+  const fixture = await setup(page);
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
+  let reply: (() => Promise<void>) | undefined;
+  let checks = 0;
+  await page.route('**/api/workflows/projects/references', (route) => {
+    const complete = () => route.fulfill({ json: { projectId: 'target', complete: true, graphReferences: [] } });
+    if (++checks === 1) return complete();
+    reply = () => complete().catch(() => {});
+  });
+  const dialog = await fixture.open();
+  await expect(dialog).toContainText('No incoming cross-project references were found');
+  await page.clock.fastForward(35_000);
+  await expect(dialog.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('region', { name: 'Graph deletion warning', exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click();
+  await expect.poll(() => typeof reply).toBe('function');
+  await page.clock.fastForward(10_000);
+  await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toBeEnabled();
+  await expect(dialog).toContainText('The reference check is still running.');
+  await page.clock.fastForward(25_000);
+  await expect(dialog).toContainText('The reference check timed out.');
+  await expect(dialog.getByRole('status')).toHaveCount(0);
+  await expect(dialog).not.toContainText('The reference check is still running.');
+  await expect(dialog.getByRole('button', { name: 'Delete anyway', exact: true })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: 'Check again', exact: true })).toBeEnabled();
+  await reply!();
+  await expect(dialog).toContainText('The reference check timed out.');
+  await expect(dialog).not.toContainText('No incoming cross-project references were found');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(fixture.editor.locator('[data-graphid="child"]')).toBeVisible();
+});
+
 test('cancel aborts a pending scan and a late response cannot replace a new review', async ({ page }) => {
   const fixture = await setup(page);
   let release: () => void = () => {};

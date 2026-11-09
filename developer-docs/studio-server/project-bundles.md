@@ -1154,6 +1154,14 @@ through the normal recording API before later recording contracts run.
 
 - Core owns the versioned `ProjectBundleManifest`, validation, prefab-aware
   dependency enumeration and saved Subgraph boundary validation in `ProjectBundle.ts`.
+  Missing/incompatible graph errors identify the caller project, graph and Subgraph
+  node (including its searchable ID), plus the target project and graph. Export and
+  portable-load checks show the actual selected target version, including bundle-wide
+  version overrides. Missing display names fall back to saved IDs. These deliberate
+  diagnostics do not include raw storage exceptions or server paths.
+  Invalid Subgraph versions, unselected projects, unresolved Library instances and
+  missing portable target bindings retain the same caller location. Library errors
+  point to the graph-local instance ID, not the Library definition's source node.
 - API `routes/workflows/project-bundle.ts` collects all graphs, not only Main.
   It reuses the execution snapshot resolver for filesystem, SQLite and managed
   storage, including the datasets belonging to the selected revision. Raw project

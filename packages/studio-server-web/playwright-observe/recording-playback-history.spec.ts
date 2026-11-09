@@ -26,6 +26,51 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
       for (const event of serialized.recording.events) if (event.data) delete event.data.execution;
       recorder = ExecutionRecorder.deserializeFromString(JSON.stringify(serialized));
     }
+    if (kind === 'root') {
+      // Replay priced and unpriced call evidence without making provider requests.
+      const serialized = JSON.parse(recorder.serialize());
+      const events = serialized.recording.events;
+      const index = events.findIndex((event: { type: string }) => event.type === 'nodeStart');
+      expect(index).toBeGreaterThanOrEqual(0);
+      const start = events[index];
+      const { nodeId, processId, execution } = start.data;
+      const call = {
+        nodeId,
+        processId,
+        execution,
+        provider: 'openai',
+        model: 'fixture-model',
+        outcome: 'success',
+        attemptIndex: 0,
+      };
+      events.splice(
+        index + 1,
+        0,
+        {
+          ts: start.ts,
+          type: 'llmCallFinished',
+          data: { ...call, callId: 'priced-llm', pricing: { status: 'known', costUsd: 0.01 } },
+        },
+        {
+          ts: start.ts,
+          type: 'llmCallFinished',
+          data: { ...call, callId: 'unpriced-llm', pricing: { status: 'unknown', costUsd: 100 } },
+        },
+        {
+          ts: start.ts,
+          type: 'llmProfileAttempt',
+          data: {
+            ...call,
+            eventId: 'priced-decision',
+            family: 'classifier',
+            stage: 'request',
+            roundIndex: 0,
+            classifierUsage: { inputTokens: 100, outputTokens: 10, estimatedCostUsd: 0.005 },
+          },
+        },
+      );
+      recorder = ExecutionRecorder.deserializeFromString(JSON.stringify(serialized));
+    }
     // Production replay artifacts have a new ID, not the original bundle caller ID.
     const project =
       kind === 'root'
@@ -392,6 +437,32 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     await expect(editor.locator('[aria-label="Run Activity"]')).toContainText(
       kind === 'root' ? 'Parent' : 'Child main',
     );
+    if (kind === 'root') {
+      const drawer = editor.locator('[aria-label="Run Activity"]');
+      const summary = drawer.locator('.run-activity-heading .run-activity-summary');
+      await expect(summary).toContainText('$0.015000 partial (LLM: $0.010000 partial + Decision AI: $0.005000)');
+      for (const width of [1600, 1000, 560]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await expect(summary).toBeVisible();
+        const layout = await drawer.evaluate((element) => {
+          const header = element.querySelector('.run-activity-header')!;
+          const close = element.querySelector('[aria-label="Close Run Activity"]')!;
+          return {
+            fits: header.scrollWidth <= header.clientWidth + 1,
+            closeRight: close.getBoundingClientRect().right,
+            drawerRight: element.getBoundingClientRect().right,
+            summaryWidth: element.querySelector('.run-activity-heading .run-activity-summary')!.getBoundingClientRect()
+              .width,
+            drawerWidth: element.getBoundingClientRect().width,
+          };
+        });
+        expect(layout.fits).toBe(true);
+        expect(layout.closeRight).toBeLessThanOrEqual(layout.drawerRight);
+        if (width === 560) expect(layout.summaryWidth).toBeGreaterThan(layout.drawerWidth * 0.75);
+        await drawer.screenshot({ path: test.info().outputPath(`run-activity-cost-breakdown-${width}.png`) });
+      }
+      await page.setViewportSize({ width: 1600, height: 1000 });
+    }
     // A graph name in the drawer header alone doesn't prove playback populated it.
     const activityRows = editor.locator('[aria-label="Run Activity"] .run-activity-row');
     await expect(activityRows.first()).toBeVisible();

@@ -139,6 +139,12 @@ checks the live branch head before publishing assets and Pages, so advancing
 does not justify changing platform labels, bypassing signing or replaying completed
 builds. A second allocation failure remains a provider-capacity blocker.
 
+The later user-authorized recovery (attempt 5) completed at 18:25:49 UTC on
+November 9 in 11m52s, at the same `a5dc939cb` source. Apple Silicon compilation,
+signing/notarization, desktop download publication and Pages deployment passed
+once GitHub assigned the runner. No packaging-code change was needed for this
+recovery.
+
 The repository-contract lane uses a filtered, shallow checkout that excludes only
 five exact native desktop pnpm executable paths under `packages/app/sidecars/pnpm/`.
 No wildcard excludes future source or metadata with a similar name.

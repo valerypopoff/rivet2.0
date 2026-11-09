@@ -282,6 +282,25 @@ activity do not render an empty accounting summary unless omitted invocations
 make the absence of retained calls inconclusive. Per-row response inspection
 remains the authoritative detailed accounting view.
 
+When a known amount is available, the header displays the combined cost followed
+by its independent subtotals: `$0.015000 (LLM: $0.010000 + Decision AI: $0.005000)`.
+The view model uses Core's `summarizeAgentResponseCosts` for each family rather
+than repeating the full usage/retry/fallback summary. The full trace summary uses
+that same cost-only owner. LLM amounts require `pricing.status: known`; both
+families require finite, nonnegative amounts, including genuine zero charges.
+Missing or invalid prices stay unknown, and an unrepresentable sum stays unknown
+instead of emitting an infinite amount. These rules match the runtime cost ledger.
+The view model never derives one subtotal by subtracting the other from the total.
+Partial amounts retain their `partial` label on the combined cost and affected subtotals.
+A family with requests but no usable price shows `unknown`, not zero. A family
+with no requests shows `$0.000000` only when retention is complete; omitted
+evidence keeps its subtotal unknown or partial. Fully unknown combined costs
+remain hidden, as before. Breakdown fields are display-only, with no recording
+format, configured-price, or provider-request contract changes.
+The accounting header stays visible and wraps at narrower drawer widths;
+responsive hiding of the filter's item count does not hide run costs or push
+the drawer controls outside its bounds.
+
 Copy diagnostics may include this bounded root accounting summary, but must not
 derive or export provider request data or stored values.
 

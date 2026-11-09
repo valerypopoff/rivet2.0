@@ -13,6 +13,9 @@ import {
   SubGraphNodeImpl,
   ReferencedGraphAliasNodeImpl,
   getGraphBoundary,
+  listProjectBundleCalls,
+  validateProjectBundleCall,
+  validateProjectBundleProjects,
   loadProjectFromString,
   type GraphId,
   type ProjectId,
@@ -672,7 +675,14 @@ test('export rejects incompatible ports, wrong versions and recursive cross-proj
   const ports = projectBundleFixture();
   ports.child.project.graphs[ports.child.project.metadata.mainGraphId!]!.nodes = [];
   ports.child.projectContents = serializeProject(ports.child.project) as string;
-  await assert.rejects(collect(ports), /incompatible boundary/);
+  await assert.rejects(collect(ports), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /incompatible boundary/);
+    assert.ok(error.message.includes('in graph "Main" of project "Root"'));
+    assert.ok(error.message.includes('Target: graph "Child" in project "子供" (Saved latest)'));
+    assert.ok(error.message.includes('changed its output "result"'));
+    return true;
+  });
   const version = projectBundleFixture();
   version.child.selectedVersion = 'published';
   await assert.rejects(collect(version), /could not be captured/);
@@ -701,6 +711,138 @@ test('export rejects incompatible ports, wrong versions and recursive cross-proj
   indirect.child.projectContents = serializeProject(indirect.child.project) as string;
   await assert.rejects(collect(indirect), /dependency cycle/);
 });
+
+for (const issue of ['invalid-version', 'unselected-project', 'missing-library', 'library-version'] as const) {
+  test(`bundle ${issue} diagnostics preserve the caller location before target validation`, () => {
+    const fixture = projectBundleFixture();
+    const graph = fixture.root.project.graphs[fixture.root.project.metadata.mainGraphId!]!;
+    const node = graph.nodes.find((candidate) => candidate.type === 'subGraph')! as ReturnType<
+      typeof SubGraphNodeImpl.create
+    >;
+    if (issue === 'invalid-version') Object.assign(node.data, { targetVersion: 'unsupported' });
+    if (issue === 'unselected-project') {
+      Object.assign(node.data, { targetProjectId: undefined, targetScope: 'other-projects' });
+    }
+    if (issue === 'missing-library') Object.assign(node, { type: 'nodePrefabInstance', data: { prefabId: 'missing' } });
+    if (issue === 'library-version') {
+      const definition = structuredClone(node);
+      definition.id = 'library-definition-id' as typeof definition.id;
+      definition.title = 'Current Library title';
+      Object.assign(definition.data, { targetVersion: 'unsupported' });
+      const prefabId = 'library-caller' as NodePrefabId;
+      fixture.root.project.nodePrefabs = { [prefabId]: { id: prefabId, sourceNode: definition } };
+      Object.assign(node, { type: 'nodePrefabInstance', data: { prefabId } });
+    }
+    assert.throws(
+      () => listProjectBundleCalls(fixture.root.project),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.ok(error.message.includes(`(${node.id}) in graph "Main" of project "Root"`));
+        assert.ok(!error.message.includes('library-definition-id'));
+        assert.match(
+          error.message,
+          issue === 'missing-library'
+            ? /unresolved library node/
+            : issue === 'unselected-project'
+              ? /no selected project/
+              : /Invalid Subgraph project version/,
+        );
+        return true;
+      },
+    );
+  });
+}
+
+test('missing bundle targets retain repair context and legacy direct validation remains supported', async () => {
+  const fixture = projectBundleFixture();
+  const { manifest } = await collectProjectBundle({
+    source: fixture.source,
+    rootVersion: 'latest',
+    signal: new AbortController().signal,
+    writeFile: async () => {},
+    progress() {},
+  });
+  const projects = new Map(
+    manifest.artifacts.map((artifact) => [
+      artifact.id,
+      artifact.projectId === fixture.root.project.metadata.id ? fixture.root.project : fixture.child.project,
+    ]),
+  );
+  const call = listProjectBundleCalls(fixture.root.project)[0]!;
+  const checkFailure = (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.ok(error.message.includes(`(${call.source!.nodeId}) in graph "Main" of project "Root"`));
+    return true;
+  };
+  assert.throws(() => validateProjectBundleProjects({ ...manifest, targets: [] }, projects), checkFailure);
+  // A caller written against the earlier two-argument API has no diagnostic source.
+  const { source: _source, ...legacyCall } = call;
+  assert.doesNotThrow(() => validateProjectBundleCall(legacyCall, fixture.child.project));
+  delete fixture.child.project.graphs[call.graphId as GraphId];
+  assert.throws(
+    () => validateProjectBundleProjects(manifest, projects),
+    (error: unknown) => {
+      checkFailure(error);
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.includes(`missing graph ${call.graphId}`));
+      assert.ok(error.message.includes('Target: graph "child-main" in project "子供" (Saved latest)'));
+      return true;
+    },
+  );
+});
+
+for (const version of ['latest', 'published'] as const) {
+  test(`bundle boundary diagnostics locate the caller and use the actual ${version} target selection`, async () => {
+    const fixture = projectBundleFixture();
+    fixture.source.versionPolicy = version;
+    fixture.root.selectedVersion = version;
+    fixture.child.selectedVersion = version;
+    fixture.root.project.metadata.title = 'Product backend';
+    fixture.child.project.metadata.title = 'Engine utilities';
+    const graph = fixture.root.project.graphs[fixture.root.project.metadata.mainGraphId!]!;
+    graph.metadata!.name = 'Folder/Build context';
+    const call = graph.nodes.find((node) => node.type === 'subGraph')! as ReturnType<typeof SubGraphNodeImpl.create>;
+    call.title = 'Build engine context';
+    // The bundle-wide selection overrides this authored choice without rewriting it.
+    call.data.targetVersion = version === 'latest' ? 'published' : 'latest';
+    fixture.root.projectContents = serializeProject(fixture.root.project) as string;
+    fixture.child.projectContents = serializeProject(fixture.child.project) as string;
+    const collect = () =>
+      collectProjectBundle({
+        source: fixture.source,
+        rootVersion: version,
+        signal: new AbortController().signal,
+        writeFile: async () => {},
+        progress() {},
+      });
+    const { manifest } = await collect();
+    fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!]!.nodes = [];
+    fixture.child.projectContents = serializeProject(fixture.child.project) as string;
+    const checkFailure = (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.message.includes(`Check Subgraph node "Build engine context" (${call.id})`));
+      assert.ok(error.message.includes('in graph "Folder/Build context" of project "Product backend"'));
+      assert.ok(error.message.includes('Target: graph "Child" in project "Engine utilities"'));
+      assert.ok(error.message.includes(`(${version === 'published' ? 'Published' : 'Saved latest'})`));
+      assert.ok(error.message.includes('changed its output "result"'));
+      return true;
+    };
+    await assert.rejects(collect(), checkFailure);
+    assert.throws(
+      () =>
+        validateProjectBundleProjects(
+          manifest,
+          new Map(
+            manifest.artifacts.map((artifact) => [
+              artifact.id,
+              artifact.projectId === fixture.root.project.metadata.id ? fixture.root.project : fixture.child.project,
+            ]),
+          ),
+        ),
+      checkFailure,
+    );
+  });
+}
 
 for (const outcome of ['ready', 'failed', 'journal-failed'] as const) {
   test(`terminal export ${outcome} waits for durable journal before acknowledgement`, async (t) => {

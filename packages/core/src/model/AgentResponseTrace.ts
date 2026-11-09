@@ -346,6 +346,33 @@ function toProfileAttemptTrace(
   return trace;
 }
 
+/** Cost-only projection shared by trace totals and activity-family subtotals. */
+export function summarizeAgentResponseCosts(
+  modelCalls: readonly AgentModelCallTrace[],
+  profileAttempts: readonly AgentLLMProfileAttemptTrace[],
+): Pick<AgentResponseTrace['summary'], 'knownCostUsd' | 'costStatus'> {
+  let knownCostUsd = 0;
+  let knownCount = 0;
+  let callCount = 0;
+  const add = (cost: number | undefined) => {
+    callCount++;
+    if (cost != null && Number.isFinite(cost) && cost >= 0) {
+      knownCostUsd += cost;
+      knownCount++;
+    }
+  };
+  for (const call of modelCalls) add(call.pricing.status === 'known' ? call.pricing.costUsd : undefined);
+  for (const attempt of profileAttempts) {
+    if (attempt.family === 'classifier' && attempt.attemptIndex != null) add(attempt.classifierUsage?.estimatedCostUsd);
+  }
+  // Keep the retained summary serializable even when individually finite estimates overflow.
+  if (!Number.isFinite(knownCostUsd)) return { knownCostUsd: 0, costStatus: 'unknown' };
+  return {
+    knownCostUsd,
+    costStatus: knownCount === 0 ? 'unknown' : knownCount < callCount ? 'partial' : 'known',
+  };
+}
+
 /** Shared metadata accounting for response inspectors and the bounded activity journal. */
 export function summarizeAgentResponseCalls(
   modelCalls: readonly AgentModelCallTrace[],
@@ -355,7 +382,6 @@ export function summarizeAgentResponseCalls(
   const classifierCalls = profileAttempts.filter(
     (attempt) => attempt.family === 'classifier' && attempt.attemptIndex != null,
   );
-  const accountedCallCount = modelCalls.length + classifierCalls.length;
   const usageKeys = ['promptTokens', 'completionTokens', 'totalTokens', 'cachedTokens', 'reasoningTokens'] as const;
   const usage = Object.fromEntries(
     usageKeys.flatMap((key) => {
@@ -370,17 +396,6 @@ export function summarizeAgentResponseCalls(
       return values.length === 0 ? [] : [[key, values.reduce((sum, value) => sum + value, 0)]];
     }),
   );
-  const knownCosts = [
-    ...modelCalls
-      .map((call) => call.pricing.costUsd)
-      .filter((value): value is number => value != null && Number.isFinite(value)),
-    ...classifierCalls.flatMap((attempt) =>
-      attempt.classifierUsage?.estimatedCostUsd == null ? [] : [attempt.classifierUsage.estimatedCostUsd],
-    ),
-  ];
-  const unknownCostCount =
-    modelCalls.filter((call) => call.pricing.status === 'unknown' || !Number.isFinite(call.pricing.costUsd)).length +
-    classifierCalls.filter((attempt) => attempt.classifierUsage?.estimatedCostUsd == null).length;
   const profileTransitions = countProfileFallbacks(modelCalls, profileAttempts);
 
   return {
@@ -394,13 +409,7 @@ export function summarizeAgentResponseCalls(
       classifierCalls.filter((attempt) => attempt.attemptIndex! > 0).length,
     fallbackCount: profileTransitions,
     ...usage,
-    knownCostUsd: knownCosts.reduce((sum, value) => sum + value, 0),
-    costStatus:
-      accountedCallCount === 0 || unknownCostCount === accountedCallCount
-        ? ('unknown' as const)
-        : unknownCostCount > 0
-          ? ('partial' as const)
-          : ('known' as const),
+    ...summarizeAgentResponseCosts(modelCalls, profileAttempts),
   };
 }
 

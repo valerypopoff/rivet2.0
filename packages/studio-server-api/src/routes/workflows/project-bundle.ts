@@ -340,7 +340,7 @@ export async function collectProjectBundle(options: {
           );
         }
       }
-      validateProjectBundleCall(call, snapshots.get(artifact.id)!.project);
+      validateProjectBundleCall(call, snapshots.get(artifact.id)!.project, artifact.version);
     }
     for (const reference of snapshot.project.references ?? []) {
       if (references.has(reference.id)) continue;
