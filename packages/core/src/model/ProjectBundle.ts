@@ -67,36 +67,58 @@ function samePluginRequirement(left: PluginLoadSpec, right: PluginLoadSpec): boo
   return left.type === 'uri' && right.type === 'uri' && left.uri === right.uri;
 }
 
+type ProjectBundleCallSource = { projectName: string; graphName: string; nodeId: string; nodeTitle: string };
+
+function describeBundleCallSource(source: ProjectBundleCallSource): string {
+  return `node "${source.nodeTitle}" (${source.nodeId}) in graph "${source.graphName}" of project "${source.projectName}"`;
+}
+
 function* projectSubgraphs(project: Project) {
   for (const [sourceGraphId, graph] of Object.entries(project.graphs)) {
     for (const authored of graph.nodes) {
       const node = resolveNodePrefabInstance(project, authored);
-      if (!node.disabled && node.type === 'nodePrefabInstance')
-        throw new ProjectBundleError(`Bundle contains an unresolved library node ${node.id}.`);
-      if (node.disabled || node.type !== 'subGraph') continue;
+      if (node.disabled || (node.type !== 'subGraph' && node.type !== 'nodePrefabInstance')) continue;
+      const source: ProjectBundleCallSource = {
+        projectName: project.metadata.title || project.metadata.id,
+        graphName: graph.metadata?.name || sourceGraphId,
+        nodeId: authored.id,
+        nodeTitle: node.title || 'Subgraph',
+      };
+      if (node.type === 'nodePrefabInstance')
+        throw new ProjectBundleError(`Bundle contains an unresolved library ${describeBundleCallSource(source)}.`);
       const data = (node as SubGraphNode).data;
       if (data.targetProjectId) {
         if (data.targetVersion !== undefined && data.targetVersion !== 'latest' && data.targetVersion !== 'published')
-          throw new ProjectBundleError('Invalid Subgraph project version.');
+          throw new ProjectBundleError(
+            `Invalid Subgraph project version. Check Subgraph ${describeBundleCallSource(source)}.`,
+          );
       } else if (data.targetScope) {
-        throw new ProjectBundleError(`Subgraph ${node.title || node.id} has no selected project.`);
+        throw new ProjectBundleError(
+          `Subgraph has no selected project. Check Subgraph ${describeBundleCallSource(source)}.`,
+        );
       }
-      yield { sourceGraphId, data };
+      yield { sourceGraphId, data, source };
     }
   }
 }
 
-export function listProjectBundleCalls(
-  project: Project,
-): { projectId: string; version: 'latest' | 'published'; graphId: string; boundary?: GraphBoundary }[] {
+export function listProjectBundleCalls(project: Project): {
+  projectId: string;
+  version: 'latest' | 'published';
+  graphId: string;
+  boundary?: GraphBoundary;
+  /** Advisory repair location; not part of the saved wire contract. */
+  source?: ProjectBundleCallSource;
+}[] {
   const calls: ReturnType<typeof listProjectBundleCalls> = [];
-  for (const { data } of projectSubgraphs(project)) {
+  for (const { data, source } of projectSubgraphs(project)) {
     if (data.targetProjectId)
       calls.push({
         projectId: data.targetProjectId,
         version: data.targetVersion ?? 'latest',
         graphId: data.graphId,
         boundary: data.targetBoundary,
+        source,
       });
   }
   return calls;
@@ -106,13 +128,19 @@ export function listProjectBundleCalls(
 export function validateProjectBundleCall(
   call: ReturnType<typeof listProjectBundleCalls>[number],
   target: Project,
+  selectedVersion?: 'latest' | 'published',
 ): void {
-  if (!Object.hasOwn(target.graphs, call.graphId))
-    throw new ProjectBundleError(`Subgraph dependency is missing graph ${call.graphId}.`);
-  const boundary = getGraphBoundary(target, call.graphId as keyof Project['graphs']);
-  if (!boundary) throw new ProjectBundleError(`Subgraph dependency is missing graph ${call.graphId}.`);
-  const issue = getSubgraphTargetBoundaryIssue(call.boundary, boundary);
-  if (issue) throw new ProjectBundleError(`Subgraph dependency has an incompatible boundary. ${issue}`);
+  const graph = Object.hasOwn(target.graphs, call.graphId)
+    ? target.graphs[call.graphId as keyof Project['graphs']]
+    : undefined;
+  const boundary = graph && getGraphBoundary(target, call.graphId as keyof Project['graphs']);
+  const issue = boundary ? getSubgraphTargetBoundaryIssue(call.boundary, boundary) : null;
+  if (boundary && !issue) return;
+  const source = call.source ? `Check Subgraph ${describeBundleCallSource(call.source)}. ` : '';
+  const version = selectedVersion ? ` (${selectedVersion === 'published' ? 'Published' : 'Saved latest'})` : '';
+  const location = `${source}Target: graph "${graph?.metadata?.name || call.graphId}" in project "${target.metadata.title || target.metadata.id}"${version}.`;
+  if (!boundary) throw new ProjectBundleError(`Subgraph dependency is missing graph ${call.graphId}. ${location}`);
+  throw new ProjectBundleError(`Subgraph dependency has an incompatible boundary. ${location} ${issue}`);
 }
 
 /** Reject missing bindings and cross-project dependency cycles before executing any graph. */
@@ -124,6 +152,7 @@ export function validateProjectBundleProjects(
   const references = new Map(manifest.references.map((r) => [r.projectId, r.artifact]));
   const plugins = new Map(manifest.plugins.map((plugin) => [plugin.id, plugin]));
   const members = manifest.workspace ? new Set(manifest.workspace.members.map((m) => m.projectId)) : undefined;
+  const versions = new Map(manifest.artifacts.map((artifact) => [artifact.id, artifact.version]));
   type Vertex = { edges: { target: Vertex; crossProject: boolean }[] };
   const vertices = new Map<string, Vertex>();
   const graphKey = (artifact: string, graph: string) => JSON.stringify([artifact, graph]);
@@ -140,7 +169,7 @@ export function validateProjectBundleProjects(
   }
   for (const artifact of manifest.artifacts) {
     const project = projects.get(artifact.id)!;
-    for (const { sourceGraphId, data } of projectSubgraphs(project)) {
+    for (const { sourceGraphId, data, source } of projectSubgraphs(project)) {
       let targetId = artifact.id;
       if (data.targetProjectId) {
         if (members?.has(data.targetProjectId) && !members.has(project.metadata.id))
@@ -152,12 +181,15 @@ export function validateProjectBundleProjects(
           version: data.targetVersion ?? 'latest',
           graphId: data.graphId,
           boundary: data.targetBoundary,
+          source,
         };
         const id = targets.get(projectBundleTargetKey(call.projectId, call.version));
         const target = id && projects.get(id);
         if (!id || !target)
-          throw new ProjectBundleError(`Bundle is missing Subgraph ${call.projectId}:${call.version}:${call.graphId}`);
-        validateProjectBundleCall(call, target);
+          throw new ProjectBundleError(
+            `Bundle is missing Subgraph ${call.projectId}:${call.version}:${call.graphId}. Check Subgraph ${describeBundleCallSource(source)}.`,
+          );
+        validateProjectBundleCall(call, target, versions.get(id));
         targetId = id;
       }
       const target = vertices.get(graphKey(targetId, data.graphId));

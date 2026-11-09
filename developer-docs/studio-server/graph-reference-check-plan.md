@@ -117,6 +117,10 @@ The host forwards counts and reasons to the graph-deletion modal and project
 Danger zone. Retry repeats the cheap lookup, not backfill. Cancel remains usable,
 late responses are ignored, and unsaved open-project references are merged.
 Known references or incomplete checks retain the explicit Delete anyway choice.
+After ten seconds of a pending graph/folder check, Delete anyway is enabled with
+a still-running warning. The check continues and can update the review before
+confirmation. Each new check has its own wait; completion, Cancel and confirmation
+clean up the timers and stale request. Existing deletion guards still apply.
 The shared 35-second UI watchdog remains for unchanged filesystem/SQLite and
 third-party hosts; managed failures normally return through the shorter budget.
 
@@ -219,7 +223,11 @@ check passed schema-18/current writer overlap and cross-reads; that is not exact
 release-image qualification.
 
 Headless `graph-deletion-references.spec.ts` checks known callers, partial
-reasons/counts, Retry, Delete anyway, Cancel/late results and unsaved callers.
+reasons/counts, Retry, the ten-second pending override, Cancel/late results and
+unsaved callers. Clock-controlled cases verify early blocking, actual deletion
+while checking, a fresh wait after retry/reopening and a late complete result.
+They also check that completed scans stay settled beyond both timer deadlines,
+the 35-second watchdog leaves the override enabled, and timed-out replies are ignored.
 Use the normal observe runner with `PLAYWRIGHT_HEADLESS=1` and
 `PLAYWRIGHT_SLOW_MO=0`. Production activation and live latency verification remain
 unchecked delivery items above.

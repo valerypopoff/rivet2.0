@@ -15,7 +15,12 @@ export interface RunActivityGraphOption {
   graphName: string;
 }
 
-export interface RunActivityAccountingSummary {
+export interface RunActivityCostSummary {
+  knownCostUsd: number;
+  costStatus: 'known' | 'partial' | 'unknown';
+}
+
+export interface RunActivityAccountingSummary extends RunActivityCostSummary {
   modelCallCount: number;
   classifierRequestCount?: number;
   toolCallCount: number;
@@ -23,8 +28,8 @@ export interface RunActivityAccountingSummary {
   completionTokens?: number;
   cachedTokens?: number;
   reasoningTokens?: number;
-  knownCostUsd: number;
-  costStatus: 'known' | 'partial' | 'unknown';
+  llmCost: RunActivityCostSummary;
+  decisionAICost: RunActivityCostSummary;
   /** Activity evidence was capped; counts, usage and cost cover retained evidence only. */
   incomplete?: boolean;
 }

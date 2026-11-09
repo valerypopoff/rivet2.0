@@ -112,6 +112,15 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     backgroundWorkPending: true,
     partialReason: 'This legacy recording does not include result provenance.',
     omittedItemCount: 2,
+    accounting: {
+      modelCallCount: 1,
+      toolCallCount: 0,
+      classifierRequestCount: 1,
+      knownCostUsd: 0.015,
+      costStatus: 'known',
+      llmCost: { knownCostUsd: 0.01, costStatus: 'known' },
+      decisionAICost: { knownCostUsd: 0.005, costStatus: 'known' },
+    },
     items: ITEMS,
   };
 
@@ -136,6 +145,7 @@ test('renders semantic run state, filters, partial-data notice, and invocation a
     assert.match(document.body.textContent ?? '', /Outputs ready; async work still running/);
     assert.match(document.body.textContent ?? '', /Partial activity: This legacy recording/);
     assert.match(document.body.textContent ?? '', /2 older activities are omitted/);
+    assert.ok(document.body.textContent?.includes('$0.015000 (LLM: $0.010000 + Decision AI: $0.005000)'));
     assert.match(document.body.textContent ?? '', /Node name/);
     assert.match(document.body.textContent ?? '', /Graph name/);
     assert.match(document.body.textContent ?? '', /Node type/);
@@ -509,6 +519,51 @@ test('unchanged expanded rows do not rerender for another invocation update', as
     await act(async () => root.unmount());
     restore();
     dom.window.close();
+  }
+});
+
+test('cost subtotals distinguish partial, unknown and zero-priced evidence', async () => {
+  const dom = new JSDOM('<div id="root"></div>');
+  const restore = installDomGlobals(dom);
+  const root = createRoot(dom.window.document.getElementById('root')!);
+  const accounting: NonNullable<RunActivityViewModel['accounting']> = {
+    modelCallCount: 2,
+    toolCallCount: 0,
+    classifierRequestCount: 1,
+    knownCostUsd: 0.01,
+    costStatus: 'partial',
+    llmCost: { knownCostUsd: 0.01, costStatus: 'partial' },
+    decisionAICost: { knownCostUsd: 0, costStatus: 'unknown' },
+  };
+  const render = async () => {
+    await act(async () =>
+      root.render(
+        <RunActivityDrawer
+          open
+          viewModel={{ status: 'completed', items: [], accounting: { ...accounting } }}
+          onClose={() => undefined}
+        />,
+      ),
+    );
+    return dom.window.document.querySelector('.run-activity-heading .run-activity-summary')!.textContent!;
+  };
+  try {
+    assert.ok((await render()).includes('$0.010000 partial (LLM: $0.010000 partial + Decision AI: unknown)'));
+    accounting.incomplete = true;
+    assert.ok((await render()).includes('retained evidence only'));
+    accounting.costStatus = 'unknown';
+    const unknown = await render();
+    assert.ok(!unknown.includes('$'));
+    assert.ok(unknown.includes('retained evidence only'));
+    accounting.costStatus = 'known';
+    accounting.knownCostUsd = 0;
+    accounting.llmCost = { knownCostUsd: 0, costStatus: 'known' };
+    accounting.decisionAICost = { knownCostUsd: 0, costStatus: 'known' };
+    accounting.incomplete = false;
+    assert.ok((await render()).includes('$0.000000 (LLM: $0.000000 + Decision AI: $0.000000)'));
+  } finally {
+    await act(async () => root.unmount());
+    restore();
   }
 });
 

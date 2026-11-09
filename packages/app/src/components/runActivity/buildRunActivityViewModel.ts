@@ -1,6 +1,7 @@
 import {
   getCustomProviderApiContract,
   summarizeAgentResponseCalls,
+  summarizeAgentResponseCosts,
   buildAgentProfileAttemptInspectorRows,
   getProfileDisplayName,
   type PortId,
@@ -22,6 +23,7 @@ import type { NodeRunDataWithRefs, StoredDataValue } from '../../state/dataFlow.
 import type {
   RunActivityCategory,
   RunActivityAccountingSummary,
+  RunActivityCostSummary,
   RunActivityChildViewModel,
   RunActivityDetailRow,
   RunActivityItemStatus,
@@ -168,9 +170,10 @@ function buildAccountingSummary(root: RunActivityRoot): RunActivityAccountingSum
   const modelCallCount = invocations.reduce((total, invocation) => total + invocation.modelCallCount, 0);
   const toolCallCount = invocations.reduce((total, invocation) => total + invocation.toolCallCount, 0);
   const calls = invocations.flatMap((invocation) => invocation.modelCalls);
+  const profileAttempts = invocations.flatMap((invocation) => invocation.profileAttempts ?? []);
   const summary = summarizeAgentResponseCalls(
     calls,
-    invocations.flatMap((invocation) => invocation.profileAttempts ?? []),
+    profileAttempts,
     invocations.flatMap((invocation) => invocation.toolCalls),
   );
   const incomplete =
@@ -191,8 +194,25 @@ function buildAccountingSummary(root: RunActivityRoot): RunActivityAccountingSum
     ...(summary.reasoningTokens == null ? {} : { reasoningTokens: summary.reasoningTokens }),
     knownCostUsd: summary.knownCostUsd,
     costStatus: incomplete && summary.costStatus === 'known' ? 'partial' : summary.costStatus,
+    llmCost: buildCostSummary(summarizeAgentResponseCosts(calls, []), calls.length > 0, incomplete),
+    decisionAICost: buildCostSummary(
+      summarizeAgentResponseCosts([], profileAttempts),
+      (summary.classifierRequestCount ?? 0) > 0,
+      incomplete,
+    ),
     ...(incomplete ? { incomplete: true } : {}),
   };
+}
+
+function buildCostSummary(
+  summary: RunActivityCostSummary,
+  hasRequests: boolean,
+  incomplete: boolean,
+): RunActivityCostSummary {
+  let costStatus = summary.costStatus;
+  if (!incomplete && !hasRequests) costStatus = 'known';
+  else if (incomplete && costStatus === 'known') costStatus = 'partial';
+  return { knownCostUsd: summary.knownCostUsd, costStatus };
 }
 
 export function selectRunActivityRoot(journal: RunActivityJournal): RunActivityRoot | undefined {

@@ -19,6 +19,7 @@ import {
   type RunActivityEvent,
   type RunActivityJournal,
   type RunActivityNodeInvocation,
+  type RunActivityProfileAttempt,
   type RunActivityRoot,
 } from '../../features/runActivity/runActivityJournal.js';
 import type {
@@ -542,6 +543,8 @@ test('projects stable exact invocation rows, bounded stored previews, children, 
     toolCallCount: 1,
     knownCostUsd: 0.01,
     costStatus: 'partial',
+    llmCost: { knownCostUsd: 0.01, costStatus: 'partial' },
+    decisionAICost: { knownCostUsd: 0, costStatus: 'unknown' },
     incomplete: true,
   });
   assert.equal(viewModel.omittedItemCount, 3);
@@ -1475,6 +1478,11 @@ test('classifier activity includes winning routing, failed usage, physical reque
   assert.equal(model.accounting?.completionTokens, 5);
   assert.equal(model.accounting?.knownCostUsd, 0.00004 + 0.00002);
   assert.equal(model.accounting?.costStatus, 'known');
+  assert.deepEqual(model.accounting?.llmCost, { knownCostUsd: 0, costStatus: 'known' });
+  assert.deepEqual(model.accounting?.decisionAICost, {
+    knownCostUsd: 0.00004 + 0.00002,
+    costStatus: 'known',
+  });
   const retainedAttempt = classifier.profileAttempts[0]!;
   for (const name of ['Classifier Profile', 'My Classifier route', ' Classifier Profile ']) {
     retainedAttempt.profileName = name;
@@ -1491,6 +1499,8 @@ test('classifier activity includes winning routing, failed usage, physical reque
   assert.equal(cappedRoot.costStatus, 'partial');
   assert.equal(cappedRoot.classifierRequestCount, 2);
   assert.equal(cappedRoot.knownCostUsd, model.accounting?.knownCostUsd);
+  assert.equal(cappedRoot.llmCost.costStatus, 'unknown');
+  assert.equal(cappedRoot.decisionAICost.costStatus, 'partial');
   selectedRoot.omittedNodeInvocationCount = 0;
   classifier.profileAttempts[1]!.classifierUsage = undefined;
   assert.equal(buildRunActivityViewModel(journal, () => undefined).accounting?.costStatus, 'partial');
@@ -1500,6 +1510,87 @@ test('classifier activity includes winning routing, failed usage, physical reque
   const omitted = buildRunActivityViewModel(journal, () => undefined).accounting!;
   assert.equal(omitted.incomplete, true);
   assert.equal(omitted.costStatus, 'unknown');
+  assert.equal(omitted.llmCost.costStatus, 'unknown');
+  assert.equal(omitted.decisionAICost.costStatus, 'unknown');
+});
+
+test('root costs split LLM and Decision AI receipts without double-counting profile events', () => {
+  const journal = createRunActivityJournal();
+  const selectedRoot = root(newerActiveRootId, 1, 'completed');
+  const item = invocation({
+    key: 'mixed',
+    sequence: 1,
+    graphId: 'main',
+    graphRunId: 'main-run',
+    nodeId: 'ai',
+    processId: 'ai-process',
+  });
+  item.modelCalls = [
+    {
+      sequence: 1,
+      callId: 'llm',
+      nodeId: item.nodeId,
+      processId: item.processId,
+      provider: 'fixture',
+      model: 'llm',
+      outcome: 'success',
+      attemptIndex: 0,
+      pricing: { status: 'known', costUsd: 0.01 },
+    },
+  ];
+  item.modelCallCount = 1;
+  const attempt: RunActivityProfileAttempt = {
+    eventId: 'decision',
+    sequence: 2,
+    nodeId: item.nodeId,
+    processId: item.processId,
+    family: 'classifier',
+    provider: 'fixture',
+    model: 'decision',
+    stage: 'request',
+    roundIndex: 0,
+    attemptIndex: 0,
+    outcome: 'success',
+    classifierUsage: { inputTokens: 100, outputTokens: 10, estimatedCostUsd: 0.005 },
+  };
+  item.profileAttempts = [
+    attempt,
+    { ...attempt, eventId: 'health', stage: 'health-update', attemptIndex: undefined },
+    { ...attempt, eventId: 'llm-profile', family: 'llm' },
+  ];
+  selectedRoot.nodeInvocationsByKey[item.key] = item;
+  selectedRoot.nodeInvocationOrder = [item.key];
+  journal.rootsById[selectedRoot.rootRunId] = selectedRoot;
+  journal.latestCompletedRootRunId = selectedRoot.rootRunId;
+  const summary = () => buildRunActivityViewModel(journal, () => undefined).accounting!;
+  assert.deepEqual(summary().llmCost, { knownCostUsd: 0.01, costStatus: 'known' });
+  assert.deepEqual(summary().decisionAICost, { knownCostUsd: 0.005, costStatus: 'known' });
+  assert.equal(summary().knownCostUsd, 0.015);
+  assert.equal(summary().costStatus, 'known');
+  item.modelCalls.push({
+    ...item.modelCalls[0]!,
+    sequence: 3,
+    callId: 'unpriced-llm',
+    pricing: { status: 'unknown', costUsd: 100 },
+  });
+  item.modelCallCount++;
+  assert.equal(summary().costStatus, 'partial');
+  assert.deepEqual(summary().llmCost, { knownCostUsd: 0.01, costStatus: 'partial' });
+  assert.equal(summary().decisionAICost.costStatus, 'known');
+  for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, -0.005]) {
+    attempt.classifierUsage!.estimatedCostUsd = invalid;
+    assert.deepEqual(summary().decisionAICost, { knownCostUsd: 0, costStatus: 'unknown' });
+    assert.equal(summary().knownCostUsd, 0.01);
+    assert.equal(summary().costStatus, 'partial');
+  }
+  attempt.classifierUsage!.estimatedCostUsd = undefined;
+  assert.deepEqual(summary().decisionAICost, { knownCostUsd: 0, costStatus: 'unknown' });
+  assert.equal(summary().knownCostUsd, 0.01);
+  item.profileAttempts = [];
+  assert.deepEqual(summary().decisionAICost, { knownCostUsd: 0, costStatus: 'known' });
+  item.modelCalls = [{ ...item.modelCalls[0]!, pricing: { status: 'known', costUsd: 0 } }];
+  item.modelCallCount = 1;
+  assert.deepEqual(summary().llmCost, { knownCostUsd: 0, costStatus: 'known' });
 });
 
 test('omitted whole invocations never imply complete accounting even without retained calls', () => {

@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { loadProjectBundle } from '@valerypopoff/rivet2-node';
+import { loadProjectBundle, serializeProject } from '@valerypopoff/rivet2-node';
 import { ProjectBundleJobs } from '../../studio-server-api/src/routes/workflows/project-bundle-jobs';
 import {
   projectBundleFixture,
@@ -313,6 +313,27 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await expect(modal.getByRole('alert')).toContainText('Could not prepare the bundle.');
     await expect(link).toHaveCount(0);
     failPreparation = false;
+    const childGraph = fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!]!;
+    const childNodes = childGraph.nodes;
+    childGraph.nodes = childNodes.filter((node) => node.type !== 'graphOutput');
+    fixture.child.projectContents = serializeProject(fixture.child.project) as string;
+    await page.getByRole('button', { name: 'Retry export', exact: true }).click();
+    await expect(modal.getByRole('status')).toContainText('Export: failed.');
+    const boundaryError = modal.getByRole('alert');
+    await expect(boundaryError).toContainText('in graph "Main" of project "Root"');
+    await expect(boundaryError).toContainText('Target: graph "Child" in project "子供" (Saved latest)');
+    await expect(boundaryError).toContainText('changed its output "result"');
+    const call = fixture.root.project.graphs[fixture.root.project.metadata.mainGraphId!]!.nodes.find(
+      (node) => node.type === 'subGraph',
+    )!;
+    await expect(boundaryError).toContainText(call.id);
+    await page.setViewportSize({ width: 390, height: 520 });
+    await expectStudioModalSizing(dialog);
+    await expect(boundaryError).toBeVisible();
+    await dialog.screenshot({ path: test.info().outputPath('bundle-boundary-repair-location.png') });
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    childGraph.nodes = childNodes;
+    fixture.child.projectContents = serializeProject(fixture.child.project) as string;
     await page.getByRole('button', { name: 'Retry export', exact: true }).click();
     await expect(link).toBeVisible();
     await expect(modal.getByRole('alert')).toHaveCount(0);

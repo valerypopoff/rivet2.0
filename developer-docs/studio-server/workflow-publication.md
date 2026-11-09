@@ -419,6 +419,11 @@ the managed lookup uses the bounded database path above. Graph details are cappe
 unreadable callers and catalog drift yield incomplete results while preserving
 verified sites. Individual legacy storage reads can exceed the between-read deadline;
 the modal retains its 35-second watchdog for compatibility with those hosts and has explicit retry.
+After ten seconds of a pending check, its danger action becomes an enabled **Delete anyway**
+and warns that the check is still running. The request continues, and results received before
+confirmation still update the review. This applies to graph and graph-folder deletion.
+Cancel/reopening and **Check again** start a fresh ten-second wait; completion and disposal
+clear both timers. Confirming the override closes the dialog and aborts the pending check.
 Managed partial results describe missing/outdated reference indexing, invalid projects, or result limits,
 along with checked/total project counts. Graph and project-level extraction failures are independent:
 only the requested component determines caller coverage. Target validation checks its identity rather
@@ -438,8 +443,8 @@ Errors and partial results warn explicitly. Known references or incomplete check
 are grouped in one red (`--error-dark`) block with white text, including caller
 details, target-version guidance and any scan failure/incomplete message. The
 deletion prompt and point-in-time disclaimer stay outside that block. Clean
-results and loading states do not render an empty warning block.
-Known references or incomplete checks use **Delete anyway**; Cancel/disposal
+results and short pending checks do not render an empty warning block.
+Known references, incomplete checks and the pending override use **Delete anyway**; Cancel/disposal
 abort stale requests. Project identity and
 folder membership are rechecked before applying the reviewed deletion.
 

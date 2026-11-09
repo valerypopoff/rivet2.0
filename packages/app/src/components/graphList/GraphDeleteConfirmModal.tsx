@@ -52,14 +52,20 @@ export function GraphDeleteConfirmModal({
   const dirty = useAtomValue(projectUnsavedChangesState);
   const [attempt, setAttempt] = useState(0);
   const [check, setCheck] = useState<{ result?: Check; error?: string } | null>(null);
+  const [allowPendingDelete, setAllowPendingDelete] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     setCheck(null);
+    setAllowPendingDelete(false);
     if (!catalog?.graphReferences) {
       setCheck({});
       return () => controller.abort();
     }
+    const pendingDeleteTimeout = setTimeout(() => {
+      if (!controller.signal.aborted) setAllowPendingDelete(true);
+    }, 10_000);
     const timeout = setTimeout(() => {
+      clearTimeout(pendingDeleteTimeout);
       setCheck({ error: 'The reference check timed out. Other projects may depend on these graphs.' });
       controller.abort();
     }, 35_000);
@@ -68,6 +74,7 @@ export function GraphDeleteConfirmModal({
       .then(
         (result) => {
           clearTimeout(timeout);
+          clearTimeout(pendingDeleteTimeout);
           if (!controller.signal.aborted)
             setCheck(
               result.projectId === request.projectId
@@ -77,6 +84,7 @@ export function GraphDeleteConfirmModal({
         },
         (error: unknown) => {
           clearTimeout(timeout);
+          clearTimeout(pendingDeleteTimeout);
           if (!controller.signal.aborted)
             setCheck({
               error: `Could not check incoming graph references. ${error instanceof Error ? error.message : 'Other projects may depend on these graphs.'}`,
@@ -85,6 +93,7 @@ export function GraphDeleteConfirmModal({
       );
     return () => {
       clearTimeout(timeout);
+      clearTimeout(pendingDeleteTimeout);
       controller.abort();
     };
   }, [catalog, request, attempt]);
@@ -115,7 +124,8 @@ export function GraphDeleteConfirmModal({
   }, [snapshots, dirty, request, savedScanComplete]);
   const references = [...(check?.result?.references ?? []), ...local.references];
   const incomplete = local.incomplete || Boolean(check?.error) || check?.result?.complete === false;
-  const hasWarning = references.length > 0 || incomplete;
+  const pendingOverride = check === null && allowPendingDelete;
+  const hasWarning = references.length > 0 || incomplete || pendingOverride;
   return (
     <ModalTransition>
       <Modal autoFocus={false} onClose={onClose} width="medium">
@@ -128,6 +138,9 @@ export function GraphDeleteConfirmModal({
           {check === null && <p role="status">Checking incoming graph references…</p>}
           {hasWarning && (
             <section aria-label="Graph deletion warning" css={warningStyles}>
+              {pendingOverride && (
+                <p role="alert">The reference check is still running. Deleting now may break other projects.</p>
+              )}
               {references.length > 0 && (
                 <section aria-label="Incoming graph references">
                   <p role="alert">
@@ -176,6 +189,7 @@ export function GraphDeleteConfirmModal({
           {catalog?.graphReferences && (
             <Button
               onClick={() => {
+                setAllowPendingDelete(false);
                 setCheck(null);
                 setAttempt((value) => value + 1);
               }}
@@ -185,7 +199,7 @@ export function GraphDeleteConfirmModal({
             </Button>
           )}
           <Button onClick={onClose}>Cancel</Button>
-          <Button appearance="danger" isDisabled={check === null} onClick={onConfirm}>
+          <Button appearance="danger" isDisabled={check === null && !allowPendingDelete} onClick={onConfirm}>
             {hasWarning ? 'Delete anyway' : 'Delete'}
           </Button>
         </ModalFooter>

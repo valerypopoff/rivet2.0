@@ -124,6 +124,27 @@ architecture labels, bypass notarization or publish missing-platform downloads
 to mask a runner-start failure. Confirm the retried job actually starts and
 finishes before reporting recovery as successful.
 
+On November 9, 2026, [Developer Desktop Release 42642896276](https://github.com/valerypopoff/rivet2.0/actions/runs/42642896276)
+at `a5dc939cb` hit this case: the Apple Silicon job waited 15m01s, had runner ID
+zero and no steps, and GitHub annotated it with hosted-runner acquisition failure
+and macOS arm64 capacity notices. Build, Studio Server verification, Windows and
+Intel macOS all succeeded. GitHub's overall operational status did not establish
+available ARM capacity. Read the job's check annotations before choosing recovery;
+a missing log alone cannot distinguish cancellation from a failed build.
+
+Recover the unstarted job once at the same commit and preserve successful
+artifacts. Finish its publication before the next requested push: `publish-pages`
+checks the live branch head before publishing assets and Pages, so advancing
+`develop` during recovery makes the recovered release stale. An allocation failure
+does not justify changing platform labels, bypassing signing or replaying completed
+builds. A second allocation failure remains a provider-capacity blocker.
+
+The later user-authorized recovery (attempt 5) completed at 18:25:49 UTC on
+November 9 in 11m52s, at the same `a5dc939cb` source. Apple Silicon compilation,
+signing/notarization, desktop download publication and Pages deployment passed
+once GitHub assigned the runner. No packaging-code change was needed for this
+recovery.
+
 The repository-contract lane uses a filtered, shallow checkout that excludes only
 five exact native desktop pnpm executable paths under `packages/app/sidecars/pnpm/`.
 No wildcard excludes future source or metadata with a similar name.

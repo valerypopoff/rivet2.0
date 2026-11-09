@@ -34,6 +34,7 @@ import {
 } from '../../features/runActivity/runActivityColumnWidths.js';
 import type {
   RunActivityDrawerProps,
+  RunActivityCostSummary,
   RunActivityFilter,
   RunActivityItemStatus,
   RunActivityItemViewModel,
@@ -132,9 +133,10 @@ const drawerStyles = css`
   .run-activity-heading {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 10px;
     min-width: 0;
-    flex: none;
+    flex: 1;
   }
 
   .run-activity-heading h2 {
@@ -324,6 +326,13 @@ const drawerStyles = css`
     color: var(--foreground-dim);
     font-size: var(--ui-font-size-sm);
     white-space: nowrap;
+  }
+
+  .run-activity-heading .run-activity-summary {
+    flex: 0 1 auto;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .run-activity-notice {
@@ -681,7 +690,7 @@ const drawerStyles = css`
   }
 
   @container run-activity-drawer (max-width: 1100px) {
-    .run-activity-summary {
+    .run-activity-filter-row .run-activity-summary {
       display: none;
     }
   }
@@ -757,6 +766,8 @@ const drawerStyles = css`
     }
 
     .run-activity-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: flex-start;
       flex-wrap: wrap;
       gap: 8px;
@@ -764,15 +775,28 @@ const drawerStyles = css`
     }
 
     .run-activity-heading {
-      display: grid;
-      gap: 3px;
+      display: contents;
+    }
+
+    .run-activity-heading h2 {
+      grid-column: 1;
+      grid-row: 1;
     }
 
     .run-activity-status {
+      grid-column: 1 / -1;
+      grid-row: 2;
       white-space: normal;
     }
 
+    .run-activity-heading .run-activity-summary {
+      grid-column: 1 / -1;
+      grid-row: 3;
+    }
+
     .run-activity-header-actions {
+      grid-column: 2;
+      grid-row: 1;
       width: auto;
       margin-left: auto;
     }
@@ -805,7 +829,7 @@ const drawerStyles = css`
       width: 100%;
     }
 
-    .run-activity-summary {
+    .run-activity-filter-row .run-activity-summary {
       display: none;
     }
 
@@ -1692,10 +1716,18 @@ function formatAccounting(accounting: NonNullable<RunActivityViewModel['accounti
   ].filter((detail): detail is string => detail != null);
   if (tokenDetails.length > 0) parts.push(tokenDetails.join(', '));
   if (accounting.costStatus !== 'unknown') {
-    parts.push(`$${accounting.knownCostUsd.toFixed(6)}${accounting.costStatus === 'partial' ? ' partial' : ''}`);
+    parts.push(
+      `${formatCost(accounting)} (LLM: ${formatCost(accounting.llmCost)} + Decision AI: ${formatCost(accounting.decisionAICost)})`,
+    );
   }
   if (accounting.incomplete) parts.push('retained evidence only');
   return parts.join(' · ');
+}
+
+function formatCost(cost: RunActivityCostSummary): string {
+  return cost.costStatus === 'unknown'
+    ? 'unknown'
+    : `$${cost.knownCostUsd.toFixed(6)}${cost.costStatus === 'partial' ? ' partial' : ''}`;
 }
 
 function toDomId(value: string): string {

@@ -6,6 +6,7 @@ import {
   buildAgentResponseTrace,
   mergeAgentTraceEvent,
   isAgentResponseTrace,
+  summarizeAgentResponseCosts,
   type AgentTraceEvent,
   type GraphExecutionMetadata,
   type GraphId,
@@ -681,6 +682,58 @@ void describe('AgentResponseTrace', () => {
 
     assert.equal(trace.summary.costStatus, 'unknown');
     assert.equal(trace.summary.knownCostUsd, 0);
+  });
+
+  void it('never counts an amount whose pricing is explicitly unknown', () => {
+    const trace = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      events: [modelEvent(), modelEvent({ pricing: { status: 'unknown', costUsd: 100 } })],
+      status: 'completed',
+    });
+    assert.equal(trace.summary.knownCostUsd, 0.01);
+    assert.equal(trace.summary.costStatus, 'partial');
+    assert.equal(isAgentResponseTrace(trace), true);
+  });
+
+  void it('cost-only accounting handles unusable receipts, genuine zero and unrepresentable sums', () => {
+    for (const costUsd of [undefined, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      assert.deepEqual(
+        summarizeAgentResponseCosts([modelEvent(), modelEvent({ pricing: { status: 'known', costUsd } })], []),
+        { knownCostUsd: 0.01, costStatus: 'partial' },
+      );
+      assert.deepEqual(
+        summarizeAgentResponseCosts(
+          [modelEvent()],
+          [
+            profileAttemptEvent({
+              family: 'classifier',
+              stage: 'request',
+              attemptIndex: 0,
+              classifierUsage: { inputTokens: 1, outputTokens: 0, estimatedCostUsd: costUsd },
+            }),
+          ],
+        ),
+        { knownCostUsd: 0.01, costStatus: 'partial' },
+      );
+    }
+    assert.deepEqual(summarizeAgentResponseCosts([], []), { knownCostUsd: 0, costStatus: 'unknown' });
+    assert.deepEqual(summarizeAgentResponseCosts([modelEvent({ pricing: { status: 'known', costUsd: 0 } })], []), {
+      knownCostUsd: 0,
+      costStatus: 'known',
+    });
+    const overflowing = buildAgentResponseTrace({
+      scope: 'response',
+      execution,
+      status: 'completed',
+      events: [
+        modelEvent({ pricing: { status: 'known', costUsd: Number.MAX_VALUE } }),
+        modelEvent({ pricing: { status: 'known', costUsd: Number.MAX_VALUE } }),
+      ],
+    });
+    assert.equal(overflowing.summary.costStatus, 'unknown');
+    assert.equal(overflowing.summary.knownCostUsd, 0);
+    assert.equal(isAgentResponseTrace(overflowing), true);
   });
 
   void it('keeps fallback-chain traces valid across retries, skipped profiles, and sticky rounds', () => {
