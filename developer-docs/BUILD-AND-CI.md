@@ -1385,6 +1385,14 @@ It also audits the same lockfile without those ignores before the normal audit,
 so a temporary Rust exception that no longer matches an advisory fails CI and
 must be removed. Remove it as soon as a compatible fix is available.
 
+The November 9, 2026 SQLite repair upgrades the native evaluation-store dependency
+to `rusqlite 0.41.1` / `libsqlite3-sys 0.39.1`, bundling SQLite 3.54.1. This fixes
+[RUSTSEC-2026-0459](https://github.com/rustsec/advisory-db/blob/main/crates/libsqlite3-sys/RUSTSEC-2026-0459.md)
+without an ignore. The desktop's minimum Rust version is 1.89, matching the new
+rusqlite line; desktop CI already uses stable Rust. The existing evaluation-store
+transaction/import tests also check the actual SQLite runtime is at least 3.54.0.
+Keep that runtime check, the lockfile and the fresh unfiltered audit together.
+
 The November 2, 2026 ZIP re-review is deliberately limited to registry `zip 0.6.6`
 with registry `tauri 1.8.3` as its sole consumer. The exception checker pins both
 crate checksums, rejects extra consumers/versions in the generated Cargo lockfile,

@@ -599,6 +599,8 @@ History navigation activates existing tabs and restores their live content,
 graph-view context and saved viewport; it never reloads an intact tab from disk.
 Closed projects and removed graphs are skipped. Manual tab selection continues
 to restore that project's own history; saved project history excludes foreign entries.
+History actions expose void callbacks through the shared async-error wrapper, so
+toolbar clicks and keyboard shortcuts report failures without unhandled rejections.
 
 External Subgraph callers retain **Go to subgraph** and **Rearrange inputs/outputs**.
 Port-reorder availability uses the caller's saved target boundary when present,

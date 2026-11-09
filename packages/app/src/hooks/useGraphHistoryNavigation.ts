@@ -6,6 +6,7 @@ import { useLoadGraph } from './useLoadGraph.js';
 import { useLoadProject } from './useLoadProject.js';
 import { useStableCallback } from './useStableCallback.js';
 import { getProjectActivationRevision } from '../utils/projectActivationCoordinator.js';
+import { wrapAsync } from '../utils/errorHandling.js';
 import {
   getGraphNavigationAvailability,
   resolveNavigationTarget,
@@ -79,8 +80,8 @@ export const useGraphHistoryNavigation = () => {
   });
 
   return {
-    navigateBack: () => navigate('backward'),
-    navigateForward: () => navigate('forward'),
+    navigateBack: wrapAsync(() => navigate('backward'), 'Could not navigate to the previous graph'),
+    navigateForward: wrapAsync(() => navigate('forward'), 'Could not navigate to the next graph'),
     hasForward: !pending && hasForward,
     hasBackward: !pending && hasBackward,
   };

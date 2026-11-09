@@ -252,6 +252,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundled_sqlite_includes_wal_page_size_fix() {
+        assert!(
+            rusqlite::version_number() >= 3_054_000,
+            "Evaluation storage requires SQLite 3.54.0 or newer (CVE-2026-119375)"
+        );
+    }
+
+    #[test]
     fn migration_entries_use_camel_case_json_fields() {
         let entry: EvaluationStoreEntry =
             serde_json::from_str(r#"{"key":"runs","value":"[]"}"#).unwrap();
