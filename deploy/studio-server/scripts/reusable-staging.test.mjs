@@ -38,6 +38,61 @@ import {
 import { autoscalerPolicy, autoscalerPolicyDigest } from './lib/execution-autoscaler.mjs';
 import { qualificationExecutionBaseline } from './lib/ha-release-evidence.mjs';
 
+test('provider dependencies reserve measured capacity without capping bursts or overlapping PVC writers', async () => {
+  const created = [],
+    ready = [];
+  const namespace = 'rivet-staging-dependency-fixture';
+  const gate = {
+    config: { namespace },
+    settings: {
+      postgresImage: 'registry.test/postgres@sha256:' + 'a'.repeat(64),
+      objectStorageImage: 'registry.test/minio@sha256:' + 'b'.repeat(64),
+      storageClassName: 'staging-storage',
+    },
+    operation: { installed: { qualificationValues: { postgres: { maxConnections: 307 } } } },
+    state: {},
+    assertProofContext: async () => {},
+    kube: async (args, options) => {
+      if (args[0] === 'create')
+        created.push(parseAllDocuments(options.input).flatMap((d) => d.toJS().items ?? d.toJS()));
+      else {
+        assert.deepEqual(args.slice(0, 2), ['rollout', 'status']);
+        ready.push(args[2]);
+      }
+    },
+  };
+  await ReusableProviderGate.prototype.installDependencies.call(gate);
+  const objects = created.flat();
+  const dependencies = objects.filter((r) => r.kind === 'Deployment');
+  assert.deepEqual(dependencies.map((r) => r.metadata.name).sort(), ['release-gate-minio', 'release-gate-postgres']);
+  for (const item of dependencies) {
+    const pod = item.spec.template.spec,
+      container = pod.containers[0];
+    assert.equal(item.metadata.namespace, namespace);
+    assert.equal(item.spec.replicas, 1);
+    assert.deepEqual(item.spec.strategy, { type: 'Recreate' });
+    assert.deepEqual(container.resources, { requests: { cpu: '250m', memory: '1Gi' } });
+    assert.equal(pod.nodeSelector, undefined);
+    assert.equal(pod.tolerations, undefined);
+    assert.equal(pod.volumes[0].persistentVolumeClaim.claimName, item.metadata.name);
+    const claim = objects.find((r) => r.kind === 'PersistentVolumeClaim' && r.metadata.name === item.metadata.name);
+    assert.deepEqual(claim.spec, {
+      accessModes: ['ReadWriteOnce'],
+      storageClassName: gate.settings.storageClassName,
+      resources: { requests: { storage: '2Gi' } },
+    });
+  }
+  const postgres = dependencies.find((r) => r.metadata.name === 'release-gate-postgres').spec.template.spec
+    .containers[0];
+  assert.equal(postgres.image, gate.settings.postgresImage);
+  assert.deepEqual(postgres.args, ['postgres', '-c', 'max_connections=307']);
+  assert.equal(
+    dependencies.find((r) => r.metadata.name === 'release-gate-minio').spec.template.spec.containers[0].image,
+    gate.settings.objectStorageImage,
+  );
+  assert.deepEqual(ready, ['deployment/release-gate-postgres', 'deployment/release-gate-minio']);
+});
+
 test('focused paired qualification starts three workers when the approved ceiling covers both pools', () => {
   const paired = { qualification: { tier: 'focused' }, executionPools: true, policy: { maxReplicas: 7 } };
   assert.equal(qualificationExecutionBaseline(paired), 3);
@@ -380,7 +435,20 @@ test('retained staging validates database capacity and refreshes only its bound 
   };
   const database = {
     metadata: { generation: 2 },
-    spec: { replicas: 1, template: { spec: { containers: [{ args: ['postgres', '-c', 'max_connections=200'] }] } } },
+    spec: {
+      replicas: 1,
+      strategy: { type: 'Recreate' },
+      template: {
+        spec: {
+          containers: [
+            {
+              args: ['postgres', '-c', 'max_connections=200'],
+              resources: { requests: { cpu: '250m', memory: '1Gi' } },
+            },
+          ],
+        },
+      },
+    },
     status: { observedGeneration: 2, replicas: 1, updatedReplicas: 1, readyReplicas: 1 },
   };
   objects.set(`/apis/apps/v1/namespaces/${gate.config.namespace}/deployments/release-gate-postgres`, database);
@@ -401,6 +469,15 @@ test('retained staging validates database capacity and refreshes only its bound 
   await assert.rejects(gate.retainedSecrets(), /Prepare the retained staging PostgreSQL/);
   database.spec.template.spec.containers[0].args[2] = 'max_connections=305';
   await gate.retainedSecrets();
+  for (const requests of [
+    { cpu: '250m', memory: '1Gi' },
+    { cpu: '500m', memory: '2Gi' },
+  ]) {
+    database.spec.template.spec.containers[0].resources = { requests };
+    const original = structuredClone(database);
+    await gate.retainedSecrets();
+    assert.deepEqual(database, original, 'Reuse must accept both resource profiles without changing the database');
+  }
   gate.operation.installed.qualificationValues.ha.executionPools.maxSurgeReplicas = 0;
   database.spec.template.spec.containers[0].args[2] = 'max_connections=200';
   await gate.retainedSecrets();

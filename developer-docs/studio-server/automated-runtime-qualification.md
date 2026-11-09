@@ -914,6 +914,25 @@ count when the reviewed provider installation has one proxy.
 
 ### Optional retained application
 
+Provider PostgreSQL and MinIO fixtures request **250m CPU / 1 GiB RAM each**,
+replacing GKE's implicit 500m / 2 GiB defaults. CPU and memory remain uncapped for
+bursts. This staging-only profile leaves headroom above measured fixture usage;
+it does not change production storage/database settings or application resources.
+Both Deployments use `Recreate` to prevent overlapping writers on their existing
+ReadWriteOnce PVCs during a template update.
+
+Ordinary retained rollouts reuse these stores without reapplying their templates.
+Both the older and smaller reservations remain acceptable: reuse checks database
+connection capacity and readiness, without requiring an exact resource profile or
+automatic resizing. Adoption on an existing installation is separate idle
+maintenance under the shared staging lock, after accepted work settles. Preview
+admission, retain the original settings for recovery and replace one store at a
+time, preserving images, credentials, PostgreSQL's connection allowance and PVC
+identities. Allow clients to regain readiness, verify data access and let any
+autoscaler recovery finish before qualification. These restarts can briefly affect
+staging readiness; they do not belong inside the ordinary rollout. Reconcile an
+uncertain write by reading its state rather than replaying the update.
+
 The persistence fixture publishes its project, configures its isolated dummy OAuth
 provider and allowlisted test account, and obtains a web-app session **before**
 reading HTML or submitting actions. This order applies to fresh and retained

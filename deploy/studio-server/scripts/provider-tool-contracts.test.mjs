@@ -622,6 +622,13 @@ for (const fault of ['none', 'admission', 'lost-ack', 'interrupt'])
       const preparing = withManagedGateSignal(cancellation.signal, () => phase('prepare'));
       if (fault === 'none') {
         await preparing;
+        for (const name of ['release-gate-postgres', 'release-gate-minio']) {
+          const dependency = f.objects.get(`/apis/apps/v1/namespaces/${namespace}/deployments/${name}`);
+          assert.deepEqual(dependency.spec.strategy, { type: 'Recreate' });
+          assert.deepEqual(dependency.spec.template.spec.containers[0].resources, {
+            requests: { cpu: '250m', memory: '1Gi' },
+          });
+        }
         const execution = [...f.objects.values()].find(
           (resource) =>
             resource.kind === 'StatefulSet' &&
