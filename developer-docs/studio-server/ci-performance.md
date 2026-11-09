@@ -145,6 +145,24 @@ signing/notarization, desktop download publication and Pages deployment passed
 once GitHub assigned the runner. No packaging-code change was needed for this
 recovery.
 
+The following code push, `7dc43e2d1`, encountered the same provider issue in
+[Developer Desktop Release 42680470866](https://github.com/valerypopoff/rivet2.0/actions/runs/42680470866).
+Its Apple Silicon job `129380106284` waited from 19:20:26 to 19:35:27 UTC without
+an assigned runner or any executed steps. The check explicitly reported failure
+to acquire a hosted runner and macOS arm64 capacity constraints. Build
+`42680471172`, Studio Server verification `42680470834`, Windows packaging and
+Intel macOS packaging all passed. This is another runner-allocation failure,
+not evidence of a regression in the graph deletion, bundle diagnostics or cost
+accounting changes. Recover only the unstarted job once; record the outcome
+before advancing the branch. An unrelated source change or another full build
+cannot repair unavailable hosted capacity.
+
+The single targeted recovery (attempt 2) completed successfully at 20:00:55 UTC
+on November 9, at the same `7dc43e2d1` source. Apple Silicon packaging, signing,
+notarization and executor checks passed. Publication also passed after the
+existing bounded Pages retry recovered a deployment timeout. This recovery
+required no application or packaging-code change.
+
 The repository-contract lane uses a filtered, shallow checkout that excludes only
 five exact native desktop pnpm executable paths under `packages/app/sidecars/pnpm/`.
 No wildcard excludes future source or metadata with a similar name.
