@@ -644,6 +644,10 @@ export class ReusableProviderGate extends RuntimeControlLocalGate {
       const pod = item.spec.template.spec;
       delete pod.nodeSelector;
       delete pod.tolerations;
+      // These single-writer stores keep their PVCs between tests. Reserve
+      // measured capacity instead of Autopilot defaults, while allowing bursts.
+      item.spec.strategy = { type: 'Recreate' };
+      pod.containers[0].resources = { requests: { cpu: '250m', memory: '1Gi' } };
       const pg = item.metadata.name === 'release-gate-postgres';
       pod.containers[0].image = pg ? this.settings.postgresImage : this.settings.objectStorageImage;
       if (this.settings.registrySecret) pod.imagePullSecrets = [{ name: 'rivet-release-gate-registry' }];
