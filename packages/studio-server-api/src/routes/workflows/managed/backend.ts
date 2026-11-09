@@ -1,4 +1,5 @@
 import type { WorkflowRecordingPageQuery } from '../data-backend.js';
+import type { ProjectReferenceQuery } from './reference-index.js';
 import type { PreparedProjectBundleImport } from '../project-bundle-import.js';
 import { importManagedProjectBundle } from './bundle-import.js';
 import { createManagedBundleService } from './bundles.js';
@@ -359,6 +360,10 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   }
   async listWorkflowProjectReferenceCatalog() {
     return this.#catalog.listWorkflowProjectReferenceCatalog();
+  }
+
+  async readIndexedProjectReferences(query: ProjectReferenceQuery) {
+    return this.#catalog.readIndexedProjectReferences(query);
   }
 
   async getLLMProfileHealthStore() {

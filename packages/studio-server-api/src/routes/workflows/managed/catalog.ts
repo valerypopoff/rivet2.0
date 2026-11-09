@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readIndexedProjectReferences, type ProjectReferenceQuery } from './reference-index.js';
 
 import type {
   WorkflowFolderItem,
@@ -439,6 +440,11 @@ export function createManagedWorkflowCatalogService(options: ManagedWorkflowCata
         operation: 'upload-project',
         input: { parentRelativePath: folderPath(folderRelativePath, true), fileName, contents },
       });
+    },
+
+    async readIndexedProjectReferences(query: ProjectReferenceQuery) {
+      await deps.initialize();
+      return readIndexedProjectReferences(deps.pool, query);
     },
 
     async listWorkflowProjectReferenceCatalog() {

@@ -6,6 +6,29 @@ import { createManagedWorkflowRevisionFactory } from '../routes/workflows/manage
 import type { RecordingInsertRowData } from '../routes/workflows/managed/types.js';
 import { createBlankProjectFile } from '../routes/workflows/fs-helpers.js';
 
+test('revision attachment stores reference metadata atomically and invalid projects stay saveable', async () => {
+  const factory = createManagedWorkflowRevisionFactory({
+    blobStore: { putText: async () => {} } as never,
+    queueObjectDeletions: async () => 0,
+  });
+  for (const contents of [createBlankProjectFile('References'), 'invalid yaml project']) {
+    const revision = await factory.createRevision('owner', contents, null);
+    assert.equal(revision.reference_summary?.state, contents === 'invalid yaml project' ? 'invalid' : 'complete');
+    const queries: Array<{ sql: string; values: unknown[] }> = [];
+    await factory.insertRevision(
+      {
+        query: async (sql: string, values: unknown[]) => {
+          queries.push({ sql, values });
+        },
+      } as never,
+      revision,
+    );
+    assert.equal(queries.length, 1);
+    assert.match(queries[0]!.sql, /reference_summary/);
+    assert.deepEqual(JSON.parse(queries[0]!.values[7] as string), revision.reference_summary);
+  }
+});
+
 function createRevisionForCleanupTest() {
   return {
     project_blob_key: 'blob-a',

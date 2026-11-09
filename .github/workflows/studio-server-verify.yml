@@ -392,6 +392,9 @@ jobs:
       - name: Verify compiled migrations on PostgreSQL
         if: matrix.lane == 'managed'
         run: yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs
+      - name: Verify incoming references and resumable backfill on PostgreSQL
+        if: matrix.lane == 'managed'
+        run: yarn workspace @valerypopoff/rivet-studio-server-api run test:references-managed
       - name: Verify async endpoint completion with managed storage
         if: matrix.lane == 'managed'
         run: yarn workspace @valerypopoff/rivet-studio-server-api run test:async-managed

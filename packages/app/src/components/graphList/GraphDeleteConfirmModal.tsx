@@ -8,6 +8,7 @@ import type { GraphDeletionRequest } from './graphDeletion.js';
 import { AppModalHeader } from '../AppModalHeader.js';
 import { useSubgraphProjectCatalog, type SubgraphProjectCatalogProvider } from '../../providers/ProvidersContext.js';
 import { openedProjectSnapshotsState, projectUnsavedChangesState, projectState } from '../../state/savedGraphs.js';
+import { describeReferenceCoverage } from '../../../../studio-server-shared/workflow-reference-diagnostics.js';
 
 type Check = Awaited<ReturnType<NonNullable<SubgraphProjectCatalogProvider['graphReferences']>>>;
 
@@ -74,11 +75,11 @@ export function GraphDeleteConfirmModal({
                 : { error: 'The project changed. Close this dialog and review again.' },
             );
         },
-        () => {
+        (error: unknown) => {
           clearTimeout(timeout);
           if (!controller.signal.aborted)
             setCheck({
-              error: 'Could not check incoming graph references. Other projects may depend on these graphs.',
+              error: `Could not check incoming graph references. ${error instanceof Error ? error.message : 'Other projects may depend on these graphs.'}`,
             });
         },
       );
@@ -156,7 +157,10 @@ export function GraphDeleteConfirmModal({
               )}
               {check?.error && <p role="alert">{check.error}</p>}
               {incomplete && (
-                <p role="alert">The reference check is incomplete. Missing results do not mean deletion is safe.</p>
+                <p role="alert">
+                  The reference check is incomplete. {check?.result ? describeReferenceCoverage(check.result) : ''}{' '}
+                  Missing results do not mean deletion is safe.
+                </p>
               )}
             </section>
           )}

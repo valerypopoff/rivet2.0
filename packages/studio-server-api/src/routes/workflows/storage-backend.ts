@@ -1,5 +1,7 @@
 import { createLegacyWorkflowCommands } from './legacy-workflow-commands.js';
 import { workflowFailure } from './workflow-failure.js';
+import type { ProjectReferenceQuery } from './managed/reference-index.js';
+import { REFERENCE_QUERY_TIMEOUT_MS } from './managed/reference-query.js';
 import { constants as fsConstants } from 'node:fs';
 import { isVmMigrationMaintenanceActive } from '../../vm-migration-maintenance.js';
 import fs from 'node:fs/promises';
@@ -290,6 +292,48 @@ const legacyCommands = createLegacyWorkflowCommands({
   resetFilesystemLLMProfileHealthForProject,
   getEvaluationStore,
 });
+
+let indexedReferenceChecks = 0;
+export async function readIndexedProjectReferencesWithBackend(query: ProjectReferenceQuery) {
+  if (!usesManagedNamespace()) return null;
+  query.signal.throwIfAborted();
+  if (indexedReferenceChecks >= 2) throw createHttpError(503, 'Reference checks are busy. Try again shortly.');
+  indexedReferenceChecks++;
+  const deadline = Date.now() + REFERENCE_QUERY_TIMEOUT_MS;
+  const bounded = AbortSignal.any([query.signal, AbortSignal.timeout(REFERENCE_QUERY_TIMEOUT_MS)]);
+  // Include shared backend initialization in the request budget. Its lifecycle
+  // remains owned by storage services even if this caller stops waiting.
+  const work = delegate(
+    'projects',
+    async (backend) => {
+      bounded.throwIfAborted();
+      if (!backend.readIndexedProjectReferences)
+        throw createHttpError(503, 'Indexed reference checking is unavailable.');
+      return backend.readIndexedProjectReferences({ ...query, signal: bounded });
+    },
+    async () => null,
+  ).finally(() => {
+    indexedReferenceChecks--;
+  });
+  let abort: () => void = () => {};
+  try {
+    const result = await new Promise<Awaited<typeof work>>((resolve, reject) => {
+      abort = () => reject(bounded.reason);
+      bounded.addEventListener('abort', abort, { once: true });
+      work.then(resolve, reject);
+      if (bounded.aborted) abort();
+    });
+    query.signal.throwIfAborted();
+    if (Date.now() >= deadline) throw createHttpError(503, 'Reference checking timed out. Try again shortly.');
+    return result;
+  } catch (error) {
+    query.signal.throwIfAborted();
+    if (bounded.aborted) throw createHttpError(503, 'Reference checking timed out. Try again shortly.');
+    throw error;
+  } finally {
+    bounded.removeEventListener('abort', abort);
+  }
+}
 
 async function delegateWithWorkflowsRoot<T, K extends keyof WorkflowRepositories>(
   repository: K,

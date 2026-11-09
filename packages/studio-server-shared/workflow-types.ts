@@ -1,3 +1,5 @@
+import type { WorkflowReferenceIncompleteReason } from './workflow-reference-diagnostics.js';
+
 export type WorkflowProjectStatus = 'unpublished' | 'published' | 'unpublished_changes';
 export type WorkflowEndpointAccess = 'public' | 'internal';
 export type WorkflowProjectDownloadVersion = 'live' | 'published';
@@ -202,6 +204,8 @@ export type WorkflowProjectReferencesResponse = {
     source: WorkflowProjectReferenceSource;
   }>;
   graphReferencesTruncated?: boolean;
+  /** Optional on older/legacy servers. Coverage is as of one committed database snapshot. */
+  incompleteReasons?: WorkflowReferenceIncompleteReason[];
 };
 
 export const WORKFLOW_ENDPOINT_MAIN_GRAPH_REQUIRED_MESSAGE = 'Choose a Main Graph before publishing this endpoint.';

@@ -16,7 +16,7 @@ assert.equal(version, Number(process.env.RIVET_SCHEMA_PROBE_VERSION), 'Probe use
 if (process.env.RIVET_SCHEMA_PROBE_ROLE === 'candidate') {
   assert.equal(migrations.ROLLING_SCHEMA_LOCK_TIMEOUT_MS, 1000, 'Unqualified rolling lock budget');
   assert.equal(migrations.ROLLING_SCHEMA_STATEMENT_TIMEOUT_MS, 5000, 'Unqualified rolling statement budget');
-  assert.equal(migrations.MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === 18)?.rollingSafe, true);
+  assert.equal(migrations.MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === version)?.rollingSafe, true);
 }
 const pool = new Pool({
   host: 'release-gate-postgres',
@@ -37,6 +37,7 @@ try {
     role: process.env.RIVET_SCHEMA_PROBE_ROLE,
     runId: process.env.RIVET_SCHEMA_PROBE_ID,
     version,
+    targetVersion: Number(process.env.RIVET_SCHEMA_PROBE_TARGET),
   });
   console.log(`RIVET_SCHEMA_PROBE_RESULT ${JSON.stringify(result)}`);
 } finally {

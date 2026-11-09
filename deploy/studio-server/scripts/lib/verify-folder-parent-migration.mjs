@@ -97,13 +97,22 @@ export async function verifyFolderParentMigration(pool, { migrations, migrate, v
     await pool.query('DELETE FROM workflow_folders WHERE relative_path=$1', [invalid]);
   }
   const migrated = await migrate(pool);
-  const forwardVersions = migrations.filter((migration) => migration.version > 16).map((migration) => migration.version);
+  const forwardVersions = migrations
+    .filter((migration) => migration.version > 16)
+    .map((migration) => migration.version);
   assert.equal(forwardVersions[0], 17, 'The upgrade must still exercise the folder-parent repair.');
   assert.deepEqual(migrated, { currentVersion: forwardVersions.at(-1), appliedVersions: forwardVersions });
   await verify(pool, options);
   assert.deepEqual(
     await snapshot(),
-    saved,
+    forwardVersions.includes(19)
+      ? {
+          ...saved,
+          workflow_revisions: saved.workflow_revisions.map(({ value }) => ({
+            value: { ...value, reference_summary: null },
+          })),
+        }
+      : saved,
     'Repair must preserve saved revisions, datasets, identities and publications.',
   );
   assert.equal((await pool.query('SELECT value FROM unrelated_application_sentinel')).rows[0].value, 'keep');

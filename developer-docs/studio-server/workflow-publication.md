@@ -360,7 +360,21 @@ Subgraph traversal across all graphs, excludes disabled calls and the selected p
 repeated version choices within a snapshot. It does not execute graphs or scan archived publications, recordings,
 unsaved browser edits, or transitive connections. It does not change publication status or block deletion.
 
-All three backends expose metadata-only catalog enumeration and project-only snapshot reads. Normal reads do not
+Managed storage uses versioned reference summaries attached atomically to immutable revisions (schema 19).
+The request joins current draft/endpoint/web-app pointers in one PostgreSQL snapshot, filters matches in SQL,
+and downloads no project blobs. Missing/outdated/invalid summaries produce a prompt partial review with reasons
+and checked-project counts. Existing active revisions are populated by the separately invoked
+[bounded backfill](./graph-reference-check-plan.md#operating-the-backfill); neither API startup nor a Delete click runs it.
+Backfill retains PostgreSQL's exact previous summary value for conditional writes,
+including literal JSON `null` and large numeric fields. Its final active coverage
+determines readiness; earlier failed reads remain reported when a concurrent
+writer has already repaired or retired the affected revision.
+The managed lookup has a five-second budget, two admitted checks per process, bounded pool acquisition,
+transaction-local SQL timeouts and connection disposal on cancellation. It returns at most 1,000 reference sites,
+with a 2 MiB SQL matching-row budget; exceeding either reports `result-limit`, never a complete empty result.
+Completeness describes committed revision contents, not a new integrity scan of every object in storage.
+
+SQLite and legacy filesystem storage retain metadata-only catalog enumeration and project-only snapshot reads. Normal reads do not
 load datasets or historical project payloads. The filesystem's legacy missing-snapshot fallback may read a dataset
 to verify that the saved project still matches the published hash, using the existing runtime resolution policy.
 A per-API-process single-scan guard, a 1,000-caller limit,
@@ -373,6 +387,9 @@ deletion proof: users should review it just before deleting and retain a backup.
 
 ## Incoming graph connections before graph/folder deletion
 
+The [fast reference-check design and operating notes](./graph-reference-check-plan.md)
+describe the managed summary writer, lookup, local validation and separately approved backfill.
+
 The editor uses `GraphDeleteConfirmModal` for individual graphs and folders. It
 asks the optional Subgraph catalog host's `graphReferences` method before
 enabling confirmation. Studio Server reuses the authenticated incoming-project
@@ -381,8 +398,9 @@ optional `relativePath`). The JSON body avoids proxy URL limits for large folder
 The original whole-project GET remains supported. Filtered results
 add `graphReferences`: caller project/path, source graph/node, caller snapshot and
 target version. Without a graph filter, the old project-level response remains
-unchanged. Stable-ID lookup rejects ambiguous identities. No new reverse index,
-database schema, graph execution or server save prohibition is introduced.
+unchanged apart from optional coverage diagnostics. Stable-ID lookup rejects ambiguous identities.
+The managed backend uses its revision summaries; SQLite/filesystem hosts retain their scan.
+Neither path executes graphs or prohibits project saves because of an advisory extraction failure.
 For legacy filesystem catalogs without indexed IDs, the host resolves a fresh
 unique tree path and retries with both path and expected ID; ambiguous/missing
 matches are failed checks, never arbitrary selections.
@@ -395,12 +413,17 @@ This rule applies to both the server scan and open editor snapshots. It does not
 repair missing definitions or change execution behavior; malformed projects,
 storage failures, identity mismatches and scan limits still produce incomplete results.
 Saved drafts and active
-endpoint/web-app publications are scanned, not datasets, recordings, archived
-history or transitive callers. Existing 1,000-project/30-second between-read limits
-remain; graph details are capped at 1,000 sites and input at 500 graph IDs. Limits,
+endpoint/web-app publications are inspected, not datasets, recordings, archived
+history or transitive callers. SQLite/filesystem scans retain the 1,000-project/30-second between-read limits;
+the managed lookup uses the bounded database path above. Graph details are capped at 1,000 sites and input at 500 graph IDs. Limits,
 unreadable callers and catalog drift yield incomplete results while preserving
-verified sites. Individual storage reads can exceed the server's between-read
-deadline; the modal has a 35-second request deadline and explicit retry.
+verified sites. Individual legacy storage reads can exceed the between-read deadline;
+the modal retains its 35-second watchdog for compatibility with those hosts and has explicit retry.
+Managed partial results describe missing/outdated reference indexing, invalid projects, or result limits,
+along with checked/total project counts. Graph and project-level extraction failures are independent:
+only the requested component determines caller coverage. Target validation checks its identity rather
+than its outgoing calls. PostgreSQL-incompatible text in advisory fields cannot make project saves fail;
+the affected summary component is marked unavailable while the original artifact is preserved.
 
 Dirty/unknown-save-state open editor snapshots add callers without hiding saved
 or published ones. While the server scan is pending, failed or incomplete, clean

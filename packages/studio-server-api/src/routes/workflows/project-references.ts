@@ -8,6 +8,7 @@ import type {
 import {
   listWorkflowProjectReferenceCatalogWithBackend,
   readWorkflowProjectReferenceSnapshotsWithBackend,
+  readIndexedProjectReferencesWithBackend,
 } from './storage-backend.js';
 
 const sortCatalog = (projects: WorkflowProjectReferenceCatalogEntry[]) =>
@@ -147,9 +148,12 @@ export async function listIncomingProjectReferences(
   signal: AbortSignal,
   graphIds?: readonly string[],
 ) {
-  if (scanning) throw createHttpError(503, 'Project references are already being checked. Try again shortly.');
-  scanning = true;
+  let ownsLegacyScan = false;
   try {
+    const indexed = await readIndexedProjectReferencesWithBackend({ relativePath, expectedProjectId, graphIds, signal });
+    if (indexed) return indexed;
+    if (scanning) throw createHttpError(503, 'Project references are already being checked. Try again shortly.');
+    scanning = ownsLegacyScan = true;
     return await scanIncomingProjectReferences({
       relativePath,
       expectedProjectId,
@@ -171,6 +175,6 @@ export async function listIncomingProjectReferences(
     if (error instanceof Error && 'status' in error) throw error;
     throw createHttpError(503, 'Project references could not be checked. Refresh and try again.');
   } finally {
-    scanning = false;
+    if (ownsLegacyScan) scanning = false;
   }
 }

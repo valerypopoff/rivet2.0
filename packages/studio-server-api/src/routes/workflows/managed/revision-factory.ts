@@ -14,7 +14,7 @@ import { getWorkflowRecordingConfig } from '../recordings-config.js';
 import { RECORDING_COLUMNS } from './mappers.js';
 import { resolveManagedHostedProjectSaveTarget } from './save-target.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
-import { getWorkflowProjectStatsFromContents } from '../project-stats.js';
+import { getWorkflowProjectIndexDataFromContents } from '../project-index.js';
 import type {
   ManagedRevisionContents,
   RecordingBlobArtifacts,
@@ -113,7 +113,7 @@ export function createManagedWorkflowRevisionFactory(options: {
       const revisionId = createManagedRevisionId();
       let projectBlobKey = createRevisionBlobKey(workflowId, revisionId, 'project');
       let datasetBlobKey = datasetsContents != null ? createRevisionBlobKey(workflowId, revisionId, 'dataset') : null;
-      const stats = getWorkflowProjectStatsFromContents(contents);
+      const { stats, referenceSummary } = getWorkflowProjectIndexDataFromContents(contents, null, true);
 
       const projectArtifact = options.blobStore.putArtifact
         ? await prepareManagedTextArtifact(projectBlobKey, contents)
@@ -149,6 +149,7 @@ export function createManagedWorkflowRevisionFactory(options: {
         stats_graph_count: stats.graphCount,
         stats_total_node_count: stats.totalNodeCount,
         stats_web_app_count: stats.webAppCount,
+        reference_summary: referenceSummary,
         created_at: new Date(),
       };
     },
@@ -158,9 +159,9 @@ export function createManagedWorkflowRevisionFactory(options: {
         `
           INSERT INTO workflow_revisions (
             revision_id, workflow_id, project_blob_key, dataset_blob_key,
-            stats_graph_count, stats_total_node_count, stats_web_app_count, created_at
+            stats_graph_count, stats_total_node_count, stats_web_app_count, reference_summary, created_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW())
         `,
         [
           revision.revision_id,
@@ -170,6 +171,7 @@ export function createManagedWorkflowRevisionFactory(options: {
           revision.stats_graph_count,
           revision.stats_total_node_count,
           revision.stats_web_app_count,
+          revision.reference_summary ? JSON.stringify(revision.reference_summary) : null,
         ],
       );
     },

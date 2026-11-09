@@ -151,7 +151,7 @@ function promoted(overrides = {}, options = {}) {
 
 test('release manifest reads the source-owned managed schema contract', () => {
   assert.deepEqual(readManagedWorkflowSchemaReleaseContract(rootDir), {
-    version: 18,
+    version: 19,
     minimumRollbackCompatibleVersion: 17,
   });
 });

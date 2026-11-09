@@ -9,7 +9,7 @@ import { MANAGED_NAMESPACE_SCHEMA_SQL } from './namespace-schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 18;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 19;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
@@ -28,6 +28,7 @@ const MANAGED_EVALUATION_PROJECTION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS eval
 `;
 
 const MANAGED_RECORDING_COST_SQL = 'ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS cost_json TEXT NULL;\n';
+const MANAGED_REFERENCE_SUMMARY_SQL = 'ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS reference_summary JSONB NULL;\n';
 
 const MANAGED_APP_SETTINGS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -450,6 +451,13 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_RECORDING_COST_SQL,
     checksum: 'b216f9e7df3fc2dd54f2c42f36999600a0aba3542eea2bb1b0406d428325cc9b',
   },
+  {
+    version: 19,
+    rollingSafe: true,
+    name: 'workflow-revision-reference-summary',
+    sql: MANAGED_REFERENCE_SUMMARY_SQL,
+    checksum: '3b7161d5e91aadf904bcc260e000bfee059a731be1428596837a3d70599493fe',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -724,6 +732,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
   ['workflow_revisions', 'stats_graph_count', 'int4', 'YES'],
   ['workflow_revisions', 'stats_total_node_count', 'int4', 'YES'],
   ['workflow_revisions', 'stats_web_app_count', 'int4', 'YES'],
+  ['workflow_revisions', 'reference_summary', 'jsonb', 'YES'],
   ['workflow_revisions', 'created_at', 'timestamptz', 'NO'],
   ['workflow_web_apps', 'app_id', 'text', 'NO'],
   ['workflow_web_apps', 'workflow_id', 'text', 'NO'],

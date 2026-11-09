@@ -603,8 +603,11 @@ rounds and the candidate's lock proof. During lock contention, both DDL and read
 rejections are observed immediately, even if the reader connection fails first;
 leases are released only after the accepted queries settle.
 
-The reviewed behavioral matrix currently covers **17 → 18**, because that change
-touches recording metadata. It does not certify arbitrary changes to projects,
+The reviewed behavioral matrix covers **17 → 18** (recording metadata) and
+**18 → 19** (nullable revision reference summaries). The latter additionally uses
+both image-owned revision writers and cross-reads, confirms NULL summaries from
+the predecessor and indexed summaries from the candidate, and tests contended
+DDL on `workflow_revisions`. It does not certify arbitrary changes to projects,
 publication, schedules or third-party SQL. Future expands must extend the matrix
 with their affected repositories and data, then receive their own exact-image
 qualification. New certificate creation and rolling admission reject missing,
@@ -622,7 +625,7 @@ then `yarn node deploy/studio-server/scripts/verify-managed-workflow-schema.mjs`
 The existing managed CI lane runs the real PostgreSQL migration/lock tests; no
 new CI job or cloud rehearsal is added. To exercise the same workers locally,
 set `RIVET_SCHEMA_PREDECESSOR_IMAGE` and `RIVET_SCHEMA_CANDIDATE_IMAGE` to cached
-immutable image IDs (17 and 18). The schema gate creates its own loopback-only DB
+immutable image IDs (18 and 19 for the current expansion). The schema gate creates its own loopback-only DB
 and internal network, runs both participants, and removes only those resources.
 Optional `RIVET_SCHEMA_PREDECESSOR_MODULES`/`RIVET_SCHEMA_CANDIDATE_MODULES` mount
 compiled diagnostic source trees; such a run is explicitly **not exact-release
@@ -644,7 +647,7 @@ schema 17 and the rollback-compatible floor remains 17, subject to the normal
 exact-image compatibility checks. A schema-18 binary must not serve against an
 unmigrated database because its recording queries require the new column.
 
-The checked-in Helm defaults must use the exact current schema (18), not the
+The checked-in Helm defaults must use the exact current schema (19), not the
 rollback floor (17), for both serving bounds. A release operation may widen the
 reader window only through the existing verified rollback procedure. Rollback
 values must not confuse a release's predecessor-compatibility floor with
@@ -653,7 +656,15 @@ reader bound and the already-migrated version is the upper bound. Chart
 rendering contracts compare migration commands with the API's current schema
 constant. Predecessor tests derive their newer-than-candidate rejection case from
 that constant; the disposable folder-repair gate still starts at schema 16 and
-asserts every forward migration, including 17's repair and 18's recording metadata.
+asserts every forward migration, including 17's repair, 18's recording metadata
+and 19's nullable reference summaries.
+
+Schema 19 adds nullable `workflow_revisions.reference_summary` for
+[fast incoming graph-reference checks](graph-reference-check-plan.md). New
+revisions attach it in the same SQL insert; old writers remain valid with NULL.
+The migration performs no object downloads or backfill. Missing active summaries
+produce a bounded partial review until the separately approved operator command
+repairs coverage. This does not alter revision blobs or publication pointers.
 
 Use the existing approved migration/deployment route: certify recovery backups,
 run the single migration owner, then start compatible serving images. Do not
