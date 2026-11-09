@@ -58,10 +58,118 @@ function fixture(version: 'latest' | 'published') {
   return { project: persisted, target, connections: persisted.graphs.main!.connections };
 }
 
+for (const { version, renamed } of [
+  { version: 'latest', renamed: false },
+  { version: 'published', renamed: false },
+  { version: 'latest', renamed: true },
+] as const) {
+  test(`external ${version}${renamed ? ' renamed' : ''} Subgraph context menu reorders caller outputs`, async ({
+    page,
+  }) => {
+    const { project, target } = fixture(version);
+    const second = registry.createDynamic('graphOutput');
+    second.data.id = 'second';
+    target.graphs.child!.nodes.push(second);
+    const call = project.graphs.main!.nodes.find((node) => node.id === 'external-call')! as SubGraphNode;
+    if (version === 'published' || renamed) call.data.targetBoundary = getGraphBoundary(target, 'child' as GraphId);
+    if (renamed) second.data.id = 'renamed second';
+    let saved: Project | undefined;
+    await page.route(
+      (url) => url.pathname.startsWith('/api/'),
+      (route) => route.fulfill({ status: 503, json: { error: 'Isolated context-menu fixture' } }),
+    );
+    await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({
+        json: {
+          root: '/workflows',
+          folders: [],
+          projects: [
+            {
+              id: 'caller',
+              projectMetadataId: 'caller',
+              name: 'External caller',
+              fileName: 'caller.rivet-project',
+              relativePath: 'caller.rivet-project',
+              absolutePath: '/workflows/caller.rivet-project',
+              updatedAt: '2026-11-09T00:00:00Z',
+              settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+            },
+          ],
+        },
+      }),
+    );
+    await page.route('**/api/projects/load', (route) =>
+      route.fulfill({
+        json: {
+          contents: serializeProject(project),
+          datasetsContents: null,
+          revisionId: null,
+        },
+      }),
+    );
+    await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=*', (route) =>
+      version === 'published'
+        ? route.fulfill({ status: 503, json: { error: 'Target temporarily unavailable; use saved boundary' } })
+        : route.fulfill({ json: { project: target } }),
+    );
+    await page.route('**/api/projects/save', (route) => {
+      saved = deserializeProject(route.request().postDataJSON().contents)[0];
+      return route.fulfill({ json: { path: '/workflows/caller.rivet-project', revisionId: null } });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await waitForDashboardReady(page);
+    await page.locator('.project-row', { hasText: 'External caller' }).dblclick();
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
+    const node = editor.locator('.node[data-nodeid="external-call"]');
+    await expect(node.locator('.output-port[data-portid="second"]')).toBeVisible();
+    if (renamed) {
+      await expect(node.locator('.output-port[data-portid="second"]').locator('..').locator('.port-label')).toHaveText(
+        'renamed second',
+      );
+    }
+    await node.locator('.node-title').click({ button: 'right' });
+    await expect(editor.locator('.context-menu-label-text', { hasText: /^Go to subgraph$/ })).toBeVisible();
+    await editor.locator('.context-menu-label-text', { hasText: /^Rearrange inputs\/outputs$/ }).click();
+    const output = (id: string) =>
+      node.locator(`[data-reorder-portid="${id}"][data-reorder-portside="output"] .port-label`);
+    await output('second').dragTo(output('answer'), { targetPosition: { x: 5, y: 0 } });
+    await expect
+      .poll(() =>
+        node
+          .locator('[data-reorder-portside="output"]')
+          .evaluateAll((ports) => ports.map((port) => port.getAttribute('data-reorder-portid'))),
+      )
+      .toEqual(['second', 'answer']);
+    await page.keyboard.press('Escape');
+    await node.locator('.node-title').click();
+    await page.keyboard.press(`${modifier}+S`);
+    await expect
+      .poll(
+        () =>
+          (saved?.graphs.main!.nodes.find((node) => node.id === 'external-call') as SubGraphNode | undefined)?.data
+            .outputPortOrder,
+      )
+      .toEqual(['second', 'answer']);
+    expect(saved!.graphs.main!.connections).toEqual(project.graphs.main!.connections);
+    const savedCall = saved!.graphs.main!.nodes.find((node) => node.id === 'external-call')! as SubGraphNode;
+    expect(savedCall.data.targetProjectId).toBe(call.data.targetProjectId);
+    expect(savedCall.data.targetVersion).toBe(version);
+    expect(savedCall.data.targetBoundary).toEqual(call.data.targetBoundary);
+  });
+}
+
 test('Go to subgraph selects the external graph over remembered navigation on reopen and warm tabs', async ({
   page,
 }) => {
   const { project, target } = fixture('latest');
+  const previousNode = registry.createDynamic('text');
+  previousNode.id = 'caller-before-node' as typeof previousNode.id;
+  project.graphs['caller-before'] = {
+    metadata: { id: 'caller-before' as GraphId, name: 'Before' },
+    nodes: [previousNode],
+    connections: [],
+  };
   const mainNode = registry.createDynamic('text');
   mainNode.id = 'target-main-node' as typeof mainNode.id;
   mainNode.visualData = { x: 100, y: 200, width: 200 };
@@ -129,14 +237,49 @@ test('Go to subgraph selects the external graph over remembered navigation on re
   await expect(main).toBeVisible();
   await callerRow.dblclick();
   await expect(caller).toBeVisible();
+  await frame.locator('.graph-list').getByText('Before', { exact: true }).click();
+  await expect(frame.locator('.node[data-nodeid="caller-before-node"]')).toBeVisible();
+  await frame.locator('.graph-list').getByText('Main', { exact: true }).click();
+  await expect(caller).toBeVisible();
   await targetTab.hover();
   await targetTab.locator('.close-project').click();
   await expect(targetTab).toHaveCount(0);
+  const viewport = frame.locator('.canvas-node-contents');
+  const beforePan = await viewport.evaluate((element) => (element as HTMLElement).style.transform);
+  await caller.locator('.node-title').hover();
+  await page.mouse.wheel(70, 50);
+  await expect.poll(() => viewport.evaluate((element) => (element as HTMLElement).style.transform)).not.toBe(beforePan);
+  const callerViewport = await viewport.evaluate((element) => (element as HTMLElement).style.transform);
   await caller.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
   await expect(targetTab).toHaveClass(/\bactive\b/);
   await expect(child).toBeVisible();
   await expect(main).toHaveCount(0);
   expect(loads.get('/workflows/target.rivet-project')).toBe(2);
+
+  await page.keyboard.press('PageUp');
+  await expect(caller).toBeVisible();
+  await expect(callerTab).toHaveClass(/\bactive\b/);
+  await expect
+    .poll(() => viewport.evaluate((element) => (element as HTMLElement).style.transform))
+    .toBe(callerViewport);
+  await page.keyboard.press('PageUp');
+  await expect(frame.locator('.node[data-nodeid="caller-before-node"]')).toBeVisible();
+  await page.keyboard.press('PageDown');
+  await expect(caller).toBeVisible();
+  await page.keyboard.press('PageDown');
+  await expect(child).toBeVisible();
+  await expect(targetTab).toHaveClass(/\bactive\b/);
+  // Ordinary graph navigation extends the same trail in both directions.
+  await frame.locator('.graph-list').getByText('Target main', { exact: true }).click();
+  await expect(main).toBeVisible();
+  await page.keyboard.press('PageUp');
+  await expect(child).toBeVisible();
+  await page.keyboard.press('PageUp');
+  await expect(caller).toBeVisible();
+  await page.keyboard.press('PageDown');
+  await expect(child).toBeVisible();
+  await page.keyboard.press('PageDown');
+  await expect(main).toBeVisible();
 
   // Explicit saved-file reloads use the same target override, rather than
   // restoring the graph active just before the reload.
@@ -173,7 +316,12 @@ test('Go to subgraph selects the external graph over remembered navigation on re
   await expect(targetTab).toHaveClass(/has-unsaved-changes/);
   await callerTab.click();
   await expect(caller).toBeVisible();
-  await caller.getByRole('button', { name: 'Go to subgraph', exact: true }).click();
+  await caller.locator('.node-title').click({ button: 'right' });
+  await frame.locator('.context-menu-label-text', { hasText: /^Go to subgraph$/ }).click();
+  await expect(child).toBeVisible();
+  await page.keyboard.press('PageUp');
+  await expect(caller).toBeVisible();
+  await page.keyboard.press('PageDown');
   await expect(child).toBeVisible();
   await expect(main).toHaveCount(0);
   await expect(targetTab).toHaveClass(/has-unsaved-changes/);
@@ -211,6 +359,7 @@ test('Go to subgraph selects the external graph over remembered navigation on re
           preferredGraphId: 'removed-graph',
           expectedProjectId: 'external-project',
           requestId: 'missing-subgraph-regression',
+          recordGraphHistory: true,
           reloadFromDisk: true,
           replaceCurrent: false,
         },

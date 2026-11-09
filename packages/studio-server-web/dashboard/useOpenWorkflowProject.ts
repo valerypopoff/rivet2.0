@@ -8,7 +8,11 @@ import {
   type OpenedProjectsInfo,
   loadedProjectState,
   projectsState,
+  projectState,
 } from '../../app/src/state/savedGraphs';
+import { graphState } from '../../app/src/state/graph.js';
+import { graphNavigationStackState } from '../../app/src/state/graphBuilder.js';
+import { appendCrossProjectGraphNavigation } from '../../app/src/domain/graphEditing/navigationActions.js';
 import { useIOProvider, type RivetProjectSnapshotInput, type RivetWorkspaceHost } from '../../app/src/host';
 import { primeOpenedProjectSession } from '../io/openedProjectSessionCache';
 import { resolveHostedProjectTitle, withHostedProjectTitle } from './openedProjectMetadata';
@@ -26,6 +30,7 @@ type OpenWorkflowProjectOptions = {
   reloadFromDisk?: boolean;
   preferredGraphId?: GraphId;
   expectedProjectId?: ProjectId;
+  recordGraphHistory?: boolean;
   skipReplaceConfirmation?: boolean;
   previewTab?: boolean;
   openingTabId?: string;
@@ -82,6 +87,35 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
   const ioProvider = useIOProvider();
 
   return async (filePath: string, options?: OpenWorkflowProjectOptions): Promise<OpenWorkflowProjectResult> => {
+    const historySource = options?.recordGraphHistory
+      ? {
+          projectId: store.get(projectState).metadata.id,
+          graphId: store.get(graphState).metadata?.id,
+          navigationStack: store.get(graphNavigationStackState),
+        }
+      : undefined;
+    const recordGraphHistory = (projectId: ProjectId) => {
+      const graphId = store.get(graphState).metadata?.id;
+      if (
+        !historySource?.graphId ||
+        !graphId ||
+        historySource.projectId === projectId ||
+        store.get(projectState).metadata.id !== projectId ||
+        (options?.preferredGraphId != null && graphId !== options.preferredGraphId) ||
+        !store.get(projectsState).openedProjects[historySource.projectId]
+      )
+        return;
+      store.set(
+        graphNavigationStackState,
+        appendCrossProjectGraphNavigation({
+          navigationStack: historySource.navigationStack,
+          sourceProjectId: historySource.projectId,
+          sourceGraphId: historySource.graphId,
+          targetProjectId: projectId,
+          targetGraphId: graphId,
+        }),
+      );
+    };
     const replaceCurrent = options?.replaceCurrent ?? false;
     const reloadFromDisk = options?.reloadFromDisk ?? false;
     const preferredGraphId = options?.preferredGraphId;
@@ -170,6 +204,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
         if (tabUiOptions) {
           await workspace.setProjectTabUiState(alreadyOpenByPath.projectId, tabUiOptions.tabUi);
         }
+        recordGraphHistory(alreadyOpenByPath.projectId);
         return { opened: true, projectId: alreadyOpenByPath.projectId };
       }
 
@@ -236,6 +271,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
         fsPath: filePath,
         evaluation,
       });
+
+      recordGraphHistory(alreadyOpenByPath.projectId);
 
       return {
         opened: true,
@@ -324,6 +361,8 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       fsPath: filePath,
       evaluation,
     });
+
+    recordGraphHistory(projectId);
 
     return {
       opened: true,

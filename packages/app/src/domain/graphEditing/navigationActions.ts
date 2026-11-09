@@ -1,10 +1,12 @@
-import { type GraphId, type NodeId, type Project } from '@valerypopoff/rivet2-core';
+import { type GraphId, type NodeId, type Project, type ProjectId } from '@valerypopoff/rivet2-core';
 
 export type GraphViewKey = string;
 
 export type GraphViewContext = {
   key: GraphViewKey;
   graphId: GraphId;
+  /** Present in a cross-project navigation trail; legacy/local views remain unscoped. */
+  projectId?: ProjectId;
   parent?: {
     parentGraphId: GraphId;
     parentNodeId: NodeId;
@@ -57,10 +59,11 @@ export function createInitialGraphNavigationStack(options: {
 export function getGraphNavigationAvailability(
   stack: GraphNavigationStack,
   project?: Pick<Project, 'graphs'>,
+  getProject?: GraphHistoryProjectResolver,
 ) {
   return {
-    hasForward: findNavigationTargetIndex('forward', stack, project) != null,
-    hasBackward: findNavigationTargetIndex('backward', stack, project) != null,
+    hasForward: findNavigationTargetIndex('forward', stack, project, getProject) != null,
+    hasBackward: findNavigationTargetIndex('backward', stack, project, getProject) != null,
   };
 }
 
@@ -68,16 +71,18 @@ export function resolveNavigationTarget(options: {
   direction: 'backward' | 'forward';
   navigationStack: GraphNavigationStack;
   project: Pick<Project, 'graphs'>;
+  getProject?: GraphHistoryProjectResolver;
 }): { nextStack: GraphNavigationStack; targetGraphId: GraphId; targetView: GraphViewContext } | undefined {
   const { direction, navigationStack } = options;
-  const targetIndex = findNavigationTargetIndex(direction, navigationStack, options.project);
+  const targetIndex = findNavigationTargetIndex(direction, navigationStack, options.project, options.getProject);
   if (targetIndex == null) {
     return undefined;
   }
 
   const targetView = navigationStack.stack[targetIndex];
   const targetGraphId = targetView?.graphId;
-  if (!targetGraphId || !options.project.graphs[targetGraphId]) {
+  const targetProject = options.getProject ? options.getProject(targetView!) : options.project;
+  if (!targetGraphId || !targetProject?.graphs[targetGraphId]) {
     return undefined;
   }
 
@@ -95,6 +100,7 @@ function findNavigationTargetIndex(
   direction: 'backward' | 'forward',
   navigationStack: GraphNavigationStack,
   project?: Pick<Project, 'graphs'>,
+  getProject?: GraphHistoryProjectResolver,
 ): number | undefined {
   const currentIndex = navigationStack.index;
   if (currentIndex == null) {
@@ -103,11 +109,35 @@ function findNavigationTargetIndex(
 
   const step = direction === 'backward' ? -1 : 1;
   for (let index = currentIndex + step; index >= 0 && index < navigationStack.stack.length; index += step) {
-    const graphId = navigationStack.stack[index]?.graphId;
-    if (graphId && (!project || project.graphs[graphId])) {
+    const view = navigationStack.stack[index];
+    const graphId = view?.graphId;
+    const targetProject = view && getProject ? getProject(view) : project;
+    if (graphId && ((!project && !getProject) || targetProject?.graphs[graphId])) {
       return index;
     }
   }
 
   return undefined;
+}
+
+export type GraphHistoryProjectResolver = (view: GraphViewContext) => Pick<Project, 'graphs'> | undefined;
+
+/** Extend the caller's active trail only after a cross-project open succeeds. */
+export function appendCrossProjectGraphNavigation(options: {
+  navigationStack: GraphNavigationStack;
+  sourceProjectId: ProjectId;
+  sourceGraphId: GraphId;
+  targetProjectId: ProjectId;
+  targetGraphId: GraphId;
+}): GraphNavigationStack {
+  const { navigationStack, sourceProjectId, sourceGraphId, targetProjectId, targetGraphId } = options;
+  const stack = navigationStack.stack
+    .slice(0, (navigationStack.index ?? -1) + 1)
+    .map((view) => ({ ...view, projectId: view.projectId ?? sourceProjectId }));
+  const current = stack.at(-1);
+  if (current?.projectId !== sourceProjectId || current.graphId !== sourceGraphId) {
+    stack.push({ ...createRootGraphViewContext(sourceGraphId), projectId: sourceProjectId });
+  }
+  stack.push({ ...createRootGraphViewContext(targetGraphId), projectId: targetProjectId });
+  return { stack, index: stack.length - 1 };
 }

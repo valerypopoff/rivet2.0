@@ -1,12 +1,73 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { type GraphId } from '@valerypopoff/rivet2-core';
+import { type GraphId, type ProjectId, type NodeId } from '@valerypopoff/rivet2-core';
 import {
   createRootGraphViewContext,
   createInitialGraphNavigationStack,
   getGraphNavigationAvailability,
   resolveNavigationTarget,
+  appendCrossProjectGraphNavigation,
+  createSubgraphGraphViewContext,
 } from './navigationActions';
+
+test('cross-project history preserves caller context and truncates forward history', () => {
+  const caller = createSubgraphGraphViewContext({
+    graphId: 'shared' as GraphId,
+    parentGraphId: 'root' as GraphId,
+    parentNodeId: 'call' as NodeId,
+  });
+  const source = {
+    stack: [createRootGraphViewContext('root' as GraphId), caller, createRootGraphViewContext('discarded' as GraphId)],
+    index: 1,
+  };
+  const trail = appendCrossProjectGraphNavigation({
+    navigationStack: source,
+    sourceProjectId: 'a' as ProjectId,
+    sourceGraphId: 'shared' as GraphId,
+    targetProjectId: 'b' as ProjectId,
+    targetGraphId: 'shared' as GraphId,
+  });
+  assert.equal(source.stack.length, 3);
+  assert.equal(trail.stack.length, 3);
+  assert.equal(trail.index, 2);
+  assert.deepEqual(trail.stack[1], { ...caller, projectId: 'a' });
+  const project = { graphs: { shared: {} as never } };
+  const back = resolveNavigationTarget({
+    direction: 'backward',
+    navigationStack: trail,
+    project,
+    getProject: () => project,
+  });
+  assert.equal(back?.targetView.projectId, 'a');
+  assert.deepEqual(back?.targetView.parent, caller.parent);
+  const forward = resolveNavigationTarget({
+    direction: 'forward',
+    navigationStack: back!.nextStack,
+    project,
+    getProject: () => project,
+  });
+  assert.equal(forward?.targetView.projectId, 'b');
+  assert.equal(
+    resolveNavigationTarget({
+      direction: 'backward',
+      navigationStack: trail,
+      project,
+      getProject: (view) => (view.projectId === 'b' ? project : undefined),
+    }),
+    undefined,
+  );
+  const next = appendCrossProjectGraphNavigation({
+    navigationStack: trail,
+    sourceProjectId: 'b' as ProjectId,
+    sourceGraphId: 'shared' as GraphId,
+    targetProjectId: 'c' as ProjectId,
+    targetGraphId: 'third' as GraphId,
+  });
+  assert.deepEqual(
+    next.stack.map((view) => view.projectId),
+    ['a', 'a', 'b', 'c'],
+  );
+});
 
 test('createInitialGraphNavigationStack seeds history for the current graph once', () => {
   const result = createInitialGraphNavigationStack({
@@ -83,12 +144,9 @@ test('graph history skips entries for deleted graphs', () => {
     hasBackward: false,
     hasForward: true,
   });
-  assert.deepEqual(
-    resolveNavigationTarget({ direction: 'forward', navigationStack, project }),
-    {
-      nextStack: { ...navigationStack, index: 2 },
-      targetGraphId: graphB,
-      targetView: createRootGraphViewContext(graphB),
-    },
-  );
+  assert.deepEqual(resolveNavigationTarget({ direction: 'forward', navigationStack, project }), {
+    nextStack: { ...navigationStack, index: 2 },
+    targetGraphId: graphB,
+    targetView: createRootGraphViewContext(graphB),
+  });
 });

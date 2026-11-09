@@ -1,8 +1,54 @@
 import { expect, test } from '@playwright/test';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
 
 test.describe('Workspace navigation', () => {
+  test('keeps workspace tabs at the right edge when project tabs overflow', async ({ page }) => {
+    await mockHostedEditorBootstrap(page);
+    await seedHostedEditorProject(page, {
+      graphId: 'overflow-graph',
+      loaded: true,
+      projectId: 'overflow-project',
+      projectPath: '/workflows/Overflow.rivet-project',
+      title: 'Overflow',
+      extraOpenedProjects: Array.from({ length: 29 }, (_, index) => ({
+        graphId: `overflow-graph-${index}`,
+        projectId: `overflow-project-${index}`,
+        projectPath: `/workflows/Long project title ${index}.rivet-project`,
+        title: `Long project title ${index}`,
+      })),
+    });
+    await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+    const navigation = page.getByRole('navigation', { name: 'Workspace navigation' });
+    const tabs = page.locator('.projects-container .project');
+    await expect(tabs).toHaveCount(30);
+
+    for (const width of [1280, 768, 640]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect
+        .poll(async () => {
+          const box = await navigation.boundingBox();
+          return box ? Math.abs(box.x + box.width - width) : Infinity;
+        })
+        .toBeLessThanOrEqual(1);
+      await expect
+        .poll(() => navigation.locator('.left-menu').evaluate((element) => element.scrollWidth <= element.clientWidth))
+        .toBe(true);
+      for (const name of ['Evaluations', 'Data Studio']) {
+        await expect(navigation.getByRole('button', { name, exact: true })).toBeInViewport({ ratio: 1 });
+        await navigation.getByRole('button', { name, exact: true }).click();
+        await expect(navigation.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+      }
+      const projects = page.locator('.projects-container .projects');
+      await projects.evaluate((element) => {
+        element.scrollLeft = element.scrollWidth;
+      });
+      await expect(tabs.last()).toBeInViewport();
+      const box = await navigation.boundingBox();
+      expect(box!.x + box!.width).toBeCloseTo(width, 0);
+    }
+  });
+
   test('switches current Rivet workspace panels through the upstream tab row', async ({ page }) => {
     test.slow();
 

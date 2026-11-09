@@ -47,6 +47,21 @@ function makeCanvasPositions(
 }
 
 describe('projectEditorState', () => {
+  test('persisted project history drops foreign views even when graph IDs collide', () => {
+    const project = makeProject([makeGraph('shared', 'Shared')]);
+    const local = createRootGraphViewContext('shared' as GraphId);
+    const navigation = sanitizeNavigationStackForProject(project, {
+      stack: [{ ...local, projectId: 'other-project' as ProjectId }, { ...local, projectId: project.metadata.id }],
+      index: 1,
+    });
+    assert.deepEqual(navigation, { stack: [local], index: 0 });
+    const foreign = { ...local, projectId: 'other-project' as ProjectId };
+    const current = { ...local, projectId: project.metadata.id };
+    const trail = { stack: [foreign, { ...current, graphId: 'deleted' as GraphId }, current], index: 2 };
+    assert.deepEqual(sanitizeNavigationStackForProject(project, trail, { preserveForeignViews: true }), {
+      stack: [foreign, current], index: 1,
+    });
+  });
   test('sanitizeNavigationStackForProject drops invalid entries and restores a valid active selection', () => {
     const rootGraph = makeGraph('root', 'Root', [
       { id: 'sub-node', type: 'subGraph', data: { graphId: 'sub' as GraphId }, visualData: { x: 0, y: 0 } } as any,

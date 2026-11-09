@@ -98,6 +98,8 @@ export const graphNavigationStackState = atom<GraphNavigationStack>({
   index: undefined,
 });
 
+export const graphHistoryNavigationPendingState = atom(false);
+
 export const expandedOutputNodeIdsState = atom<NodeId[]>([]);
 
 export const isNodeOutputExpandedState = atomFamily((nodeId: NodeId) =>

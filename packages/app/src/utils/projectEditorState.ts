@@ -181,15 +181,20 @@ export function sanitizeProjectEditorStateForProject(
 export function sanitizeNavigationStackForProject(
   project: ProjectLike,
   navigationStack: GraphNavigationStack | undefined,
+  options: { preserveForeignViews?: boolean } = {},
 ): GraphNavigationStack {
   const rawStack = Array.isArray(navigationStack?.stack) ? navigationStack.stack : [];
   const rawIndex = typeof navigationStack?.index === 'number' ? navigationStack.index : rawStack.length - 1;
   const clampedRawIndex = Math.min(Math.max(rawIndex, 0), Math.max(rawStack.length - 1, 0));
-  const validEntries = rawStack.flatMap((graphView, rawEntryIndex) =>
-    isGraphViewContextLike(graphView) && isProjectGraphViewContextValid(graphView, project)
-      ? [{ graphView: normalizeGraphViewContext(graphView), rawEntryIndex }]
-      : [],
-  );
+  const validEntries = rawStack.flatMap((graphView, rawEntryIndex) => {
+    if (!isGraphViewContextLike(graphView)) return [];
+    const foreign = graphView.projectId != null && graphView.projectId !== project.metadata.id;
+    if (foreign ? !options.preserveForeignViews : !isProjectGraphViewContextValid(graphView, project)) return [];
+    return [{
+      graphView: options.preserveForeignViews ? graphView : normalizeGraphViewContext(graphView),
+      rawEntryIndex,
+    }];
+  });
 
   if (validEntries.length === 0) {
     return {

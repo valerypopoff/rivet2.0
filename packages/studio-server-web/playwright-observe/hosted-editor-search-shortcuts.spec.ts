@@ -95,6 +95,36 @@ test('iframe-focused Ctrl+F opens Rivet search instead of browser find', async (
   await expect(graphSearchInput).toBeFocused();
 });
 
+test('Ctrl+F finds full and partial node IDs in another graph', async ({ page }) => {
+  const editor = await openSeededEditorProject(page, 'node-id-search', 'Node ID Search', [
+    {
+      id: 'node-id-target-graph',
+      name: 'Archive',
+      nodes: [
+        {
+          id: 'Q7_z',
+          type: 'text',
+          title: 'Target text',
+          data: { text: 'Example' },
+          visualData: { x: 300, y: 200, width: 250 },
+        },
+      ],
+    },
+  ]);
+  await editor.locator('.node-canvas').click();
+  await page.keyboard.press(`${shortcutModifier}+F`);
+  const search = visibleGraphSearchInput(editor);
+  for (const query of ['Q7', 'q7_z']) {
+    await search.fill(query);
+    await expect(editor.locator('.search-result-row')).toHaveCount(1);
+    await expect(editor.locator('.search-result-row')).toContainText('Target text');
+    await expect(editor.locator('.search-result-graph-name')).toHaveText('Archive');
+  }
+  await editor.locator('.search-result-row').click();
+  await expect(editor.locator('.graph-item.selected[data-graphid="node-id-target-graph"]')).toBeVisible();
+  await expect(editor.locator('[data-nodeid="Q7_z"]').first()).toBeVisible();
+});
+
 test('graph folder toggles preserve search while ordinary outside clicks and explicit dismissal still work', async ({
   page,
 }) => {

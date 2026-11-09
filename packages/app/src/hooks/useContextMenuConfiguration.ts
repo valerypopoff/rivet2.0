@@ -62,7 +62,6 @@ const type = <T>() => undefined! as T;
 type NodeContextMenuData = {
   nodeType: ChartNode['type'];
   nodeId: NodeId;
-  isExternalSubgraphTarget?: boolean;
   graphCommandsEnabled: boolean;
   isLinkedNode: boolean;
   canRunFromEditor: boolean;
@@ -129,7 +128,6 @@ const getNodeContextMenuData = (context: unknown): NodeContextMenuData | undefin
   return {
     nodeType: data.nodeType as ChartNode['type'],
     nodeId: data.nodeId as NodeId,
-    isExternalSubgraphTarget: data.isExternalSubgraphTarget === true,
     graphCommandsEnabled: data.graphCommandsEnabled,
     isLinkedNode: data.isLinkedNode,
     canRunFromEditor: data.canRunFromEditor,
@@ -204,7 +202,7 @@ const canUnfreezeMultipleNodes = (context: unknown) => getUnfreezeNodeTargetCoun
 
 const isSubgraphNodeContext = (context: unknown) => {
   const data = getNodeContextMenuData(context);
-  return data?.graphCommandsEnabled === true && data.nodeType === 'subGraph' && !data.isExternalSubgraphTarget;
+  return data?.graphCommandsEnabled === true && data.nodeType === 'subGraph';
 };
 
 const canRearrangeSubgraphPorts = (context: unknown) => {

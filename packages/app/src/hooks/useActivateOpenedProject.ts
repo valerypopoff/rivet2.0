@@ -1,5 +1,6 @@
 import { useStore } from 'jotai';
 import type { GraphId } from '@valerypopoff/rivet2-core';
+import type { GraphViewContext } from '../domain/graphEditing/navigationActions.js';
 import { graphState, isReadOnlyGraphState } from '../state/graph.js';
 import { projectWorkspaceTargetsState } from '../state/workspaceTarget.js';
 import { isPathBasedIOProvider } from '../io/IOProvider.js';
@@ -30,7 +31,7 @@ export function useActivateOpenedProject() {
 
   return (
     projectInfo: OpenedProjectInfo,
-    options?: { preferredGraphId?: GraphId },
+    options?: { preferredGraphId?: GraphId; graphView?: GraphViewContext },
     intent?: { isCurrent(): boolean; signal: AbortSignal; bundleManifestPath?: string },
   ): Promise<boolean> => {
     const activate = async (isCurrent: () => boolean, signal: AbortSignal) => {
@@ -173,6 +174,7 @@ export function useActivateOpenedProject() {
           evaluationDatasets: evaluation?.evaluationDatasets,
           markClean,
           graphToLoad,
+          graphView: options?.graphView,
           onLoaded: () => {
             store.set(openedProjectSnapshotsState, (snapshots) =>
               isValidOpenedProjectSnapshot(snapshots[projectInfo.projectId], projectInfo.projectId)
