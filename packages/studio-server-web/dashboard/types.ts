@@ -122,6 +122,7 @@ export type WorkflowProjectOpenOptions = {
   title?: string;
   preferredGraphId?: string;
   expectedProjectId?: string;
+  recordGraphHistory?: boolean;
 };
 
 export type RecordingOpenResult = { opened: true } | { opened: false; error: string };

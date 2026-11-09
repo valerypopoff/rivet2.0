@@ -1,4 +1,5 @@
 import type { WorkflowRecordingExecutionIdentity, WorkflowRunCost } from '../../../../../studio-server-shared/workflow-recording-types.js';
+import type { ProjectReferenceSummary } from '../project-reference-summary.js';
 
 type TimestampValue = Date | string;
 
@@ -36,6 +37,7 @@ export type RevisionRow = {
   stats_graph_count: number | null;
   stats_total_node_count: number | null;
   stats_web_app_count: number | null;
+  reference_summary?: ProjectReferenceSummary | null;
   created_at: TimestampValue;
 };
 

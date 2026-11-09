@@ -249,6 +249,15 @@ test('open project bridge command accepts optional title and preview flags', () 
 
 test('Subgraph navigation carries stable project and graph IDs through validated bridge messages', () => {
   assert.equal(
+    isDashboardToEditorCommand({
+      type: 'open-project',
+      path: '/target',
+      replaceCurrent: false,
+      recordGraphHistory: 'yes',
+    }),
+    false,
+  );
+  assert.equal(
     isEditorToDashboardEvent({ type: 'open-subgraph-target', projectId: 'project-1', graphId: 'graph-1' }),
     true,
   );
@@ -260,6 +269,7 @@ test('Subgraph navigation carries stable project and graph IDs through validated
       replaceCurrent: false,
       expectedProjectId: 'project-1',
       preferredGraphId: 'graph-1',
+      recordGraphHistory: true,
     }),
     true,
   );

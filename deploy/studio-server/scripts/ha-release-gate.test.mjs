@@ -18,7 +18,13 @@ import {
 import { HA_BROWSER_CONTRACT } from './lib/ha-release-evidence.mjs';
 import { HA_ROUTING_PROPAGATION_MS } from './lib/ha-routing-withdrawal.mjs';
 import { maintenanceValidationValues } from './lib/managed-release-cutover.mjs';
-import { probeSchemaLockContention, readSchemaRepositoryReceipt } from './lib/schema-compatibility-probe.mjs';
+import { assertProbedSchemaTransition, probeSchemaLockContention, readSchemaRepositoryReceipt } from './lib/schema-compatibility-probe.mjs';
+
+test('reviewed schema expands include nullable reference summaries without approving future migrations', () => {
+  assert.doesNotThrow(() => assertProbedSchemaTransition(17, 18));
+  assert.doesNotThrow(() => assertProbedSchemaTransition(18, 19));
+  assert.throws(() => assertProbedSchemaTransition(19, 20), /no reviewed mixed-writer probe/);
+});
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';
 import { startHaWorkflowTraffic } from './lib/ha-workflow-traffic.mjs';

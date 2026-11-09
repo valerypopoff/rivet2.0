@@ -48,6 +48,9 @@ test('cached target validation surfaces bundle rejection instead of reusing perm
 const result = () => ({
   projectId: 'target',
   complete: false,
+  checkedProjects: 262,
+  totalProjects: 321,
+  incompleteReasons: ['missing-summary'],
   graphReferences: [
     {
       sourceGraphId: 'main',
@@ -80,6 +83,9 @@ test('graph reference provider preserves partial results, explicit identity, bod
   });
   const response = await hostedSubgraphProjectCatalog.graphReferences!(target, controller.signal);
   assert.equal(response.complete, false);
+  assert.equal(response.checkedProjects, 262);
+  assert.equal(response.totalProjects, 321);
+  assert.deepEqual(response.incompleteReasons, ['missing-summary']);
   assert.equal(response.references[0]!.sourceDescription, 'Published endpoint: live');
 });
 

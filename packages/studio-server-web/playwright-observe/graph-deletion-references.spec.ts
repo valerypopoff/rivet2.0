@@ -187,7 +187,16 @@ test('folder deletion surfaces failed and incomplete scans and requires an expli
     expect(route.request().postDataJSON().graphIds.sort()).toEqual(['child', 'other']);
     return ++checks === 1
       ? route.fulfill({ status: 503, json: { error: 'Unavailable' } })
-      : route.fulfill({ json: { projectId: 'target', complete: false, graphReferences: [reference] } });
+      : route.fulfill({
+          json: {
+            projectId: 'target',
+            complete: false,
+            graphReferences: [reference],
+            checkedProjects: 262,
+            totalProjects: 321,
+            incompleteReasons: ['missing-summary', 'result-limit'],
+          },
+        });
   });
   const dialog = await fixture.open(true);
   await expect(dialog).toContainText('Could not check incoming graph references');
@@ -198,6 +207,9 @@ test('folder deletion surfaces failed and incomplete scans and requires an expli
   await dialog.getByRole('button', { name: 'Check again' }).click();
   await expect(dialog).toContainText('Closed caller');
   await expect(dialog).toContainText('incomplete');
+  await expect(dialog).toContainText('262 of 321 other projects checked.');
+  await expect(dialog).toContainText('Some saved projects are still awaiting reference indexing.');
+  await expect(dialog).toContainText('The reference list is too large to show in full.');
   await expect(warning).toContainText('Closed caller');
   await expect(warning).toHaveCSS('background-color', 'rgb(192, 57, 43)');
   await dialog.getByRole('button', { name: 'Delete anyway', exact: true }).click();

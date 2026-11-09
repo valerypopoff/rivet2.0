@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import { deserializeProject } from '@valerypopoff/rivet2-core/serialization';
 import type { WorkflowProjectStats } from './types.js';
+import {
+  PROJECT_REFERENCE_SUMMARY_VERSION,
+  summarizeProjectReferences,
+  type ProjectReferenceSummary,
+} from './project-reference-summary.js';
 
 /** Pure payload indexing: no settings repositories, filesystem roots or runtime initialization. */
 export type WorkflowProjectIndexData = {
@@ -8,6 +13,7 @@ export type WorkflowProjectIndexData = {
   projectMetadataId?: string;
   /** Opaque content version used for hosted filesystem save conflict checks. */
   revisionId: string;
+  referenceSummary?: ProjectReferenceSummary;
 };
 
 function appendRevisionPart(hash: ReturnType<typeof createHash>, contents: string | null): void {
@@ -34,10 +40,11 @@ export function getFilesystemProjectRevisionId(contents: string, datasetsContent
 export function getWorkflowProjectIndexDataFromContents(
   contents: string,
   datasetsContents: string | null = null,
+  includeReferences = false,
 ): WorkflowProjectIndexData {
   const revisionId = getFilesystemProjectRevisionId(contents, datasetsContents);
   try {
-    const [project] = deserializeProject(contents);
+    const [project] = deserializeProject(contents, null, { logErrors: false });
     const graphs = Object.values(project.graphs ?? {});
     return {
       stats: {
@@ -51,9 +58,22 @@ export function getWorkflowProjectIndexDataFromContents(
         }, 0),
       },
       revisionId,
+      ...(includeReferences ? { referenceSummary: summarizeProjectReferences(project) } : {}),
       ...(project.metadata.id ? { projectMetadataId: project.metadata.id } : {}),
     };
   } catch {
-    return { stats: { graphCount: 0, totalNodeCount: 0, webAppCount: 0 }, revisionId };
+    return {
+      stats: { graphCount: 0, totalNodeCount: 0, webAppCount: 0 },
+      revisionId,
+      ...(includeReferences
+        ? {
+            referenceSummary: {
+              version: PROJECT_REFERENCE_SUMMARY_VERSION,
+              state: 'invalid',
+              reason: 'invalid-project',
+            } as const,
+          }
+        : {}),
+    };
   }
 }

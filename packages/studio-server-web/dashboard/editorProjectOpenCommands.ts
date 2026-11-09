@@ -104,6 +104,7 @@ export async function handleOpenProjectCommand(
       previewTab: shouldUsePreviewSlot,
       preferredGraphId: command.preferredGraphId as GraphId | undefined,
       expectedProjectId: command.expectedProjectId as ProjectId | undefined,
+      recordGraphHistory: command.recordGraphHistory,
     });
     if (!openResult.opened) {
       if (openingTabId) {

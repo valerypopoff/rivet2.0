@@ -11,7 +11,8 @@ const styles = css`
   display: flex;
   align-items: stretch;
   align-self: stretch;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+  margin-left: auto;
   min-width: 0;
   max-width: min(760px, 65vw);
   border-left: 1px solid var(--project-selector-divider-color, var(--app-strip-divider-color));
@@ -80,7 +81,6 @@ const styles = css`
       background-color: var(--primary-dark);
     }
   }
-
 `;
 
 export const OverlayTabs: FC<{

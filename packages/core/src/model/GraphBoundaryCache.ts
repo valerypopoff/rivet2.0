@@ -58,7 +58,7 @@ export function getGraphBoundary(
   return boundary;
 }
 
-export function applyGraphBoundaryPortOrder<T extends { id: string }>(
+export function applyGraphBoundaryPortOrder<T extends { id: string; portId?: string }>(
   boundaryItems: readonly T[],
   portOrder: readonly string[] | undefined,
 ): T[] {
@@ -66,7 +66,7 @@ export function applyGraphBoundaryPortOrder<T extends { id: string }>(
     return [...boundaryItems];
   }
 
-  const itemsById = new Map(boundaryItems.map((item) => [item.id, item]));
+  const itemsById = new Map(boundaryItems.map((item) => [item.portId ?? item.id, item]));
   const usedIds = new Set<string>();
   const orderedItems: T[] = [];
 
@@ -85,7 +85,7 @@ export function applyGraphBoundaryPortOrder<T extends { id: string }>(
   }
 
   for (const item of boundaryItems) {
-    if (!usedIds.has(item.id)) {
+    if (!usedIds.has(item.portId ?? item.id)) {
       orderedItems.push(item);
     }
   }

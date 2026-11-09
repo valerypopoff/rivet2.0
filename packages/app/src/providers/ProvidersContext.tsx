@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo, type FC, type ReactNode } from 'rea
 import { type IOProvider, type EvaluationProjectFileData } from '../io/IOProvider.js';
 import type { ProjectExecutorMode } from '../utils/projectExecutorMode.js';
 import type { OpenedProjectSynchronizationPolicy } from '../utils/openedProjectSynchronization.js';
+import type { WorkflowReferenceIncompleteReason } from '../../../studio-server-shared/workflow-reference-diagnostics.js';
 import {
   type DatasetProvider,
   type AudioProvider,
@@ -103,6 +104,9 @@ export type SubgraphProjectCatalogProvider = {
   ): Promise<{
     projectId: string;
     complete: boolean;
+    checkedProjects?: number;
+    totalProjects?: number;
+    incompleteReasons?: WorkflowReferenceIncompleteReason[];
     references: Array<
       ProjectGraphCallSite & {
         projectId: string;

@@ -331,7 +331,9 @@ export function useWorkspaceTransitions() {
           persistedProjectEditorState: store.get(projectEditorStateByProjectIdState)[project.metadata.id],
           legacyCanvasPositionsByGraph,
         }),
-        nextGraphView: options.graphView,
+        nextGraphView: graphNavigationStack.stack.some((view) => view.projectId != null) && savedGraph.metadata?.id
+          ? { ...(options.graphView ?? getFallbackGraphView(savedGraph.metadata.id)), projectId: project.metadata.id }
+          : options.graphView,
         previousNavigationStack: graphNavigationStack,
         pushHistory: options.pushHistory ?? true,
       });

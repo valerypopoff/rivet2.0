@@ -1,4 +1,5 @@
 import type { RecordingRunScope } from './recording-workflow-scope.js';
+import type { ProjectReferenceQuery } from './managed/reference-index.js';
 import type {
   AttachedData,
   CombinedDataset,
@@ -11,6 +12,7 @@ import type {
 import type {
   WorkflowFolderItem,
   WorkflowProjectItem,
+  WorkflowProjectReferencesResponse,
   WorkflowProjectDownloadVersion,
   WorkflowPublicationPreconditions,
   WorkflowDraftPublicationPreconditions,
@@ -126,6 +128,8 @@ export interface WorkflowProjectRepository {
   ): Promise<{ contents: string; fileName: string }>;
   readWorkflowProjectReferenceSnapshots(relativePath: string): Promise<WorkflowProjectReferenceSnapshot[]>;
   listWorkflowProjectReferenceCatalog(): Promise<WorkflowProjectReferenceCatalogEntry[]>;
+  /** Managed immutable revisions support a bounded, blob-free lookup. */
+  readIndexedProjectReferences?(query: ProjectReferenceQuery): Promise<WorkflowProjectReferencesResponse>;
   deleteWorkflowProjectItem(relativePath: string): Promise<string | null>;
 }
 export interface WorkflowPublicationRepository {
