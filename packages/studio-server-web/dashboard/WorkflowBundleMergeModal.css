@@ -27,17 +27,12 @@
 .workflow-bundle-merge-content p {
   overflow-wrap: anywhere;
 }
-.workflow-bundle-merge-section-heading,
-.workflow-bundle-merge-toolbar {
+.workflow-bundle-merge-section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
-}
-.workflow-bundle-merge-toolbar .project-settings-input {
-  flex: 1 1 250px;
-  min-width: 0;
 }
 .workflow-bundle-merge-content .project-settings-input {
   box-sizing: border-box;

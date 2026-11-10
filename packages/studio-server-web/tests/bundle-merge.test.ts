@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeBundleMergeSite, suggestBundleMergeCounterpart } from '../dashboard/bundleMerge.js';
+import {
+  applyBundleMergeSuggestions,
+  describeBundleMergeSite,
+  suggestBundleMergeCounterpart,
+} from '../dashboard/bundleMerge.js';
+import type { BundleMergeChoices, BundleMergePreview } from '../../studio-server-shared/workflow-bundle-types.js';
 
 test('counterpart suggestions prefer one exact relative path and leave ambiguous names unresolved', () => {
   const source = { projectId: 'copy', title: 'Same', relativePath: 'Nested/A.rivet-project' };
@@ -48,4 +53,46 @@ test('review locations distinguish same-name projects and identify saved variant
     'Original/Bundle/Other/Same.rivet-project / Main / (call) / variant 1 / (inactive)',
   );
   assert.equal(describeBundleMergeSite(site, null), 'Same (source) / Main / (call) / variant 1 / (inactive)');
+});
+
+test('automatic choices include only changed/new projects and required clear matches', () => {
+  const source = ['changed', 'new', 'same', 'ambiguous'].map((projectId) => ({
+    projectId,
+    title: projectId,
+    relativePath: projectId + '.rivet-project',
+  }));
+  const suggestions: NonNullable<BundleMergePreview['suggestions']> = [
+    { sourceProjectId: 'changed', state: 'changed', targetProjectId: 'original' },
+    { sourceProjectId: 'new', state: 'new' },
+    { sourceProjectId: 'same', state: 'unchanged', targetProjectId: 'kept' },
+    { sourceProjectId: 'ambiguous', state: 'ambiguous' },
+  ];
+  const preview = {
+    source: { projects: source },
+    destination: { projects: [] },
+    requiredProjects: [{ project: source[2]!, sites: [] }],
+    suggestions,
+  } as unknown as BundleMergePreview;
+  const choices: BundleMergeChoices = { destinationBundleId: 'destination', actions: [], dependencies: [], graphs: [] };
+  const defaults = applyBundleMergeSuggestions(choices, preview, suggestions, true);
+  assert.deepEqual(defaults.actions, [
+    { sourceProjectId: 'changed', kind: 'replace', targetProjectId: 'original' },
+    { sourceProjectId: 'new', kind: 'add', relativePath: 'new.rivet-project' },
+  ]);
+  assert.deepEqual(defaults.dependencies, [{ sourceProjectId: 'same', kind: 'existing', targetProjectId: 'kept' }]);
+  const edited = {
+    ...defaults,
+    actions: [{ sourceProjectId: 'new', kind: 'add' as const, relativePath: 'Custom/New.rivet-project' }],
+    dependencies: [{ sourceProjectId: 'same', kind: 'add' as const, relativePath: 'Custom/Same.rivet-project' }],
+  };
+  assert.equal(applyBundleMergeSuggestions(edited, preview, suggestions, false), edited);
+  assert.equal(
+    applyBundleMergeSuggestions(
+      choices,
+      { ...preview, requiredProjects: [] },
+      suggestions.filter((value) => value.state === 'unchanged'),
+      true,
+    ),
+    choices,
+  );
 });

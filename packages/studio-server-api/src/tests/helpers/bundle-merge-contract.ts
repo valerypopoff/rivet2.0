@@ -88,6 +88,25 @@ export async function verifyBundleMergeContract(
   const a1 = copied.projects.find((item) => item.name === 'A')!;
   const b1 = copied.projects.find((item) => item.name === 'B')!;
   const x1 = copied.projects.find((item) => item.name === 'X')!;
+  const emptyChoices: BundleMergeChoices = {
+    destinationBundleId: original.bundleId!,
+    actions: [],
+    dependencies: [],
+    graphs: [],
+  };
+  const unchangedCopy = await backend.bundles.mergePreview(copy.bundleId, emptyChoices, undefined, true);
+  assert.ok(unchangedCopy.suggestions?.length === copied.projects.length);
+  assert.ok(unchangedCopy.suggestions.every((suggestion) => suggestion.state === 'unchanged'));
+  const comparisonResponse = await fetch(
+    `${http.baseUrl}/api/workflows/bundles/${copy.bundleId}/merge/preview?suggestChanges=1`,
+    {
+      method: 'POST',
+      headers: { ...http.headers, 'content-type': 'application/json', 'x-rivet-bundle-intent': '1' },
+      body: JSON.stringify(emptyChoices),
+    },
+  );
+  assert.equal(comparisonResponse.status, 200);
+  assert.deepEqual((await comparisonResponse.json()).suggestions, unchangedCopy.suggestions);
   const c1 = await backend.createWorkflowProjectItem(copied.relativePath, 'C');
   const added = structuredClone(fixture.child.project);
   remapBundleProject(added, new Map([['bundle-child', c1.projectMetadataId! as ProjectId]]));
@@ -103,6 +122,13 @@ export async function verifyBundleMergeContract(
   call.data.targetProjectId = c1.projectMetadataId as ProjectId;
   call.data.targetBoundary = getGraphBoundary(added, call.data.graphId)!;
   await save(a1, nextA, datasets(a1.projectMetadataId!, 'new-data'));
+  const changeReview = await backend.bundles.mergePreview(copy.bundleId, emptyChoices, undefined, true);
+  const changeState = (id: string) =>
+    changeReview.suggestions?.find((suggestion) => suggestion.sourceProjectId === id)?.state;
+  assert.equal(changeState(a1.projectMetadataId!), 'changed');
+  assert.equal(changeState(b1.projectMetadataId!), 'unchanged');
+  assert.equal(changeState(x1.projectMetadataId!), 'changed');
+  assert.equal(changeState(c1.projectMetadataId!), 'new');
   const choices: BundleMergeChoices = {
     destinationBundleId: original.bundleId!,
     actions: [
@@ -168,7 +194,30 @@ export async function verifyBundleMergeContract(
   assert.equal(mappedReview.mappedGraphs?.[0]?.sourceGraphName, 'Child');
   assert.equal(mappedReview.mappedGraphs?.[0]?.selectedGraphId, 'other-child');
   assert.deepEqual(mappedReview.mappedGraphs?.[0]?.options, [{ id: 'other-child', name: 'Child' }]);
+  // Graph matches belong to kept counterparts, not copied/replaced definitions.
+  // A stale match from an earlier UI selection must never retarget these calls.
+  choices.graphs = [
+    { sourceProjectId: c1.projectMetadataId!, sourceGraphId: 'child-main', targetGraphId: 'other-child' },
+  ];
+  const replacedGraphReview = await backend.bundles.mergePreview(copy.bundleId, {
+    ...choices,
+    actions: choices.actions.map((action) =>
+      action.sourceProjectId === c1.projectMetadataId
+        ? {
+            sourceProjectId: action.sourceProjectId,
+            kind: 'replace',
+            targetProjectId: counterpartItem.projectMetadataId!,
+          }
+        : action,
+    ),
+  });
+  assert.deepEqual(replacedGraphReview.blockers, []);
+  assert.ok(replacedGraphReview.fingerprint);
   const reviewed = await backend.bundles.mergePreview(copy.bundleId, choices);
+  assert.equal(
+    (await backend.bundles.mergePreview(copy.bundleId, choices, undefined, true)).fingerprint,
+    reviewed.fingerprint,
+  );
   assert.deepEqual(reviewed.blockers, []);
   assert.ok(reviewed.fingerprint);
   const sourceBefore = await Promise.all([a1, b1, x1, c1].map((item) => backend.loadHostedProject(item.absolutePath)));

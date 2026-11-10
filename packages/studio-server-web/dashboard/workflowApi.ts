@@ -55,14 +55,18 @@ export async function previewWorkflowBundleMerge(
   sourceBundleId: string,
   choices: import('../../studio-server-shared/workflow-bundle-types').BundleMergeChoices,
   signal: AbortSignal,
+  suggestChanges = false,
 ) {
   return workflowJsonResponse<import('../../studio-server-shared/workflow-bundle-types').BundleMergePreview>(
-    await fetch(`${API}/workflows/bundles/${encodeURIComponent(sourceBundleId)}/merge/preview`, {
-      method: 'POST',
-      signal,
-      headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
-      body: JSON.stringify(choices),
-    }),
+    await fetch(
+      `${API}/workflows/bundles/${encodeURIComponent(sourceBundleId)}/merge/preview${suggestChanges ? '?suggestChanges=1' : ''}`,
+      {
+        method: 'POST',
+        signal,
+        headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+        body: JSON.stringify(choices),
+      },
+    ),
   );
 }
 

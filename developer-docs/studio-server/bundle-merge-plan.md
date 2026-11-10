@@ -1,6 +1,6 @@
 # Bundle merge implementation plan
 
-Status: implemented and validated locally, 2026-11-10. The managed bundle merge UI
+Status: implemented and validated locally; automatic-review update 2026-11-11. The managed bundle merge UI
 and API are available in source. Hosted publication and deployment remain separate;
 this work does not start a cloud test or change production.
 
@@ -47,7 +47,9 @@ Existing contracts are described in [Project bundles](project-bundles.md) and
 
 The source bundle's context menu gains **Merge into another bundle…**. The modal
 names both bundles and allows choosing a distinct existing destination bundle.
-Every source project starts with **Skip**. A selected project has one of two
+Saved contents are compared on destination selection. Unchanged counterparts are
+hidden; changed and new projects receive editable Suggested defaults. Ambiguous
+matches remain visible with Skip until the user chooses. A selected project has one of two
 write actions:
 
 | Action                                  | Result                                                                                                                                                                                                                               |
@@ -128,12 +130,32 @@ or retarget it by name after the user has reviewed a different mapping.
 
 ### Suggestions and graph correspondence
 
-Offer project correspondence suggestions from unique source-relative paths, then
-unique names, using the bounded catalogs already loaded. The explicit
-**Use suggested matches** action accepts them. Ambiguous names remain
-unresolved. Shared graph IDs establish the exact graph match once a project
-counterpart is selected; suggesting projects does not download every candidate's
-definition. Existing copies work without duplication ancestry records.
+Suggest project matches from unique relative paths, then unique names, then
+unclaimed shared graph identities. Competing matches remain manual. This works
+with existing copies without duplication ancestry records; suggestions are not
+authoritative lineage. Graph-only matches stay visible even when normalized
+contents match, so an uncertain rename is never hidden as certainly unchanged.
+
+Destination selection and manual Refresh review opt into a bounded comparison of
+both bundles' current saved definitions, attached data and dataset snapshots.
+Normalize project ownership, mapped internal references, catalog titles and
+discovery hints before comparing canonical content hashes. New project/revision
+IDs alone are not changes. Batch at most four project downloads, serialize their
+metadata reads within the review to respect the shared reference-query guard,
+and retain the existing deadline and 128 MiB total analysis budget. Never scan
+the whole library or published/history artifacts for this comparison.
+
+The modal automatically selects clear changed-project replacements, new-project
+additions and required-project matches. Keep Suggested visible in their menus;
+preserve manual skips, edited paths and dependency choices on later previews.
+Ordinary selection previews do not repeat full comparison. Comparison-only reads
+do not expand the fingerprint revalidated by the commit command.
+Empty sources return no changes and empty destinations propose additions without
+reading project contents; the ordinary selected-project preview still validates
+every proposed write. Changing a project's action or kept counterpart clears its
+old graph choices. Server-side planning also discards graph mappings for imported
+definitions, preventing a stale kept-counterpart choice from redirecting a call
+after that project is changed to Add or Replace.
 
 For each imported reference, resolve its target against the final destination
 state: a replaced/added project's new contents take precedence over its old draft;
@@ -182,17 +204,18 @@ from pre-existing issues in diagnostics.
 ## Modal flow
 
 1. **Destination and changes.** Show source/destination names and paths, a
-   searchable source-project list, Skip/Replace/Add controls and destination
+   changed/new source-project list, Skip/Replace/Add controls and destination
    project selectors and editable destination-relative addition paths. Exclude
-   the source from destination choices, including UUID case variants. Show selected
-   only and search filter the visible list without changing choices or requesting
-   a preview. Disable destination replacements already chosen by another row.
+   the source from destination choices, including UUID case variants. Prefill clear
+   replacements and additions, retaining Suggested menu hints. There are no search
+   or selected-only controls. Disable destination replacements already chosen by another row.
    Empty-state guidance explains when another bundle or a saved project is needed.
 2. **Match referenced projects.** Show only newly required correspondences, their call
    sites and any graph choices. Highlight dependencies used only by disabled
    nodes, saved variants or Library definitions without expanding the whole bundle.
    Keep selected graph matches named and editable after validation, disambiguating
-   duplicate graph names by ID. Use existing stops importing that source dependency;
+   duplicate graph names by ID. Automatically fill clear required-project matches
+   without overriding existing choices. Use existing stops importing that source dependency;
    it does not prevent another explicit action from replacing the destination.
 3. **Review and merge.** Summarize replacements, additions, kept counterparts,
    dataset replacement, reference/version rewrites and acknowledged warnings.
@@ -212,6 +235,9 @@ data never authorizes a write. Selecting the same destination or action preserve
 and avoids an unnecessary preview.
 
 Use the shared Atlaskit modal/select styling and existing bundle icon conventions.
+Use the existing workflow-project-bundle-card for project choices, required
+references, graph matches and review. The lead shows source path → destination
+path, and the review source column names its bundle.
 Provide labels, focus trapping, keyboard navigation, Escape cancellation, focus
 return and a visible footer on short/narrow screens. Escape closes an open select
 menu before dismissing the dialog. Review/error shortcuts scroll only the content,
@@ -239,6 +265,9 @@ Add shared types alongside workflow-bundle-types.ts:
   mappings and call sites, rewrite counts, blockers, advisory warnings and an
   optional ready fingerprint. Optional mappedGraphs contains resolved named graph
   choices for editing; it is presentation data and does not change write admission.
+  Optional suggestions classifies each source project as unchanged, changed, new
+  or ambiguous, with a target ID when matched. Only opt-in suggestChanges=1 previews
+  perform full saved-content comparison; commits do not trust or require this field.
 - BundleMergeResult: operation identity, destination folder identity, actual
   source-to-destination project mapping, changed project IDs/paths/revision IDs,
   additions and reviewed warnings.
@@ -253,11 +282,13 @@ is a concurrency check, not an authorization credential.
 Route: POST /api/workflows/bundles/:sourceId/merge/preview.
 
 Accept destination/choices, with an empty action list allowed for initial member
-metadata. Return complete candidate lists from the bounded bundle catalogs.
+metadata. Optional suggestChanges=1 also requests saved-content comparison for
+automatic defaults. Return complete candidate lists from the bounded bundle catalogs.
 Do not load all source blobs through the existing duplication preview: that
 method prepares remapped copies of every member and is not the right owner here.
 
-Capture metadata in a short consistent SQL snapshot. Read only selected/added
+Capture metadata in a short consistent SQL snapshot. Outside the opt-in comparison,
+read only selected/added
 source drafts, needed graph counterparts and advisory caller definitions. Deduplicate
 immutable revision reads. Do not download datasets for use-existing counterparts
 or for graph-only diagnostics. Correspondence discovery needs project definitions
@@ -532,7 +563,7 @@ dependencies first when their compiled artifacts are missing or changed; use the
 existing studio-server:build:dependencies command rather than stale declarations.
 
 ```sh
-yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/remap-bundle-project.test.ts src/tests/bundle-merge-plan.test.ts src/tests/managed-bundle-merge.test.ts src/tests/managed-bundles.test.ts src/tests/project-bundle-import.test.ts
+yarn workspace @valerypopoff/rivet-studio-server-api test:files src/tests/remap-bundle-project.test.ts src/tests/bundle-merge-plan.test.ts src/tests/bundle-merge-suggestions.test.ts src/tests/managed-bundle-merge.test.ts src/tests/managed-bundles.test.ts src/tests/project-bundle-import.test.ts
 yarn workspace @valerypopoff/rivet-studio-server-api exec tsc --noEmit
 yarn workspace @valerypopoff/rivet-studio-server-web exec tsx --test tests/bundle-merge.test.ts tests/workflow-namespace.test.ts tests/editor-project-refresh.test.ts tests/hosted-project-revision-tracker.test.ts
 yarn workspace @valerypopoff/rivet-studio-server-shared run build
@@ -606,13 +637,13 @@ blocks because its graph is gone.
 The equivalent legacy alias also blocks despite a stale Published field, matching
 the actual project-reference loader rather than that unsupported metadata.
 
-Fifteen headless merge journeys cover the main selection flow, recovered success with
+Seventeen headless merge journeys cover the main selection flow, recovered success with
 a failed refresh, obsolete previews, editable graph/warning choices, unknown acknowledgements,
-older APIs, failed-preview refresh, large-list filtering, duplicate target choices,
+older APIs, failed-preview refresh, changed-only defaults, duplicate target choices,
 dependency path focus across preview errors, same-destination/action choice preservation, empty
 states, pending-commit dismissal and long errors on a 320px screen. They include
 short-screen dropdown/footer access, double submission, dropdown Escape, content-only
-review/error scrolling and focus return. The editor shard weight is 80 seconds to
+review/error scrolling and focus return. The editor shard weight is 90 seconds to
 reflect these journeys; its enrollment regression includes the new spec in the
 36-spec set and checks balanced, complete coverage. The existing 23 bundle/scope
 journeys also pass. Existing
@@ -624,15 +655,20 @@ A transient preview failure disables Merge; one successful manual refresh clears
 its stale error without an automatic read/write retry. Unknown mutation outcomes
 retain their explicit message and remain blocked.
 
-Local acceptance passed 73 focused API tests, 40 web unit tests, the real
-PostgreSQL/MinIO integration, and 38 browser journeys (15 merge and 23 adjacent
-bundle/scope cases). A final targeted browser check also passed after preserving
-choices when the same destination is selected again. API/shared checks, the
+Local acceptance covers 87 focused API tests, 41 web unit tests, the real
+PostgreSQL/MinIO integration, and 40 browser journeys (17 merge and 23 adjacent
+bundle/scope cases). Comparison regressions cover duplicated ownership, internal
+references, datasets, attached data, renamed/ambiguous projects and bounded reads.
+The storage contract also checks the HTTP comparison query and ensures comparison
+refreshes preserve the ordinary commit fingerprint. API/shared checks, the
 focused merge-UI typecheck, production web build, formatting, documentation links
 and CI enrollment/balance checks passed. This is local acceptance, not a claim of
 hosted CI or production deployment. Package versions are reviewed
 but unchanged here: private API/shared/web feature version bumps belong to release
 preparation; public Core/Node APIs were not changed by this feature.
+The follow-up regression also changes a kept counterpart to Add and back in the
+browser, and validates both Add and Replace against stale graph choices in the
+storage contract. Empty-bundle comparisons prove that no artifact read is needed.
 
 ## Implementation reconciliation
 
@@ -640,13 +676,13 @@ All five implementation phases are delivered in source. This audit
 checks their owners and observed behavior rather than treating checked boxes as
 evidence by themselves.
 
-| Phase               | Delivered behavior                                                                                                                               | Local evidence                                                                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 Contracts/mapping | Typed actions, minimal dependency queue, cycles/pruning, graph and legacy-reference remapping, deterministic identity                            | Pure planner/remapper tests and existing copy/import regressions                                                                                  |
-| 2 Preview           | Bounded cancellable reads, final-state graph checks, explicit required mappings, caller diagnostics, owner-safe read deduplication               | Managed preview tests including corrupt cached ownership and actual large byte-limit fixtures                                                     |
-| 3 Commit/recovery   | Fresh revision preparation, one topology transaction, read-set fencing, dataset replacement/removal, durable warnings and exact receipts         | Disposable PostgreSQL/MinIO execution, rollback, concurrent admission, opposite-direction and save-race contracts; preparation failure regression |
-| 4 Editor/modal      | Capability gate, compact filtered choices, editable graph matches, explicit review, current-preview admission, existing dirty-tab reconciliation | Fifteen merge browser journeys, adjacent bundle/scope checks, hosted revision/recovery tests and location-label tests                             |
-| 5 Integration/docs  | Enrollment in existing API/web/browser CI lanes, updated feature/runbook documentation, reviewed version policy                                  | API/shared/UI typechecks, production builds, shard/style/structure checks and doc-link verification                                               |
+| Phase               | Delivered behavior                                                                                                                                        | Local evidence                                                                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 Contracts/mapping | Typed actions, minimal dependency queue, cycles/pruning, graph and legacy-reference remapping, deterministic identity                                     | Pure planner/remapper tests and existing copy/import regressions                                                                                  |
+| 2 Preview           | Bounded cancellable reads, final-state graph checks, explicit required mappings, caller diagnostics, owner-safe read deduplication                        | Managed preview tests including corrupt cached ownership and actual large byte-limit fixtures                                                     |
+| 3 Commit/recovery   | Fresh revision preparation, one topology transaction, read-set fencing, dataset replacement/removal, durable warnings and exact receipts                  | Disposable PostgreSQL/MinIO execution, rollback, concurrent admission, opposite-direction and save-race contracts; preparation failure regression |
+| 4 Editor/modal      | Capability gate, saved-content comparison/defaults, editable graph matches, explicit review, current-preview admission, existing dirty-tab reconciliation | Seventeen merge browser journeys, adjacent bundle/scope checks, hosted revision/recovery tests and location-label tests                           |
+| 5 Integration/docs  | Enrollment in existing API/web/browser CI lanes, updated feature/runbook documentation, reviewed version policy                                           | API/shared/UI typechecks, production builds, shard/style/structure checks and doc-link verification                                               |
 
 The remaining publication/deployment steps use the ordinary release process and
 are outside feature implementation. No production backfill, schema migration,

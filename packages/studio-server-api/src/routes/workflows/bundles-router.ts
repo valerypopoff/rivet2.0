@@ -61,7 +61,11 @@ bundlesRouter.post(
     };
     res.once('close', close);
     try {
-      res.json(await (await getExplicitBundleService()).mergePreview(id.parse(req.params.id), input, abort.signal));
+      res.json(
+        await (
+          await getExplicitBundleService()
+        ).mergePreview(id.parse(req.params.id), input, abort.signal, req.query.suggestChanges === '1'),
+      );
     } finally {
       res.off('close', close);
     }

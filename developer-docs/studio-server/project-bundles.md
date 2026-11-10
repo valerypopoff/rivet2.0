@@ -19,9 +19,12 @@ a separate recursive deletion flow.
 ### Merging saved project changes
 
 On a managed explicit bundle, choose **Merge into another bundle…** from its
-context menu. Choose the destination, then select which source projects should
-replace existing destination projects or be added as new projects. Everything
-starts as Skip. The source bundle and its unsaved editor changes are left intact;
+context menu. Choose the destination to compare saved contents. Only changed,
+new or ambiguous projects appear in Choose project changes. Clear replacements
+and new-project additions are preselected and marked Suggested in their menus;
+the user can change or skip them before committing. An untouched duplicate shows
+No saved project changes to merge and cannot submit an empty merge.
+The source bundle and its unsaved editor changes are left intact;
 only saved drafts are read.
 The tree advertises the additive bundleMerge capability. Older APIs that support
 bundles but lack the merge routes do not expose this action in a newer web UI.
@@ -30,20 +33,31 @@ The modal asks for matches only for source-bundle projects referenced by
 the selected content. Choosing Use existing does not copy that source dependency
 and stops dependency expansion there. Another explicitly selected replacement
 can still update that destination project. Choosing Add copies the dependency and checks
-its references too. Shared dependencies appear once. Suggestions use unique
-paths/names and require explicit acceptance; names never establish identity by
-themselves. Removing a selected branch removes its now-unused dependency additions.
+its references too. Shared dependencies appear once. Clear required-project
+matches are filled automatically as they are discovered. Existing choices and
+custom paths are preserved during validation and manual refresh. Removing a
+selected branch removes its now-unused dependency additions.
+
+Duplication creates new project IDs while retaining graph/node/port IDs. Change
+detection compares saved definitions, attached data and datasets after normalizing
+duplicate project ownership, mapped internal references and discovery-only hints.
+New revision IDs alone are not evidence of an authored change. Candidates use
+unique relative paths, then unique names, then unclaimed shared graph identities.
+Competing matches stay manual. A graph-only match remains visible even if its
+normalized contents match: graph IDs are useful suggestions, not proof of ancestry.
+No lineage schema is introduced and names never become authoritative identities.
 
 The dialog uses the existing dashboard modal, themed Atlaskit selects, checkboxes
-and buttons. Compact project rows show names and paths together. Search and
-Show selected only filter the visible source list without changing choices or
-requesting another preview. Replacement projects already chosen by another row
-are disabled with an explanation. Use suggested matches applies only unambiguous
-required-project suggestions. Empty-source, empty-destination and missing-destination
+and buttons. Choose project changes, Match referenced projects and Review changes
+use the same bordered cards as the existing bundle-export modal. Compact project
+rows show names and paths together; there are no search or selected-only controls.
+Replacement projects already chosen by another row are disabled with an explanation.
+Empty-source, empty-destination and missing-destination
 states explain the next action.
 
 Review changes shows each selected source, destination action/path and dataset
-count. The footer explains what is still needed and links directly to the review;
+count. Its source column includes the source bundle name. The header shows the
+full source-to-destination bundle paths. The footer explains what is still needed and links directly to the review;
 Merge projects stays disabled until the current review and warning acknowledgements
 allow it. The header/footer remain visible while the content scrolls. Escape
 closes an open dropdown before it can dismiss the dialog. Long errors live in the
@@ -57,6 +71,11 @@ destination or action does not reset choices or custom paths. Named graph matche
 validation; graph IDs are shown only to distinguish duplicate names. The optional
 mappedGraphs preview field supplies this presentation metadata; an older API can
 still expose its selected mappings through the Change graph fallback.
+Changing a project's action or counterpart clears that project's old graph
+choices. The API also ignores obsolete graph matches for added/replaced projects:
+their imported definitions retain their own graph IDs. Empty source bundles need
+no content comparison, and empty destinations can suggest additions from metadata
+before normal validation reads the selected projects.
 
 Replacements keep destination project IDs, names, filenames and locations. New
 projects receive fresh IDs and may use ordinary nested folders. Project contents,
@@ -92,7 +111,12 @@ inactive warning; disabled or unused Library source definitions remain advisory.
 
 The two authenticated routes are POST /api/workflows/bundles/:id/merge/preview and
 POST /api/workflows/bundles/:id/merge. Preview is read-only and abortable; commit
-uses the existing structural admission and namespace receipt recovery. Source and
+uses the existing structural admission and namespace receipt recovery. The opt-in
+suggestChanges=1 preview query compares the two bundles when selecting a destination
+or refreshing the review. Comparison reads use batches of at most four projects,
+the existing deadline and byte budget; ordinary selection previews do not repeat
+the full comparison. Suggestion reads never expand the commit fingerprint's
+authoritative read set or authorize a write. Source and
 consumed counterpart revisions, bundle identities, membership and addition paths
 are rechecked under the topology lease and ordered row locks. A concurrent edit
 to a consumed project requires a fresh review; an unrelated draft edit does not.
@@ -123,7 +147,7 @@ revision identities block even inactive calls. Known inactive missing-graph or
 unpublished-version issues remain acknowledgement warnings.
 
 Limits remain 256 projects and 512 folders per bundle, 64 MiB of prepared write
-content and 128 MiB of analyzed definitions. Review output is capped at 2 MiB.
+content and 128 MiB of analyzed definitions/datasets. Review output is capped at 2 MiB.
 Definition and dataset byte limits are checked before parsing their large payloads.
 Cached revision reads recheck both the revision owner and parsed project ID; a
 shared/corrupt revision pointer cannot bypass identity checks. UUID case variants
@@ -137,7 +161,7 @@ existing capability boundary and do not expose this action.
 
 Implementation and validation details are tracked in the
 [bundle merge plan](bundle-merge-plan.md). Regression owners are
-bundle-merge-plan.test.ts, managed-bundle-merge.test.ts, the real local
+bundle-merge-plan.test.ts, bundle-merge-suggestions.test.ts, managed-bundle-merge.test.ts, the real local
 PostgreSQL/MinIO bundle-merge contract, web bundle-merge.test.ts, existing hosted
 revision/recovery tests and headless bundle-merge.spec.ts. The API/web/browser
 tests are enrolled in their existing CI lanes.

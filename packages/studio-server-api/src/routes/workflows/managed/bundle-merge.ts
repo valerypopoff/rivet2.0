@@ -35,6 +35,7 @@ import { sanitizeWorkflowName } from '../fs-helpers.js';
 import { bundleGraphKey, inspectBundleProjectBindings, remapBundleProject } from '../remap-bundle-project.js';
 import { bundleMergeAdditionId, resolveBundleMerge } from '../bundle-merge-plan.js';
 import { parseBundleDatasets } from '../bundle-datasets.js';
+import { suggestBundleMergeChanges } from '../bundle-merge-suggestions.js';
 import { captureOperation } from './namespace-receipts.js';
 import { createPreparedRevisions } from './prepared-revisions.js';
 import { previousStructuralResult, structuralTransaction } from './structural-admission.js';
@@ -159,14 +160,22 @@ async function incoming(client: Pool | PoolClient, destination: Catalog, replace
 }
 
 export function createManagedBundleMergeService(context: ManagedWorkflowContext) {
-  async function analyze(sourceId: string, choices: BundleMergeChoices, signal: AbortSignal) {
+  async function analyze(sourceId: string, choices: BundleMergeChoices, signal: AbortSignal, suggestChanges = false) {
     signal.throwIfAborted();
     if (sourceId.toLowerCase() === choices.destinationBundleId.toLowerCase())
       throw badRequest('Choose a different destination bundle.');
     await context.initialize();
     signal.throwIfAborted();
-    const readRows = <Row extends QueryResultRow>(sql: string, values: unknown[]) =>
-      queryReferences<Row>(context.pool, sql, values, signal, { timeoutMs: 30_000 });
+    let metadataRead: Promise<unknown> = Promise.resolve();
+    const readRows = <Row extends QueryResultRow>(sql: string, values: unknown[]) => {
+      // Parallel artifact downloads share one metadata-query slot per review.
+      // Otherwise a comparison would exhaust the existing two-query admission guard.
+      const read = metadataRead.then(() =>
+        queryReferences<Row>(context.pool, sql, values, signal, { timeoutMs: 30_000 }),
+      );
+      metadataRead = read.catch(() => {});
+      return read;
+    };
     const readArtifact = async (key: string, projectName: string) => {
       try {
         return await context.blobStore.getText(key, { signal });
@@ -216,6 +225,24 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
       }>
     >();
     let analysisBytes = 0;
+    const datasetReads = new Map<string, Promise<string | null>>();
+    async function datasetsContents(loaded: { revision: RevisionRow }, id: string) {
+      const revision = loaded.revision;
+      let read = datasetReads.get(revision.revision_id);
+      if (!read) {
+        read = (async () => {
+          const contents = revision.dataset_blob_key
+            ? await readArtifact(revision.dataset_blob_key, rows.get(id)!.name)
+            : null;
+          analysisBytes += Buffer.byteLength(contents ?? '');
+          if (analysisBytes > 2 * PROJECT_BUNDLE_UPLOAD_MAX_BYTES)
+            throw badRequest('Merge analysis exceeds 128 MiB. Select fewer changes.');
+          return contents;
+        })();
+        datasetReads.set(revision.revision_id, read);
+      }
+      return read;
+    }
     const sourceIds = new Set(source.members.map((row) => row.workflow_id));
     const destinationIds = new Set(destination.members.map((row) => row.workflow_id));
     async function row(id: string) {
@@ -316,9 +343,14 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
       ),
     );
     const graphMappings = new Map<string, string>();
+    const graphKeys = new Set<string>();
     for (const graph of choices.graphs) {
       const key = bundleGraphKey(graph.sourceProjectId, graph.sourceGraphId);
-      if (graphMappings.has(key)) throw badRequest('Duplicate graph correspondence.');
+      if (graphKeys.has(key)) throw badRequest('Duplicate graph correspondence.');
+      graphKeys.add(key);
+      // Imported definitions retain their own graph IDs. A match chosen for a
+      // previously kept counterpart must not redirect calls into copied content.
+      if (sourceWrites.has(graph.sourceProjectId) || !plan.mapping.has(graph.sourceProjectId)) continue;
       graphMappings.set(key, graph.targetGraphId);
     }
     const graphChoices = new Map<string, BundleMergePreview['requiredGraphs'][number]>();
@@ -535,15 +567,13 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
     ) {
       for (const action of plan.actions) {
         const loaded = await load(action.sourceProjectId);
-        const datasetsContents = loaded.revision.dataset_blob_key
-          ? await readArtifact(loaded.revision.dataset_blob_key, rows.get(action.sourceProjectId)!.name)
-          : null;
+        const savedDatasets = await datasetsContents(loaded, action.sourceProjectId);
         writeBytes +=
           Buffer.byteLength(serializeProject(loaded.project, loaded.attached) as string) +
-          Buffer.byteLength(datasetsContents ?? '');
+          Buffer.byteLength(savedDatasets ?? '');
         if (writeBytes > PROJECT_BUNDLE_UPLOAD_MAX_BYTES)
           throw badRequest('Merge writes exceed 64 MiB. Select fewer changes.');
-        const datasets = parseBundleDatasets(datasetsContents, action.sourceProjectId);
+        const datasets = parseBundleDatasets(savedDatasets, action.sourceProjectId);
         payloads.set(action.sourceProjectId, { project: loaded.project, attached: loaded.attached, datasets });
         preview.datasets.push({ sourceProjectId: action.sourceProjectId, count: datasets?.length ?? 0 });
       }
@@ -557,18 +587,29 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
         warnings: preview.warnings.map((warning) => warning.id),
       });
     }
+    // Comparison is presentation only: its larger read set must not change the
+    // fingerprint recomputed by an ordinary commit of the selected changes.
+    if (suggestChanges)
+      preview.suggestions = await suggestBundleMergeChanges(
+        preview.source.projects,
+        preview.destination.projects,
+        async (id) => {
+          const loaded = await load(id);
+          return { ...loaded, datasets: parseBundleDatasets(await datasetsContents(loaded, id), id) };
+        },
+      );
     signal.throwIfAborted();
     if (Buffer.byteLength(JSON.stringify(preview)) > 2 * 1024 * 1024)
       throw badRequest('The merge review exceeds 2 MiB. Select fewer changes.');
     return { preview, source, destination, plan, facts, folderFacts, incomingRows, placement, payloads, graphMappings };
   }
   return {
-    async preview(sourceId: string, choices: BundleMergeChoices, callerSignal?: AbortSignal) {
+    async preview(sourceId: string, choices: BundleMergeChoices, callerSignal?: AbortSignal, suggestChanges = false) {
       const signal = callerSignal
         ? AbortSignal.any([callerSignal, AbortSignal.timeout(30_000)])
         : AbortSignal.timeout(30_000);
       try {
-        return (await analyze(sourceId, choices, signal)).preview;
+        return (await analyze(sourceId, choices, signal, suggestChanges)).preview;
       } catch (error) {
         if (signal.aborted)
           throw createHttpError(

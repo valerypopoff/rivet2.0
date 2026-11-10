@@ -16,6 +16,7 @@ export const defaultApiTestFiles = [
   'src/tests/body-admission.test.ts',
   'src/tests/browser-storage-deployment-contract.test.ts',
   'src/tests/bundle-merge-plan.test.ts',
+  'src/tests/bundle-merge-suggestions.test.ts',
   'src/tests/catalog-worker.test.ts',
   'src/tests/docker-launcher-env.test.ts',
   'src/tests/docker-launcher.test.ts',

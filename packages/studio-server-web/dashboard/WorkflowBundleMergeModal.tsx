@@ -11,12 +11,13 @@ import type {
   BundleMergePreview,
   BundleMergeProject,
   BundleMergeSite,
+  BundleMergeSuggestion,
 } from '../../studio-server-shared/workflow-bundle-types';
 import type { WorkflowFolderItem } from './types';
 import type { LibraryMutationCompletion } from './workflowNamespaceReconciliation';
 import { previewWorkflowBundleMerge, mergeWorkflowBundle } from './workflowApi';
 import { MutationOutcomeUnknownError } from './workflowNamespaceMutations';
-import { describeBundleMergeSite, suggestBundleMergeCounterpart } from './bundleMerge';
+import { applyBundleMergeSuggestions, describeBundleMergeSite, suggestBundleMergeCounterpart } from './bundleMerge';
 import './WorkflowProjectBundleModal.css';
 import './WorkflowBundleMergeModal.css';
 
@@ -157,14 +158,15 @@ export function WorkflowBundleMergeModal({
   const [busy, setBusy] = useState(false);
   const [unknown, setUnknown] = useState(false);
   const [refresh, setRefresh] = useState(0);
-  const [search, setSearch] = useState('');
-  const [selectedOnly, setSelectedOnly] = useState(false);
+  const [suggestions, setSuggestions] = useState<BundleMergeSuggestion[]>();
+  const currentSuggestions = useRef<BundleMergeSuggestion[]>();
+  const initializeChoices = useRef(true);
+  const compareChanges = useRef(true);
   const [openSelect, setOpenSelect] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState<string[]>([]);
   const pending = useRef(false);
   const mounted = useRef(true);
   const abort = useRef<AbortController>();
-  const searchInput = useRef<HTMLInputElement>(null);
   const reviewSection = useRef<HTMLElement>(null);
   const errorDetails = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -198,10 +200,26 @@ export function WorkflowBundleMergeModal({
     setLoading(true);
     setError('');
     const timer = setTimeout(() => {
-      void previewWorkflowBundleMerge(source.bundleId!, choices, controller.signal)
+      void previewWorkflowBundleMerge(source.bundleId!, choices, controller.signal, compareChanges.current)
         .then((value) => {
           if (controller.signal.aborted || latest.current !== choices || pending.current) return;
+          if (value.suggestions) {
+            currentSuggestions.current = value.suggestions;
+            setSuggestions(value.suggestions);
+          }
+          const next = applyBundleMergeSuggestions(
+            choices,
+            value,
+            currentSuggestions.current,
+            initializeChoices.current,
+          );
+          initializeChoices.current = false;
+          compareChanges.current = false;
           setCatalogs(value);
+          if (next !== choices) {
+            change(next);
+            return;
+          }
           setReview({ choices, value });
           setLoading(false);
         })
@@ -289,6 +307,7 @@ export function WorkflowBundleMergeModal({
         ...choices.actions.filter((choice) => choice.sourceProjectId !== project.projectId),
         ...(action ? [action] : []),
       ],
+      graphs: choices.graphs.filter((graph) => graph.sourceProjectId !== project.projectId),
     });
   };
   const updateDependency = (project: BundleMergeProject, value: string) => {
@@ -309,6 +328,7 @@ export function WorkflowBundleMergeModal({
         ...choices.dependencies.filter((choice) => choice.sourceProjectId !== project.projectId),
         ...(dependency ? [dependency] : []),
       ],
+      graphs: choices.graphs.filter((graph) => graph.sourceProjectId !== project.projectId),
     });
   };
   const candidates: Option[] = bundles
@@ -320,8 +340,10 @@ export function WorkflowBundleMergeModal({
   }));
   const projects = (form?.source.projects ?? []).filter(
     (project) =>
-      (!selectedOnly || choices.actions.some((action) => action.sourceProjectId === project.projectId)) &&
-      (project.title + ' ' + project.relativePath).toLowerCase().includes(search.toLowerCase().trim()),
+      choices.actions.some((action) => action.sourceProjectId === project.projectId) ||
+      !suggestions?.some(
+        (suggestion) => suggestion.sourceProjectId === project.projectId && suggestion.state === 'unchanged',
+      ),
   );
   const requiredProjects = choices.actions.length
     ? (form?.requiredProjects ?? []).filter(
@@ -345,11 +367,6 @@ export function WorkflowBundleMergeModal({
     preview?.requiredProjects.filter(({ project }) =>
       choices.dependencies.some((choice) => choice.sourceProjectId === project.projectId && choice.kind === 'existing'),
     ).length ?? 0;
-  const suggestions = requiredProjects.flatMap(({ project }) => {
-    if (choices.dependencies.some((choice) => choice.sourceProjectId === project.projectId)) return [];
-    const id = suggestBundleMergeCounterpart(project, form!.destination.projects);
-    return id ? [{ sourceProjectId: project.projectId, kind: 'existing' as const, targetProjectId: id }] : [];
-  });
   function readinessMessage() {
     if (busy) return 'Merging saved project changes…';
     if (unknown) return 'The outcome is unconfirmed. Refresh the project tree before starting another merge.';
@@ -357,6 +374,7 @@ export function WorkflowBundleMergeModal({
     if (loading) return 'Checking selected projects and required references…';
     if (!choices.destinationBundleId) return 'Choose a destination bundle to begin.';
     if (form && !form.source.projects.length) return 'The source bundle has no saved projects.';
+    if (form && suggestions && !projects.length) return 'No saved project changes to merge.';
     if (!choices.actions.length) return 'Choose projects to replace or add.';
     if (!preview) return 'Refresh the review before merging.';
     if (preview.blockers.length)
@@ -387,7 +405,12 @@ export function WorkflowBundleMergeModal({
           <div className="project-settings-modal-header-row">
             <div className="project-settings-modal-heading">
               <div className="project-settings-modal-title">Merge bundle</div>
-              <small className="project-settings-muted">From {form?.source.relativePath ?? source.relativePath}</small>
+              <small className="project-settings-muted">
+                {form?.source.relativePath ?? source.relativePath} →{' '}
+                {form?.destination.relativePath ??
+                  bundles.find((bundle) => bundle.bundleId === choices.destinationBundleId)?.relativePath ??
+                  'Choose a destination'}
+              </small>
             </div>
             <button
               type="button"
@@ -417,6 +440,10 @@ export function WorkflowBundleMergeModal({
                 onChange={(option) => {
                   const destinationId = option?.value ?? '';
                   if (destinationId === latest.current.destinationBundleId) return;
+                  initializeChoices.current = true;
+                  compareChanges.current = true;
+                  currentSuggestions.current = undefined;
+                  setSuggestions(undefined);
                   setCatalogs(null);
                   change(emptyChoices(destinationId));
                 }}
@@ -431,55 +458,38 @@ export function WorkflowBundleMergeModal({
               </p>
             ) : null}
             {form ? (
-              <section aria-label="Project changes">
+              <section className="workflow-project-bundle-card" aria-label="Project changes">
                 <div className="workflow-bundle-merge-section-heading">
                   <h3>Choose project changes</h3>
                   <small>{countLabel(choices.actions.length, 'project')} selected</small>
                 </div>
-                <div className="workflow-bundle-merge-toolbar">
-                  <input
-                    ref={searchInput}
-                    type="search"
-                    className="project-settings-input"
-                    aria-label="Filter source projects"
-                    placeholder="Search project names or paths"
-                    value={search}
-                    disabled={busy}
-                    onChange={(event) => setSearch(event.target.value)}
-                  />
-                  <Checkbox
-                    label="Show selected only"
-                    isChecked={selectedOnly}
-                    isDisabled={busy}
-                    onChange={(event) => setSelectedOnly(event.currentTarget.checked)}
-                  />
-                  {search || selectedOnly ? (
-                    <Button
-                      appearance="subtle"
-                      isDisabled={busy}
-                      onClick={() => {
-                        setSearch('');
-                        setSelectedOnly(false);
-                        searchInput.current?.focus();
-                      }}
-                    >
-                      Clear filters
-                    </Button>
-                  ) : null}
-                </div>
+                <p className="project-settings-help">
+                  {suggestions
+                    ? 'Only changed and new saved projects are listed. Suggested actions are selected for you and can be changed.'
+                    : 'Choose project changes manually. This server does not provide saved-content comparison.'}
+                </p>
                 {!projects.length ? (
                   <p className="project-settings-help">
                     {!form.source.projects.length
                       ? 'This bundle has no saved projects to merge.'
-                      : 'No projects match the current filters. Clear the filters to see all projects.'}
+                      : 'No saved project changes to merge. The projects already match the destination.'}
                   </p>
                 ) : null}
                 {projects.map((project) => {
                   const action = choices.actions.find((choice) => choice.sourceProjectId === project.projectId);
-                  const suggested = suggestBundleMergeCounterpart(project, form.destination.projects);
+                  const suggestion = suggestions?.find(
+                    (suggestion) => suggestion.sourceProjectId === project.projectId,
+                  );
+                  const suggested =
+                    suggestion?.targetProjectId ??
+                    (!suggestions ? suggestBundleMergeCounterpart(project, form.destination.projects) : null);
                   const options: Option[] = [
                     { value: 'skip', label: 'Skip' },
-                    { value: 'add', label: 'Add as a new project' },
+                    {
+                      value: 'add',
+                      label: 'Add as a new project',
+                      hint: suggestion?.state === 'new' ? 'Suggested' : undefined,
+                    },
                     ...targets
                       .map((target) => {
                         const used = choices.actions.some(
@@ -523,6 +533,9 @@ export function WorkflowBundleMergeModal({
                         })
                       }
                     >
+                      {suggestion?.state === 'ambiguous' ? (
+                        <small>No unique match was found. Choose a replacement or add a new project.</small>
+                      ) : null}
                       {requiredAddition ? <small>Will be added as a required reference below.</small> : null}
                     </ProjectChoiceRow>
                   );
@@ -536,16 +549,13 @@ export function WorkflowBundleMergeModal({
               </section>
             ) : null}
             {form && requiredProjects.length ? (
-              <section aria-label="Required project references" aria-busy={loading}>
+              <section
+                className="workflow-project-bundle-card"
+                aria-label="Required project references"
+                aria-busy={loading}
+              >
                 <div className="workflow-bundle-merge-section-heading">
                   <h3>Match referenced projects</h3>
-                  <Button
-                    appearance="subtle"
-                    isDisabled={disabled || !suggestions.length}
-                    onClick={() => change({ ...choices, dependencies: [...choices.dependencies, ...suggestions] })}
-                  >
-                    Use suggested matches
-                  </Button>
                 </div>
                 <p className="project-settings-help">
                   Use an existing project to update references only. Add copies the source project and checks its
@@ -555,6 +565,12 @@ export function WorkflowBundleMergeModal({
                   const dependency = choices.dependencies.find(
                     (choice) => choice.sourceProjectId === project.projectId,
                   );
+                  const suggestion = suggestions?.find(
+                    (suggestion) => suggestion.sourceProjectId === project.projectId,
+                  );
+                  const suggested =
+                    suggestion?.targetProjectId ??
+                    (!suggestions ? suggestBundleMergeCounterpart(project, form.destination.projects) : null);
                   return (
                     <ProjectChoiceRow
                       onMenuChange={trackSelect}
@@ -563,10 +579,15 @@ export function WorkflowBundleMergeModal({
                       scope="dependency"
                       disabled={disabled}
                       options={[
-                        { value: 'add', label: 'Add as a new project' },
+                        {
+                          value: 'add',
+                          label: 'Add as a new project',
+                          hint: suggestion?.state === 'new' ? 'Suggested' : undefined,
+                        },
                         ...targets.map((target) => ({
                           value: 'existing:' + target.value,
                           label: 'Use existing ' + target.label,
+                          hint: target.value === suggested ? 'Suggested' : undefined,
                         })),
                       ]}
                       value={dependencyValue(dependency)}
@@ -597,7 +618,7 @@ export function WorkflowBundleMergeModal({
               </section>
             ) : null}
             {graphChoices.length ? (
-              <section aria-label="Graph correspondences" aria-busy={loading}>
+              <section className="workflow-project-bundle-card" aria-label="Graph correspondences" aria-busy={loading}>
                 <h3>Match graphs</h3>
                 {graphChoices.map((graph) => {
                   const key = graphKey(graph.sourceProjectId, graph.sourceGraphId);
@@ -682,7 +703,12 @@ export function WorkflowBundleMergeModal({
                 ))
               : null}
             {preview && choices.actions.length ? (
-              <section aria-label="Merge review" ref={reviewSection} tabIndex={-1}>
+              <section
+                className="workflow-project-bundle-card"
+                aria-label="Merge review"
+                ref={reviewSection}
+                tabIndex={-1}
+              >
                 <h3>Review changes</h3>
                 <p>
                   {countLabel(preview.actions.filter((action) => action.kind === 'replace').length, 'replacement')};{' '}
@@ -695,7 +721,7 @@ export function WorkflowBundleMergeModal({
                     <caption className="workflow-bundle-merge-sr-only">Selected project changes</caption>
                     <thead>
                       <tr>
-                        <th scope="col">Source project</th>
+                        <th scope="col">Source project in {preview.source.name}</th>
                         <th scope="col">Destination in {preview.destination.name}</th>
                         <th scope="col">Datasets</th>
                       </tr>
@@ -801,6 +827,7 @@ export function WorkflowBundleMergeModal({
                 isDisabled={disabled || loading || !choices.destinationBundleId}
                 onClick={() => {
                   abort.current?.abort();
+                  compareChanges.current = true;
                   setReview(null);
                   setAcknowledged([]);
                   setRefresh((value) => value + 1);

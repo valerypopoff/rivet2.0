@@ -14,6 +14,11 @@ export type BundleMergeChoices = {
   graphs: BundleMergeGraphMapping[];
 };
 export type BundleMergeProject = { projectId: string; title: string; relativePath: string };
+export type BundleMergeSuggestion = {
+  sourceProjectId: string;
+  state: 'unchanged' | 'changed' | 'new' | 'ambiguous';
+  targetProjectId?: string;
+};
 export type BundleMergeCatalog = {
   bundleId: string;
   namespaceId: string;
@@ -50,6 +55,8 @@ export type BundleMergePreview = {
   requiredGraphs: BundleMergeGraphChoice[];
   /** Current named choices remain editable after their correspondence resolves. */
   mappedGraphs?: BundleMergeGraphChoice[];
+  /** Requested once when choosing a destination; not a write authorization. */
+  suggestions?: BundleMergeSuggestion[];
   blockers: BundleMergeDiagnostic[];
   warnings: BundleMergeDiagnostic[];
   rewrites: number;
