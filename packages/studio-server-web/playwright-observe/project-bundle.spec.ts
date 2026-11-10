@@ -313,26 +313,36 @@ test('download dependencies survives closing the dialog and runs the real downlo
     await expect(modal.getByRole('alert')).toContainText('Could not prepare the bundle.');
     await expect(link).toHaveCount(0);
     failPreparation = false;
-    const childGraph = fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!]!;
+    const childGraphId = fixture.child.project.metadata.mainGraphId!;
+    const childGraph = fixture.child.project.graphs[childGraphId]!;
     const childNodes = childGraph.nodes;
     childGraph.nodes = childNodes.filter((node) => node.type !== 'graphOutput');
     fixture.child.projectContents = serializeProject(fixture.child.project) as string;
     await page.getByRole('button', { name: 'Retry export', exact: true }).click();
+    await expect(link).toBeVisible();
+    await expect(modal.getByRole('alert')).toHaveCount(0);
+    // Port changes are adopted automatically, but a missing graph still needs
+    // an actionable location and must recover after the target is restored.
+    await page.getByRole('button', { name: 'Prepare another bundle' }).click();
+    delete fixture.child.project.graphs[childGraphId];
+    fixture.child.projectContents = serializeProject(fixture.child.project) as string;
+    await page.getByRole('button', { name: 'Prepare bundle', exact: true }).click();
     await expect(modal.getByRole('status')).toContainText('Export: failed.');
-    const boundaryError = modal.getByRole('alert');
-    await expect(boundaryError).toContainText('in graph "Main" of project "Root"');
-    await expect(boundaryError).toContainText('Target: graph "Child" in project "子供" (Saved latest)');
-    await expect(boundaryError).toContainText('changed its output "result"');
+    const targetError = modal.getByRole('alert');
+    await expect(targetError).toContainText('in graph "Main" of project "Root"');
+    await expect(targetError).toContainText(`Target: graph "${childGraphId}" in project "子供" (Saved latest)`);
+    await expect(targetError).toContainText(`missing graph ${childGraphId}`);
     const call = fixture.root.project.graphs[fixture.root.project.metadata.mainGraphId!]!.nodes.find(
       (node) => node.type === 'subGraph',
     )!;
-    await expect(boundaryError).toContainText(call.id);
+    await expect(targetError).toContainText(call.id);
     await page.setViewportSize({ width: 390, height: 520 });
     await expectStudioModalSizing(dialog);
-    await expect(boundaryError).toBeVisible();
-    await dialog.screenshot({ path: test.info().outputPath('bundle-boundary-repair-location.png') });
+    await expect(targetError).toBeVisible();
+    await dialog.screenshot({ path: test.info().outputPath('bundle-missing-graph-repair-location.png') });
     await page.setViewportSize({ width: 1600, height: 1000 });
     childGraph.nodes = childNodes;
+    fixture.child.project.graphs[childGraphId] = childGraph;
     fixture.child.projectContents = serializeProject(fixture.child.project) as string;
     await page.getByRole('button', { name: 'Retry export', exact: true }).click();
     await expect(link).toBeVisible();

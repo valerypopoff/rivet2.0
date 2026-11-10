@@ -22,6 +22,7 @@ for (const mode of [
   'database inactive target',
   'inactive missing graph',
   'inactive unpublished target',
+  'kept counterpart',
 ] as const) {
   const abortDuringRead = mode === 'cancelled';
   test(`preview deduplicates external metadata/artifact reads and never writes (${mode})`, async () => {
@@ -29,6 +30,8 @@ for (const mode of [
     const source = fixture.root.project,
       external = fixture.child.project;
     const first = source.graphs[source.metadata.mainGraphId!]!.nodes.find((node) => node.type === 'subGraph')!;
+    const keptCounterpart = mode === 'kept counterpart';
+    if (keptCounterpart) delete (first.data as { targetBoundary?: unknown }).targetBoundary;
     const targetUnavailable = mode === 'unavailable active target' || mode === 'unavailable inactive target';
     const databaseUnavailable = mode === 'database active target' || mode === 'database inactive target';
     const inactiveCall = [
@@ -80,6 +83,16 @@ for (const mode of [
       relative_path: 'External.rivet-project',
       folder_relative_path: '',
     };
+    const counterpart = structuredClone(external);
+    counterpart.metadata.id = 'kept-target' as ProjectId;
+    const counterpartRow = {
+      ...externalRow,
+      workflow_id: counterpart.metadata.id,
+      current_draft_revision_id: 'kept-revision',
+      name: 'Kept target',
+      relative_path: 'Destination/Kept target.rivet-project',
+      folder_relative_path: 'Destination',
+    };
     let metadataReads = 0,
       leases = 0,
       releases = 0,
@@ -99,13 +112,13 @@ for (const mode of [
                 root,
                 members: [
                   sourceRow,
-                  ...(mode === 'preparation failure'
+                  ...(mode === 'preparation failure' || keptCounterpart
                     ? [{ ...externalRow, relative_path: 'Source/Child.rivet-project', folder_relative_path: 'Source' }]
                     : []),
                 ],
                 folders: [root],
               },
-              { root: destination, members: [], folders: [destination] },
+              { root: destination, members: keptCounterpart ? [counterpartRow] : [], folders: [destination] },
             ],
           };
         if (sql.includes('AS merge_bundle_id')) {
@@ -124,7 +137,12 @@ for (const mode of [
             rows: [
               {
                 revision_id: parameters[0],
-                workflow_id: parameters[0] === 'source-revision' ? source.metadata.id : external.metadata.id,
+                workflow_id:
+                  parameters[0] === 'kept-revision'
+                    ? counterpart.metadata.id
+                    : parameters[0] === 'source-revision'
+                      ? source.metadata.id
+                      : external.metadata.id,
                 project_blob_key: parameters[0],
                 dataset_blob_key:
                   mode === 'oversized datasets' || mode === 'unavailable datasets' ? 'source-datasets' : null,
@@ -150,6 +168,8 @@ for (const mode of [
       blobStore: {
         getText: async (key: string) => {
           reads.set(key, (reads.get(key) ?? 0) + 1);
+          if (keptCounterpart && key === 'external-revision')
+            throw new Error('Unused source contents must not be read');
           if (abortDuringRead && key === 'source-revision') stop.abort();
           if (mode === 'oversized definition' && key === 'source-revision') return 'x'.repeat(128 * 1024 * 1024 + 1);
           if (mode === 'oversized datasets' && key === 'source-datasets') return 'x'.repeat(64 * 1024 * 1024 + 1);
@@ -158,7 +178,9 @@ for (const mode of [
             (mode === 'unavailable datasets' && key === 'source-datasets')
           )
             throw new Error('private object path and storage diagnostics must not be exposed');
-          return serializeProject(key === 'source-revision' ? source : external) as string;
+          return serializeProject(
+            key === 'source-revision' ? source : key === 'kept-revision' ? counterpart : external,
+          ) as string;
         },
       },
       revisions: {
@@ -189,7 +211,9 @@ for (const mode of [
             ? [{ sourceProjectId: external.metadata.id, kind: 'add' as const, relativePath: 'Child.rivet-project' }]
             : []),
         ],
-        dependencies: [],
+        dependencies: keptCounterpart
+          ? [{ sourceProjectId: external.metadata.id, kind: 'existing', targetProjectId: counterpart.metadata.id }]
+          : [],
         graphs: [],
       },
       stop.signal,
@@ -254,6 +278,12 @@ for (const mode of [
       );
       assert.equal(prepared, 2);
       assert.deepEqual(discarded, ['prepared-first']);
+    } else if (keptCounterpart) {
+      const review = await preview;
+      assert.ok(review.fingerprint);
+      assert.deepEqual(review.blockers, []);
+      assert.deepEqual(Object.fromEntries(reads), { 'source-revision': 1, 'kept-revision': 1 });
+      assert.equal(metadataReads, 0);
     } else {
       assert.ok((await preview).fingerprint);
       assert.equal(metadataReads, 1);

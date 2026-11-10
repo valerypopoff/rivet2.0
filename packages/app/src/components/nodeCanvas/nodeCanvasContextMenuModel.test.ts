@@ -1164,6 +1164,7 @@ test('external Subgraph rearrange uses its saved boundary or exact referenced ve
       },
     },
   });
+  assert.equal(removedPorts.type, 'node');
   assert.equal(removedPorts.data.canRearrangeSubgraphPorts, false);
 });
 

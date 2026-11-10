@@ -123,6 +123,7 @@ export function buildGraphBoundaryInputData(
   boundary: GraphBoundary,
   inputs: Inputs,
   defaults: Record<string, DataValue> | undefined,
+  previousBoundary?: GraphBoundary,
 ): Inputs {
   const inputData: Inputs = {};
   const callerPortIds = new Set(boundary.inputs.map((input) => input.portId));
@@ -135,7 +136,13 @@ export function buildGraphBoundaryInputData(
     }
 
     const defaultValue =
-      defaults?.[input.portId] ?? (!callerPortIds.has(input.id as PortId) ? defaults?.[input.id] : undefined);
+      defaults?.[input.portId] ??
+      (!callerPortIds.has(input.id as PortId) &&
+      !previousBoundary?.inputs.some(
+        (previous) => previous.portId !== input.portId && (previous.portId === input.id || previous.id === input.id),
+      )
+        ? defaults?.[input.id]
+        : undefined);
     if (defaultValue != null) {
       inputData[input.portId] = defaultValue;
     }

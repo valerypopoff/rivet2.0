@@ -1212,6 +1212,33 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(defaultResults.result?.value, 'authored default');
   });
 
+  void it('does not send a deleted input default to a surviving input renamed to that name', async () => {
+    const removed = makeGraphInputNode('deleted-node', 'removed');
+    const survivor = makeGraphInputNode('survivor-node', 'kept');
+    Object.assign(survivor.data, { defaultValue: 'child default' });
+    const output = makeGraphOutputNode('answer');
+    const child = makeGraph(
+      'defaults-child',
+      [removed, survivor, output],
+      [connect(survivor.id, output.id, 'value', 'data')],
+    );
+    const project = makeProject(child);
+    project.metadata.id = 'defaults-project' as ProjectId;
+    const caller = makeSubgraphNode('defaults-caller', child.metadata!.id);
+    caller.data.targetProjectId = project.metadata.id;
+    caller.data.targetBoundary = getGraphBoundary(project, child.metadata!.id);
+    caller.data.inputData = { removed: { type: 'string', value: 'wrong old default' } };
+    child.nodes = child.nodes.filter((node) => node.id !== removed.id);
+    Object.assign(survivor.data, { id: 'removed' });
+    const result = makeGraphOutputNode('result');
+    const root = makeGraph('defaults-root', [caller, result], [connect(caller.id, result.id, 'value', 'answer')]);
+    const outputs = await createProcessor(root).processGraph({
+      ...testProcessContext(),
+      subgraphProjectLoader: { loadTarget: async () => ({ project }) },
+    });
+    assert.equal(outputs.result?.value, 'child default');
+  });
+
   void it('adopts renamed legacy inputs and keeps reused port names distinct without reselection', async () => {
     const input = makeGraphInputNode('stable-input-node', 'prompt');
     const child = makeGraph('ambiguous-boundary-child', [input], []);

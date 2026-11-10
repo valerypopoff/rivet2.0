@@ -5,7 +5,6 @@ import {
   serializeProject,
   remapOwnedDatasets,
   serializeDatasets,
-  getGraphBoundary,
   validateProjectBundleCall,
   ProjectBundleError,
   type Project,
@@ -435,13 +434,8 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
           entry.sites.push(binding.site);
           if (!entry.selectedGraphId) continue;
         }
-        let boundary = binding.boundary;
-        if (!boundary && mapped && !sourceWrites.has(binding.projectId) && binding.graphId) {
-          const original = (await load(binding.projectId)).project;
-          boundary = getGraphBoundary(original, binding.graphId as GraphId);
-        }
         validateProjectBundleCall(
-          { projectId: targetId, graphId: graphId ?? '', version: mapped ? 'latest' : binding.version, boundary },
+          { projectId: targetId, graphId: graphId ?? '', version: mapped ? 'latest' : binding.version },
           target,
         );
       } catch (error) {
@@ -454,7 +448,7 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
         // Only Core's explicit graph-contract failures can become inactive warnings.
         if (status || !(error instanceof ProjectBundleError)) throw error;
         issue(
-          `Target graph ${graphId || '(not selected)'} in ${sourceWrites.get(binding.projectId)?.kind === 'add' ? rows.get(binding.projectId)?.name : rows.get(targetId)?.name || targetId} is missing or has an incompatible saved wire boundary. Select a compatible graph or include the dependency's changes.`,
+          `Target graph ${graphId || '(not selected)'} in ${sourceWrites.get(binding.projectId)?.kind === 'add' ? rows.get(binding.projectId)?.name : rows.get(targetId)?.name || targetId} is missing. Select another graph or include the dependency's changes.`,
           binding.site,
           !binding.site.active,
         );
@@ -527,8 +521,6 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
           projectId: binding.projectId,
           graphId: binding.graphId ?? '',
           version: binding.version,
-          boundary:
-            binding.boundary ?? (binding.graphId ? getGraphBoundary(before, binding.graphId as GraphId) : undefined),
         };
         try {
           validateProjectBundleCall(call, before);
@@ -539,7 +531,7 @@ export function createManagedBundleMergeService(context: ManagedWorkflowContext)
           validateProjectBundleCall(call, after);
         } catch {
           issue(
-            `This existing ${caller.kind}${caller.label ? ` (${caller.label})` : ''} caller will lose a compatible target graph. Its contents will not be changed.`,
+            `This existing ${caller.kind}${caller.label ? ` (${caller.label})` : ''} caller will lose its selected target graph. Its contents will not be changed.`,
             binding.site,
             true,
           );

@@ -76,7 +76,8 @@ their dataset snapshots remain available through existing history/retention rule
 ### Saved versions and publications
 
 Use **Saved latest** source drafts in the first release. Do not silently save
-open source tabs. The modal explains that unsaved changes are excluded.
+open source tabs. Review and comparison use saved revisions; unsaved editor
+changes are excluded.
 
 Rewritten internal Subgraph targets use **Saved latest**, matching the current
 copy/import policy and the newly merged drafts. State this in the review,

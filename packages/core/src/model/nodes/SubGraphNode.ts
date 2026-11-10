@@ -267,7 +267,12 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
     const callerBoundary = this.data.targetProjectId
       ? reconcileSubgraphTargetBoundary(this.data.targetBoundary, boundary)
       : boundary;
-    const callerInputData = buildGraphBoundaryInputData(callerBoundary, inputs, this.data.inputData);
+    const callerInputData = buildGraphBoundaryInputData(
+      callerBoundary,
+      inputs,
+      this.data.inputData,
+      this.data.targetProjectId ? this.data.targetBoundary : undefined,
+    );
     const inputData: Inputs = this.data.targetProjectId ? {} : callerInputData;
     if (this.data.targetProjectId) {
       for (const input of callerBoundary.inputs) {

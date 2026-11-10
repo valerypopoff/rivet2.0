@@ -83,3 +83,22 @@ test('legacy snapshots and callers without snapshots use available current ident
   assert.deepEqual(reconcileSubgraphTargetBoundary(legacy, actual), actual);
   assert.equal(reconcileSubgraphTargetBoundary(undefined, actual), actual);
 });
+
+test('a surviving input cannot inherit a removed input default by taking its old name', () => {
+  const saved = boundary(port('removed', 'deleted'), port('kept', 'survivor'));
+  const next = reconcileSubgraphTargetBoundary(saved, boundary(port('removed', 'survivor')));
+  assert.deepEqual(
+    buildGraphBoundaryInputData(next, {}, { removed: { type: 'string', value: 'old default' } }, saved),
+    {},
+  );
+  assert.deepEqual(buildGraphBoundaryInputData(next, {}, { kept: { type: 'string', value: 'own default' } }, saved), {
+    kept: { type: 'string', value: 'own default' },
+  });
+  const renamed = reconcileSubgraphTargetBoundary(saved, boundary(port('new-name', 'survivor')));
+  assert.deepEqual(
+    buildGraphBoundaryInputData(renamed, {}, { 'new-name': { type: 'string', value: 'new default' } }, saved),
+    {
+      kept: { type: 'string', value: 'new default' },
+    },
+  );
+});

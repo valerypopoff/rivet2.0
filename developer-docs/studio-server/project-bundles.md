@@ -135,6 +135,10 @@ Published applications that intentionally call Saved latest dependencies may obs
 changed drafts; merging is not coordinated publication or endpoint cutover.
 Legacy graph aliases retain their project-reference/Saved latest semantics;
 Subgraph-only targetVersion or targetBoundary fields do not change alias behavior.
+For kept dependency counterparts, ordinary merge validation reads the selected
+destination definition without downloading the unused source definition merely
+to compare port snapshots. Missing-graph diagnostics identify the selected target;
+port changes do not become compatibility blockers.
 
 Duplication preserves graph/node/port IDs, so the normal duplicate/edit/merge case
 needs project mapping only. Missing graph identities in an existing counterpart
@@ -1455,6 +1459,9 @@ renamed port's old name gets a separate stable ID, keeping existing wires and
 defaults attached to the original port. While a preview is unavailable, the saved
 port snapshot remains visible and cannot authorize pruning. Version selection,
 missing-graph errors and ordinary execution/type checks remain in effect.
+Name-based default lookup cannot reuse a different or removed input's saved
+default when a surviving input adopts that name. Defaults explicitly stored for
+the surviving port and unambiguous current-name defaults remain supported.
 Connecting or rewiring a recreated same-name port records its current node
 identity in the same undoable command, so later renames retain the new connection.
 Named graph outputs and their retained wire aliases take precedence over run
@@ -1465,7 +1472,14 @@ Regression coverage: `SubGraphNode.boundary.test.ts`, the cross-project cases in
 `connectionValidation.test.ts`, `project-bundle.test.ts` and the headless
 `cross-project-subgraph-loading.spec.ts`/`subgraph-output-pruning.spec.ts` journeys.
 Build Core with `yarn workspace @valerypopoff/rivet2-core build:esm` before running
-the App tests, which consume its generated exports. Run the browser journeys with
+the App tests, which consume its generated exports. Also run
+`yarn workspace @valerypopoff/rivet-app build` before publishing: its TypeScript
+step checks test sources that `tsx --test` executes without type-checking.
+Run `yarn test:style` as well. The merge implementation's ten shared-contract
+and HTTP-error dependencies are reviewed as exact source/specifier entries in
+`scripts/checks/import-boundary-debt.json`, following the existing source/compiled
+shared-contract layout. New, removed or duplicate entries still fail the guard.
+Run the browser journeys with
 `PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0` through
 `yarn studio-server:ui:observe`. Finish source edits and formatting before starting
 them so Vite reloads do not interrupt navigation or connection gestures.
@@ -1935,9 +1949,12 @@ yarn studio-server:ui:observe desktop-project-bundle.spec.ts
 The browser fixture uses owned API responses and a real exporter, browser download,
 ZIP extraction into another directory, and Node execution, plus delayed/lost start
 acknowledgements, failed preparation followed by retry without reloading the
-workspace, and the shared modal theme. API tests cover auth,
-range resumption, redaction, cancellation, restart, coherent closure and reader
-retention, including cancelled reader capacity, held terminal journal writes, retry after
+workspace, and the shared modal theme. Port changes in the referenced graph must
+still permit export. A genuinely missing target graph must identify the caller
+project/graph/node and target project/version, remain readable on a narrow
+viewport, and allow retry after repair. API tests cover auth, range resumption,
+redaction, cancellation, restart, coherent closure and reader retention,
+including cancelled reader capacity, held terminal journal writes, retry after
 failed expiry removal and unclaimed scratch preservation.
 Held-journal fixtures cover both success/failure acknowledgements and prevent
 downloads from escaping a failed publication; they use explicit gates,
