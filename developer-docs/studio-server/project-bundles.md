@@ -16,6 +16,132 @@ Conversion back to an ordinary folder removes grouping only. Projects, reference
 and publications survive. Ordinary folders must be empty to delete; bundles have
 a separate recursive deletion flow.
 
+### Merging saved project changes
+
+On a managed explicit bundle, choose **Merge into another bundle…** from its
+context menu. Choose the destination, then select which source projects should
+replace existing destination projects or be added as new projects. Everything
+starts as Skip. The source bundle and its unsaved editor changes are left intact;
+only saved drafts are read.
+The tree advertises the additive bundleMerge capability. Older APIs that support
+bundles but lack the merge routes do not expose this action in a newer web UI.
+
+The modal asks for matches only for source-bundle projects referenced by
+the selected content. Choosing Use existing does not copy that source dependency
+and stops dependency expansion there. Another explicitly selected replacement
+can still update that destination project. Choosing Add copies the dependency and checks
+its references too. Shared dependencies appear once. Suggestions use unique
+paths/names and require explicit acceptance; names never establish identity by
+themselves. Removing a selected branch removes its now-unused dependency additions.
+
+The dialog uses the existing dashboard modal, themed Atlaskit selects, checkboxes
+and buttons. Compact project rows show names and paths together. Search and
+Show selected only filter the visible source list without changing choices or
+requesting another preview. Replacement projects already chosen by another row
+are disabled with an explanation. Use suggested matches applies only unambiguous
+required-project suggestions. Empty-source, empty-destination and missing-destination
+states explain the next action.
+
+Review changes shows each selected source, destination action/path and dataset
+count. The footer explains what is still needed and links directly to the review;
+Merge projects stays disabled until the current review and warning acknowledgements
+allow it. The header/footer remain visible while the content scrolls. Escape
+closes an open dropdown before it can dismiss the dialog. Long errors live in the
+scrollable content with a short footer notice and View error link, so actions
+remain reachable on narrow screens.
+
+Matching catalog metadata stays mounted while a new preview is pending or fails,
+preserving editable addition paths and input focus. Only a fresh preview matching
+the current choices and fingerprint can authorize a merge. Reselecting the same
+destination or action does not reset choices or custom paths. Named graph matches remain editable after
+validation; graph IDs are shown only to distinguish duplicate names. The optional
+mappedGraphs preview field supplies this presentation metadata; an older API can
+still expose its selected mappings through the Change graph fallback.
+
+Replacements keep destination project IDs, names, filenames and locations. New
+projects receive fresh IDs and may use ordinary nested folders. Project contents,
+attached data and dataset snapshots are replaced together, including dataset
+removals; old saved revisions and published snapshots retain their old sidecars.
+The review shows source dataset counts. Endpoints, web-app publication records,
+schedules, recording history and server settings are not copied or republished.
+
+Internal references are rewritten to the selected destination counterparts using
+Saved latest. Bindings outside the source bundle retain their versions. A binding
+to an existing destination member's Published snapshot still validates and runs
+against that snapshot when the same merge replaces the member's Saved latest
+draft. It cannot accidentally validate against the replacement's new definition.
+Published applications that intentionally call Saved latest dependencies may observe the
+changed drafts; merging is not coordinated publication or endpoint cutover.
+Legacy graph aliases retain their project-reference/Saved latest semantics;
+Subgraph-only targetVersion or targetBoundary fields do not change alias behavior.
+
+Duplication preserves graph/node/port IDs, so the normal duplicate/edit/merge case
+needs project mapping only. Missing graph identities in an existing counterpart
+get explicit graph choices. Existing Core boundary validation preserves wire IDs
+and rejects incompatible active imported calls; the merge does not guess port
+matches or repair connections by their names. Inactive graph issues and newly
+broken incoming destination callers are location-specific warnings that require
+acknowledgement. Incomplete advisory index coverage remains visible. Unresolved
+internal project mappings always block, including inactive bindings, so recognized
+references cannot silently keep pointing into the source bundle.
+Review locations use full catalog paths and identify saved variants so equally
+named projects remain distinguishable. The review also counts kept counterparts.
+Library call activity follows Core's effective source-node behavior. A disabled
+flag on a linked wrapper cannot downgrade a call that actually executes into an
+inactive warning; disabled or unused Library source definitions remain advisory.
+
+The two authenticated routes are POST /api/workflows/bundles/:id/merge/preview and
+POST /api/workflows/bundles/:id/merge. Preview is read-only and abortable; commit
+uses the existing structural admission and namespace receipt recovery. Source and
+consumed counterpart revisions, bundle identities, membership and addition paths
+are rechecked under the topology lease and ordered row locks. A concurrent edit
+to a consumed project requires a fresh review; an unrelated draft edit does not.
+All destination draft/addition pointers and the receipt commit in one transaction.
+Artifact preparation remains outside SQL locks, with reference-aware cleanup.
+The durable result includes the exact acknowledged warnings and their locations;
+observational recovery returns the same result. Concurrent identical admissions
+commit once, and opposite-direction merges serialize through the topology owner
+with stale consumed revisions requiring a fresh review.
+
+Do not resend an uncertain merge automatically. The client makes one observational
+receipt lookup; unknown outcomes require refreshing before another action. A
+committed merge whose tree refresh fails still reports committed success with a
+refresh-needed notice. Existing hosted revision/conflict tracking protects dirty
+active and inactive tabs and offers explicit reload/keep-local decisions.
+The success toast appears only after a committed/recovered merge and an accepted
+fresh tree. A failed or superseded tree read retains the refresh-needed warning
+without claiming that the displayed list is current. While the commit is pending,
+the controls and dismissal are disabled; an unconfirmed outcome offers Close and
+requires a tree refresh before another merge.
+An artifact-storage read failure stops the preview with a sanitized 503 error,
+including for inactive calls, rather than claiming a graph-compatibility warning.
+Merge remains disabled until a fresh review succeeds. Manual Refresh review clears
+the obsolete error and performs one read attempt; writes are never retried.
+Only explicit Core graph-contract failures can become compatibility warnings.
+Database or unexpected read errors abort the review; corrupt or mismatched saved
+revision identities block even inactive calls. Known inactive missing-graph or
+unpublished-version issues remain acknowledgement warnings.
+
+Limits remain 256 projects and 512 folders per bundle, 64 MiB of prepared write
+content and 128 MiB of analyzed definitions. Review output is capped at 2 MiB.
+Definition and dataset byte limits are checked before parsing their large payloads.
+Cached revision reads recheck both the revision owner and parsed project ID; a
+shared/corrupt revision pointer cannot bypass identity checks. UUID case variants
+cannot make a bundle its own merge destination.
+Incoming checks cover current saved drafts and active endpoint/web-app snapshots
+within the destination, with bounded SQL-selected edges rather than a project-blob
+or historical-revision scan. New revision reference summaries are inserted with
+the merged revisions; no backfill, schema migration, new worker or Kubernetes
+change is required. Filesystem/SQLite and extracted Desktop bundles retain their
+existing capability boundary and do not expose this action.
+
+Implementation and validation details are tracked in the
+[bundle merge plan](bundle-merge-plan.md). Regression owners are
+bundle-merge-plan.test.ts, managed-bundle-merge.test.ts, the real local
+PostgreSQL/MinIO bundle-merge contract, web bundle-merge.test.ts, existing hosted
+revision/recovery tests and headless bundle-merge.spec.ts. The API/web/browser
+tests are enrolled in their existing CI lanes.
+
 **Delete bundle** is available for empty and non-empty bundles. The shared modal
 requires an exact, case-sensitive name match (no trimming) before enabling its
 destructive action. The displayed name is selectable/copyable text. The compact
@@ -310,6 +436,8 @@ Authenticated POST operations under `/api/workflows/bundles` provide creation
 (`/:id/duplicate`). They require `X-Rivet-Bundle-Intent: 1`, reject cross-site
 requests and use maintenance-owner routing. Preview fingerprints hierarchy,
 membership and selected revisions; duplication rechecks under topology/member locks.
+Preview and both copy paths verify each revision's workflow owner before reading
+project/dataset artifacts, then check the saved project identity after decoding.
 
 **Duplicate bundle** is one click, with no modal or confirmation. The UI sends
 `{ automatic: true }` to `/:id/duplicate`. The server copies every member's latest
@@ -579,8 +707,11 @@ implementation boundaries, not a claim that a deployment has already been upgrad
 | Membership changes/deletion retain edits and reject late events                                                                       | Guarded editor binding reconciliation, registry lifetime fences and deletion-during-streaming browser regression |
 | Keep existing portable artifacts, desktop runtimes and storage compatibility paths working                                            | Existing import/Node contracts retained; unsupported backends advertise no new container actions                 |
 
-Coordinated publication, endpoint cutover and merge-back between copies remain
-outside this plan. Container-level download reuses the existing portable archive
+Coordinated publication and endpoint cutover remain outside this container plan.
+Merge-back between copies is specified separately in the
+[Bundle merge implementation plan](bundle-merge-plan.md) and is implemented for
+managed saved drafts with only needed project/graph correspondences. Container-level download
+reuses the existing portable archive
 and job owner rather than introducing another transfer format or scheduler.
 Deployments apply migrations through the existing migration owner before serving
 the updated API; no manual project conversion or new Kubernetes component is needed.

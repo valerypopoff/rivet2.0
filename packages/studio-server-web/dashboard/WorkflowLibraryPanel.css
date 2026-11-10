@@ -131,6 +131,7 @@
 [data-testid='workflow-bundle-upload-modal--blanket'],
 [data-testid='workflow-bundle-conversion-error-modal--blanket'],
 [data-testid='workflow-bundle-delete-modal--blanket'],
+[data-testid='workflow-bundle-merge-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
 [data-testid='app-settings-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
@@ -148,6 +149,7 @@
 [data-testid='workflow-bundle-upload-modal'],
 [data-testid='workflow-bundle-conversion-error-modal'],
 [data-testid='workflow-bundle-delete-modal'],
+[data-testid='workflow-bundle-merge-modal'],
 [data-testid='workflow-published-version-history-modal'],
 [data-testid='app-settings-modal'] {
   background: #1f1f22 !important;

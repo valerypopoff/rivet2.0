@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  deserializeDatasets,
   serializeDatasets,
   loadProjectAndAttachedDataFromString,
   serializeProject,
@@ -18,6 +17,7 @@ import {
 import { badRequest } from '../../utils/httpError.js';
 import { sanitizeWorkflowName } from './fs-helpers.js';
 import { remapBundleProject } from './remap-bundle-project.js';
+import { parseBundleDatasets } from './bundle-datasets.js';
 import { normalizeWorkflowRelativePath } from './workflow-inputs.js';
 
 export type PreparedProjectBundleImport = {
@@ -72,7 +72,7 @@ export function prepareProjectBundleImport(files: ProjectBundleUploadFile[]): Pr
       {
         project: Project;
         attached: ReturnType<typeof loadProjectAndAttachedDataFromString>[1];
-        datasets: ReturnType<typeof deserializeDatasets> | null;
+        datasets: ReturnType<typeof parseBundleDatasets>;
       }
     >();
     const identities = new Set<string>();
@@ -90,41 +90,7 @@ export function prepareProjectBundleImport(files: ProjectBundleUploadFile[]): Pr
       const data = artifact.datasets ? byPath.get(artifact.datasets.path) : null;
       if (artifact.datasets) allowed.add(artifact.datasets.path);
       if (data === undefined) throw badRequest('Bundle is missing a declared dataset file.');
-      const datasets = data === null ? null : deserializeDatasets(data);
-      if (datasets !== null) {
-        if (!Array.isArray(datasets)) throw badRequest('Invalid bundle datasets.');
-        const datasetIds = new Set<string>();
-        for (const dataset of datasets) {
-          if (
-            !dataset?.meta ||
-            !dataset.data ||
-            typeof dataset.meta.id !== 'string' ||
-            !dataset.meta.id ||
-            dataset.meta.projectId !== artifact.projectId ||
-            typeof dataset.meta.name !== 'string' ||
-            dataset.data.id !== dataset.meta.id ||
-            !Array.isArray(dataset.data.rows)
-          )
-            throw badRequest('Invalid bundle dataset metadata or rows.');
-          if (datasetIds.has(dataset.meta.id)) throw badRequest('Bundle contains duplicate dataset IDs.');
-          datasetIds.add(dataset.meta.id);
-          const rowIds = new Set<string>();
-          for (const row of dataset.data.rows) {
-            if (
-              !row ||
-              typeof row.id !== 'string' ||
-              !Array.isArray(row.data) ||
-              row.data.some((value) => typeof value !== 'string') ||
-              (row.embedding !== undefined &&
-                (!Array.isArray(row.embedding) ||
-                  row.embedding.some((value) => typeof value !== 'number' || !Number.isFinite(value))))
-            )
-              throw badRequest('Invalid bundle dataset row or embedding.');
-            if (rowIds.has(row.id)) throw badRequest('Bundle contains duplicate dataset row IDs.');
-            rowIds.add(row.id);
-          }
-        }
-      }
+      const datasets = parseBundleDatasets(data, artifact.projectId);
       originals.set(artifact.id, { project, attached, datasets });
     }
     if (files.some((file) => !allowed.has(file.path))) throw badRequest('Bundle contains undeclared files.');

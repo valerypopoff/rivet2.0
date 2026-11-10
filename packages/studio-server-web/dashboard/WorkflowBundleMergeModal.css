@@ -1,0 +1,189 @@
+.workflow-bundle-merge-shell {
+  max-height: min(88dvh, 900px);
+}
+.workflow-bundle-merge-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  min-height: 0;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
+  overflow-wrap: anywhere;
+}
+.workflow-bundle-merge-content section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.workflow-bundle-merge-content p,
+.workflow-bundle-merge-content h3 {
+  margin: 0;
+}
+.workflow-bundle-merge-content h3 {
+  font-size: var(--workflow-library-font-size-m);
+}
+.workflow-bundle-merge-shell .project-settings-modal-heading small,
+.workflow-bundle-merge-content p {
+  overflow-wrap: anywhere;
+}
+.workflow-bundle-merge-section-heading,
+.workflow-bundle-merge-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.workflow-bundle-merge-toolbar .project-settings-input {
+  flex: 1 1 250px;
+  min-width: 0;
+}
+.workflow-bundle-merge-content .project-settings-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--workflow-button-height-l);
+  padding: 8px 10px;
+}
+.workflow-bundle-merge-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 8px 18px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.workflow-bundle-merge-row > * {
+  min-width: 0;
+}
+.workflow-bundle-merge-project {
+  cursor: pointer;
+}
+.workflow-bundle-merge-project strong,
+.workflow-bundle-merge-project small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.workflow-bundle-merge-project small {
+  color: var(--grey-light);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 3px;
+}
+.workflow-bundle-merge-path {
+  grid-column: 2;
+}
+.workflow-bundle-merge-path > label {
+  font-size: 12px;
+}
+.workflow-bundle-merge-row-details {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.workflow-bundle-merge-row-details summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.workflow-bundle-merge-row-details ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.workflow-bundle-merge-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.workflow-bundle-merge-option > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workflow-bundle-merge-option small {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  font-size: 11px;
+}
+.workflow-bundle-merge-issue {
+  color: #ffb3b3;
+  overflow-wrap: anywhere;
+}
+.workflow-bundle-merge-warning {
+  color: #ffcf80;
+}
+.workflow-bundle-merge-warning label {
+  color: inherit;
+}
+.workflow-bundle-merge-table-wrap {
+  min-width: 0;
+}
+.workflow-bundle-merge-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  text-align: left;
+}
+.workflow-bundle-merge-table th,
+.workflow-bundle-merge-table td {
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.workflow-bundle-merge-table th {
+  color: var(--grey-light);
+  font-size: 12px;
+}
+.workflow-bundle-merge-table th:last-child,
+.workflow-bundle-merge-table td:last-child {
+  width: 76px;
+  text-align: right;
+}
+.workflow-bundle-merge-table td strong {
+  display: block;
+}
+.workflow-bundle-merge-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.workflow-bundle-merge-footer {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.workflow-bundle-merge-footer-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.workflow-bundle-merge-footer-status > p {
+  margin: 0;
+  flex: 1 1 180px;
+  font-size: var(--studio-modal-description-font-size);
+  line-height: var(--studio-modal-description-line-height);
+  overflow-wrap: anywhere;
+}
+.workflow-bundle-merge-footer-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.workflow-bundle-merge-footer-actions button:disabled {
+  opacity: 0.5;
+}
+@media (max-width: 600px) {
+  .workflow-bundle-merge-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workflow-bundle-merge-path {
+    grid-column: 1;
+  }
+}

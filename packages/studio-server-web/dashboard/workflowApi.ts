@@ -51,6 +51,37 @@ import type { WorkflowNamespaceMutation } from '../../studio-server-shared/workf
 import type { StructuralCommand, StructuralMutation } from '../../studio-server-shared/workflow-mutation-contract';
 
 const API = RIVET_API_BASE_URL;
+export async function previewWorkflowBundleMerge(
+  sourceBundleId: string,
+  choices: import('../../studio-server-shared/workflow-bundle-types').BundleMergeChoices,
+  signal: AbortSignal,
+) {
+  return workflowJsonResponse<import('../../studio-server-shared/workflow-bundle-types').BundleMergePreview>(
+    await fetch(`${API}/workflows/bundles/${encodeURIComponent(sourceBundleId)}/merge/preview`, {
+      method: 'POST',
+      signal,
+      headers: { 'Content-Type': 'application/json', 'X-Rivet-Bundle-Intent': '1' },
+      body: JSON.stringify(choices),
+    }),
+  );
+}
+
+export function mergeWorkflowBundle(
+  sourceBundleId: string,
+  request: import('../../studio-server-shared/workflow-bundle-types').BundleMergeCommit,
+  sourceNamespaceId: string,
+  destinationNamespaceId: string,
+) {
+  return requestStructuralMutation<import('../../studio-server-shared/workflow-bundle-types').BundleMergeResult>({
+    api: API,
+    url: `${API}/workflows/bundles/${encodeURIComponent(sourceBundleId)}/merge`,
+    command: { operation: 'merge-bundle', input: { sourceBundleId, ...request } },
+    input: request,
+    preconditions: { expectedSource: { id: sourceNamespaceId }, expectedDestinationId: destinationNamespaceId },
+    headers: { 'X-Rivet-Bundle-Intent': '1', ...getWorkflowTreeMutationHeaders() },
+  });
+}
+
 export async function requestWorkflowBundle<T>(
   path: string,
   input: unknown,

@@ -39,6 +39,7 @@ export const instantWarningToastTransition = cssTransition({
 
 type WorkflowFolderContextMenuState = {
   folder: WorkflowFolderItem;
+  opener: HTMLElement;
   x: number;
   y: number;
 };
@@ -100,6 +101,7 @@ export function useWorkflowLibraryController(options: {
   const {
     explicitBundles,
     namespaceMutations,
+    bundleMerge,
     allProjects,
     error,
     expandedFolders,
@@ -126,6 +128,8 @@ export function useWorkflowLibraryController(options: {
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [bundleUploadFolder, setBundleUploadFolder] = useState<WorkflowFolderItem | null>(null);
   const [bundleDeleteFolder, setBundleDeleteFolder] = useState<WorkflowFolderItem | null>(null);
+  const [bundleMergeFolder, setBundleMergeFolder] = useState<WorkflowFolderItem | null>(null);
+  const bundleMergeOpener = useRef<HTMLElement | null>(null);
   const [bundleAction, setBundleAction] = useState<{ kind: 'conversion' | 'duplication'; name: string } | null>(null);
   const [bundleConversionFailure, setBundleConversionFailure] = useState<WorkflowBundleConversionFailure | null>(null);
   const bundleActionPending = useRef(false);
@@ -309,6 +313,7 @@ export function useWorkflowLibraryController(options: {
 
   const projectTreeOverlayOpen = Boolean(
     bundleDeleteFolder ||
+      bundleMergeFolder ||
       bundleOpen ||
       appSettingsOpen ||
       folderContextMenuState ||
@@ -422,6 +427,7 @@ export function useWorkflowLibraryController(options: {
       setProjectContextMenuState(null);
       setFolderContextMenuState({
         folder,
+        opener: event.currentTarget,
         x: event.clientX,
         y: event.clientY,
       });
@@ -806,6 +812,23 @@ export function useWorkflowLibraryController(options: {
 
   return {
     explicitBundles,
+    canMergeBundles: namespaceMutations && bundleMerge,
+    bundleMergeFolder,
+    closeBundleMerge: () => {
+      setBundleMergeFolder(null);
+      const opener = bundleMergeOpener.current;
+      bundleMergeOpener.current = null;
+      requestAnimationFrame(() => {
+        if (opener?.isConnected) opener.focus();
+      });
+    },
+    handleMergeBundle: () => {
+      const source = folderContextMenuState?.folder;
+      if (!source?.bundleId || !namespaceMutations || !bundleMerge || bundleActionPending.current) return;
+      bundleMergeOpener.current = folderContextMenuState!.opener;
+      closeFolderContextMenu();
+      setBundleMergeFolder(source);
+    },
     bundleAction,
     bundleDeleteFolder,
     closeBundleDelete: () => setBundleDeleteFolder(null),

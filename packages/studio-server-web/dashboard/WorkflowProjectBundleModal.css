@@ -1,3 +1,4 @@
+[data-testid='workflow-bundle-merge-modal'],
 [data-testid='workflow-bundle-delete-modal'],
 [data-testid='workflow-bundle-conversion-error-modal'],
 [data-testid='workflow-project-bundle-modal'],
@@ -6,6 +7,7 @@
   flex-direction: column;
   max-height: calc(100dvh - 40px);
 }
+[data-testid='workflow-bundle-merge-modal--body'],
 [data-testid='workflow-bundle-delete-modal--body'],
 [data-testid='workflow-bundle-conversion-error-modal--body'],
 [data-testid='workflow-project-bundle-modal--body'],

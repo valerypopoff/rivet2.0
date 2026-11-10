@@ -26,6 +26,66 @@ const name = z.string().min(1).max(255);
 const version = z.enum(['latest', 'published']);
 const id = z.string().uuid();
 const receipt = z.object({ operationId: id, expiresAt: z.string().datetime() }).strict();
+const projectId = z.string().min(1).max(256);
+const mergeChoices = z
+  .object({
+    destinationBundleId: id,
+    actions: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('replace'), sourceProjectId: projectId, targetProjectId: projectId }).strict(),
+          z.object({ kind: z.literal('add'), sourceProjectId: projectId, relativePath: location.min(1) }).strict(),
+        ]),
+      )
+      .max(256),
+    dependencies: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('existing'), sourceProjectId: projectId, targetProjectId: projectId }).strict(),
+          z.object({ kind: z.literal('add'), sourceProjectId: projectId, relativePath: location.min(1) }).strict(),
+        ]),
+      )
+      .max(256),
+    graphs: z
+      .array(z.object({ sourceProjectId: projectId, sourceGraphId: projectId, targetGraphId: projectId }).strict())
+      .max(1000),
+  })
+  .strict();
+bundlesRouter.post(
+  '/:id/merge/preview',
+  asyncHandler(async (req, res) => {
+    const input = mergeChoices.parse(req.body);
+    const abort = new AbortController();
+    const close = () => {
+      if (!res.writableEnded) abort.abort(new Error('Merge preview disconnected'));
+    };
+    res.once('close', close);
+    try {
+      res.json(await (await getExplicitBundleService()).mergePreview(id.parse(req.params.id), input, abort.signal));
+    } finally {
+      res.off('close', close);
+    }
+  }),
+);
+bundlesRouter.post(
+  '/:id/merge',
+  asyncHandler(async (req, res) => {
+    const mutation = requireStructuralMutation(req.body?.mutation, req);
+    const input = z
+      .object({
+        choices: mergeChoices,
+        fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+        acknowledgedWarnings: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(1000),
+        mutation: structuralMutationSchema.optional(),
+      })
+      .strict()
+      .parse(req.body);
+    const { mutation: _mutation, ...request } = input;
+    const result = await (await getExplicitBundleService()).merge(id.parse(req.params.id), request, mutation);
+    notifyWorkflowTreeChanged(req);
+    res.json(result);
+  }),
+);
 const duplicateInput = z.union([
   z
     .object({

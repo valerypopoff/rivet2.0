@@ -1,3 +1,5 @@
+import type { BundleMergeCommit } from './workflow-bundle-types.js';
+
 /** Internal authoring metadata only; never serialized into project files. */
 export type StructuralMutation = {
   operationId: string;
@@ -17,6 +19,7 @@ export type StructuralCommand =
   | { operation: 'bundle-kind'; input: { relativePath: string; enabled: boolean; namespaceId: string } }
   | { operation: 'delete-bundle'; input: { bundleId: string; name: string; relativePath: string } }
   | { operation: 'copy-bundle'; input: { bundleId: string; automatic: true; relativePath: string } }
+  | { operation: 'merge-bundle'; input: BundleMergeCommit & { sourceBundleId: string } }
   | {
       operation: 'import-bundle';
       input: { parentRelativePath: string; files: Array<{ path: string; contents: string }> };

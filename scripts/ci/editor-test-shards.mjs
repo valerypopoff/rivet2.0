@@ -2,6 +2,7 @@
 // Hints balance work; they never select or omit individual test cases.
 const weightedSpecs = [
   ['explicit-bundles.spec.ts', 132],
+  ['bundle-merge.spec.ts', 80],
   ['modal-sizing.spec.ts', 9],
   ['scheduled-runs.spec.ts', 101],
   ['fullscreen-output-search-paging.spec.ts', 16],
