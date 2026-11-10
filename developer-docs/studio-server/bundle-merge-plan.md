@@ -68,8 +68,8 @@ normalize the project's metadata ID and title to the destination owner and remov
 the source path hint using the existing hosted serialization rules. Preserve
 dataset and row IDs within the project; change only their project ownership.
 
-Datasets are part of the whole-project replacement, including removals. Show
-source dataset counts and this replacement rule in the review. Do not silently union old
+Legacy datasets remain part of the whole-project replacement, including removals,
+but are omitted from the merge modal's columns and explanatory text. Do not silently union old
 and new datasets or leave old rows under a new draft. Old immutable revisions and
 their dataset snapshots remain available through existing history/retention rules.
 
@@ -203,6 +203,21 @@ from pre-existing issues in diagnostics.
 
 ## Modal flow
 
+The bundle tree supports two entry points. A context-menu action opens the
+destination picker; dragging a bundle onto a different bundle opens the same
+modal with the target preselected. Both use the same capability and busy-action
+guards. The gesture performs no move or merge write; the user still reviews and
+confirms the merge. Cancel restores focus to the drop target. Ordinary moves
+retain their existing handling, and unsupported or self bundle drops stay blocked.
+Bundle drags use a pointer-transparent preview with the existing menu merge icon
+over an eligible bundle target. Valid move targets show the ordinary bundle icon;
+invalid targets, including the editor iframe, hide the preview. Re-entering a
+target restores it. Local tree drag-over/leave handlers own its coordinates and
+visibility; no global pointer listeners or cross-document coordinate conversion
+are needed. Ending or cancelling the drag removes the preview. A transparent native drag
+bitmap avoids duplicate feedback because the [drag-data-store rules](https://html.spec.whatwg.org/multipage/dnd.html#dom-datatransfer-setdragimage)
+allow setting it at drag start, before the target is known.
+
 1. **Destination and changes.** Show source/destination names and paths, a
    changed/new source-project list, Skip/Replace/Add controls and destination
    project selectors and editable destination-relative addition paths. Exclude
@@ -218,10 +233,11 @@ from pre-existing issues in diagnostics.
    without overriding existing choices. Use existing stops importing that source dependency;
    it does not prevent another explicit action from replacing the destination.
 3. **Review and merge.** Summarize replacements, additions, kept counterparts,
-   dataset replacement, reference/version rewrites and acknowledged warnings.
-   Show an explicit source/action/destination/dataset-count table and a footer
-   shortcut to the review. Explain why Merge projects is disabled.
-   Disambiguate call sites by full catalog path and identify saved variants.
+   reference/version rewrites and acknowledged warnings.
+   Show an explicit source/action/destination table. Explain why Merge projects
+   is disabled in the footer, without a redundant shortcut to the review.
+   Label call sites with the bundle name and its relative project path, omitting
+   ancestor folders; keep graph/node details and saved variants.
    Disable Merge until the latest preview is complete and blocking conflicts are
    resolved. A no-change selection cannot submit a write.
 
@@ -240,7 +256,7 @@ references, graph matches and review. The lead shows source path → destination
 path, and the review source column names its bundle.
 Provide labels, focus trapping, keyboard navigation, Escape cancellation, focus
 return and a visible footer on short/narrow screens. Escape closes an open select
-menu before dismissing the dialog. Review/error shortcuts scroll only the content,
+menu before dismissing the dialog. The View error shortcut scrolls only the content,
 keeping the header and actions visible. Full errors appear in the scrollable body;
 the footer has a short notice and View error link rather than repeating a long
 path. Suppress unrelated local
@@ -637,26 +653,50 @@ blocks because its graph is gone.
 The equivalent legacy alias also blocks despite a stale Published field, matching
 the actual project-reference loader rather than that unsupported metadata.
 
-Seventeen headless merge journeys cover the main selection flow, recovered success with
-a failed refresh, obsolete previews, editable graph/warning choices, unknown acknowledgements,
-older APIs, failed-preview refresh, changed-only defaults, duplicate target choices,
-dependency path focus across preview errors, same-destination/action choice preservation, empty
-states, pending-commit dismissal and long errors on a 320px screen. They include
-short-screen dropdown/footer access, double submission, dropdown Escape, content-only
-review/error scrolling and focus return. The editor shard weight is 90 seconds to
-reflect these journeys; its enrollment regression includes the new spec in the
-36-spec set and checks balanced, complete coverage. The existing 23 bundle/scope
-journeys also pass. Existing
-hosted revision/refresh/receipt unit tests cover the reused dirty-tab and recovery
+Twenty-three headless merge journeys cover selection, recovered success after a
+failed refresh, obsolete previews, editable graph/warning choices, unknown
+acknowledgements, older APIs, changed-only defaults and duplicate target choices.
+They also cover dependency-path focus across preview errors, choice preservation,
+empty states, pending-commit dismissal and long errors on a 320px screen.
+Short-screen dropdown/footer access, double submission, dropdown Escape, normal
+review scrolling, error navigation and focus return are checked. Content-heavy
+dialogs use the available viewport height within the existing margins; shorter
+content keeps its natural height.
+The modal body adds no padding around the existing header/content/footer insets;
+geometry checks keep the close button at the dialog corner and align the title,
+destination label and footer actions on desktop and smaller windows.
+Both selection sections label source and destination columns, switch to per-row
+labels on small screens, and hide storage suffixes in project labels and
+path editing. The submitted paths retain their canonical suffix, including after
+edits and reselection. The dependency guidance describes choosing the needed
+destination counterparts. Both selection sections use the review
+table's padded, divided headers. A no-change comparison replaces the empty chooser
+with a warning block; manually skipped changes remain selectable. The selected-count
+badge is removed. Context-menu coverage verifies both bundles' creation separators,
+merge icons and final conversion action. New folder has its own separated section
+before New project. The modal omits the general introductory paragraph, labels
+addition inputs Project name and renders project labels in Replace/Use existing
+choices as inline code without changing their plain-text search labels.
+Native drag coverage proves destination preselection, no move/merge writes before
+confirmation, cleared drag highlighting, focus return, and the retained manual
+context-menu entry point. Self-drops and older-server drops issue no requests.
+The pointer-feedback journey checks the exact menu icon, cursor-relative position,
+non-intercepting overlay, iframe exit/re-entry, cancellation and completed-drop cleanup.
+The editor shard weight is 120 seconds, matching the expanded journeys' local
+timing. Its enrollment regression includes the new spec in the 36-spec set and
+checks balanced, complete coverage. The existing 23 bundle/scope journeys also
+pass. Hosted revision/refresh/receipt unit tests cover the reused dirty-tab and recovery
 owner rather than introducing a second editor replacement path.
-The review includes kept-counterpart counts and full project paths; focused web
-tests distinguish equally named projects and saved variants.
+The review includes kept-counterpart counts; reference details start with bundle
+names and retain project paths within those bundles. Legacy dataset details stay
+out of the modal. Focused web tests distinguish equally named projects and saved
+variants.
 A transient preview failure disables Merge; one successful manual refresh clears
 its stale error without an automatic read/write retry. Unknown mutation outcomes
 retain their explicit message and remain blocked.
 
-Local acceptance covers 87 focused API tests, 41 web unit tests, the real
-PostgreSQL/MinIO integration, and 40 browser journeys (17 merge and 23 adjacent
+Local acceptance covers 87 focused API tests, 43 web unit tests, the real
+PostgreSQL/MinIO integration, and 46 browser journeys (23 merge and 23 adjacent
 bundle/scope cases). Comparison regressions cover duplicated ownership, internal
 references, datasets, attached data, renamed/ambiguous projects and bounded reads.
 The storage contract also checks the HTTP comparison query and ensures comparison
@@ -681,7 +721,7 @@ evidence by themselves.
 | 1 Contracts/mapping | Typed actions, minimal dependency queue, cycles/pruning, graph and legacy-reference remapping, deterministic identity                                     | Pure planner/remapper tests and existing copy/import regressions                                                                                  |
 | 2 Preview           | Bounded cancellable reads, final-state graph checks, explicit required mappings, caller diagnostics, owner-safe read deduplication                        | Managed preview tests including corrupt cached ownership and actual large byte-limit fixtures                                                     |
 | 3 Commit/recovery   | Fresh revision preparation, one topology transaction, read-set fencing, dataset replacement/removal, durable warnings and exact receipts                  | Disposable PostgreSQL/MinIO execution, rollback, concurrent admission, opposite-direction and save-race contracts; preparation failure regression |
-| 4 Editor/modal      | Capability gate, saved-content comparison/defaults, editable graph matches, explicit review, current-preview admission, existing dirty-tab reconciliation | Seventeen merge browser journeys, adjacent bundle/scope checks, hosted revision/recovery tests and location-label tests                           |
+| 4 Editor/modal      | Capability gate, saved-content comparison/defaults, editable graph matches, explicit review, current-preview admission, existing dirty-tab reconciliation | Twenty-three merge browser journeys, adjacent bundle/scope checks, hosted revision/recovery tests and location-label tests                        |
 | 5 Integration/docs  | Enrollment in existing API/web/browser CI lanes, updated feature/runbook documentation, reviewed version policy                                           | API/shared/UI typechecks, production builds, shard/style/structure checks and doc-link verification                                               |
 
 The remaining publication/deployment steps use the ordinary release process and

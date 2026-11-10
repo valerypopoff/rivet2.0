@@ -17,11 +17,24 @@ import type { WorkflowFolderItem } from './types';
 import type { LibraryMutationCompletion } from './workflowNamespaceReconciliation';
 import { previewWorkflowBundleMerge, mergeWorkflowBundle } from './workflowApi';
 import { MutationOutcomeUnknownError } from './workflowNamespaceMutations';
-import { applyBundleMergeSuggestions, describeBundleMergeSite, suggestBundleMergeCounterpart } from './bundleMerge';
+import {
+  applyBundleMergeSuggestions,
+  describeBundleMergeSite,
+  displayBundleMergePath,
+  formatBundleMergeProject,
+  savedBundleMergePath,
+  suggestBundleMergeCounterpart,
+} from './bundleMerge';
 import './WorkflowProjectBundleModal.css';
 import './WorkflowBundleMergeModal.css';
 
-type Option = { label: string; value: string; isDisabled?: boolean; hint?: string };
+type Option = {
+  label: string;
+  value: string;
+  isDisabled?: boolean;
+  hint?: string;
+  project?: { action: 'Replace' | 'Use existing'; name: string };
+};
 const graphKey = (id: string, graph: string) => JSON.stringify([id, graph]);
 const countLabel = (count: number, label: string, plural = label + 's') => count + ' ' + (count === 1 ? label : plural);
 const actionValue = (action?: BundleMergeAction) =>
@@ -36,6 +49,29 @@ const emptyChoices = (destinationBundleId = ''): BundleMergeChoices => ({
 });
 
 type MenuChange = (id: string, open: boolean) => void;
+type ProjectColumns = { source: string; destination: string };
+
+function ProjectChoicesTable({
+  columns,
+  label,
+  children,
+}: {
+  columns: ProjectColumns;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <table className="workflow-bundle-merge-table workflow-bundle-merge-choices" aria-label={label}>
+      <thead>
+        <tr>
+          <th scope="col">{columns.source}</th>
+          <th scope="col">{columns.destination}</th>
+        </tr>
+      </thead>
+      <tbody>{children}</tbody>
+    </table>
+  );
+}
 function MergeSelect({
   onMenuChange,
   onMenuOpen,
@@ -55,7 +91,15 @@ function MergeSelect({
       styles={{ menuPortal: (base) => ({ ...base, zIndex: 20000 }) }}
       formatOptionLabel={(option, meta) => (
         <span className="workflow-bundle-merge-option">
-          <span>{option.label}</span>
+          <span>
+            {option.project ? (
+              <>
+                {option.project.action} <code>{option.project.name}</code>
+              </>
+            ) : (
+              option.label
+            )}
+          </span>
           {meta.context === 'menu' && option.hint ? <small>{option.hint}</small> : null}
         </span>
       )}
@@ -90,6 +134,7 @@ function ProjectChoiceRow({
   onPathChange,
   children,
   onMenuChange,
+  columns,
 }: {
   project: BundleMergeProject;
   scope: 'action' | 'dependency';
@@ -101,55 +146,70 @@ function ProjectChoiceRow({
   onPathChange(value: string): void;
   children?: ReactNode;
   onMenuChange: MenuChange;
+  columns: ProjectColumns;
 }) {
   const id = 'merge-' + scope + '-' + project.projectId;
   return (
-    <div className="workflow-bundle-merge-row">
-      <label className="workflow-bundle-merge-project" htmlFor={id}>
-        <strong>{project.title}</strong>
-        <small>{project.relativePath}</small>
-      </label>
-      <MergeSelect
-        onMenuChange={onMenuChange}
-        inputId={id}
-        isDisabled={disabled}
-        options={options}
-        value={options.find((option) => option.value === value) ?? null}
-        placeholder="Choose an action…"
-        onChange={(option) => onChange(option?.value ?? '')}
-      />
-      {path !== undefined ? (
-        <div className="project-settings-field workflow-bundle-merge-path">
-          <label htmlFor={id + '-path'}>Destination path</label>
-          <input
-            id={id + '-path'}
-            className="project-settings-input"
-            aria-label={(scope === 'action' ? 'New path for ' : 'New dependency path for ') + project.title}
-            autoComplete="off"
-            spellCheck={false}
-            value={path}
-            disabled={disabled}
-            onChange={(event) => onPathChange(event.target.value)}
-          />
-        </div>
-      ) : null}
-      {children ? <div className="workflow-bundle-merge-row-details">{children}</div> : null}
-    </div>
+    <tr className="workflow-bundle-merge-row">
+      <td>
+        <label className="workflow-bundle-merge-project" htmlFor={id}>
+          <span className="workflow-bundle-merge-mobile-column" aria-hidden="true">
+            {columns.source}
+          </span>
+          <strong>{project.title}</strong>
+          {displayBundleMergePath(project.relativePath) !== project.title ? (
+            <small>{displayBundleMergePath(project.relativePath)}</small>
+          ) : null}
+        </label>
+        {children ? <div className="workflow-bundle-merge-row-details">{children}</div> : null}
+      </td>
+      <td>
+        <span className="workflow-bundle-merge-mobile-column" aria-hidden="true">
+          {columns.destination}
+        </span>
+        <MergeSelect
+          onMenuChange={onMenuChange}
+          inputId={id}
+          isDisabled={disabled}
+          options={options}
+          value={options.find((option) => option.value === value) ?? null}
+          placeholder="Choose an action…"
+          onChange={(option) => onChange(option?.value ?? '')}
+        />
+        {path !== undefined ? (
+          <div className="project-settings-field workflow-bundle-merge-path">
+            <label htmlFor={id + '-path'}>Project name</label>
+            <input
+              id={id + '-path'}
+              className="project-settings-input"
+              aria-label={(scope === 'action' ? 'Project name for ' : 'Referenced project name for ') + project.title}
+              autoComplete="off"
+              spellCheck={false}
+              value={displayBundleMergePath(path)}
+              disabled={disabled}
+              onChange={(event) => onPathChange(savedBundleMergePath(event.target.value))}
+            />
+          </div>
+        ) : null}
+      </td>
+    </tr>
   );
 }
 
 export function WorkflowBundleMergeModal({
   source,
   bundles,
+  initialDestinationBundleId,
   onClose,
   onStructuralMutation,
 }: {
   source: WorkflowFolderItem;
   bundles: WorkflowFolderItem[];
+  initialDestinationBundleId?: string;
   onClose(): void;
   onStructuralMutation: LibraryMutationCompletion;
 }) {
-  const [choices, setChoices] = useState<BundleMergeChoices>(() => emptyChoices());
+  const [choices, setChoices] = useState<BundleMergeChoices>(() => emptyChoices(initialDestinationBundleId));
   const latest = useRef(choices);
   const [catalogs, setCatalogs] = useState<BundleMergePreview | null>(null);
   const [review, setReview] = useState<{ choices: BundleMergeChoices; value: BundleMergePreview } | null>(null);
@@ -167,7 +227,6 @@ export function WorkflowBundleMergeModal({
   const pending = useRef(false);
   const mounted = useRef(true);
   const abort = useRef<AbortController>();
-  const reviewSection = useRef<HTMLElement>(null);
   const errorDetails = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const trackSelect = useCallback<MenuChange>((id, open) => {
@@ -336,8 +395,12 @@ export function WorkflowBundleMergeModal({
     .map((bundle) => ({ value: bundle.bundleId!, label: bundle.name + ' — ' + bundle.relativePath }));
   const targets: Option[] = (form?.destination.projects ?? []).map((project) => ({
     value: project.projectId,
-    label: project.title + ' — ' + project.relativePath,
+    label: formatBundleMergeProject(project),
   }));
+  const columns = {
+    source: `Source project in ${form?.source.name ?? source.name}`,
+    destination: `Destination in ${form?.destination.name ?? ''}`,
+  };
   const projects = (form?.source.projects ?? []).filter(
     (project) =>
       choices.actions.some((action) => action.sourceProjectId === project.projectId) ||
@@ -423,9 +486,6 @@ export function WorkflowBundleMergeModal({
             </button>
           </div>
           <div className="project-settings-modal-content workflow-bundle-merge-content" ref={content}>
-            <p className="project-settings-help">
-              Copy selected saved projects into another bundle. Unsaved edits are excluded; the source stays unchanged.
-            </p>
             <div className="project-settings-field">
               <label htmlFor="bundle-merge-destination">Destination bundle</label>
               <MergeSelect
@@ -457,93 +517,92 @@ export function WorkflowBundleMergeModal({
                 The destination is empty. Add the projects you want to copy into this bundle.
               </p>
             ) : null}
-            {form ? (
+            {form && !projects.length ? (
+              <p className="workflow-bundle-merge-empty" role="status">
+                {!form.source.projects.length
+                  ? 'This bundle has no saved projects to merge.'
+                  : 'No saved project changes to merge. The projects already match the destination.'}
+              </p>
+            ) : form ? (
               <section className="workflow-project-bundle-card" aria-label="Project changes">
-                <div className="workflow-bundle-merge-section-heading">
-                  <h3>Choose project changes</h3>
-                  <small>{countLabel(choices.actions.length, 'project')} selected</small>
-                </div>
+                <h3>Choose project changes</h3>
                 <p className="project-settings-help">
                   {suggestions
-                    ? 'Only changed and new saved projects are listed. Suggested actions are selected for you and can be changed.'
+                    ? 'Only changed and newly added projects are listed'
                     : 'Choose project changes manually. This server does not provide saved-content comparison.'}
                 </p>
-                {!projects.length ? (
-                  <p className="project-settings-help">
-                    {!form.source.projects.length
-                      ? 'This bundle has no saved projects to merge.'
-                      : 'No saved project changes to merge. The projects already match the destination.'}
-                  </p>
-                ) : null}
-                {projects.map((project) => {
-                  const action = choices.actions.find((choice) => choice.sourceProjectId === project.projectId);
-                  const suggestion = suggestions?.find(
-                    (suggestion) => suggestion.sourceProjectId === project.projectId,
-                  );
-                  const suggested =
-                    suggestion?.targetProjectId ??
-                    (!suggestions ? suggestBundleMergeCounterpart(project, form.destination.projects) : null);
-                  const options: Option[] = [
-                    { value: 'skip', label: 'Skip' },
-                    {
-                      value: 'add',
-                      label: 'Add as a new project',
-                      hint: suggestion?.state === 'new' ? 'Suggested' : undefined,
-                    },
-                    ...targets
-                      .map((target) => {
-                        const used = choices.actions.some(
-                          (choice) =>
-                            choice.kind === 'replace' &&
-                            choice.targetProjectId === target.value &&
-                            choice.sourceProjectId !== project.projectId,
-                        );
-                        return {
-                          value: 'replace:' + target.value,
-                          label: 'Replace ' + target.label,
-                          isDisabled: used,
-                          hint: used ? 'Already chosen' : target.value === suggested ? 'Suggested' : undefined,
-                        };
-                      })
-                      .sort((a, b) => Number(b.hint === 'Suggested') - Number(a.hint === 'Suggested')),
-                  ];
-                  const requiredAddition =
-                    choices.actions.length > 0 &&
-                    !action &&
-                    form.actions.some(
-                      (choice) => choice.sourceProjectId === project.projectId && choice.kind === 'add',
+                <ProjectChoicesTable columns={columns} label="Project changes">
+                  {projects.map((project) => {
+                    const action = choices.actions.find((choice) => choice.sourceProjectId === project.projectId);
+                    const suggestion = suggestions?.find(
+                      (suggestion) => suggestion.sourceProjectId === project.projectId,
                     );
-                  return (
-                    <ProjectChoiceRow
-                      onMenuChange={trackSelect}
-                      key={project.projectId}
-                      project={project}
-                      scope="action"
-                      options={options}
-                      value={actionValue(action)}
-                      disabled={disabled}
-                      onChange={(value) => updateAction(project, value)}
-                      path={action?.kind === 'add' ? action.relativePath : undefined}
-                      onPathChange={(value) =>
-                        change({
-                          ...choices,
-                          actions: choices.actions.map((choice) =>
-                            choice === action && choice.kind === 'add' ? { ...choice, relativePath: value } : choice,
-                          ),
+                    const suggested =
+                      suggestion?.targetProjectId ??
+                      (!suggestions ? suggestBundleMergeCounterpart(project, form.destination.projects) : null);
+                    const options: Option[] = [
+                      { value: 'skip', label: 'Skip' },
+                      {
+                        value: 'add',
+                        label: 'Add as a new project',
+                        hint: suggestion?.state === 'new' ? 'Suggested' : undefined,
+                      },
+                      ...targets
+                        .map((target): Option => {
+                          const used = choices.actions.some(
+                            (choice) =>
+                              choice.kind === 'replace' &&
+                              choice.targetProjectId === target.value &&
+                              choice.sourceProjectId !== project.projectId,
+                          );
+                          return {
+                            value: 'replace:' + target.value,
+                            label: 'Replace ' + target.label,
+                            project: { action: 'Replace', name: target.label },
+                            isDisabled: used,
+                            hint: used ? 'Already chosen' : target.value === suggested ? 'Suggested' : undefined,
+                          };
                         })
-                      }
-                    >
-                      {suggestion?.state === 'ambiguous' ? (
-                        <small>No unique match was found. Choose a replacement or add a new project.</small>
-                      ) : null}
-                      {requiredAddition ? <small>Will be added as a required reference below.</small> : null}
-                    </ProjectChoiceRow>
-                  );
-                })}
+                        .sort((a, b) => Number(b.hint === 'Suggested') - Number(a.hint === 'Suggested')),
+                    ];
+                    const requiredAddition =
+                      choices.actions.length > 0 &&
+                      !action &&
+                      form.actions.some(
+                        (choice) => choice.sourceProjectId === project.projectId && choice.kind === 'add',
+                      );
+                    return (
+                      <ProjectChoiceRow
+                        onMenuChange={trackSelect}
+                        key={project.projectId}
+                        project={project}
+                        columns={columns}
+                        scope="action"
+                        options={options}
+                        value={actionValue(action)}
+                        disabled={disabled}
+                        onChange={(value) => updateAction(project, value)}
+                        path={action?.kind === 'add' ? action.relativePath : undefined}
+                        onPathChange={(value) =>
+                          change({
+                            ...choices,
+                            actions: choices.actions.map((choice) =>
+                              choice === action && choice.kind === 'add' ? { ...choice, relativePath: value } : choice,
+                            ),
+                          })
+                        }
+                      >
+                        {suggestion?.state === 'ambiguous' ? (
+                          <small>No unique match was found. Choose a replacement or add a new project.</small>
+                        ) : null}
+                        {requiredAddition ? <small>Will be added as a required reference below.</small> : null}
+                      </ProjectChoiceRow>
+                    );
+                  })}
+                </ProjectChoicesTable>
                 {choices.actions.some((action) => action.kind === 'add') ? (
                   <p className="project-settings-help">
-                    Destination paths are relative to {form.destination.relativePath} and include the .rivet-project
-                    filename.
+                    Choose a project name, with optional folders inside {form.destination.relativePath}.
                   </p>
                 ) : null}
               </section>
@@ -554,67 +613,71 @@ export function WorkflowBundleMergeModal({
                 aria-label="Required project references"
                 aria-busy={loading}
               >
-                <div className="workflow-bundle-merge-section-heading">
-                  <h3>Match referenced projects</h3>
-                </div>
+                <h3>Match referenced projects</h3>
                 <p className="project-settings-help">
-                  Use an existing project to update references only. Add copies the source project and checks its
-                  required references.
+                  The projects above reference these other projects. Choose their counterparts in{' '}
+                  {form.destination.name}.
                 </p>
-                {requiredProjects.map(({ project, sites }) => {
-                  const dependency = choices.dependencies.find(
-                    (choice) => choice.sourceProjectId === project.projectId,
-                  );
-                  const suggestion = suggestions?.find(
-                    (suggestion) => suggestion.sourceProjectId === project.projectId,
-                  );
-                  const suggested =
-                    suggestion?.targetProjectId ??
-                    (!suggestions ? suggestBundleMergeCounterpart(project, form.destination.projects) : null);
-                  return (
-                    <ProjectChoiceRow
-                      onMenuChange={trackSelect}
-                      key={project.projectId}
-                      project={project}
-                      scope="dependency"
-                      disabled={disabled}
-                      options={[
-                        {
-                          value: 'add',
-                          label: 'Add as a new project',
-                          hint: suggestion?.state === 'new' ? 'Suggested' : undefined,
-                        },
-                        ...targets.map((target) => ({
-                          value: 'existing:' + target.value,
-                          label: 'Use existing ' + target.label,
-                          hint: target.value === suggested ? 'Suggested' : undefined,
-                        })),
-                      ]}
-                      value={dependencyValue(dependency)}
-                      onChange={(value) => updateDependency(project, value)}
-                      path={dependency?.kind === 'add' ? dependency.relativePath : undefined}
-                      onPathChange={(value) =>
-                        change({
-                          ...choices,
-                          dependencies: choices.dependencies.map((choice) =>
-                            choice === dependency && choice.kind === 'add'
-                              ? { ...choice, relativePath: value }
-                              : choice,
+                <ProjectChoicesTable columns={columns} label="Referenced project matches">
+                  {requiredProjects.map(({ project, sites }) => {
+                    const dependency = choices.dependencies.find(
+                      (choice) => choice.sourceProjectId === project.projectId,
+                    );
+                    const suggestion = suggestions?.find(
+                      (suggestion) => suggestion.sourceProjectId === project.projectId,
+                    );
+                    const suggested =
+                      suggestion?.targetProjectId ??
+                      (!suggestions ? suggestBundleMergeCounterpart(project, form.destination.projects) : null);
+                    return (
+                      <ProjectChoiceRow
+                        onMenuChange={trackSelect}
+                        key={project.projectId}
+                        project={project}
+                        columns={columns}
+                        scope="dependency"
+                        disabled={disabled}
+                        options={[
+                          {
+                            value: 'add',
+                            label: 'Add as a new project',
+                            hint: suggestion?.state === 'new' ? 'Suggested' : undefined,
+                          },
+                          ...targets.map(
+                            (target): Option => ({
+                              value: 'existing:' + target.value,
+                              label: 'Use existing ' + target.label,
+                              project: { action: 'Use existing', name: target.label },
+                              hint: target.value === suggested ? 'Suggested' : undefined,
+                            }),
                           ),
-                        })
-                      }
-                    >
-                      <details>
-                        <summary>Used in {countLabel(sites.length, 'place')}</summary>
-                        <ul>
-                          {sites.map((site, index) => (
-                            <li key={index}>{siteLabel(site)}</li>
-                          ))}
-                        </ul>
-                      </details>
-                    </ProjectChoiceRow>
-                  );
-                })}
+                        ]}
+                        value={dependencyValue(dependency)}
+                        onChange={(value) => updateDependency(project, value)}
+                        path={dependency?.kind === 'add' ? dependency.relativePath : undefined}
+                        onPathChange={(value) =>
+                          change({
+                            ...choices,
+                            dependencies: choices.dependencies.map((choice) =>
+                              choice === dependency && choice.kind === 'add'
+                                ? { ...choice, relativePath: value }
+                                : choice,
+                            ),
+                          })
+                        }
+                      >
+                        <details>
+                          <summary>Referenced in {countLabel(sites.length, 'place')}</summary>
+                          <ul>
+                            {sites.map((site, index) => (
+                              <li key={index}>{siteLabel(site)}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      </ProjectChoiceRow>
+                    );
+                  })}
+                </ProjectChoicesTable>
               </section>
             ) : null}
             {graphChoices.length ? (
@@ -638,13 +701,14 @@ export function WorkflowBundleMergeModal({
                         : ''),
                   }));
                   return (
-                    <div className="workflow-bundle-merge-row" key={key}>
+                    <div className="workflow-bundle-merge-graph-row" key={key}>
                       <label className="workflow-bundle-merge-project" htmlFor={'merge-graph-' + key}>
                         <strong>
                           Graph match for {project?.title} / {graph.sourceGraphName}
                         </strong>
                         <small>
-                          {project?.relativePath} → {target?.relativePath}
+                          {displayBundleMergePath(project?.relativePath ?? '')} →{' '}
+                          {displayBundleMergePath(target?.relativePath ?? '')}
                         </small>
                       </label>
                       <MergeSelect
@@ -673,7 +737,7 @@ export function WorkflowBundleMergeModal({
                       />
                       {graph.sites.length ? (
                         <details className="workflow-bundle-merge-row-details">
-                          <summary>Used in {countLabel(graph.sites.length, 'place')}</summary>
+                          <summary>Referenced in {countLabel(graph.sites.length, 'place')}</summary>
                           <ul>
                             {graph.sites.map((site, index) => (
                               <li key={index}>{siteLabel(site)}</li>
@@ -703,12 +767,7 @@ export function WorkflowBundleMergeModal({
                 ))
               : null}
             {preview && choices.actions.length ? (
-              <section
-                className="workflow-project-bundle-card"
-                aria-label="Merge review"
-                ref={reviewSection}
-                tabIndex={-1}
-              >
+              <section className="workflow-project-bundle-card" aria-label="Merge review">
                 <h3>Review changes</h3>
                 <p>
                   {countLabel(preview.actions.filter((action) => action.kind === 'replace').length, 'replacement')};{' '}
@@ -723,27 +782,26 @@ export function WorkflowBundleMergeModal({
                       <tr>
                         <th scope="col">Source project in {preview.source.name}</th>
                         <th scope="col">Destination in {preview.destination.name}</th>
-                        <th scope="col">Datasets</th>
                       </tr>
                     </thead>
                     <tbody>
                       {preview.actions.map((action) => (
                         <tr key={action.sourceProjectId}>
                           <td>
-                            {preview.source.projects.find((project) => project.projectId === action.sourceProjectId)
-                              ?.relativePath ?? action.sourceProjectId}
+                            {displayBundleMergePath(
+                              preview.source.projects.find((project) => project.projectId === action.sourceProjectId)
+                                ?.relativePath ?? action.sourceProjectId,
+                            )}
                           </td>
                           <td>
                             <strong>{action.kind === 'replace' ? 'Replace' : 'Add'}</strong>{' '}
-                            {action.kind === 'replace'
-                              ? preview.destination.projects.find(
-                                  (project) => project.projectId === action.targetProjectId,
-                                )?.relativePath
-                              : action.relativePath}
-                          </td>
-                          <td>
-                            {preview.datasets.find((dataset) => dataset.sourceProjectId === action.sourceProjectId)
-                              ?.count ?? '—'}
+                            {displayBundleMergePath(
+                              action.kind === 'replace'
+                                ? preview.destination.projects.find(
+                                    (project) => project.projectId === action.targetProjectId,
+                                  )?.relativePath ?? action.targetProjectId
+                                : action.relativePath,
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -751,8 +809,8 @@ export function WorkflowBundleMergeModal({
                   </table>
                 </div>
                 <p className="project-settings-help">
-                  Replacements overwrite saved project content and datasets, including removals. Destination IDs, names,
-                  locations and saved history are kept.
+                  Replacements overwrite saved project content. Destination IDs, names, locations and saved history are
+                  kept.
                 </p>
                 <p className="project-settings-help">
                   Internal references use Saved latest
@@ -801,12 +859,12 @@ export function WorkflowBundleMergeModal({
               <p className={error || unknown ? 'workflow-bundle-merge-issue' : 'project-settings-muted'} role="status">
                 {readinessMessage()}
               </p>
-              {(error || (preview && choices.actions.length > 0)) && !busy ? (
+              {error && !busy ? (
                 <Button
                   appearance="link"
                   onClick={() => {
                     const scroll = content.current,
-                      target = error ? errorDetails.current : reviewSection.current;
+                      target = errorDetails.current;
                     if (!scroll || !target) return;
                     const top =
                       scroll.scrollTop + target.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
@@ -814,7 +872,7 @@ export function WorkflowBundleMergeModal({
                     target.focus({ preventScroll: true });
                   }}
                 >
-                  {error ? 'View error' : 'Review changes'}
+                  View error
                 </Button>
               ) : null}
             </div>

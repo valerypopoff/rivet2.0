@@ -5,6 +5,32 @@
 @import './ProjectSettingsModal.css';
 @import './WorkflowLibraryOverlays.css';
 
+.workflow-bundle-drag-preview {
+  position: fixed;
+  z-index: 20001;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: var(--grey-darkest, #1f1f22);
+  color: var(--grey-lightest, #eee);
+  font-size: 13px;
+}
+.workflow-bundle-drag-preview svg {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+}
+.workflow-bundle-drag-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 :root {
   --workflow-library-font-size-xs: 10px;
   --workflow-library-font-size-s: 14px;

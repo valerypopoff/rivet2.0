@@ -3,6 +3,9 @@ import test from 'node:test';
 import {
   applyBundleMergeSuggestions,
   describeBundleMergeSite,
+  displayBundleMergePath,
+  formatBundleMergeProject,
+  savedBundleMergePath,
   suggestBundleMergeCounterpart,
 } from '../dashboard/bundleMerge.js';
 import type { BundleMergeChoices, BundleMergePreview } from '../../studio-server-shared/workflow-bundle-types.js';
@@ -19,7 +22,7 @@ test('counterpart suggestions prefer one exact relative path and leave ambiguous
   assert.equal(suggestBundleMergeCounterpart(source, []), null);
 });
 
-test('review locations distinguish same-name projects and identify saved variants', () => {
+test('reference locations start with the bundle name and identify projects and saved variants', () => {
   const catalogs = {
     source: {
       bundleId: 'copy',
@@ -44,15 +47,28 @@ test('review locations distinguish same-name projects and identify saved variant
     variantIndex: 0,
     active: false,
   };
-  assert.equal(
-    describeBundleMergeSite(site, catalogs),
-    'Copies/Bundle/Nested/Same.rivet-project / Main / (call) / variant 1 / (inactive)',
-  );
+  assert.equal(describeBundleMergeSite(site, catalogs), 'Bundle/Nested/Same / Main / (call) / variant 1 / (inactive)');
   assert.equal(
     describeBundleMergeSite({ ...site, projectId: 'target' }, catalogs),
-    'Original/Bundle/Other/Same.rivet-project / Main / (call) / variant 1 / (inactive)',
+    'Bundle/Other/Same / Main / (call) / variant 1 / (inactive)',
   );
   assert.equal(describeBundleMergeSite(site, null), 'Same (source) / Main / (call) / variant 1 / (inactive)');
+});
+
+test('project labels hide only the storage suffix and retain useful disambiguation', () => {
+  assert.equal(formatBundleMergeProject({ projectId: 'a', title: 'A', relativePath: 'A.rivet-project' }), 'A');
+  assert.equal(
+    formatBundleMergeProject({ projectId: 'b', title: 'A', relativePath: 'Nested/A.rivet-project' }),
+    'A — Nested/A',
+  );
+  assert.equal(displayBundleMergePath('Folder.rivet-project/A.rivet-project'), 'Folder.rivet-project/A');
+});
+
+test('extension-free path editing round-trips the actual storage path without changing names', () => {
+  for (const path of ['A.rivet-project', 'Nested/A.rivet-project', 'A.rivet-project.rivet-project'])
+    assert.equal(savedBundleMergePath(displayBundleMergePath(path)), path);
+  assert.equal(savedBundleMergePath('Nested/New'), 'Nested/New.rivet-project');
+  assert.equal(savedBundleMergePath(''), '');
 });
 
 test('automatic choices include only changed/new projects and required clear matches', () => {

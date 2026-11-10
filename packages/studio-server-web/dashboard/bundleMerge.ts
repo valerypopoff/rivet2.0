@@ -6,6 +6,22 @@ import type {
   BundleMergeSuggestion,
 } from '../../studio-server-shared/workflow-bundle-types';
 
+const projectExtension = '.rivet-project';
+
+/** Display names never expose the storage suffix; persisted paths retain it. */
+export function displayBundleMergePath(path: string) {
+  return path.endsWith(projectExtension) ? path.slice(0, -projectExtension.length) : path;
+}
+
+export function savedBundleMergePath(displayPath: string) {
+  return displayPath ? displayPath + projectExtension : '';
+}
+
+export function formatBundleMergeProject(project: BundleMergeProject) {
+  const path = displayBundleMergePath(project.relativePath);
+  return path === project.title ? project.title : `${project.title} — ${path}`;
+}
+
 /** Metadata fallback for older APIs; names remain suggestions rather than identity. */
 export function suggestBundleMergeCounterpart(source: BundleMergeProject, destination: readonly BundleMergeProject[]) {
   const path = destination.filter((project) => project.relativePath === source.relativePath);
@@ -71,7 +87,9 @@ export function describeBundleMergeSite(
     );
   const project = catalog?.projects.find((project) => project.projectId === site.projectId);
   return [
-    project ? `${catalog!.relativePath}/${project.relativePath}` : `${site.projectTitle} (${site.projectId})`,
+    project
+      ? `${catalog!.name}/${displayBundleMergePath(project.relativePath)}`
+      : `${site.projectTitle} (${site.projectId})`,
     site.graphName || site.graphId || site.prefabId,
     site.nodeTitle,
     site.nodeId && `(${site.nodeId})`,

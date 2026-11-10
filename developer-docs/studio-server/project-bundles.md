@@ -15,19 +15,36 @@ but bundles cannot nest. Existing folders are not converted automatically.
 Conversion back to an ordinary folder removes grouping only. Projects, references
 and publications survive. Ordinary folders must be empty to delete; bundles have
 a separate recursive deletion flow.
+The bundle context menu keeps conversion last in its bundle-action section,
+uses a merge icon for merging, and puts New folder in its own section between
+separators, before the New project and upload actions.
 
 ### Merging saved project changes
 
-On a managed explicit bundle, choose **Merge into another bundle…** from its
-context menu. Choose the destination to compare saved contents. Only changed,
-new or ambiguous projects appear in Choose project changes. Clear replacements
-and new-project additions are preselected and marked Suggested in their menus;
-the user can change or skip them before committing. An untouched duplicate shows
-No saved project changes to merge and cannot submit an empty merge.
+On a managed explicit bundle, drag its tree row onto another bundle to open the
+merge review with that destination selected. The source is the dragged bundle;
+the target row is the destination. This gesture only opens the review: it does
+not move either bundle or commit a merge. Cancel returns focus to the target row.
+The pointer preview uses the same merge icon as the context-menu action over a
+valid bundle target, and the ordinary bundle icon over a valid move target.
+It hides outside valid tree drop targets, including over the editor iframe, and
+returns when the pointer re-enters a target. The preview cannot intercept the
+drop and is removed when the gesture ends or is cancelled.
+Alternatively, choose **Merge into another bundle…** from the context menu and
+select a destination. Only changed, new or ambiguous projects appear in Choose
+project changes. Clear replacements and new-project additions are preselected
+and marked Suggested in their menus;
+the user can change or skip them before committing. An untouched duplicate replaces
+the empty chooser with a warning-colored No saved project changes to merge block
+and cannot submit an empty merge. The chooser has no selected-count badge. Skipping
+all changed projects leaves their controls available for reselection; it does not
+claim the saved projects match.
 The source bundle and its unsaved editor changes are left intact;
 only saved drafts are read.
 The tree advertises the additive bundleMerge capability. Older APIs that support
 bundles but lack the merge routes do not expose this action in a newer web UI.
+They also reject bundle-to-bundle drops. Self-drops and bundle nesting remain
+blocked, while ordinary folder/project moves keep their existing behavior.
 
 The modal asks for matches only for source-bundle projects referenced by
 the selected content. Choosing Use existing does not copy that source dependency
@@ -51,18 +68,43 @@ The dialog uses the existing dashboard modal, themed Atlaskit selects, checkboxe
 and buttons. Choose project changes, Match referenced projects and Review changes
 use the same bordered cards as the existing bundle-export modal. Compact project
 rows show names and paths together; there are no search or selected-only controls.
+Both selection sections use tables with the same padded headers and divider lines
+as Review changes. They name their source and destination columns and stack cells
+with per-row labels on small screens. Project paths, dropdowns and the review
+omit the internal .rivet-project suffix; path editing
+adds that suffix only to the API value and preserves actual file identity. Duplicate
+name/path labels are collapsed while nested paths still disambiguate projects.
+Replace and Use existing options format the project label as inline code in both
+the menu and selected value; the plain-text label remains available to search and
+accessibility. The addition field is named Project name, with optional folders
+still supported. The modal opens directly at Destination bundle without a general
+introductory paragraph; saved-draft semantics remain documented here.
+The section descriptions say Only changed and newly added projects are listed and
+The projects above reference these other projects. Choose their counterparts in
+the named destination. Reference details are labeled Referenced in N places;
+each location starts with the bundle name, omitting its ancestor folders while
+preserving the project path within the bundle and graph/node details.
 Replacement projects already chosen by another row are disabled with an explanation.
 Empty-source, empty-destination and missing-destination
 states explain the next action.
 
-Review changes shows each selected source, destination action/path and dataset
-count. Its source column includes the source bundle name. The header shows the
-full source-to-destination bundle paths. The footer explains what is still needed and links directly to the review;
+Review changes shows each selected source and destination action/path. Legacy
+datasets are omitted from the modal's columns and explanatory text; their existing
+storage and replacement behavior is unchanged. Its source column includes the
+source bundle name. The header shows the full source-to-destination bundle paths.
+The footer explains what is still needed;
 Merge projects stays disabled until the current review and warning acknowledgements
-allow it. The header/footer remain visible while the content scrolls. Escape
-closes an open dropdown before it can dismiss the dialog. Long errors live in the
-scrollable content with a short footer notice and View error link, so actions
+allow it. The header/footer remain visible while the content scrolls.
+The dialog grows with its content within the existing viewport margins,
+without a fixed 900px ceiling. Small dialogs retain their natural height.
+The merge modal removes Atlaskit's extra body padding: its header, content and
+footer own a single 18px horizontal inset, and the close button sits at the
+dialog's top-right corner.
+Escape closes an open dropdown before it can dismiss the dialog. Long errors live
+in the scrollable content with a short footer notice and View error link, so actions
 remain reachable on narrow screens.
+The review is reached by normal scrolling; there is no redundant Review changes
+shortcut in the footer.
 
 Matching catalog metadata stays mounted while a new preview is pending or fails,
 preserving editable addition paths and input focus. Only a fresh preview matching
@@ -81,8 +123,8 @@ Replacements keep destination project IDs, names, filenames and locations. New
 projects receive fresh IDs and may use ordinary nested folders. Project contents,
 attached data and dataset snapshots are replaced together, including dataset
 removals; old saved revisions and published snapshots retain their old sidecars.
-The review shows source dataset counts. Endpoints, web-app publication records,
-schedules, recording history and server settings are not copied or republished.
+Endpoints, web-app publication records, schedules, recording history and server
+settings are not copied or republished.
 
 Internal references are rewritten to the selected destination counterparts using
 Saved latest. Bindings outside the source bundle retain their versions. A binding

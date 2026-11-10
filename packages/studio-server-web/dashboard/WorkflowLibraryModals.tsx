@@ -75,9 +75,10 @@ export const WorkflowLibraryModals: FC<{
     <>
       {controller.bundleMergeFolder ? (
         <WorkflowBundleMergeModal
-          key={controller.bundleMergeFolder.bundleId}
+          key={`${controller.bundleMergeFolder.bundleId}:${controller.bundleMergeDestinationId ?? ''}`}
           source={controller.bundleMergeFolder}
           bundles={controller.bundleFolders}
+          initialDestinationBundleId={controller.bundleMergeDestinationId}
           onClose={controller.closeBundleMerge}
           onStructuralMutation={controller.onStructuralMutation}
         />

@@ -9,6 +9,7 @@ import {
 } from '@floating-ui/react';
 import ArrowUpIcon from 'majesticons/line/arrow-up-line.svg?react';
 import DeleteBinIcon from 'majesticons/line/delete-bin-line.svg?react';
+import MergeIcon from 'majesticons/line/git-merge-line.svg?react';
 import PlusIcon from 'majesticons/line/plus-line.svg?react';
 import { useLayoutEffect, type FC } from 'react';
 import type { WorkflowFolderItem } from './types';
@@ -112,24 +113,8 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onRename}>
         <span>Rename {folder.bundleId ? 'bundle' : 'folder'}</span>
       </button>
-      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateFolder}>
-        <PlusIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-        <span>New folder</span>
-      </button>
       {bundleActions ? (
         <>
-          {bundleActions.canConvert ? (
-            <button
-              type="button"
-              className="workflow-project-context-menu-item"
-              role="menuitem"
-              onClick={bundleActions.convert}
-              disabled={bundleActions.busy}
-            >
-              <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
-              <span>{folder.bundleId ? 'Convert to ordinary folder' : 'Convert to bundle'}</span>
-            </button>
-          ) : null}
           {folder.bundleId ? (
             <button
               type="button"
@@ -160,12 +145,29 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
               onClick={bundleActions.merge}
               disabled={bundleActions.busy}
             >
-              <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+              <MergeIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
               Merge into another bundle…
+            </button>
+          ) : null}
+          {bundleActions.canConvert ? (
+            <button
+              type="button"
+              className="workflow-project-context-menu-item"
+              role="menuitem"
+              onClick={bundleActions.convert}
+              disabled={bundleActions.busy}
+            >
+              <WorkflowBundleIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+              <span>{folder.bundleId ? 'Convert to ordinary folder' : 'Convert to bundle'}</span>
             </button>
           ) : null}
         </>
       ) : null}
+      <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
+      <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateFolder}>
+        <PlusIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
+        <span>New folder</span>
+      </button>
       <div className="workflow-project-context-menu-separator" role="separator" aria-hidden="true" />
       <button type="button" className="workflow-project-context-menu-item" role="menuitem" onClick={onCreateProject}>
         <PlusIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
