@@ -266,6 +266,7 @@ async function main() {
       'deploy/studio-server/scripts/single-machine-kubernetes.test.mjs',
       'deploy/studio-server/scripts/server-launch-mode.test.mjs',
       'deploy/studio-server/scripts/container-server.test.mjs',
+      'deploy/studio-server/scripts/container-launcher-owner.test.mjs',
     ]);
     await verifyLocalRender(nodeBin, envPath);
     await verifyLocalRender(nodeBin, path.join(rootDir, 'deploy', 'studio-server', '.env.kubernetes-local.example'));

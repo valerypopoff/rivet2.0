@@ -30,6 +30,7 @@ import {
   assertReleaseManifestMatchesCurrentCheckout,
 } from './deploy-kubernetes-release.mjs';
 import { withLauncherProgress } from './lib/launcher-progress.mjs';
+import { acquireContainerLauncher } from './lib/container-launcher-owner.mjs';
 import {
   ensureContainerStateDirectory,
   writeContainerState,
@@ -131,17 +132,11 @@ async function main() {
       'An external incompatible cutover requires explicit installation confirmation and every database consumer stopped.',
     );
   const dir = ensureContainerStateDirectory(root, config.project);
-  const lockPath = path.join(dir, 'launcher.lock');
-  let lock;
-  try {
-    lock = fs.openSync(lockPath, 'wx', 0o600);
-  } catch (error) {
-    if (error.code === 'EEXIST')
-      throw new Error(
-        'This installation already has a launcher owner. After a crash, stop the previous runner before removing launcher.lock.',
-      );
-    throw error;
-  }
+  const releaseLauncher = await acquireContainerLauncher(dir, {
+    stage,
+    identity: containerStorageIdentity(config),
+    restart: stage === 'dev',
+  });
   try {
     const dockerBin = process.env.RIVET_K8S_DOCKER_BIN || 'docker';
     const docker = (args, extra) => run(dockerBin, args, extra);
@@ -248,8 +243,7 @@ async function main() {
     fs.unlinkSync(pendingPath);
     console.log(containerStartupMessage(config, startup));
   } finally {
-    fs.closeSync(lock);
-    fs.unlinkSync(lockPath);
+    releaseLauncher();
   }
 }
 export function containerDevelopmentBuildArgs(name, image) {

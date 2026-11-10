@@ -102,7 +102,10 @@ Stop drains application services before local storage and preserves data. Failed
 startup drains partially started producers, preserves persistence and the pending
 receipt, and never automatically rolls back schema or replays an uncertain write.
 Follow the [recovery contract](../../developer-docs/studio-server/server-stack.md#ownership-startup-and-recovery)
-before removing a stale launcher lock or repairing a pending deployment.
+before repairing a pending deployment. Development commands automatically recover
+stale launcher ownership and wait for an active startup before restarting. They
+retain data volumes; local-storage development restarts PostgreSQL/MinIO as well
+as the applications. Staging/production ownership is still fail-closed.
 
 Existing file/SQLite installations are not upgraded in place or automatically
 adopted. Export/transfer with their previous working release first and retain

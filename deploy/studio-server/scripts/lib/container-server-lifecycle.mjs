@@ -128,6 +128,9 @@ export async function startContainerInstallation(
 ) {
   await compose(['stop', '--timeout', '150', ...applicationServices]);
   await checkPort();
+  // A repeated development command restarts the whole local stack, retaining
+  // its named volumes. Published installations keep their existing stop policy.
+  if (config.stage === 'dev' && config.local) await compose(['stop', '--timeout', '150', 'postgres', 'minio']);
   if (config.local) await compose(['up', '-d', '--wait', '--wait-timeout', '180', 'postgres', 'minio']);
   await compose(['run', '--rm', '--no-deps', 'prepare-volumes']);
   // Exit 75 is the private, read-only verified-restore preparation outcome.

@@ -155,6 +155,28 @@ test('only development extends application readiness for the first watched compi
   }
 });
 
+test('dev local-storage restarts persistence after draining apps without deleting volumes', async () => {
+  for (const stage of ['dev', 'staging', 'prod']) {
+    const calls = [];
+    await startContainerInstallation(
+      { stage, local: true },
+      async (args) => {
+        calls.push(args);
+      },
+      async () => {
+        calls.push(['check-port']);
+      },
+    );
+    assert.deepEqual(calls[0], ['stop', '--timeout', '150', 'proxy', 'web', 'backend', 'execution']);
+    assert.deepEqual(calls[1], ['check-port']);
+    if (stage === 'dev') assert.deepEqual(calls[2], ['stop', '--timeout', '150', 'postgres', 'minio']);
+    const storageStart = calls.findIndex((args) => args[0] === 'up' && args.includes('postgres'));
+    const migration = calls.findIndex((args) => args.at(-1) === 'migrate');
+    assert.ok(storageStart > 0 && migration > storageStart);
+    assert.ok(calls.every((args) => !args.includes('down') && !args.includes('--volumes')));
+  }
+});
+
 test('the shared dotenv example declares the complete current launcher input contract without retired assignments', () => {
   const example = fs.readFileSync(new URL('../.env.example', import.meta.url), 'utf8');
   const declarations = [...example.matchAll(/^# (RIVET_[A-Z0-9_]+)=([^\r\n]*)$/gm)];
@@ -821,7 +843,7 @@ test('an occupied browser port blocks before storage initialization or migration
   const calls = [];
   await assert.rejects(
     startContainerInstallation(
-      { local: true },
+      { stage: 'dev', local: true },
       async (args) => {
         calls.push(args);
       },
