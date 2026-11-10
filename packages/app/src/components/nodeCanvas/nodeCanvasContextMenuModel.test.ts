@@ -1150,7 +1150,21 @@ test('external Subgraph rearrange uses its saved boundary or exact referenced ve
     referencedProjects: { [getSubgraphProjectKey({ projectId: target.metadata.id, version: 'published' })]: target },
   });
   assert.equal(emptyContract.type, 'node');
-  assert.equal(emptyContract.data.canRearrangeSubgraphPorts, false, 'Saved empty contract remains authoritative');
+  assert.equal(emptyContract.data.canRearrangeSubgraphPorts, true, 'Current ports replace the saved empty snapshot');
+  const removedPorts = getNodeCanvasContextMenuContext({
+    ...contextModelOptions,
+    contextMenuData: makeContextMenuData('node-subGraph'),
+    nodesById: {
+      [nodeId]: { ...call, data: { ...(call.data as object), targetBoundary: getGraphBoundary(target, graphId) } },
+    },
+    referencedProjects: {
+      [getSubgraphProjectKey({ projectId: target.metadata.id, version: 'published' })]: {
+        ...target,
+        graphs: { [graphId]: { ...target.graphs[graphId]!, nodes: [] } },
+      },
+    },
+  });
+  assert.equal(removedPorts.data.canRearrangeSubgraphPorts, false);
 });
 
 test('canRunNodeCanvasContextMenuFromHere permits Watch but hides its repeated branch and Stop boundary', () => {

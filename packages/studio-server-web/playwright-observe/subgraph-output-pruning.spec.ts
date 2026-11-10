@@ -230,7 +230,17 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
               relativePath: 'Zeta',
               absolutePath: '/workflows/Zeta',
               updatedAt: '2026-09-05T00:00:00.000Z',
-              projects: [],
+              projects: [
+                {
+                  ...externalProject,
+                  id: 'zeta-project-row',
+                  projectMetadataId: 'zeta-project',
+                  name: 'Other logic',
+                  fileName: 'Other logic.rivet-project',
+                  relativePath: 'Zeta/Other logic.rivet-project',
+                  absolutePath: '/workflows/Zeta/Other logic.rivet-project',
+                },
+              ],
               folders: [],
             },
           ],
@@ -367,25 +377,8 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await expect(version.getByRole('button', { name: 'Saved latest' })).toHaveAttribute('aria-pressed', 'true');
     publishedOutputType = 'number';
     await version.getByRole('button', { name: 'Published' }).click();
-    const automaticWarning = panel.getByText(
-      'The selected project\'s graph changed its output "result". The graph selection was updated automatically; review its connections.',
-      { exact: true },
-    );
-    await expect(automaticWarning).toBeVisible();
-    const versionBounds = await version.boundingBox();
-    const warningBounds = await automaticWarning.boundingBox();
-    expect(versionBounds).not.toBeNull();
-    expect(warningBounds).not.toBeNull();
-    expect(warningBounds!.y).toBeGreaterThan(versionBounds!.y + versionBounds!.height);
-    const warningColors = await automaticWarning.evaluate((element) => {
-      const reference = document.createElement('span');
-      reference.style.color = 'var(--warning)';
-      element.append(reference);
-      const colors = { actual: getComputedStyle(element).color, expected: getComputedStyle(reference).color };
-      reference.remove();
-      return colors;
-    });
-    expect(warningColors.actual).toBe(warningColors.expected);
+    await expect(panel.getByText(/The selected project's graph changed its output/)).toHaveCount(0);
+    await expect(unset.locator('.output-port[data-portid="result"]')).toHaveCount(1);
     externalPreviewUnavailable = true;
     await version.getByRole('button', { name: 'Saved latest' }).click();
     await expect(
@@ -408,13 +401,8 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await selector.press('Escape');
     publishedOutputType = 'boolean';
     await selector.click();
-    await expect(
-      frame
-        .locator('.panel-container')
-        .getByText(
-          'The selected project\'s graph changed its output "outputStream2". Re-select the graph and review its connections.',
-        ),
-    ).toBeVisible();
+    await expect(panel.getByText(/The selected project's graph changed its output/)).toHaveCount(0);
+    await expect(unset.locator('.output-port[data-portid="result"]')).toHaveCount(1);
     await selector.press('Escape');
     publishedOutputType = 'number';
     publishedOutputId = 'outputStream2';
@@ -518,7 +506,10 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
 
   await test.step('Follow an external Subgraph to its project and selected graph', async () => {
     await unset.locator('.edit-button').evaluate((button: HTMLElement) => button.click());
-    await frame.getByRole('group', { name: 'Subgraph graph source' }).getByRole('button', { name: 'Other projects' }).click();
+    await frame
+      .getByRole('group', { name: 'Subgraph graph source' })
+      .getByRole('button', { name: 'Other projects' })
+      .click();
     const selector = frame.locator('.panel-container').getByRole('combobox', { name: 'Subgraph graph' });
     await selector.click();
     const panel = frame.locator('.panel-container');
@@ -527,7 +518,9 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
     await panel.getByText('Reusable logic', { exact: true }).click();
     await panel.getByText('Saved graph', { exact: true }).click();
     await expect(unset.locator('.subgraph-node-body-select')).toContainText('Reusable logic > Saved graph');
-    await unset.getByRole('button', { name: 'Go to subgraph', exact: true }).evaluate((button: HTMLElement) => button.click());
+    await unset
+      .getByRole('button', { name: 'Go to subgraph', exact: true })
+      .evaluate((button: HTMLElement) => button.click());
     await expect(frame.locator('.node[data-nodeid="external-output"]')).toBeVisible();
     await expect(frame.locator('.projects .project.active', { hasText: 'Reusable logic' })).toBeVisible();
   });
@@ -603,8 +596,10 @@ test('Subgraph pruning is opt-in per instance, undoable, persisted, and reflecte
       await reloadedFrame.getByRole('button', { name: 'Go to previous graph', exact: true }).click();
       const caller = reloadedFrame.locator('.node[data-nodeid="subgraph-unset"]');
       await caller.locator('.edit-button').evaluate((button: HTMLElement) => button.click());
-      await reloadedFrame.getByRole('group', { name: 'Subgraph graph source' })
-        .getByRole('button', { name: 'Other projects' }).click();
+      await reloadedFrame
+        .getByRole('group', { name: 'Subgraph graph source' })
+        .getByRole('button', { name: 'Other projects' })
+        .click();
       const panelSelector = reloadedFrame.locator('.panel-container').getByRole('combobox', { name: 'Subgraph graph' });
       await panelSelector.click();
       const panel = reloadedFrame.locator('.panel-container');

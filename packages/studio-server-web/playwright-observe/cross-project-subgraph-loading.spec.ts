@@ -159,6 +159,119 @@ for (const { version, renamed } of [
   });
 }
 
+for (const version of ['latest', 'published'] as const) {
+  test(`external ${version} Subgraph adopts changed ports without warning or reselection`, async ({ page }) => {
+    const { project, target, connections } = fixture(version);
+    const call = project.graphs.main!.nodes.find((node) => node.id === 'external-call')! as SubGraphNode;
+    call.data.targetBoundary = getGraphBoundary(target, 'child' as GraphId);
+    let saved: Project | undefined;
+    await page.route(
+      (url) => url.pathname.startsWith('/api/'),
+      (route) => route.fulfill({ status: 503, json: { error: 'Isolated automatic-port fixture' } }),
+    );
+    await mockHostedEditorBootstrap(page);
+    await page.route('**/api/workflows/tree', (route) =>
+      route.fulfill({
+        json: {
+          root: '/workflows',
+          folders: [],
+          projects: [
+            {
+              id: 'caller',
+              projectMetadataId: 'caller',
+              name: 'External caller',
+              fileName: 'caller.rivet-project',
+              relativePath: 'caller.rivet-project',
+              absolutePath: '/workflows/caller.rivet-project',
+              updatedAt: '2026-11-11T00:00:00Z',
+              settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+            },
+          ],
+        },
+      }),
+    );
+    await page.route('**/api/projects/load', (route) =>
+      route.fulfill({ json: { contents: serializeProject(project), datasetsContents: null, revisionId: null } }),
+    );
+    await page.route('**/api/workflows/subgraph-projects/external-project/preview?version=*', (route) =>
+      route.fulfill({ json: { project: target } }),
+    );
+    await page.route('**/api/projects/save', (route) => {
+      saved = deserializeProject(route.request().postDataJSON().contents)[0];
+      return route.fulfill({ json: { path: '/workflows/caller.rivet-project', revisionId: null } });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await waitForDashboardReady(page);
+    await page.locator('.project-row', { hasText: 'External caller' }).dblclick();
+    const editor = page.frameLocator('iframe.dashboard-editor-frame');
+    const node = editor.locator('.node[data-nodeid="external-call"]');
+    await expect(node.locator('.input-port[data-portid="prompt"]')).toBeVisible();
+    await expect(node.locator('.output-port[data-portid="answer"]')).toBeVisible();
+    const selector = node.getByRole('combobox', { name: 'Subgraph graph' });
+    const input = target.graphs.child!.nodes.find((node) => node.type === 'graphInput')!;
+    const output = target.graphs.child!.nodes.find((node) => node.type === 'graphOutput')!;
+    Object.assign(input.data, { id: 'renamed prompt', dataType: 'number' });
+    Object.assign(output.data, { id: 'renamed answer', dataType: 'number' });
+    await selector.click();
+    await expect(node.locator('.output-port[data-portid="answer"]').locator('..').locator('.port-label')).toHaveText(
+      'renamed answer',
+    );
+    await expect(node.locator('.input-port[data-portid="prompt"]').locator('..').locator('.port-label')).toHaveText(
+      'renamed prompt',
+    );
+    await expect(node.getByText(/Re-select|graph changed its/)).toHaveCount(0);
+    await selector.press('Escape');
+
+    const replacement = structuredClone(output);
+    replacement.id = 'replacement-output' as typeof output.id;
+    Object.assign(replacement.data, { id: 'answer' });
+    target.graphs.child!.nodes = [replacement];
+    await selector.click();
+    await expect(node.locator('.input-port[data-portid="prompt"]')).toHaveCount(0);
+    await expect(node.locator('.output-port[data-portid="answer"]')).toBeVisible();
+    await expect(node.getByText(/Re-select|graph changed its/)).toHaveCount(0);
+    await selector.press('Escape');
+    await node.locator('.node-title').click();
+    await page.keyboard.press(`${modifier}+S`);
+    await expect
+      .poll(() => saved?.graphs.main!.connections)
+      .toEqual(connections.filter((connection) => connection.outputNodeId === call.id));
+
+    const recreatedInput = structuredClone(input);
+    recreatedInput.id = 'replacement-input' as typeof input.id;
+    Object.assign(recreatedInput.data, { id: 'prompt', dataType: 'string' });
+    target.graphs.child!.nodes.push(recreatedInput);
+    await selector.click();
+    await expect(node.locator('.input-port[data-portid="prompt"]')).toBeVisible();
+    await selector.press('Escape');
+    const from = (await editor
+      .locator('.node[data-nodeid="source"] .output-port[data-portid="output"]')
+      .boundingBox())!;
+    const to = (await node.locator('.input-port[data-portid="prompt"]').boundingBox())!;
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 });
+    await page.mouse.up();
+    await expect(editor.locator('path.wire')).toHaveCount(2);
+    await editor.locator('body').press(`${modifier}+S`);
+    await expect
+      .poll(
+        () =>
+          (saved?.graphs.main!.nodes.find((entry) => entry.id === call.id) as SubGraphNode)?.data.targetBoundary
+            ?.inputs[0]?.nodeId,
+      )
+      .toBe(recreatedInput.id);
+
+    Object.assign(recreatedInput.data, { id: 'renamed after reconnect' });
+    await selector.click();
+    await expect(node.locator('.input-port[data-portid="prompt"]').locator('..').locator('.port-label')).toHaveText(
+      'renamed after reconnect',
+    );
+    await selector.press('Escape');
+    await expect(editor.locator('path.wire')).toHaveCount(2);
+  });
+}
+
 test('Go to subgraph selects the external graph over remembered navigation on reopen and warm tabs', async ({
   page,
 }) => {

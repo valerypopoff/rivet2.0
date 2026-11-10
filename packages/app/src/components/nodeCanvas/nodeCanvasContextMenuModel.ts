@@ -205,14 +205,11 @@ function canRearrangeNodeSubgraphPorts(
   }
 
   const { graphId, targetProjectId, targetVersion, targetBoundary } = (node as SubGraphNode).data;
-  if (targetProjectId && targetBoundary) {
-    return targetBoundary.inputs.length > 0 || targetBoundary.outputs.length > 0;
-  }
-
   const targetProject = targetProjectId
     ? referencedProjects[getSubgraphProjectKey({ projectId: targetProjectId, version: targetVersion ?? 'latest' })]
     : project;
-  const boundary = targetProject ? getGraphBoundary(targetProject, graphId) : undefined;
+  const boundary =
+    (targetProject && getGraphBoundary(targetProject, graphId)) ?? (targetProjectId ? targetBoundary : undefined);
   return Boolean(boundary && (boundary.inputs.length > 0 || boundary.outputs.length > 0));
 }
 

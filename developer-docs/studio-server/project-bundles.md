@@ -138,9 +138,9 @@ Subgraph-only targetVersion or targetBoundary fields do not change alias behavio
 
 Duplication preserves graph/node/port IDs, so the normal duplicate/edit/merge case
 needs project mapping only. Missing graph identities in an existing counterpart
-get explicit graph choices. Existing Core boundary validation preserves wire IDs
-and rejects incompatible active imported calls; the merge does not guess port
-matches or repair connections by their names. Inactive graph issues and newly
+get explicit graph choices. Core adopts the selected graph's current inputs and
+outputs and preserves surviving wire IDs; port changes do not require reselection.
+Missing active imported graphs still block. Inactive graph issues and newly
 broken incoming destination callers are location-specific warnings that require
 acknowledgement. Incomplete advisory index coverage remains visible. Unresolved
 internal project mappings always block, including inactive bindings, so recognized
@@ -1350,8 +1350,8 @@ through the normal recording API before later recording contracts run.
 ### Export and local execution ownership
 
 - Core owns the versioned `ProjectBundleManifest`, validation, prefab-aware
-  dependency enumeration and saved Subgraph boundary validation in `ProjectBundle.ts`.
-  Missing/incompatible graph errors identify the caller project, graph and Subgraph
+  dependency enumeration and target-graph validation in `ProjectBundle.ts`.
+  Missing-graph errors identify the caller project, graph and Subgraph
   node (including its searchable ID), plus the target project and graph. Export and
   portable-load checks show the actual selected target version, including bundle-wide
   version overrides. Missing display names fall back to saved IDs. These deliberate
@@ -1369,9 +1369,8 @@ through the normal recording API before later recording contracts run.
   for projects with no publication. Both latest/published Subgraph bindings and
   legacy reference bindings resolve to that project's selected artifact. Authored
   Subgraph version settings are not rewritten; the selection overrides them only
-  inside the bundle. Incompatible saved graph boundaries reject export rather
-  than remove wires or silently choose another version. Stale hint paths are not
-  export authority.
+  inside the bundle. Saved port snapshots do not block export when the selected
+  graph changes its inputs or outputs. Stale hint paths are not export authority.
 - API clients omitting `versionPolicy` retain the legacy per-call selection:
   `(projectId, latest|published)` artifacts and published-first legacy references.
 - Every captured source is re-read once after the ZIP closes, before publication. A changed
@@ -1380,7 +1379,7 @@ through the normal recording API before later recording contracts run.
   An export is not a transaction spanning
   databases, but it never knowingly publishes a mixed, changed capture.
 - Node `loadProjectBundle` validates the extracted manifest, contained real paths,
-  actual file resource limits, identities, target graphs and wire boundaries before
+  actual file resource limits, identities and target graphs before
   processor creation. Each processor receives separate mutable project clones and
   in-memory dataset providers per artifact. Legacy references and versioned calls
   resolve only through the manifest; there is no server lookup or filename guessing.
@@ -1446,12 +1445,30 @@ native reader containment is covered separately by Rust tests.
 File limits (64 MiB per artifact, the configured total budget, and 1 MiB for the
 manifest) use actual sizes before allocation, with bounded reads detecting growth
 or truncation during loading. Path containment, identities, version bindings,
-plugins, dependency closure, cycles and saved wire boundaries still apply.
-Renaming an existing Graph Input or Graph Output keeps its stable node identity:
-the caller retains its connected port ID while displaying and executing the new
-name, just like same-project Subgraphs. Removing/replacing a boundary node,
-changing its type, or introducing conflicting names requires reviewing the caller
-contract; removing checksums does not make incompatible graph connections valid.
+plugins, dependency closure, cycles and target-graph validation still apply.
+External Subgraphs use the current inputs, outputs and types of the selected
+graph, without a changed-port warning or reselection step. Renaming or changing
+the type of an existing Graph Input/Output preserves its caller wire ID. Removed
+ports disappear and their connections follow the editor's ordinary pruning rules;
+recreating a port with the same name adopts the replacement. A new port reusing a
+renamed port's old name gets a separate stable ID, keeping existing wires and
+defaults attached to the original port. While a preview is unavailable, the saved
+port snapshot remains visible and cannot authorize pruning. Version selection,
+missing-graph errors and ordinary execution/type checks remain in effect.
+Connecting or rewiring a recreated same-name port records its current node
+identity in the same undoable command, so later renames retain the new connection.
+Named graph outputs and their retained wire aliases take precedence over run
+statistics such as cost and duration, including when an output has no value.
+
+Regression coverage: `SubGraphNode.boundary.test.ts`, the cross-project cases in
+`GraphProcessor.asyncBranches.test.ts`, `SubGraphNode.outputProjection.test.ts`, `connectionBoundaryCommands.test.ts`,
+`connectionValidation.test.ts`, `project-bundle.test.ts` and the headless
+`cross-project-subgraph-loading.spec.ts`/`subgraph-output-pruning.spec.ts` journeys.
+Build Core with `yarn workspace @valerypopoff/rivet2-core build:esm` before running
+the App tests, which consume its generated exports. Run the browser journeys with
+`PLAYWRIGHT_HEADLESS=1` and `PLAYWRIGHT_SLOW_MO=0` through
+`yarn studio-server:ui:observe`. Finish source edits and formatting before starting
+them so Vite reloads do not interrupt navigation or connection gestures.
 
 `loadProjectBundle` captures current disk contents once. Processors made from that
 loaded bundle use isolated in-memory copies. Call it again after editing files to

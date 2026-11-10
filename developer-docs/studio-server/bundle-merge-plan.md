@@ -31,7 +31,7 @@ background indexer, or Kubernetes component is needed for this first release.
 | Explicit bundles are folder identities with derived descendant membership; there is no entry project.                          | managed/bundles.ts and workflow-bundle-types.ts. Select members from metadata, not dependency reachability.                                                                          |
 | Duplication creates fresh project IDs but preserves graph, node and port identities.                                           | managed/bundles.ts, remap-bundle-project.ts and its regression. The ordinary duplicate/edit/merge case needs project correspondence, usually no graph correspondence.                |
 | Internal Subgraph bindings, legacy references/aliases, Library source nodes and saved variants already have a shared remapper. | remap-bundle-project.ts. Extend this traversal instead of introducing string replacement or a competing reference scanner.                                                           |
-| Saved wire compatibility uses graph-boundary identities and data types, not just names.                                        | Core ProjectBundle.ts and nodes/SubGraphNode.ts. A same-name graph is not sufficient evidence of compatibility.                                                                      |
+| External Subgraphs adopt current ports and types, retaining surviving wire identities.                                         | Core ProjectBundle.ts validates target existence; nodes/SubGraphNode.ts reconciles ports without reselection. Missing graph identities still require a graph choice.                 |
 | Revision preparation writes immutable project/dataset artifacts and reference summaries.                                       | managed/revision-factory.ts and prepared-revisions.ts. Merged drafts are indexed in their insertion transaction; no merge backfill is needed.                                        |
 | Structural operations have topology locking, identity preconditions, durable receipts and observational recovery.              | managed/structural-admission.ts, namespace-receipts.ts and workflow-mutation-contract.ts. Merge must use this owner.                                                                 |
 | Open hosted tabs already track changed saved revisions and expose explicit reload/keep-local resolution.                       | Web dashboard/editorProjectLifecycleCommands.ts, io/hostedProjectRevisionTracker.ts and dashboard/useHostedProjectConflictNotices.tsx. Preserve this behavior for all affected tabs. |
@@ -169,22 +169,21 @@ graph mapping by source project ID and source graph ID, not graph name alone.
 Apply it only to imported references; never rewrite unrelated destination graphs.
 Names/full graph paths may rank suggestions but cannot silently choose a graph.
 
-Validate selected graphs with the existing boundary compatibility helpers. Keep
-saved wire IDs, input data and port-order settings; do not regenerate boundaries,
-match ports by their labels, or reconnect wires automatically. If no compatible
-graph exists, report the caller project, graph, node ID and target graph. The user
-can add/replace that dependency, choose a compatible graph, repair the source or
-deselect the referring change. Arbitrary port migration is outside this release.
+Validate that each selected graph exists. Keep saved wire IDs, input data and
+port-order settings; Core adopts the target's current ports without requiring
+reselection when their types or identities change. If the graph is missing,
+report the caller project, graph, node ID and target graph. The user can add/replace
+that dependency, select another graph, repair the source or deselect the change.
 
 ### Existing destination callers
 
-Keeping a's project ID does not guarantee that an old caller remains compatible
-if the replacement deletes a graph or changes its boundary. Review affected
+Keeping a's project ID does not guarantee that an old caller's graph still exists
+if the replacement deletes it. Review affected
 unchanged destination drafts and active endpoint/web-app snapshots, including
 published snapshots of projects whose drafts are replaced. Use the existing active
 revision/index contracts to select call sites, then read only the needed definitions.
 
-Show newly missing/incompatible incoming calls as explicit review warnings with
+Show newly missing incoming calls as explicit review warnings with
 locations. Require acknowledgement when proceeding with known breaking changes,
 as these can also result from ordinary draft edits. Do not automatically import,
 edit or delete those callers, and do not turn this advisory review into a global
@@ -194,7 +193,7 @@ Existing published snapshots themselves are not rewritten.
 
 Unresolved recognized internal project correspondences block the merge, including
 bindings in inactive configurations: they must not retain source-bundle IDs.
-Missing/incompatible active imported calls also block. Graph-contract issues used
+Missing active imported graphs also block. Graph-contract issues used
 only by disabled nodes, inactive variants or unused Library definitions are
 located review warnings requiring acknowledgement, not an excuse to leave their
 project IDs unmapped. Existing unrelated broken nodes and advisory warnings must
@@ -552,23 +551,23 @@ does not authorize launching a cloud test, deploying production or altering data
 
 ## Required regression matrix
 
-| Area                      | Cases and observable result                                                                                                                                                                                                                                                                                                  |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main authoring loop       | Duplicate A, modify a1/b1, create c1, merge into A. Original a/b IDs and graph/node IDs survive; c has a fresh ID; source bytes/revisions stay unchanged; the destination executes the new behavior.                                                                                                                         |
-| Minimal correspondence    | a1/b1 already mapped; shared x1 requested once; unrelated source members absent; use-existing x does not inspect x1's dependencies; Add x1 expands only its own needed closure.                                                                                                                                              |
-| Choice changes and cycles | Unselecting a branch prunes its exclusive auto-required additions; explicitly selected additions remain. Shared dependencies remain once. Project-level cycles terminate without a blanket ban on valid graph calls.                                                                                                         |
-| Typed authored bindings   | Subgraphs, self-calls, legacy aliases/references, Library sources, disabled nodes and saved variants are remapped. Missing Library definitions do not hide other bindings. Prompts/static data containing ID-looking text are unchanged.                                                                                     |
-| Graph contracts           | Exact IDs, graph renames, explicit compatible graph mapping, same-name ambiguity, missing graph, changed boundary types/identities and preserved port orders/wires. A changed target included in the same merge validates against its new definition.                                                                        |
-| Compatibility policy      | Unresolved internal project mappings and missing/incompatible active imported calls block. Known broken incoming destination callers and inactive graph-contract issues require acknowledgement. All recognized internal project IDs are still remapped. An unrelated pre-existing issue cannot disqualify the whole bundle. |
-| Versions and scope        | Internal version normalization is reviewed; ordinary external Published/latest references remain unchanged. Another explicit bundle or a concurrently moved counterpart cannot bypass scope validation. No rewritten reference retains an A1 member ID.                                                                      |
-| Data and settings         | Attached data, empty/nonempty sidecars, dataset removals, ownership mismatches and duplicate row/dataset identities. Replaced publications and their old sidecars, routes, schedules, recordings and endpoint configuration remain unchanged.                                                                                |
-| Placement                 | Nested ordinary folders, same filenames in different folders, occupied paths, invalid names/escapes, source=destination and post-merge project/folder limits. No implicit overwrite on collision.                                                                                                                            |
-| Concurrency               | Changed imported source, changed target/counterpart, changed graph selection, root path reuse and moved membership reject stale review. An unrelated project's draft edit does not. Opposite-direction merges and a concurrent ordinary save cannot deadlock through reversed locks.                                         |
-| Atomicity and receipts    | Fail a later artifact upload and later SQL row update. Assert exact draft pointers, added rows, receipts and GC intents. Concurrent identical requests commit once. Same operation ID/different request rejects. Lost acknowledgement recovers, expired unknown request does not start.                                      |
-| Editor safety             | Active/inactive dirty tabs retain local edits, stale saves reject, explicit reload uses the merged snapshot/datasets, source unsaved edits are excluded, and unrelated tabs/recordings remain active. Recovered success uses the same path.                                                                                  |
-| UI resilience             | Late preview replies, destination changes, double click, Cancel, pending commit, narrow viewport, Escape/focus return, same-name projects distinguished by path, and failed/superseded refresh after successful commit.                                                                                                      |
-| Bounds                    | One read per distinct needed revision, no unrelated dataset/history download, real abort propagation and no writes from preview. Large input returns an actionable bounded error rather than an empty successful plan.                                                                                                       |
-| Index and runtime         | New revision summaries are immediately queryable with correct project IDs. A merged draft executes through hosted/Node paths; pinned published snapshots keep their version semantics. No production backfill or new runtime policy is required.                                                                             |
+| Area                      | Cases and observable result                                                                                                                                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main authoring loop       | Duplicate A, modify a1/b1, create c1, merge into A. Original a/b IDs and graph/node IDs survive; c has a fresh ID; source bytes/revisions stay unchanged; the destination executes the new behavior.                                                                                                    |
+| Minimal correspondence    | a1/b1 already mapped; shared x1 requested once; unrelated source members absent; use-existing x does not inspect x1's dependencies; Add x1 expands only its own needed closure.                                                                                                                         |
+| Choice changes and cycles | Unselecting a branch prunes its exclusive auto-required additions; explicitly selected additions remain. Shared dependencies remain once. Project-level cycles terminate without a blanket ban on valid graph calls.                                                                                    |
+| Typed authored bindings   | Subgraphs, self-calls, legacy aliases/references, Library sources, disabled nodes and saved variants are remapped. Missing Library definitions do not hide other bindings. Prompts/static data containing ID-looking text are unchanged.                                                                |
+| Graph contracts           | Exact IDs, graph renames, explicit graph mapping, same-name ambiguity and missing graphs. Changed port types/identities are adopted automatically while surviving wire IDs and port orders are retained. A target included in the same merge uses its new definition.                                   |
+| Compatibility policy      | Unresolved internal project mappings and missing active imported graphs block. Known missing incoming destination graphs and inactive graph issues require acknowledgement. All recognized internal project IDs are still remapped. An unrelated pre-existing issue cannot disqualify the whole bundle. |
+| Versions and scope        | Internal version normalization is reviewed; ordinary external Published/latest references remain unchanged. Another explicit bundle or a concurrently moved counterpart cannot bypass scope validation. No rewritten reference retains an A1 member ID.                                                 |
+| Data and settings         | Attached data, empty/nonempty sidecars, dataset removals, ownership mismatches and duplicate row/dataset identities. Replaced publications and their old sidecars, routes, schedules, recordings and endpoint configuration remain unchanged.                                                           |
+| Placement                 | Nested ordinary folders, same filenames in different folders, occupied paths, invalid names/escapes, source=destination and post-merge project/folder limits. No implicit overwrite on collision.                                                                                                       |
+| Concurrency               | Changed imported source, changed target/counterpart, changed graph selection, root path reuse and moved membership reject stale review. An unrelated project's draft edit does not. Opposite-direction merges and a concurrent ordinary save cannot deadlock through reversed locks.                    |
+| Atomicity and receipts    | Fail a later artifact upload and later SQL row update. Assert exact draft pointers, added rows, receipts and GC intents. Concurrent identical requests commit once. Same operation ID/different request rejects. Lost acknowledgement recovers, expired unknown request does not start.                 |
+| Editor safety             | Active/inactive dirty tabs retain local edits, stale saves reject, explicit reload uses the merged snapshot/datasets, source unsaved edits are excluded, and unrelated tabs/recordings remain active. Recovered success uses the same path.                                                             |
+| UI resilience             | Late preview replies, destination changes, double click, Cancel, pending commit, narrow viewport, Escape/focus return, same-name projects distinguished by path, and failed/superseded refresh after successful commit.                                                                                 |
+| Bounds                    | One read per distinct needed revision, no unrelated dataset/history download, real abort propagation and no writes from preview. Large input returns an actionable bounded error rather than an empty successful plan.                                                                                  |
+| Index and runtime         | New revision summaries are immediately queryable with correct project IDs. A merged draft executes through hosted/Node paths; pinned published snapshots keep their version semantics. No production backfill or new runtime policy is required.                                                        |
 
 ## Local verification commands
 
@@ -745,6 +744,5 @@ Stop and resolve the implementation design if it requires deleting/recreating
 destination projects, rewriting arbitrary JSON strings, scanning every library
 project synchronously, saving/importing unrelated projects, silently rebasing a
 reviewed target, automatic mutation retries, or new cloud infrastructure. None is
-needed to satisfy this feature. Track a concrete unsupported graph-port migration
-as a targeted repair case rather than expanding this into a general graph diff
-engine or weakening the existing wire contract.
+needed to satisfy this feature. Track missing graph identities as targeted repair
+cases rather than expanding this into a general graph diff engine.

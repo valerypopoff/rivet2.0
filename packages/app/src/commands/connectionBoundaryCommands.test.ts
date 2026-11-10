@@ -107,7 +107,7 @@ for (const version of ['latest', 'published'] as const) {
   }
 }
 
-test('boundary capture does not refresh existing ports, unavailable targets or breaking contracts', () => {
+test('boundary capture waits for the exact preview and adopts current ports when adding a wire', () => {
   const projectId = 'external' as ProjectId;
   const input = makeGraphInputNode('in', 'old');
   const oldTarget = makeProject([makeGraph('child', [input])]);
@@ -127,7 +127,8 @@ test('boundary capture does not refresh existing ports, unavailable targets or b
     [],
   );
   const breaking = makeProject([makeGraph('child', [makeGraphInputNode('new', 'new')])]);
-  assert.deepEqual(captureSubgraphConnectionBoundaries([subgraph], newWire, { [latestKey]: breaking }), []);
+  const [change] = captureSubgraphConnectionBoundaries([subgraph], newWire, { [latestKey]: breaking });
+  assert.deepEqual(change?.next, getGraphBoundary(breaking, 'child' as GraphId));
 });
 
 test('boundary capture upgrades older nodes without a contract and retains stable renamed port IDs', () => {
@@ -151,6 +152,65 @@ test('boundary capture upgrades older nodes without a contract and retains stabl
   assert.equal(upgrade!.previous, undefined);
   assert.equal(upgrade!.next.inputs.length, 2);
 });
+
+for (const side of ['input', 'output'] as const) {
+  test(`a new ${side} connection remembers a recreated same-name port for future renames and undo`, () => {
+    const projectId = 'external' as ProjectId;
+    const makePort = side === 'input' ? makeGraphInputNode : makeGraphOutputNode;
+    const oldTarget = makeProject([makeGraph('child', [makePort('old-port', 'value')])]);
+    const replacement = makePort('replacement-port', 'value');
+    const target = makeProject([makeGraph('child', [replacement])]);
+    const oldBoundary = getGraphBoundary(oldTarget, 'child' as GraphId);
+    const subgraph = makeSubGraphNode('target', 'child', {
+      data: { targetProjectId: projectId, targetBoundary: oldBoundary },
+    });
+    const endpoint = makeTextNode('endpoint', '{{value}}');
+    const connection = makeConnection(
+      side === 'input'
+        ? { outputNodeId: endpoint.id, inputNodeId: subgraph.id, inputId: 'value' as PortId }
+        : {
+            outputNodeId: subgraph.id,
+            outputId: 'value' as PortId,
+            inputNodeId: endpoint.id,
+            inputId: 'value' as PortId,
+          },
+    );
+    let graph = makeGraph('main', [endpoint, subgraph]);
+    const command = createMakeConnectionCommand((update) => {
+      graph = update(graph);
+    });
+    const state = () => ({
+      ...makeCommandState({ nodes: graph.nodes, connections: graph.connections }),
+      referencedProjects: { [getSubgraphProjectKey({ projectId, version: 'latest' })]: target },
+    });
+    const applied = command.apply(connection, undefined, state());
+    const updated = graph.nodes.find((node) => node.id === subgraph.id) as SubGraphNode;
+    assert.equal(updated.data.targetBoundary?.[side === 'input' ? 'inputs' : 'outputs'][0]?.nodeId, replacement.id);
+    (replacement.data as { id: string }).id = 'renamed';
+    assert.equal(
+      filterValidSubGraphConnections({
+        connections: graph.connections,
+        nodesById: Object.fromEntries(graph.nodes.map((node) => [node.id, node])),
+        project: makeProject(),
+        referencedProjects: state().referencedProjects,
+        projectNodeRegistry: registry,
+      }),
+      graph.connections,
+    );
+    command.undo(connection, applied, state());
+    assert.deepEqual(
+      (graph.nodes.find((node) => node.id === subgraph.id) as SubGraphNode).data.targetBoundary,
+      oldBoundary,
+    );
+    command.apply(connection, applied, { ...state(), referencedProjects: {} });
+    assert.equal(
+      (graph.nodes.find((node) => node.id === subgraph.id) as SubGraphNode).data.targetBoundary?.[
+        side === 'input' ? 'inputs' : 'outputs'
+      ][0]?.nodeId,
+      replacement.id,
+    );
+  });
+}
 
 test('connecting two external Subgraphs snapshots both boundaries and restores the displaced wire', () => {
   const projectId = 'external' as ProjectId;
@@ -219,7 +279,7 @@ test('connecting two external Subgraphs snapshots both boundaries and restores t
   }
 });
 
-test('boundary capture refuses type changes and stable-ID rename collisions', () => {
+test('boundary capture adopts type changes and resolves reused names without losing existing wire identity', () => {
   const projectId = 'external' as ProjectId;
   const oldInput = makeGraphInputNode('in-old', 'old', { data: { dataType: 'string' } });
   const oldTarget = makeProject([makeGraph('child', [oldInput])]);
@@ -234,7 +294,8 @@ test('boundary capture refuses type changes and stable-ID rename collisions', ()
       makeGraphInputNode('in-new', 'new'),
     ]),
   ]);
-  assert.deepEqual(captureSubgraphConnectionBoundaries([subgraph], wire, { [key]: typeChanged }), []);
+  const [typeChange] = captureSubgraphConnectionBoundaries([subgraph], wire, { [key]: typeChanged });
+  assert.equal(typeChange?.next.inputs.find((port) => port.portId === 'old')?.dataType, 'number');
   const colliding = makeProject([
     makeGraph('child', [
       makeGraphInputNode('in-old', 'renamed', { data: { dataType: 'string' } }),
@@ -242,5 +303,10 @@ test('boundary capture refuses type changes and stable-ID rename collisions', ()
       makeGraphInputNode('in-new', 'new'),
     ]),
   ]);
-  assert.deepEqual(captureSubgraphConnectionBoundaries([subgraph], wire, { [key]: colliding }), []);
+  const [collision] = captureSubgraphConnectionBoundaries([subgraph], wire, { [key]: colliding });
+  assert.deepEqual(Object.fromEntries(collision!.next.inputs.map((port) => [port.id, port.portId])), {
+    new: 'new',
+    old: 'in-collision',
+    renamed: 'old',
+  });
 });

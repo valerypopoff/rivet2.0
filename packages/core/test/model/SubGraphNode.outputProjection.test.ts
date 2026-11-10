@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   GraphProcessor,
+  NodeImpl,
   createBuiltInRegistry,
+  getGraphBoundary,
+  nodeDefinition,
   type ChartNode,
   type GraphId,
   type NodeConnection,
   type NodeId,
+  type NodeOutputDefinition,
   type Outputs,
   type PortId,
   type Project,
@@ -25,6 +29,24 @@ function connect(outputNodeId: string, outputId: string, inputNodeId: string, in
     inputNodeId: inputNodeId as NodeId,
     inputId: inputId as PortId,
   };
+}
+
+class ProjectionSource extends NodeImpl<ChartNode> {
+  static create() {
+    return node('projectionSource', 'child-source', {});
+  }
+  static getUIData() {
+    return {};
+  }
+  getInputDefinitions() {
+    return [];
+  }
+  getOutputDefinitions(): NodeOutputDefinition[] {
+    return [{ id: 'output' as PortId, title: 'Output', dataType: 'string' }];
+  }
+  async process(): Promise<Outputs> {
+    return { output: { type: 'string', value: '73' }, cost: { type: 'number', value: 1 } };
+  }
 }
 
 function fixture(skipUnusedOutputs: boolean, excluded: boolean) {
@@ -104,3 +126,69 @@ void describe('Subgraph requested-output projection', () => {
     });
   }
 });
+
+for (const alias of ['cost', 'costBreakdown', 'duration']) {
+  for (const skipUnusedOutputs of [false, true]) {
+    testRenamedMetricOutput(alias, skipUnusedOutputs);
+  }
+}
+
+function testRenamedMetricOutput(alias: string, skipUnusedOutputs: boolean) {
+  void it(`preserves renamed ${alias} values and missing outputs with pruning ${skipUnusedOutputs}`, async () => {
+    for (const hasValue of [true, false]) {
+      const childId = 'external-child' as GraphId;
+      const childOutput = node('graphOutput', 'child-output', { id: alias, dataType: 'any' });
+      const target: Project = {
+        metadata: { id: 'external-target' as ProjectId, title: 'Target', description: '' },
+        graphs: {
+          [childId]: {
+            metadata: { id: childId, name: 'Child' },
+            nodes: [ProjectionSource.create(), childOutput],
+            connections: hasValue ? [connect('child-source', 'output', 'child-output', 'value')] : [],
+          },
+        },
+        plugins: [],
+      };
+      const savedBoundary = getGraphBoundary(target, childId);
+      (childOutput.data as { id: string }).id = 'answer';
+      const mainId = 'external-main' as GraphId;
+      const owner: Project = {
+        metadata: { id: 'external-owner' as ProjectId, title: 'Owner', description: '', mainGraphId: mainId },
+        graphs: {
+          [mainId]: {
+            metadata: { id: mainId, name: 'Main' },
+            nodes: [
+              node('subGraph', 'caller', {
+                graphId: childId,
+                targetProjectId: target.metadata.id,
+                targetBoundary: savedBoundary,
+                skipUnusedOutputs,
+              }),
+              node('number', 'consumer', { useValueInput: true, value: 42 }),
+              node('graphOutput', 'result', { id: 'result', dataType: 'number' }),
+            ],
+            connections: [
+              connect('caller', alias, 'consumer', 'input'),
+              connect('consumer', 'value', 'result', 'value'),
+            ],
+          },
+        },
+        plugins: [],
+      };
+      const registry = createBuiltInRegistry().register(nodeDefinition(ProjectionSource, 'Projection source'));
+      const processor = new GraphProcessor(owner, mainId, registry);
+      let callerOutputs: Outputs | undefined;
+      processor.on('nodeFinish', ({ node: finished, outputs }) => {
+        if (finished.id === 'caller') callerOutputs = outputs;
+      });
+      const outputs = await processor.processGraph({
+        ...testProcessContext(),
+        subgraphProjectLoader: { loadTarget: async () => ({ project: target }) },
+      });
+      assert.equal(outputs.result?.value, hasValue ? 73 : 42);
+      assert.ok(callerOutputs);
+      if (hasValue) assert.deepEqual(callerOutputs[alias as PortId], { type: 'string', value: '73' });
+      else assert.equal(Object.hasOwn(callerOutputs, alias), false);
+    }
+  });
+}

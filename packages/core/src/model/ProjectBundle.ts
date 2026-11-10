@@ -1,6 +1,6 @@
 import type { Project } from './Project.js';
-import { getSubgraphTargetBoundaryIssue, type SubGraphNode } from './nodes/SubGraphNode.js';
-import { getGraphBoundary, type GraphBoundary } from './GraphBoundaryCache.js';
+import type { SubGraphNode } from './nodes/SubGraphNode.js';
+import type { GraphBoundary } from './GraphBoundaryCache.js';
 import { resolveNodePrefabInstance } from './NodePrefabResolver.js';
 import type { PluginLoadSpec } from './PluginLoadSpec.js';
 import { findStronglyConnectedComponents } from './CycleDetector.js';
@@ -124,7 +124,7 @@ export function listProjectBundleCalls(project: Project): {
   return calls;
 }
 
-/** Uses the same saved wire contract as runtime execution, without running any nodes. */
+/** Validate the target without running nodes; execution adopts its current ports. */
 export function validateProjectBundleCall(
   call: ReturnType<typeof listProjectBundleCalls>[number],
   target: Project,
@@ -133,14 +133,11 @@ export function validateProjectBundleCall(
   const graph = Object.hasOwn(target.graphs, call.graphId)
     ? target.graphs[call.graphId as keyof Project['graphs']]
     : undefined;
-  const boundary = graph && getGraphBoundary(target, call.graphId as keyof Project['graphs']);
-  const issue = boundary ? getSubgraphTargetBoundaryIssue(call.boundary, boundary) : null;
-  if (boundary && !issue) return;
+  if (graph) return;
   const source = call.source ? `Check Subgraph ${describeBundleCallSource(call.source)}. ` : '';
   const version = selectedVersion ? ` (${selectedVersion === 'published' ? 'Published' : 'Saved latest'})` : '';
-  const location = `${source}Target: graph "${graph?.metadata?.name || call.graphId}" in project "${target.metadata.title || target.metadata.id}"${version}.`;
-  if (!boundary) throw new ProjectBundleError(`Subgraph dependency is missing graph ${call.graphId}. ${location}`);
-  throw new ProjectBundleError(`Subgraph dependency has an incompatible boundary. ${location} ${issue}`);
+  const location = `${source}Target: graph "${call.graphId}" in project "${target.metadata.title || target.metadata.id}"${version}.`;
+  throw new ProjectBundleError(`Subgraph dependency is missing graph ${call.graphId}. ${location}`);
 }
 
 /** Reject missing bindings and cross-project dependency cycles before executing any graph. */

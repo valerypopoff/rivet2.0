@@ -40,7 +40,7 @@ export type SubGraphNode = ChartNode & {
     /** Retains the hosted picker mode before an external project is selected. */
     targetScope?: 'other-projects' | 'same-bundle';
     targetVersion?: SubgraphProjectVersion;
-    /** Last selected boundary keeps existing wires visible while a hosted preview reloads. */
+    /** Remembered port IDs preserve wires across renames and while a target preview reloads. */
     targetBoundary?: GraphBoundary;
     useErrorOutput?: boolean;
     useAsGraphPartialOutput?: boolean;
@@ -54,66 +54,42 @@ export type SubGraphNode = ChartNode & {
   };
 };
 
-/** A saved cross-project boundary is the wire contract until the user explicitly selects a new target. */
-export function getSubgraphTargetBoundaryChange(
-  expected: GraphBoundary | undefined,
-  actual: GraphBoundary,
-): { side: 'input' | 'output'; id: string } | null {
-  if (!expected) return null;
-  for (const side of ['inputs', 'outputs'] as const) {
-    for (const port of expected[side]) {
-      const match = actual[side].find((candidate) =>
-        port.nodeId ? candidate.nodeId === port.nodeId : candidate.portId === port.portId,
-      );
-      if (match?.dataType !== port.dataType) {
-        return { side: side === 'inputs' ? 'input' : 'output', id: port.id };
-      }
-    }
-    const callerIds = new Set<string>();
-    for (const port of actual[side]) {
-      const saved = expected[side].find((candidate) =>
-        candidate.nodeId ? candidate.nodeId === port.nodeId : candidate.portId === port.portId,
-      );
-      const callerId = saved?.portId ?? port.portId;
-      if (callerIds.has(callerId)) {
-        return { side: side === 'inputs' ? 'input' : 'output', id: port.id };
-      }
-      callerIds.add(callerId);
-    }
-  }
-  return null;
-}
-
-/** Keep the caller's saved wire IDs while adopting current target names and metadata. */
+/** Adopt current ports and types while preserving the IDs of surviving wired ports. */
 export function reconcileSubgraphTargetBoundary(
   expected: GraphBoundary | undefined,
   actual: GraphBoundary,
 ): GraphBoundary {
   if (!expected) return actual;
   return {
-    inputs: actual.inputs.map((port) => {
-      const saved = expected.inputs.find((candidate) =>
-        candidate.nodeId ? candidate.nodeId === port.nodeId : candidate.portId === port.portId,
-      );
-      return saved && saved.dataType === port.dataType ? { ...port, portId: saved.portId } : port;
-    }),
-    outputs: actual.outputs.map((port) => {
-      const saved = expected.outputs.find((candidate) =>
-        candidate.nodeId ? candidate.nodeId === port.nodeId : candidate.portId === port.portId,
-      );
-      return saved && saved.dataType === port.dataType ? { ...port, portId: saved.portId } : port;
-    }),
+    inputs: reconcileSubgraphPorts(expected.inputs, actual.inputs),
+    outputs: reconcileSubgraphPorts(expected.outputs, actual.outputs),
   };
 }
 
-export function getSubgraphTargetBoundaryIssue(
-  expected: GraphBoundary | undefined,
-  actual: GraphBoundary,
-): string | null {
-  const change = getSubgraphTargetBoundaryChange(expected, actual);
-  return change
-    ? `The selected project's graph changed its ${change.side} "${change.id}". Re-select the graph and review its connections.`
-    : null;
+function reconcileSubgraphPorts<T extends { nodeId?: NodeId; portId: PortId }>(
+  expected: readonly T[],
+  actual: readonly T[],
+): T[] {
+  const matches = actual.map((port) =>
+    expected.find((saved) => (saved.nodeId ? saved.nodeId === port.nodeId : saved.portId === port.portId)),
+  );
+  const reserved = new Set(matches.flatMap((saved) => (saved ? [saved.portId] : [])));
+  const used = new Set<PortId>();
+  return actual.map((port, index) => {
+    const saved = matches[index];
+    let portId = saved?.portId ?? port.portId;
+    // A new port can reuse a renamed port's old name. Keep their wires distinct;
+    // the new port's stable node ID is a deterministic fallback, not a new name.
+    if (used.has(portId) || (!saved && reserved.has(portId))) {
+      const base = port.nodeId ?? port.portId;
+      portId = base as PortId;
+      for (let suffix = 2; used.has(portId) || reserved.has(portId); suffix++) {
+        portId = `${base}:${suffix}` as PortId;
+      }
+    }
+    used.add(portId);
+    return portId === port.portId ? port : { ...port, portId };
+  });
 }
 
 export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
@@ -198,21 +174,11 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
     referencedProjects: Record<ProjectId, Project>,
     definitionContext?: NodeDefinitionContext,
   ): GraphBoundary | undefined {
-    // Keep the authored port contract visible even after a referenced project
-    // changes. Execution checks it against the resolved graph and fails with a
-    // reviewable error; replacing it here would hide existing wires in the UI.
-    if (this.data.targetProjectId && this.data.targetBoundary) {
-      const target = this.getTargetProject(project, referencedProjects);
-      const actual = target && this.getBoundary(target, definitionContext);
-      return actual && !getSubgraphTargetBoundaryChange(this.data.targetBoundary, actual)
-        ? reconcileSubgraphTargetBoundary(this.data.targetBoundary, actual)
-        : this.data.targetBoundary;
-    }
     const target = this.getTargetProject(project, referencedProjects);
-    return (
-      (target && this.getBoundary(target, definitionContext)) ??
-      (this.data.targetProjectId ? this.data.targetBoundary : undefined)
-    );
+    const actual = target && this.getBoundary(target, definitionContext);
+    if (!this.data.targetProjectId) return actual;
+    // Missing preview data is not evidence that a port was deleted.
+    return actual ? reconcileSubgraphTargetBoundary(this.data.targetBoundary, actual) : this.data.targetBoundary;
   }
 
   getEditors(context: RivetUIContext): EditorDefinition<SubGraphNode>[] {
@@ -298,10 +264,6 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
 
     const boundary =
       context.getGraphBoundary?.(target, this.data.graphId) ?? getGraphBoundary(target, this.data.graphId)!;
-    if (this.data.targetProjectId) {
-      const boundaryIssue = getSubgraphTargetBoundaryIssue(this.data.targetBoundary, boundary);
-      if (boundaryIssue) throw new Error(boundaryIssue);
-    }
     const callerBoundary = this.data.targetProjectId
       ? reconcileSubgraphTargetBoundary(this.data.targetBoundary, boundary)
       : boundary;
@@ -400,7 +362,7 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
         };
       }
 
-      if (outputs['duration' as PortId] == null) {
+      if (!getSubgraphOutputNames(callerBoundary).has('duration') && outputs['duration' as PortId] == null) {
         outputs['duration' as PortId] = {
           type: 'number',
           value: duration,
@@ -450,10 +412,14 @@ export class SubGraphNodeImpl extends NodeImpl<SubGraphNode> {
 
 export const subGraphNode = nodeDefinition(SubGraphNodeImpl, 'Subgraph');
 
+function getSubgraphOutputNames(boundary: GraphBoundary): Set<string> {
+  return new Set(boundary.outputs.flatMap((output) => [output.id, output.portId]));
+}
+
 function mapSubgraphTargetOutputs(boundary: GraphBoundary, graphOutputs: Outputs): Outputs {
-  const targetNames = new Set(boundary.outputs.map((output) => output.id));
+  const ownedNames = getSubgraphOutputNames(boundary);
   const outputs: Outputs = Object.fromEntries(
-    Object.entries(graphOutputs).filter(([name]) => !targetNames.has(name)),
+    Object.entries(graphOutputs).filter(([name]) => !ownedNames.has(name)),
   ) as Outputs;
   for (const output of boundary.outputs) {
     if (Object.hasOwn(graphOutputs, output.id)) outputs[output.portId] = graphOutputs[output.id as PortId]!;
@@ -491,13 +457,14 @@ function buildOptimizedSubgraphOutputs(
   // Authored boundary values retain ownership of metric-named ports, including
   // exclusions. An unrequested Graph Output may still run as another output's
   // dependency, so do not copy arbitrary child results into the caller map.
-  if (!boundary.outputs.some((output) => output.id === 'cost')) {
+  const ownedNames = getSubgraphOutputNames(boundary);
+  if (!ownedNames.has('cost')) {
     outputs['cost' as PortId] = graphOutputs['cost' as PortId] ?? { type: 'number', value: 0 };
   }
-  if (!boundary.outputs.some((output) => output.id === 'costBreakdown') && graphOutputs['costBreakdown' as PortId]) {
+  if (!ownedNames.has('costBreakdown') && graphOutputs['costBreakdown' as PortId]) {
     outputs['costBreakdown' as PortId] = graphOutputs['costBreakdown' as PortId];
   }
-  if (!boundary.outputs.some((output) => output.id === 'duration')) {
+  if (!ownedNames.has('duration')) {
     outputs['duration' as PortId] = { type: 'number', value: duration };
   }
 
