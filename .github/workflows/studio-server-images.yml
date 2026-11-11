@@ -551,6 +551,11 @@ jobs:
     env:
       SOURCE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       STUDIO_SERVER_CANDIDATE_MANIFEST: artifacts/studio-server-release-manifest/candidate-release-manifest.json
+      RIVET_CI_BROWSER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+      RIVET_CI_PLAYWRIGHT_VERSION: '1.62.1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3100/
+      PW_TEST_CONNECT_EXPOSE_NETWORK: '<loopback>'
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -559,6 +564,34 @@ jobs:
           node-version: 24
       - name: Install Workspace Dependencies
         run: node .yarn/releases/yarn-4.17.1.cjs install --immutable --immutable-cache
+      - name: Prepare browser runtime
+        id: browser-runtime
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          docker pull "$RIVET_CI_BROWSER_IMAGE"
+          container_id=$(docker create --init --ipc=host --publish 127.0.0.1:3100:3100 \
+            --label "rivet.ci.browser=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-image-smoke" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
+            --workdir /workspace --env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+            "$RIVET_CI_BROWSER_IMAGE" node .yarn/releases/yarn-4.17.1.cjs \
+            workspace @valerypopoff/rivet-studio-server-web exec playwright run-server \
+            --host 0.0.0.0 --port 3100)
+          [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]
+          echo "container_id=$container_id" >> "$GITHUB_OUTPUT"
+          docker start "$container_id"
+          ready=false
+          for attempt in {1..30}; do
+            if docker logs "$container_id" 2>&1 | grep -Fq 'Listening on ws://0.0.0.0:3100/'; then
+              ready=true
+              break
+            fi
+            test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = true
+            sleep 1
+          done
+          docker logs "$container_id"
+          test "$ready" = true
+          yarn node scripts/ci/verify-browser-environment.mjs
       - name: Log In to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -572,12 +605,20 @@ jobs:
         with:
           name: studio-server-candidate-release-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/studio-server-release-manifest
-      - name: Install Playwright Chromium and Linux dependencies
-        run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
       - name: Rehearse local SQLite conversion and recovery with candidate images
         run: yarn studio-server:verify:local-upgrade-images
       - name: Exercise restored-copy orchestration directly on the Linux host
         run: sudo --preserve-env=IMAGE_NAMESPACE,SOURCE_TAG,GITHUB_SHA "$(command -v node)" deploy/studio-server/scripts/local-upgrade-restored-host.integration.mjs
+      - name: Stop owned browser runtime
+        if: ${{ always() && steps.browser-runtime.outputs.container_id != '' }}
+        env:
+          CONTAINER_ID: ${{ steps.browser-runtime.outputs.container_id }}
+          EXPECTED_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-image-smoke
+        shell: bash
+        run: |
+          [[ "$CONTAINER_ID" =~ ^[a-f0-9]{64}$ ]]
+          test "$(docker inspect --format '{{ index .Config.Labels "rivet.ci.browser" }}' "$CONTAINER_ID")" = "$EXPECTED_OWNER"
+          docker rm -f "$CONTAINER_ID"
       - name: Upload local upgrade rehearsal diagnostics
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
@@ -619,6 +660,11 @@ jobs:
       RIVET_HA_SCENARIO: ${{ matrix.scenario }}
       RIVET_HA_CLUSTER_RECEIPT: artifacts/ha-cluster-receipt.json
       KUBECONFIG: ${{ github.workspace }}/artifacts/ha-kind-kubeconfig
+      RIVET_CI_BROWSER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+      RIVET_CI_PLAYWRIGHT_VERSION: '1.62.1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3100/
+      PW_TEST_CONNECT_EXPOSE_NETWORK: '<loopback>'
     steps:
       - name: Check Out Repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -638,6 +684,36 @@ jobs:
         run: |
           corepack enable
           yarn install --immutable
+
+      - name: Prepare browser runtime
+        if: matrix.scenario == 'upgrade'
+        id: browser-runtime
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          docker pull "$RIVET_CI_BROWSER_IMAGE"
+          container_id=$(docker create --init --ipc=host --publish 127.0.0.1:3100:3100 \
+            --label "rivet.ci.browser=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-ha-${{ matrix.scenario }}" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/workspace,readonly" \
+            --workdir /workspace --env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+            "$RIVET_CI_BROWSER_IMAGE" node .yarn/releases/yarn-4.17.1.cjs \
+            workspace @valerypopoff/rivet-studio-server-web exec playwright run-server \
+            --host 0.0.0.0 --port 3100)
+          [[ "$container_id" =~ ^[a-f0-9]{64}$ ]]
+          echo "container_id=$container_id" >> "$GITHUB_OUTPUT"
+          docker start "$container_id"
+          ready=false
+          for attempt in {1..30}; do
+            if docker logs "$container_id" 2>&1 | grep -Fq 'Listening on ws://0.0.0.0:3100/'; then
+              ready=true
+              break
+            fi
+            test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = true
+            sleep 1
+          done
+          docker logs "$container_id"
+          test "$ready" = true
+          yarn node scripts/ci/verify-browser-environment.mjs
 
       - name: Set Up Kubernetes Tools
         run: yarn studio-server:setup:k8s-tools
@@ -733,10 +809,6 @@ jobs:
           fi
           yarn "$gate_script"
 
-      - name: Install browser for full HA upgrade verification
-        if: matrix.scenario == 'upgrade'
-        run: yarn workspace @valerypopoff/rivet-studio-server-web exec playwright install --with-deps chromium
-
       - name: Run HA Kubernetes Gate
         shell: bash
         env:
@@ -767,6 +839,17 @@ jobs:
           path: artifacts/kubernetes-ha-release-gate/ha-scenario-report.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Stop owned browser runtime
+        if: ${{ always() && steps.browser-runtime.outputs.container_id != '' }}
+        env:
+          CONTAINER_ID: ${{ steps.browser-runtime.outputs.container_id }}
+          EXPECTED_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-ha-${{ matrix.scenario }}
+        shell: bash
+        run: |
+          [[ "$CONTAINER_ID" =~ ^[a-f0-9]{64}$ ]]
+          test "$(docker inspect --format '{{ index .Config.Labels "rivet.ci.browser" }}' "$CONTAINER_ID")" = "$EXPECTED_OWNER"
+          docker rm -f "$CONTAINER_ID"
 
       - name: Delete Disposable Kind Cluster
         if: ${{ always() }}

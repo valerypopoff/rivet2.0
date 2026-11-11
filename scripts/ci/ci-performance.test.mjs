@@ -488,6 +488,48 @@ test('browser prerequisites reject version drift before launch and close Chromiu
   }
 });
 
+test('observer uses the remote browser without installing a host Chromium and preserves local installation', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-observer-browser-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const launcher = fileURLToPath(
+    new URL('../../packages/studio-server-web/scripts/playwright-observe.mjs', import.meta.url),
+  );
+  const calls = path.join(root, 'calls.jsonl');
+  await fs.mkdir(path.join(root, '.yarn/releases'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, '.yarn/releases/yarn-4.17.1.cjs'),
+    `require('node:fs').appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');`,
+  );
+  for (const mode of ['test', 'debug']) {
+    for (const remote of [false, true]) {
+      await fs.writeFile(calls, '');
+      const result = spawnSync(process.execPath, [launcher, mode, 'fixture.spec.ts'], {
+        cwd: root,
+        env: {
+          ...process.env,
+          RIVET_ENV_FILE: path.join(root, 'empty.env'),
+          FIXTURE_CALLS: calls,
+          PLAYWRIGHT_EXECUTABLE_PATH: '',
+          PW_TEST_CONNECT_WS_ENDPOINT: remote ? browserCiEndpoint : '',
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
+        },
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const commands = (await fs.readFile(calls, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).slice(4));
+      assert.deepEqual(
+        commands.map((command) => command[0]),
+        remote ? ['test'] : ['install', 'test'],
+      );
+      assert.deepEqual(commands.at(-1).slice(-1), ['fixture.spec.ts']);
+    }
+  }
+});
+
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
   assert.equal(editorCiSpecs.length, 36);
   assert.ok(editorCiSpecs.includes('bundle-merge.spec.ts'));
