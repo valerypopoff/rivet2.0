@@ -3,7 +3,7 @@ import { LRUCache } from 'lru-cache';
 import { recordStudioMetrics } from '../../metrics.js';
 
 import type { WorkflowRecordingExtractedInput } from './recording-input-filter.js';
-import { RECORDING_INPUT_PAGE_COMPLETE } from './recording-input-filter.js';
+import { RECORDING_INPUT_CONCURRENT_READS, RECORDING_INPUT_PAGE_COMPLETE } from './recording-input-filter.js';
 import { extractWorkflowRecordingInputInWorker } from './recording-input-extractor.js';
 import {
   normalizeWorkflowRecordingInputSource,
@@ -15,7 +15,9 @@ const DEFAULT_MAX_ENTRIES = 16_384;
 const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
 const DEFAULT_ENTRY_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_MAX_CONCURRENT_LOADS = 8;
+const REQUEST_ID_MAX_ENTRIES = 32_768;
+const REQUEST_ID_MAX_ENTRY_BYTES = 4096;
+const REQUEST_ID_TTL_MS = 60 * 60 * 1000;
 let nextManagedStorageNamespace = 0;
 const managedStorageNamespaces = new WeakMap<object, number>();
 
@@ -23,13 +25,36 @@ type CacheEntry = {
   serializedInput: Buffer;
   retainedBytes: number;
   expiresAt: number;
+  immutable: boolean;
 };
+
+type RequestIdValue = string | number | boolean | null | undefined;
+type RequestIdProjection = { exists: boolean; value: { request_id?: RequestIdValue } };
+
+function projectRequestId(input: WorkflowRecordingExtractedInput): RequestIdProjection | undefined {
+  const projection: RequestIdProjection = { exists: input.exists, value: {} };
+  if (
+    input.exists &&
+    input.value != null &&
+    typeof input.value === 'object' &&
+    Object.prototype.hasOwnProperty.call(input.value, 'request_id')
+  ) {
+    const value = (input.value as { request_id: unknown }).request_id;
+    if (value != null && !['string', 'number', 'boolean', 'undefined'].includes(typeof value)) return undefined;
+    if (typeof value === 'string' && Buffer.byteLength(value) > REQUEST_ID_MAX_ENTRY_BYTES) return undefined;
+    projection.value.request_id = value as RequestIdValue;
+  }
+  return serializeInput(projection).byteLength <= REQUEST_ID_MAX_ENTRY_BYTES ? projection : undefined;
+}
 
 type InFlightLoad = {
   controller: AbortController;
   consumers: number;
   promise: Promise<WorkflowRecordingExtractedInput | null>;
   started: boolean;
+  fullInputRequested: boolean;
+  requestIdRequested: boolean;
+  readonly immutable: boolean;
   graceTimer?: ReturnType<typeof setTimeout>;
 };
 
@@ -42,6 +67,8 @@ type WorkflowRecordingInputCacheOptions = {
   maxEstimatedLoadBytes?: number;
   now?: () => number;
   pageCompletionGraceMs?: number;
+  requestIdMaxEntries?: number;
+  requestIdTtlMs?: number;
   onCacheEvent?: (event: RecordingInputCacheEvent) => void;
   /** Optional diagnostic hook used by the benchmark; it cannot affect loads. */
   onExtractionTiming?: (timing: WorkflowRecordingInputExtractionTiming & { workerQueueAndTransferMs: number }) => void;
@@ -63,6 +90,8 @@ export class WorkflowRecordingInputCache {
   // existing deterministic TTL contract without scanning all entries on each
   // insert.
   readonly #entries: LRUCache<string, CacheEntry>;
+  readonly #requestIds: LRUCache<string, CacheEntry>;
+  readonly #requestIdTtlMs: number;
   readonly #inFlight = new Map<string, InFlightLoad>();
   readonly #maxEntries: number;
   readonly #maxBytes: number;
@@ -85,11 +114,20 @@ export class WorkflowRecordingInputCache {
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.#maxEntryBytes = options.maxEntryBytes ?? DEFAULT_ENTRY_MAX_BYTES;
     this.#ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.#maxConcurrentLoads = Math.max(1, options.maxConcurrentLoads ?? DEFAULT_MAX_CONCURRENT_LOADS);
+    this.#maxConcurrentLoads = Math.max(1, options.maxConcurrentLoads ?? RECORDING_INPUT_CONCURRENT_READS);
     this.#maxEstimatedLoadBytes = Math.max(1, options.maxEstimatedLoadBytes ?? 256 * 1024 * 1024);
     this.#now = options.now ?? Date.now;
     this.#pageCompletionGraceMs = options.pageCompletionGraceMs ?? 250;
     this.#onExtractionTiming = options.onExtractionTiming;
+    this.#requestIdTtlMs = options.requestIdTtlMs ?? REQUEST_ID_TTL_MS;
+    this.#requestIds = new LRUCache<string, CacheEntry>({
+      max: Math.max(1, options.requestIdMaxEntries ?? REQUEST_ID_MAX_ENTRIES),
+      maxSize: Math.max(1, Math.floor(this.#maxBytes * 0.75)),
+      sizeCalculation: (entry) => entry.retainedBytes,
+      dispose: (_entry, _key, reason) => {
+        if (reason === 'evict') this.#record('evicted');
+      },
+    });
     this.#entries = new LRUCache<string, CacheEntry>({
       // LRUCache requires at least one positive structural bound. A disabled
       // cache never reaches set(), so a one-entry shell is sufficient there.
@@ -114,12 +152,23 @@ export class WorkflowRecordingInputCache {
     loadRecordingSource: (signal: AbortSignal) => Promise<WorkflowRecordingInputSource | string | null>,
     signal?: AbortSignal,
     estimatedLoadBytes = 32 * 1024 * 1024,
+    options: { requestIdOnly?: boolean; immutable?: boolean } = {},
   ): Promise<WorkflowRecordingExtractedInput | null> {
     throwIfAborted(signal);
+    const requestIdOnly = options.requestIdOnly === true;
+    const projection = requestIdOnly ? this.#takeFresh(key, this.#requestIds) : undefined;
+    if (projection) {
+      this.#record('hit');
+      return deserializeInput(projection.serializedInput);
+    }
     const cached = this.#takeFresh(key);
     if (cached) {
       this.#record('hit');
-      return deserializeInput(cached.serializedInput);
+      const input = deserializeInput(cached.serializedInput);
+      if (!requestIdOnly) return input;
+      const selected = projectRequestId(input);
+      if (selected) this.#storeRequestId(key, selected, cached.immutable, cached.expiresAt);
+      return selected ?? input;
     }
 
     this.#record('miss');
@@ -127,12 +176,16 @@ export class WorkflowRecordingInputCache {
     let inFlight = this.#inFlight.get(key);
     if (inFlight) this.#record('shared');
     if (!inFlight) {
+      // A new source read supersedes every older view, even if it fails or
+      // finds the artifact missing. Refresh an existing projection alongside
+      // a full-input read so subsequent equality searches see the same source.
+      const refreshRequestId = this.#requestIds.delete(key);
       const controller = new AbortController();
       const promise = this.#load(
         key,
         loadRecordingSource,
         controller.signal,
-        () => this.#inFlight.get(key) === createdInFlight,
+        () => (this.#inFlight.get(key) === createdInFlight ? createdInFlight : undefined),
         () => {
           createdInFlight.started = true;
         },
@@ -140,7 +193,15 @@ export class WorkflowRecordingInputCache {
           ? estimatedLoadBytes
           : this.#maxEstimatedLoadBytes,
       );
-      const createdInFlight: InFlightLoad = { controller, consumers: 0, promise, started: false };
+      const createdInFlight: InFlightLoad = {
+        controller,
+        consumers: 0,
+        promise,
+        started: false,
+        fullInputRequested: false,
+        requestIdRequested: refreshRequestId,
+        immutable: options.immutable === true,
+      };
       inFlight = createdInFlight;
       this.#inFlight.set(key, createdInFlight);
       void promise.then(
@@ -149,12 +210,15 @@ export class WorkflowRecordingInputCache {
       );
     }
 
+    inFlight.fullInputRequested ||= !requestIdOnly;
+    inFlight.requestIdRequested ||= requestIdOnly;
     inFlight.consumers += 1;
     clearTimeout(inFlight.graceTimer);
     inFlight.graceTimer = undefined;
     try {
       const input = await awaitWithAbort(inFlight.promise, signal);
-      return input == null ? null : deserializeInput(serializeInput(input));
+      const selected = input && requestIdOnly ? projectRequestId(input) ?? input : input;
+      return selected == null ? null : deserializeInput(serializeInput(selected));
     } finally {
       inFlight.consumers -= 1;
       if (inFlight.consumers === 0) {
@@ -165,7 +229,7 @@ export class WorkflowRecordingInputCache {
           this.#pageCompletionGraceMs > 0
         ) {
           // Only already-admitted work gets a short handoff window. The same
-          // eight cold-load slots remain reserved; queued work is cancelled.
+          // bounded cold-load slots remain reserved; queued work is cancelled.
           const abandoned = inFlight;
           abandoned.graceTimer = setTimeout(() => {
             abandoned.controller.abort();
@@ -186,6 +250,7 @@ export class WorkflowRecordingInputCache {
 
   invalidate(key: string): void {
     this.#removeEntry(key);
+    this.#requestIds.delete(key);
     // Existing consumers may finish their captured read, but new consumers
     // must not join it and its completion must not replace a newer value.
     const inFlight = this.#inFlight.get(key);
@@ -196,7 +261,7 @@ export class WorkflowRecordingInputCache {
   }
 
   invalidateByPrefix(prefix: string): void {
-    const keys = new Set([...this.#entries.keys(), ...this.#inFlight.keys()]);
+    const keys = new Set([...this.#entries.keys(), ...this.#requestIds.keys(), ...this.#inFlight.keys()]);
     for (const key of keys) {
       if (key.startsWith(prefix)) {
         this.invalidate(key);
@@ -206,11 +271,12 @@ export class WorkflowRecordingInputCache {
 
   clear(): void {
     this.#entries.clear();
+    this.#requestIds.clear();
     for (const key of this.#inFlight.keys()) this.invalidate(key);
   }
 
   get size(): number {
-    return this.#entries.size;
+    return this.#entries.size + this.#requestIds.size;
   }
 
   /** Bounded aggregate diagnostics; never includes keys, filters, or inputs. */
@@ -218,7 +284,8 @@ export class WorkflowRecordingInputCache {
     return {
       ...this.#events,
       entries: this.size,
-      retainedBytes: this.#entries.calculatedSize,
+      retainedBytes: this.#entries.calculatedSize + this.#requestIds.calculatedSize,
+      requestIdEntries: this.#requestIds.size,
       activeLoads: this.#activeLoads,
       queuedLoads: this.#loadWaiters.length,
     };
@@ -237,7 +304,7 @@ export class WorkflowRecordingInputCache {
     key: string,
     loadRecordingSource: (signal: AbortSignal) => Promise<WorkflowRecordingInputSource | string | null>,
     signal: AbortSignal,
-    isCurrent: () => boolean,
+    currentLoad: () => InFlightLoad | undefined,
     onStarted: () => void,
     estimatedLoadBytes: number,
   ): Promise<WorkflowRecordingExtractedInput | null> {
@@ -266,46 +333,85 @@ export class WorkflowRecordingInputCache {
       return null;
     }
 
-    // Cache the tiny extracted input, rather than refusing to cache it merely
-    // because unrelated execution history made the source recording large.
-    if (isCurrent() && !signal.aborted) {
-      this.#store(key, input);
+    const current = currentLoad();
+    if (current && !signal.aborted) {
+      const projection = current.requestIdRequested ? projectRequestId(input) : undefined;
+      if (projection) this.#storeRequestId(key, projection, current.immutable);
+      if (current.fullInputRequested || (current.requestIdRequested && !projection))
+        this.#store(key, input, current.immutable);
     }
 
     return input;
   }
 
-  #takeFresh(key: string): CacheEntry | undefined {
-    const entry = this.#entries.get(key);
+  #takeFresh(key: string, entries = this.#entries): CacheEntry | undefined {
+    const entry = entries.get(key);
     if (!entry) {
       return undefined;
     }
 
     if (entry.expiresAt <= this.#now()) {
       this.#record('expired');
-      this.invalidate(key);
+      entries.delete(key);
       return undefined;
     }
 
     return entry;
   }
 
-  #store(key: string, input: WorkflowRecordingExtractedInput): void {
+  #store(key: string, input: WorkflowRecordingExtractedInput, immutable: boolean): void {
     if (this.#maxEntries <= 0 || this.#maxBytes <= 0) return;
     const serializedInput = serializeInput(input);
     const retainedBytes = serializedInput.byteLength;
     this.#removeEntry(key);
 
-    if (retainedBytes > this.#maxEntryBytes || retainedBytes > this.#maxBytes) {
+    if (retainedBytes > this.#maxEntryBytes || retainedBytes > this.#maxBytes - this.#requestIds.calculatedSize) {
       this.#record('oversized');
       return;
     }
 
+    this.#makeRoom(retainedBytes);
     this.#entries.set(key, {
       serializedInput,
       retainedBytes,
       expiresAt: this.#now() + this.#ttlMs,
+      immutable,
     });
+  }
+
+  #storeRequestId(key: string, input: RequestIdProjection, immutable: boolean, sourceExpiresAt?: number): void {
+    if (this.#maxEntries <= 0 || this.#maxBytes <= 0) return;
+    const serializedInput = serializeInput(input);
+    // Include conservative key/wrapper accounting; decoded worker RSS is separate.
+    const retainedBytes = serializedInput.byteLength + Buffer.byteLength(key) * 2 + 128;
+    if (retainedBytes > this.#requestIds.maxSize) return;
+    this.#requestIds.delete(key);
+    // Evict from this view first. Otherwise a full projection LRU can evict
+    // an unrelated full input and then evict its own old entry as well.
+    while (
+      this.#requestIds.size >= this.#requestIds.max ||
+      this.#requestIds.calculatedSize + retainedBytes > this.#requestIds.maxSize
+    ) {
+      this.#requestIds.pop();
+    }
+    this.#makeRoom(retainedBytes);
+    this.#requestIds.set(key, {
+      serializedInput,
+      retainedBytes,
+      expiresAt: immutable
+        ? this.#now() + this.#requestIdTtlMs
+        : Math.min(sourceExpiresAt ?? Number.POSITIVE_INFINITY, this.#now() + this.#ttlMs),
+      immutable,
+    });
+  }
+
+  #makeRoom(bytes: number): void {
+    while (
+      this.#entries.calculatedSize + this.#requestIds.calculatedSize + bytes > this.#maxBytes &&
+      this.#entries.size
+    ) {
+      this.#entries.pop();
+    }
   }
 
   async #runWithLoadSlot<T>(load: () => Promise<T>, signal: AbortSignal, weight: number): Promise<T> {

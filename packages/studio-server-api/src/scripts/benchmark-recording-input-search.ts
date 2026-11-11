@@ -34,11 +34,6 @@ import {
 } from '../routes/workflows/recordings-db.js';
 
 const gunzipAsync = promisify(gunzip);
-const scope = {
-  workflowId: 'benchmark',
-  statusFilter: 'all' as const,
-  filter: { path: '$.requestId', operator: '==' as const, value: 'needle' },
-};
 const flags = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) {
   const key = process.argv[i]!,
@@ -58,6 +53,8 @@ for (let i = 2; i < process.argv.length; i += 2) {
       '--cache-ttl-ms',
       '--repeat-delay-ms',
       '--initial-page-size',
+      '--input-property',
+      '--scope',
     ].includes(key) ||
     value == null
   )
@@ -83,8 +80,18 @@ const readLatencyMs = integer('--read-latency-ms', 0, 0),
   httpLatencyMs = integer('--http-latency-ms', 0, 0);
 const extractionKiB = integer('--extraction-kib', 16384),
   scenario = flags.get('--scenario') ?? 'recent';
+const inputProperty = flags.get('--input-property') ?? 'requestId';
+const queryScope = flags.get('--scope') ?? 'project';
+const projectIds = queryScope === 'any' ? Array.from({ length: 5 }, (_, i) => `benchmark-${i}`) : ['benchmark'];
+const scope = {
+  workflowId: queryScope === 'any' ? '' : projectIds[0]!,
+  statusFilter: 'all' as const,
+  filter: { path: `$.${inputProperty}`, operator: '==' as const, value: 'needle' },
+};
 if (
   !['recent', 'dense', 'sparse', 'absent'].includes(scenario) ||
+  !['requestId', 'request_id'].includes(inputProperty) ||
+  !['project', 'any'].includes(queryScope) ||
   pageSize > 100 ||
   initialPageSize > 100 ||
   cacheMiB > 512 ||
@@ -118,7 +125,7 @@ function artifact(index: number, kib: number): Buffer {
               inputs: {
                 input: {
                   value: {
-                    requestId: matches(index) ? '$STRING:request' : 'other',
+                    [inputProperty]: matches(index) ? '$STRING:request' : 'other',
                     ...(inputKiB ? { payload: fixtureText(index, inputKiB) } : {}),
                   },
                 },
@@ -197,6 +204,7 @@ async function measure(
       },
       signal,
       row.recordingCompressedBytes * 2 + row.recordingUncompressedBytes * 4,
+      { requestIdOnly: inputProperty === 'request_id' },
     );
   };
   const getInputAfter = (row: WorkflowRecordingRunRow, cursor: number) =>
@@ -369,7 +377,7 @@ async function main() {
       await fs.writeFile(filePath, bytes);
       rows.push({
         id: `recording-${String(index).padStart(6, '0')}`,
-        workflowId: scope.workflowId,
+        workflowId: projectIds[index % projectIds.length]!,
         createdAt: new Date(Date.UTC(2026, 0, 1) - index).toISOString(),
         runKind: 'published',
         status: 'succeeded',
@@ -387,16 +395,14 @@ async function main() {
       });
     }
     await replaceWorkflowRecordingIndex(
-      [
-        {
-          workflowId: scope.workflowId,
-          sourceProjectMetadataId: 'benchmark',
-          sourceProjectPath: 'benchmark',
-          sourceProjectRelativePath: 'benchmark',
-          sourceProjectName: 'Benchmark',
-          updatedAt: rows[0]!.createdAt,
-        },
-      ],
+      projectIds.map((workflowId) => ({
+        workflowId,
+        sourceProjectMetadataId: workflowId,
+        sourceProjectPath: workflowId,
+        sourceProjectRelativePath: workflowId,
+        sourceProjectName: workflowId,
+        updatedAt: rows[0]!.createdAt,
+      })),
       rows,
     );
     const measurements = [];
@@ -436,6 +442,8 @@ async function main() {
       nodeVersion: process.version,
       availableCpus: os.availableParallelism(),
       scenario,
+      inputProperty,
+      queryScope,
       count,
       payloadKiB,
       inputKiB,

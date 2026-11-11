@@ -8,7 +8,252 @@ import {
   WorkflowRecordingInputCache,
 } from '../routes/workflows/recording-input-cache.js';
 import { extractWorkflowRecordingInputFromSource } from '../routes/workflows/recording-input-source.js';
-import { RECORDING_INPUT_PAGE_COMPLETE } from '../routes/workflows/recording-input-filter.js';
+import {
+  RECORDING_INPUT_PAGE_COMPLETE,
+  isRequestIdInputFilter,
+  matchesWorkflowRecordingInputFilter,
+} from '../routes/workflows/recording-input-filter.js';
+
+test('request-ID projections cover a long 25,000-record scan without retaining complete inputs', async () => {
+  let now = 0;
+  let reads = 0;
+  const cache = new WorkflowRecordingInputCache({ now: () => now });
+  const source = createSerializedRecording({ request_id: 'needle', payload: 'large unrelated input' });
+  const key = (id: number) =>
+    `managed:1:namespace/${'a'.repeat(36)}/workflows/${'b'.repeat(36)}/recordings/${String(id).padStart(36, '0')}/recording.json.artifact-v1.${'c'.repeat(64)}.100.500.gzip`;
+  const load = async () => {
+    reads++;
+    return source;
+  };
+  for (let i = 0; i < 25_000; i++) {
+    now += 80;
+    await cache.getOrLoad(key(i), load, undefined, 1, { requestIdOnly: true, immutable: true });
+  }
+  now += 120_000;
+  for (let i = 0; i < 25_000; i++) {
+    const input = await cache.getOrLoad(key(i), load, undefined, 1, { requestIdOnly: true, immutable: true });
+    assert.deepEqual(input, { exists: true, value: { request_id: 'needle' } });
+  }
+  assert.equal(reads, 25_000);
+  assert.equal(cache.diagnostics.requestIdEntries, 25_000);
+  assert.ok(cache.diagnostics.retainedBytes < 32 * 1024 * 1024);
+  now = 3_600_081;
+  await cache.getOrLoad(key(0), load, undefined, 1, { requestIdOnly: true, immutable: true });
+  assert.equal(reads, 25_001);
+});
+
+test('projection selection preserves equality semantics and falls back for large or structured IDs', async () => {
+  assert.equal(isRequestIdInputFilter({ path: "$['request_id']", operator: '==', value: '' }), true);
+  for (const path of ['$.request_id.child', '$.requestId', '$'])
+    assert.equal(isRequestIdInputFilter({ path, operator: '==', value: '' }), false);
+  assert.equal(isRequestIdInputFilter({ path: '$.request_id', operator: 'contains', value: '' }), false);
+  const values = [42, '042', 'true', true, false, null, undefined, { nested: 'value' }, [42], 'x'.repeat(5000)];
+  for (const [i, value] of values.entries()) {
+    const cache = new WorkflowRecordingInputCache();
+    const source = createSerializedRecording({ request_id: value, unrelated: 'retained only by full readers' });
+    const expected = extractWorkflowRecordingInputFromSource({ kind: 'serialized', serializedRecording: source })!;
+    const projected = await cache.getOrLoad(`source-${i}`, async () => source, undefined, 1, { requestIdOnly: true });
+    for (const searched of ['42', '042', 'true', 'false', 'null', 'undefined', '{"nested":"value"}', '[42]']) {
+      const filter = { path: '$.request_id', operator: '==' as const, value: searched };
+      assert.equal(
+        matchesWorkflowRecordingInputFilter(projected!.value, filter),
+        matchesWorkflowRecordingInputFilter(expected.value, filter),
+      );
+    }
+    if (i >= 7) assert.deepEqual(projected, expected, 'unsupported projection keeps full matching behavior');
+  }
+});
+
+test('projection and full consumers share reads without leaking partial inputs or retaining large payloads', async () => {
+  const cache = new WorkflowRecordingInputCache();
+  const source = createSerializedRecording({ request_id: 'needle', payload: 'x'.repeat(1024 * 1024 + 1) });
+  let reads = 0;
+  const pending = deferred<string>();
+  const load = () => {
+    reads++;
+    return pending.promise;
+  };
+  const projected = cache.getOrLoad('same', load, undefined, 1, { requestIdOnly: true });
+  const full = cache.getOrLoad('same', load, undefined, 1);
+  pending.resolve(source);
+  assert.deepEqual(await projected, { exists: true, value: { request_id: 'needle' } });
+  assert.ok(((await full)!.value as { payload: string }).payload.length > 1024 * 1024);
+  assert.equal(reads, 1);
+  assert.equal(cache.diagnostics.requestIdEntries, 1);
+  await cache.getOrLoad('same', load, undefined, 1, { requestIdOnly: true });
+  assert.equal(reads, 1);
+  await cache.getOrLoad('same', load, undefined, 1);
+  assert.equal(reads, 2, 'a projection must not satisfy a full-input lookup');
+});
+
+test('projection reuses full cache, respects legacy expiry, and survives full-view eviction pressure', async () => {
+  let now = 0,
+    reads = 0;
+  const cache = new WorkflowRecordingInputCache({ maxBytes: 4096, now: () => now, ttlMs: 100 });
+  const load = async () => {
+    reads++;
+    return createSerializedRecording({ request_id: 'needle', payload: 'x'.repeat(1000) });
+  };
+  await cache.getOrLoad('legacy', load);
+  now = 75;
+  await cache.getOrLoad('legacy', load, undefined, 1, { requestIdOnly: true });
+  assert.equal(reads, 1);
+  for (let i = 0; i < 10; i++) await cache.getOrLoad(`full:${i}`, load);
+  await cache.getOrLoad('legacy', load, undefined, 1, { requestIdOnly: true });
+  assert.equal(reads, 11);
+  assert.ok(cache.diagnostics.retainedBytes <= 4096);
+  now = 101;
+  await cache.getOrLoad('legacy', load, undefined, 1, { requestIdOnly: true });
+  assert.equal(reads, 12, 'deriving from a full-cache hit must not extend the legacy source expiry');
+  cache.invalidateByPrefix('legacy');
+  assert.equal(cache.diagnostics.requestIdEntries, 0);
+});
+
+test('disabled cache and source invalidation cover projections and in-flight view publication', async () => {
+  let reads = 0;
+  const source = createSerializedRecording({ request_id: 'needle' });
+  const disabled = new WorkflowRecordingInputCache({ maxBytes: 0 });
+  for (let i = 0; i < 2; i++)
+    await disabled.getOrLoad(
+      'source',
+      async () => {
+        reads++;
+        return source;
+      },
+      undefined,
+      1,
+      { requestIdOnly: true },
+    );
+  assert.equal(reads, 2);
+  assert.equal(disabled.size, 0);
+  const cache = new WorkflowRecordingInputCache();
+  const pending = deferred<string>();
+  const old = cache.getOrLoad('source', () => pending.promise, undefined, 1, { requestIdOnly: true, immutable: true });
+  cache.invalidate('source');
+  await cache.getOrLoad('source', async () => createSerializedRecording({ request_id: 'new' }), undefined, 1, {
+    requestIdOnly: true,
+    immutable: true,
+  });
+  pending.resolve(source);
+  await old;
+  assert.deepEqual(await cache.getOrLoad('source', async () => source, undefined, 1, { requestIdOnly: true }), {
+    exists: true,
+    value: { request_id: 'new' },
+  });
+  cache.clear();
+  assert.equal(cache.size, 0);
+});
+
+test('a fresh full read replaces older projections, including absent and unreadable sources', async (t) => {
+  for (const replacement of ['scalar', 'structured', 'missing', 'corrupt'] as const) {
+    await t.test(replacement, async () => {
+      const cache = new WorkflowRecordingInputCache();
+      await cache.getOrLoad('mutable', async () => createSerializedRecording({ request_id: 'old' }), undefined, 1, {
+        requestIdOnly: true,
+      });
+      const source =
+        replacement === 'missing'
+          ? null
+          : replacement === 'corrupt'
+            ? 'invalid JSON'
+            : createSerializedRecording({ request_id: replacement === 'scalar' ? 'new' : { name: 'new' } });
+      const load = async () => source;
+      if (replacement === 'corrupt') {
+        await assert.rejects(cache.getOrLoad('mutable', load), /Malformed recording/);
+        await assert.rejects(
+          cache.getOrLoad('mutable', load, undefined, 1, { requestIdOnly: true }),
+          /Malformed recording/,
+        );
+      } else {
+        await cache.getOrLoad('mutable', load);
+        const result = await cache.getOrLoad('mutable', load, undefined, 1, { requestIdOnly: true });
+        assert.deepEqual(
+          result,
+          source == null
+            ? null
+            : extractWorkflowRecordingInputFromSource({ kind: 'serialized', serializedRecording: source }),
+        );
+      }
+    });
+  }
+});
+
+test('later consumers cannot upgrade the trust or expiry of an unverified source read', async (t) => {
+  for (const shared of [false, true]) {
+    await t.test(shared ? 'in-flight read' : 'completed full input', async () => {
+      let now = 0;
+      const cache = new WorkflowRecordingInputCache({ ttlMs: 10, now: () => now });
+      const pending = deferred<string>();
+      const full = cache.getOrLoad('source', () => pending.promise);
+      const project = () =>
+        cache.getOrLoad('source', async () => createSerializedRecording({ request_id: 'new' }), undefined, 1, {
+          requestIdOnly: true,
+          immutable: true,
+        });
+      const joined = shared ? project() : undefined;
+      pending.resolve(createSerializedRecording({ request_id: 'old' }));
+      await full;
+      if (joined) await joined;
+      else {
+        now = 5;
+        await project();
+      }
+      now = 11;
+      assert.deepEqual(await project(), { exists: true, value: { request_id: 'new' } });
+    });
+  }
+});
+
+test('a verified full-cache hit retains immutable projection expiry', async () => {
+  let now = 0;
+  const cache = new WorkflowRecordingInputCache({ ttlMs: 10, now: () => now });
+  const source = createSerializedRecording({ request_id: 'verified' });
+  await cache.getOrLoad('verified', async () => source, undefined, 1, { immutable: true });
+  now = 5;
+  await cache.getOrLoad(
+    'verified',
+    async () => {
+      throw new Error('must use full cache');
+    },
+    undefined,
+    1,
+    { requestIdOnly: true },
+  );
+  now = 11;
+  assert.deepEqual(
+    await cache.getOrLoad(
+      'verified',
+      async () => {
+        throw new Error('must use projection');
+      },
+      undefined,
+      1,
+      { requestIdOnly: true },
+    ),
+    { exists: true, value: { request_id: 'verified' } },
+  );
+});
+
+test('replacing a full projection LRU does not also evict an unrelated full input', async () => {
+  const cache = new WorkflowRecordingInputCache({ maxBytes: 4096, requestIdMaxEntries: 2 });
+  const project = (key: string) =>
+    cache.getOrLoad(key, async () => createSerializedRecording({ request_id: 'item' }), undefined, 1, {
+      requestIdOnly: true,
+    });
+  await project('small-0');
+  await project('small-1');
+  let fullReads = 0;
+  const load = async () => {
+    fullReads++;
+    return createSerializedRecording({ payload: 'x'.repeat(3600) });
+  };
+  await cache.getOrLoad('full', load);
+  await project('small-2');
+  await cache.getOrLoad('full', load);
+  assert.equal(fullReads, 1);
+  assert.equal(cache.diagnostics.requestIdEntries, 2);
+  assert.ok(cache.diagnostics.retainedBytes <= 4096);
+});
 
 test('deployment cache memory budget is explicit, bounded, and defaults to 32 MiB', () => {
   assert.equal(getRecordingInputCacheMaxBytes({}), 32 * 1024 * 1024);

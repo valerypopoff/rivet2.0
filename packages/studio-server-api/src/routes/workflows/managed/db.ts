@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { MANAGED_POSTGRES_CONNECTION_TIMEOUT_MS } from '../../../managed-health.js';
 import { withManagedPostgresPoolMax, withAuthoritativePostgresTls } from '../../../managed-postgres-pool.js';
@@ -26,10 +27,6 @@ function isRetryableManagedDbError(error: unknown): boolean {
   }
 
   return RETRYABLE_MANAGED_DB_ERROR_CODES.has(String((error as { code?: unknown }).code ?? ''));
-}
-
-async function waitForManagedDbRetry(delayMs: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 export function getManagedDbConnectionConfig(
@@ -68,11 +65,15 @@ export function isUniqueViolation(error: unknown): boolean {
   );
 }
 
-export async function withManagedDbRetry<T>(scope: string, run: () => Promise<T>): Promise<T> {
+export async function withManagedDbRetry<T>(scope: string, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   for (let attempt = 1; attempt <= MANAGED_DB_RETRY_ATTEMPTS; attempt += 1) {
+    signal?.throwIfAborted();
     try {
-      return await run();
+      const result = await run();
+      signal?.throwIfAborted();
+      return result;
     } catch (error) {
+      signal?.throwIfAborted();
       if (!isRetryableManagedDbError(error) || attempt === MANAGED_DB_RETRY_ATTEMPTS) {
         throw error;
       }
@@ -82,7 +83,7 @@ export async function withManagedDbRetry<T>(scope: string, run: () => Promise<T>
         `[managed-workflows] ${scope} failed with retryable database connection error ` +
           `(${String((error as { code?: unknown }).code ?? 'unknown')}). Retrying in ${delayMs}ms...`,
       );
-      await waitForManagedDbRetry(delayMs);
+      await delay(delayMs, undefined, { signal });
     }
   }
 
@@ -93,11 +94,14 @@ export async function queryRows<T extends QueryResultRow>(
   client: ManagedWorkflowDbClient,
   sql: string,
   params: unknown[] = [],
+  signal?: AbortSignal,
 ): Promise<T[]> {
+  signal?.throwIfAborted();
   const result =
     client instanceof Pool
-      ? await withManagedDbRetry('database query', () => client.query<T>(sql, params))
+      ? await withManagedDbRetry('database query', () => client.query<T>(sql, params), signal)
       : await client.query<T>(sql, params);
+  signal?.throwIfAborted();
   return result.rows;
 }
 
@@ -105,8 +109,9 @@ export async function queryOne<T extends QueryResultRow>(
   client: ManagedWorkflowDbClient,
   sql: string,
   params: unknown[] = [],
+  signal?: AbortSignal,
 ): Promise<T | null> {
-  const rows = await queryRows<T>(client, sql, params);
+  const rows = await queryRows<T>(client, sql, params, signal);
   return rows[0] ?? null;
 }
 

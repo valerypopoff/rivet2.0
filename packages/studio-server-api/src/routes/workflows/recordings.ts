@@ -80,6 +80,7 @@ import { getWorkflowProject } from './workflow-query.js';
 import {
   createWorkflowRecordingInputAfter,
   filterRecordingInputWindows,
+  isRequestIdInputFilter,
   parseWorkflowRecordingInputAfter,
 } from './recording-input-filter.js';
 import { getFilesystemRecordingInputCacheKey, workflowRecordingInputCache } from './recording-input-cache.js';
@@ -648,6 +649,7 @@ async function listWorkflowRecordingRowsMatchingInputFilter(
         }),
         readSignal,
         stat.size * 2 + (row.recordingUncompressedBytes || stat.size) * 4,
+        { requestIdOnly: isRequestIdInputFilter(inputFilter) },
       );
     },
     {

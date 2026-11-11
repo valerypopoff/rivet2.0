@@ -2736,6 +2736,63 @@ test('SQLite recording writes use configured compression and gzip level', async 
   });
 });
 
+test('SQLite close and reopen invalidates retained request-ID inputs for that database', async (t) => {
+  await fixture(async (backend, options) => {
+    const item = await createExecutable(backend);
+    const [project, attached] = loadProjectAndAttachedDataFromString(
+      (await backend.loadHostedProject(item.absolutePath)).contents,
+    );
+    const recordingId = await backend.persistWorkflowExecutionRecording({
+      sourceProject: project,
+      sourceProjectPath: item.absolutePath,
+      executedProject: project,
+      executedAttachedData: attached,
+      executedDatasets: [],
+      endpointName: 'story',
+      runKind: 'published',
+      status: 'succeeded',
+      durationMs: 1,
+      recordingSerialized: JSON.stringify({
+        recording: { events: [{ type: 'start', data: { inputs: { input: { value: { request_id: 'needle' } } } } }] },
+      }),
+    });
+    assert.ok(recordingId);
+    const catalog = new LocalWorkflowCatalog(options);
+    catalog.initialize();
+    const hash = catalog.listRecordingMetadata({ recordingId })[0]!.recordingHash;
+    catalog.close();
+    let recordingReads = 0;
+    const read = ImmutableLocalArtifactStore.prototype.read;
+    t.mock.method(
+      ImmutableLocalArtifactStore.prototype,
+      'read',
+      async function (this: ImmutableLocalArtifactStore, key: string, size?: number) {
+        if (key === hash) recordingReads++;
+        return read.call(this, key, size);
+      },
+    );
+    const search = async () => {
+      const result = await backend.listWorkflowRecordingRunsPage({
+        workflowId: item.projectMetadataId!,
+        page: 1,
+        pageSize: 20,
+        inputFilter: { path: '$.request_id', operator: '==', value: 'needle' },
+      });
+      assert.deepEqual(
+        result.runs.map((run) => run.id),
+        [recordingId],
+      );
+    };
+    await search();
+    await search();
+    assert.equal(recordingReads, 1, 'the second search uses the retained request ID');
+    await backend.close();
+    await backend.initialize();
+    await search();
+    assert.equal(recordingReads, 2, 'reopening the same path cannot reuse the previous cache namespace');
+  });
+});
+
 test('SQLite recordings persist before callbacks, support bounded input search, replay, statistics and deletion', async () => {
   await fixture(async (backend) => {
     const item = await createExecutable(backend),

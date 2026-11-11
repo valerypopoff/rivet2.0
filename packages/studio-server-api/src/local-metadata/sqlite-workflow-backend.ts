@@ -31,6 +31,7 @@ import {
 } from '../routes/workflows/recording-statistics.js';
 import {
   filterRecordingInputWindows,
+  isRequestIdInputFilter,
   createWorkflowRecordingInputAfter,
   parseWorkflowRecordingInputAfter,
 } from '../routes/workflows/recording-input-filter.js';
@@ -186,6 +187,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
     this.#lifecycleRevision++;
     this.#initialized = false;
     this.#executionCache.clearRevisionMaterializations();
+    workflowRecordingInputCache.invalidateByPrefix(this.#cacheScope);
     return this.#catalog.close();
   }
 
@@ -1278,6 +1280,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
               () => this.#catalog.readRecordingArtifact(row.recordingId, 'recording'),
               abort,
               row.recordingDecodedBytes,
+              { requestIdOnly: isRequestIdInputFilter(inputFilter), immutable: true },
             ),
           {
             pageSize: size,

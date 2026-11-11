@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { readScheduledRecordingFields, readWorkflowRunCost } from '../../../../../studio-server-shared/workflow-recording-types.js';
+import {
+  readScheduledRecordingFields,
+  readWorkflowRunCost,
+} from '../../../../../studio-server-shared/workflow-recording-types.js';
 import { serializeDatasets, serializeProject, type Project } from '@valerypopoff/rivet2-node';
 
 import type {
@@ -42,6 +45,8 @@ import type {
 import {
   createWorkflowRecordingInputAfter,
   filterRecordingInputWindows,
+  isRequestIdInputFilter,
+  observeRecordingInputQuery,
   parseWorkflowRecordingInputAfter,
 } from '../recording-input-filter.js';
 import { getManagedRecordingInputCacheKey, workflowRecordingInputCache } from '../recording-input-cache.js';
@@ -93,7 +98,20 @@ function getCreatedAtMs(row: RecordingRow): number {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function getRecordingCursorCreatedAt(row: RecordingRow): string {
+type RecordingInputCandidate = Pick<
+  RecordingRow,
+  | 'recording_id'
+  | 'workflow_id'
+  | 'created_at'
+  | 'recording_cursor_created_at'
+  | 'status'
+  | 'execution_surface'
+  | 'recording_blob_key'
+  | 'recording_compressed_bytes'
+  | 'recording_uncompressed_bytes'
+>;
+
+function getRecordingCursorCreatedAt(row: Pick<RecordingRow, 'created_at' | 'recording_cursor_created_at'>): string {
   // node-postgres turns `timestamptz` into a JavaScript Date, which removes
   // microseconds. A keyset boundary has to keep the exact selected timestamp
   // or recordings written by `NOW()` can be skipped at the same millisecond.
@@ -208,7 +226,7 @@ function getStoredByteLength(key: string | null, text: string | null | undefined
 }
 
 async function filterManagedRecordingRowsByInput(
-  loadWindow: (after: string | undefined, offset: number, limit: number) => Promise<RecordingRow[]>,
+  loadWindow: (after: string | undefined, offset: number, limit: number) => Promise<RecordingInputCandidate[]>,
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
   inputFilter: WorkflowRecordingInputFilter,
@@ -242,6 +260,10 @@ async function filterManagedRecordingRowsByInput(
         },
         readSignal,
         Math.max(row.recording_compressed_bytes, row.recording_uncompressed_bytes) * 6,
+        {
+          requestIdOnly: isRequestIdInputFilter(inputFilter),
+          immutable: !!blobStore.getBytes && parseManagedArtifactDescriptor(row.recording_blob_key) != null,
+        },
       ),
     {
       inputCursor: inputAfterCursor?.legacyCursor ?? inputCursor,
@@ -589,6 +611,18 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       runScope: RecordingRunScope = inputFilter ? 'roots' : 'all',
     ): Promise<WorkflowRecordingRunsPageResponse> {
       await deps.initialize();
+      signal?.throwIfAborted();
+      const timedRead = async <T>(stage: 'count' | 'candidates' | 'matches', read: () => Promise<T>): Promise<T> => {
+        signal?.throwIfAborted();
+        const start = performance.now();
+        try {
+          const result = await read();
+          signal?.throwIfAborted();
+          return result;
+        } finally {
+          if (inputFilter) observeRecordingInputQuery(stage, performance.now() - start);
+        }
+      };
       const normalizedPage = Math.max(1, Math.floor(page));
       const normalizedPageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
       const offset = (normalizedPage - 1) * normalizedPageSize;
@@ -606,22 +640,6 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         runScope === 'families'
           ? recordingWorkflowScopeClause(workflowId, includeSubgraphRuns, 'managed')
           : workflowClause;
-      const scopeCounts =
-        (workflowId && includeSubgraphRuns) || runScope === 'roots'
-          ? (await deps.queryOne<{
-              totalRuns: number;
-              failedRuns: number;
-              suspiciousRuns: number;
-            }>(
-              deps.pool,
-              `SELECT COUNT(*)::int AS "totalRuns",
-        COUNT(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
-        COUNT(*) FILTER (WHERE status = 'suspicious')::int AS "suspiciousRuns"
-        FROM workflow_recordings WHERE ${countsClause}`,
-              [workflowId],
-            )) ?? undefined
-          : undefined;
-      const filterClause = statusFilter === 'failed' ? `AND status IN ('failed', 'suspicious')` : '';
       const inputAfterCursor = inputFilter
         ? parseWorkflowRecordingInputAfter(inputAfter, {
             workflowId,
@@ -630,6 +648,26 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
             includeSubgraphRuns,
           })
         : undefined;
+      const initialInputSearch = !inputAfter && inputCursor === 0;
+      const scopeCounts =
+        (!inputFilter || initialInputSearch) && ((workflowId && includeSubgraphRuns) || runScope === 'roots')
+          ? (await timedRead('count', () =>
+              deps.queryOne<{
+                totalRuns: number;
+                failedRuns: number;
+                suspiciousRuns: number;
+              }>(
+                deps.pool,
+                `SELECT COUNT(*)::int AS "totalRuns",
+        COUNT(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
+        COUNT(*) FILTER (WHERE status = 'suspicious')::int AS "suspiciousRuns"
+        FROM workflow_recordings WHERE ${countsClause}`,
+                [workflowId],
+                signal,
+              ),
+            )) ?? undefined
+          : undefined;
+      const filterClause = statusFilter === 'failed' ? `AND status IN ('failed', 'suspicious')` : '';
 
       const countRow =
         inputFilter || (scopeCounts && runScope !== 'families')
@@ -660,11 +698,16 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         const offsetParameter = boundary ? '$5' : '$3';
         // Select the bounded window once before computing child presence.
         // Count ownership globally for its keys, never group unrelated history.
-        return deps.queryRows<RecordingRow>(
-          deps.pool,
-          `
+        return timedRead('candidates', () =>
+          deps.queryRows<RecordingInputCandidate>(
+            deps.pool,
+            `
           WITH recording_page AS MATERIALIZED (
-            SELECT ${deps.recordingColumns},
+            SELECT ${
+              inputFilter
+                ? 'recording_id, workflow_id, created_at, status, execution_surface, recording_blob_key, recording_compressed_bytes, recording_uncompressed_bytes'
+                : deps.recordingColumns
+            },
                    TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                      AS recording_cursor_created_at
             FROM workflow_recordings
@@ -672,11 +715,13 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
             ORDER BY created_at DESC, recording_id DESC
             LIMIT ${limitParameter} OFFSET ${offsetParameter}
           )
-          SELECT recording_page.*, ${recordingHasSubRunsSql('managed', 'recording_page')} AS has_sub_runs
+          SELECT recording_page.*${inputFilter ? '' : `, ${recordingHasSubRunsSql('managed', 'recording_page')} AS has_sub_runs`}
           FROM recording_page
           ORDER BY created_at DESC, recording_id DESC
         `,
-          queryParameters,
+            queryParameters,
+            signal,
+          ),
         );
       };
       const filteredPage = inputFilter
@@ -694,7 +739,42 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
             includeSubgraphRuns,
           )
         : null;
-      const pageRows = filteredPage?.rows ?? (await loadWindow(undefined, offset, normalizedPageSize));
+      let pageRows: RecordingRow[];
+      if (filteredPage) {
+        const selected = filteredPage.rows;
+        const hydrated = selected.length
+          ? await timedRead('matches', () =>
+              deps.queryRows<RecordingRow>(
+                deps.pool,
+                `WITH recording_matches AS MATERIALIZED (
+            SELECT ${deps.recordingColumns},
+              TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS recording_cursor_created_at
+            FROM workflow_recordings
+            WHERE ${workflowClause} ${filterClause} AND recording_id = ANY($2::text[])
+          )
+          SELECT recording_matches.*, ${recordingHasSubRunsSql('managed', 'recording_matches')} AS has_sub_runs
+          FROM recording_matches`,
+                [workflowId, selected.map((row) => row.recording_id)],
+                signal,
+              ),
+            )
+          : [];
+        const byId = new Map(hydrated.map((row) => [row.recording_id, row]));
+        // Preserve scanner order and its consumed boundary even if a row was
+        // removed/replaced between matching and decoration. Never show a match
+        // evaluated against a different artifact or timestamp.
+        pageRows = selected.flatMap((candidate) => {
+          const row = byId.get(candidate.recording_id);
+          return row &&
+            row.recording_blob_key === candidate.recording_blob_key &&
+            getRecordingCursorCreatedAt(row) === getRecordingCursorCreatedAt(candidate)
+            ? [row]
+            : [];
+        });
+      } else {
+        // Ordinary browsing selects the full projection in loadWindow.
+        pageRows = (await loadWindow(undefined, offset, normalizedPageSize)) as RecordingRow[];
+      }
       const totalRuns =
         scopeCounts && runScope !== 'families'
           ? statusFilter === 'failed'
@@ -714,8 +794,10 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
         scopeCounts,
         page: normalizedPage,
         pageSize: normalizedPageSize,
-        totalRuns: filteredPage?.totalRuns ?? totalRuns,
-        totalRunsExact: filteredPage?.totalRunsExact ?? true,
+        totalRuns: filteredPage ? pageRows.length : totalRuns,
+        totalRunsExact: filteredPage
+          ? filteredPage.totalRunsExact && pageRows.length === filteredPage.rows.length
+          : true,
         hasMore: filteredPage?.hasMore ?? normalizedPage * normalizedPageSize < totalRuns,
         nextInputCursor: filteredPage?.nextInputCursor,
         inputSearchAnalyzedRuns: filteredPage?.analyzedRuns,
