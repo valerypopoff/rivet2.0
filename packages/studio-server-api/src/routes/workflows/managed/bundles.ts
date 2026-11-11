@@ -21,6 +21,7 @@ import { badRequest, conflict, createHttpError } from '../../../utils/httpError.
 import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
 import { sanitizeWorkflowName } from '../fs-helpers.js';
 import { remapBundleProject } from '../remap-bundle-project.js';
+import { createManagedBundleMergeService } from './bundle-merge.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { FolderRow, RevisionRow, WorkflowRow } from './types.js';
 import { prepareBundleConversion, assertBundleConversion } from './bundle-conversion.js';
@@ -80,6 +81,7 @@ async function chooseBundleCopyDestination(client: PoolClient, root: FolderRow) 
 }
 
 export function createManagedBundleService(context: ManagedWorkflowContext) {
+  const merge = createManagedBundleMergeService(context);
   async function capture(client: PoolClient, id: string, version: WorkflowBundleVersion, lock = false) {
     const root = (await client.query<FolderRow>('SELECT * FROM workflow_folders WHERE bundle_id = $1', [id])).rows[0];
     if (!root) throw createHttpError(404, 'Bundle not found');
@@ -126,6 +128,8 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
     for (const member of snapshot.selected) {
       const revision = await context.queries.getRevision(context.pool, member.revisionId);
       if (!revision) throw conflict('A source revision is unavailable. Refresh the preview.');
+      if (revision.workflow_id !== member.projectId)
+        throw conflict('A source revision no longer matches its project. Refresh the preview.');
       const contents = await context.revisions.readRevisionContents(revision);
       bytes += Buffer.byteLength(contents.contents) + Buffer.byteLength(contents.datasetsContents ?? '');
       if (bytes > PROJECT_BUNDLE_UPLOAD_MAX_BYTES)
@@ -175,6 +179,8 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
     return { snapshot, projects, preview };
   }
   return {
+    mergePreview: merge.preview,
+    merge: merge.commit,
     async delete(id: string, confirmation: { name: string; relativePath: string }, mutation?: StructuralMutation) {
       const captured = captureOperation(
         { confirmation, mutation },

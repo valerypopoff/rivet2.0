@@ -58,6 +58,7 @@ export const WorkflowLibraryContextMenus: FC<{
                     ),
                   convert: () => void controller.handleToggleBundleKind(),
                   duplicate: () => void controller.handleDuplicateBundle(),
+                  merge: controller.canMergeBundles ? controller.handleMergeBundle : undefined,
                   busy: controller.bundleAction !== null,
                   download: controller.handleDownloadBundle,
                 }

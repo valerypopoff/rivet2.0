@@ -2134,6 +2134,31 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-11)
+
+The latest actual version change for App, the public runtime family, App Executor
+and Studio Server is `8165d45f4`. Changes through `c1073e833`, plus the accompanying
+runtime and CI fixes, prepare these release tracks:
+
+| Release track                       | Version change      | Reason                                                                                                                                                    |
+| ----------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop app                         | `2.34.0` → `2.35.0` | Separate AI spending totals, timed graph deletion override, automatic Subgraph port adoption, navigation and bundled SQLite fixes.                        |
+| Public Core/Node/Evaluations/CLI    | `2.27.1` → `2.28.0` | Shared cost projection, caller-aware bundle diagnostics and current-port adoption; unchanged Node/Evaluations/CLI source follows the publishing contract. |
+| App executor                        | `2.19.1` → `2.20.0` | Bundles the new Core behavior without a separate sidecar protocol change.                                                                                 |
+| Five private Studio Server packages | `1.36.0` → `1.37.0` | Bundle merging with automatic suggestions, review and drag/drop; export/validation fixes and safe local launcher restarts.                                |
+| Documentation site                  | Remains `2.27.0`    | No package-local changes since `488019eb9`.                                                                                                               |
+
+The [package matrix](PACKAGES.md#version-update-2026-11-11--bundle-merging-and-automatic-subgraph-ports)
+distinguishes changed workspaces from release companions. Synchronize the desktop
+Tauri/Cargo metadata with `yarn sync:desktop-version`; keep the CLI Docker fallback
+at the public-family version. Existing workspace ranges, Yarn resolutions, Helm
+metadata and schema versions do not change for a package-version increment.
+
+Validate with `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+`yarn check:pnp:fresh`, `yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. The package edits prepare a release;
+they do not publish packages or start a deployment.
+
 ### Prepared release versions (2026-11-09)
 
 Reviewing `488019eb9..70d83c638` prepares these independent release tracks:

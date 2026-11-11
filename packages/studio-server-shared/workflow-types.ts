@@ -321,7 +321,7 @@ export const WORKFLOW_TREE_CLIENT_ID_HEADER = 'x-rivet-workflow-tree-client';
 
 export type WorkflowTreeResponse = {
   root: string;
-  capabilities?: { explicitBundles: boolean; namespaceMutations?: boolean };
+  capabilities?: { explicitBundles: boolean; namespaceMutations?: boolean; bundleMerge?: boolean };
   folders: WorkflowFolderItem[];
   projects: WorkflowProjectItem[];
   sync: WorkflowTreeSyncState;

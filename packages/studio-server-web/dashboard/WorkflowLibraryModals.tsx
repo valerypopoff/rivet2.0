@@ -9,6 +9,7 @@ import { WorkflowProjectBundleModal } from './WorkflowProjectBundleModal';
 import { WorkflowBundleUploadModal } from './WorkflowBundleUploadModal';
 import { WorkflowBundleConversionErrorModal } from './WorkflowBundleConversionErrorModal';
 import { WorkflowBundleDeleteModal } from './WorkflowBundleDeleteModal';
+import { WorkflowBundleMergeModal } from './WorkflowBundleMergeModal';
 import type { HostedRouteConfig } from './types';
 import { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
@@ -72,6 +73,16 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      {controller.bundleMergeFolder ? (
+        <WorkflowBundleMergeModal
+          key={`${controller.bundleMergeFolder.bundleId}:${controller.bundleMergeDestinationId ?? ''}`}
+          source={controller.bundleMergeFolder}
+          bundles={controller.bundleFolders}
+          initialDestinationBundleId={controller.bundleMergeDestinationId}
+          onClose={controller.closeBundleMerge}
+          onStructuralMutation={controller.onStructuralMutation}
+        />
+      ) : null}
       {controller.bundleDeleteFolder ? (
         <WorkflowBundleDeleteModal
           key={`${controller.bundleDeleteFolder.namespaceId ?? controller.bundleDeleteFolder.id}:${controller.bundleDeleteFolder.bundleId}`}
@@ -108,6 +119,7 @@ export const WorkflowLibraryModals: FC<{
         suppressed={
           scheduledRunsOpen ||
           controller.bundleDeleteFolder != null ||
+          controller.bundleMergeFolder != null ||
           controller.bundleConversionFailure != null ||
           controller.bundleOpen ||
           controller.bundleUploadFolder != null ||

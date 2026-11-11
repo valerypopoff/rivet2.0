@@ -32,7 +32,14 @@ two installations cannot bind the same host port simultaneously. Host volumes re
 does not provide Kubernetes PVC/ephemeral-storage quota enforcement or HA.
 
 Development builds the checkout's API, web and proxy images with unique source
-tags. Both dev storage choices now serve watched, immutable frontend bundles
+tags. Rerunning either development command safely acquires the same installation
+and rebuilds/restarts its application services. Local-storage development also
+restarts PostgreSQL and MinIO after draining the applications and checking the
+browser port; their named volumes, credentials and saved data are retained. A
+stale launcher lock is recovered automatically. If another startup is still
+running, the new command waits for it to finish rather than racing its build or
+migration. No extra recreate flag or manual lock deletion is needed.
+Both dev storage choices now serve watched, immutable frontend bundles
 using the existing guarded development-refresh owner. Source changes in the
 hosted web, editor, browser-side Core, shared types and evaluations rebuild automatically;
 the browser refreshes once unsaved edits, active work and dialogs permit it.
@@ -232,6 +239,7 @@ values literally (no variable interpolation) and does not strip inline comments.
 `container-server-lifecycle.mjs` owns resource checks and startup ordering.
 `container-server.mjs` owns admission, image policy, private configuration,
 the exclusive per-installation launcher lock and pending/release records.
+`container-launcher-owner.mjs` owns process-aware launcher admission and recovery.
 `container-server-files.mjs` owns private atomic file publication and the bounded
 subprocess environment projection. State directories/files must be ordinary
 entries, not symlinks/junctions into another installation. Replacements use a
@@ -334,15 +342,24 @@ Repair forward with the same project, storage identity and immutable
 manifest. Preserve private configuration and release evidence. A crashed launcher
 that failed during its first startup can also recover with that matching pending
 receipt; no successful release record is required until it becomes healthy.
-Remove a crashed launcher's lock manually only after the old process is stopped.
-The lock is the empty exclusive file
-`.data/container-server/<compose-project>/launcher.lock`; its existence alone does
-not prove that a launcher is still alive, and it does not contain a PID. Check the
-matching `container-server.mjs` process and any owned Docker build, migration or
-volume-preparation task before removing only this file. Do not delete the state
-directory, pending/release receipts or volumes to resolve a lock error. Once the
-owner and its tasks have stopped, rerun the same launcher so the normal ownership
-and unfinished-deployment checks decide whether recovery is safe.
+Launcher ownership lives under
+`.data/container-server/<compose-project>/launcher.owner` with a PID, host,
+storage identity and unique owner token. A complete, nonempty owner directory is
+published atomically. Recovery/removal targets only that token's record, so a
+late predecessor cannot remove its successor. `launcher.lock` remains as a
+compatibility marker for older launchers and now contains the same owner data.
+Development waits for live owners (up to 30 minutes), reclaims dead matching
+owners, and checks process inventory before recovering an old empty marker.
+POSIX discovery checks the Node executable in argv as well as the process name:
+Node 24 can label the Linux process `MainThread`. BusyBox's `{comm}` argv prefix
+is presentation metadata, not the executable. Discovery never terminates a process.
+Unknown, foreign, corrupt or linked ownership is not silently removed. The
+launcher never kills an arbitrary process to acquire admission. Staging and
+production retain fail-closed ownership: inspect their recorded owner and any
+owned Docker preparation tasks before manual recovery. Do not delete the state
+directory, pending/release receipts or volumes to resolve a lock error.
+Normal container/storage and unfinished-deployment checks still run after
+admission; lock recovery does not bypass them.
 Successful releases record their exact manifest; missing/contradictory evidence
 blocks unidentified adoption. Do not use ad-hoc Docker/Helm rollback to bypass
 these gates.
@@ -359,6 +376,15 @@ rollback in this launcher. Back up matching PostgreSQL, S3 contents and encrypti
 keys off-machine. Local MinIO/PostgreSQL is not managed cloud durability.
 Shutdown drains application services before stopping local PostgreSQL/MinIO;
 if the application stop fails, persistence is left running.
+Local launcher verification runs without rebuilding application images:
+
+```bash
+yarn node --test deploy/studio-server/scripts/container-launcher-owner.test.mjs deploy/studio-server/scripts/container-server.test.mjs
+```
+
+It covers competing real Node processes, dead and legacy lock recovery, the
+actual config-only CLI, restart/drain ordering, and unchanged staging/production
+ownership. The existing full Docker lifecycle check remains separately opt-in.
 
 ## Storage settings and deployment changes
 

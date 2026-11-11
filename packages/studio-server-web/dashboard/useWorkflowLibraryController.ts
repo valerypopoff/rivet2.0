@@ -39,6 +39,7 @@ export const instantWarningToastTransition = cssTransition({
 
 type WorkflowFolderContextMenuState = {
   folder: WorkflowFolderItem;
+  opener: HTMLElement;
   x: number;
   y: number;
 };
@@ -100,6 +101,7 @@ export function useWorkflowLibraryController(options: {
   const {
     explicitBundles,
     namespaceMutations,
+    bundleMerge,
     allProjects,
     error,
     expandedFolders,
@@ -126,6 +128,11 @@ export function useWorkflowLibraryController(options: {
   const [folderContextMenuState, setFolderContextMenuState] = useState<WorkflowFolderContextMenuState | null>(null);
   const [bundleUploadFolder, setBundleUploadFolder] = useState<WorkflowFolderItem | null>(null);
   const [bundleDeleteFolder, setBundleDeleteFolder] = useState<WorkflowFolderItem | null>(null);
+  const [bundleMergeRequest, setBundleMergeRequest] = useState<{
+    source: WorkflowFolderItem;
+    destinationBundleId?: string;
+  } | null>(null);
+  const bundleMergeOpener = useRef<HTMLElement | null>(null);
   const [bundleAction, setBundleAction] = useState<{ kind: 'conversion' | 'duplication'; name: string } | null>(null);
   const [bundleConversionFailure, setBundleConversionFailure] = useState<WorkflowBundleConversionFailure | null>(null);
   const bundleActionPending = useRef(false);
@@ -237,6 +244,22 @@ export function useWorkflowLibraryController(options: {
     [cancelPendingPreviewOpen, handleStartProjectRename],
   );
 
+  const canMergeBundles = namespaceMutations && bundleMerge;
+  const openBundleMerge = useCallback(
+    (source: WorkflowFolderItem, destination?: WorkflowFolderItem, opener?: HTMLElement) => {
+      if (!source.bundleId || !canMergeBundles || bundleActionPending.current) return;
+      if (
+        destination &&
+        (!destination.bundleId || destination.bundleId.toLowerCase() === source.bundleId.toLowerCase())
+      )
+        return;
+      bundleMergeOpener.current = opener ?? null;
+      setFolderContextMenuState(null);
+      setBundleMergeRequest({ source, destinationBundleId: destination?.bundleId ?? undefined });
+    },
+    [canMergeBundles],
+  );
+
   const dragAndDrop = useWorkflowLibraryDragAndDrop({
     activePath,
     applyProjectPathMoves: applyWorkflowProjectPathMoves,
@@ -247,10 +270,12 @@ export function useWorkflowLibraryController(options: {
     setExpandedFolders,
     setFolders,
     setRootProjects,
+    onBundleMerge: canMergeBundles && !bundleAction && !treeMutationPending ? openBundleMerge : undefined,
   });
   const {
     dragOverRoot,
     draggedItem,
+    dragPreview,
     dropTargetFolderPath,
     handleDragEnd,
     handleDragStart,
@@ -309,6 +334,7 @@ export function useWorkflowLibraryController(options: {
 
   const projectTreeOverlayOpen = Boolean(
     bundleDeleteFolder ||
+      bundleMergeRequest ||
       bundleOpen ||
       appSettingsOpen ||
       folderContextMenuState ||
@@ -422,6 +448,7 @@ export function useWorkflowLibraryController(options: {
       setProjectContextMenuState(null);
       setFolderContextMenuState({
         folder,
+        opener: event.currentTarget,
         x: event.clientX,
         y: event.clientY,
       });
@@ -806,6 +833,21 @@ export function useWorkflowLibraryController(options: {
 
   return {
     explicitBundles,
+    canMergeBundles,
+    bundleMergeFolder: bundleMergeRequest?.source ?? null,
+    bundleMergeDestinationId: bundleMergeRequest?.destinationBundleId,
+    closeBundleMerge: () => {
+      setBundleMergeRequest(null);
+      const opener = bundleMergeOpener.current;
+      bundleMergeOpener.current = null;
+      requestAnimationFrame(() => {
+        if (opener?.isConnected) opener.focus();
+      });
+    },
+    handleMergeBundle: () => {
+      if (folderContextMenuState)
+        openBundleMerge(folderContextMenuState.folder, undefined, folderContextMenuState.opener);
+    },
     bundleAction,
     bundleDeleteFolder,
     closeBundleDelete: () => setBundleDeleteFolder(null),
@@ -835,6 +877,7 @@ export function useWorkflowLibraryController(options: {
     error,
     expandedFolders,
     draggedItem,
+    dragPreview,
     dropTargetFolderPath,
     dragOverRoot,
     downloadingProjectPath,

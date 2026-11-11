@@ -5,8 +5,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FC } fr
 import {
   getGraphBoundary,
   getSubgraphProjectKey,
-  getSubgraphTargetBoundaryChange,
-  getSubgraphTargetBoundaryIssue,
   reconcileSubgraphTargetBoundary,
   type GraphId,
   type Project,
@@ -37,12 +35,6 @@ const controlCss = css`
 
   .target-error {
     color: var(--error);
-    font-size: var(--ui-font-size-sm);
-    margin-top: 6px;
-  }
-
-  .target-warning {
-    color: var(--warning);
     font-size: var(--ui-font-size-sm);
     margin-top: 6px;
   }
@@ -402,9 +394,6 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
   const selectedGraphName =
     selectedGraph?.metadata?.name?.split('/').pop() ??
     (selectedPreview ? `Missing graph: ${node.data.graphId}` : node.data.graphId);
-  const boundaryIssue = selectedGraph
-    ? getSubgraphTargetBoundaryIssue(node.data.targetBoundary, getGraphBoundary(selectedPreview, node.data.graphId)!)
-    : null;
   const selectedOption: TargetOption | null =
     node.data.targetProjectId && node.data.graphId
       ? {
@@ -547,10 +536,9 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
                 targetScope: scope === 'same-bundle' ? 'same-bundle' : 'other-projects',
                 targetProjectId: option.projectId,
                 targetVersion: version,
-                targetBoundary:
-                  sameTarget && !getSubgraphTargetBoundaryChange(node.data.targetBoundary, nextBoundary)
-                    ? reconcileSubgraphTargetBoundary(node.data.targetBoundary, nextBoundary)
-                    : nextBoundary,
+                targetBoundary: sameTarget
+                  ? reconcileSubgraphTargetBoundary(node.data.targetBoundary, nextBoundary)
+                  : nextBoundary,
               },
             });
             setMenuOpen(false);
@@ -563,11 +551,6 @@ const LiveSubgraphTargetControl: FC<SubgraphTargetControlProps> = ({
       )}
       {selectedKey && previewStatus[selectedKey] === 'failed' && (
         <div className="target-error">Could not refresh the target preview. Try again.</div>
-      )}
-      {boundaryIssue && (
-        <div className="target-warning" role="alert">
-          {boundaryIssue}
-        </div>
       )}
       {error && (
         <div className="target-error" role="alert">

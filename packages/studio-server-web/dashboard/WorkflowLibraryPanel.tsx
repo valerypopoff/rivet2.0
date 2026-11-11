@@ -9,6 +9,7 @@ import { requestScheduledRuns } from './scheduledRunApi';
 import type { ScheduledRunSummary } from '../../studio-server-shared/scheduled-run-types';
 import { ActiveProjectSection } from './ActiveProjectSection';
 import { WorkflowFolderTree } from './WorkflowFolderTree';
+import { WorkflowBundleDragPreview } from './WorkflowBundleDragPreview';
 import { WorkflowLibraryContextMenus } from './WorkflowLibraryContextMenus';
 import { WorkflowLibraryModals } from './WorkflowLibraryModals';
 import type {
@@ -386,6 +387,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <WorkflowLibraryContextMenus controller={controller} />
+        <WorkflowBundleDragPreview preview={controller.dragPreview} />
         <WorkflowLibraryModals
           scheduledRunsOpen={scheduledRunsOpen}
           controller={controller}

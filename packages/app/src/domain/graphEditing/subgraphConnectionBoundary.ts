@@ -1,7 +1,6 @@
 import {
   getGraphBoundary,
   getSubgraphProjectKey,
-  getSubgraphTargetBoundaryChange,
   reconcileSubgraphTargetBoundary,
   type ChartNode,
   type GraphBoundary,
@@ -18,7 +17,7 @@ export type SubgraphConnectionBoundaryChange = {
   next: GraphBoundary;
 };
 
-/** Accepting a wire to a newly discovered port must persist its contract, too. */
+/** New wires remember target port identities so later renames preserve them. */
 export function captureSubgraphConnectionBoundaries(
   nodes: readonly ChartNode[],
   connection: NodeConnection,
@@ -33,17 +32,23 @@ export function captureSubgraphConnectionBoundaries(
       ...(connection.inputNodeId === node.id ? [{ side: 'inputs' as const, id: connection.inputId }] : []),
       ...(connection.outputNodeId === node.id ? [{ side: 'outputs' as const, id: connection.outputId }] : []),
     ];
-    if (!ports.length || ports.every(({ side, id }) => data.targetBoundary?.[side].some((port) => port.portId === id)))
-      continue;
+    if (!ports.length) continue;
     const target =
       referencedProjects[
         getSubgraphProjectKey({ projectId: data.targetProjectId, version: data.targetVersion ?? 'latest' })
       ];
     const actual = target && getGraphBoundary(target, data.graphId);
-    // Do not silently accept removals/type changes or cross-version previews.
-    if (!actual || getSubgraphTargetBoundaryChange(data.targetBoundary, actual)) continue;
+    if (!actual) continue;
     const next = reconcileSubgraphTargetBoundary(data.targetBoundary, actual);
     if (!ports.every(({ side, id }) => next[side].some((port) => port.portId === id))) continue;
+    if (
+      ports.every(({ side, id }) => {
+        const previous = data.targetBoundary?.[side].find((port) => port.portId === id);
+        const current = next[side].find((port) => port.portId === id)!;
+        return previous && previous.nodeId === current.nodeId;
+      })
+    )
+      continue;
     changes.push({ nodeId: node.id, previous: data.targetBoundary, next });
   }
   return structuredClone(changes);

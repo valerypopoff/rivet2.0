@@ -663,7 +663,7 @@ test('failed expiry removal stays tracked and retryable instead of orphaning scr
   }
 });
 
-test('export rejects incompatible ports, wrong versions and recursive cross-project cycles without executing nodes', async () => {
+test('export adopts current ports while rejecting wrong versions and recursive cross-project cycles', async () => {
   const collect = (f: ReturnType<typeof projectBundleFixture>) =>
     collectProjectBundle({
       source: f.source,
@@ -675,12 +675,14 @@ test('export rejects incompatible ports, wrong versions and recursive cross-proj
   const ports = projectBundleFixture();
   ports.child.project.graphs[ports.child.project.metadata.mainGraphId!]!.nodes = [];
   ports.child.projectContents = serializeProject(ports.child.project) as string;
+  await collect(ports);
+  delete ports.child.project.graphs[ports.child.project.metadata.mainGraphId!];
+  ports.child.projectContents = serializeProject(ports.child.project) as string;
   await assert.rejects(collect(ports), (error: unknown) => {
     assert.ok(error instanceof Error);
-    assert.match(error.message, /incompatible boundary/);
+    assert.match(error.message, /missing graph/);
     assert.ok(error.message.includes('in graph "Main" of project "Root"'));
-    assert.ok(error.message.includes('Target: graph "Child" in project "子供" (Saved latest)'));
-    assert.ok(error.message.includes('changed its output "result"'));
+    assert.ok(error.message.includes('in project "子供" (Saved latest)'));
     return true;
   });
   const version = projectBundleFixture();
@@ -792,7 +794,7 @@ test('missing bundle targets retain repair context and legacy direct validation 
 });
 
 for (const version of ['latest', 'published'] as const) {
-  test(`bundle boundary diagnostics locate the caller and use the actual ${version} target selection`, async () => {
+  test(`bundle missing-graph diagnostics locate the caller and actual ${version} target selection`, async () => {
     const fixture = projectBundleFixture();
     fixture.source.versionPolicy = version;
     fixture.root.selectedVersion = version;
@@ -818,13 +820,16 @@ for (const version of ['latest', 'published'] as const) {
     const { manifest } = await collect();
     fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!]!.nodes = [];
     fixture.child.projectContents = serializeProject(fixture.child.project) as string;
+    await collect();
+    delete fixture.child.project.graphs[fixture.child.project.metadata.mainGraphId!];
+    fixture.child.projectContents = serializeProject(fixture.child.project) as string;
     const checkFailure = (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.ok(error.message.includes(`Check Subgraph node "Build engine context" (${call.id})`));
       assert.ok(error.message.includes('in graph "Folder/Build context" of project "Product backend"'));
-      assert.ok(error.message.includes('Target: graph "Child" in project "Engine utilities"'));
+      assert.ok(error.message.includes('Target: graph "child-main" in project "Engine utilities"'));
       assert.ok(error.message.includes(`(${version === 'published' ? 'Published' : 'Saved latest'})`));
-      assert.ok(error.message.includes('changed its output "result"'));
+      assert.ok(error.message.includes('missing graph'));
       return true;
     };
     await assert.rejects(collect(), checkFailure);

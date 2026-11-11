@@ -9,7 +9,7 @@ import type { NodeRegistration } from './NodeRegistration.js';
 import type { Project, ProjectId } from './Project.js';
 import type { ReferencedGraphAliasNode } from './nodes/ReferencedGraphAliasNode.js';
 import type { SubGraphNode } from './nodes/SubGraphNode.js';
-import { getSubgraphTargetBoundaryChange, reconcileSubgraphTargetBoundary } from './nodes/SubGraphNode.js';
+import { reconcileSubgraphTargetBoundary } from './nodes/SubGraphNode.js';
 import { getGraphBoundary } from './GraphBoundaryCache.js';
 import { createGraphOutputSelection } from './GraphOutputSelection.js';
 import { getSubgraphProjectKey } from './SubgraphProjectTarget.js';
@@ -22,8 +22,10 @@ function canEmitStreamingOutput(node: ChartNode, outputId: string): boolean {
     case 'streamValue':
       return outputId === 'value';
     case 'llmChatV2':
-      return data.useAsGraphPartialOutput === true &&
-        ['response', 'in-messages', 'all-messages', 'function-calls', 'reasoning'].includes(outputId);
+      return (
+        data.useAsGraphPartialOutput === true &&
+        ['response', 'in-messages', 'all-messages', 'function-calls', 'reasoning'].includes(outputId)
+      );
     case 'chatAnthropic':
       return ['response', 'all-messages', 'function-calls', 'citations'].includes(outputId);
     case 'chatGoogle':
@@ -55,7 +57,7 @@ function getCallerProject(
 function getCallerBoundary(caller: SubGraphNode | ReferencedGraphAliasNode, target: Project) {
   if (caller.type !== 'subGraph') return undefined;
   const actual = getGraphBoundary(target, caller.data.graphId);
-  if (!actual || getSubgraphTargetBoundaryChange(caller.data.targetBoundary, actual)) return undefined;
+  if (!actual) return undefined;
   return reconcileSubgraphTargetBoundary(caller.data.targetBoundary, actual);
 }
 
@@ -120,7 +122,11 @@ export function getProjectStreamingOutputWatchConnections({
   isNodeFrozen?: (owner: Project, candidate: NodeGraph, node: ChartNode) => boolean;
   fullGraphCallers?: ReadonlySet<NodeId>;
   /** Redacted hosted previews contain boundaries, not executable graph topology. */
-  getPreviewGraphOutputStreamingCapability?: (owner: Project, graph: NodeGraph, outputNodeId: NodeId) => boolean | undefined;
+  getPreviewGraphOutputStreamingCapability?: (
+    owner: Project,
+    graph: NodeGraph,
+    outputNodeId: NodeId,
+  ) => boolean | undefined;
   /** Presentation-only filter. Runtime routing must accept ordinary values too. */
   onlyStreamCapableSources?: boolean;
 }): ReadonlySet<NodeConnection> {
@@ -248,7 +254,8 @@ export function getProjectStreamingOutputWatchConnections({
         (node.type !== 'watchStreamingOutput' && node.type !== 'catchStreamingChunks') ||
         node.disabled ||
         isFrozen(context.project, candidate, node)
-      ) continue;
+      )
+        continue;
       const inputs = context.incoming(node.id).filter((edge) => edge.inputId === 'stream');
       // Multiple providers are rejected by the Watch scheduler, not multiple streams.
       if (inputs.length === 1) watchInputs.push({ graph: candidate, edge: inputs[0]! });
@@ -382,7 +389,13 @@ export function getProjectStreamableGraphOutputNodeIdsByGraph({
     nodes.push({ id: callerId, type: 'subGraph', title: 'Probe', data: { graphId }, visualData: { x: 0, y: 0 } });
     for (const output of boundary.outputs) {
       const watchId = nanoid() as NodeId;
-      nodes.push({ id: watchId, type: 'watchStreamingOutput', title: 'Probe watch', data: {}, visualData: { x: 0, y: 0 } });
+      nodes.push({
+        id: watchId,
+        type: 'watchStreamingOutput',
+        title: 'Probe watch',
+        data: {},
+        visualData: { x: 0, y: 0 },
+      });
       probes.push({
         graphId,
         outputNodeId: output.nodeId,

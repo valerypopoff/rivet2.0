@@ -601,3 +601,64 @@ for (const oversized of ['projects', 'folders'] as const) {
     assert.equal(artifactReads, 0);
   });
 }
+
+for (const operation of ['preview', 'automatic copy', 'explicit copy'] as const) {
+  test(`bundle ${operation} rejects a foreign revision owner before any artifact read`, async () => {
+    const root = { bundle_id: 'bundle', relative_path: 'Feature', name: 'Feature', parent_relative_path: '' };
+    let artifactReads = 0;
+    const client = {
+      async query(sql: string) {
+        if (sql.startsWith('SET TRANSACTION')) return { rows: [] };
+        if (sql.startsWith('SELECT * FROM workflow_folders')) return { rows: [root] };
+        if (sql.startsWith('SELECT * FROM workflows'))
+          return {
+            rows: [
+              {
+                workflow_id: 'expected',
+                relative_path: 'Feature/Expected.rivet-project',
+                current_draft_revision_id: 'foreign-revision',
+                published_revision_id: null,
+              },
+            ],
+          };
+        throw new Error('Unexpected metadata write: ' + sql);
+      },
+    };
+    const context = {
+      initialize: async () => {},
+      pool: client,
+      withTransaction: async <T>(run: (connection: typeof client) => Promise<T>) => run(client),
+      queries: { getRevision: async () => ({ workflow_id: 'foreign', revision_id: 'foreign-revision' }) },
+      revisions: {
+        readRevisionContents: async () => {
+          artifactReads++;
+          return {
+            contents: serializeProject({
+              metadata: { id: 'expected' as ProjectId, title: 'Expected', description: '' },
+              graphs: {},
+            }) as string,
+            datasetsContents: null,
+          };
+        },
+      },
+    } as unknown as ManagedWorkflowContext;
+    const service = createManagedBundleService(context);
+    await assert.rejects(
+      operation === 'preview'
+        ? service.preview('bundle', 'latest')
+        : service.duplicate(
+            'bundle',
+            operation === 'automatic copy'
+              ? { automatic: true }
+              : {
+                  version: 'latest',
+                  fingerprint: '0'.repeat(64),
+                  name: 'Copy',
+                  parentRelativePath: '',
+                },
+          ),
+      { status: 409, message: 'A source revision no longer matches its project. Refresh the preview.' },
+    );
+    assert.equal(artifactReads, 0);
+  });
+}

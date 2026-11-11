@@ -1,11 +1,9 @@
 import { Field } from '@atlaskit/form';
-import { css } from '@emotion/react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useEffect, useRef, useState, type FC } from 'react';
 import {
   getGraphBoundary,
   getSubgraphProjectKey,
-  getSubgraphTargetBoundaryChange,
   reconcileSubgraphTargetBoundary,
   type GraphId,
   type SubGraphNode,
@@ -23,12 +21,6 @@ import { SegmentedEditor } from '../SegmentedEditor';
 import { SubgraphTargetControl, SubgraphTargetLabel } from '../../nodes/SubgraphTargetControl';
 import { useNodeEditorSessionContext } from '../../nodeEditor/NodeEditorSessionContext.js';
 import { isRecordingProjectState } from '../../../state/execution.js';
-
-const versionWarningCss = css`
-  color: var(--warning);
-  font-size: var(--ui-font-size-sm);
-  margin-top: 6px;
-`;
 
 export const SubgraphTargetEditor: FC<SharedEditorProps> = (props) => {
   const recording = useAtomValue(isRecordingProjectState);
@@ -55,7 +47,6 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
   const [publishedError, setPublishedError] = useState<string>();
   const [versionLoading, setVersionLoading] = useState(false);
   const [versionError, setVersionError] = useState<string>();
-  const [versionWarning, setVersionWarning] = useState<string>();
   const versionRequest = useRef(0);
   const latestNode = useRef(node);
   const setReferencedProjects = useSetAtom(referencedProjectsState);
@@ -68,7 +59,6 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
     // request can no longer clear loading, so release the incoming owner's UI.
     setVersionLoading(false);
     setVersionError(undefined);
-    setVersionWarning(undefined);
     return () => {
       requests.current++;
     };
@@ -108,7 +98,6 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
     versionRequest.current++;
     setVersionLoading(false);
     setVersionError(undefined);
-    setVersionWarning(undefined);
     onChange({
       ...node,
       data: {
@@ -133,7 +122,6 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
     const request = ++versionRequest.current;
     setVersionLoading(true);
     setVersionError(undefined);
-    setVersionWarning(undefined);
     try {
       const project = await catalog.preview({ projectId, version: nextVersion, callerProjectId: ownProjectId });
       if (versionRequest.current !== request || (session && !session.canWrite())) return;
@@ -151,7 +139,6 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
         return;
       }
 
-      const change = getSubgraphTargetBoundaryChange(current.data.targetBoundary, boundary);
       setReferencedProjects((projects) => ({
         ...projects,
         [getSubgraphProjectKey({ projectId, version: nextVersion })]: project,
@@ -162,17 +149,12 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
           data: {
             ...current.data,
             targetVersion: nextVersion,
-            targetBoundary: change ? boundary : reconcileSubgraphTargetBoundary(current.data.targetBoundary, boundary),
+            targetBoundary: reconcileSubgraphTargetBoundary(current.data.targetBoundary, boundary),
           },
         },
         undefined,
         current,
       );
-      if (change) {
-        setVersionWarning(
-          `The selected project's graph changed its ${change.side} "${change.id}". The graph selection was updated automatically; review its connections.`,
-        );
-      }
     } catch {
       if (versionRequest.current === request && (!session || session.isCurrent())) {
         setVersionError('Could not load the selected project version. The current version was kept.');
@@ -211,7 +193,6 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
               versionRequest.current++;
               setVersionLoading(false);
               setVersionError(undefined);
-              setVersionWarning(undefined);
               onChange(next);
             }}
           />
@@ -237,11 +218,6 @@ const LiveSubgraphTargetEditor: FC<SharedEditorProps> = ({ node: chartNode, onCh
               },
             ]}
           />
-          {versionWarning && (
-            <div css={versionWarningCss} role="alert">
-              {versionWarning}
-            </div>
-          )}
           {versionError && <div role="alert">{versionError}</div>}
           {publishedError && <div role="alert">{publishedError}</div>}
         </>

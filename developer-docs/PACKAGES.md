@@ -2,6 +2,31 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-11 — bundle merging and automatic Subgraph ports
+
+App, the public runtime family, App Executor and all five Studio Server packages
+last changed versions in `8165d45f4`. This preparation covers subsequent commits
+through `c1073e833` and the accompanying Subgraph-default, merge-validation
+and CI fixes. The documentation site last changed version in `488019eb9` and has
+no package-local changes.
+
+| Packages                        | Version             | Changes since the last bump                                                                                                                                                                                                                                                                  |
+| ------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.34.0` → `2.35.0` | Separate LLM/Decision AI spend in Run Activity, a timed Delete anyway action, automatic referenced-graph port adoption, navigation fixes and patched bundled SQLite.                                                                                                                         |
+| Core, Node, CLI, Evaluations    | `2.27.1` → `2.28.0` | Core adds shared cost projection and optional bundle caller provenance, adopts current Subgraph ports, preserves surviving wire/default ownership and improves missing-target diagnostics. Node, CLI and Evaluations have no package-local source changes and follow public-family lockstep. |
+| App Executor                    | `2.19.1` → `2.20.0` | Source-bundled companion for the updated Core capabilities; no package-local source or separate sidecar protocol change.                                                                                                                                                                     |
+| All five Studio Server packages | `1.36.0` → `1.37.0` | Adds saved-project bundle merging, suggested correspondence, merge review and drag/drop, plus compatible export diagnostics and local launcher restart fixes. API/Web/Shared change locally; Bootstrap/Executor remain release companions.                                                   |
+| Docs                            | Remains `2.27.0`    | No source changes under `packages/docs`; developer-doc changes do not bump the documentation-site package.                                                                                                                                                                                   |
+
+The feature changes warrant minor increments. Companion versions follow the
+existing release tracks without claiming independent new features. Desktop
+Tauri/Cargo metadata follows App, and the CLI Docker fallback follows the public
+family. Workspace dependency ranges, Yarn resolutions, Helm metadata and managed
+schema versions remain independent of these package-version edits.
+
+See the [prepared release summary](BUILD-AND-CI.md#prepared-release-versions-2026-11-11)
+for metadata checks. Publication and deployment remain separate operations.
+
 ## Version update: 2026-11-09 — graph-reference indexing and project navigation
 
 Every track last changed versions in `488019eb9`. This preparation covers the
@@ -511,7 +536,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.19.0`
+- Version: `2.28.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -551,7 +576,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.19.0`
+- Version: `2.28.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -1023,7 +1048,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.26.1`
+- Version: `2.35.0`
 - Private: yes
 
 ### Runtime shape
@@ -1088,7 +1113,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.12.0`
+- Version: `2.20.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -1193,7 +1218,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.19.0`
+- Version: `2.28.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -1317,7 +1342,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.19.0`
+- Version: `2.28.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -1349,7 +1374,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.19.0`
+- Version: `2.27.0`
 - Private: yes
 
 ### Script surface

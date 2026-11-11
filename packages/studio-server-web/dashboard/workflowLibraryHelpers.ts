@@ -2,6 +2,8 @@ import type { WorkflowFolderItem, WorkflowProjectItem } from './types';
 
 export const ROOT_DROP_TARGET = '__root__';
 
+export type BundleDragPreview = { name: string; x: number; y: number; merge: boolean };
+
 export type DraggedWorkflowItem = {
   expectedSource?: import('../../studio-server-shared/workflow-namespace-types').WorkflowNamespaceMutation['expectedSource'];
   itemType: 'folder' | 'project';

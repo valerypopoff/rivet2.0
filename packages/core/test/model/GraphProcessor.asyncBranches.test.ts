@@ -1126,9 +1126,12 @@ void describe('GraphProcessor scheduler boundaries', () => {
     );
   });
 
-  void it('rejects a changed cross-project output type instead of dropping an existing wire', async () => {
+  void it('adopts a changed cross-project output type without reselection or dropping an existing wire', async () => {
+    const source = makeTestNode('changed-boundary-source');
+    AsyncTestNodeImpl.handlers.set(source.id, () => ({ output: { type: 'number', value: 42 } }));
     const output = makeGraphOutputNode('response');
-    const child = makeGraph('changed-boundary-child', [output], []);
+    Object.assign(output.data, { dataType: 'number' });
+    const child = makeGraph('changed-boundary-child', [source, output], [connect(source.id, output.id, 'value')]);
     const project = makeProject(child);
     project.metadata.id = 'changed-boundary-project' as ProjectId;
     const caller = makeSubgraphNode('changed-boundary-caller', child.metadata!.id);
@@ -1144,7 +1147,8 @@ void describe('GraphProcessor scheduler boundaries', () => {
       makeProject(makeGraph('unused-owner', [], [])),
       { [getSubgraphProjectKey({ projectId: project.metadata.id, version: 'latest' })]: project },
     );
-    assert.equal(definitions[0]?.id, 'old-output', 'a refreshed preview must not hide the authored wire');
+    assert.equal(definitions[0]?.id, 'old-output');
+    assert.equal(definitions[0]?.dataType, 'number');
     const rootOutput = makeGraphOutputNode('result');
     const processor = createProcessor(
       makeGraph(
@@ -1153,18 +1157,11 @@ void describe('GraphProcessor scheduler boundaries', () => {
         [connect(caller.id, rootOutput.id, 'value', 'old-output')],
       ),
     );
-    let nodeError = '';
-    processor.on('nodeError', ({ error }) => {
-      nodeError = String(error);
+    const result = await processor.processGraph({
+      ...testProcessContext(),
+      subgraphProjectLoader: { loadTarget: async () => ({ project }) },
     });
-    await assert.rejects(
-      processor.processGraph({
-        ...testProcessContext(),
-        subgraphProjectLoader: { loadTarget: async () => ({ project }) },
-      }),
-      /changed-boundary-caller/,
-    );
-    assert.match(nodeError, /graph changed its output/);
+    assert.deepEqual(result.result, { type: 'number', value: 42 });
   });
 
   void it('preserves saved cross-project input and output wires after both IDs are renamed', async () => {
@@ -1215,7 +1212,34 @@ void describe('GraphProcessor scheduler boundaries', () => {
     assert.equal(defaultResults.result?.value, 'authored default');
   });
 
-  void it('does not guess an already-renamed legacy input or collide with a reused port ID', async () => {
+  void it('does not send a deleted input default to a surviving input renamed to that name', async () => {
+    const removed = makeGraphInputNode('deleted-node', 'removed');
+    const survivor = makeGraphInputNode('survivor-node', 'kept');
+    Object.assign(survivor.data, { defaultValue: 'child default' });
+    const output = makeGraphOutputNode('answer');
+    const child = makeGraph(
+      'defaults-child',
+      [removed, survivor, output],
+      [connect(survivor.id, output.id, 'value', 'data')],
+    );
+    const project = makeProject(child);
+    project.metadata.id = 'defaults-project' as ProjectId;
+    const caller = makeSubgraphNode('defaults-caller', child.metadata!.id);
+    caller.data.targetProjectId = project.metadata.id;
+    caller.data.targetBoundary = getGraphBoundary(project, child.metadata!.id);
+    caller.data.inputData = { removed: { type: 'string', value: 'wrong old default' } };
+    child.nodes = child.nodes.filter((node) => node.id !== removed.id);
+    Object.assign(survivor.data, { id: 'removed' });
+    const result = makeGraphOutputNode('result');
+    const root = makeGraph('defaults-root', [caller, result], [connect(caller.id, result.id, 'value', 'answer')]);
+    const outputs = await createProcessor(root).processGraph({
+      ...testProcessContext(),
+      subgraphProjectLoader: { loadTarget: async () => ({ project }) },
+    });
+    assert.equal(outputs.result?.value, 'child default');
+  });
+
+  void it('adopts renamed legacy inputs and keeps reused port names distinct without reselection', async () => {
     const input = makeGraphInputNode('stable-input-node', 'prompt');
     const child = makeGraph('ambiguous-boundary-child', [input], []);
     const project = makeProject(child);
@@ -1228,17 +1252,29 @@ void describe('GraphProcessor scheduler boundaries', () => {
       inputs: savedBoundary.inputs.map(({ nodeId: _nodeId, ...port }) => port),
     };
     Object.assign(input.data, { id: 'renamedPrompt' });
+    caller.data.inputData = { renamedPrompt: { type: 'string', value: 'legacy input' } };
     const root = makeGraph('ambiguous-boundary-root', [caller], []);
     const run = () =>
       createProcessor(root).processGraph({
         ...testProcessContext(),
         subgraphProjectLoader: { loadTarget: async () => ({ project }) },
       });
-    await assert.rejects(run(), /ambiguous-boundary-caller/);
+    await run();
 
     caller.data.targetBoundary = savedBoundary;
     child.nodes.push(makeGraphInputNode('new-input-node', 'prompt'));
-    await assert.rejects(run(), /ambiguous-boundary-caller/);
+    caller.data.inputData = {
+      prompt: { type: 'string', value: 'surviving input' },
+      'new-input-node': { type: 'string', value: 'new input' },
+    };
+    const definitions = new SubGraphNodeImpl(caller).getInputDefinitions([], {}, makeProject(root), {
+      [getSubgraphProjectKey({ projectId: project.metadata.id, version: 'latest' })]: project,
+    });
+    assert.deepEqual(
+      definitions.map(({ id }) => id),
+      ['new-input-node', 'prompt'],
+    );
+    await run();
   });
 
   void it('streams a direct named Referenced Graph Alias output to Watch before the child graph finishes', async () => {

@@ -198,7 +198,7 @@ for (const version of ['latest', 'published'] as const) {
   });
 }
 
-test('a saved external boundary remains authoritative during missing or changed previews', () => {
+test('external ports wait for a preview, then prune removed connections automatically', () => {
   const projectId = 'external' as ProjectId;
   const target = makeProjectWithSubGraph([makeGraphInputNode('in', 'input')]);
   const source = makeTextNode('source');
@@ -223,7 +223,7 @@ test('a saved external boundary remains authoritative during missing or changed 
         [getSubgraphProjectKey({ projectId, version: 'latest' })]: makeProjectWithSubGraph([]),
       },
     }),
-    [valid],
+    [],
   );
   assert.deepEqual(
     filterValidSubGraphConnections({
