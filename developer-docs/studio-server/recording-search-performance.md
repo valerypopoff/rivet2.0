@@ -1,5 +1,56 @@
 # Recording input search performance
 
+## Request-ID search improvements — November 11, 2026
+
+The [implementation plan and measurements](recording-request-id-search-plan.md)
+target **Any -> `$.request_id == value`** without schema, index, artifact-format
+or backfill changes. Managed searches now read minimal candidates, count once,
+and hydrate display/child metadata only for matches. The controller retains the
+initial counts across count-free continuations. Deleted/replaced matches cannot
+be shown using an old source, and consumed cursors remain authoritative.
+
+On a local fixture with 800 roots across five projects, 64 KiB inputs, 3,200
+child rows and 10 ms simulated artifact reads, cold completion fell from 2,129
+to 1,227 ms and repeat completion from 1,762 to 22 ms. Cold requests fell from
+13 to 3; repeat artifact reads fell from 800 to zero. First-result latency was
+221 versus 214 ms. Measured API peak RSS during the cold phase fell from 613 to
+544 MiB. These are matched local PostgreSQL/HTTP/compiled-worker measurements,
+not a prediction that every production query will improve by the same factor.
+
+The retained projection covers only root request-ID equality, including bracket
+notation. Large/structured IDs and other predicates keep the normal matcher.
+An uncached search still reads historical artifacts. Stop prevents subsequent
+queries, retries and artifact work; an already-running managed SQL query retains
+its connection until it settles rather than being abandoned by a timeout race.
+
+The follow-up cache review fixed three additional cases: a new source read
+retires older cached views (including on missing/corrupt data); immutable-source
+trust belongs to the actual loader and follows a cached full input, so a later
+consumer cannot upgrade its expiry; and a full projection LRU evicts its own old
+entry before taking space from full inputs.
+
+The completeness pass added the missing scenario/outcome benchmark coverage:
+48 exact ordered-result searches against an uncached full-input/full-metadata
+reference across recent/sparse/dense/absent IDs, All and
+failed/warning filters, Any and one project, and cold/repeat/changed-value states.
+Covered repeats made zero artifact downloads. Eight held-read cancellation checks
+also passed. Real PostgreSQL query-plan assertions, fast count-free browser
+continuations and a real SQLite close/reopen cache test passed. The detailed
+completion matrix is in the implementation plan.
+
+Final local validation passed: 148 affected API tests, 80 compiled Node 24/Linux
+scanner/cache/worker tests, five real PostgreSQL/SQLite integration checks,
+20 browser-side unit tests, and headless Run recordings journeys covering
+progress, immediate count-free continuations, Stop, replay and modal cleanup.
+API compilation and the web build passed. After the final test additions, the
+complete root `test:style` lane, CI formatting, API/web typechecks, compiled
+workspace exports, dependency-loader consistency and test registration passed.
+The optional full API sweep was stopped during unrelated legacy-storage
+migration rehearsals; no complete full-suite pass is claimed. Its build-order
+and Windows process-permission failures passed a separate 105-test recheck.
+No deployment or application-database change was performed. Commit the code,
+tests and docs; keep the local checklist and raw benchmark reports Git-ignored.
+
 ## Authored price estimates
 
 LLM Chat/Decision AI run in Inline mode and their separate Profile nodes optionally carry flat `tokenPricing` rates in
@@ -181,11 +232,11 @@ Catalog counters are snapshots, not pagination or search authorities. Clamp an o
 
 Current input searches select only non-Subgraph root recordings, including legacy rows without execution-surface metadata. Their `scopeCounts`, progress and matches exclude children. Ordinary modal browsing uses `groupByRoot=true` to paginate top-level families, not individual children. Expanding an entry uses the separate authenticated metadata-only `GET /api/workflows/recordings/:recordingId/sub-runs` route, without input or status predicates. Child pages are checked for identity, ownership, progress and consistent totals before publishing a complete family. See [Development](./development.md#collapsible-recording-families) for context groups and pagination invariants. Catalog/status summary counts still include retained recordings; they must not replace authoritative family-page or root-search totals. Flat API browsing without the grouping flag is unchanged.
 
-Optimization changes request scheduling, metadata-query indexes, and transient process-local work. Recording artifacts, compression, retention, input matching, missing-input semantics, newest-first ordering, and precise PostgreSQL cursor timestamps remain unchanged. Cursors advance through consumed candidates, not completed speculative reads. Errors are not silently converted into non-matches.
+The November 11 optimization changes read queries, request scheduling and transient process-local work. Recording artifacts, compression, retention, input matching, missing-input semantics, newest-first ordering, and precise PostgreSQL cursor timestamps remain unchanged. Cursors advance through consumed candidates, not completed speculative reads. Errors are not silently converted into non-matches.
 
 The shared scanner batches metadata windows, drains ready ordered decisions, guarantees progress after a budget overrun, and yields between windows. Cache handoff grace is bounded and separate from explicit cancellation. Weighted admission limits simultaneous large reads; compiled workers recover without a permanent inline fallback. No persistent index of extracted inputs or sidecar is introduced.
 
-SQLite creates the composite all-runs and failed-runs metadata indexes when its recording database opens. Managed deployments apply additive schema migration **11** for the equivalent PostgreSQL indexes; earlier migrations and checksums are unchanged. Helm compatibility and release-manifest contracts advance with that migration. The change does not rewrite recordings or introduce new recording row fields. Index creation can take time and locks on a large existing managed database, so run it through the normal migration/release workflow.
+The earlier implementation introduced SQLite metadata indexes and managed schema migration **11** for corresponding PostgreSQL indexes. The November 11 change reuses those existing indexes; it adds no migration or database settings change.
 
 Invalidation detaches an in-flight load from new consumers, without interrupting its existing consumers. Only the current load identity may populate the cache; cancelling the last consumer also stops detached work. This replaces per-key generation bookkeeping and prevents stale joins after reset.
 
@@ -193,19 +244,59 @@ The production artifact extractor rejects malformed JSON or a missing recording 
 
 ## Search batching and worker preparation
 
-The browser keeps its initial filtered request at the ordinary page size (20 by default), then requests 100 matches per continuation. This search batching is independent of the top-level family pagination used by ordinary browsing. The initial newest-match probe, 150 ms scheduling budget, cancellation and ordered cursors remain authoritative; 100 is a response cap, not a promise to wait for 100 matches.
+The browser keeps its initial filtered request at the ordinary page size (20 by default), then requests 100 matches per continuation. This search batching is independent of the top-level family pagination used by ordinary browsing. The initial newest-match probe retains its 150 ms scheduling budget; continuations allow 500 ms of scheduling and return earlier on a full page or exhaustion. These are scheduling budgets, not hard response deadlines. A response still consumes at most 4,096 candidates, with windows up to 256 and yields between windows. Cancellation and ordered cursors remain authoritative; 100 is a response cap, not a promise to wait for 100 matches.
+
+The scanner and shared cache admit up to 16 reads, with the same 256 MiB estimated-load budget and one/two parsing workers. An oversized recording runs alone. This is an estimate, not an RSS guarantee. The 250 ms handoff for already-admitted speculative reads remains unchanged. Explicit Stop/close cancels abandoned work without that grace; another active consumer can still finish a shared read.
 
 After an authorized recordings-catalog request successfully loads its metadata, the API prepares one idle extraction worker without reading any recording artifacts or delaying the response. Repeated catalog requests do not allocate more workers. A direct search still initializes lazily. Preparation failures do not fail the catalog; search-time bounded recovery remains responsible for reporting unavailable workers. Shutdown disposes prepared workers too. This trades one idle worker's memory for hiding startup during the time between opening the catalog and searching, not for faster artifact decompression.
 
 ## Cache capacity and diagnostics
 
-`RIVET_RECORDING_INPUT_CACHE_MAX_MIB` configures completed-input retention **per API process**, default 32, integer range 0–512; 0 disables completed retention while preserving shared in-flight loads. Invalid values fail at process initialization. The entry-count limit (16,384), individual-input limit (1 MiB), and five-minute TTL remain unchanged. This budget excludes keys, worker heaps, decoding and transient buffers; it is not a process RSS limit. Compose production/dev forward the setting from the launcher environment or `.env`; restart/recreate the API to apply it. Managed Helm installations can supply it through the chart's existing `env` map. Account for each replica and leave memory for execution before increasing it.
+`RIVET_RECORDING_INPUT_CACHE_MAX_MIB` configures total completed-input retention **per API process**, default 32, integer range 0–512; 0 disables both full-input and request-ID retention while preserving shared in-flight loads. Invalid values fail at process initialization. Full inputs retain their 16,384-entry, 1 MiB-per-entry and five-minute limits. Request-ID projections retain up to 32,768 entries, each with at most 4 KiB of serialized value, under at most 75% of the same byte budget. Their accounting includes conservative key/wrapper overhead. Full inputs use the remaining space and cannot evict projections merely through full-input churn. There is no second independent memory allowance.
 
-With metrics enabled, `rivet_recording_input_cache_events_total{event}` counts `hit`, `miss`, `shared`, `load`, `evicted`, `expired`, and `oversized`. A shared lookup is also a miss; load counts actual admitted loads, not consumers. `rivet_recording_input_extraction_seconds{stage}` observes `decode`, `parse`, and `queue_transfer` durations. These are fixed-cardinality aggregates: never label by input, filter, recording key or project. Observer failures cannot change search results. The cache's diagnostic snapshot additionally supplies current entry/byte and active/queued load counts for benchmarks; counters are cumulative, so compare phase snapshots.
+Verified immutable managed byte artifacts and SQLite content hashes permit one-hour projection retention; legacy raw managed keys and filesystem stat identities retain five minutes. Deriving a legacy projection from a full-cache hit preserves the older source's expiry instead of starting another five minutes. Deletion/retention invalidates both views, and closing/reopening SQLite at the same path clears its namespace. Projection-only misses do not retain or clone full inputs. Full and projected consumers share one source read, but a partial value can never satisfy a full-input lookup. Oversized/non-scalar IDs fall back to the exact existing matcher. Cache hits are not refreshed indefinitely.
+
+Source verification is captured from the loader that actually supplies bytes,
+not from consumers joining it. A fresh full read refreshes an existing projection
+from the same result; failures or missing sources cannot expose its older value.
+
+Worker heaps, decoding and transient buffers remain outside the retention budget; it is not a process RSS limit. Compose production/dev forward the setting from the launcher environment or `.env`; restart/recreate the API to apply it. Managed Helm installations can supply it through the chart's existing `env` map. Account for each replica and leave memory for execution before increasing it.
+
+With metrics enabled, `rivet_recording_input_cache_events_total{event}` counts `hit`, `miss`, `shared`, `load`, `evicted`, `expired`, and `oversized`. A shared lookup is also a miss; load counts actual admitted loads, not consumers. `rivet_recording_input_extraction_seconds{stage}` observes `decode`, `parse`, and `queue_transfer` durations. `rivet_recording_input_query_seconds{stage}` observes managed `count`, `candidates` and `matches` queries. These are fixed-cardinality aggregates: never label by input, filter, recording key or project. Observer failures cannot change search results. The diagnostic snapshot supplies current total/projected entry counts, retained bytes and active/queued loads; counters are cumulative, so compare phase snapshots.
 
 A repeated newest-first scan exceeding retention can evict all remaining older entries before reaching them. It is therefore not necessarily a warm-cache scan. Diagnose capacity, TTL and oversized rejection separately rather than increasing all limits or eagerly warming on persistence.
 
 ## Reproducing measurements
+
+For the managed request-ID benchmark, build the API and run this with local Docker available:
+
+```sh
+yarn workspace @valerypopoff/rivet-studio-server-api run build
+yarn workspace @valerypopoff/rivet-studio-server-api run recording-input:benchmark:managed
+```
+
+It creates its own loopback-only PostgreSQL container using the current schema,
+tests cold/repeat/changed-ID searches for Any and one project over HTTP, and
+removes that container in `finally`. It never accepts an existing database URL.
+JSON goes to stdout. Optional `RIVET_RECORDING_BENCH_COUNT`,
+`RIVET_RECORDING_BENCH_INPUT_KIB` and `RIVET_RECORDING_BENCH_READ_MS` adjust bounded
+synthetic fixture size/delay. `RIVET_RECORDING_BENCH_SCENARIO` accepts `recent`
+(default), `sparse`, `dense` or `absent`; `RIVET_RECORDING_BENCH_STATUS` accepts
+`all` (default) or `failed` (failed plus warning outcomes). Each
+search has a 60-second diagnostic timeout. Authentication and GCS are excluded;
+CPU/RSS, SQL, downloads and extraction use real local processes. Linux Node 24
+compiled-worker tests and a bounded Linux benchmark complement the Windows
+Node 22 managed measurements. Reports now include first-20 latency, result and
+analyzed counts, stage timings and a separately measured held-read Stop. Timing
+values are observations rather than flaky test thresholds.
+
+The older benchmark below remains useful for general predicates and SQLite;
+its default camelCase `requestId` does not enable the root `request_id` shortcut.
+Use `--input-property request_id --scope any` to exercise the optimized path over
+five local projects. A compiled Node 24/Linux run with 600 recordings and 64 KiB
+inputs completed cold in about 1,000 ms and warm in 22 ms with zero warm reads;
+two concurrent cold searches shared the 600 artifact reads. It ran with two
+Docker CPUs and 1.5 GiB memory. `availableCpus` reports affinity, not that quota.
 
 The benchmark defaults to the current browser policy: 20 rows on the initial request, 100 on continuations. Pass `--page-size 20` explicitly to reproduce the earlier continuation policy. `firstPageMs` measures when one search has collected the initial page size; concurrent searches are not combined to reach that threshold.
 

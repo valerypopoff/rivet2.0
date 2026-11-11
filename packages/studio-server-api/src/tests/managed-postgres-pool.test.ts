@@ -3,6 +3,55 @@ import test from 'node:test';
 
 import type { Pool, PoolConfig } from 'pg';
 import pg from 'pg';
+import { queryRows, withManagedDbRetry } from '../routes/workflows/managed/db.js';
+
+test('canceled recording queries cannot retry and keep active reads owned until settlement', async (t) => {
+  const controller = new AbortController();
+  let retryStarted!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    retryStarted = resolve;
+  });
+  t.mock.method(console, 'warn', () => retryStarted());
+  let attempts = 0;
+  const retried = withManagedDbRetry(
+    'test read',
+    async () => {
+      attempts++;
+      throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
+    },
+    controller.signal,
+  );
+  await entered;
+  controller.abort();
+  await assert.rejects(retried, { name: 'AbortError' });
+  assert.equal(attempts, 1);
+
+  let finish!: (value: { rows: [] }) => void;
+  const pending = new Promise<{ rows: [] }>((resolve) => {
+    finish = resolve;
+  });
+  const activeController = new AbortController();
+  let settled = false;
+  const active = queryRows(
+    { query: () => pending } as unknown as pg.PoolClient,
+    'SELECT 1',
+    [],
+    activeController.signal,
+  );
+  void active.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  activeController.abort();
+  await Promise.resolve();
+  assert.equal(settled, false, 'an active driver operation is not abandoned or released by a timeout race');
+  finish({ rows: [] });
+  await assert.rejects(active, { name: 'AbortError' });
+});
 
 import {
   DEFAULT_MANAGED_POSTGRES_POOL_MAX,

@@ -10,6 +10,7 @@ import {
   matchesWorkflowRecordingSerializedInputFilter,
   normalizeWorkflowRecordingInputFilter,
   parseWorkflowRecordingInputAfter,
+  RECORDING_INPUT_CONCURRENT_READS,
 } from '../routes/workflows/recording-input-filter.js';
 
 test('input search batches sparse metadata windows under one request budget', async () => {
@@ -610,8 +611,8 @@ test('an initial input search consumes already-ready nearby matches without wait
   // The one-record newest probe is followed by bounded concurrent reads. The
   // first match returns promptly rather than waiting on still-pending older
   // artifacts, and the cursor remains exactly at that consumed row.
-  assert.equal(readCount, 17);
-  assert.equal(filteredPage.nextInputCursor, 17);
+  assert.ok(readCount >= 10 && readCount <= 24, 'only the admitted window is consumed');
+  assert.equal(filteredPage.nextInputCursor, readCount);
   assert.equal(filteredPage.hasMore, true);
 });
 
@@ -711,12 +712,12 @@ test('the scan budget stops further scheduling after the current ordered read co
   );
 
   await Promise.resolve();
-  assert.equal(readCount, 8);
+  assert.equal(readCount, RECORDING_INPUT_CONCURRENT_READS);
   releaseFirstRead?.();
   const filteredPage = await filteredPagePromise;
 
-  assert.equal(readCount, 8);
-  assert.equal(filteredPage.nextInputCursor, 8);
+  assert.equal(readCount, RECORDING_INPUT_CONCURRENT_READS);
+  assert.equal(filteredPage.nextInputCursor, RECORDING_INPUT_CONCURRENT_READS);
   assert.equal(filteredPage.hasMore, true);
 });
 

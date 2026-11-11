@@ -275,6 +275,9 @@ export function useRunRecordingsController(
           }
 
           setRunsPage(response);
+          if (response.scopeCounts) {
+            setRelatedCounts({ workflowId: response.workflowId, counts: response.scopeCounts });
+          }
           const newRuns = response.runs.filter((run) => {
             if (seenIds.has(run.id)) {
               return false;

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { setImmediate as yieldToRequests } from 'node:timers/promises';
+import { recordStudioMetrics } from '../../metrics.js';
 
 import {
   WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS,
@@ -10,19 +11,31 @@ import {
 type PathToken = string | number;
 
 const INPUT_FILTER_OPERATORS = new Set<WorkflowRecordingInputFilterOperator>(WORKFLOW_RECORDING_INPUT_FILTER_OPERATORS);
-const INPUT_FILTER_CONCURRENT_ARTIFACT_READS = 8;
+export const RECORDING_INPUT_CONCURRENT_READS = 16;
 
 // Start with a small newest-first metadata window, then grow bounded windows
 // within the request budget. Both storage backends share this scheduling policy.
 export const RECORDING_INPUT_FILTER_CANDIDATE_WINDOW_SIZE = 24;
 export const RECORDING_INPUT_FILTER_MAX_CANDIDATE_WINDOW_SIZE = 256;
 export const RECORDING_INPUT_FILTER_SCAN_BUDGET_MS = 150;
+export const RECORDING_INPUT_FILTER_CONTINUATION_BUDGET_MS = 500;
 export const RECORDING_INPUT_PAGE_COMPLETE = Symbol('recording-input-page-complete');
+
+export function observeRecordingInputQuery(stage: 'count' | 'candidates' | 'matches', durationMs: number): void {
+  recordStudioMetrics((metrics) => metrics.observeRecordingInputQuery(stage, durationMs));
+}
 
 export type WorkflowRecordingExtractedInput = {
   exists: boolean;
   value: unknown;
 };
+
+/** Only this exact, parsed root-property equality can consume a partial input. */
+export function isRequestIdInputFilter(filter: WorkflowRecordingInputFilter | null | undefined): boolean {
+  if (filter?.operator !== '==') return false;
+  const tokens = parseJsonPath(filter.path);
+  return tokens.length === 1 && tokens[0] === 'request_id';
+}
 
 type PreparedWorkflowRecordingInputFilter = {
   operator: WorkflowRecordingInputFilterOperator;
@@ -81,8 +94,11 @@ export async function filterRecordingInputWindows<T>(
   },
 ): Promise<FilterRowsByRecordingInputPageResult<T>> {
   const now = options.now ?? performance.now.bind(performance);
-  const deadline = now() + (options.scanBudgetMs ?? RECORDING_INPUT_FILTER_SCAN_BUDGET_MS);
   const initial = !options.inputAfter && options.inputCursor === 0;
+  const deadline =
+    now() +
+    (options.scanBudgetMs ??
+      (initial ? RECORDING_INPUT_FILTER_SCAN_BUDGET_MS : RECORDING_INPUT_FILTER_CONTINUATION_BUDGET_MS));
   const pageSize = Math.min(100, Math.max(1, Math.floor(options.pageSize)));
   let after = options.inputAfter;
   let offset = options.inputCursor;
@@ -179,7 +195,7 @@ export async function filterRowsBySerializedRecordingInput<T>(
   const matches = Array.from({ length: rows.length }, () => false);
   let nextIndex = 0;
 
-  const workerCount = Math.min(INPUT_FILTER_CONCURRENT_ARTIFACT_READS, rows.length);
+  const workerCount = Math.min(RECORDING_INPUT_CONCURRENT_READS, rows.length);
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (nextIndex < rows.length) {
@@ -276,7 +292,7 @@ export async function filterRowsByRecordingInputPage<T>(
   };
 
   const scheduleCandidates = (): void => {
-    const maximumPending = Math.min(INPUT_FILTER_CONCURRENT_ARTIFACT_READS, Math.max(1, pageSize - pageRows.length));
+    const maximumPending = Math.min(RECORDING_INPUT_CONCURRENT_READS, Math.max(1, pageSize - pageRows.length));
     while (
       pending.size < maximumPending &&
       nextIndexToStart < rows.length &&

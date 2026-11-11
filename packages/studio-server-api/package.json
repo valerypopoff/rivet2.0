@@ -13,6 +13,7 @@
     "managed-reconciliation:status": "tsx src/scripts/managed-reconciliation-status.ts",
     "workflow-execution:benchmark-fixture": "tsx src/scripts/benchmark-graph-fixture.ts",
     "recording-input:benchmark": "node dist/studio-server-api/src/scripts/benchmark-recording-input-search.js",
+    "recording-input:benchmark:managed": "node dist/studio-server-api/src/scripts/benchmark-recording-search-managed.js",
     "workflow-execution:measure": "tsx src/scripts/measure-workflow-execution.ts",
     "serving-refactors:benchmark": "node dist/studio-server-api/src/scripts/benchmark-serving-refactors.js",
     "serving-refactors:workload": "node dist/studio-server-api/src/scripts/benchmark-serving-workload.js",

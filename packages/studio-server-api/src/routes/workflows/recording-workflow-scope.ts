@@ -15,7 +15,7 @@ export type RecordingRunScope =
 /** Mirrors primary-owned child discovery, independently of page/status/input filters. */
 export function recordingHasSubRunsSql(
   storage: 'filesystem' | 'sqlite' | 'managed',
-  pageTable?: 'recording_page',
+  pageTable?: 'recording_page' | 'recording_matches',
 ): string {
   const table =
     storage === 'filesystem' ? 'recording_runs' : storage === 'sqlite' ? 'recordings' : 'workflow_recordings';

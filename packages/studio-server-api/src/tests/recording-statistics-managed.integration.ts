@@ -64,13 +64,17 @@ async function verifySubRunPresence(database: Pool): Promise<void> {
   await insert('blank', 'workflow_endpoint', ' '.repeat(16));
   const windows: Array<{ sql: string; parameters: unknown[] }> = [];
   const artifactReads: string[] = [];
+  let countQueries = 0;
   const context = {
     pool: database,
     initialize: async () => {},
     revisions: {},
     mappers,
     db: {
-      queryOne,
+      queryOne: async (client: Pool, sql: string, parameters: unknown[] = [], signal?: AbortSignal) => {
+        if (sql.includes('COUNT(*)::int')) countQueries++;
+        return queryOne(client, sql, parameters, signal);
+      },
       queryRows: async (client: Pool, sql: string, parameters: unknown[] = []) => {
         if (sql.includes('recording_cursor_created_at')) windows.push({ sql, parameters });
         return queryRows(client, sql, parameters);
@@ -209,6 +213,45 @@ async function verifySubRunPresence(database: Pool): Promise<void> {
   assert.ok(
     groups.every((plan) => plan['Actual Rows'] + (plan['Rows Removed by Filter'] ?? 0) <= 20),
     'presence must aggregate only visible-page keys, not the complete history',
+  );
+  const beforeInputWindows = windows.length;
+  const beforeInputCounts = countQueries;
+  const inputFirst = await service.listWorkflowRecordingRunsPage('', 1, 1, 'all', filter);
+  assert.equal(inputFirst.runs.length, 1);
+  assert.ok(inputFirst.nextInputAfter);
+  const inputNext = await service.listWorkflowRecordingRunsPage(
+    '',
+    1,
+    1,
+    'all',
+    filter,
+    inputFirst.nextInputCursor,
+    undefined,
+    inputFirst.nextInputAfter,
+  );
+  assert.equal(inputNext.runs.length, 1);
+  assert.notEqual(inputNext.runs[0]!.id, inputFirst.runs[0]!.id);
+  assert.equal(countQueries - beforeInputCounts, 1, 'real PostgreSQL continuations do not recount roots');
+  const inputWindows = windows.slice(beforeInputWindows).filter(({ sql }) => sql.includes('WITH recording_page'));
+  assert.ok(inputWindows.length >= 2);
+  for (const candidate of inputWindows) assert.doesNotMatch(candidate.sql, /has_sub_runs|replay_project_blob_key/);
+  const inputPlan = await database.query(
+    `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${inputWindows[0]!.sql}`,
+    inputWindows[0]!.parameters,
+  );
+  const inputReport = inputPlan.rows[0]['QUERY PLAN'][0];
+  assert.ok(inputReport.Plan['Actual Rows'] <= 25);
+  assert.ok(
+    nodes(inputReport.Plan).every((node) => !node['Node Type'].includes('Aggregate')),
+    'input candidates must not execute child-presence aggregation',
+  );
+  console.log(
+    JSON.stringify({
+      check: 'postgres-recording-input-candidates',
+      historyRows: 50000,
+      returnedRows: inputReport.Plan['Actual Rows'],
+      executionMs: inputReport['Execution Time'],
+    }),
   );
   await service.listWorkflowRecordingRunsPage('legacy', 1, 100, 'all', null, 0, undefined, undefined, true, 'children');
   const childWindow = windows.at(-1)!;

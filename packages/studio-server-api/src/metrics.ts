@@ -310,6 +310,10 @@ export class StudioMetrics {
     this.observeHistogram('rivet_recording_input_extraction_seconds', { stage }, Math.max(0, durationMs) / 1000);
   }
 
+  observeRecordingInputQuery(stage: 'count' | 'candidates' | 'matches', durationMs: number): void {
+    this.observeHistogram('rivet_recording_input_query_seconds', { stage }, Math.max(0, durationMs) / 1000);
+  }
+
   setPostgresPool(input: { idle: number; pools: number; total: number; waiting: number }): void {
     this.setGauge('rivet_postgres_pool_connections', { state: 'idle' }, input.idle);
     this.setGauge('rivet_postgres_pool_connections', { state: 'total' }, input.total);

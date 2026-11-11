@@ -312,6 +312,8 @@ test('managed Any scope applies status, pagination and input continuations witho
       },
       queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) => {
         const available = scopedRows(sql, parameters);
+        if (sql.includes('WITH recording_matches'))
+          return available.filter((row) => (parameters[1] as string[]).includes(row.recording_id));
         const after = parameters.length === 5;
         const offset = after
           ? available.findIndex((row) => row.recording_id === parameters[2]) + 1
@@ -396,6 +398,8 @@ test('managed caller scope wires related counts, status filters and matching inp
       },
       queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) => {
         const matching = available(sql, parameters);
+        if (sql.includes('WITH recording_matches'))
+          return matching.filter((row) => (parameters[1] as string[]).includes(row.recording_id));
         const after = parameters.length === 5;
         const offset = after
           ? matching.findIndex((row) => row.recording_id === parameters[2]) + 1
@@ -465,6 +469,105 @@ test('managed caller scope wires related counts, status filters and matching inp
   );
 });
 
+test('managed input continuations enrich only matches and preserve progress across deleted or replaced rows', async () => {
+  const rows = [0, 1, 2, 3].map((id) =>
+    createRecordingRow(`race-${id}`, 'endpoint', `2026-08-04T12:00:0${3 - id}.000Z`),
+  );
+  let counts = 0;
+  const queries: string[] = [];
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    revisions: {},
+    db: {
+      queryOne: async () => {
+        counts++;
+        return { totalRuns: 4, failedRuns: 0, suspiciousRuns: 0 };
+      },
+      queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) => {
+        queries.push(sql);
+        if (sql.includes('WITH recording_matches')) {
+          assert.deepEqual(parameters[1], ['race-1', 'race-2', 'race-3']);
+          return [
+            { ...rows[3]!, has_sub_runs: true },
+            { ...rows[1]!, recording_blob_key: 'replaced' },
+          ];
+        }
+        assert.doesNotMatch(sql, /has_sub_runs|source_project_name|replay_project_blob_key/);
+        return rows.slice(Number(parameters[2]));
+      },
+    },
+    blobStore: {
+      getText: async () =>
+        JSON.stringify({
+          recording: { events: [{ type: 'start', data: { inputs: { input: { value: { request_id: 'needle' } } } } }] },
+        }),
+    },
+    mappers: { RECORDING_COLUMNS: 'recording_id', toIsoString: (value: unknown) => String(value) },
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({ context });
+  const page = await service.listWorkflowRecordingRunsPage(
+    '',
+    1,
+    20,
+    'all',
+    { path: '$.request_id', operator: '==', value: 'needle' },
+    1,
+  );
+  assert.equal(counts, 0, 'legacy numeric continuations must also skip counts');
+  assert.equal(page.scopeCounts, undefined);
+  assert.deepEqual(
+    page.runs.map((row) => row.id),
+    ['race-3'],
+  );
+  assert.equal(page.runs[0]!.hasSubRuns, true);
+  assert.equal(page.inputSearchAnalyzedRuns, 4);
+  assert.equal(page.hasMore, false);
+  assert.equal(page.totalRunsExact, false);
+  assert.equal(queries.length, 2);
+});
+
+test('managed search validates cursors before counts and stops after a canceled active metadata read', async () => {
+  let started!: () => void, finish!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let counts = 0,
+    windows = 0;
+  const context = {
+    pool: {},
+    initialize: async () => {},
+    revisions: {},
+    db: {
+      queryOne: async () => {
+        counts++;
+        started();
+        await pending;
+        return { totalRuns: 1 };
+      },
+      queryRows: async () => {
+        windows++;
+        return [];
+      },
+    },
+    mappers: { RECORDING_COLUMNS: 'recording_id' },
+  } as unknown as ManagedWorkflowContext;
+  const service = createManagedWorkflowRecordingService({ context });
+  const filter = { path: '$.request_id', operator: '==' as const, value: 'needle' };
+  await assert.rejects(service.listWorkflowRecordingRunsPage('', 1, 20, 'all', filter, 0, undefined, 'invalid'));
+  assert.equal(counts, 0);
+  const controller = new AbortController();
+  const search = service.listWorkflowRecordingRunsPage('', 1, 20, 'all', filter, 0, controller.signal);
+  await entered;
+  controller.abort();
+  finish();
+  await assert.rejects(search, { name: 'AbortError' });
+  assert.equal(windows, 0);
+});
+
 test('managed input filtering reads a bounded newest-first window and returns a fresh match immediately', async () => {
   const rows = Array.from({ length: 25 }, (_, index) =>
     createRecordingRow(
@@ -496,6 +599,8 @@ test('managed input filtering reads a bounded newest-first window and returns a 
       queryOne: async () => null,
       queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) => {
         queryCalls.push({ sql, parameters });
+        if (sql.includes('WITH recording_matches'))
+          return rows.filter((row) => (parameters[1] as string[]).includes(row.recording_id));
         const offset =
           parameters.length === 5
             ? rows.findIndex((row) => row.recording_id === parameters[2]) + 1
@@ -559,8 +664,10 @@ test('managed input filtering reads a bounded newest-first window and returns a 
     undefined,
     page.nextInputAfter,
   );
-  assert.match(queryCalls[1]!.sql, /\(created_at, recording_id\) < \(\$2::timestamptz, \$3\)/);
-  assert.deepEqual(queryCalls[1]!.parameters, [
+  assert.match(queryCalls[1]!.sql, /WITH recording_matches/);
+  assert.doesNotMatch(queryCalls[0]!.sql, /has_sub_runs/);
+  assert.match(queryCalls[2]!.sql, /\(created_at, recording_id\) < \(\$2::timestamptz, \$3\)/);
+  assert.deepEqual(queryCalls[2]!.parameters, [
     'workflow-a',
     rows[0]!.recording_cursor_created_at,
     rows[0]!.recording_id,
@@ -578,7 +685,7 @@ test('managed input filtering reads a bounded newest-first window and returns a 
     [rows[24]!.recording_id],
   );
   assert.equal(sparse.hasMore, false);
-  assert.equal(queryCalls.length - previousQueries, 2);
+  assert.equal(queryCalls.length - previousQueries, 3);
 });
 
 test('managed input search supplies descriptor bounds only for encoded byte readers', async (t) => {
@@ -614,8 +721,8 @@ test('managed input search supplies descriptor bounds only for encoded byte read
       revisions: {},
       db: {
         queryOne: async () => null,
-        queryRows: async (_pool: unknown, _sql: string, parameters: unknown[]) =>
-          Number(parameters[2]) === 0 ? [row] : [],
+        queryRows: async (_pool: unknown, sql: string, parameters: unknown[]) =>
+          sql.includes('WITH recording_matches') || Number(parameters[2]) === 0 ? [row] : [],
       },
       blobStore: {
         getText: async () => text,

@@ -42,9 +42,13 @@ void test('recording search metrics use bounded payload-free labels', () => {
   metrics.recordRecordingInputCacheEvent('oversized');
   metrics.observeRecordingInputExtraction('decode', 25);
   metrics.observeRecordingInputExtraction('parse', 50);
+  metrics.observeRecordingInputQuery('count', 12);
+  metrics.observeRecordingInputQuery('candidates', 25);
+  metrics.observeRecordingInputQuery('matches', 5);
   const rendered = metrics.render();
   assert.match(rendered, /rivet_recording_input_cache_events_total\{[^\n]*event="hit"[^\n]*\} 1/);
   assert.match(rendered, /rivet_recording_input_extraction_seconds_sum\{[^\n]*stage="parse"[^\n]*\} 0\.05/);
+  assert.match(rendered, /rivet_recording_input_query_seconds_sum\{[^\n]*stage="candidates"[^\n]*\} 0\.025/);
 });
 
 async function startMetricsServer(metrics: StudioMetrics) {

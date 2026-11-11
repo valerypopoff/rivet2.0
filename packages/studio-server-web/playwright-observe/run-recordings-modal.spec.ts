@@ -792,7 +792,8 @@ async function installRunRecordingRoutes(
         contentType: 'application/json',
         body: JSON.stringify({
           workflowId,
-          ...((workflowId && options.relatedSubgraphRuns) || hasInputFilter
+          ...((workflowId && options.relatedSubgraphRuns && !hasInputFilter) ||
+          (hasInputFilter && !inputAfter && inputCursor === 0)
             ? {
                 scopeCounts: {
                   totalRuns: sourceRuns.length,
@@ -2393,6 +2394,33 @@ test.describe('Run recordings modal', () => {
     await modal.locator('.run-recordings-run').first().hover();
     await modal.locator('.run-recordings-run').first().getByRole('button', { name: 'Delete' }).click();
     await expect(modal.locator('.run-recordings-run')).toHaveCount(1);
+  });
+
+  test('immediate count-free continuations preserve root-only totals', async ({ page }) => {
+    const { runFetches } = await installRunRecordingRoutes(page, {
+      relatedSubgraphRuns: true,
+      inputSearchWindowSize: 1,
+      cursorDelayMs: 0,
+    });
+    const modal = await openLatestFlowRecordings(page);
+    await expect(modal.getByRole('button', { name: 'All (12)', exact: true })).toBeVisible();
+    await modal.getByRole('button', { name: 'Filter by input', exact: true }).click();
+    await modal.getByLabel('Input JSON path').fill('$');
+    await modal.locator('.run-recordings-input-filter-operator .run-recordings-select__control').click();
+    await page
+      .locator('.run-recordings-select__option')
+      .filter({ hasText: /^exists$/ })
+      .click();
+    await modal.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(modal.locator('.run-recordings-input-search-status')).toContainText(
+      'Search complete, 11 matches found',
+    );
+    await expect(modal.getByRole('button', { name: 'All (11)', exact: true })).toBeVisible();
+    await expect(modal.getByRole('progressbar', { name: 'Input search progress' })).toHaveAttribute(
+      'aria-valuetext',
+      'Analyzed 11 of 11 available runs (100%)',
+    );
+    expect(runFetches.some((url) => new URL(url).searchParams.has('inputAfter'))).toBe(true);
   });
 
   test('reports how many available runs an input search has analyzed', async ({ page }) => {
