@@ -38,9 +38,29 @@ The November 3 image scan found cached Alpine `libexpat 2.9.0-r0` blocked by
 CVE-2026-117610 and CVE-2026-118370 in the proxy (both architectures) and API.
 Alpine publishes the patched [2.10.0-r0 package](https://pkgs.alpinelinux.org/package/v3.24/main/x86_64/libexpat).
 The explicit floor invalidates the cached runtime package-install layers. The
-qualification toolchain passed its scan and needs no package-layer change.
+qualification toolchain passed that November 3 scan and needed no package-layer change then.
 Preserve the scanner policy and verify the final images; a successful application
 test does not waive OS findings.
+
+The November 11 [proxy scan](https://github.com/valerypopoff/rivet2.0/actions/runs/42931262586/job/130233844998)
+found cached `libxslt 1.1.43-r3` on both architectures, blocked by CVE-2026-87636
+and CVE-2026-9947. The final proxy now requires `libxslt>=1.1.43-r4`, the patched
+[Alpine 3.24 package](https://pkgs.alpinelinux.org/package/v3.24/main/aarch64/libxslt).
+Changing the explicit package floor invalidates the cached install layer and
+requires the available fix on amd64 and arm64. Keep the pinned NGINX version and
+the existing High/Critical policy; scan the rebuilt final images. The
+[qualification actor scan](https://github.com/valerypopoff/rivet2.0/actions/runs/42931262586/job/130231314131)
+found the same package and findings through Chromium's dependencies. Its
+`qualification-toolchain` stage requires the same floor; refreshing only the
+proxy would leave tooling publication blocked. Both floors are guarded by the
+workflow-policy check. The downstream
+HA assembly failure in that run followed skipped prerequisites after this scan,
+not a failed Kubernetes rollout. No staging or production deployment had begun.
+Local rebuilds and strict scans of both proxy architectures and the exact
+`qualification-toolchain` target returned zero High/Critical findings. NGINX on
+both architectures, the rebuilt toolchain checks, Chromium rendering and five
+headless UI smoke tests passed. The complete source-bound actor still requires
+its normal CI scan before publication; the toolchain check does not replace it.
 
 ## Release gate
 

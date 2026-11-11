@@ -4,6 +4,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 
+const images = {
+  postgres: 'postgres:16.8-alpine',
+  minio:
+    'alpine/minio:RELEASE.2025-10-15T17-29-55Z@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4',
+};
+
 /** Disposable services only: never accepts a deployment address or existing ID. */
 export async function startRunCostStorage() {
   const owned: string[] = [];
@@ -17,7 +23,16 @@ export async function startRunCostStorage() {
     for (const id of owned.reverse()) docker('rm', '-f', '-v', id);
   };
   const launch = (port: number, ...args: string[]) => {
-    const id = docker('run', '-d', '--name', `rivet-cost-${randomUUID()}`, '-p', `127.0.0.1::${port}`, ...args);
+    const id = docker(
+      'run',
+      '--pull=never',
+      '-d',
+      '--name',
+      `rivet-cost-${randomUUID()}`,
+      '-p',
+      `127.0.0.1::${port}`,
+      ...args,
+    );
     owned.push(id);
     return Number(
       docker('inspect', '--format', `{{(index (index .NetworkSettings.Ports "${port}/tcp") 0).HostPort}}`, id),
@@ -26,13 +41,24 @@ export async function startRunCostStorage() {
   let pool: Pool | undefined;
   let s3: S3Client | undefined;
   try {
+    const { pullImageWithRetry } = await import(
+      new URL('../../../../../deploy/studio-server/scripts/lib/docker-image-pull.mjs', import.meta.url).href
+    );
+    for (const image of Object.values(images)) {
+      try {
+        docker('image', 'inspect', image);
+      } catch (error) {
+        if (!/No such image/i.test(String(error))) throw error;
+        await pullImageWithRetry(image, (reference: string) => docker('pull', reference));
+      }
+    }
     const dbPort = launch(
       5432,
       '-e',
       'POSTGRES_HOST_AUTH_METHOD=trust',
       '-e',
       'POSTGRES_DB=rivet_cost',
-      'postgres:16.8-alpine',
+      images.postgres,
     );
     const s3Port = launch(
       9000,
@@ -42,7 +68,7 @@ export async function startRunCostStorage() {
       'MINIO_ROOT_PASSWORD=costfixturesecret',
       '-e',
       'MINIO_REGION_NAME=eu-west-7',
-      'alpine/minio:RELEASE.2025-10-15T17-29-55Z@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4',
+      images.minio,
       'server',
       '/tmp/minio',
     );

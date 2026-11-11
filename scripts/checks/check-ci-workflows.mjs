@@ -1000,9 +1000,13 @@ for (const service of ['proxy', 'api']) {
     `${service}: require the patched libexpat floor in the runtime package layer, not only a builder.`,
   );
 }
-for (const packageName of ['curl', 'libcurl']) {
+for (const [packageName, minimum] of [
+  ['curl', '8.23.0-r0'],
+  ['libcurl', '8.23.0-r0'],
+  ['libxslt', '1.1.43-r4'],
+]) {
   assert.ok(
-    read('deploy/studio-server/images/proxy/Dockerfile').includes(`'${packageName}>=8.23.0-r0'`),
+    read('deploy/studio-server/images/proxy/Dockerfile').includes(`'${packageName}>=${minimum}'`),
     `Proxy must retain the ${packageName} security floor; an unversioned cached APK layer can remain vulnerable.`,
   );
 }
@@ -1054,6 +1058,7 @@ assert.match(janitorDockerfile, /ws@8\.21\.0/);
 const actorDockerfile = read('deploy/studio-server/images/qualification/Dockerfile');
 assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
 assert.ok(actorDockerfile.includes(`FROM ${runtimeNodeImage}`));
+assert.match(actorDockerfile, /apk add --no-cache[^\n]+'libxslt>=1\.1\.43-r4'/);
 assert.match(actorDockerfile, /COPY source\/deploy\/studio-server\/images\/lib\/rebuild-esbuild\.sh/);
 assert.match(actorDockerfile, /sh \/rebuild-esbuild\.sh "\$TARGETARCH"/);
 assert.match(actorDockerfile, /COPY --from=esbuild-security --chown=10001:10001 \/out\/@esbuild/);
