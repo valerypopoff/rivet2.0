@@ -250,6 +250,9 @@ counts; mock-handler completion alone does not prove browser delivery. There is
 no flaky wall-clock CI limit.
 The full modal spec is part of the normal weighted editor CI shards, so these
 regressions run against the built application before release.
+The cases explicitly permit parallel execution because each owns its browser
+context, route handlers, fixture data and storage. CI's two workers can therefore
+share the large suite instead of leaving one idle behind a serial file.
 Its isolated fixture reuses the shared hosted-editor bootstrap and supplies idle
 tree/evaluation streams, disabled local-upgrade setup, empty model choices and an
 empty schedule summary. The startup regression rejects unmatched API requests rather than

@@ -940,6 +940,10 @@ async function deleteFirstRun(page: Page, modal: Locator) {
 }
 
 test.describe('Run recordings modal', () => {
+  // Each case owns its page, routes, fixtures and browser storage. Allow CI's
+  // second worker to run cases instead of idling behind this large file.
+  test.describe.configure({ mode: 'parallel' });
+
   test('keeps the recordings requests idle until a session opens', async ({ page }) => {
     const unexpectedApiRequests: string[] = [];
     await page.route('**/api/**', (route) => {
