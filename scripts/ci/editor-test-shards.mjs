@@ -23,8 +23,8 @@ const weightedSpecs = [
   ['hosted-subgraph-auth.spec.ts', 198],
   ['remote-bundle-observation.spec.ts', 220],
   ['ha-latest-replay.spec.ts', 16],
-  // Two independent contexts, scoped HA transport, real runs and reconnect.
-  ['managed-debugger-channels.spec.ts', 56],
+  // Complete hosted fixture, including scoped HA transport, runs and reconnect.
+  ['managed-debugger-channels.spec.ts', 260],
   ['ha-recording-selection.spec.ts', 12],
   ['recording-playback-history.spec.ts', 50],
   ['graph-deletion-references.spec.ts', 46],
@@ -41,7 +41,7 @@ const weightedSpecs = [
   ['tunnel-cache-retention.spec.ts', 1],
   ['run-statistics-modal.spec.ts', 15],
   // Hosted CI work estimate; isolated cases can share both browser workers.
-  ['run-recordings-modal.spec.ts', 520],
+  ['run-recordings-modal.spec.ts', 640],
   // Debug node discovery, output labels, icons and documentation links.
   ['graph-call-path-node.spec.ts', 15],
   // Real local PostgreSQL/MinIO + provider HTTP, including cancellation settlement.

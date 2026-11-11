@@ -32,9 +32,9 @@ The recordings suite now opts into parallel cases using the existing two CI
 workers. Every case constructs its own Playwright page/context, mock routes,
 fixture data and browser storage; it has no shared setup, mutable suite fixture
 or external provider dependency. Other suites retain their existing serial
-scenarios. The recordings weight is now 520 seconds of estimated work, based on
-the hosted 84-case sample of approximately 483 seconds plus the four remaining
-cases. It remains a scheduling hint, not a wall-clock acceptance threshold.
+scenarios. Work weights use total case time rather than the shorter wall time
+of parallel execution. They remain scheduling hints, not wall-clock acceptance
+thresholds.
 
 Keep every case, assertion and the existing 12-minute step limit. Validate the
 complete affected shard with `RIVET_EDITOR_TEST_SHARD=1/3 yarn studio-server:ui:ci`
@@ -46,8 +46,17 @@ The targeted production-build check passed all 88 recordings cases in 2m42s
 without retries or skips. Its JSON report assigned 45 and 43 cases to the two
 workers and confirmed overlapping execution. A complete local shard attempt
 stopped at Chromium's Windows `ERR_NO_BUFFER_SPACE` during another fixture's
-application bootstrap; the replacement hosted run must still validate the full
-shard on Linux.
+application bootstrap. The hosted Linux result below supplies the full-shard
+validation.
+
+[The complete hosted follow-up](https://github.com/valerypopoff/rivet2.0/actions/runs/43109601411)
+passed all three browser shards. The repaired shard finished 145 cases in 9m25s,
+but shard 2 took 11m44s, only 16 seconds below the unchanged limit. Its debugger
+suite had grown to approximately 260 seconds of work while retaining a
+56-second estimate. The complete recordings suite measured approximately
+638 seconds of work. Refresh those two weights to 260 and 640 seconds so the
+existing balancer accounts for that work across all three shards. Do not accept
+equal estimated totals as proof of useful timeout headroom.
 
 ## Image-test browser setup repair: November 11, 2026
 
@@ -444,8 +453,8 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
   The complete Run recordings modal suite is also registered, including immediate
   opening, independent catalog/results, retained sessions, deletion and replay.
-  Its 520-second work estimate includes the hosted recordings sample and the
-  remaining cases; refine it from complete hosted timings.
+  Its 640-second work estimate comes from the complete hosted recordings run;
+  refine materially stale weights from complete hosted timings.
   Their inclusion is asserted by the shard regression. These weights balance work,
   not predict hosted wall time. Independently isolated recordings cases can use
   both workers; other files preserve serial scenarios. Test-owned contexts,
