@@ -1288,6 +1288,32 @@ must be updated and their policy checksums reviewed **before a new operation**;
 do not change an unfinished operation's bound scripts/policy to adopt this stage.
 Exact recovery skips fresh preparation and retains its original policy.
 
+#### Keep the checkpoint schema current
+
+A private recovery adapter must match the **installed** database schema, even
+when the candidate release does not change it. Its read-only data-access
+preflight checks the complete migration history against the installed-source
+verifier before starting an acceptance observer. Capture repeats that check
+inside the read-only snapshot, and local restore verifies the same schema.
+An unsupported version or changed migration checksum requires refreshing the
+private adapter; do not accept it by widening a numeric version assertion.
+
+Schema 19 adds `workflow_revisions.reference_summary`. A schema-18 checkpoint
+adapter is therefore stale after deploying schema 19. Validate the replacement
+with a real isolated PostgreSQL dump/restore that preserves a nonempty reference
+summary, all owned-table row counts and unrelated sentinel data. Keep production
+capture read-only and retain the existing scoped tables and object protections.
+
+For a repair confined to this private adapter, retain the successful application
+qualification and immutable images. Preserve the failed preparation receipts,
+verify observer cleanup and unchanged live workloads, then publish one new
+immutable private installation bundle and its protected configuration pointer.
+Use the acknowledged configuration publication receipt as the baseline so an
+older preparation file cannot restore an outdated installation pointer or values.
+Run the repaired preflight with the actual production CI identity before a new
+explicit production attempt. A backup-adapter repair does not require another
+application image build or a repeated staging rollout.
+
 #### Implementing and preparing the private adapter
 
 `lib/deployment-adapter-preflight.mjs` provides the reusable local implementation
