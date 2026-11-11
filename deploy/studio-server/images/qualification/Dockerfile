@@ -19,7 +19,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS qualification-toolchain
 ARG TARGETARCH=amd64
 COPY source/deploy/studio-server/images/lib/harden-package-manager-caches.mjs /opt/rivet/harden-package-manager-caches.mjs
-RUN apk add --no-cache git chromium ffmpeg openssl util-linux curl ca-certificates bash && corepack enable && \
+# Chromium brings libxslt; require its security fix even when this layer was cached.
+RUN apk add --no-cache git chromium ffmpeg openssl util-linux curl ca-certificates bash 'libxslt>=1.1.43-r4' && corepack enable && \
     npm install -g npm@11.21.1 && \
     npm install --prefix /tmp/rivet-npm-security --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact undici@6.29.1 && \
     rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \
