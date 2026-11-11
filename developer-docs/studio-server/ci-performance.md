@@ -5,6 +5,20 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+## Local pre-push recurrence checklist
+
+Keep repeatable CI findings in `developer-docs/studio-server/ci-pre-push.local.md`.
+The root ignore rule keeps its contents out of Git; `AGENTS.md` asks agents to
+consult it during commit preparation and before a later push when inputs change.
+Each finding should identify its scope, cause and concrete prevention check.
+Keep unresolved findings explicit, merge duplicates, and omit incident timelines,
+one-off errors and credentials. Apply only checks relevant to the final diff;
+separate local pre-push checks from later exact-image/hosted-runner checks and
+authorized release readiness. Use failed-test summaries and job/attempt metadata
+to distinguish real failures from expected negative-test errors, downstream
+refusals and unstarted jobs. This is a local preparation aid, not another CI gate
+or cloud-test requirement.
+
 ## Develop CI repair: November 11, 2026
 
 Build passed for `54c429551`, but deployment contracts in

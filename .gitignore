@@ -79,6 +79,9 @@ packages/app-executor/bin/executor-bundle.cjs
 # Personal planning notes stay local and must never be committed.
 /backlog.md
 
+# Local CI recurrence checklist, consulted before committing or pushing.
+/developer-docs/studio-server/ci-pre-push.local.md
+
 Thumbs.db
 
 packages/app/stats.html
