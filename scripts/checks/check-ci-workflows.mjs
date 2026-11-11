@@ -950,6 +950,35 @@ assert.equal(
   imageJobs['fast-container-smoke'].env.STUDIO_SERVER_CANDIDATE_MANIFEST,
   'artifacts/studio-server-release-manifest/candidate-release-manifest.json',
 );
+for (const [id, before] of [
+  ['fast-container-smoke', 'Exercise Candidate Image Set'],
+  ['managed-kubernetes-release-gate', 'Create Disposable Kind Cluster'],
+]) {
+  const job = imageJobs[id];
+  for (const key of [
+    'RIVET_CI_BROWSER_IMAGE',
+    'RIVET_CI_PLAYWRIGHT_VERSION',
+    'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD',
+    'PW_TEST_CONNECT_WS_ENDPOINT',
+    'PW_TEST_CONNECT_EXPOSE_NETWORK',
+  ])
+    assert.equal(job.env[key], editorJob.env[key], `${id} must use the verified editor browser runtime.`);
+  assert.equal(job.container, undefined, `${id} needs host Docker and loopback access.`);
+  const setup = findStep(job, 'Prepare browser runtime', id);
+  assert.equal(setup.id, 'browser-runtime');
+  assert.equal(setup['timeout-minutes'], 4);
+  assert.ok(job.steps.indexOf(setup) < job.steps.indexOf(findStep(job, before, id)));
+  assert.match(setup.run, /docker create --init --ipc=host --publish 127\.0\.0\.1:3100:3100/);
+  assert.match(setup.run, /target=\/workspace,readonly/);
+  assert.match(setup.run, /--host 0\.0\.0\.0 --port 3100/);
+  assert.match(setup.run, /yarn node scripts\/ci\/verify-browser-environment\.mjs/);
+  assert.ok(setup.run.indexOf('container_id=$container_id') < setup.run.indexOf('docker start'));
+  assert.doesNotMatch(job.steps.map((step) => step.run ?? '').join('\n'), /playwright install|apt-get|\bnpx\b/);
+  const cleanup = findStep(job, 'Stop owned browser runtime', id);
+  assert.equal(cleanup.if, "${{ always() && steps.browser-runtime.outputs.container_id != '' }}");
+  assert.match(cleanup.run, /docker inspect --format.*rivet\.ci\.browser/);
+  assert.match(cleanup.run, /docker rm -f "\$CONTAINER_ID"/);
+}
 const proxyReuse = findStep(imageJobs['build-and-push'], 'Resolve unchanged proxy image', 'Component reuse');
 assert.equal(
   findStep(imageJobs['build-and-push'], 'Check Out Repository', 'Component reuse').with.filter,
@@ -1281,10 +1310,7 @@ assert.deepEqual(
   proofMatrix.strategy.matrix.include.map((x) => x.context),
   ['kind-rivet-managed-release', 'kind-rivet-ha-lost-acknowledgement', 'kind-rivet-ha-lease-loss'],
 );
-for (const name of [
-  'Verify hard-spread scheduling with tainted nodes',
-  'Install browser for full HA upgrade verification',
-]) {
+for (const name of ['Verify hard-spread scheduling with tainted nodes', 'Prepare browser runtime']) {
   assert.equal(findStep(proofMatrix, name, 'HA matrix').if, "matrix.scenario == 'upgrade'");
 }
 assert.match(findStep(proofMatrix, 'Delete Disposable Kind Cluster', 'HA matrix').run, /ha-kind-cluster\.mjs cleanup/);

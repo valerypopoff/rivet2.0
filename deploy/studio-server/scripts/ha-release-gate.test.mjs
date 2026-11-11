@@ -34,7 +34,59 @@ import {
   waitForHaFrontendReplacement,
   hasHaBrowserReadyTransport,
   assertHaBrowserWebPods,
+  launchHaBrowser,
 } from './lib/ha-browser-probe.mjs';
+
+test('HA probes use the prepared CI browser without a host-browser fallback', async () => {
+  const calls = [];
+  const browser = {};
+  const chromium = {
+    async connect(endpoint, options) {
+      calls.push({ endpoint, options });
+      return browser;
+    },
+    launch() {
+      assert.fail('CI must not require an installed host browser');
+    },
+  };
+  const env = {
+    PW_TEST_CONNECT_WS_ENDPOINT: 'ws://127.0.0.1:3100/',
+    PW_TEST_CONNECT_EXPOSE_NETWORK: '<loopback>',
+  };
+  assert.equal(await launchHaBrowser(chromium, env), browser);
+  assert.deepEqual(calls, [
+    { endpoint: env.PW_TEST_CONNECT_WS_ENDPOINT, options: { timeout: 15_000, exposeNetwork: '<loopback>' } },
+  ]);
+  await assert.rejects(launchHaBrowser(chromium, { ...env, PW_TEST_CONNECT_EXPOSE_NETWORK: '*' }), /loopback/);
+  await assert.rejects(
+    launchHaBrowser(chromium, { ...env, PW_TEST_CONNECT_WS_ENDPOINT: 'ws://example.invalid/' }),
+    /loopback/,
+  );
+  assert.equal(calls.length, 1);
+  await assert.rejects(
+    launchHaBrowser(
+      { ...chromium, connect: async () => { throw Error('CI browser unavailable'); } },
+      env,
+    ),
+    /CI browser unavailable/,
+  );
+});
+
+test('local HA probes retain the configured host Chromium', async () => {
+  let options;
+  const browser = {};
+  const chromium = {
+    async launch(value) {
+      options = value;
+      return browser;
+    },
+    connect() {
+      assert.fail('A local probe must not connect to a CI browser');
+    },
+  };
+  assert.equal(await launchHaBrowser(chromium, { PLAYWRIGHT_EXECUTABLE_PATH: '/fixture/chromium' }), browser);
+  assert.deepEqual(options, { headless: true, executablePath: '/fixture/chromium' });
+});
 
 test('backend-only browser evidence retains web identity without weakening frontend replacement evidence', () => {
   const before = [{ metadata: { uid: 'old-web', labels: { 'app.kubernetes.io/component': 'web' } } }];

@@ -5,6 +5,19 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 
+/** Direct probes share the prepared CI browser with the Playwright runner. */
+export async function launchHaBrowser(chromium, env = process.env) {
+  if (env.PW_TEST_CONNECT_WS_ENDPOINT) {
+    if (
+      env.PW_TEST_CONNECT_WS_ENDPOINT !== 'ws://127.0.0.1:3100/' ||
+      env.PW_TEST_CONNECT_EXPOSE_NETWORK !== '<loopback>'
+    )
+      throw Error('The HA CI browser requires the exact loopback endpoint and loopback-only network exposure.');
+    return chromium.connect(env.PW_TEST_CONNECT_WS_ENDPOINT, { timeout: 15_000, exposeNetwork: '<loopback>' });
+  }
+  return chromium.launch({ headless: true, executablePath: env.PLAYWRIGHT_EXECUTABLE_PATH || undefined });
+}
+
 /** The global first page is continuously displaced by the traffic proof. Use
  * the real workflow selector, including in a retained predecessor/oldest UI. */
 export async function selectHaBrowserRecordingWorkflow(page, workflowName, expect) {
@@ -146,10 +159,7 @@ export async function startHaBrowserProbe(gate, baseUrl, rootDir, { build, label
   const { chromium, expect } = createRequire(path.join(rootDir, 'packages/studio-server-web/package.json'))(
     '@playwright/test',
   );
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined,
-  });
+  const browser = await launchHaBrowser(chromium);
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   await context.addInitScript(() =>
     localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: true })),

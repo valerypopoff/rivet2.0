@@ -19,6 +19,54 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+## Image-test browser setup repair: November 11, 2026
+
+[Build Images 43053444658](https://github.com/valerypopoff/rivet2.0/actions/runs/43053444658)
+built and scanned the runtime images, but the candidate-image rehearsal and full
+HA upgrade jobs failed before browser acceptance. Both still ran
+`playwright install --with-deps chromium` on the host. Their Ubuntu 26.04 runners
+could not resolve the Azure, archive or security Ubuntu mirrors; dependency
+installation spent about ten minutes retrying before exiting with code 100.
+The HA summary failure was downstream of the unrun upgrade proof, and image
+promotion correctly remained blocked. Build and Verify Studio Server on the
+corresponding `develop` revision had passed.
+
+These two jobs now use the same digest-pinned Playwright browser server as the
+editor shards. Prepare and verify it before candidate smoke work or Kind cluster
+creation, with a four-minute setup limit. Node, Docker, Helm and fixture servers
+stay on the runner; only Chromium runs in the browser container. Matching
+package/image versions, the read-only checkout, exact loopback control port,
+loopback-only fixture forwarding and ownership-checked cleanup remain required.
+Each job records its container ID before start and cleans only that exact owned
+container even after a test/setup failure. The non-browser HA scenarios do not
+start a browser container.
+
+The observer launcher skips local browser installation when a remote browser is
+configured, in both test and debug modes. A normal local observer retains its
+existing installation behavior. The direct HA browser probe connects to the
+prepared server as well; a failed remote connection must fail the proof rather
+than falling back to an unrelated host executable. Browser assertions, test
+retries, HA scenarios, image scans and promotion conditions are unchanged.
+
+The workflow guard covers all three prepared-browser jobs, including matching
+pins, setup ordering, no host package/browser installs, and cleanup. CLI
+regressions cover remote/local observer modes; HA probe regressions cover the
+remote connection, bounded loopback exposure, failure and local executable path.
+Validate the real connection and host-loopback fixtures in the exact pinned image
+before pushing a change to this setup. A registry failure can still stop image
+preparation; this removes the demonstrated Ubuntu package-mirror dependency.
+
+Local verification passed: the full root style and rollout-source gates, CI
+formatting, workflow contracts and compiled workspace-export checks; five
+focused browser regressions on native Linux; and four headless observer tests
+connected to the pinned browser. A direct HA-browser connection also verified
+host HTTP/API requests, WebSockets, streamed attachment downloads and video
+delivery. The restricted Windows source run could not confirm an unchanged
+backup fixture's child shutdown; the complete run with normal process permissions
+and the three corresponding native Linux shutdown cases passed. No shutdown or
+browser acceptance assertion was relaxed. Hosted image qualification still runs
+through the normal main-branch workflow after merging the repair.
+
 ## Develop CI repair: November 11, 2026
 
 Build passed for `54c429551`, but deployment contracts in
