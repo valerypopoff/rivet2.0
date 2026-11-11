@@ -24,7 +24,8 @@ ENV https_proxy=$https_proxy
 ENV all_proxy=$all_proxy
 ENV no_proxy=$no_proxy
 
-RUN apk add --no-cache git && \
+# Explicit floors refresh cached APK layers after Git security releases.
+RUN apk add --no-cache 'git>=2.54.1-r0' 'git-init-template>=2.54.1-r0' && \
     corepack enable && \
     corepack prepare pnpm@10.34.8 --activate
 
@@ -103,7 +104,7 @@ ENV https_proxy=$https_proxy
 ENV all_proxy=$all_proxy
 ENV no_proxy=$no_proxy
 
-RUN apk add --no-cache git 'libexpat>=2.10.0-r0' && \
+RUN apk add --no-cache 'git>=2.54.1-r0' 'git-init-template>=2.54.1-r0' 'libexpat>=2.10.0-r0' && \
     npm install -g npm@11.21.1 pnpm@10.34.8 && \
     npm install --prefix /tmp/rivet-npm-security --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact undici@6.29.1 && \
     rm -rf /usr/local/lib/node_modules/npm/node_modules/undici && \

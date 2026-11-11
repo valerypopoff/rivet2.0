@@ -1078,13 +1078,29 @@ for (const service of ['api', 'executor', 'web']) {
     assert.match(dockerfile, /COPY --link --from=runtime-dependencies --chown=10001:10001 \/ \//);
   }
 }
-assert.match(read('deploy/studio-server/images/api/Dockerfile'), /pnpm@10\.34\.8/);
+const apiDockerfile = read('deploy/studio-server/images/api/Dockerfile');
+assert.match(apiDockerfile, /pnpm@10\.34\.8/);
 const janitorDockerfile = read('deploy/studio-server/images/janitor/Dockerfile');
 const janitorBases = [...janitorDockerfile.matchAll(/^FROM (node:[^\s]+)/gm)];
 assert.ok(janitorBases.length && janitorBases.every((match) => match[1] === runtimeNodeImage));
 assert.match(janitorDockerfile, /USER 10001:10001/);
 assert.match(janitorDockerfile, /ws@8\.21\.0/);
 const actorDockerfile = read('deploy/studio-server/images/qualification/Dockerfile');
+const apiRuntimeStart = apiDockerfile.lastIndexOf('\nFROM ');
+for (const [label, stage] of [
+  ['API dependencies', apiDockerfile.slice(0, apiRuntimeStart)],
+  ['API runtime', apiDockerfile.slice(apiRuntimeStart)],
+  ['qualification toolchain', actorDockerfile.slice(0, actorDockerfile.indexOf('\nFROM qualification-toolchain'))],
+]) {
+  for (const packageName of ['git', 'git-init-template']) {
+    assert.ok(
+      stage
+        .match(/^RUN apk add --no-cache[^\n]*/gm)
+        ?.some((install) => install.includes(`'${packageName}>=2.54.1-r0'`)),
+      `${label}: require patched ${packageName} in its own APK layer; Docker caches unversioned installs.`,
+    );
+  }
+}
 assert.ok(actorDockerfile.includes(`FROM --platform=$BUILDPLATFORM ${esbuildCompilerImage} AS esbuild-security`));
 assert.ok(actorDockerfile.includes(`FROM ${runtimeNodeImage}`));
 assert.match(actorDockerfile, /apk add --no-cache[^\n]+'libxslt>=1\.1\.43-r4'/);
