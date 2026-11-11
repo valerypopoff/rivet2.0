@@ -91,23 +91,32 @@ test('image download fails immediately for deterministic or unknown errors', asy
   }
 });
 
-test('pull retries recognise the complete stderr from an actual failed command', async () => {
-  let calls = 0;
-  const result = await pullImageWithRetry(
-    'ghcr.io/example/web:fixture',
-    async () => {
-      calls++;
-      return runRehearsalCommand(
-        process.execPath,
-        [
-          '--eval',
-          calls === 1 ? "process.stderr.write('unexpected EOF'); process.exitCode = 1" : "console.log('downloaded')",
-        ],
-        process.env,
+test('pull retries recognise the complete stderr from an actual failed command', async (t) => {
+  for (const message of [
+    'unexpected EOF',
+    'failed to copy: unexpected status from GET request to https://registry-1.docker.io/v2/library/postgres/blobs/sha256:fixture: 502 Bad Gateway',
+  ]) {
+    await t.test(message, async () => {
+      let calls = 0;
+      const result = await pullImageWithRetry(
+        'ghcr.io/example/web:fixture',
+        async () => {
+          calls++;
+          return runRehearsalCommand(
+            process.execPath,
+            [
+              '--eval',
+              calls === 1
+                ? `process.stderr.write(${JSON.stringify(message)}); process.exitCode = 1`
+                : "console.log('downloaded')",
+            ],
+            process.env,
+          );
+        },
+        { wait: async () => {}, warn: () => {} },
       );
-    },
-    { wait: async () => {}, warn: () => {} },
-  );
-  assert.equal(calls, 2);
-  assert.match(result.output, /downloaded/);
+      assert.equal(calls, 2);
+      assert.match(result.output, /downloaded/);
+    });
+  }
 });

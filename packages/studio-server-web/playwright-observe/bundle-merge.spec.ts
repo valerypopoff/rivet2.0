@@ -141,13 +141,23 @@ async function select(page: Page, label: string | RegExp, option: string, sectio
 }
 
 async function expectModalInsets(modal: Locator) {
-  const bounds = (await modal.boundingBox())!;
-  const close = (await modal.getByRole('button', { name: 'Close bundle merge', exact: true }).boundingBox())!;
+  // Read one layout snapshot: the centered dialog can move between browser RPCs.
+  const { bounds, close, title, field, cancel } = await modal.evaluate((element) => {
+    const rect = (target: Element | null | undefined) => {
+      if (!target) throw new Error('A bundle merge layout element is missing.');
+      const { x, y, width, height } = target.getBoundingClientRect();
+      return { x, y, width, height };
+    };
+    return {
+      bounds: rect(element),
+      close: rect(element.querySelector('.project-settings-close-button')),
+      title: rect(element.querySelector('.project-settings-modal-title')),
+      field: rect(element.querySelector('label[for="bundle-merge-destination"]')),
+      cancel: rect([...element.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Cancel')),
+    };
+  });
   expect(Math.abs(close.x + close.width - bounds.x - bounds.width)).toBeLessThanOrEqual(2);
   expect(Math.abs(close.y - bounds.y)).toBeLessThanOrEqual(2);
-  const title = (await modal.locator('.project-settings-modal-title').boundingBox())!;
-  const field = (await modal.getByText('Destination bundle', { exact: true }).boundingBox())!;
-  const cancel = (await modal.getByRole('button', { name: 'Cancel', exact: true }).boundingBox())!;
   expect(title.x - bounds.x).toBeGreaterThanOrEqual(17);
   expect(title.x - bounds.x).toBeLessThanOrEqual(20);
   expect(Math.abs(title.x - field.x)).toBeLessThanOrEqual(1);

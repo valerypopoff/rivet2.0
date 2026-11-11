@@ -29,6 +29,33 @@ on Linux with Node 24. Run the temporary-staging timeout scenario against its
 owned loopback server. These checks need no cloud activation or application
 image rebuild.
 
+Later [verification 42934371949](https://github.com/valerypopoff/rivet2.0/actions/runs/42934371949)
+exposed two browser-lane issues. Bundle-merge inset checks read the modal and its
+children in separate browser calls while the centered dialog was moving. Measure
+all rectangles synchronously in one DOM snapshot; retain the existing two-pixel
+corner tolerance and content-alignment assertions rather than loosening them or
+adding a fixed sleep.
+
+The real cost-statistics fixture also encountered a Docker Hub HTTP502 downloading
+PostgreSQL inside `docker run`. Prepare missing fixture images first, using the
+existing read-only download policy (at most three attempts, with five- and
+15-second delays), then create each container once with `--pull=never`. Cached
+images do not require a registry request. The shared download policy recognizes
+the observed `502 Bad Gateway` alongside its existing transport errors; access,
+manifest, integrity, disk and unknown failures still stop immediately. Never
+retry container creation or deployment commands under this policy. Reproduce the
+download error with the subprocess regression and run the real PostgreSQL/MinIO
+cost-statistics browser journey before pushing.
+
+That run also exposed a torn simulated-clock read in the schema-maintenance
+recovery fixture. The CLI rewrote `clock-offset.json` while a management child
+was importing its preload, briefly exposing an empty file. Write the next clock
+snapshot to a sibling file and rename it atomically. The regression observes
+the clock exactly between truncation and writing: readers must retain the prior
+complete value until replacement. This changes only the test clock, preserving
+the production ownership, recovery and no-Helm-replay assertions. Run the focused
+`lostFinalApply` command test as well as the deterministic clock regression.
+
 ## Develop CI repair: November 9, 2026
 
 The first `8165d45f4` push failed before compilation on four independent gates:

@@ -68,7 +68,9 @@ if (process.env.RIVET_COMMAND_FIXTURE) {
     globalThis.setTimeout = (fn, delay, ...args) => {
       if (delay >= 500 && delay <= 1000) {
         offset += 5_000;
-        fs.writeFileSync(clockFile, JSON.stringify(offset));
+        const nextClockFile = `${clockFile}.${process.pid}.tmp`;
+        fs.writeFileSync(nextClockFile, JSON.stringify(offset), { flag: 'wx' });
+        fs.renameSync(nextClockFile, clockFile);
         for (const timer of intervals)
           if (timer.next <= Date.now()) {
             timer.next = Date.now() + timer.delay;

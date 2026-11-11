@@ -8,7 +8,8 @@ export async function pullImageWithRetry(image, pull, { wait = sleep, warn = con
       return await pull(image);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      const transient = /connection reset by peer|TLS handshake timeout|i\/o timeout|unexpected EOF/i.test(message);
+      const transient =
+        /connection reset by peer|TLS handshake timeout|i\/o timeout|unexpected EOF|\b502 Bad Gateway\b/i.test(message);
       const deterministic =
         /unauthorized|authentication required|access.*denied|manifest unknown|no matching manifest|invalid reference|digest mismatch|no space left/i.test(
           message,
