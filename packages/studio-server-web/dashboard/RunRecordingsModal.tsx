@@ -11,12 +11,13 @@ import { useRunRecordingsController } from './useRunRecordingsController';
 
 interface RunRecordingsModalProps {
   isOpen: boolean;
+  isRetained: boolean;
   resetToken: number;
   initialProject?: WorkflowProjectItem | null;
   onDismiss: () => void;
   onClose: () => void;
   onOpenRecording: (recordingId: string) => Promise<RecordingOpenResult>;
-  onFoundCountChange: (count: number) => void;
+  onFoundCountChange: (count: number | null) => void;
 }
 
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
@@ -47,6 +48,7 @@ function getWorkflowEndpoint(workflow: WorkflowRecordingWorkflowSummary): string
 
 export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   isOpen,
+  isRetained,
   resetToken: externalResetToken,
   initialProject = null,
   onDismiss,
@@ -62,6 +64,8 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
   const {
     workflows,
     workflowsLoading,
+    catalogError,
+    retryCatalog,
     runsLoading,
     error,
     selectedWorkflowId,
@@ -99,7 +103,7 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
     handleClearInputFilter,
     handleStopInputSearch,
     handleDeleteRecording,
-  } = useRunRecordingsController(isOpen, resetToken, initialProject);
+  } = useRunRecordingsController(isOpen || isRetained, resetToken, initialProject);
 
   const hierarchyScope = JSON.stringify([
     resetToken,
@@ -169,9 +173,11 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
           value: workflow.workflowId,
           description: workflow.latestRunAt
             ? `Last run ${formatTimestamp(workflow.latestRunAt)}`
-            : 'No recorded runs yet',
+            : allWorkflowsRunsCount === null
+              ? ''
+              : 'No recorded runs yet',
           endpoint,
-          recordingCount: workflow.totalRuns,
+          recordingCount: allWorkflowsRunsCount === null ? null : workflow.totalRuns,
           statusLabel,
         };
       }),
@@ -263,62 +269,65 @@ export const RunRecordingsModal: FC<RunRecordingsModalProps> = ({
                 </div>
               ))}
 
-              {workflowsLoading ? <div className="run-recordings-empty-state">Loading recordings...</div> : null}
+              <div className="run-recordings-layout">
+                <RecordingWorkflowSelect
+                  workflowOptions={workflowOptions}
+                  selectedWorkflowId={selectedWorkflowId}
+                  isLoading={workflowsLoading}
+                  error={catalogError}
+                  onRetry={retryCatalog}
+                  onSelectWorkflow={(workflowId) => {
+                    setSelectedWorkflowId(workflowId);
+                    setPage(1);
+                  }}
+                />
 
-              {!workflowsLoading ? (
-                <div className="run-recordings-layout">
-                  <RecordingWorkflowSelect
-                    workflowOptions={workflowOptions}
-                    selectedWorkflowId={selectedWorkflowId}
-                    onSelectWorkflow={(workflowId) => {
-                      setSelectedWorkflowId(workflowId);
-                      setPage(1);
+                {selectedWorkflow || !selectedWorkflowId ? (
+                  <RecordingRunsTable
+                    expandedFamilyKeys={expandedFamilyKeys}
+                    onToggleFamily={handleToggleFamily}
+                    childLoadStates={childLoadStates}
+                    selectedWorkflow={selectedWorkflow}
+                    selectedWorkflowEndpoint={selectedWorkflowEndpoint}
+                    selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}
+                    overallRunsCount={overallRunsCount}
+                    badRunsCount={badRunsCount}
+                    filteredRunsCount={filteredRunsCount}
+                    totalPages={totalPages}
+                    inputSearchStatus={inputSearchStatus}
+                    inputSearchProgress={inputSearchProgress}
+                    page={page}
+                    runsPerPage={runsPerPage}
+                    statusFilter={statusFilter}
+                    inputFilterVisible={inputFilterVisible}
+                    inputFilterPath={inputFilterPath}
+                    inputFilterOperator={inputFilterOperator}
+                    inputFilterValue={inputFilterValue}
+                    appliedInputFilter={appliedInputFilter}
+                    inputFilterError={inputFilterError}
+                    runsLoading={runsLoading}
+                    visibleRuns={visibleRuns}
+                    deletingRecordingId={deletingRecordingId}
+                    openingRecordingId={openingRecordingId}
+                    onSetStatusFilter={setStatusFilter}
+                    onSetInputFilterVisible={setInputFilterVisible}
+                    onSetInputFilterPath={setInputFilterPath}
+                    onSetInputFilterOperator={setInputFilterOperator}
+                    onSetInputFilterValue={setInputFilterValue}
+                    onApplyInputFilter={handleApplyInputFilter}
+                    onClearInputFilter={handleClearInputFilter}
+                    onStopInputSearch={handleStopInputSearch}
+                    onSetRunsPerPage={setRunsPerPage}
+                    onSetPage={setPage}
+                    onDeleteRecording={(recordingId) => {
+                      void handleDeleteRecording(recordingId);
+                    }}
+                    onOpenRecording={(recordingId) => {
+                      void handleOpenRecording(recordingId);
                     }}
                   />
-
-                  {selectedWorkflow || !selectedWorkflowId ? (
-                    <RecordingRunsTable
-                      expandedFamilyKeys={expandedFamilyKeys}
-                      onToggleFamily={handleToggleFamily}
-                      childLoadStates={childLoadStates}
-                      selectedWorkflow={selectedWorkflow}
-                      selectedWorkflowEndpoint={selectedWorkflowEndpoint}
-                      selectedWorkflowStatusLabel={selectedWorkflowStatusLabel}
-                      overallRunsCount={overallRunsCount}
-                      badRunsCount={badRunsCount}
-                      filteredRunsCount={filteredRunsCount}
-                      totalPages={totalPages}
-                      inputSearchStatus={inputSearchStatus}
-                      inputSearchProgress={inputSearchProgress}
-                      page={page}
-                      runsPerPage={runsPerPage}
-                      statusFilter={statusFilter}
-                      inputFilterVisible={inputFilterVisible}
-                      inputFilterPath={inputFilterPath}
-                      inputFilterOperator={inputFilterOperator}
-                      inputFilterValue={inputFilterValue}
-                      appliedInputFilter={appliedInputFilter}
-                      inputFilterError={inputFilterError}
-                      runsLoading={runsLoading}
-                      visibleRuns={visibleRuns}
-                      deletingRecordingId={deletingRecordingId}
-                      openingRecordingId={openingRecordingId}
-                      onSetStatusFilter={setStatusFilter}
-                      onSetInputFilterVisible={setInputFilterVisible}
-                      onSetInputFilterPath={setInputFilterPath}
-                      onSetInputFilterOperator={setInputFilterOperator}
-                      onSetInputFilterValue={setInputFilterValue}
-                      onApplyInputFilter={handleApplyInputFilter}
-                      onClearInputFilter={handleClearInputFilter}
-                      onStopInputSearch={handleStopInputSearch}
-                      onSetRunsPerPage={setRunsPerPage}
-                      onSetPage={setPage}
-                      onDeleteRecording={handleDeleteRecording}
-                      onOpenRecording={handleOpenRecording}
-                    />
-                  ) : null}
-                </div>
-              ) : null}
+                ) : null}
+              </div>
             </div>
           </div>
         </ModalBody>

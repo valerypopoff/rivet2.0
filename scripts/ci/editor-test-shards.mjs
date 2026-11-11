@@ -40,6 +40,8 @@ const weightedSpecs = [
   ['wire-viewport-culling.spec.ts', 25],
   ['tunnel-cache-retention.spec.ts', 1],
   ['run-statistics-modal.spec.ts', 15],
+  // Full headless local recordings suite, including asynchronous opening/replay.
+  ['run-recordings-modal.spec.ts', 400],
   // Debug node discovery, output labels, icons and documentation links.
   ['graph-call-path-node.spec.ts', 15],
   // Real local PostgreSQL/MinIO + provider HTTP, including cancellation settlement.

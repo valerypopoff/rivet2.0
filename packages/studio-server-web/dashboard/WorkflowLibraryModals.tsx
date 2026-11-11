@@ -11,7 +11,7 @@ import { WorkflowBundleConversionErrorModal } from './WorkflowBundleConversionEr
 import { WorkflowBundleDeleteModal } from './WorkflowBundleDeleteModal';
 import { WorkflowBundleMergeModal } from './WorkflowBundleMergeModal';
 import type { HostedRouteConfig } from './types';
-import { useWorkflowLibraryController } from './useWorkflowLibraryController';
+import type { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
 type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>;
 
@@ -49,6 +49,7 @@ export const WorkflowLibraryModals: FC<{
     handlePublishedVersionRestored,
     onDeleteProject,
     runRecordingsOpen,
+    runRecordingsRetained,
     runRecordingsResetToken,
     runRecordingsInitialProject,
     hideRunRecordingsModal,
@@ -148,12 +149,15 @@ export const WorkflowLibraryModals: FC<{
           onDeleteProject={onDeleteProject}
           onPreviewPublishedVersion={onOpenPublishedVersionPreview}
           onPublishedVersionRestored={handlePublishedVersionRestored}
-          onOpenRecording={onOpenRecording}
+          onOpenRecording={(recordingId) => {
+            void onOpenRecording(recordingId);
+          }}
           routeConfig={routeConfig}
         />
       ) : null}
       <RunRecordingsModal
         isOpen={runRecordingsOpen}
+        isRetained={runRecordingsRetained}
         resetToken={runRecordingsResetToken}
         initialProject={runRecordingsInitialProject}
         onDismiss={hideRunRecordingsModal}

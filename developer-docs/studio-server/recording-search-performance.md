@@ -198,10 +198,100 @@ previous success file cannot fail a valid rerun or masquerade as fresh evidence.
 
 ## All-workflow scope
 
+### Immediate modal interaction (November 12, 2026)
+
+The modal renders its Project picker and filter controls without waiting for the
+recordings catalog or the first unfiltered page. Any and a project supplied by
+**Inspect recordings** are usable immediately; remaining project choices still
+arrive with the existing catalog response. The Project picker stays searchable
+while loading and after the options arrive, preserving typed text and focus
+instead of replacing its input when the option count changes. Applying an input
+filter supersedes the pending unfiltered page. The existing API contracts, SQL queries, storage
+schemas, indexes and input-search batching are unchanged.
+
+The controller initializes its reset generation and starting project before
+issuing either request. A fresh closed modal performs no recordings reads. The
+existing open/retained state owns the session: temporary dismissal preserves its
+requests and results, whereas explicit close discards it. Catalog completion and
+retry do not restart results requests or erase input edits. Catalog errors have
+a local retry action and cannot disable an independent search. All catalog
+loads, including deletion refreshes, use the same cancellation/stale-response
+guard; a confirmed deletion invalidates an older opening snapshot before
+refreshing counts.
+
+Unavailable totals are `null` in the browser, not invented zero counts. The
+picker shows a pending/unavailable count, the heading omits an unknown total,
+and input progress reports the known analyzed count without a percentage until
+the response establishes a denominator. Legacy responses lacking both counts
+and cumulative analysis retain this unknown state even on completion. Real
+zero counts remain zero. Catalog recording counts, family pagination totals,
+and root-only input-search counts retain their separate meanings.
+
+Applying during an initial read does not weaken guards around active searches,
+deletion or replay opening. Browser cancellation stops subsequent reads and
+ignores stale results; it does not promise to interrupt a PostgreSQL statement
+already executing. Direct searches can initialize the existing extraction
+worker lazily before the catalog's optional warmup finishes. No recording
+artifacts are prefetched when opening the modal.
+
+The browser regression fixture holds both catalog and initial browsing responses
+and requires a filtered result while they remain pending. It also covers unknown
+progress, catalog error/retry, late catalog arrival after deletion, closed-session
+idleness, retained reopening, typing a project query before a larger catalog
+arrives, project-specific initialization, and deleting an inspected project's
+final recording. The timing fixture independently delays
+catalog and unfiltered reads by five seconds and records controls, Apply and
+filtered-result latency as an attachment. It separately measures retained
+reopening, verifies the filter/results survive, and requires no additional catalog
+or run request. Catalog arrival uses browser resource timing rather than a pending
+response promise that could outlive a failed test. The timing check waits for the
+browser timing entry and the picker to finish loading before checking request
+counts; mock-handler completion alone does not prove browser delivery. There is
+no flaky wall-clock CI limit.
+The full modal spec is part of the normal weighted editor CI shards, so these
+regressions run against the built application before release.
+Its isolated fixture reuses the shared hosted-editor bootstrap and supplies idle
+tree/evaluation streams, disabled local-upgrade setup, empty model choices and an
+empty schedule summary. The startup regression rejects unmatched API requests rather than
+letting tests read an ambient server or provider credentials.
+These timings measure browser/request sequencing, not real PostgreSQL query time
+or cold-worker extraction cost. Server-query changes remain a separate measured
+follow-up if project-choice or data latency still requires them.
+
+The matched local delayed-response fixture measured 5.54 seconds to open filters
+and 10.66 seconds to filtered results before this change. Three final runs measured
+medians of 1.44 and 1.95 seconds respectively; the catalog response still arrived
+at 5.19 seconds. These include Playwright interaction and modal animation time.
+They demonstrate removal of the blocking dependency, not faster database queries
+or a verified sub-half-second/production latency guarantee.
+
+Three follow-up runs measured retained controls at a median of 71 ms and retained
+results at 86 ms, with no new requests. A separate 100-recording loopback benchmark
+using the compiled extraction worker measured the first cold result at 384 ms
+and the warm result at 3 ms; worker startup alone was 312 ms. The nine compiled
+worker regressions passed, including a search sharing an immediately prepared
+worker and recovering when optional preparation fails. These worker measurements
+use synthetic local artifacts and SQLite; they are separate from the browser
+timings and do not measure production PostgreSQL/object-storage contention.
+
+Local validation passed the complete 88-case Run recordings browser suite against
+the production build using the CI configuration, including the late-arriving
+picker regression and delayed-startup measurement. All 275 web package tests,
+root style checks, editor-shard contracts, the production web build, targeted
+lint, formatting, test style and documentation links passed. A broad
+strict web typecheck still reports 53 pre-existing diagnostics; comparison against
+the unchanged source finds no new diagnostics. This was local validation only;
+no database change, cloud test or production rollout was performed.
+The Windows run needed its remaining preview processes stopped after all browser
+assertions finished; the test command then exited successfully. Hosted Linux CI
+remains the release gate for the committed revision.
+
 The icon-only **Refresh run recordings** button follows the modal title. It starts
-a new controller reset generation, using the same initial state as an explicit
-close/reopen: Any workflow, All outcomes, page 1, 20 roots per page, no input filter
-and collapsed families. The dialog and backdrop remain mounted, so refresh does
+a new controller reset generation: Any for an ordinary footer session, or the
+inspected project for a project-context session; All outcomes, page 1, 20 top-level
+families per page, no input filter and collapsed families. Explicit close clears
+the inspected project, so a subsequent ordinary opening uses Any. The dialog and
+backdrop remain mounted, so refresh does
 not restart their opening animations or lose focus. Resetting cancels the old
 catalog/run/search/child requests and fences late results, including a refresh
 during initial loading; the catalog effect depends explicitly on this generation.

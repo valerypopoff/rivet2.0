@@ -408,10 +408,14 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses three required matrix shards, each running two independent
-  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 32
+  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 37
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
+  The complete Run recordings modal suite is also registered, including immediate
+  opening, independent catalog/results, retained sessions, deletion and replay.
+  Its initial weight comes from the roughly 400-second local headless run; update
+  it from hosted timings rather than dropping cases to shorten a shard.
   Their inclusion is asserted by the shard regression. These weights balance work,
   not predict hosted wall time. Serial tests
   within each file, test-owned contexts/mocks/temporary paths, assertions and

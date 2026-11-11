@@ -416,12 +416,12 @@ type RecordingRunsTableProps = {
   selectedWorkflow: WorkflowRecordingWorkflowSummary | null;
   selectedWorkflowEndpoint: string;
   selectedWorkflowStatusLabel: string;
-  overallRunsCount: number;
-  badRunsCount: number;
-  filteredRunsCount: number;
+  overallRunsCount: number | null;
+  badRunsCount: number | null;
+  filteredRunsCount: number | null;
   totalPages: number;
   inputSearchStatus: 'idle' | 'searching' | 'complete' | 'stopped';
-  inputSearchProgress: { analyzedRuns: number; availableRuns: number } | null;
+  inputSearchProgress: { analyzedRuns: number; availableRuns: number | null } | null;
   page: number;
   runsPerPage: number;
   statusFilter: WorkflowRecordingFilterStatus;
@@ -489,8 +489,9 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
   onOpenRecording,
 }) => {
   const [inputPathHistory, setInputPathHistory] = useState(() => readInputPathHistory());
-  const allRunsLabel = overallRunsCount > 0 ? `All (${overallRunsCount})` : 'All';
-  const badRunsLabel = badRunsCount > 0 ? `Bad only (${badRunsCount})` : 'Bad only';
+  const allRunsLabel = overallRunsCount !== null && overallRunsCount > 0 ? `All (${overallRunsCount})` : 'All';
+  const badRunsLabel = badRunsCount !== null && badRunsCount > 0 ? `Bad only (${badRunsCount})` : 'Bad only';
+  const canApplyInputFilter = !deletingRecordingId && !openingRecordingId && !(runsLoading && appliedInputFilter);
   const valueInputDisabled = inputFilterOperator === 'exists' || inputFilterOperator === 'not_exists';
   const selectedInputFilterOperator =
     inputFilterOperatorOptions.find((option) => option.value === inputFilterOperator) ?? inputFilterOperatorOptions[0]!;
@@ -505,15 +506,20 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
         : inputSearchStatus === 'stopped'
           ? `Search stopped, ${inputSearchFoundLabel}`
           : '';
-  const inputSearchProgressPercent = inputSearchProgress
-    ? inputSearchProgress.availableRuns === 0
-      ? 100
-      : Math.round(Math.min(1, Math.max(0, inputSearchProgress.analyzedRuns / inputSearchProgress.availableRuns)) * 100)
-    : null;
+  const inputSearchProgressPercent =
+    inputSearchProgress && inputSearchProgress.availableRuns !== null
+      ? inputSearchProgress.availableRuns === 0
+        ? 100
+        : Math.round(
+            Math.min(1, Math.max(0, inputSearchProgress.analyzedRuns / inputSearchProgress.availableRuns)) * 100,
+          )
+      : null;
   const inputSearchProgressLabel = inputSearchProgress
-    ? inputSearchProgress.availableRuns === 0
-      ? 'No available runs to analyze (100%)'
-      : `Analyzed ${inputSearchProgress.analyzedRuns} of ${inputSearchProgress.availableRuns} available runs (${inputSearchProgressPercent}%)`
+    ? inputSearchProgress.availableRuns === null
+      ? `Analyzed ${inputSearchProgress.analyzedRuns} runs; total not yet available`
+      : inputSearchProgress.availableRuns === 0
+        ? 'No available runs to analyze (100%)'
+        : `Analyzed ${inputSearchProgress.analyzedRuns} of ${inputSearchProgress.availableRuns} available runs (${inputSearchProgressPercent}%)`
     : null;
 
   return (
@@ -548,7 +554,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
         <div className="run-recordings-runs-header">
           <div className="run-recordings-runs-heading-group">
             <div className="run-recordings-runs-title">
-              {overallRunsCount} {overallRunsCount === 1 ? 'Run' : 'Runs'}
+              {overallRunsCount === null ? 'Runs' : `${overallRunsCount} ${overallRunsCount === 1 ? 'Run' : 'Runs'}`}
             </div>
             <SegmentedControl label="Filter runs">
               <SegmentedControlButton
@@ -606,6 +612,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             className="run-recordings-input-filter"
             onSubmit={(event) => {
               event.preventDefault();
+              if (!canApplyInputFilter) return;
               if (onApplyInputFilter()) {
                 setInputPathHistory(rememberInputPath(inputFilterPath));
               }
@@ -650,7 +657,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             </label>
 
             <div className="run-recordings-input-filter-actions">
-              <button type="submit" className="run-recordings-filter-apply-button" disabled={runsLoading}>
+              <button type="submit" className="run-recordings-filter-apply-button" disabled={!canApplyInputFilter}>
                 Apply
               </button>
               <button
@@ -673,25 +680,27 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
                   ) : null}
                   {inputSearchMessage}
                 </span>
-                {inputSearchProgressLabel && inputSearchProgressPercent != null ? (
+                {inputSearchProgressLabel ? (
                   <div className="run-recordings-input-search-progress">
                     <span>{inputSearchProgressLabel}</span>
-                    <div
-                      className="run-recordings-input-search-progress-track"
-                      role="progressbar"
-                      aria-label="Input search progress"
-                      aria-valuemin={0}
-                      aria-valuemax={Math.max(inputSearchProgress?.availableRuns ?? 0, 1)}
-                      aria-valuenow={
-                        inputSearchProgress?.availableRuns === 0 ? 1 : inputSearchProgress?.analyzedRuns ?? 0
-                      }
-                      aria-valuetext={inputSearchProgressLabel}
-                    >
-                      <span
-                        className="run-recordings-input-search-progress-fill"
-                        style={{ width: `${inputSearchProgressPercent}%` }}
-                      />
-                    </div>
+                    {inputSearchProgressPercent !== null ? (
+                      <div
+                        className="run-recordings-input-search-progress-track"
+                        role="progressbar"
+                        aria-label="Input search progress"
+                        aria-valuemin={0}
+                        aria-valuemax={Math.max(inputSearchProgress?.availableRuns ?? 0, 1)}
+                        aria-valuenow={
+                          inputSearchProgress?.availableRuns === 0 ? 1 : inputSearchProgress?.analyzedRuns ?? 0
+                        }
+                        aria-valuetext={inputSearchProgressLabel}
+                      >
+                        <span
+                          className="run-recordings-input-search-progress-fill"
+                          style={{ width: `${inputSearchProgressPercent}%` }}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {inputSearchStatus === 'searching' ? (
@@ -709,6 +718,8 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
             <div className="run-recordings-empty-group">
               {appliedInputFilter ? 'Searching for matching runs...' : 'Loading runs...'}
             </div>
+          ) : filteredRunsCount === null ? (
+            <div className="run-recordings-empty-group">Run history is unavailable.</div>
           ) : filteredRunsCount === 0 ? (
             <div className="run-recordings-empty-group">
               {appliedInputFilter
@@ -742,7 +753,7 @@ export const RecordingRunsTable: FC<RecordingRunsTableProps> = ({
           )}
         </div>
 
-        {!appliedInputFilter && filteredRunsCount > 0 && totalPages > 1 ? (
+        {!appliedInputFilter && filteredRunsCount !== null && filteredRunsCount > 0 && totalPages > 1 ? (
           <div className="run-recordings-pagination-footer">
             <button
               type="button"

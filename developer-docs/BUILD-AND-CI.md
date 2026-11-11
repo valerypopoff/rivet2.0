@@ -2134,6 +2134,28 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared release versions (2026-11-12)
+
+Reviewing changes since `54c429551`, through `e2c1fa42f` and the accompanying
+recordings UI/CI fixes, prepares Studio Server `1.37.1`:
+
+| Release track                                  | Version             | Reason                                                                                                                                                                     |
+| ---------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Five private Studio Server packages            | `1.37.0` → `1.37.1` | Compatible recording-search performance, metadata/pool fixes and immediate modal filtering. API/Web changed; Bootstrap/Executor/Shared remain required product companions. |
+| Desktop, public npm family, App Executor, Docs | Unchanged           | No package-local changes since their actual previous version bumps.                                                                                                        |
+
+The [package matrix](PACKAGES.md#version-update-2026-11-12--recording-search-and-modal-responsiveness)
+records each unchanged track explicitly. The Studio Server manifests remain
+lockstep; desktop Tauri/Cargo and the public CLI Docker fallback remain aligned
+with their unchanged owners. No dependency, schema, chart or storage change is
+part of this version preparation.
+
+Validate with `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+`yarn check:pnp:fresh`, `yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. Reuse the passed application regressions
+for unchanged code and check the rebuilt versioned frontend locally. Image
+qualification and deployment remain separate release steps.
+
 ### Prepared release versions (2026-11-11)
 
 The latest actual version change for App, the public runtime family, App Executor
