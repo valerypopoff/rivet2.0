@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+// test-style: fixture-read: Read only generated clock snapshots in the owned temporary fixture directory.
 test('deployment fixture clock readers retain a complete snapshot while the next value is written', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-fixture-clock-'));
   t.after(async () => {

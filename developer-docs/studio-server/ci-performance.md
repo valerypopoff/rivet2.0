@@ -55,6 +55,9 @@ the clock exactly between truncation and writing: readers must retain the prior
 complete value until replacement. This changes only the test clock, preserving
 the production ownership, recovery and no-Helm-replay assertions. Run the focused
 `lostFinalApply` command test as well as the deterministic clock regression.
+Declare the regression's generated clock reads with `test-style: fixture-read`;
+they do not inspect authored source. Run the root `yarn test:style` lane as well
+as `studio-server:verify:test-style`, which is a separate deployment-test check.
 
 ## Develop CI repair: November 9, 2026
 
