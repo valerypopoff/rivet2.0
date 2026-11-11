@@ -23,7 +23,7 @@ type InputSearchStatus = 'idle' | 'searching' | 'complete' | 'stopped';
 
 type InputSearchProgress = {
   analyzedRuns: number;
-  availableRuns: number;
+  availableRuns: number | null;
 };
 
 function countsAfterDeletingRun<T extends WorkflowRecordingCounts>(counts: T, run: WorkflowRecordingRunSummary): T {
@@ -39,10 +39,11 @@ function getAvailableInputSearchRuns(
   response: WorkflowRecordingWorkflowListResponse | null,
   workflowId: string,
   statusFilter: WorkflowRecordingFilterStatus,
-): number {
+): number | null {
+  if (!response) return null;
   const counts = workflowId
-    ? response?.workflows.find((workflow) => workflow.workflowId === workflowId)
-    : response?.totals ?? sumWorkflowRecordingCounts(response?.workflows ?? []);
+    ? response.workflows.find((workflow) => workflow.workflowId === workflowId)
+    : response.totals ?? sumWorkflowRecordingCounts(response.workflows);
   if (!counts) return 0;
   return statusFilter === 'failed' ? counts.failedRuns + counts.suspiciousRuns : counts.totalRuns;
 }
@@ -52,35 +53,43 @@ function getNextInputSearchProgress(
   response: WorkflowRecordingRunsPageResponse,
 ): InputSearchProgress {
   const responseAnalyzedRuns = response.inputSearchAnalyzedRuns ?? response.nextInputCursor;
+  const availableRuns = response.scopeCounts
+    ? response.statusFilter === 'failed'
+      ? response.scopeCounts.failedRuns + response.scopeCounts.suspiciousRuns
+      : response.scopeCounts.totalRuns
+    : currentProgress.availableRuns;
   const analyzedRuns = Math.max(
     currentProgress.analyzedRuns,
-    responseAnalyzedRuns ?? (response.hasMore ? currentProgress.analyzedRuns : currentProgress.availableRuns),
+    responseAnalyzedRuns ??
+      (response.hasMore ? currentProgress.analyzedRuns : availableRuns ?? currentProgress.analyzedRuns),
   );
 
   return {
     // Catalog counts are an estimate, not a frozen search snapshot. Use the
     // scanner's cumulative count once it reaches the end of its keyset.
     availableRuns: response.hasMore
-      ? Math.max(
-          response.scopeCounts
-            ? response.statusFilter === 'failed'
-              ? response.scopeCounts.failedRuns + response.scopeCounts.suspiciousRuns
-              : response.scopeCounts.totalRuns
-            : currentProgress.availableRuns,
-          analyzedRuns,
-        )
-      : analyzedRuns,
+      ? availableRuns === null
+        ? null
+        : Math.max(availableRuns, analyzedRuns)
+      : responseAnalyzedRuns !== undefined || availableRuns !== null
+        ? analyzedRuns
+        : null,
     analyzedRuns,
   };
 }
 
 export function useRunRecordingsController(
-  isOpen: boolean,
+  sessionActive: boolean,
   resetToken: number | string = 0,
   initialProject: WorkflowProjectItem | null = null,
 ) {
+  const initialProjectId = initialProject?.id ?? '';
+  const sessionKey = JSON.stringify([resetToken, initialProjectId]);
+  const [initializedSessionKey, setInitializedSessionKey] = useState<string | null>(null);
+  const sessionReady = initializedSessionKey === sessionKey;
   const [workflowsResponse, setWorkflowsResponse] = useState<WorkflowRecordingWorkflowListResponse | null>(null);
   const [workflowsLoading, setWorkflowsLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [runsLoading, setRunsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState('');
@@ -109,11 +118,42 @@ export function useRunRecordingsController(
   const workflowsRef = useRef<WorkflowRecordingWorkflowListResponse | null>(null);
   const runsRequestVersionRef = useRef(0);
   const deletionRequestRef = useRef<object | null>(null);
+  const catalogAbortControllerRef = useRef<AbortController | null>(null);
 
+  const abortCatalog = useCallback(() => {
+    catalogAbortControllerRef.current?.abort();
+    catalogAbortControllerRef.current = null;
+  }, []);
   const loadWorkflowRecordingWorkflows = useCallback(
-    (signal?: AbortSignal) => fetchWorkflowRecordingWorkflows({ signal }),
-    [],
+    async (reportError = true) => {
+      abortCatalog();
+      const controller = new AbortController();
+      catalogAbortControllerRef.current = controller;
+      const isCurrent = () => !controller.signal.aborted && catalogAbortControllerRef.current === controller;
+      setWorkflowsLoading(true);
+      setCatalogError(null);
+      try {
+        const response = await fetchWorkflowRecordingWorkflows({ signal: controller.signal });
+        if (!isCurrent()) return null;
+        workflowsRef.current = response;
+        setWorkflowsResponse(response);
+        return response;
+      } catch (err) {
+        if (!isCurrent()) return null;
+        if (reportError) setCatalogError(err instanceof Error ? err.message : String(err));
+        throw err;
+      } finally {
+        if (isCurrent()) {
+          setWorkflowsLoading(false);
+          catalogAbortControllerRef.current = null;
+        }
+      }
+    },
+    [abortCatalog],
   );
+  const retryCatalog = useCallback(() => {
+    void loadWorkflowRecordingWorkflows().catch(() => {});
+  }, [loadWorkflowRecordingWorkflows]);
   const loadWorkflowRecordingRunsPage = useCallback(
     (
       workflowId: string,
@@ -136,12 +176,14 @@ export function useRunRecordingsController(
 
   const resetSessionState = useCallback(() => {
     abortInputSearch();
+    abortCatalog();
     runsRequestVersionRef.current++;
     deletionRequestRef.current = null;
-    setSelectedWorkflowId(initialProject?.id ?? '');
+    setSelectedWorkflowId(initialProjectId);
     setRunsPage(null);
     setRelatedCounts(null);
     setError(null);
+    setCatalogError(null);
     setPage(1);
     setRunsPerPage(20);
     setStatusFilter('all');
@@ -156,63 +198,42 @@ export function useRunRecordingsController(
     setInputFilterError(null);
     setRunsLoading(false);
     setWorkflowsResponse(null);
+    workflowsRef.current = null;
     setWorkflowsLoading(true);
     setDeletingRecordingId(null);
-  }, [abortInputSearch, initialProject]);
+    setInitializedSessionKey(sessionKey);
+  }, [abortInputSearch, abortCatalog, initialProjectId, sessionKey]);
 
   useEffect(() => {
     resetSessionState();
-  }, [resetSessionState, resetToken]);
+  }, [resetSessionState]);
 
   useEffect(() => {
-    if (!isOpen || workflowsResponse) {
-      return;
-    }
-
-    let cancelled = false;
-    const abortController = new AbortController();
-    setError(null);
-    setWorkflowsLoading(true);
-
-    void loadWorkflowRecordingWorkflows(abortController.signal)
-      .then((response) => {
-        if (!cancelled) {
-          setWorkflowsResponse(response);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled && !abortController.signal.aborted) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setWorkflowsLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      abortController.abort();
-    };
-  }, [isOpen, loadWorkflowRecordingWorkflows, resetToken, workflowsResponse]);
+    if (!sessionActive || !sessionReady) return;
+    void loadWorkflowRecordingWorkflows().catch(() => {});
+    return abortCatalog;
+  }, [sessionActive, sessionReady, sessionKey, loadWorkflowRecordingWorkflows, abortCatalog]);
 
   const workflows = useMemo(() => {
-    const catalog = workflowsResponse?.workflows ?? [];
+    const catalog = sessionReady ? workflowsResponse?.workflows ?? [] : [];
     if (!initialProject || catalog.some((workflow) => workflow.workflowId === initialProject.id)) return catalog;
     return [
       ...catalog,
       { workflowId: initialProject.id, project: initialProject, totalRuns: 0, failedRuns: 0, suspiciousRuns: 0 },
     ];
-  }, [initialProject, workflowsResponse]);
-  const workflowsReady = workflowsResponse !== null;
+  }, [initialProject, workflowsResponse, sessionReady]);
 
   useEffect(() => {
-    if (selectedWorkflowId && !workflows.some((workflow) => workflow.workflowId === selectedWorkflowId)) {
+    if (
+      sessionReady &&
+      workflowsResponse &&
+      selectedWorkflowId &&
+      !workflows.some((workflow) => workflow.workflowId === selectedWorkflowId)
+    ) {
       setSelectedWorkflowId('');
       setPage(1);
     }
-  }, [selectedWorkflowId, workflows]);
+  }, [selectedWorkflowId, workflows, sessionReady, workflowsResponse]);
 
   const selectedWorkflow = useMemo(
     () => workflows.find((workflow) => workflow.workflowId === selectedWorkflowId) ?? null,
@@ -224,6 +245,7 @@ export function useRunRecordingsController(
   }, [workflowsResponse]);
 
   useEffect(() => {
+    if (!sessionActive || !sessionReady) return;
     const requestVersion = ++runsRequestVersionRef.current;
     for (const request of childRequestsRef.current.values()) request.abort();
     childRequestsRef.current.clear();
@@ -233,11 +255,6 @@ export function useRunRecordingsController(
     setRelatedCounts(null);
     deletionRequestRef.current = null;
     setDeletingRecordingId(null);
-    if (!workflowsReady) {
-      setInputSearchProgress(null);
-      return;
-    }
-
     let cancelled = false;
     const abortController = new AbortController();
     inputSearchAbortControllerRef.current = appliedInputFilter ? abortController : null;
@@ -371,7 +388,9 @@ export function useRunRecordingsController(
     runsPerPage,
     selectedWorkflowId,
     statusFilter,
-    workflowsReady,
+    sessionActive,
+    sessionReady,
+    sessionKey,
   ]);
 
   const allWorkflowsRunsCount = getAvailableInputSearchRuns(workflowsResponse, '', 'all');
@@ -388,10 +407,8 @@ export function useRunRecordingsController(
     : getAvailableInputSearchRuns(workflowsResponse, selectedWorkflowId, 'failed');
   const primaryRuns = appliedInputFilter ? inputFilterRuns : runsPage?.runs ?? [];
   const visibleRuns = [...primaryRuns, ...subRuns];
-  const filteredRunsCount = appliedInputFilter
-    ? inputFilterRuns.length
-    : runsPage?.totalRuns ?? (statusFilter === 'failed' ? badRunsCount : overallRunsCount);
-  const totalPages = appliedInputFilter ? 1 : Math.max(1, Math.ceil(filteredRunsCount / runsPerPage));
+  const filteredRunsCount = appliedInputFilter ? inputFilterRuns.length : runsPage?.totalRuns ?? null;
+  const totalPages = appliedInputFilter ? 1 : Math.max(1, Math.ceil((filteredRunsCount ?? 0) / runsPerPage));
 
   const handleLoadSubRuns = useCallback(
     async (key: string) => {
@@ -495,6 +512,7 @@ export function useRunRecordingsController(
   }, [appliedInputFilter, page, runsLoading, runsPage, totalPages]);
 
   const handleApplyInputFilter = useCallback(() => {
+    if (!sessionActive || !sessionReady || deletingRecordingId || inputSearchStatus === 'searching') return false;
     const path = inputFilterPath.trim();
     if (!path.startsWith('$')) {
       setInputFilterError('JSON path must start with $');
@@ -512,7 +530,15 @@ export function useRunRecordingsController(
     setInputSearchProgress(null);
     setPage(1);
     return true;
-  }, [inputFilterOperator, inputFilterPath, inputFilterValue]);
+  }, [
+    inputFilterOperator,
+    inputFilterPath,
+    inputFilterValue,
+    sessionActive,
+    sessionReady,
+    deletingRecordingId,
+    inputSearchStatus,
+  ]);
 
   const handleClearInputFilter = useCallback(() => {
     abortInputSearch();
@@ -587,6 +613,8 @@ export function useRunRecordingsController(
         await deleteWorkflowRecordingRequest(recordingId);
         deleted = true;
         if (!isCurrent()) return;
+        // An opening catalog snapshot may predate this committed deletion.
+        abortCatalog();
         // The mutation already committed, even if refreshing metadata later fails.
         setInputFilterRuns((currentRuns) => currentRuns.filter((run) => run.id !== recordingId));
         setChildLoadErrors((errors) => {
@@ -651,16 +679,17 @@ export function useRunRecordingsController(
           setRelatedCounts(null);
         }
 
-        const nextWorkflowsResponse = await loadWorkflowRecordingWorkflows();
-        if (!isCurrent()) return;
-        setWorkflowsResponse(nextWorkflowsResponse);
+        const nextWorkflowsResponse = await loadWorkflowRecordingWorkflows(false);
+        if (!isCurrent() || !nextWorkflowsResponse) return;
 
         const refreshedWorkflow =
           nextWorkflowsResponse.workflows.find((workflow) => workflow.workflowId === currentWorkflowId) ?? null;
         if (currentWorkflowId && !refreshedWorkflow) {
           setRunsPage(null);
           setInputFilterRuns([]);
-          return;
+          // Ordinary selections fall back to Any. An explicitly inspected
+          // project stays selected, so reload its now-empty history normally.
+          if (currentWorkflowId !== initialProjectId) return;
         }
 
         if (currentInputFilter) {
@@ -710,36 +739,42 @@ export function useRunRecordingsController(
       inputSearchStatus,
       visibleRuns,
       abortInputSearch,
+      abortCatalog,
+      initialProjectId,
     ],
   );
 
   return {
     workflows,
-    workflowsLoading,
-    runsLoading,
-    error,
-    selectedWorkflowId,
-    selectedWorkflow,
+    workflowsLoading: !sessionReady || workflowsLoading,
+    catalogError: sessionReady ? catalogError : null,
+    retryCatalog,
+    runsLoading: !sessionReady || runsLoading || (sessionActive && !appliedInputFilter && !runsPage && !error),
+    error: sessionReady ? error : null,
+    selectedWorkflowId: sessionReady ? selectedWorkflowId : initialProjectId,
+    selectedWorkflow: sessionReady
+      ? selectedWorkflow
+      : workflows.find((workflow) => workflow.workflowId === initialProjectId) ?? null,
     runsPerPage,
     page,
     statusFilter,
-    inputFilterVisible,
+    inputFilterVisible: sessionReady && inputFilterVisible,
     inputFilterPath,
     inputFilterOperator,
     inputFilterValue,
     appliedInputFilter,
     inputFilterError,
     deletingRecordingId,
-    overallRunsCount,
-    allWorkflowsRunsCount,
-    badRunsCount,
-    filteredRunsCount,
+    overallRunsCount: sessionReady ? overallRunsCount : null,
+    allWorkflowsRunsCount: sessionReady ? allWorkflowsRunsCount : null,
+    badRunsCount: sessionReady ? badRunsCount : null,
+    filteredRunsCount: sessionReady ? filteredRunsCount : null,
     totalPages,
     inputSearchStatus,
     inputSearchProgress,
-    visibleRuns,
+    visibleRuns: sessionReady ? visibleRuns : [],
     childLoadStates,
-    childLoadErrors,
+    childLoadErrors: sessionReady ? childLoadErrors : {},
     handleLoadSubRuns,
     setSelectedWorkflowId,
     setRunsPerPage,

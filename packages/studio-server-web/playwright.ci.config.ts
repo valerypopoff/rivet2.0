@@ -19,8 +19,8 @@ export default defineConfig({
     timeout: 20_000,
   },
   fullyParallel: false,
-  // Files own browser contexts, mocked APIs and temporary artifacts. Preserve
-  // serial scenarios within each file; use two independent files per runner.
+  // Preserve serial scenarios by default. Independently isolated suites, such
+  // as Run recordings, opt into parallel cases to keep both workers occupied.
   workers: 2,
   outputDir: `../../artifacts/playwright/ci-test-results${suffix}`,
   reporter: [['list'], ['html', { open: 'never', outputFolder: `../../artifacts/playwright/ci-report${suffix}` }]],

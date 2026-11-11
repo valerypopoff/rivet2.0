@@ -531,7 +531,7 @@ test('observer uses the remote browser without installing a host Chromium and pr
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 36);
+  assert.equal(editorCiSpecs.length, 37);
   assert.ok(editorCiSpecs.includes('bundle-merge.spec.ts'));
   assert.ok(editorCiSpecs.includes('managed-debugger-channels.spec.ts'));
   assert.ok(editorCiSpecs.includes('hosted-editor-search-shortcuts.spec.ts'));
@@ -541,6 +541,7 @@ test('balanced editor shards cover every selected spec exactly once and reject i
   assert.ok(editorCiSpecs.includes('partial-run-preload.spec.ts'));
   assert.ok(editorCiSpecs.includes('wire-viewport-culling.spec.ts'));
   assert.ok(editorCiSpecs.includes('run-statistics-modal.spec.ts'));
+  assert.ok(editorCiSpecs.includes('run-recordings-modal.spec.ts'));
   assert.ok(editorCiSpecs.includes('run-cost-statistics.spec.ts'));
   assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
   assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);

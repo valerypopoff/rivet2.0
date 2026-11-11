@@ -333,7 +333,9 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
               <span className="panel-bottom-button-label">Run recordings</span>
             </Button>
             {runRecordingsRetained ? (
-              <div className="panel-bottom-action-summary">Found: {runRecordingsFoundCount}</div>
+              <div className="panel-bottom-action-summary">
+                {runRecordingsFoundCount === null ? 'Found: —' : `Found: ${runRecordingsFoundCount}`}
+              </div>
             ) : null}
           </div>
           <Button

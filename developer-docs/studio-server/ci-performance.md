@@ -19,6 +19,45 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+## Recordings browser scheduling repair: November 12, 2026
+
+[Verify Studio Server 43104429099, editor shard 1](https://github.com/valerypopoff/rivet2.0/actions/runs/43104429099/job/130806358601)
+hit the 12-minute test-step limit after 153 passing cases. It had no assertion
+failure. The recordings file started about four minutes into the step, then
+executed 84 of its 88 cases serially before cancellation. The other worker
+finished its queue about six minutes before cancellation and stayed idle.
+Balanced sums of file weights did not prevent this long indivisible tail.
+
+The recordings suite now opts into parallel cases using the existing two CI
+workers. Every case constructs its own Playwright page/context, mock routes,
+fixture data and browser storage; it has no shared setup, mutable suite fixture
+or external provider dependency. Other suites retain their existing serial
+scenarios. Work weights use total case time rather than the shorter wall time
+of parallel execution. They remain scheduling hints, not wall-clock acceptance
+thresholds.
+
+Keep every case, assertion and the existing 12-minute step limit. Validate the
+complete affected shard with `RIVET_EDITOR_TEST_SHARD=1/3 yarn studio-server:ui:ci`
+and confirm the recordings results use both workers with overlapping intervals.
+Use the JSON reporter for worker/start/duration evidence when checking locally.
+Do not infer a hosted runtime guarantee from a faster local browser.
+
+The targeted production-build check passed all 88 recordings cases in 2m42s
+without retries or skips. Its JSON report assigned 45 and 43 cases to the two
+workers and confirmed overlapping execution. A complete local shard attempt
+stopped at Chromium's Windows `ERR_NO_BUFFER_SPACE` during another fixture's
+application bootstrap. The hosted Linux result below supplies the full-shard
+validation.
+
+[The complete hosted follow-up](https://github.com/valerypopoff/rivet2.0/actions/runs/43109601411)
+passed all three browser shards. The repaired shard finished 145 cases in 9m25s,
+but shard 2 took 11m44s, only 16 seconds below the unchanged limit. Its debugger
+suite had grown to approximately 260 seconds of work while retaining a
+56-second estimate. The complete recordings suite measured approximately
+638 seconds of work. Refresh those two weights to 260 and 640 seconds so the
+existing balancer accounts for that work across all three shards. Do not accept
+equal estimated totals as proof of useful timeout headroom.
+
 ## Image-test browser setup repair: November 11, 2026
 
 [Build Images 43053444658](https://github.com/valerypopoff/rivet2.0/actions/runs/43053444658)
@@ -408,15 +447,20 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses three required matrix shards, each running two independent
-  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 32
+  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 37
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
+  The complete Run recordings modal suite is also registered, including immediate
+  opening, independent catalog/results, retained sessions, deletion and replay.
+  Its 640-second work estimate comes from the complete hosted recordings run;
+  refine materially stale weights from complete hosted timings.
   Their inclusion is asserted by the shard regression. These weights balance work,
-  not predict hosted wall time. Serial tests
-  within each file, test-owned contexts/mocks/temporary paths, assertions and
-  retry policy are unchanged. Each shard has separate reports and failure
-  artifacts. Executor-retirement verification runs exactly once, on shard 1.
+  not predict hosted wall time. Independently isolated recordings cases can use
+  both workers; other files preserve serial scenarios. Test-owned contexts,
+  mocks, temporary paths, assertions and retry policy are unchanged. Each shard
+  has separate reports and failure artifacts. Executor-retirement verification
+  runs exactly once, on shard 1.
   Set `RIVET_EDITOR_TEST_SHARD=1/3`, `2/3` or `3/3` before
   `yarn studio-server:ui:ci` to reproduce a lane. Omit it to run the complete
   selection; unknown shard values fail instead of silently dropping coverage.

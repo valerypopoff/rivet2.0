@@ -2,6 +2,27 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-12 — recording search and modal responsiveness
+
+The last actual version change for App, the public runtime family, App Executor
+and Studio Server was `54c429551`. This review includes subsequent commits
+through `e2c1fa42f` and the accompanying Run recordings loading/CI fixes. Docs last
+changed version in `488019eb9`.
+
+| Packages                        | Version             | Changes since the last bump                                                                                                                                                                                                                                                                                                             |
+| ------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| All five Studio Server packages | `1.37.0` → `1.37.1` | API optimizes existing recording searches, request-ID caching, metadata reads and concurrent pool cleanup. Web removes catalog/initial-page waits before filtering and preserves session ownership, counts, deletion and replay. Bootstrap, Executor and Shared have no package-local changes and follow the product lockstep contract. |
+| App                             | Remains `2.35.0`    | No package-local changes.                                                                                                                                                                                                                                                                                                               |
+| Core, Node, CLI, Evaluations    | Remain `2.28.0`     | No package-local changes; the public npm family and CLI Docker fallback remain aligned.                                                                                                                                                                                                                                                 |
+| App Executor                    | Remains `2.20.0`    | No package-local changes or changed bundled Core/Node runtime.                                                                                                                                                                                                                                                                          |
+| Docs                            | Remains `2.27.0`    | No changes under `packages/docs`; developer documentation is a separate area.                                                                                                                                                                                                                                                           |
+
+These are compatible performance and correctness fixes, so Studio Server receives
+a patch increment. No desktop/native metadata, dependency ranges, Yarn
+resolutions, Helm metadata or managed schema versions change. See the
+[prepared release summary](BUILD-AND-CI.md#prepared-release-versions-2026-11-12)
+for consistency checks; package metadata preparation does not deploy the server.
+
 ## Version update: 2026-11-11 — bundle merging and automatic Subgraph ports
 
 App, the public runtime family, App Executor and all five Studio Server packages
