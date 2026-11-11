@@ -49,11 +49,15 @@ export async function findLegacyContainerLaunchers() {
       .map((value) => value.ProcessId);
   }
   const { stdout } = await execute('ps', ['-eo', 'pid=,comm=,args='], { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 });
+  const nodeExecutable = /^(node|nodejs)$/;
   return stdout.split('\n').flatMap((line) => {
     const match = line.trim().match(/^(\d+)\s+(\S+)\s+(.*)$/);
+    // BusyBox prefixes argv with {comm} when the OS thread name differs.
+    const command = match?.[3].replace(/^\{[^}]+\}\s+/, '').split(/\s+/, 1)[0] ?? '';
     return match &&
       Number(match[1]) !== process.pid &&
-      /^(node|nodejs)$/.test(path.basename(match[2])) &&
+      // Node 24 on Linux can report MainThread in comm; argv still names Node.
+      (nodeExecutable.test(path.basename(match[2])) || nodeExecutable.test(path.basename(command))) &&
       match[3].includes('container-server.mjs')
       ? [Number(match[1])]
       : [];

@@ -350,6 +350,9 @@ late predecessor cannot remove its successor. `launcher.lock` remains as a
 compatibility marker for older launchers and now contains the same owner data.
 Development waits for live owners (up to 30 minutes), reclaims dead matching
 owners, and checks process inventory before recovering an old empty marker.
+POSIX discovery checks the Node executable in argv as well as the process name:
+Node 24 can label the Linux process `MainThread`. BusyBox's `{comm}` argv prefix
+is presentation metadata, not the executable. Discovery never terminates a process.
 Unknown, foreign, corrupt or linked ownership is not silently removed. The
 launcher never kills an arbitrary process to acquire admission. Staging and
 production retain fail-closed ownership: inspect their recorded owner and any

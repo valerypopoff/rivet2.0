@@ -5,6 +5,30 @@ gates or reusing an unverified build from another commit. Standard GitHub-hosted
 runners for public repositories are free; these changes need no paid runner.
 Branch targeting, signing and protected deployment safeguards remain unchanged.
 
+## Develop CI repair: November 11, 2026
+
+Build passed for `54c429551`, but deployment contracts in
+[Verify Studio Server 42924459264](https://github.com/valerypopoff/rivet2.0/actions/runs/42924459264)
+exposed two independent failures. Node 24 on Linux reports `MainThread` in the
+process-name column, so legacy launcher discovery must also inspect the Node
+executable in argv. BusyBox can prefix that argv with `{comm}`; normalize the
+display prefix before checking it. The real child-process test covers discovery,
+and Windows retains its existing process inventory and ownership safeguards.
+
+The temporary-cloud HTTP fixture gave every request only 100 ms. Under CI load,
+an inventory read could time out before the intended uncertain create, leaving
+zero writes for an assertion that correctly requires one. The fixture now allows
+five seconds and deliberately delays its first inventory read by 150 ms in the
+hanging-write scenario. It must still reach exactly one create, time out, avoid
+write retries and resolve cleanup through observation. Production request
+deadlines and rollout qualification criteria are unchanged.
+
+Reproduce these cases locally before another push. Run the launcher ownership
+suite on Windows through `yarn node --test` and exercise the real process case
+on Linux with Node 24. Run the temporary-staging timeout scenario against its
+owned loopback server. These checks need no cloud activation or application
+image rebuild.
+
 ## Develop CI repair: November 9, 2026
 
 The first `8165d45f4` push failed before compilation on four independent gates:

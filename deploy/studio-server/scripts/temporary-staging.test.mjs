@@ -1019,7 +1019,7 @@ test('anonymous registry admission uses a scoped token and rejects private, chan
   );
   assert.ok(calls.filter((c) => c.authorization).every((c) => c.authorization === 'Bearer local-anonymous-only'));
 });
-async function fixture(t, { fault, plan = temporaryPlan() } = {}) {
+async function fixture(t, { fault, plan = temporaryPlan(), firstReadDelayMs = 0 } = {}) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-temp-foundation-'));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const store = new TemporaryStagingStore(path.join(temp, plan.operationId), { lock: fixtureLock });
@@ -1027,7 +1027,16 @@ async function fixture(t, { fault, plan = temporaryPlan() } = {}) {
   let server,
     base = process.env.RIVET_TEMPORARY_SIMULATION_URL;
   if (!base) {
-    server = http.createServer(handler());
+    const handle = handler();
+    let delayRead = firstReadDelayMs > 0;
+    server = http.createServer(async (request, response) => {
+      if (delayRead && request.method === 'GET' && !request.url.startsWith('/_')) {
+        delayRead = false;
+        // Prove the timeout scenario reaches its intended write despite a slow initial inventory read.
+        await new Promise((resolve) => setTimeout(resolve, firstReadDelayMs));
+      }
+      if (!response.destroyed) handle(request, response);
+    });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${server.address().port}/`;
     t.after(() => {
@@ -1049,7 +1058,8 @@ async function fixture(t, { fault, plan = temporaryPlan() } = {}) {
   const origins = Object.fromEntries(
     ['compute', 'container', 'crm', 'iam', 'dns'].map((k) => [k, new URL(`${k}/`, base).href]),
   );
-  const cloud = temporaryGcp(plan, { origins, simulation: true, token: async () => 'local-only', timeoutMs: 100 });
+  // Allow loaded CI hosts to finish inventory reads before the intended hanging write.
+  const cloud = temporaryGcp(plan, { origins, simulation: true, token: async () => 'local-only', timeoutMs: 5000 });
   const calls = [];
   const runtime = Object.fromEntries(
     ['offlinePreflight', 'bootstrap', 'settleAndExport', 'removeEdgeAndBootstrap', 'removePermissions'].map((name) => [
@@ -1427,7 +1437,10 @@ test('exact new network children are removed while pre-existing and unrelated ne
 test('unknown HTML/timeout outcomes never authorize retries or assumed absence', async (t) => {
   for (const type of ['html', 'hang'])
     await t.test(type, async (child) => {
-      const f = await fixture(child, { fault: { type, kind: 'networks' } });
+      const f = await fixture(child, {
+        fault: { type, kind: 'networks' },
+        firstReadDelayMs: type === 'hang' ? 150 : 0,
+      });
       await f.store.locked(async () => {
         await assert.rejects(provisionTemporaryEnvironment(f.store, f.cloud, f.runtime, { wait, guard: f.guard }));
         assert.equal(
