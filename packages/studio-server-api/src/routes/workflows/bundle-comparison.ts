@@ -4,12 +4,12 @@ import type {
   BundleComparisonManifest,
   BundleComparisonPairRequest,
   BundleComparisonPairResult,
-} from '../../../../../studio-server-shared/workflow-bundle-comparison-types.js';
-import { createHttpError } from '../../../utils/httpError.js';
-import { getManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
-import { queryReferences } from './reference-query.js';
-import type { ManagedWorkflowContext } from './context.js';
-import type { FolderRow, RevisionRow, WorkflowRow } from './types.js';
+} from '@valerypopoff/rivet-studio-server-shared/workflow-bundle-comparison-types.js';
+import { createHttpError } from '../../utils/httpError.js';
+import { getManagedWorkflowProjectVirtualPath } from './virtual-paths.js';
+import { queryReferences } from './managed/reference-query.js';
+import type { ManagedWorkflowContext } from './managed/context.js';
+import type { FolderRow, RevisionRow, WorkflowRow } from './managed/types.js';
 
 export function createManagedBundleComparisonService(context: ManagedWorkflowContext) {
   return {

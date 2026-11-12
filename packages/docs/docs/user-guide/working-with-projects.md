@@ -60,7 +60,8 @@ no publication. Progress continues if you close the dialog;
 reopen the same action to download the ready ZIP. After fixing a reported issue,
 use **Retry export** to replace a failed or interrupted export with a fresh attempt.
 Reopening and retrying retain the export's version choice. Ready exports offer
-**Prepare another bundle** if you want a different bundle-wide version choice.
+**Download bundle**. The notice about preparation continuing after closing the
+dialog appears only while preparation is running.
 Ready bundles are retained for 24 hours. If a browser download is interrupted,
 resume it using the browser's download controls while the export remains available;
 after it expires, prepare a new bundle.

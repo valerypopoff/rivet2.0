@@ -430,7 +430,7 @@ Each step delivers its tests before the next dependent step. Implement in
    invalidation. Share small merge matching primitives only if this reduces
    duplication without changing merge defaults.
 2. **Pinned reference reads.** Add
-   `packages/studio-server-api/src/routes/workflows/managed/bundle-comparison.ts`;
+   `packages/studio-server-api/src/routes/workflows/bundle-comparison.ts`;
    connect it through managed bundle/storage owners and `bundles-router.ts`.
    Extend `workflow-types.ts`/tree capabilities with `bundleCompare`. Test exact
    identities on both sides, revision/version pinning, project-only artifact

@@ -13,7 +13,8 @@ const weightedSpecs = [
   ['hosted-editor-search-shortcuts.spec.ts', 22],
   ['hosted-dashboard-contracts.spec.ts', 27],
   ['hosted-executor-origin.spec.ts', 50],
-  ['project-bundle.spec.ts', 55],
+  // Full local suite, including admission races and error-recovery regressions.
+  ['project-bundle.spec.ts', 130],
   ['project-bundle-upload.spec.ts', 13],
   ['sidebar-name-wrapping.spec.ts', 22],
   ['streaming-nodes.spec.ts', 23],

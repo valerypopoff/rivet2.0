@@ -407,6 +407,10 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   the explicit depth-one fetch. Forced verification needs no historical fetch.
   Fetch errors fail classification, never skip checks. The migration ledger job
   retains full history because its provenance checks need historical commits.
+  Migration-history preparation fetches only when inspection cannot read required
+  objects. Already-present evidence with mismatched immutable identities fails
+  immediately, preserving the integrity error without a redundant transfer. Its
+  shallow-checkout regression fences that negative case against another fetch.
 - Final Build/Studio status jobs sparsely check out only the standalone timing
   helper. Their previous full checkouts cost 22–26 seconds after all checks had
   finished. The required result aggregation and workflow timing remain intact.
@@ -447,7 +451,7 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses three required matrix shards, each running two independent
-  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 37
+  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 38
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
@@ -455,6 +459,11 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   opening, independent catalog/results, retained sessions, deletion and replay.
   Its 640-second work estimate comes from the complete hosted recordings run;
   refine materially stale weights from complete hosted timings.
+  Bundle comparison is included explicitly. Its 200-second starting weight and
+  the expanded export suite's 130-second weight come from complete local runs;
+  refine those estimates from hosted timings as well. Adding a selected spec
+  also updates the inventory count and membership assertions in
+  `ci-performance.test.mjs`; run its `balanced editor shards` case before pushing.
   Their inclusion is asserted by the shard regression. These weights balance work,
   not predict hosted wall time. Independently isolated recordings cases can use
   both workers; other files preserve serial scenarios. Test-owned contexts,

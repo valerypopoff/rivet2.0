@@ -1300,7 +1300,7 @@ the **Download project** menu item, separately from the bundle chooser.
 
 Failed, cancelled and interrupted jobs offer **Retry export** directly: disposal
 must succeed before creating a fresh job with the selected bundle-wide version. Ready
-jobs retain **Prepare another bundle** for choosing a different version. Job status
+jobs offer **Download bundle** without a separate restart action. Job status
 includes the optional durable `versionPolicy`; reopening or retrying a new-format
 job restores its actual choice. New bundle downloads default to Saved latest.
 The session-storage key is the explicit bundle ID, not a project's metadata ID.
@@ -1310,14 +1310,37 @@ Late start acknowledgements cannot regress packaging back to collection, or
 replace a terminal result with active progress.
 Action admission uses a synchronous in-flight guard as well as disabled buttons,
 so rapid repeated clicks cannot start competing POST/DELETE operations. Progress
-polls may reconcile a lost start acknowledgement but never erase a cancellation
-failure; only another explicit action or reopening clears that diagnostic. The
+polls may reconcile a lost start acknowledgement but never erase an independent
+cancellation failure. The
 dialog uses the shared API response parser, retaining HTTP status and gateway
 guidance without showing HTML bodies or malformed structured error values.
+
+The client reserves the export ID before sending its start request. A status
+poll issued while that start is still unacknowledged can legitimately return
+404 before the server registers the job; the dialog keeps showing preparation
+and polls again without a warning. This applies only to that pending start,
+not to missing/expired exports reopened later or other HTTP errors. A newer
+start acknowledgement supersedes older polling errors. Genuine start failures
+remain visible until successful status readback, and cancellation errors keep
+their existing precedence.
+
+In-flight starts are tracked by export ID for the lifetime of their request,
+outside the modal instance. Switching to another bundle and reopening the first
+therefore preserves pending admission and keeps cancellation disabled until
+that request settles. Completed, failed and timed-out starts remove their entry;
+the dialog subscribes to these changes so **Retry export** becomes available
+even if it has already observed a terminal failure and stopped polling.
+Recovery does not depend on unrelated page refreshes. This is page-local
+request tracking, not persisted job state.
 
 The bundle dialog uses the shared responsive modal dimensions, black backdrop,
 dark surface and header/close styling. Project details and export progress use
 bordered cards with the shared 14px/1.5 description typography.
+Its introductory text is “Includes bundle members and dependencies outside the
+bundle. Unsaved editor changes are excluded.” The extended version-selection and
+ZIP-opening instructions are omitted. The notice that closing the dialog does
+not cancel preparation appears only while preparing, including initial status
+loading and collection/packaging; it is hidden for terminal jobs.
 The progress card shows an indeterminate spinner while loading initial status,
 collecting snapshots or packaging, including after reopening an active export.
 Terminal states remove the spinner; reduced-motion preferences disable rotation.

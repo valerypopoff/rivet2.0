@@ -22,7 +22,7 @@ import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
 import { sanitizeWorkflowName } from '../fs-helpers.js';
 import { remapBundleProject } from '../remap-bundle-project.js';
 import { createManagedBundleMergeService } from './bundle-merge.js';
-import { createManagedBundleComparisonService } from './bundle-comparison.js';
+import { createManagedBundleComparisonService } from '../bundle-comparison.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { FolderRow, RevisionRow, WorkflowRow } from './types.js';
 import { prepareBundleConversion, assertBundleConversion } from './bundle-conversion.js';

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { serializeProject, type Project } from '@valerypopoff/rivet2-node';
-import { createManagedBundleComparisonService } from '../routes/workflows/managed/bundle-comparison.js';
+import { createManagedBundleComparisonService } from '../routes/workflows/bundle-comparison.js';
 import type { ManagedWorkflowContext } from '../routes/workflows/managed/context.js';
 import type { RevisionRow } from '../routes/workflows/managed/types.js';
 
