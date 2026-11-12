@@ -35,7 +35,7 @@ test('a displayed removed graph reports its deleted nodes instead of No changes'
   const after = { ...before, graphs: {} };
   const comparison = compareProjects(before, after);
   assert.equal(
-    formatProjectComparisonCurrentGraphCounts(getGraphProjectComparisonCounts(comparison.graphs.removed)),
+    formatProjectComparisonCurrentGraphCounts(getGraphProjectComparisonCounts(comparison.graphs[asGraphId('removed')])),
     '1 node',
   );
 });

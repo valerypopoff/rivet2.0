@@ -19,6 +19,21 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+## Comparison fixture compilation repair: November 12, 2026
+
+[Build 43291039140](https://github.com/valerypopoff/rivet2.0/actions/runs/43291039140/job/131439269832)
+failed in desktop compilation on three branded-graph-ID errors in comparison
+test fixtures. All App test shards passed: `tsx` executes those fixtures without
+type-checking them, while the App's normal `tsc` project includes all `src` tests.
+A scoped hosted-frontend type check also omits fixtures it does not import.
+
+Construct recovery graphs with typed `GraphId` metadata and index comparison
+maps with branded graph keys; do not bypass the errors with whole-object
+`unknown` casts or exclude tests from the build. Validate changed App fixtures
+through its actual TypeScript project and the normal desktop frontend/CLI build.
+The developer desktop release correctly refused to reuse the failed Build;
+that downstream failure needs no retry or release-gate change.
+
 ## Recordings browser scheduling repair: November 12, 2026
 
 [Verify Studio Server 43104429099, editor shard 1](https://github.com/valerypopoff/rivet2.0/actions/runs/43104429099/job/130806358601)

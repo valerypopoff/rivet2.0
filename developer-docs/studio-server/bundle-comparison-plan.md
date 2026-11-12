@@ -10,7 +10,8 @@ new bundle-comparison browser journeys and five existing standalone-comparison
 journeys, plus normal Save/tab-activation browser regressions. Core identity,
 matching/bridge ownership, API read/cancellation and App recovery/inspection tests
 pass. The complete web unit suite passes (252 TypeScript tests and 39 Node tests).
-API and shared type checks pass. The focused frontend comparison against HEAD
+API and shared type checks pass. The normal desktop frontend/CLI build also
+passes, including all App test-fixture types. The focused hosted-frontend comparison against HEAD
 introduces no diagnostics; the checkout's broad frontend type baseline still has
 pre-existing errors. Source inspection is not being substituted for browser evidence.
 
@@ -535,6 +536,15 @@ yarn studio-server:ui:observe bundle-comparison.spec.ts project-compare-mode.spe
 node scripts/checks/check-test-style.mjs
 node scripts/checks/check-doc-links.mjs
 git diff --check
+```
+
+The App's normal TypeScript project includes its `src` test fixtures. Executing
+them with `tsx` or checking only imported hosted-editor roots does not validate
+all those fixtures. Run the same frontend/CLI command as Build when changing them:
+
+```powershell
+yarn workspace @valerypopoff/rivet-app run build
+yarn workspace @valerypopoff/rivet2-cli run build
 ```
 
 Inspect failed UI artifacts under `artifacts/playwright/`. Include affected

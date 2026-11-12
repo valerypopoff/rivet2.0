@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { excludeComparisonInspection } from './comparisonRecovery.js';
 import { shouldPersistCurrentGraph } from '../../utils/currentGraphSave.js';
-import type { NodeGraph } from '@valerypopoff/rivet2-core';
+import type { GraphId, NodeGraph } from '@valerypopoff/rivet2-core';
 
-const graph = { metadata: { id: 'real', name: 'Real graph' }, nodes: [], connections: [] };
-const placeholder = { ...graph, metadata: { id: 'deleted', name: 'Deleted graph' }, comparisonReferenceView: true };
+const graph: NodeGraph = { metadata: { id: 'real' as GraphId, name: 'Real graph' }, nodes: [], connections: [] };
+const placeholder = {
+  ...graph,
+  metadata: { id: 'deleted' as GraphId, name: 'Deleted graph' },
+  comparisonReferenceView: true,
+};
 void test('removed-graph inspection cannot become saved content or replace real recovery content', () => {
-  assert.equal(shouldPersistCurrentGraph(placeholder as NodeGraph, [graph as NodeGraph]), false);
+  assert.equal(shouldPersistCurrentGraph(placeholder, [graph]), false);
   const groups = {
     project: { projectState: { metadata: { id: 'real' }, graphs: { real: graph } } },
     graph: { graphState: placeholder },
