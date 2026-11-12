@@ -199,6 +199,42 @@ the tree before retrying; it may already have created the copy.
 
 To open a project, choose **Open Project** in the top-bar **Menu** dropdown or press **Ctrl+O**/**Cmd+O**. This will open a file dialog where you can choose a project to open. The project will be loaded into Rivet as the current project.
 
+### Comparing Studio Server bundles
+
+Use bundle comparison to review a tested copy against its original, or compare
+any two bundles. On a PostgreSQL/S3 Studio Server that supports this feature:
+
+1. Right-click the bundle you want to edit and choose **Compare with another bundle…**.
+2. Choose the **Older bundle**. The clicked bundle starts as **Newer**; use **Swap** to reverse the roles.
+3. Review **Match projects**. Rivet suggests counterparts by unique paths inside the bundles, then project names. Correct renamed or ambiguous matches, or choose **No corresponding project**. Each Newer project can match only one Older project. Unmatched Newer projects appear in the list below.
+4. Choose **Compare bundles**. The project tree shows just those two bundles. Click either project in a matched pair to open its comparison in the editor.
+
+The **Newer** project is editable and saveable normally, including edits that
+were already unsaved when comparison started. **Older** uses a captured saved
+version; unsaved edits in an Older tab are excluded. Duplicate bundles have fresh
+project IDs, so review the suggested matches rather than treating them as proof
+that projects are related. The comparison uses your confirmed correspondence to
+ignore copied internal project IDs without rewriting the projects' references.
+
+Graph, node and connection changes use the [usual project comparison](#comparing-projects).
+A Newer-only project compares against an empty Older project and stays editable.
+An Older-only project opens for read-only inspection. Removed graphs also remain
+read-only; inspecting them does not restore them to Newer.
+
+Use **Match projects** to change the correspondence, **Refresh older version** to
+capture fresh saved Older versions, or **Swap** to edit the other side. Refresh
+does not reload Newer or discard its edits. Swap leaves unsaved edits in their
+original project tabs and uses saved versions for the newly Older side. Changes
+to bundle membership or locations require reviewing the matches again. If a
+project is unavailable, its row reports the problem; other pairs remain usable.
+
+Switching between open Newer member tabs follows their comparisons. Go to
+subgraph and **Page Up**/**Page Down** retain normal graph-history behavior.
+Opening an unrelated project, using **Exit comparison** in the Server tree, or
+using **Exit** in the editor restores the normal tree and keeps real project
+tabs and edits. Reloading the editor ends comparison; it is not saved as project
+data. Comparing bundles does not merge, publish or run them.
+
 ### Studio Server project tabs
 
 In Studio Server's project tree, a single click opens a preview tab. Double-clicking, editing, saving or running the project makes that tab persistent. Opening a different clean preview can replace the previous preview; dirty work is not silently discarded. Clicking or double-clicking an already-open project activates its existing tab without reloading its content or clearing unsaved changes. Switching A → B → A preserves each project's edits and dirty indicator.

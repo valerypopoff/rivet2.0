@@ -8,6 +8,7 @@ export type PreparedCurrentGraphSave = {
 };
 
 export function shouldPersistCurrentGraph(graph: NodeGraph, savedGraphs: NodeGraph[]): boolean {
+  if ('comparisonReferenceView' in graph && graph.comparisonReferenceView === true) return false;
   if (graph.nodes.length > 0 || graph.connections.length > 0) {
     return true;
   }
@@ -38,7 +39,9 @@ export function prepareCurrentGraphForSave(
     return draft;
   });
 
-  const existingGraphIndex = savedGraphs.findIndex((savedGraph) => savedGraph.metadata?.id === currentGraph.metadata?.id);
+  const existingGraphIndex = savedGraphs.findIndex(
+    (savedGraph) => savedGraph.metadata?.id === currentGraph.metadata?.id,
+  );
   const nextSavedGraphs =
     existingGraphIndex === -1
       ? [...savedGraphs, currentGraph]

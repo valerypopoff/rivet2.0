@@ -1,4 +1,4 @@
-import type { GraphId, NodeGraph, Project, ProjectId } from '@valerypopoff/rivet2-core';
+import type { GraphId, NodeGraph, Project, ProjectId, ProjectComparisonIdentity } from '@valerypopoff/rivet2-core';
 import type { EvaluationDataset, EvaluationProjectData } from '@valerypopoff/rivet2-evaluations';
 import type { ProjectCompareSideLabels } from '../../state/projectComparison.js';
 import type { ProjectTabUiState } from '../../state/projectTabUi.js';
@@ -29,6 +29,18 @@ export type RivetProjectCleanBaselineSnapshotInput = {
 
 export type RivetProjectCompareOptions = {
   labels?: ProjectCompareSideLabels;
+  expectedProjectId?: ProjectId;
+  identity?: ProjectComparisonIdentity;
+  owner?: { sessionId: string; generation: number };
+  referencedProjects?: Record<ProjectId, Project>;
+};
+export type RivetProjectCompareState = {
+  owner: { sessionId: string; generation: number } | null;
+  projectId: ProjectId | null;
+  referenceProjectId: ProjectId | null;
+  referenceId: string | null;
+  graphId: GraphId | null;
+  activationRevision: number;
 };
 
 export type RivetProjectTabUiState = ProjectTabUiState;
@@ -119,5 +131,12 @@ export type RivetWorkspaceHost = {
     referencePath?: string | null,
     options?: RivetProjectCompareOptions,
   ): Promise<boolean>;
-  stopProjectCompare(projectId?: ProjectId): Promise<boolean>;
+  stopProjectCompare(projectId?: ProjectId, owner?: { sessionId: string; generation: number }): Promise<boolean>;
+  getProjectCompareState(): RivetProjectCompareState;
+  subscribeProjectCompare(listener: () => void): () => void;
+  updateProjectCompareDefinitions(
+    owner: { sessionId: string; generation: number },
+    definitions: Record<ProjectId, Project>,
+  ): boolean;
+  inspectComparisonGraph(graphId: GraphId): boolean;
 };

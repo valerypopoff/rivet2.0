@@ -10,6 +10,16 @@ In the current deployment model:
 
 In `RIVET_API_PROFILE=combined`, the same API process serves both surfaces. In split deployments, `RIVET_API_PROFILE=control` and `RIVET_API_PROFILE=execution` separate them.
 
+## Bundle comparison
+
+Bundle comparison does not publish, run, or change a project's saved revision.
+Older uses captured Saved latest revision IDs; visible Older Subgraphs still honor
+their authored Latest/Published selection via captured target pointers. Newer stays
+in its real editable tab with normal save revision/conflict handling. Comparison
+identity equivalence never rewrites authored target IDs or versions. It does not
+require executable bundle validation and remains usable with unavailable plugins
+or dependencies. See [Comparing bundles](project-bundles.md#comparing-bundles).
+
 ## Endpoint responses and async completion
 
 Published, internal-published, and latest workflow endpoints enable Core's

@@ -117,6 +117,59 @@ shared activation and dirty-state behavior is exercised in App-owned hook tests.
 | `workflow-project-bindings-reconciled`     | `changes[]`, `status`, optional `requestId`                                    | The iframe applied current bindings or requested another fresh pass                                               |
 | `workflow-project-content-change-resolved` | `projectId`, `revisionId`, `resolution`, `resolved`, optional error/request id | The iframe applied or rejected the user's reload/keep-mine choice                                                 |
 
+## Bundle comparison ownership
+
+`bundle-comparison` is a serialized, acknowledged command with `requestId` and
+`action: open | stop | state`. Open carries a session/generation owner, explicit
+nullable Older/Newer descriptors, complete one-to-one pair array (up to 512),
+side labels, and a bounded Older catalog. Project contents never cross this wire.
+`bundle-comparison-state` replies/reporting contain the actual active project ID,
+owner or null, optional located error, an optional `cancelled: true` when native
+navigation supersedes a request, and request ID for acknowledgements.
+Runtime readers validate membership/uniqueness, labels, bounds and selected pair.
+An unknown acknowledgement triggers one state read, never an automatic open replay.
+
+`editorBundleComparison.ts` prepares Older before normal Newer activation through
+`handleOpenProjectCommand`. It validates Newer's live bundle/path again before
+attaching or updating its bundle binding. The public `RivetWorkspaceHost` compare
+API validates the actual current project and exact owner. It exposes comparison,
+graph and activation state/subscriptions and an owner-checked reference-definition
+update; the wrapper never writes App comparison atoms or implements another save
+pipeline. Native selections cancel pending reads and end the pending Server UI;
+ordinary project-open/preview/compare commands cancel the pending read before
+joining the activation queue. Command-owned activation does not recursively
+restart itself. Superseded work settles its acknowledgement. Applying an empty
+review keeps its pending owner until Stop acknowledges normal virtual-tab closure,
+then records the actual selected project as its navigation baseline.
+The Server tracks the actual acknowledged project ID for both real and virtual
+views. A read error preserves a displayed selection only when its exact owner and
+project still match. An unattached error retains its location for explicit retry,
+but subsequent tab navigation exits instead of trapping the filtered tree or
+automatically reopening the failed pair. Entering the matching modal aborts any
+uncommitted toolbar catalog read before opening its isolated draft.
+Starting a new native comparison also supersedes bundle work during project
+activation, not just reference reads. Activation may clear an old reference as
+part of closing its virtual tab; a newly installed reference instead cancels the
+pending attachment. Cancellation cleanup never closes a document now claimed by
+a different comparison owner. Both cases have bounded controller regressions.
+The metadata-update result is also an admission boundary: a rejected binding
+update cannot attach comparison, and a cancelled completion cannot proceed into
+virtual-tab cleanup. Controller fixtures clone command payloads independently,
+matching the bridge's structured-clone behavior across successive selections.
+
+Stop invalidates pending work in that session and clears only an older/equal
+confirmed owner. Stale exits cannot clear a later pair or a standalone comparison.
+After awaiting Stop, cleanup checks its success and reads ownership again.
+Virtual IDs are released only after close succeeds or the tab is already absent;
+a rejected close remains tracked and reports an error for a later explicit action.
+Exit uses the workspace's normal replacement selection without a second tab
+activation, preserving newer native selections. Late cleanup errors cannot
+overwrite a newer session's state.
+The editor's Exit reports ownership loss so the Server restores its normal tree.
+Temporary Older-only documents use the reserved `bundle-comparison:` namespace;
+hosted writes reject them and recovery excludes them. Real project edits retain
+normal save, conflict and recovery owners. See [Project bundles](project-bundles.md).
+
 ## Model-node error behavior
 
 The Classifier family is branded **Decision AI** in the editor: **Decision AI run**,

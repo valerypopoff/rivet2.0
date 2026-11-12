@@ -12,6 +12,7 @@ export function useWorkflowLibraryTree() {
   const [explicitBundles, setExplicitBundles] = useState(false);
   const [namespaceMutations, setNamespaceMutations] = useState(false);
   const [bundleMerge, setBundleMerge] = useState(false);
+  const [bundleCompare, setBundleCompare] = useState(false);
   const [rootProjects, setRootProjects] = useState<WorkflowProjectItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +56,7 @@ export function useWorkflowLibraryTree() {
         setExplicitBundles(tree.capabilities?.explicitBundles === true);
         setNamespaceMutations(tree.capabilities?.namespaceMutations === true);
         setBundleMerge(tree.capabilities?.bundleMerge === true);
+        setBundleCompare(tree.capabilities?.bundleCompare === true);
         setRootProjects(tree.projects);
         syncRef.current = tree.sync;
         const before = acceptedFolders.current;
@@ -136,6 +138,7 @@ export function useWorkflowLibraryTree() {
     explicitBundles,
     namespaceMutations,
     bundleMerge,
+    bundleCompare,
     allProjects,
     error,
     expandedFolders,

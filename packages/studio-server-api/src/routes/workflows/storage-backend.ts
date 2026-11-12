@@ -555,6 +555,7 @@ export async function getWorkflowTree() {
       explicitBundles: usesManagedNamespace(),
       namespaceMutations: usesManagedNamespace(),
       bundleMerge: usesManagedNamespace(),
+      bundleCompare: usesManagedNamespace(),
     },
   };
 }

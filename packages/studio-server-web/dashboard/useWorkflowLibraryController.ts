@@ -78,6 +78,8 @@ export function useWorkflowLibraryController(options: {
   openedProjectPath: string;
   editorReady: boolean;
   projectSaveSequence: number;
+  bundleComparisonActive?: boolean;
+  bundleComparisonModalOpen?: boolean;
 }) {
   const {
     onOpenProject,
@@ -102,6 +104,7 @@ export function useWorkflowLibraryController(options: {
     explicitBundles,
     namespaceMutations,
     bundleMerge,
+    bundleCompare,
     allProjects,
     error,
     expandedFolders,
@@ -333,7 +336,9 @@ export function useWorkflowLibraryController(options: {
   } = versionActions;
 
   const projectTreeOverlayOpen = Boolean(
-    bundleDeleteFolder ||
+    options.bundleComparisonActive ||
+      options.bundleComparisonModalOpen ||
+      bundleDeleteFolder ||
       bundleMergeRequest ||
       bundleOpen ||
       appSettingsOpen ||
@@ -832,7 +837,9 @@ export function useWorkflowLibraryController(options: {
   );
 
   return {
+    editorReady,
     explicitBundles,
+    bundleCompare,
     canMergeBundles,
     bundleMergeFolder: bundleMergeRequest?.source ?? null,
     bundleMergeDestinationId: bundleMergeRequest?.destinationBundleId,

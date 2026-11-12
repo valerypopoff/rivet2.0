@@ -53,7 +53,8 @@ async function closeReplaceablePreviewProject(context: EditorCommandBridgeContex
 export async function handleOpenProjectCommand(
   context: EditorCommandBridgeContext,
   command: Extract<SerializedEditorCommand, { type: 'open-project' }>,
-): Promise<void> {
+  options?: { signal?: AbortSignal },
+): Promise<boolean> {
   let openingTabId: string | undefined;
   try {
     const existingOpenedProject = findOpenedProjectByPath(context, command.path);
@@ -96,6 +97,7 @@ export async function handleOpenProjectCommand(
     }
 
     const openResult = await context.getOpenProject()(command.path, {
+      signal: options?.signal,
       replaceCurrent,
       openingTabId,
       openedProjectId: existingOpenedProject?.projectId,
@@ -114,7 +116,7 @@ export async function handleOpenProjectCommand(
           console.warn('Failed to cancel project opening tab after skipped open:', cancelError);
         }
       }
-      return;
+      return false;
     }
 
     if (openResult.projectId && command.bundleId !== undefined) {
@@ -151,6 +153,7 @@ export async function handleOpenProjectCommand(
     context.clearLoadedRecordingForPath(replacedPath || undefined);
     focusHostedEditorFrame();
     postMessageToDashboard({ type: 'project-opened', path: command.path, requestId: command.requestId });
+    return true;
   } catch (error) {
     if (openingTabId) {
       try {
@@ -167,6 +170,7 @@ export async function handleOpenProjectCommand(
       error: message,
       requestId: command.requestId,
     });
+    return false;
   }
 }
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   globalRivetNodeRegistry,
+  getSubgraphProjectKey,
   type ChartNode,
   type GraphId,
   type NodeId,
@@ -69,6 +70,25 @@ test('linked nodes resolve the reference library source while preserving the sav
   assert.equal(resolved.id, instance.id);
   assert.deepEqual(reference, before);
   assert.equal(instance.type, 'nodePrefabInstance');
+});
+test('external reference fallback uses the authored version and never a same-ID local graph', () => {
+  const sub = node('subGraph', { graphId: 'main', targetProjectId: 'dependency', targetVersion: 'published' });
+  const reference = project([sub]);
+  const published = project([]);
+  published.graphs[graphId]!.metadata!.name = 'Pinned publication';
+  const definitions = {
+    [getSubgraphProjectKey({ projectId: 'dependency' as Project['metadata']['id'], version: 'published' })]: published,
+  };
+  assert.match(getComparisonNodeFallback(sub, reference, definitions), /Pinned publication/);
+  assert.match(getComparisonNodeFallback(sub, reference), /unavailable in reference/);
+  assert.doesNotMatch(
+    getComparisonNodeFallback(
+      { ...sub, data: { ...(sub.data as object), targetVersion: 'latest' } },
+      reference,
+      definitions,
+    ),
+    /Pinned publication|Graph: Main/,
+  );
 });
 
 test('missing plugins still have bounded settings previews and no invented ports', () => {

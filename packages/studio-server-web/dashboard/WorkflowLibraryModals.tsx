@@ -10,6 +10,8 @@ import { WorkflowBundleUploadModal } from './WorkflowBundleUploadModal';
 import { WorkflowBundleConversionErrorModal } from './WorkflowBundleConversionErrorModal';
 import { WorkflowBundleDeleteModal } from './WorkflowBundleDeleteModal';
 import { WorkflowBundleMergeModal } from './WorkflowBundleMergeModal';
+import { WorkflowBundleCompareModal } from './WorkflowBundleCompareModal';
+import type { useWorkflowBundleComparison } from './useWorkflowBundleComparison';
 import type { HostedRouteConfig } from './types';
 import type { useWorkflowLibraryController } from './useWorkflowLibraryController';
 
@@ -35,9 +37,10 @@ function getProjectVersionActionLabel(mode: WorkflowLibraryController['projectMo
 export const WorkflowLibraryModals: FC<{
   controller: WorkflowLibraryController;
   scheduledRunsOpen?: boolean;
+  comparison?: ReturnType<typeof useWorkflowBundleComparison>;
   routeConfig: HostedRouteConfig;
   onRouteConfigChange?: Dispatch<SetStateAction<HostedRouteConfig>>;
-}> = ({ controller, routeConfig, onRouteConfigChange, scheduledRunsOpen }) => {
+}> = ({ controller, routeConfig, onRouteConfigChange, scheduledRunsOpen, comparison }) => {
   const [upgradeTabRequested, setUpgradeTabRequested] = useState(false);
   const {
     settingsModalOpen,
@@ -74,6 +77,16 @@ export const WorkflowLibraryModals: FC<{
 
   return (
     <>
+      {comparison?.modal ? (
+        <WorkflowBundleCompareModal
+          bundles={controller.bundleFolders}
+          editorReady={controller.editorReady}
+          newerBundleId={comparison.modal.newerBundleId}
+          initial={comparison.modal.initial}
+          onClose={comparison.closeModal}
+          onApply={comparison.apply}
+        />
+      ) : null}
       {controller.bundleMergeFolder ? (
         <WorkflowBundleMergeModal
           key={`${controller.bundleMergeFolder.bundleId}:${controller.bundleMergeDestinationId ?? ''}`}

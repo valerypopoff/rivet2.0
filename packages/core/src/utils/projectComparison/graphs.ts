@@ -3,13 +3,19 @@ import type { GraphId, NodeGraph } from '../../model/NodeGraph.js';
 import { compareConnections, getComparableGraphConnections, getProjectConnectionComparisonKey } from './connections.js';
 import { compareNodes, getComparableGraphNodes } from './nodes.js';
 import { summarizeGraphComparison } from './summaries.js';
-import type { ProjectConnectionComparison, ProjectGraphComparison, ProjectNodeComparison } from '../projectComparison.js';
+import type {
+  ProjectConnectionComparison,
+  ProjectGraphComparison,
+  ProjectNodeComparison,
+} from '../projectComparison.js';
 import { areComparisonValuesEqual } from './values.js';
+import type { ProjectComparisonIdentity } from './identity.js';
 
 export function compareGraphs(
   id: GraphId,
   before: NodeGraph | undefined,
   after: NodeGraph | undefined,
+  identity?: ProjectComparisonIdentity,
 ): ProjectGraphComparison {
   if (!before && after) {
     return createOneSidedGraphComparison(id, after, 'added');
@@ -23,7 +29,7 @@ export function compareGraphs(
     throw new Error(`Cannot compare missing graph ${id}`);
   }
 
-  const nodes = compareNodes(getComparableGraphNodes(before.nodes), getComparableGraphNodes(after.nodes));
+  const nodes = compareNodes(getComparableGraphNodes(before.nodes), getComparableGraphNodes(after.nodes), identity);
   const connections = compareConnections(
     getComparableGraphConnections(before.connections, before.nodes),
     getComparableGraphConnections(after.connections, after.nodes),

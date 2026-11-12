@@ -3,7 +3,7 @@ import RecordingIcon from 'majesticons/line/video-line.svg?react';
 import SettingsCogIcon from 'majesticons/line/settings-cog-line.svg?react';
 import ScheduleIcon from 'majesticons/line/calendar-line.svg?react';
 import type { Dispatch, FC, SetStateAction } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ScheduledRunsModal } from './ScheduledRunsModal';
 import { requestScheduledRuns } from './scheduledRunApi';
 import type { ScheduledRunSummary } from '../../studio-server-shared/scheduled-run-types';
@@ -28,8 +28,18 @@ import type {
 } from '../../studio-server-shared/editor-bridge';
 import type { WorkflowProjectEditorBinding } from '../../studio-server-shared/workflow-types';
 import './WorkflowLibraryPanel.css';
+import type {
+  BundleComparisonEditorState,
+  BundleComparisonSend,
+} from '../../studio-server-shared/workflow-bundle-comparison-types';
+import { useWorkflowBundleComparison } from './useWorkflowBundleComparison';
+import { WorkflowBundleComparisonTree } from './WorkflowBundleComparisonTree';
 
 interface WorkflowLibraryPanelProps {
+  sendBundleComparison: BundleComparisonSend;
+  bundleComparisonState: BundleComparisonEditorState;
+  editorInstanceId?: string | null;
+  onBundleComparisonNavigator?: (handler: ((projectId: string, graphId: string) => boolean) | null) => void;
   onOpenProject: (path: string, options?: WorkflowProjectOpenOptions) => void;
   onRefreshOpenProjectFromDisk: (path: string) => void;
   onOpenRecording: (recordingId: string, options?: { replaceCurrent?: boolean }) => Promise<RecordingOpenResult>;
@@ -53,6 +63,7 @@ interface WorkflowLibraryPanelProps {
   onActiveWorkflowProjectPathChange: (path: string) => void;
   openedProjectPath: string;
   activeProjectHasUnsavedChanges: boolean;
+  projectUnsavedChangesByPath?: Record<string, boolean>;
   editorReady: boolean;
   projectSaveSequence: number;
   collapsed: boolean;
@@ -82,6 +93,10 @@ const SidebarExpandIcon: FC = () => (
 );
 
 export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
+  sendBundleComparison,
+  bundleComparisonState,
+  editorInstanceId,
+  onBundleComparisonNavigator,
   onOpenProject,
   onRefreshOpenProjectFromDisk,
   onOpenRecording,
@@ -98,6 +113,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   onActiveWorkflowProjectPathChange,
   openedProjectPath,
   activeProjectHasUnsavedChanges,
+  projectUnsavedChangesByPath = {},
   editorReady,
   projectSaveSequence,
   collapsed,
@@ -106,6 +122,20 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   routeConfig,
   onRouteConfigChange,
 }) => {
+  const comparison = useWorkflowBundleComparison(sendBundleComparison, bundleComparisonState, editorInstanceId);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const libraryScroll = useRef(0);
+  const comparing = useRef(false);
+  useLayoutEffect(() => {
+    const active = comparison.session !== null || comparison.pending !== null;
+    if (active && !comparing.current) libraryScroll.current = bodyRef.current?.scrollTop ?? 0;
+    if (!active && comparing.current && bodyRef.current) bodyRef.current.scrollTop = libraryScroll.current;
+    comparing.current = active;
+  }, [comparison.session, comparison.pending]);
+  useEffect(() => {
+    onBundleComparisonNavigator?.(comparison.navigate);
+    return () => onBundleComparisonNavigator?.(null);
+  }, [comparison.navigate, onBundleComparisonNavigator]);
   const [scheduledRunsOpen, setScheduledRunsOpen] = useState(false);
   const [enabledScheduleCount, setEnabledScheduleCount] = useState<number | null>(null);
   useEffect(() => {
@@ -149,6 +179,8 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
     };
   }, [scheduledRunsOpen]);
   const controller = useWorkflowLibraryController({
+    bundleComparisonActive: comparison.session !== null,
+    bundleComparisonModalOpen: comparison.modal !== null,
     onOpenProject,
     onRefreshOpenProjectFromDisk,
     onOpenRecording,
@@ -216,7 +248,43 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
   } = controller;
 
   let bodyContent: JSX.Element | null = null;
-  if (loading) {
+  const membershipChanged =
+    comparison.session &&
+    !loading &&
+    !error &&
+    [comparison.session.manifest.older, comparison.session.manifest.newer].some((catalog) => {
+      const root = controller.bundleFolders.find((folder) => folder.bundleId === catalog.bundleId);
+      const members = controller.allProjects.filter((project) => project.bundleId === catalog.bundleId);
+      return (
+        !root ||
+        root.relativePath !== catalog.relativePath ||
+        members.length !== catalog.projects.length ||
+        catalog.projects.some(
+          (member) =>
+            !members.some(
+              (project) =>
+                project.id === member.projectId &&
+                project.relativePath === `${catalog.relativePath}/${member.relativePath}`,
+            ),
+        )
+      );
+    });
+  if (comparison.session) {
+    bodyContent = (
+      <WorkflowBundleComparisonTree
+        older={comparison.session.manifest.older}
+        newer={comparison.session.manifest.newer}
+        pairs={comparison.session.pairs}
+        selected={comparison.selected}
+        pending={comparison.pending}
+        errors={comparison.errors}
+        dirtyProjects={
+          new Set(controller.allProjects.filter((p) => projectUnsavedChangesByPath[p.absolutePath]).map((p) => p.id))
+        }
+        onSelect={comparison.select}
+      />
+    );
+  } else if (loading) {
     bodyContent = <div className="state">Loading folders...</div>;
   } else if (error) {
     bodyContent = <div className="state">{error}</div>;
@@ -294,11 +362,42 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
         </div>
 
         <div
+          ref={bodyRef}
           className={`body${dragOverRoot ? ' drag-over-root' : ''}`}
-          onDragOver={handleRootDragOver}
-          onDragLeave={handleRootDragLeave}
-          onDrop={(event) => void handleRootDrop(event)}
+          onDragOver={comparison.session ? undefined : handleRootDragOver}
+          onDragLeave={comparison.session ? undefined : handleRootDragLeave}
+          onDrop={comparison.session ? undefined : (event) => void handleRootDrop(event)}
         >
+          {comparison.session || comparison.pending ? (
+            <div className="bundle-comparison-toolbar">
+              <div className="bundle-comparison-title">
+                {comparison.session
+                  ? `${comparison.session.manifest.older.name} (Older, saved) → ${comparison.session.manifest.newer.name} (Newer, editable)`
+                  : 'Opening bundle comparison…'}
+              </div>
+              <span>Older uses saved versions. Unsaved edits stay in their original tabs.</span>
+              <Button onClick={comparison.swap} isDisabled={!!comparison.pending}>
+                Swap
+              </Button>
+              <Button onClick={comparison.edit} isDisabled={!!comparison.pending}>
+                Match projects
+              </Button>
+              <Button onClick={comparison.refresh} isDisabled={!!comparison.pending}>
+                Refresh older version
+              </Button>
+              <Button onClick={comparison.exit}>Exit comparison</Button>
+            </div>
+          ) : null}
+          {comparison.error ? (
+            <div className="workflow-project-bundle-error" role="alert">
+              {comparison.error}
+            </div>
+          ) : null}
+          {membershipChanged ? (
+            <div className="workflow-project-bundle-warning" role="status">
+              Bundle membership or locations changed. Use Match projects to review the comparison.
+            </div>
+          ) : null}
           {bodyContent}
           {controller.bundleAction ? (
             <div className="bundle-action-status" role="status" title={controller.bundleAction.name}>
@@ -307,16 +406,18 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
                 : `Converting ${controller.bundleAction.name}…`}
             </div>
           ) : null}
-          <div className="body-actions">
-            <button
-              type="button"
-              className="link-button"
-              disabled={loading || !!error}
-              onClick={() => void handleCreateFolder()}
-            >
-              + New folder
-            </button>
-          </div>
+          {!comparison.session ? (
+            <div className="body-actions">
+              <button
+                type="button"
+                className="link-button"
+                disabled={loading || !!error}
+                onClick={() => void handleCreateFolder()}
+              >
+                + New folder
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="panel-bottom-actions">
@@ -388,9 +489,10 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           </Button>
         </div>
 
-        <WorkflowLibraryContextMenus controller={controller} />
+        <WorkflowLibraryContextMenus controller={controller} onCompareBundle={comparison.begin} />
         <WorkflowBundleDragPreview preview={controller.dragPreview} />
         <WorkflowLibraryModals
+          comparison={comparison}
           scheduledRunsOpen={scheduledRunsOpen}
           controller={controller}
           routeConfig={routeConfig}

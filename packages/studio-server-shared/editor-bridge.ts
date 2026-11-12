@@ -1,4 +1,10 @@
 import type { WorkflowProjectEditorBinding, WorkflowProjectPathMove } from './workflow-types';
+import {
+  isBundleComparisonCommand,
+  isBundleComparisonEditorState,
+  type BundleComparisonCommand,
+  type BundleComparisonEditorState,
+} from './workflow-bundle-comparison-types';
 
 export type EditorShortcutModifier = 'ctrl' | 'meta';
 
@@ -23,6 +29,7 @@ export type HostedProjectConflictSnapshot = {
 };
 
 export type DashboardToEditorCommand =
+  | BundleComparisonCommand
   | {
       type: 'open-project';
       path: string;
@@ -89,6 +96,7 @@ export type WorkflowProjectBindingReconciliationResult = {
 };
 
 export type EditorToDashboardEvent =
+  | { type: 'bundle-comparison-state'; state: BundleComparisonEditorState; requestId?: string }
   | { type: 'editor-ready'; editorInstanceId: string }
   | { type: 'editor-initialization-failed' }
   | { type: 'open-subgraph-target'; projectId: string; graphId: string }
@@ -195,6 +203,8 @@ export function isDashboardToEditorCommand(value: unknown): value is DashboardTo
   }
 
   switch (value.type) {
+    case 'bundle-comparison':
+      return isBundleComparisonCommand(value);
     case 'open-project':
       return (
         typeof value.path === 'string' &&
@@ -284,6 +294,11 @@ export function isEditorToDashboardEvent(value: unknown): value is EditorToDashb
   }
 
   switch (value.type) {
+    case 'bundle-comparison-state':
+      return (
+        isBundleComparisonEditorState(value.state) &&
+        (value.requestId === undefined || typeof value.requestId === 'string')
+      );
     case 'editor-initialization-failed':
       return true;
     case 'editor-ready':

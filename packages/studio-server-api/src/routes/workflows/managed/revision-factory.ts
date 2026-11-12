@@ -86,8 +86,11 @@ export function createManagedWorkflowRevisionFactory(options: {
     );
   };
 
-  const readRevisionProjectContents = async (revision: Pick<RevisionRow, 'project_blob_key'>): Promise<string> => {
-    return options.blobStore.getText(revision.project_blob_key);
+  const readRevisionProjectContents = async (
+    revision: Pick<RevisionRow, 'project_blob_key'>,
+    readOptions?: { signal?: AbortSignal },
+  ): Promise<string> => {
+    return options.blobStore.getText(revision.project_blob_key, readOptions);
   };
 
   return {

@@ -27,6 +27,36 @@ const version = z.enum(['latest', 'published']);
 const id = z.string().uuid();
 const receipt = z.object({ operationId: id, expiresAt: z.string().datetime() }).strict();
 const projectId = z.string().min(1).max(256);
+const comparisonMember = z.object({ bundleId: id, projectId }).strict();
+const comparisonPair = z
+  .object({
+    older: comparisonMember.extend({ revisionId: z.string().min(1).max(256) }).nullable(),
+    newer: comparisonMember.nullable(),
+  })
+  .strict()
+  .refine((value) => value.older !== null || value.newer !== null, 'Select a project to compare.');
+for (const operation of ['manifest', 'pair'] as const) {
+  bundlesRouter.post(
+    `/compare/${operation}`,
+    asyncHandler(async (req, res) => {
+      const abort = new AbortController();
+      const close = () => {
+        if (!res.writableEnded) abort.abort();
+      };
+      const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]);
+      res.once('close', close);
+      try {
+        const service = await getExplicitBundleService();
+        if (operation === 'manifest') {
+          const body = z.object({ olderId: id, newerId: id }).strict().parse(req.body);
+          res.json(await service.compareManifest(body.olderId, body.newerId, signal));
+        } else res.json(await service.comparePair(comparisonPair.parse(req.body), signal));
+      } finally {
+        res.off('close', close);
+      }
+    }),
+  );
+}
 const mergeChoices = z
   .object({
     destinationBundleId: id,

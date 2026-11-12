@@ -66,6 +66,8 @@ import { GraphListHeader } from './graphList/GraphListHeader.js';
 import { GraphListSectionHeader } from './graphList/GraphListSectionHeader.js';
 import { UiGraphResourceSection } from './graphList/UiGraphResourceSection.js';
 import { GraphListContextMenus } from './graphList/GraphListContextMenus.js';
+import { useWorkspaceHostCompare } from '../hooks/workspaceHost/useWorkspaceHostCompare.js';
+import { isComparisonInspectionProject } from '../utils/projectComparisonDocument.js';
 
 const NO_SELECTED_GRAPH: NodeGraph = {
   nodes: [],
@@ -755,6 +757,7 @@ export const GraphList: FC = memo(() => {
 
   const runningGraphs = useAtomValue(runningGraphsState);
   const project = useAtomValue(projectState);
+  const inspectionOnly = isComparisonInspectionProject(project.metadata.id);
   const clipboard = useAtomValue(clipboardState);
   const uiGraphs = Object.values(project.uiGraphs ?? {});
   const nodeLibraryItemCount = Object.keys(project.nodePrefabs ?? {}).length;
@@ -777,6 +780,7 @@ export const GraphList: FC = memo(() => {
   const handleSidebarContextMenu = useStableCallback((e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
+    if (inspectionOnly) return;
     handleContextMenu(e);
   });
 
@@ -827,7 +831,9 @@ export const GraphList: FC = memo(() => {
     openUiGraph(uiGraphId);
   });
 
+  const { inspectComparisonGraph } = useWorkspaceHostCompare();
   const selectGraph = useStableCallback((graph: NodeGraph) => {
+    if (graph.metadata?.id && inspectComparisonGraph(graph.metadata.id)) return;
     loadGraph(graph);
   });
 
@@ -876,6 +882,7 @@ export const GraphList: FC = memo(() => {
   });
 
   const handleGraphListKeyDown = useStableCallback((e: KeyboardEvent<HTMLDivElement>) => {
+    if (inspectionOnly) return;
     if (e.key !== 'F2' || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) {
       return;
     }
@@ -1098,6 +1105,7 @@ export const GraphList: FC = memo(() => {
   return (
     <div css={styles}>
       <GraphListHeader
+        readOnly={inspectionOnly}
         hasWebApps={uiGraphs.length > 0}
         nodeLibraryItemCount={nodeLibraryItemCount}
         nodeLibraryOpen={nodeLibraryOpen}

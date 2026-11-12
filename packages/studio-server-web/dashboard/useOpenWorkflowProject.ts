@@ -25,6 +25,7 @@ import {
 } from '../../app/src/utils/projectActivationCoordinator.js';
 
 type OpenWorkflowProjectOptions = {
+  signal?: AbortSignal;
   executorMode?: ProjectExecutorMode;
   replaceCurrent?: boolean;
   reloadFromDisk?: boolean;
@@ -160,8 +161,12 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
     if ((!alreadyOpenByPath || reloadFromDisk) && !openingTabId) supersedeProjectActivation(store);
     const selectionRevision = getProjectActivationRevision(store);
     const signal = getProjectActivationSignal(store);
-    const isCurrent = () => getProjectActivationRevision(store) === selectionRevision && !signal.aborted;
-    const loadOptions = { signal, deferCommit: true };
+    const isCurrent = () =>
+      getProjectActivationRevision(store) === selectionRevision && !signal.aborted && !options?.signal?.aborted;
+    const loadOptions = {
+      signal: options?.signal ? AbortSignal.any([signal, options.signal]) : signal,
+      deferCommit: true,
+    };
     const commitCurrent = async (loaded: LoadedProjectData, canCommit = isCurrent): Promise<boolean> => {
       try {
         return canCommit() && (!loaded.commit || (await loaded.commit(canCommit))) && canCommit();
@@ -193,6 +198,7 @@ export function useOpenWorkflowProject(workspace: RivetWorkspaceHost) {
       // Tree activation is tab selection, not a fresh load. The workspace owns
       // the live graph, dirty baseline, viewport and inactive-tab snapshot.
       if (!reloadFromDisk) {
+        if (!isCurrent()) return { opened: false };
         await cancelOpeningTab();
         const activating = workspace.activateProject(alreadyOpenByPath.projectId, { preferredGraphId });
         const activationRevision = getProjectActivationRevision(store);

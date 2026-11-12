@@ -36,8 +36,7 @@ export function ComparisonNodeLayer({
 }) {
   const reference = useAtomValue(projectCompareReferenceState);
   const currentGraph = useAtomValue(graphState);
-  const graph =
-    currentGraph.metadata?.id ? reference?.referenceProject.graphs[currentGraph.metadata.id] : undefined;
+  const graph = currentGraph.metadata?.id ? reference?.referenceProject.graphs[currentGraph.metadata.id] : undefined;
   const removedIds = useMemo(() => new Set(removedNodes.map((node) => node.id)), [removedNodes]);
   const nodesById = useMemo(
     () => (graph && reference ? getComparisonNodesById(reference.referenceProject, graph) : {}),
@@ -47,10 +46,7 @@ export function ComparisonNodeLayer({
     if (!graph) return [];
     // Also measure historical layouts for surviving endpoints of removed/changed wires.
     const endpoints = new Set(
-      referenceConnections.flatMap((connection) => [
-        connection.inputNodeId,
-        connection.outputNodeId,
-      ]),
+      referenceConnections.flatMap((connection) => [connection.inputNodeId, connection.outputNodeId]),
     );
     return graph.nodes.filter(
       (node) =>
@@ -109,10 +105,13 @@ function ComparisonNode({
   const { isZoomedOut } = useCanvasViewContext();
   const resolvedNode = nodesById[node.id] ?? node;
   const ports = useMemo(
-    () => getComparisonNodePorts(registry, project, graph, node, nodesById),
-    [registry, project, graph, node, nodesById],
+    () => getComparisonNodePorts(registry, project, graph, node, nodesById, reference.referencedProjects),
+    [registry, project, graph, node, nodesById, reference],
   );
-  const fallback = useMemo(() => getComparisonNodeFallback(resolvedNode, project), [resolvedNode, project]);
+  const fallback = useMemo(
+    () => getComparisonNodeFallback(resolvedNode, project, reference.referencedProjects),
+    [resolvedNode, project, reference],
+  );
   const [preview, setPreview] = useState<{
     node: ChartNode;
     reference: ProjectCompareReference;
@@ -125,9 +124,13 @@ function ComparisonNode({
     void (async () => {
       try {
         const context = await getUIContext({ node: resolvedNode });
-        const body = await registry
-          .createDynamicImpl(resolvedNode)
-          .getBody({ ...context, node: resolvedNode, project, graph, referencedProjects: {} });
+        const body = await registry.createDynamicImpl(resolvedNode).getBody({
+          ...context,
+          node: resolvedNode,
+          project,
+          graph,
+          referencedProjects: reference.referencedProjects ?? {},
+        });
         if (active) setPreview({ node, reference, graph, body });
       } catch {
         if (active) setPreview({ node, reference, graph, body: undefined });

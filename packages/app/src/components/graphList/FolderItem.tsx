@@ -160,6 +160,7 @@ export const FolderItem: FC<{
       }
 
       if (isComparisonRemovedGraph) {
+        if (item.type === 'graph') onGraphSelected?.(item.graph);
         return;
       }
 

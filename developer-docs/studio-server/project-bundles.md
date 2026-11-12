@@ -19,6 +19,75 @@ The bundle context menu keeps conversion last in its bundle-action section,
 uses a merge icon for merging, and puts New folder in its own section between
 separators, before the New project and upload actions.
 
+### Comparing bundles
+
+On managed installations advertising `bundleCompare`, choose **Compare with
+another bundle…** from a bundle context menu. The clicked bundle starts as Newer.
+Choose Older, review every project in the matching table, and confirm **Compare
+bundles**. Unique bundle-relative paths, then names, prefill one-to-one suggestions;
+ambiguous rows require a choice. **No corresponding project** is explicit.
+Duplication creates fresh project IDs while preserving graph/node IDs, so project
+ID equality cannot establish duplicate correspondence. The reviewed mapping is
+authoritative. Swapping reverses that mapping; cancelling a draft changes nothing.
+The unpaired Newer list uses the same project-name and relative-path labels as
+the counterpart choices, without storage extensions. Narrow matching tables
+show their column labels above each stacked cell. The scrollable content keeps
+the footer actions reachable; Escape closes an open choice menu before the modal.
+
+The Server tree shows both selected bundles, including subfolders and disconnected
+members. Either paired row opens the same real **Newer** project. Edit, undo, save,
+and resolve conflicts normally; an open dirty tab is activated without reloading
+it. **Older** stays pinned to Saved latest at setup. Refresh older version captures
+fresh saved pointers without reloading Newer. Swap keeps edits in their original
+real tabs and uses saved contents for the newly Older side. Unsaved Older edits
+are excluded. Changes to bundle membership/locations require reviewing matching.
+Both sides highlight the active pair. Collapsed ancestors retain the ordinary
+library's selected-descendant cue without reopening folders the user has closed.
+Pair availability errors stay with the current reviewed versions and mapping;
+a successfully applied Refresh, Swap or new review clears errors from the previous
+review. Switching pairs alone retains other pairs' errors until they are reopened.
+
+Newer-only projects compare against an empty reference and remain editable.
+Older-only projects use a transient read-only inspection: no server file, save,
+run, or recoverable virtual tab is created. Removed graphs open a read-only ghost
+view; saving a real Newer project from that view cannot restore the deleted graph.
+Both Exit controls restore the ordinary library and retain real tabs/edits.
+Opening an unrelated tab exits; native Newer-member navigation follows its pair.
+Closing an inspection uses normal tab replacement; Exit does not override a
+newer tab selection. If closure cannot complete, the tab stays available with a
+located error and can be closed explicitly; it is not retried automatically.
+Native tab changes and ordinary Server project opens also cancel an initial
+comparison load and restore the library. Applying an empty review waits for any
+Older-only inspection to close and return to its real tab before settling the
+empty session. Closing inspections releases their reference view and temporary
+context. Recovery filters only workspace metadata, preserving authored payloads
+and real project contexts even when their keys resemble inspection IDs.
+After a read failure with no attached comparison, switching or closing the active
+tab exits the filtered view without retrying. If the previous comparison is still
+displayed, its exact owner and actual project ID keep its selection intact,
+including Older-only inspections. Opening the matching modal cancels an in-flight
+toolbar Swap/Refresh so a late catalog reply cannot change the confirmed session
+under the modal draft.
+A later standalone comparison also wins over an in-flight bundle attachment;
+cancellation cleanup preserves any inspection document it has taken over.
+
+Comparison-only, side-aware ID equivalence suppresses copied internal Subgraph,
+alias, variant and Library-source owner IDs. Real target/version/boundary changes
+remain visible, including a Newer node incorrectly targeting the Older bundle.
+No authored reference is rewritten for comparison. Older ghost ports use captured
+in-bundle Latest/Published definitions, with saved boundary fallbacks for unavailable
+definitions; they never borrow Newer's dependencies.
+
+The read API captures bounded catalogs in one metadata snapshot, then fetches only
+selected Older project blobs and visible direct definitions, never whole-bundle
+execution closures or dataset blobs. Reads propagate cancellation/deadlines; parsed
+immutable references have an eight-entry/64 MiB serialized-size cache. This needs
+no schema migration, indexing, backfill or background job. See the
+[implementation and acceptance plan](bundle-comparison-plan.md) and
+[editor bridge](editor-bridge.md) for the ownership contract.
+The user-facing matching, editing and navigation guide is
+[Comparing Studio Server bundles](../../packages/docs/docs/user-guide/working-with-projects.md#comparing-studio-server-bundles).
+
 ### Merging saved project changes
 
 On a managed explicit bundle, drag its tree row onto another bundle to open the

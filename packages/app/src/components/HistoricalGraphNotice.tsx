@@ -5,6 +5,7 @@ import { graphState, historicalGraphState, isReadOnlyGraphState } from '../state
 import Button from '@atlaskit/button';
 import { useLoadGraph } from '../hooks/useLoadGraph';
 import { projectState } from '../state/savedGraphs';
+import { useProjectWorkspaceTarget } from '../hooks/useProjectWorkspaceTarget.js';
 
 const styles = css`
   position: fixed;
@@ -45,6 +46,7 @@ export const HistoricalGraphNotice: FC = () => {
   const graph = useAtomValue(graphState);
   const [historicalGraph, setHistoricalGraph] = useAtom(historicalGraphState);
   const [isReadOnlyGraph, setIsReadOnlyGraph] = useAtom(isReadOnlyGraphState);
+  const target = useProjectWorkspaceTarget();
 
   const currentGraphExists = graph.metadata!.id! in project.graphs;
 
@@ -71,7 +73,11 @@ export const HistoricalGraphNotice: FC = () => {
           </>
         )}
       </span>
-      <Button onClick={backToCurrent}>Back to Current</Button>
+      {target?.type === 'comparisonReference' ? (
+        <span>Deleted graph from Older. Select a Newer graph or exit comparison to return.</span>
+      ) : (
+        <Button onClick={backToCurrent}>Back to Current</Button>
+      )}
     </div>
   );
 };

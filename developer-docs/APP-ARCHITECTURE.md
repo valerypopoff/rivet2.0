@@ -12,6 +12,27 @@ feature-specific detail.
 > Detailed internal reference for refactoring the desktop app.
 > Verified against `packages/app`, `packages/app/src-tauri`, and the current hooks/state modules.
 
+## Bundle comparison
+
+Bundle comparison is hosted through the existing public workspace boundary.
+`startProjectCompare` accepts optional side-aware identity equivalence, reference
+definitions, expected current project and session/generation owner. Standalone
+comparison keeps its defaults. Get/subscribe/stop/definition updates validate the
+live store and owner; they do not read a stale React activation closure. Core
+normalizes derived comparison values only, preserving raw inspector values and
+authored save/run content.
+
+Removed graphs use a `comparisonReference` workspace target and a marked empty
+canvas with the graph remaining only in the pinned reference. This target has no
+execution or live-graph/viewport commit capability. Current-graph save, dirty
+snapshot merging and recovery omit the placeholder. Normal graph navigation/Exit
+restores an authored view without adding the removed graph or losing newer graph
+selection. Older-only host documents have reserved `bundle-comparison:` identities,
+cannot mutate through graph commands or hosted saves, and are excluded from
+workspace recovery while real dirty snapshots/baselines remain. Ghost ports can
+use pinned Older definitions independently of the live dependency store.
+See [Bundle comparison](studio-server/project-bundles.md#comparing-bundles).
+
 ## Purpose
 
 `@valerypopoff/rivet-app` is the interactive IDE layer of the monorepo. It is responsible for:

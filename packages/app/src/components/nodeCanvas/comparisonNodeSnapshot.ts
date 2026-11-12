@@ -1,5 +1,7 @@
 import {
   resolveNodePrefabInstance,
+  getSubgraphProjectKey,
+  type ProjectId,
   type ChartNode,
   type NodeGraph,
   type NodeId,
@@ -24,13 +26,14 @@ export function getComparisonNodePorts(
   graph: NodeGraph,
   node: ChartNode,
   nodesById = getComparisonNodesById(project, graph),
+  referencedProjects: Record<string, Project> = {},
 ): { inputs: NodeInputDefinition[]; outputs: NodeOutputDefinition[] } {
   try {
     const impl = registry.createDynamicImpl(nodesById[node.id] ?? node);
     const connections = graph.connections.filter((c) => c.inputNodeId === node.id || c.outputNodeId === node.id);
     return {
-      inputs: impl.getInputDefinitionsIncludingBuiltIn(connections, nodesById, project, {}),
-      outputs: impl.getOutputDefinitions(connections, nodesById, project, {}),
+      inputs: impl.getInputDefinitionsIncludingBuiltIn(connections, nodesById, project, referencedProjects),
+      outputs: impl.getOutputDefinitions(connections, nodesById, project, referencedProjects),
     };
   } catch {
     // A missing plugin or external project must not prevent inspecting saved data.
@@ -38,10 +41,23 @@ export function getComparisonNodePorts(
   }
 }
 
-export function getComparisonNodeFallback(node: ChartNode, project: Project): string {
+export function getComparisonNodeFallback(
+  node: ChartNode,
+  project: Project,
+  referencedProjects: Record<string, Project> = {},
+): string {
   if (node.type === 'subGraph') {
-    const graphId = (node.data as { graphId?: string }).graphId;
-    const target = Object.values(project.graphs).find((graph) => graph.metadata?.id === graphId);
+    const { graphId, targetProjectId, targetVersion } = node.data as {
+      graphId?: string;
+      targetProjectId?: string;
+      targetVersion?: 'latest' | 'published';
+    };
+    const owner = targetProjectId
+      ? referencedProjects[
+          getSubgraphProjectKey({ projectId: targetProjectId as ProjectId, version: targetVersion ?? 'latest' })
+        ]
+      : project;
+    const target = Object.values(owner?.graphs ?? {}).find((graph) => graph.metadata?.id === graphId);
     return `Graph: ${target?.metadata?.name ?? '(unavailable in reference)'}\nID: ${graphId ?? '(not set)'}`;
   }
   const savedSettings = yaml.stringify(node.data) ?? '';

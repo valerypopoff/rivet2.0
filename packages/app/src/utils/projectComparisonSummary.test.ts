@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type {
-  ChartNode,
-  GraphId,
-  NodeId,
-  ProjectComparison,
-  ProjectGraphComparison,
-  ProjectId,
+import {
+  compareProjects,
+  type Project,
+  type ChartNode,
+  type GraphId,
+  type NodeId,
+  type ProjectComparison,
+  type ProjectGraphComparison,
+  type ProjectId,
 } from '@valerypopoff/rivet2-core';
 import {
   formatProjectComparisonCounts,
@@ -19,6 +21,24 @@ import {
 function asGraphId(id: string): GraphId {
   return id as GraphId;
 }
+test('a displayed removed graph reports its deleted nodes instead of No changes', () => {
+  const before = {
+    metadata: { id: 'older', title: 'Older' },
+    graphs: {
+      removed: {
+        metadata: { id: 'removed', name: 'Removed' },
+        nodes: [{ id: 'deleted', type: 'text', title: 'Deleted', data: { text: 'saved' }, visualData: { x: 0, y: 0 } }],
+        connections: [],
+      },
+    },
+  } as unknown as Project;
+  const after = { ...before, graphs: {} };
+  const comparison = compareProjects(before, after);
+  assert.equal(
+    formatProjectComparisonCurrentGraphCounts(getGraphProjectComparisonCounts(comparison.graphs.removed)),
+    '1 node',
+  );
+});
 
 function asNodeId(id: string): NodeId {
   return id as NodeId;
