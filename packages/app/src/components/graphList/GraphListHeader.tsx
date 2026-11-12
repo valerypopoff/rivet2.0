@@ -7,6 +7,7 @@ import { Tooltip } from '../Tooltip.js';
 import { SubgraphLinkIcon } from '../visualNode/SubgraphLinkIcon.js';
 
 export const GraphListHeader: FC<{
+  readOnly?: boolean;
   hasWebApps: boolean;
   nodeLibraryItemCount: number;
   nodeLibraryOpen: boolean;
@@ -16,6 +17,7 @@ export const GraphListHeader: FC<{
   onOpenSearch(): void;
   projectTitle: string;
 }> = ({
+  readOnly,
   hasWebApps,
   nodeLibraryItemCount,
   nodeLibraryOpen,
@@ -30,42 +32,44 @@ export const GraphListHeader: FC<{
       <span className="project-tree-header-label">Project:</span>
       <span className="project-tree-header-title">{projectTitle}</span>
     </div>
-    <div className="graph-list-toolbar">
-      <Tooltip content="Search (Ctrl/Cmd+F)" placement="right" tag="span" className="graph-list-action-tooltip">
-        <button type="button" className="graph-list-action" onClick={onOpenSearch}>
-          <SearchIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-search" />
-          <span>Search</span>
+    {!readOnly && (
+      <div className="graph-list-toolbar">
+        <Tooltip content="Search (Ctrl/Cmd+F)" placement="right" tag="span" className="graph-list-action-tooltip">
+          <button type="button" className="graph-list-action" onClick={onOpenSearch}>
+            <SearchIcon aria-hidden="true" className="project-tree-panel-icon project-tree-panel-icon-search" />
+            <span>Search</span>
+          </button>
+        </Tooltip>
+        <button type="button" className="graph-list-action" onClick={onOpenProjectSettings}>
+          <SettingsCogIcon
+            aria-hidden="true"
+            className="project-tree-panel-icon project-tree-panel-icon-project-settings"
+          />
+          <span>Project settings</span>
         </button>
-      </Tooltip>
-      <button type="button" className="graph-list-action" onClick={onOpenProjectSettings}>
-        <SettingsCogIcon
-          aria-hidden="true"
-          className="project-tree-panel-icon project-tree-panel-icon-project-settings"
-        />
-        <span>Project settings</span>
-      </button>
-      <button
-        type="button"
-        className={clsx('graph-list-action', { selected: nodeLibraryOpen })}
-        aria-current={nodeLibraryOpen ? 'page' : undefined}
-        onClick={onOpenNodeLibrary}
-      >
-        <span className="project-tree-panel-icon project-tree-panel-icon-node-library">
-          <SubgraphLinkIcon />
-        </span>
-        <span>Node library</span>
-        {nodeLibraryItemCount > 0 && (
-          <span className="graph-folder-count">
-            <span>{nodeLibraryItemCount}</span>
+        <button
+          type="button"
+          className={clsx('graph-list-action', { selected: nodeLibraryOpen })}
+          aria-current={nodeLibraryOpen ? 'page' : undefined}
+          onClick={onOpenNodeLibrary}
+        >
+          <span className="project-tree-panel-icon project-tree-panel-icon-node-library">
+            <SubgraphLinkIcon />
           </span>
-        )}
-      </button>
-      {!hasWebApps && (
-        <button type="button" className="graph-list-action" onClick={onCreateWebApp}>
-          <PlusIcon aria-hidden="true" className="project-tree-panel-icon" />
-          <span>Create web app</span>
+          <span>Node library</span>
+          {nodeLibraryItemCount > 0 && (
+            <span className="graph-folder-count">
+              <span>{nodeLibraryItemCount}</span>
+            </span>
+          )}
         </button>
-      )}
-    </div>
+        {!hasWebApps && (
+          <button type="button" className="graph-list-action" onClick={onCreateWebApp}>
+            <PlusIcon aria-hidden="true" className="project-tree-panel-icon" />
+            <span>Create web app</span>
+          </button>
+        )}
+      </div>
+    )}
   </div>
 );

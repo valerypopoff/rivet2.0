@@ -36,7 +36,9 @@ export function prepareMigrationHistory({ cwd = process.cwd(), evidence = migrat
   try {
     inspect();
     return { fetched: false };
-  } catch {
+  } catch (error) {
+    // Fetching cannot repair a mismatch in already-present immutable evidence.
+    if (error instanceof assert.AssertionError) throw error;
     // A depth-three fetch contains the migration, import and both import parents.
     // Never unshallow the checkout or fetch all remote branches/tags.
   }

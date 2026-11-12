@@ -5,6 +5,36 @@ those audits does not certify NGINX, Alpine libraries or binaries copied into a
 container. Build Images now requires `scan-images` before promotion, alongside
 the existing functional, migration and HA gates. Scanning does not deploy anything.
 
+## Git package floor: November 12, 2026
+
+[Build Images 43113173680](https://github.com/valerypopoff/rivet2.0/actions/runs/43113173680)
+passed the application, API and all three browser shards, but its
+[API scan](https://github.com/valerypopoff/rivet2.0/actions/runs/43113173680/job/130838760168)
+found `git` and `git-init-template` at `2.54.0-r0`, blocked by
+CVE-2026-105437, CVE-2026-111760 and CVE-2026-114466. These are six package
+findings for three advisories. The later HA assembly failure followed skipped
+prerequisites after this scan; promotion stayed blocked. The cancelled develop
+push runs were separate from this main-branch image failure.
+
+[Git 2.54.1](https://raw.githubusercontent.com/git/git/v2.54.1/Documentation/RelNotes/2.54.1.adoc)
+contains the security fixes. Both API stages that install Git and the
+qualification toolchain now require `git>=2.54.1-r0` and
+`git-init-template>=2.54.1-r0`. The explicit floors change the Docker package
+layers and refuse older packages; `apk --no-cache` alone does not invalidate a
+cached Docker `RUN`. Require the matching init templates explicitly rather
+than assuming that installing Git fixes every related package.
+
+The workflow-policy check guards each of these installation stages separately.
+Keep Git for existing repository/plugin operations, preserve the pinned base
+images and High/Critical policy, and scan rebuilt final images.
+
+Local rebuilds of the API image and `qualification-toolchain` target both passed
+strict amd64 scans with zero High/Critical findings. Both contained Git and init
+templates at `2.54.1-r0`. Embedded native-runtime and Helm/kubectl checks, plus an
+offline Chromium render, passed. Local toolchain validation does not replace the
+source-bound qualification actor's normal CI scan. This repair changes no
+application data or schema and deploys nothing.
+
 ## Pinned NGINX and October 2026 update
 
 The production Dockerfile, development Compose proxy and real proxy regression

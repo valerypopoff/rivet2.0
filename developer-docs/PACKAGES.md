@@ -2,6 +2,28 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-12 — editable bundle comparison
+
+The actual version baselines are `54c429551` for App, the public runtime family
+and App Executor, `488019eb9` for Docs, and `5b3a3fae7` for Studio Server. This
+preparation covers subsequent changes through `3551e25c7` and the current
+Download bundle UI/status fixes.
+
+| Packages | Version | Changes since the last bump |
+| --- | --- | --- |
+| App | `2.35.0` → `2.36.0` | Adds hosted comparison ownership and reference definitions, editable Newer projects, read-only removed/Older-only inspection, and navigation/save/recovery preservation. |
+| Core, Node, CLI, Evaluations | `2.28.0` → `2.29.0` | Core adds optional side-aware comparison identity equivalence and preserves raw inspector values. Node, CLI and Evaluations have no package-local implementation changes and follow public-family lockstep. |
+| App Executor | `2.20.0` → `2.21.0` | Source-bundled companion for the updated Core API; no package-local implementation or separate sidecar protocol change. |
+| All five Studio Server packages | `1.37.1` → `1.38.0` | Adds bounded bundle comparison reads, matching and two-bundle navigation, editable comparison sessions and shared bridge contracts, plus compatible export-progress/copy fixes. API/Web/Shared change locally; Bootstrap/Executor remain product companions. |
+| Docs | `2.27.0` → `2.28.0` | Adds the bundle-comparison user journey and interface overview link. |
+
+The new capabilities are compatible additions, warranting minor releases.
+Desktop Tauri/Cargo metadata follows App, and the CLI Docker fallback follows
+the public family. Workspace dependency ranges, Yarn resolutions, chart metadata
+and managed schema versions remain independent. The root workspace has no version.
+See the [prepared release summary](BUILD-AND-CI.md#prepared-bundle-comparison-release-versions-2026-11-12)
+for validation commands. These metadata edits do not publish or deploy a release.
+
 ## Version update: 2026-11-12 — recording search and modal responsiveness
 
 The last actual version change for App, the public runtime family, App Executor

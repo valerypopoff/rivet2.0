@@ -57,7 +57,10 @@ export function getGraphProjectComparisonCounts(
       graphComparison.summary.removedConnections +
       graphComparison.summary.changedConnections,
     graphs: graphComparison.kind === 'unchanged' ? 0 : 1,
-    nodes: countHighlightedCurrentNodes(graphComparison),
+    nodes:
+      graphComparison.kind === 'removed'
+        ? graphComparison.summary.removedNodes
+        : countHighlightedCurrentNodes(graphComparison),
     nodePrefabs: 0,
     uiGraphs: 0,
   };

@@ -1,4 +1,5 @@
 import { useEffect, type RefObject } from 'react';
+import type { BundleComparisonEditorState } from '../../studio-server-shared/workflow-bundle-comparison-types';
 import { toast } from 'react-toastify';
 import {
   isEditorToDashboardEvent,
@@ -16,6 +17,7 @@ import {
 } from './editorBridgeFocus';
 
 type UseEditorBridgeEventsOptions = {
+  onBundleComparisonState?: (state: BundleComparisonEditorState, requestId?: string) => void;
   activeWorkflowProjectPath: string;
   editorReady: boolean;
   focusEditorFrame: () => void;
@@ -39,6 +41,7 @@ type UseEditorBridgeEventsOptions = {
 
 export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
   const {
+    onBundleComparisonState,
     activeWorkflowProjectPath,
     editorReady,
     focusEditorFrame,
@@ -156,6 +159,9 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
       }
 
       switch (event.data.type) {
+        case 'bundle-comparison-state':
+          onBundleComparisonState?.(event.data.state, event.data.requestId);
+          break;
         case 'editor-initialization-failed':
           onEditorInitializationFailed();
           break;
@@ -213,6 +219,7 @@ export function useEditorBridgeEvents(options: UseEditorBridgeEventsOptions) {
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, [
+    onBundleComparisonState,
     focusEditorFrame,
     iframeRef,
     onActiveProjectUnsavedChangesChange,

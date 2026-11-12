@@ -35,6 +35,25 @@ function createRevisionForCleanupTest() {
     dataset_blob_key: 'blob-b',
   };
 }
+test('project-only revision reads forward cancellation without touching dataset artifacts', async () => {
+  const abort = new AbortController();
+  const calls: string[] = [];
+  const factory = createManagedWorkflowRevisionFactory({
+    blobStore: {
+      getText: async (key: string, options?: { signal?: AbortSignal }) => {
+        calls.push(key);
+        assert.equal(options?.signal, abort.signal);
+        return 'project-only contents';
+      },
+    } as never,
+    queueObjectDeletions: async () => 0,
+  });
+  assert.equal(
+    await factory.readRevisionProjectContents(createRevisionForCleanupTest(), { signal: abort.signal }),
+    'project-only contents',
+  );
+  assert.deepEqual(calls, ['blob-a']);
+});
 
 test('managed pre-commit blob cleanup queues known objects instead of directly deleting them', async () => {
   const queued: Array<{ domain: string; keys: Array<string | null | undefined> }> = [];

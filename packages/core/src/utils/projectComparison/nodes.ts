@@ -1,6 +1,7 @@
 import type { ChartNode, NodeId } from '../../model/NodeBase.js';
 import type { ProjectNodeComparison, ProjectNodeFieldComparison } from '../projectComparison.js';
 import { areComparisonValuesEqual, getChangedValueComparisons, isComparisonRecord, unionKeys } from './values.js';
+import { comparisonNodeIdentity, type ProjectComparisonIdentity } from './identity.js';
 
 export function getProjectNodeFieldComparisons(comparison: ProjectNodeComparison): ProjectNodeFieldComparison[] {
   const before = comparison.before;
@@ -10,14 +11,29 @@ export function getProjectNodeFieldComparisons(comparison: ProjectNodeComparison
     return [];
   }
 
-  return getChangedValueComparisons([], getComparableNodeRecord(before), getComparableNodeRecord(after));
+  const rawBefore = getComparableNodeRecord(before);
+  const rawAfter = getComparableNodeRecord(after);
+  const at = (record: unknown, path: string[]) =>
+    path.reduce<unknown>(
+      (value, key) => (value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined),
+      record,
+    );
+  return getChangedValueComparisons(
+    [],
+    getComparableNodeRecord(comparisonNodeIdentity(before, 'before', comparison.identity)),
+    getComparableNodeRecord(comparisonNodeIdentity(after, 'after', comparison.identity)),
+  ).map((change) => ({ ...change, before: at(rawBefore, change.path), after: at(rawAfter, change.path) }));
 }
 
 export function getComparableGraphNodes(nodes: ChartNode[]): ChartNode[] {
   return nodes.filter((node) => node.type !== 'comment');
 }
 
-export function compareNodes(beforeNodes: ChartNode[], afterNodes: ChartNode[]): Record<NodeId, ProjectNodeComparison> {
+export function compareNodes(
+  beforeNodes: ChartNode[],
+  afterNodes: ChartNode[],
+  identity?: ProjectComparisonIdentity,
+): Record<NodeId, ProjectNodeComparison> {
   const beforeById = new Map(beforeNodes.map((node) => [node.id, node]));
   const afterById = new Map(afterNodes.map((node) => [node.id, node]));
   const nodeIds = unionKeys(Object.fromEntries(beforeById), Object.fromEntries(afterById)) as NodeId[];
@@ -39,9 +55,15 @@ export function compareNodes(beforeNodes: ChartNode[], afterNodes: ChartNode[]):
         nodeId,
         {
           id: nodeId,
-          kind: areComparisonNodesEqual(before, after) ? 'unchanged' : 'changed',
+          kind: areComparisonNodesEqual(
+            before && comparisonNodeIdentity(before, 'before', identity),
+            after && comparisonNodeIdentity(after, 'after', identity),
+          )
+            ? 'unchanged'
+            : 'changed',
           before,
           after,
+          ...(identity ? { identity } : {}),
         } satisfies ProjectNodeComparison,
       ];
     }),

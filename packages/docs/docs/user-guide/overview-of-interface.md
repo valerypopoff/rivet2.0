@@ -24,6 +24,10 @@ Use **Project settings** at the top of the graph tree panel to set the name and 
 
 You can also use **Project settings** to compare the open project to an older `.rivet-project` file. See [Working with Projects](./working-with-projects.md#comparing-projects) for how compare mode highlights added, changed, and removed graphs, nodes, and connections.
 
+In Studio Server, a bundle's **Compare with another bundle…** context-menu action
+lets you match projects and navigate their comparisons while editing the Newer
+side. See [Comparing Studio Server bundles](./working-with-projects.md#comparing-studio-server-bundles).
+
 Project plugin declarations are shown separately as "Plugins used by this project". In Rivet 2, plugins are installed into the app from Settings > Plugins, and the project list is derived from actual plugin-node usage. See the [Plugins](./plugins.md) documentation for more information.
 
 ![Project Info](./assets/project-info.png)

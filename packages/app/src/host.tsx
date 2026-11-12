@@ -181,6 +181,7 @@ export type {
   RivetOpeningProjectTabInput,
   RivetOpeningProjectTabOptions,
   RivetProjectCompareOptions,
+  RivetProjectCompareState,
   RivetProjectCleanBaselineSnapshotInput,
   RivetProjectOpenOptions,
   RivetProjectMetadataPatch,
@@ -218,6 +219,7 @@ export {
   type ProjectNodeComparison,
 } from '@valerypopoff/rivet2-core';
 export type { ProjectCompareSideLabels } from './state/projectComparison.js';
+export { COMPARISON_INSPECTION_PREFIX, isComparisonInspectionProject } from './utils/projectComparisonDocument.js';
 export {
   configureHybridStorageBackend,
   IndexedDBStorage,

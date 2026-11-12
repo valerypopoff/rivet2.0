@@ -11,7 +11,11 @@ import {
   deleteProjectContextState,
 } from '../../state/savedGraphs.js';
 import { flushHybridStorageGroup } from '../../state/storage.js';
-import { projectCompareReferenceState, viewingProjectComparisonNodeState } from '../../state/projectComparison.js';
+import {
+  comparisonReferenceGraphState,
+  projectCompareReferenceState,
+  viewingProjectComparisonNodeState,
+} from '../../state/projectComparison.js';
 import { removeProjectTabUiState, projectTabUiState } from '../../state/projectTabUi.js';
 import { recordingTabIndicatorsState } from '../../state/execution.js';
 import { useExecutorSessionRegistry } from '../../providers/ExecutorSessionContext.js';
@@ -21,6 +25,7 @@ import { useProjectExecutionSnapshots } from '../useProjectExecutionSnapshots.js
 import { useStableCallback } from '../useStableCallback.js';
 import { removeProjectWorkspaceTargetState } from '../../state/workspaceTarget.js';
 import { clearUiGraphPreviewSessions } from '../../components/rivetWebApps/uiGraphPreviewSession.js';
+import { isComparisonInspectionProject } from '../../utils/projectComparisonDocument.js';
 
 function clearCodeEditorModelCacheForClosedProject(projectId: ProjectId, isStillClosed: () => boolean): void {
   window.setTimeout(() => {
@@ -63,6 +68,8 @@ export function useWorkspaceHostProjectCleanup() {
         setProjectCompareReference(undefined);
         setViewingProjectComparisonNode(undefined);
       }
+      if (store.get(comparisonReferenceGraphState)?.reference.projectId === projectId)
+        store.set(comparisonReferenceGraphState, undefined);
       setOpenedProjectSnapshots((snapshots) => {
         const nextSnapshots = { ...snapshots };
         delete nextSnapshots[projectId];
@@ -80,7 +87,8 @@ export function useWorkspaceHostProjectCleanup() {
       });
       removeWorkspaceTarget(projectId);
       executorSessionRegistry.removeProject(projectId);
-      releaseProjectContextState(projectId);
+      if (isComparisonInspectionProject(projectId)) store.set(deleteProjectContextState, projectId);
+      else releaseProjectContextState(projectId);
       clearCodeEditorModelCacheForClosedProject(projectId, () => !store.get(projectsState).openedProjects[projectId]);
     },
   );

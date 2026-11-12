@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FC } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type FC } from 'react';
 import ModalDialog, { ModalBody, ModalTransition } from '@atlaskit/modal-dialog';
 import Button from '@atlaskit/button';
 import type { ProjectBundleJobStatus } from '../../studio-server-shared/project-bundle-types';
@@ -13,6 +13,21 @@ function request(url: string, options: RequestInit = {}) {
   return fetch(url, { ...options, signal: options.signal ? AbortSignal.any([options.signal, deadline]) : deadline });
 }
 const active = (job: ProjectBundleJobStatus | null) => job?.phase === 'collecting' || job?.phase === 'packaging';
+// Start requests can outlive a modal instance when the user switches bundles.
+// Entries exist only until their original request settles (including timeout).
+const pendingStarts = new Set<string>();
+const pendingStartListeners = new Set<() => void>();
+function subscribeToPendingStarts(listener: () => void) {
+  pendingStartListeners.add(listener);
+  return () => {
+    pendingStartListeners.delete(listener);
+  };
+}
+function setStartPending(id: string, pending: boolean) {
+  if (pending) pendingStarts.add(id);
+  else pendingStarts.delete(id);
+  for (const listener of pendingStartListeners) listener();
+}
 
 export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen: boolean; onClose(): void }> = ({
   bundle,
@@ -27,6 +42,7 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
       return null;
     }
   });
+  const startPending = useSyncExternalStore(subscribeToPendingStarts, () => !!jobId && pendingStarts.has(jobId));
   const currentJobId = useRef(jobId);
   const [job, setJob] = useState<ProjectBundleJobStatus | null>(null);
   const latestJob = useRef<ProjectBundleJobStatus | null>(null);
@@ -71,6 +87,8 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      const previousStatus = latestJob.current;
+      const awaitingAdmission = pendingStarts.has(jobId) && !previousStatus;
       try {
         const status = await parseJsonResponse<ProjectBundleJobStatus>(
           await request(`${endpoint}/${jobId}`, { cache: 'no-store', signal: abort.signal }),
@@ -80,11 +98,23 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
         // Progress can reconcile a lost start acknowledgement, but cannot
         // prove that an independently requested cancellation succeeded.
         setError((current) => (current?.kind === 'cancel' ? current : null));
-        if (active(status)) timer = setTimeout(() => void poll(), 1000);
+        if (active(latestJob.current)) timer = setTimeout(() => void poll(), 1000);
       } catch (failure) {
         if (abort.signal.aborted || currentJobId.current !== jobId) return;
+        // A start acknowledgement can arrive while this older status read is
+        // failing. Keep its newer status instead of displaying a stale error.
+        if (latestJob.current !== previousStatus) {
+          if (active(latestJob.current)) timer = setTimeout(() => void poll(), 1000);
+          return;
+        }
+        // The client reserves its ID before POST; the server registers it
+        // asynchronously. A pre-admission 404 is pending, not a failed export.
+        if (awaitingAdmission && failure instanceof Error && 'status' in failure && failure.status === 404) {
+          timer = setTimeout(() => void poll(), 1000);
+          return;
+        }
         setError((current) =>
-          current?.kind === 'cancel'
+          current?.kind === 'cancel' || current?.kind === 'prepare'
             ? current
             : {
                 kind: 'progress',
@@ -107,6 +137,7 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
     setError(null);
     acceptStatus(null);
     const id = crypto.randomUUID();
+    setStartPending(id, true);
     remember(id); // Known before POST, so a lost acknowledgement is recoverable by GET.
     try {
       const status = await parseJsonResponse<ProjectBundleJobStatus>(
@@ -120,17 +151,21 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
           }),
         }),
       );
-      if (mounted.current) acceptStatus(status);
+      if (mounted.current) {
+        acceptStatus(status);
+        setError((current) => (current?.kind === 'cancel' ? current : null));
+      }
     } catch (failure) {
       if (mounted.current && !latestJob.current)
         setError({ kind: 'prepare', message: failure instanceof Error ? failure.message : 'Could not start export.' });
     } finally {
+      setStartPending(id, false);
       actionInFlight.current = false;
       if (mounted.current) setBusy(false);
     }
   };
   const dispose = async () => {
-    if (!jobId || actionInFlight.current) return false;
+    if (!jobId || actionInFlight.current || pendingStarts.has(jobId)) return false;
     actionInFlight.current = true;
     setBusy(true);
     setError(null);
@@ -180,9 +215,7 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
               <section className="workflow-project-bundle-card" aria-labelledby="bundle-project-heading">
                 <h3 id="bundle-project-heading">{bundle.name}</h3>
                 <p className="project-settings-help">
-                  Includes every bundle member, subfolders, disconnected projects, dependency snapshots and datasets.
-                  Unsaved editor changes are excluded. Project files and datasets may contain sensitive values.
-                  Credentials and server settings are not copied separately.
+                  Includes bundle members and dependencies outside the bundle. Unsaved editor changes are excluded.
                 </p>
                 {!jobId ? (
                   <div className="workflow-project-bundle-version">
@@ -205,14 +238,6 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
                     </SegmentedControl>
                   </div>
                 ) : null}
-                {!jobId ? (
-                  <p className="project-settings-help">
-                    One version per project, including dependencies. Published uses saved latest when a project has no
-                    publication. This selection applies to the whole bundle, overriding individual Subgraph version
-                    choices only inside the downloaded bundle. Incompatible graph interfaces fail export; wires are
-                    never removed automatically.
-                  </p>
-                ) : null}
               </section>
               {jobId ? (
                 <section className="workflow-project-bundle-card" aria-label="Export progress">
@@ -234,13 +259,6 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
                       {job.error}
                     </p>
                   ) : null}
-                  {job?.phase === 'ready' ? (
-                    <p className="project-settings-help">
-                      Extract the ZIP and open rivet-bundle.json in an updated Rivet Desktop app. Edit and save the
-                      projects, then use Upload bundle on the server to import the extracted folder or a new ZIP. The
-                      original server bundle is not overwritten.
-                    </p>
-                  ) : null}
                 </section>
               ) : null}
               {error ? (
@@ -249,10 +267,12 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
                   {error.kind !== 'cancel' ? ' Progress will be checked again while this window is open.' : null}
                 </p>
               ) : null}
-              <p className="project-settings-help">
-                Closing this window does not cancel preparation. Reopen this bundle’s download action to check its
-                progress.
-              </p>
+              {preparing ? (
+                <p className="project-settings-help">
+                  Closing this window does not cancel preparation. Reopen this bundle’s download action to check its
+                  progress.
+                </p>
+              ) : null}
             </div>
             <div className="workflow-project-bundle-footer">
               {!jobId ? (
@@ -264,30 +284,23 @@ export const WorkflowProjectBundleModal: FC<{ bundle: WorkflowFolderItem; isOpen
                 >
                   Prepare bundle
                 </Button>
+              ) : job?.phase === 'ready' ? (
+                <Button
+                  appearance="primary"
+                  className="workflow-project-bundle-action workflow-project-bundle-primary button-size-l"
+                  href={`${endpoint}/${jobId}/download`}
+                >
+                  Download bundle
+                </Button>
               ) : (
-                <>
-                  <Button
-                    appearance="subtle"
-                    className="workflow-project-bundle-action button-size-l"
-                    isDisabled={busy}
-                    onClick={() => void (job && !active(job) && job.phase !== 'ready' ? retry() : dispose())}
-                  >
-                    {active(job) || !job
-                      ? 'Cancel export'
-                      : job.phase === 'ready'
-                        ? 'Prepare another bundle'
-                        : 'Retry export'}
-                  </Button>
-                  {job?.phase === 'ready' ? (
-                    <Button
-                      appearance="primary"
-                      className="workflow-project-bundle-action workflow-project-bundle-primary button-size-l"
-                      href={`${endpoint}/${jobId}/download`}
-                    >
-                      Download bundle
-                    </Button>
-                  ) : null}
-                </>
+                <Button
+                  appearance="subtle"
+                  className="workflow-project-bundle-action button-size-l"
+                  isDisabled={busy || startPending}
+                  onClick={() => void (job && !active(job) ? retry() : dispose())}
+                >
+                  {active(job) || !job ? 'Cancel export' : 'Retry export'}
+                </Button>
               )}
             </div>
           </div>

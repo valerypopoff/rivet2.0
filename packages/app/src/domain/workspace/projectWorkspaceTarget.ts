@@ -3,6 +3,7 @@ import { createRootGraphViewContext, type GraphViewContext } from '../graphEditi
 
 export type ProjectWorkspaceTarget =
   | { type: 'graph'; graphView: GraphViewContext }
+  | { type: 'comparisonReference'; graphId: GraphId }
   | { type: 'nodeLibrary'; editingPrefabId?: NodePrefabId }
   | { type: 'uiGraph'; uiGraphId: UiGraphId };
 
@@ -26,7 +27,7 @@ export function getProjectWorkspaceTargetCapabilities(
   target: ProjectWorkspaceTarget | undefined,
 ): ProjectWorkspaceTargetCapabilities {
   return {
-    canRun: target?.type !== 'nodeLibrary' && target?.type !== 'uiGraph',
+    canRun: target?.type !== 'nodeLibrary' && target?.type !== 'uiGraph' && target?.type !== 'comparisonReference',
     hasCanvas: target?.type !== 'uiGraph',
   };
 }
@@ -34,7 +35,8 @@ export function getProjectWorkspaceTargetCapabilities(
 export function getProjectWorkspaceLeavePolicy(
   target: ProjectWorkspaceTarget | undefined,
 ): ProjectWorkspaceLeavePolicy {
-  const leavesGraph = target?.type !== 'nodeLibrary' && target?.type !== 'uiGraph';
+  const leavesGraph =
+    target?.type !== 'nodeLibrary' && target?.type !== 'uiGraph' && target?.type !== 'comparisonReference';
   return { commitLiveGraph: leavesGraph, persistGraphViewport: leavesGraph };
 }
 

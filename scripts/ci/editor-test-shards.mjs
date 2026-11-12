@@ -4,6 +4,8 @@ const weightedSpecs = [
   ['explicit-bundles.spec.ts', 132],
   // Local timing for comparison, recovery, modal layout and native drag journeys.
   ['bundle-merge.spec.ts', 120],
+  // Complete local comparison/edit/save/swap/recovery and iframe-owner journeys.
+  ['bundle-comparison.spec.ts', 200],
   ['modal-sizing.spec.ts', 9],
   ['scheduled-runs.spec.ts', 101],
   ['fullscreen-output-search-paging.spec.ts', 16],
@@ -11,7 +13,8 @@ const weightedSpecs = [
   ['hosted-editor-search-shortcuts.spec.ts', 22],
   ['hosted-dashboard-contracts.spec.ts', 27],
   ['hosted-executor-origin.spec.ts', 50],
-  ['project-bundle.spec.ts', 55],
+  // Full local suite, including admission races and error-recovery regressions.
+  ['project-bundle.spec.ts', 130],
   ['project-bundle-upload.spec.ts', 13],
   ['sidebar-name-wrapping.spec.ts', 22],
   ['streaming-nodes.spec.ts', 23],

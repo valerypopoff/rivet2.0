@@ -222,7 +222,15 @@ test('migration history prepares exact evidence from a shallow checkout without 
     'Historical content is unnecessary; neither inspection nor the bounded fetch may download it.',
   );
   assert.throws(
-    () => prepareMigrationHistory({ cwd: checkout, evidence: { ...evidence, sourceTree: importTree } }),
+    () =>
+      prepareMigrationHistory({
+        cwd: checkout,
+        evidence: { ...evidence, sourceTree: importTree },
+        execute(args, options) {
+          if (args.includes('fetch')) assert.fail('Mismatched immutable evidence must fail before any transfer.');
+          return execFileSync('git', args, { cwd: checkout, ...options });
+        },
+      }),
     /strictly equal/,
   );
 });
@@ -531,8 +539,9 @@ test('observer uses the remote browser without installing a host Chromium and pr
 });
 
 test('balanced editor shards cover every selected spec exactly once and reject invalid selection', () => {
-  assert.equal(editorCiSpecs.length, 37);
+  assert.equal(editorCiSpecs.length, 38);
   assert.ok(editorCiSpecs.includes('bundle-merge.spec.ts'));
+  assert.ok(editorCiSpecs.includes('bundle-comparison.spec.ts'));
   assert.ok(editorCiSpecs.includes('managed-debugger-channels.spec.ts'));
   assert.ok(editorCiSpecs.includes('hosted-editor-search-shortcuts.spec.ts'));
   assert.ok(editorCiSpecs.includes('bundle-local-execution-history.spec.ts'));

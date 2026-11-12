@@ -1,5 +1,26 @@
 # Architecture
 
+## Bundle comparison
+
+The managed bundle service supplies `POST /api/workflows/bundles/compare/manifest`
+and `/compare/pair`, behind normal authentication, explicit bundle intent, strict
+schemas and no-store responses. The catalog captures up to 256 projects/512 folders
+per bundle in one cancellation-aware, bounded SQL statement. Pair reads validate
+current memberships and Older revision ownership before releasing SQL and reading
+the selected project-only artifact through the existing revision/blob decoder.
+Malformed artifacts give located errors without exposing project contents/storage
+keys. Newer is returned as an authoritative path/identity, not another snapshot.
+
+`useWorkflowBundleComparison` owns transient modal/confirmed/pending selection state.
+`editorBundleComparison` owns reference reads and attachment behind the serialized
+editor queue; normal workspace loading, tab activation, saves and conflicts retain
+their existing owners. The tree is a navigation projection, not a replacement
+namespace/mutation model. Immutable reference caching is bounded and direct Older
+dependency reads use captured per-version pointers only for visible graph display.
+No SQL schema, migration, background job or deployment configuration is added.
+See [Project bundles](project-bundles.md) and the
+[implementation/acceptance plan](bundle-comparison-plan.md).
+
 ## Managed latest-debugger isolation
 
 Core's `LatestDebuggerMessage` union covers handshake, scoped process/lifecycle

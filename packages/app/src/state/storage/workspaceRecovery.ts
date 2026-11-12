@@ -1,4 +1,5 @@
 import type { AsyncStorageBackend } from './indexedDB.js';
+import { excludeComparisonInspection } from './comparisonRecovery.js';
 import { nanoid } from 'nanoid';
 
 export const WORKSPACE_RECOVERY_PREFIX = 'workspace-recovery/v1/';
@@ -293,7 +294,7 @@ export class WorkspaceRecoveryStorage implements AsyncStorageBackend {
         version: 1,
         revision,
         updatedAt: new Date().toISOString(),
-        groups: this.capture(),
+        groups: excludeComparisonInspection(this.capture()),
       } satisfies Checkpoint);
       parseRecoveryCheckpoint(serialized);
     } catch (error) {

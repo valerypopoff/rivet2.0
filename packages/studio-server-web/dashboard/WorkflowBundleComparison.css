@@ -1,0 +1,84 @@
+[data-testid='workflow-bundle-compare-modal'] {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 40px);
+}
+[data-testid='workflow-bundle-compare-modal--body'] {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+.bundle-comparison-pickers {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.bundle-comparison-pickers .project-settings-field {
+  flex: 1;
+  min-width: 0;
+}
+.bundle-comparison-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.bundle-comparison-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--grey-medium);
+}
+.bundle-comparison-toolbar .bundle-comparison-title {
+  flex-basis: 100%;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.bundle-comparison-tree .comparison-project-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  padding: 7px 10px;
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.bundle-comparison-tree .comparison-project-row:hover {
+  background: var(--grey-medium);
+}
+.bundle-comparison-tree .comparison-project-row.selected {
+  background: var(--grey-medium);
+  outline: 1px solid var(--primary);
+  outline-offset: -1px;
+}
+.bundle-comparison-tree .comparison-project-row small {
+  margin-left: auto;
+  color: var(--grey-light);
+}
+.bundle-comparison-tree .comparison-project-row span {
+  min-width: 0;
+}
+.bundle-comparison-tree .comparison-folder {
+  padding-left: 14px;
+}
+.bundle-comparison-tree .comparison-folder summary {
+  padding: 7px 4px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.bundle-comparison-tree .comparison-folder summary.contains-selection {
+  background: rgba(255, 255, 255, 0.04);
+}
+@media (max-width: 600px) {
+  .bundle-comparison-pickers {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

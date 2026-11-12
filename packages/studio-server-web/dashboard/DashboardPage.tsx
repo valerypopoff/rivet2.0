@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FC } from 'react';
+import type {
+  BundleComparisonEditorState,
+  BundleComparisonSend,
+} from '../../studio-server-shared/workflow-bundle-comparison-types';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { WorkflowLibraryPanel } from './WorkflowLibraryPanel';
@@ -214,8 +218,16 @@ export const DashboardPage: FC = () => {
     [rememberPendingWorkflowProjectOpen],
   );
 
+  const bundleComparisonNavigator = useRef<((projectId: string, graphId: string) => boolean) | null>(null);
+  const registerBundleComparisonNavigator = useCallback(
+    (handler: ((projectId: string, graphId: string) => boolean) | null) => {
+      bundleComparisonNavigator.current = handler;
+    },
+    [],
+  );
   const handleOpenSubgraphTarget = useCallback(
     async (projectId: string, graphId: string) => {
+      if (bundleComparisonNavigator.current?.(projectId, graphId)) return;
       try {
         const tree = await fetchWorkflowTree();
         const matches = findSubgraphProjects(tree.folders, tree.projects, projectId);
@@ -313,6 +325,38 @@ export const DashboardPage: FC = () => {
       });
     },
     [postEditorCommand],
+  );
+
+  const [bundleComparisonState, setBundleComparisonState] = useState<BundleComparisonEditorState>({
+    owner: null,
+    projectId: null,
+  });
+  const sendBundleComparison: BundleComparisonSend = useCallback(
+    async (action) => {
+      const requestId = editorSession.nextId('bundle-comparison');
+      const result = await editorSession.request<BundleComparisonEditorState>(
+        { type: 'bundle-comparison', ...action, requestId },
+        'bundle-comparison-state',
+        60_000,
+      );
+      if (result.status === 'completed') return result.value;
+      if (result.status === 'unknown' && action.action !== 'state') {
+        const readId = editorSession.nextId('bundle-comparison-state');
+        const state = await editorSession.request<BundleComparisonEditorState>(
+          {
+            type: 'bundle-comparison',
+            action: 'state',
+            owner: action.action === 'open' ? action.intent : action.owner,
+            requestId: readId,
+          },
+          'bundle-comparison-state',
+          10_000,
+        );
+        if (state.status === 'completed') return state.value;
+      }
+      return null;
+    },
+    [editorSession],
   );
 
   const requestDashboardProjectSave = useCallback(() => {
@@ -482,6 +526,10 @@ export const DashboardPage: FC = () => {
   }, []);
 
   useEditorBridgeEvents({
+    onBundleComparisonState: (state, requestId) => {
+      editorSession.acknowledge(requestId, 'bundle-comparison-state', state);
+      setBundleComparisonState(state);
+    },
     activeWorkflowProjectPath,
     editorReady,
     focusEditorFrame,
@@ -515,6 +563,7 @@ export const DashboardPage: FC = () => {
     onEditorReady: (editorInstanceId) => {
       setEditorInitializationFailed(false);
       if (editorInstanceRef.current !== editorInstanceId) {
+        setBundleComparisonState({ owner: null, projectId: null });
         resetEditorReconciliation();
         editorInstanceRef.current = editorInstanceId;
         setReconciliationSequence((sequence) => sequence + 1);
@@ -588,6 +637,11 @@ export const DashboardPage: FC = () => {
         onTransitionEnd={handleSidebarTransitionEnd}
       >
         <WorkflowLibraryPanel
+          onBundleComparisonNavigator={registerBundleComparisonNavigator}
+          sendBundleComparison={sendBundleComparison}
+          projectUnsavedChangesByPath={projectUnsavedChangesByPath}
+          bundleComparisonState={bundleComparisonState}
+          editorInstanceId={editorInstanceRef.current}
           onOpenProject={handleOpenProject}
           onRefreshOpenProjectFromDisk={handleRefreshOpenProjectFromDisk}
           onOpenRecording={handleOpenRecording}

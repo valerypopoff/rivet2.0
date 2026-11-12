@@ -1,3 +1,4 @@
+import { useWorkspaceHostCompare } from '../hooks/workspaceHost/useWorkspaceHostCompare.js';
 import { type FC, useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { NodeCanvas } from './NodeCanvas.js';
 import { useAtomValue, useAtom, useSetAtom } from 'jotai';
@@ -40,7 +41,6 @@ import { useSyncProjectPluginsFromGraphUsage } from '../hooks/useSyncProjectPlug
 import { warmCodeEditor } from './LazyComponents.js';
 import {
   activeProjectComparisonState,
-  projectCompareReferenceState,
   resolveProjectCompareSideLabels,
   selectedGraphProjectComparisonState,
 } from '../state/projectComparison.js';
@@ -143,7 +143,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
   );
   const activeComparison = useAtomValue(activeProjectComparisonState);
   const selectedGraphComparison = useAtomValue(selectedGraphProjectComparisonState);
-  const setProjectCompareReference = useSetAtom(projectCompareReferenceState);
+  const { stopProjectCompare } = useWorkspaceHostCompare();
 
   useReloadProjectReferences();
   useDatasets(project.metadata.id);
@@ -284,7 +284,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
                 </strong>
               </div>
             </div>
-            <Button spacing="compact" onClick={() => setProjectCompareReference(undefined)}>
+            <Button spacing="compact" onClick={() => void stopProjectCompare()}>
               Exit
             </Button>
           </div>

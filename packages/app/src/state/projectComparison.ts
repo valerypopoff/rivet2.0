@@ -7,16 +7,25 @@ import {
   type ProjectId,
   type NodeId,
   type GraphId,
+  type ProjectComparisonIdentity,
 } from '@valerypopoff/rivet2-core';
 import { graphMetadataState, graphState } from './graph.js';
 import { projectState } from './savedGraphs.js';
 
 export type ProjectCompareReference = {
+  referenceId?: string;
   projectId: ProjectId;
   referenceProject: Project;
   referencePath?: string;
   labels?: ProjectCompareSideLabels;
+  identity?: ProjectComparisonIdentity;
+  owner?: { sessionId: string; generation: number };
+  referencedProjects?: Record<ProjectId, Project>;
 };
+
+export const comparisonReferenceGraphState = atom<
+  { reference: ProjectCompareReference; graphId: GraphId; returnGraphId?: GraphId } | undefined
+>(undefined);
 
 export type ActiveProjectComparison = ProjectCompareReference & {
   comparison: ProjectComparison;
@@ -65,19 +74,21 @@ export const activeProjectComparisonState = atom<ActiveProjectComparison | undef
   }
 
   const graphId = graph.metadata?.id;
-  const liveProject = graphId
-    ? {
-        ...project,
-        graphs: {
-          ...project.graphs,
-          [graphId]: graph,
-        },
-      }
-    : project;
+  const referenceView = get(comparisonReferenceGraphState);
+  const liveProject =
+    graphId && !(referenceView?.reference === reference && referenceView.graphId === graphId)
+      ? {
+          ...project,
+          graphs: {
+            ...project.graphs,
+            [graphId]: graph,
+          },
+        }
+      : project;
 
   return {
     ...reference,
-    comparison: compareProjects(reference.referenceProject, liveProject as Project),
+    comparison: compareProjects(reference.referenceProject, liveProject as Project, reference.identity),
   };
 });
 
@@ -99,9 +110,8 @@ export const viewingProjectComparisonNodeState = atom(
       return undefined;
     }
 
-    const nodeComparison = get(activeProjectComparisonState)?.comparison.graphs[inspection.graphId]?.nodes[
-      inspection.nodeId
-    ];
+    const nodeComparison =
+      get(activeProjectComparisonState)?.comparison.graphs[inspection.graphId]?.nodes[inspection.nodeId];
     return nodeComparison?.kind === 'changed' || nodeComparison?.kind === 'removed' ? inspection : undefined;
   },
   (get, set, target: { graphId: GraphId; nodeId: NodeId; reference?: ProjectCompareReference } | undefined) => {

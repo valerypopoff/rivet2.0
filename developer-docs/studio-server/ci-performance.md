@@ -19,6 +19,21 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+## Comparison fixture compilation repair: November 12, 2026
+
+[Build 43291039140](https://github.com/valerypopoff/rivet2.0/actions/runs/43291039140/job/131439269832)
+failed in desktop compilation on three branded-graph-ID errors in comparison
+test fixtures. All App test shards passed: `tsx` executes those fixtures without
+type-checking them, while the App's normal `tsc` project includes all `src` tests.
+A scoped hosted-frontend type check also omits fixtures it does not import.
+
+Construct recovery graphs with typed `GraphId` metadata and index comparison
+maps with branded graph keys; do not bypass the errors with whole-object
+`unknown` casts or exclude tests from the build. Validate changed App fixtures
+through its actual TypeScript project and the normal desktop frontend/CLI build.
+The developer desktop release correctly refused to reuse the failed Build;
+that downstream failure needs no retry or release-gate change.
+
 ## Recordings browser scheduling repair: November 12, 2026
 
 [Verify Studio Server 43104429099, editor shard 1](https://github.com/valerypopoff/rivet2.0/actions/runs/43104429099/job/130806358601)
@@ -407,6 +422,10 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   the explicit depth-one fetch. Forced verification needs no historical fetch.
   Fetch errors fail classification, never skip checks. The migration ledger job
   retains full history because its provenance checks need historical commits.
+  Migration-history preparation fetches only when inspection cannot read required
+  objects. Already-present evidence with mismatched immutable identities fails
+  immediately, preserving the integrity error without a redundant transfer. Its
+  shallow-checkout regression fences that negative case against another fetch.
 - Final Build/Studio status jobs sparsely check out only the standalone timing
   helper. Their previous full checkouts cost 22–26 seconds after all checks had
   finished. The required result aggregation and workflow timing remain intact.
@@ -447,7 +466,7 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
 - Browser CI uses three required matrix shards, each running two independent
-  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 37
+  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 38
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
@@ -455,6 +474,11 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   opening, independent catalog/results, retained sessions, deletion and replay.
   Its 640-second work estimate comes from the complete hosted recordings run;
   refine materially stale weights from complete hosted timings.
+  Bundle comparison is included explicitly. Its 200-second starting weight and
+  the expanded export suite's 130-second weight come from complete local runs;
+  refine those estimates from hosted timings as well. Adding a selected spec
+  also updates the inventory count and membership assertions in
+  `ci-performance.test.mjs`; run its `balanced editor shards` case before pushing.
   Their inclusion is asserted by the shard regression. These weights balance work,
   not predict hosted wall time. Independently isolated recordings cases can use
   both workers; other files preserve serial scenarios. Test-owned contexts,

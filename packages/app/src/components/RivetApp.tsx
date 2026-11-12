@@ -209,13 +209,14 @@ export const RivetApp: FC = () => {
     }
   }, [noProjectOpen, openOverlay, selectedOpeningProjectTabId, setOpenOverlay]);
 
-  const runGraph = wrapAsync(async (options?: EditorGraphRunOptions) => {
+  const runCanvasGraph = async (options?: EditorGraphRunOptions) => {
     if (!workspaceCapabilities.canRun) {
       return;
     }
 
-    await tryRunGraph(options);
-  }, 'Run graph');
+    return tryRunGraph(options);
+  };
+  const runGraph = wrapAsync(runCanvasGraph, 'Run graph');
   const hostUiConfig = useRivetAppHostUiConfig();
 
   useMenuCommands({
@@ -330,7 +331,7 @@ export const RivetApp: FC = () => {
         <>
           <ProjectSelector />
           {openingProjectSelected ? <OpeningProjectPlaceholder /> : null}
-          {isCanvasMode && !openingProjectSelected && !nodeLibraryOpen && !uiGraphOpen && (
+          {isCanvasMode && !openingProjectSelected && workspaceCapabilities.canRun && (
             <ActionBar
               onRunGraph={runGraph}
               onAbortGraph={tryAbortGraph}
@@ -347,7 +348,7 @@ export const RivetApp: FC = () => {
             ) : uiGraphOpen ? (
               <UiGraphBuilder runGraph={tryRunGraph} />
             ) : (
-              <GraphBuilder runGraph={tryRunGraph} />
+              <GraphBuilder runGraph={runCanvasGraph} />
             ))}
           <AppErrorBoundary context="Settings Modal" fallback={<div>Failed to render Settings</div>}>
             <SettingsModal />

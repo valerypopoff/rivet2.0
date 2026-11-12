@@ -1,5 +1,6 @@
 // HostedIOProvider: API-backed IOProvider for hosted mode
 // Supports server-side path-based save/load alongside browser FSA API fallbacks
+import { isComparisonInspectionProject } from '../../app/src/utils/projectComparisonDocument';
 
 import {
   type NodeGraph,
@@ -242,6 +243,8 @@ function createPublishedVersionPreviewProject(
 }
 
 function assertProjectIsWritable(project: Project, path?: string | null): void {
+  if (isComparisonInspectionProject(String(project.metadata.id)) || (path && isComparisonInspectionProject(path)))
+    throw new Error('Older-only comparison inspection is read-only.');
   if (
     isPublishedVersionPreviewProject(project) ||
     (path && getWorkflowPublishedVersionPreviewFromVirtualProjectPath(path))
@@ -391,9 +394,15 @@ export class HostedIOProvider implements IOProvider {
       });
 
       if (saved.project?.projectMetadataId && saved.project.projectMetadataId !== project.metadata.id) {
-        if (!saved.revisionId) throw new Error('The project copy was saved, but its revision could not be confirmed. Refresh the library.');
-        return { kind: 'created-project', path: saved.path, projectId: saved.project.projectMetadataId as ProjectId,
-          revisionId: saved.revisionId, title: saved.project.name };
+        if (!saved.revisionId)
+          throw new Error('The project copy was saved, but its revision could not be confirmed. Refresh the library.');
+        return {
+          kind: 'created-project',
+          path: saved.path,
+          projectId: saved.project.projectMetadataId as ProjectId,
+          revisionId: saved.revisionId,
+          title: saved.project.name,
+        };
       }
       bindHostedProjectRevision(project.metadata.id, saved.path, saved.revisionId ?? null);
       return saved.path;

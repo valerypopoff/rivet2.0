@@ -2134,6 +2134,30 @@ version. It checks npm before publishing each package and skips package versions
 that are already present in the registry, so re-running the same main-branch
 workflow does not turn an already-published package into a hard failure.
 
+### Prepared bundle comparison release versions (2026-11-12)
+
+The actual per-track baselines are `54c429551` (desktop/public runtime/App
+Executor), `488019eb9` (Docs) and `5b3a3fae7` (Studio Server). Review through
+`3551e25c7`, plus the current Download bundle UI fixes, prepares these releases:
+
+| Release track | Version change | Reason |
+| --- | --- | --- |
+| Desktop app | `2.35.0` → `2.36.0` | Public hosted-comparison ownership, editable Newer projects and read-only reference/removed-graph inspection with normal save/navigation/recovery. |
+| Public Core/Node/Evaluations/CLI | `2.28.0` → `2.29.0` | Additive side-aware Core comparison API; unchanged Node/Evaluations/CLI implementations remain required publishing companions. |
+| App Executor | `2.20.0` → `2.21.0` | Source-bundles the updated Core API without a separate sidecar protocol change. |
+| Five private Studio Server packages | `1.37.1` → `1.38.0` | Saved bundle comparison catalogs/pairs, matching, projected navigation and session lifecycle, plus compatible export-status and copy fixes. |
+| Documentation site | `2.27.0` → `2.28.0` | New user guidance for comparing bundles and editing the Newer side. |
+
+The [package matrix](PACKAGES.md#version-update-2026-11-12--editable-bundle-comparison)
+distinguishes package-local changes from release companions. Synchronize desktop
+Tauri/Cargo versions and the CLI Docker fallback. This does not change dependency
+ranges, Yarn resolutions, Helm metadata or the managed schema.
+
+Validate with `yarn verify:desktop-version`, `yarn check:npm-publish-versions`,
+`yarn check:pnp:fresh`, `yarn studio-server:verify:repo-structure` and
+`node scripts/checks/check-doc-links.mjs`. Reuse passed application checks for
+unchanged implementation. Publication and deployment remain separate actions.
+
 ### Prepared release versions (2026-11-12)
 
 Reviewing changes since `54c429551`, through `e2c1fa42f` and the accompanying

@@ -22,6 +22,7 @@ import { normalizeManagedWorkflowRelativePath } from '../virtual-paths.js';
 import { sanitizeWorkflowName } from '../fs-helpers.js';
 import { remapBundleProject } from '../remap-bundle-project.js';
 import { createManagedBundleMergeService } from './bundle-merge.js';
+import { createManagedBundleComparisonService } from '../bundle-comparison.js';
 import type { ManagedWorkflowContext } from './context.js';
 import type { FolderRow, RevisionRow, WorkflowRow } from './types.js';
 import { prepareBundleConversion, assertBundleConversion } from './bundle-conversion.js';
@@ -82,6 +83,7 @@ async function chooseBundleCopyDestination(client: PoolClient, root: FolderRow) 
 
 export function createManagedBundleService(context: ManagedWorkflowContext) {
   const merge = createManagedBundleMergeService(context);
+  const comparison = createManagedBundleComparisonService(context);
   async function capture(client: PoolClient, id: string, version: WorkflowBundleVersion, lock = false) {
     const root = (await client.query<FolderRow>('SELECT * FROM workflow_folders WHERE bundle_id = $1', [id])).rows[0];
     if (!root) throw createHttpError(404, 'Bundle not found');
@@ -179,6 +181,8 @@ export function createManagedBundleService(context: ManagedWorkflowContext) {
     return { snapshot, projects, preview };
   }
   return {
+    compareManifest: comparison.manifest,
+    comparePair: comparison.pair,
     mergePreview: merge.preview,
     merge: merge.commit,
     async delete(id: string, confirmation: { name: string; relativePath: string }, mutation?: StructuralMutation) {

@@ -1,4 +1,5 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
+import { createEditorBundleComparison } from './editorBundleComparison';
 import { beginDevelopmentCommand } from './developmentActivity';
 import { useSetAtom, useStore } from 'jotai';
 import { useEffect, useRef } from 'react';
@@ -144,8 +145,11 @@ export function useEditorCommandBridge({
       recording,
     };
 
+    const comparison = createEditorBundleComparison(context);
     const runSerializedCommand = async (command: SerializedEditorCommand): Promise<void> => {
       switch (command.type) {
+        case 'bundle-comparison':
+          return comparison.run(command);
         case 'capture-workflow-project-reconciliation':
           publishHostedProjectConflicts();
           postMessageToDashboard({
@@ -167,9 +171,11 @@ export function useEditorCommandBridge({
           });
           return;
         case 'open-project':
-          return handleOpenProjectCommand(context, command);
+          await handleOpenProjectCommand(context, command);
+          return;
         case 'refresh-open-project-from-disk':
-          return handleRefreshOpenProjectCommand(context, command);
+          await handleRefreshOpenProjectCommand(context, command);
+          return;
         case 'open-recording':
           return handleOpenRecordingCommand(context, command);
         case 'open-published-version-preview':
@@ -202,6 +208,14 @@ export function useEditorCommandBridge({
       }
 
       switch (event.data.type) {
+        case 'bundle-comparison':
+          if (event.data.action === 'state') {
+            await comparison.run(event.data);
+            break;
+          }
+          comparison.admit(event.data);
+          enqueueSerializedCommand(event.data);
+          break;
         case 'save-project': {
           // Evaluation definitions are independently persisted shared
           // resources. A dashboard-level shortcut must not rewrite the open
@@ -236,6 +250,9 @@ export function useEditorCommandBridge({
         case 'open-published-version-preview':
         case 'refresh-open-project-from-disk':
         case 'compare-open-project-with':
+          comparison.cancelPending();
+          enqueueSerializedCommand(event.data);
+          break;
         case 'workflow-paths-moved':
         case 'reconcile-workflow-project-bindings':
         case 'resolve-workflow-project-content-change':
@@ -246,6 +263,9 @@ export function useEditorCommandBridge({
     };
 
     window.addEventListener('message', handler);
-    return () => window.removeEventListener('message', handler);
+    return () => {
+      window.removeEventListener('message', handler);
+      comparison.dispose();
+    };
   }, [clearLoadedRecordingForPath, preview, rebindLoadedRecordingPath, recording, setLoadedProject]);
 }

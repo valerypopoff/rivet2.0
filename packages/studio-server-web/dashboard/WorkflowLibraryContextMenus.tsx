@@ -7,7 +7,8 @@ type WorkflowLibraryController = ReturnType<typeof useWorkflowLibraryController>
 
 export const WorkflowLibraryContextMenus: FC<{
   controller: WorkflowLibraryController;
-}> = ({ controller }) => {
+  onCompareBundle?: (bundleId: string, opener?: HTMLElement) => void;
+}> = ({ controller, onCompareBundle }) => {
   const {
     folderContextMenuState,
     projectContextMenuState,
@@ -59,6 +60,14 @@ export const WorkflowLibraryContextMenus: FC<{
                   convert: () => void controller.handleToggleBundleKind(),
                   duplicate: () => void controller.handleDuplicateBundle(),
                   merge: controller.canMergeBundles ? controller.handleMergeBundle : undefined,
+                  compare:
+                    controller.bundleCompare && onCompareBundle
+                      ? () => {
+                          const id = folderContextMenuState.folder.bundleId;
+                          closeFolderContextMenu();
+                          if (id) onCompareBundle(id, folderContextMenuState.opener);
+                        }
+                      : undefined,
                   busy: controller.bundleAction !== null,
                   download: controller.handleDownloadBundle,
                 }

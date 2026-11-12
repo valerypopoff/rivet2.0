@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { serializeProject, type Project } from '@valerypopoff/rivet2-core';
-import { authenticateIfNeeded, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
 import type { WorkflowProjectItem, WorkflowPublishedVersionSummary, WorkflowTreeResponse } from '../dashboard/types';
 
 function isRouteRequest(
@@ -197,6 +197,9 @@ async function installPublishedVersionRoutes(
 }
 
 test.describe('Project compare mode', () => {
+  test.beforeEach(async ({ page }) => {
+    await mockHostedEditorBootstrap(page);
+  });
   for (const theme of ['molten', 'bright']) {
     test(`deleted nodes show reference settings, passive ports and complete read-only inspection (${theme})`, async ({
       page,

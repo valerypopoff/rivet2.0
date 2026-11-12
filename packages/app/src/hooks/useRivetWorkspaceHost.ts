@@ -19,6 +19,7 @@ export type {
   RivetOpeningProjectTabOptions,
   RivetProjectCleanBaselineSnapshotInput,
   RivetProjectCompareOptions,
+  RivetProjectCompareState,
   RivetProjectMetadataPatch,
   RivetProjectMetadataUpdateOptions,
   RivetProjectOpenOptions,
@@ -38,7 +39,14 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
     useWorkspaceHostOpeningTabs(openProjectSnapshot);
   const { moveProjectPaths, updateProjectMetadata } = useWorkspaceHostProjectMetadata();
   const { markCurrentProjectClean, markProjectClean } = useWorkspaceHostCleanBaseline();
-  const { startProjectCompare, stopProjectCompare } = useWorkspaceHostCompare();
+  const {
+    startProjectCompare,
+    stopProjectCompare,
+    getProjectCompareState,
+    subscribeProjectCompare,
+    updateProjectCompareDefinitions,
+    inspectComparisonGraph,
+  } = useWorkspaceHostCompare();
   const setProjectTabUiState = useWorkspaceHostTabUi();
 
   return useMemo(
@@ -61,6 +69,10 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       markProjectClean,
       startProjectCompare,
       stopProjectCompare,
+      getProjectCompareState,
+      subscribeProjectCompare,
+      updateProjectCompareDefinitions,
+      inspectComparisonGraph,
     }),
     [
       activateProject,
@@ -80,6 +92,10 @@ export function useRivetWorkspaceHost(): RivetWorkspaceHost {
       startOpeningProjectTab,
       startProjectCompare,
       stopProjectCompare,
+      getProjectCompareState,
+      subscribeProjectCompare,
+      updateProjectCompareDefinitions,
+      inspectComparisonGraph,
       updateProjectMetadata,
     ],
   );

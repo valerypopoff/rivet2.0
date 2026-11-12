@@ -6,6 +6,8 @@ import { compareGraphs } from './projectComparison/graphs.js';
 import { summarizeProjectComparison } from './projectComparison/summaries.js';
 import { compareNodes } from './projectComparison/nodes.js';
 import { areComparisonValuesEqual, unionKeys } from './projectComparison/values.js';
+import { comparisonProjectIdentity, type ProjectComparisonIdentity } from './projectComparison/identity.js';
+export type { ProjectComparisonIdentity } from './projectComparison/identity.js';
 
 export { getProjectConnectionComparisonKey } from './projectComparison/connections.js';
 export { getProjectNodeFieldComparisons } from './projectComparison/nodes.js';
@@ -13,6 +15,7 @@ export { getProjectNodeFieldComparisons } from './projectComparison/nodes.js';
 export type ProjectComparisonChangeKind = 'added' | 'removed' | 'changed' | 'unchanged';
 
 export type ProjectNodeComparison = {
+  identity?: ProjectComparisonIdentity;
   id: NodeId;
   kind: ProjectComparisonChangeKind;
   before?: ChartNode;
@@ -90,18 +93,32 @@ export type ProjectComparison = {
   summary: ProjectComparisonSummary;
 };
 
-export function compareProjects(before: Project, after: Project): ProjectComparison {
+export function compareProjects(
+  before: Project,
+  after: Project,
+  identity?: ProjectComparisonIdentity,
+): ProjectComparison {
   const graphIds = unionKeys(before.graphs, after.graphs) as GraphId[];
   const graphs = Object.fromEntries(
-    graphIds.map((graphId) => [graphId, compareGraphs(graphId, before.graphs[graphId], after.graphs[graphId])]),
+    graphIds.map((graphId) => [
+      graphId,
+      compareGraphs(graphId, before.graphs[graphId], after.graphs[graphId], identity),
+    ]),
   ) as Record<GraphId, ProjectGraphComparison>;
-  const nodePrefabs = compareNodePrefabs(before.nodePrefabs ?? {}, after.nodePrefabs ?? {});
+  const nodePrefabs = compareNodePrefabs(before.nodePrefabs ?? {}, after.nodePrefabs ?? {}, identity);
   const uiGraphs = compareUiGraphs(before.uiGraphs ?? {}, after.uiGraphs ?? {});
 
   return {
     beforeProjectId: before.metadata.id,
     afterProjectId: after.metadata.id,
-    metadataChanged: !areComparisonValuesEqual(before.metadata, after.metadata),
+    metadataChanged: !areComparisonValuesEqual(
+      identity
+        ? { ...before.metadata, id: comparisonProjectIdentity(before.metadata.id, 'before', identity), path: undefined }
+        : before.metadata,
+      identity
+        ? { ...after.metadata, id: comparisonProjectIdentity(after.metadata.id, 'after', identity), path: undefined }
+        : after.metadata,
+    ),
     graphs,
     nodePrefabs,
     uiGraphs,
@@ -112,6 +129,7 @@ export function compareProjects(before: Project, after: Project): ProjectCompari
 function compareNodePrefabs(
   before: Record<NodePrefabId, NodePrefab>,
   after: Record<NodePrefabId, NodePrefab>,
+  identity?: ProjectComparisonIdentity,
 ): Record<NodePrefabId, ProjectNodePrefabComparison> {
   const prefabIds = unionKeys(before, after) as NodePrefabId[];
 
@@ -132,7 +150,9 @@ function compareNodePrefabs(
         throw new Error(`Cannot compare missing library node ${prefabId}`);
       }
 
-      const sourceNodeComparison = Object.values(compareNodes([beforePrefab.sourceNode], [afterPrefab.sourceNode]))[0]!;
+      const sourceNodeComparison = Object.values(
+        compareNodes([beforePrefab.sourceNode], [afterPrefab.sourceNode], identity),
+      )[0]!;
 
       return [
         prefabId,

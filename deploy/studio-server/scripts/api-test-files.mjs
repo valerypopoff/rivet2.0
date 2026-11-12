@@ -77,6 +77,7 @@ export const defaultApiTestFiles = [
   'src/tests/maintenance-idle.test.ts',
   'src/tests/managed-artifact-descriptor.test.ts',
   'src/tests/managed-artifact-transport.test.ts',
+  'src/tests/managed-bundle-comparison.test.ts',
   'src/tests/managed-bundle-merge.test.ts',
   'src/tests/managed-bundles.test.ts',
   'src/tests/managed-catalog.test.ts',

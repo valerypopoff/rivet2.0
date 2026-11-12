@@ -124,6 +124,7 @@ test('resolveHostedProjectTitle preserves metadata titles for virtual project pa
 
 test('isHostedVirtualProjectPath distinguishes detached URI tabs from workflow-tree paths', () => {
   assert.equal(isHostedVirtualProjectPath('recording://run-1/replay.rivet-project'), true);
+  assert.equal(isHostedVirtualProjectPath('bundle-comparison:session:1'), true);
   assert.equal(isHostedVirtualProjectPath('published-version-preview://Project/version/preview.rivet-project'), true);
   assert.equal(isHostedVirtualProjectPath('/managed/workflows/Project.rivet-project'), false);
   assert.equal(isHostedVirtualProjectPath('C:\\workflows\\Project.rivet-project'), false);

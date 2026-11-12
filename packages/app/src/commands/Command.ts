@@ -7,7 +7,7 @@ import {
   type ProjectId,
 } from '@valerypopoff/rivet2-core';
 import { useAtomValue, useSetAtom, useStore } from 'jotai';
-import { connectionsState, graphMetadataState, nodesState } from '../state/graph';
+import { connectionsState, graphMetadataState, nodesState, isReadOnlyGraphState } from '../state/graph';
 import { useStableCallback } from '../hooks/useStableCallback';
 import { projectState, referencedProjectsState } from '../state/savedGraphs';
 import { editingNodeState } from '../state/graphBuilder';
@@ -16,6 +16,7 @@ import {
   clearRecoverableNodeConnectionsForGraph,
   recoverableNodeConnectionsStatePerGraph,
 } from '../state/recoverableNodeConnections';
+import { isComparisonInspectionProject } from '../utils/projectComparisonDocument.js';
 
 export interface Command<T, U> {
   type: string;
@@ -42,6 +43,7 @@ export type GraphCommandState = {
   graphId: GraphId | undefined;
   editingNodeId: NodeId | null;
   referencedProjects: Record<ProjectId, Project>;
+  readOnly?: boolean;
 };
 
 export const commandHistoryStackStatePerGraph = projectScopedAtom<Record<GraphId, CommandData<any, any>[]>>({});
@@ -85,6 +87,7 @@ export function readGraphCommandState(store: ReturnType<typeof useStore>): Graph
     graphId,
     editingNodeId,
     referencedProjects,
+    readOnly: store.get(isReadOnlyGraphState) || isComparisonInspectionProject(project.metadata.id),
   };
 }
 
@@ -103,6 +106,7 @@ export function useCommand<T, U>(command: Command<T, U>) {
     // Multiple editor changes can occur before a React render. Each command
     // must build on the previous committed graph, never the render snapshot.
     const currentState = readCurrentState();
+    if (currentState.readOnly) return undefined;
     const graphId = currentState.graphId;
     const appliedData = command.apply(data, undefined, currentState);
 
@@ -174,6 +178,7 @@ export function useUndo() {
   const readCurrentState = useGraphCommandState();
 
   return () => {
+    if (readCurrentState().readOnly) return;
     const graphId = readCurrentState().graphId;
     setCommandHistoryStacks((stacks) => {
       if (!graphId) {
@@ -214,6 +219,7 @@ export function useRedo() {
   const readCurrentState = useGraphCommandState();
 
   return () => {
+    if (readCurrentState().readOnly) return;
     const graphId = readCurrentState().graphId;
     setRedoStacks((stacks) => {
       if (!graphId) {

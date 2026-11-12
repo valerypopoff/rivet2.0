@@ -1,5 +1,6 @@
 import type { Project, ProjectId } from '@valerypopoff/rivet2-core';
 import { normalizeWorkflowPath } from './workflowLibraryHelpers';
+import { isComparisonInspectionProject } from '../../app/src/utils/projectComparisonDocument';
 
 const PROJECT_FILE_EXTENSION = /\.rivet-project$/i;
 const VIRTUAL_PROJECT_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -53,7 +54,10 @@ export function resolveHostedProjectTitleFromPath(fsPath?: string | null): strin
 }
 
 export function isHostedVirtualProjectPath(fsPath?: string | null): boolean {
-  return Boolean(fsPath?.trim() && VIRTUAL_PROJECT_PATH_PATTERN.test(fsPath.trim()));
+  return Boolean(
+    fsPath?.trim() &&
+      (VIRTUAL_PROJECT_PATH_PATTERN.test(fsPath.trim()) || isComparisonInspectionProject(fsPath.trim())),
+  );
 }
 
 function shouldPreferPathTitle(fsPath?: string | null): boolean {
@@ -77,10 +81,7 @@ export function resolveHostedProjectTitle(
   return pathTitle ?? 'Untitled Project';
 }
 
-export function withHostedProjectTitle<T extends Pick<Project, 'metadata'>>(
-  project: T,
-  fsPath?: string | null,
-): T {
+export function withHostedProjectTitle<T extends Pick<Project, 'metadata'>>(project: T, fsPath?: string | null): T {
   const title = resolveHostedProjectTitle(project, fsPath);
 
   if (project.metadata.title === title) {
@@ -98,10 +99,7 @@ export function withHostedProjectTitle<T extends Pick<Project, 'metadata'>>(
 
 export function resolveHostedProjectMetadataUpdatesForPathMoves<
   T extends { openedProjects: Record<ProjectId, OpenedProjectPathMetadata> },
->(
-  current: T,
-  moves: HostedProjectPathMove[],
-): HostedProjectMetadataUpdateForPathMove[] {
+>(current: T, moves: HostedProjectPathMove[]): HostedProjectMetadataUpdateForPathMove[] {
   const updatesByPath = new Map<string, { path: string; title?: string }>();
 
   for (const move of moves) {

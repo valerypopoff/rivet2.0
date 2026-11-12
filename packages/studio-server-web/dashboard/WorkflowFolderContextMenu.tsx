@@ -30,6 +30,7 @@ type WorkflowFolderContextMenuProps = {
     convert(): void;
     duplicate(): void;
     merge?: () => void;
+    compare?: () => void;
     download(): void;
   };
   onRename: () => void;
@@ -147,6 +148,17 @@ export const WorkflowFolderContextMenu: FC<WorkflowFolderContextMenuProps> = ({
             >
               <MergeIcon className="workflow-project-context-menu-item-icon" aria-hidden="true" />
               Merge into another bundle…
+            </button>
+          ) : null}
+          {folder.bundleId && bundleActions.compare ? (
+            <button
+              type="button"
+              className="workflow-project-context-menu-item"
+              role="menuitem"
+              disabled={bundleActions.busy}
+              onClick={bundleActions.compare}
+            >
+              Compare with another bundle…
             </button>
           ) : null}
           {bundleActions.canConvert ? (
