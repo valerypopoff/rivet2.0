@@ -318,6 +318,24 @@ Kubernetes rehearsal or a new browser run.
 
 ## Extending serving services
 
+The [hosted execution isolation plan](./hosted-execution-isolation-plan.md)
+tracks the Code-family event-loop blocking problem and unfinished production
+integration. The prototype under `src/scripts/hosted-isolation/` is excluded from
+production compiler inputs; serving defaults are unchanged and the no-regression
+performance gate has not passed. The [local Gate A results](./hosted-execution-isolation-gate-a.md)
+record functional/performance evidence, limits and reproduction commands.
+
+`hosted-isolation:test` runs fast input/limit contracts in ordinary API CI without
+bootstrapping the graph engine. `hosted-isolation:verify` builds current sources
+and exercises real workers, prepared actions, held background work, cancellation,
+replacement and cleanup. Benchmarks accept a sample only after its root/capture
+settles successfully. Production socket/debugger integration remains planned;
+retain the existing Node handler/gateway suites as the transport coverage owner.
+
+The [execution error-policy plan](./execution-error-policy-plan.md) records the
+confirmed public-error inconsistencies and the proposed compatible fix. It is a
+deferred plan, not the current implemented policy.
+
 Classifier providers are Core-owned and shared by desktop and hosted execution.
 Their curated `modelOptions` also drive the shared Decision AI Model dropdown in
 run/Profile inspectors: known model IDs and Custom model text entry. An absent
@@ -464,15 +482,15 @@ recording must never execute the graph again. Keep production bookkeeping in the
 background; the accepted crash window and durable editor protocol are documented
 in [Recording durability](./recording-durability.md).
 
-| Responsibility | Owner | Extension rule |
-| --- | --- | --- |
-| Capture graph events | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path. |
-| Admit and drain recording work | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts` | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores. |
-| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution. |
-| Browse projects and run history | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs. |
-| Search captured inputs | `recording-input-filter.ts` with its source, extractor worker and cache | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent. |
-| Aggregate outcomes and costs | `recording-statistics.ts` and `recording-statistics-sql.ts` | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence. |
-| Present and operate history | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes. |
+| Responsibility                        | Owner                                                                                                                            | Extension rule                                                                                                                                          |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capture graph events                  | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters                              | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path.                         |
+| Admit and drain recording work        | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts`                                                 | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores.                                |
+| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner                                      | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution.                                        |
+| Browse projects and run history       | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination                                   | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs. |
+| Search captured inputs                | `recording-input-filter.ts` with its source, extractor worker and cache                                                          | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent.          |
+| Aggregate outcomes and costs          | `recording-statistics.ts` and `recording-statistics-sql.ts`                                                                      | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence.                                       |
+| Present and operate history           | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes.                |
 
 The project picker and its global totals use one managed catalog query. Filtering
 projects before merging evidence would hide an unpublished project's first run;

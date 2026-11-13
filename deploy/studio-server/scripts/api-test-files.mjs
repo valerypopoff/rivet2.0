@@ -48,6 +48,7 @@ export const defaultApiTestFiles = [
   'src/tests/hosted-evaluation-coordinator.test.ts',
   'src/tests/hosted-evaluation-execution.test.ts',
   'src/tests/hosted-evaluations-config.test.ts',
+  'src/tests/hosted-isolation.test.ts',
   'src/tests/hosted-project-title.test.ts',
   'src/tests/hosted-runtime-policy.test.ts',
   'src/tests/housekeeping-routing.test.ts',
