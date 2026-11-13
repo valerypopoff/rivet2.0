@@ -375,16 +375,6 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
                   ? `${comparison.session.manifest.older.name} (Older, saved) → ${comparison.session.manifest.newer.name} (Newer, editable)`
                   : 'Opening bundle comparison…'}
               </div>
-              <span>Older uses saved versions. Unsaved edits stay in their original tabs.</span>
-              <Button onClick={comparison.swap} isDisabled={!!comparison.pending}>
-                Swap
-              </Button>
-              <Button onClick={comparison.edit} isDisabled={!!comparison.pending}>
-                Match projects
-              </Button>
-              <Button onClick={comparison.refresh} isDisabled={!!comparison.pending}>
-                Refresh older version
-              </Button>
               <Button onClick={comparison.exit}>Exit comparison</Button>
             </div>
           ) : null}
@@ -395,7 +385,7 @@ export const WorkflowLibraryPanel: FC<WorkflowLibraryPanelProps> = ({
           ) : null}
           {membershipChanged ? (
             <div className="workflow-project-bundle-warning" role="status">
-              Bundle membership or locations changed. Use Match projects to review the comparison.
+              Bundle membership or locations changed. Exit comparison and start again to review the updated bundles.
             </div>
           ) : null}
           {bodyContent}

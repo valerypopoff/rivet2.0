@@ -1,19 +1,28 @@
 # Bundle comparison: consolidated implementation plan
 
 Status: implemented in the local `F:/Programming/Rivet2.0` checkout and validated
-locally on 2026-11-12. This document retains the agreed design and acceptance scope.
+locally on 2026-11-12, with the simplified controls and explicit-exit lifecycle
+updated on 2026-11-13. This document retains the current design and acceptance scope.
 Commit, publication and deployment remain separate actions; no database/schema
 change, migration, backfill or cloud operation is part of this implementation.
 
-All six implementation steps below are delivered. Local evidence includes 24
-new bundle-comparison browser journeys and five existing standalone-comparison
-journeys, plus normal Save/tab-activation browser regressions. Core identity,
-matching/bridge ownership, API read/cancellation and App recovery/inspection tests
-pass. The complete web unit suite passes (252 TypeScript tests and 39 Node tests).
-API and shared type checks pass. The normal desktop frontend/CLI build also
-passes, including all App test-fixture types. The focused hosted-frontend comparison against HEAD
-introduces no diagnostics; the checkout's broad frontend type baseline still has
-pre-existing errors. Source inspection is not being substituted for browser evidence.
+All six implementation steps below are delivered. The original November 12
+validation included the complete web unit suite (252 TypeScript tests and 39 Node
+tests), Core/App/API regressions, and normal desktop frontend/CLI builds. The
+focused hosted-frontend comparison introduced no diagnostics; its broad frontend
+type baseline still had pre-existing errors.
+
+The November 13 controls/lifecycle update passed all 28 bundle-comparison browser
+journeys and five standalone-comparison journeys in a final combined run after
+correcting test readiness and tab-label assumptions. Coverage includes closing
+all real tabs, closing active/inactive and Older-only tabs, explicit Exit from
+both surfaces, pending/failed reads, iframe reload, modal Swap, Save/Undo and
+Subgraph/PgUp/PgDn navigation, standard row sizing/selection colors, and responsive
+modal controls. The complete web unit suite, App and shared type checks, affected
+App lint, formatting, import-boundary, repository style/policy, Studio Server
+test-style and documentation-link checks also pass. Removed obsolete sidebar
+refresh/rematch handlers and the unused modal initialization prop. Source
+inspection is not being substituted for browser evidence.
 
 Session regressions cover pending/failed reads, empty reviews, isolated modal
 drafts, metadata admission, native ownership changes and rejected tab closure.
@@ -30,6 +39,11 @@ The holistic UI review covers actual project names in the unmatched list,
 collapsed selected-descendant cues during native tab navigation, availability
 errors scoped to the confirmed review, and a 63-member narrow matching modal
 with reachable actions, mobile labels and two-stage Escape dismissal.
+The setup modal also reuses the common dark dialog surface and blurred backdrop,
+bundle-dialog frame, zero body padding, corner close control, footer and button
+styles. A focused browser journey checks shared sizing at 1600/740/360px, insets,
+initial Older focus, disabled actions, close/Cancel/backdrop dismissal and focus
+return. The existing crowded-modal journey covers scrolling and dropdown Escape.
 
 The owning regression files are
 [bundle comparison UI](../../packages/studio-server-web/playwright-observe/bundle-comparison.spec.ts),
@@ -73,7 +87,10 @@ Published-version selectors are outside this initial feature.
    Preserve existing bundle actions and drag-to-merge.
 2. Open **Compare bundles**, using the usual responsive modal/header/footer
    patterns. Preselect the clicked bundle as Newer. Show Older/Newer bundle
-   selectors and **Swap**; require two distinct bundles.
+   selectors and an icon-only **Swap** button; require two distinct bundles.
+   Selected fields show names only, with paths underneath. Open options retain
+   their paths; accessible descriptions associate each selected path with its
+   field. Keep paths below their corresponding selectors when stacking on mobile.
 3. Once both are selected, load a lightweight catalog and show a bordered
    **Match projects** section, using Merge bundle's table/select styling.
    Selecting bundles alone must not change the tree or open editor projects.
@@ -92,10 +109,10 @@ Published-version selectors are outside this initial feature.
 7. **Compare bundles** starts the reviewed session. **Cancel** discards only
    the modal draft, leaving the ordinary tree/editor or existing session intact.
 
-Use the same modal later for **Match projects** and changing bundles. Open a
-copy of the current choices; apply them explicitly. Changing bundle identities
-clears choices for the previous identities. Swapping roles reverses the logical
-pairs and updates labels, retaining the user's decisions.
+Roles and correspondence are chosen only in the setup modal. To change them or
+capture fresh saved references, exit and start a new comparison. Changing bundle
+identities clears choices for the previous identities. Modal Swap reverses the
+logical pairs and updates labels, retaining the user's decisions.
 
 ### Navigate the comparison
 
@@ -104,23 +121,24 @@ pairs and updates labels, retaining the user's decisions.
   library entries, and initially expand both roots.
 - Clicking either member of a pair activates the same **real Newer project**
   and compares it against its Older reference. Highlight both paired rows.
+  Reuse the ordinary project-row size and neutral highlight, with half the
+  highlight opacity on Older. Truncate long names to retain single-row height.
   Collapsed ancestors show the normal library's selected-descendant cue without
   overriding the user's collapsed folders.
   Clicking an Older row does not make that side editable.
-- Show all members, with Paired, Only in older, Only in newer or a located
+- Show all members, omitting the default Paired label. Show Only in older, Only in newer or a located
   Unavailable status. These labels describe correspondence, not ancestry or
   proof that a project was historically added/deleted. A failure affects its
   pair, not the whole feature.
-- Provide compact **Swap**, **Match projects**, **Refresh older version** and
-  **Exit comparison** controls. Existing normal tabs and Newer dirty indicators
-  remain available. Reuse the setup modal rather than duplicating bundle pickers.
+- The comparison sidebar provides only **Exit comparison**. Swap and matching
+  remain in the setup modal. Existing tabs and Newer dirty indicators stay available.
 - Comparison-tree rows are navigation controls. Do not wire projected rows to
   normal rename/delete/move/drop/merge actions. Newer graph/project editing in
   the editor retains its ordinary behavior; the full library returns on exit.
 - Activating an already-open Newer member tab selects/attaches its pair.
-  Activating a normal tab outside the selected Newer bundle exits comparison
-  and honors that navigation, keeping all real tabs and edits intact.
-- Both the editor's existing comparison Exit and the Server Exit comparison
+  Closing tabs or activating an unrelated tab detaches the selected pair but
+  keeps the reviewed bundles available, even with no editor tabs open.
+- Both the editor's owned **Exit comparison** and the Server **Exit comparison**
   end the same session. Restore the full tree, expansion/scroll/focus and normal
   selection without closing, reverting or saving real projects.
 
@@ -237,18 +255,17 @@ byte-for-byte equality of two complete bundles.
 ## 4. Versions, editing and session operations
 
 Use the Older revisions captured for the confirmed setup and display that they
-are saved references. Hold them fixed until an explicit refresh, role change or
-new setup. Newer uses its live editor state, including unsaved work.
+are saved references. Hold them fixed for the session; a new setup captures fresh
+versions. Newer uses its live editor state, including unsaved work.
 
-| Operation                       | Required behavior                                                                                                                                                                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Select pair                     | Prepare its pinned Older reference, activate/open the explicitly identified real Newer project, then attach comparison. Reuse an open tab without disk reload; otherwise use normal hosted open and revision binding.    |
-| Edit / Save                     | Edit Newer normally. Save writes only that real project with its usual conflict checks. The pinned Older revision and mapping remain unchanged; comparison remains visible after Save.                                   |
-| Switch pair                     | Keep real tabs, unsaved contents, undo, viewports and execution lifetimes. Do not replace a dirty tab through a preview-slot shortcut.                                                                                   |
-| Swap                            | Preserve the same logical mapping, capture the newly Older side's saved revisions, and activate the newly Newer real project with any existing edits. Commit new role labels only when the editor confirms the new pair. |
-| Refresh older version           | Fetch fresh saved Older revisions for the reviewed members. Do not reload Newer, reset its save baseline or save/discard edits. Replace the active reference only after successful preparation.                          |
-| Match projects / change bundles | Edit a separate modal draft, leaving the active comparison usable. Apply confirmed choices through a new session generation; Cancel has no active-session effect.                                                        |
-| Exit                            | Invalidate pending intents, stop the session-owned comparison, dispose only virtual inspection/cache state, and restore the normal tree. Real opened/edited projects remain.                                             |
+| Operation                         | Required behavior                                                                                                                                                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Select pair                       | Prepare its pinned Older reference, activate/open the explicitly identified real Newer project, then attach comparison. Reuse an open tab without disk reload; otherwise use normal hosted open and revision binding. |
+| Edit / Save                       | Edit Newer normally. Save writes only that real project with its usual conflict checks. The pinned Older revision and mapping remain unchanged; comparison remains visible after Save.                                |
+| Switch pair                       | Keep real tabs, unsaved contents, undo, viewports and execution lifetimes. Do not replace a dirty tab through a preview-slot shortcut.                                                                                |
+| Swap / match projects             | Choose roles and correspondence in the setup modal before starting the session. Exit and start again to change an active review or refresh saved references; real dirty tabs remain intact.                           |
+| Close tabs / unrelated navigation | Keep the reviewed bundle tree. Clear the detached pair highlight without reopening closed projects. Newer-member tab navigation can still attach its corresponding pair.                                              |
+| Exit                              | Invalidate pending intents, stop the session-owned comparison, dispose only virtual inspection/cache state, and restore the normal tree. Real opened/edited projects remain.                                          |
 
 Swap is not necessarily a reversal of cached snapshots: the former Newer may
 have unsaved changes. Its new Older role uses its **saved** version; retain its
@@ -256,14 +273,14 @@ unsaved tab and show the distinction when relevant. Nothing is autosaved or
 copied across. Subsequent Save always belongs to whichever real tab is active.
 
 Save As and explicit Run retain normal Newer behavior. If Save As activates a
-different project, do not silently retarget the reviewed pair. Exit comparison
-for an out-of-scope target; a new in-scope member requires matching review.
+different project, do not silently retarget the reviewed pair. Detach the pair
+for an out-of-scope target while preserving the tree; a new member needs a new setup.
 Opening comparison itself triggers neither Save nor Run.
 
 Continue normal catalog sync and remote revision/conflict handling. Labels/path
 moves for the same validated identities may reconcile, but membership changes
 must not automatically re-pair, drop members or manufacture an empty side. Mark
-the affected comparison and offer Match projects to review a fresh catalog.
+the affected comparison and explain that Exit followed by a new setup reviews a fresh catalog.
 A missing/deleted artifact is Unavailable, not evidence of an intentional
 one-sided project. Preserve dirty real tabs and existing reload/keep-local choices.
 
@@ -335,7 +352,7 @@ a cached comparison snapshot over it.
 Fetch selected references on demand. Keep any immutable-reference cache bounded
 and keyed by bundle/project/revision, with eviction; it is an optimization, not
 a requirement for comparison correctness. There is no parallel editable-project
-cache. A missing/collected reference gives a per-pair error with Refresh; never
+cache. A missing/collected reference gives a per-pair error and can be reviewed in a new setup; never
 silently substitute a newer file, another project at a reused path, or an empty
 project. Already loaded reference snapshots remain inspectable.
 
@@ -376,7 +393,7 @@ Extend the public workspace/bridge boundary, not private App atoms:
    native tab click must not attach the reference to another project. Reuse
    existing activation cancellation/ownership where possible.
 4. A newer selection invalidates obsolete queued work and aborts obsolete
-   reads. Swap, modal Apply, Refresh, Exit and local tab navigation participate
+   reads. Modal Apply, Exit and local tab navigation participate
    in the same ownership rule. Late success/error replies cannot relabel the
    current pair, clear a newer error, change Save's target or re-enter after Exit.
    Distinguish the command's own project-activation notifications from native
@@ -413,7 +430,7 @@ reference nodes and captured boundary fallbacks for missing plugins/projects.
 
 Reuse ordinary Go to subgraph and PgUp/PgDn ownership. An in-scope jump selects
 the relevant pair and graph on the real Newer project; outside-scope navigation
-exits comparison and follows normal history. Reference-side inspection must not
+detaches the pair and follows normal history while retaining the bundle tree. Reference-side inspection must not
 silently open a live editable Older project. Resolve reference-side display
 lookups from pinned Older definitions when needed; Newer uses its normal live
 resolution. Missing plugins, broken references or invalid executable bundles
@@ -474,7 +491,7 @@ Each step delivers its tests before the next dependent step. Implement in
 - **Matching:** duplicate names, nested paths, renames, repeated/shared graph
   IDs, ambiguous candidates, explicit unmatched rows, empty bundles and
   one-to-one conflicts. Confirmed and manual pairs survive delayed replies and
-  Swap. Cancel initial/reopened drafts changes no active session or editor tab.
+  modal Swap. Cancel changes no editor tab or active comparison.
 - **Identity equivalence:** copied internal references, self calls, aliases,
   Library sources, disabled nodes and variants do not generate owner-ID noise.
   Real target, graph and Published/Saved latest changes remain visible. Merely
@@ -486,19 +503,21 @@ Each step delivers its tests before the next dependent step. Implement in
   Ctrl+S and explicit Save As using the real editor. Inspect actual payloads and
   destinations. Only the intended real project is saved, comparison stays live,
   and the Older artifact/reference stays unchanged.
-- **Swap / Refresh:** test unsaved work on both sides. Each Save retains its
+- **Modal Swap / new setup:** test unsaved work on both sides. Each Save retains its
   original real owner; newly Older uses saved contents with clear indication.
-  Refresh never reloads Newer or replaces its revision/conflict baseline.
+  Starting a new review never reloads an open Newer tab or replaces its saved baseline.
 - **Navigation / Exit / recovery:** switch several edited pairs, activate tabs,
   navigate Subgraphs and PgUp/PgDn, exit from each UI location and reload the
   iframe/page. Preserve real tabs, edits, viewports, history and runtime. Restore
-  the normal tree; do not recover virtual inspections as editable server files.
+  the normal tree only on explicit Exit. Closing all tabs and iframe reload keep
+  the two-bundle tree; reload detaches without replaying selection. A full page
+  reload ends the transient session. Never recover virtual inspections as editable files.
 - **Races / failure:** delay/fail reads, native tab switches and acknowledgements;
-  switch/swap/apply/refresh/exit during them. No wrong-tab reference, stale label,
+  switch/apply/exit during them. No wrong-tab reference, stale label,
   warning erased by an older reply, automatic command replay or post-exit reopen.
   Pending Ctrl+S saves the actually active tab. One failed pair leaves others usable.
   Programmatic activation must not recursively restart comparison; closing the
-  active tab must not reopen it. Delayed Exit/Refresh must not clear a newer
+  active tab must not reopen it. A delayed Exit must not clear a newer
   bundle reference or a replacement standalone comparison on the same project.
 - **Storage changes:** missing/collected revisions, reused paths, moved/deleted
   members, remote saves and membership changes. Report availability accurately,

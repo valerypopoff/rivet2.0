@@ -45,7 +45,11 @@ export function createEditorBundleComparison(context: EditorCommandBridgeContext
   const workspace = () => context.getWorkspace();
   const state = (): BundleComparisonEditorState => {
     const current = workspace().getProjectCompareState();
-    return { owner: current.owner, projectId: current.projectId };
+    return {
+      owner: current.owner,
+      projectId: current.projectId,
+      ...(current.exitedOwner ? { exitedOwner: current.exitedOwner } : {}),
+    };
   };
   const publish = (requestId?: string, error?: string, cancelled = false) => {
     const current = { ...state(), ...(error ? { error } : {}), ...(cancelled ? { cancelled: true as const } : {}) };

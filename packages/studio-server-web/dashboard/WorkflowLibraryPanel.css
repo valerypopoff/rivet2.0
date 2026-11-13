@@ -67,6 +67,7 @@
   --workflow-library-project-marker-width: 8px;
   --workflow-library-row-gap: 8px;
   --workflow-library-row-padding: 6px;
+  --workflow-library-row-highlight: rgba(255, 255, 255, 0.08);
   --workflow-library-footer-label-inset: calc(
     var(--workflow-library-body-inset) + var(--workflow-library-row-padding) + var(--workflow-button-height-s) +
       var(--workflow-library-row-gap)
@@ -158,6 +159,7 @@
 [data-testid='workflow-bundle-conversion-error-modal--blanket'],
 [data-testid='workflow-bundle-delete-modal--blanket'],
 [data-testid='workflow-bundle-merge-modal--blanket'],
+[data-testid='workflow-bundle-compare-modal--blanket'],
 [data-testid='workflow-published-version-history-modal--blanket'],
 [data-testid='app-settings-modal--blanket'] {
   background: rgba(0, 0, 0, 0.56) !important;
@@ -176,6 +178,7 @@
 [data-testid='workflow-bundle-conversion-error-modal'],
 [data-testid='workflow-bundle-delete-modal'],
 [data-testid='workflow-bundle-merge-modal'],
+[data-testid='workflow-bundle-compare-modal'],
 [data-testid='workflow-published-version-history-modal'],
 [data-testid='app-settings-modal'] {
   background: #1f1f22 !important;
@@ -225,6 +228,7 @@
 [data-testid='workflow-bundle-upload-modal--body'],
 [data-testid='workflow-bundle-conversion-error-modal--body'],
 [data-testid='workflow-bundle-delete-modal--body'],
+[data-testid='workflow-bundle-compare-modal--body'],
 [data-testid='workflow-published-version-history-modal--body'],
 [data-testid='app-settings-modal--body'] {
   padding: 0 !important;
@@ -894,7 +898,7 @@
 .workflow-library-panel .project-row:hover,
 .workflow-library-panel .folder-row.active,
 .workflow-library-panel .project-row.active {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--workflow-library-row-highlight);
 }
 
 .workflow-library-panel .body.drag-over-root,

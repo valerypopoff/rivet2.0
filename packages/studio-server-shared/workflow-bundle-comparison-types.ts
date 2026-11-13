@@ -40,9 +40,11 @@ export type BundleComparisonIntent = BundleComparisonOwner & {
 };
 export type BundleComparisonEditorState = {
   owner: BundleComparisonOwner | null;
+  /** Explicit editor Exit; tab cleanup only clears owner. */
+  exitedOwner?: BundleComparisonOwner;
   projectId: string | null;
   error?: string;
-  /** A native selection superseded this request; end its transient UI too. */
+  /** A native selection superseded this request without ending the reviewed session. */
   cancelled?: true;
 };
 export type BundleComparisonAction =
@@ -60,6 +62,7 @@ export function isBundleComparisonEditorState(v: unknown): v is BundleComparison
   return (
     record(v) &&
     (v.owner === null || isBundleComparisonOwner(v.owner)) &&
+    (v.exitedOwner === undefined || isBundleComparisonOwner(v.exitedOwner)) &&
     (v.projectId === null || text(v.projectId)) &&
     (v.error === undefined || text(v.error, 4096)) &&
     (v.cancelled === undefined || v.cancelled === true)

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Button from '@atlaskit/button';
 import Select from '@atlaskit/select';
 import ModalDialog, { ModalBody } from '@atlaskit/modal-dialog';
+import SwapIcon from '../icons/swap.svg?react';
 import type { WorkflowFolderItem } from './types';
 import { readBundleComparison } from './bundleComparisonApi';
 import {
@@ -17,7 +18,7 @@ import './WorkflowProjectBundleModal.css';
 import './WorkflowBundleMergeModal.css';
 import './WorkflowBundleComparison.css';
 
-type Option = { label: string; value: string; isDisabled?: boolean };
+type Option = { label: string; value: string; isDisabled?: boolean; name?: string; path?: string };
 export type BundleComparisonSetup = { manifest: BundleComparisonManifest; pairs: BundleComparisonPair[] };
 
 function projectLabel(project: BundleComparisonProject) {
@@ -28,31 +29,27 @@ function projectLabel(project: BundleComparisonProject) {
 export function WorkflowBundleCompareModal({
   bundles,
   newerBundleId,
-  initial,
   editorReady,
   onClose,
   onApply,
 }: {
   bundles: WorkflowFolderItem[];
   newerBundleId: string;
-  initial?: BundleComparisonSetup;
   editorReady: boolean;
   onClose(): void;
   onApply(setup: BundleComparisonSetup): void;
 }) {
-  const [olderId, setOlderId] = useState(initial?.manifest.older.bundleId ?? '');
-  const [newerId, setNewerId] = useState(initial?.manifest.newer.bundleId ?? newerBundleId);
-  const [manifest, setManifest] = useState<BundleComparisonManifest | null>(initial?.manifest ?? null);
-  const [choices, setChoices] = useState<BundleComparisonChoices>(() =>
-    Object.fromEntries(initial?.pairs.filter((p) => p.olderId).map((p) => [p.olderId!, p.newerId]) ?? []),
-  );
+  const [olderId, setOlderId] = useState('');
+  const [newerId, setNewerId] = useState(newerBundleId);
+  const [manifest, setManifest] = useState<BundleComparisonManifest | null>(null);
+  const [choices, setChoices] = useState<BundleComparisonChoices>({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const menuOpen = useRef(false);
   const identity = `${olderId}:${newerId}`;
   const matchesSelection = manifest?.older.bundleId === olderId && manifest?.newer.bundleId === newerId;
-  const drafts = useRef<Record<string, BundleComparisonChoices>>(initial ? { [identity]: choices } : {});
+  const drafts = useRef<Record<string, BundleComparisonChoices>>({});
   useEffect(() => {
     if (!olderId || !newerId || olderId === newerId) {
       setManifest(null);
@@ -90,7 +87,14 @@ export function WorkflowBundleCompareModal({
   }, [olderId, newerId, refresh, identity]);
   const options = bundles
     .filter((p) => p.bundleId)
-    .map((p) => ({ value: p.bundleId!, label: p.name === p.relativePath ? p.name : `${p.name} — ${p.relativePath}` }));
+    .map((p) => ({
+      value: p.bundleId!,
+      name: p.name,
+      path: p.relativePath,
+      label: p.name === p.relativePath ? p.name : `${p.name} — ${p.relativePath}`,
+    }));
+  const olderBundle = options.find((p) => p.value === olderId);
+  const newerBundle = options.find((p) => p.value === newerId);
   const suggestions = useMemo(() => (manifest ? suggestBundleComparison(manifest) : {}), [manifest]);
   let pairs: BundleComparisonPair[] = [];
   let validation = '';
@@ -110,8 +114,11 @@ export function WorkflowBundleCompareModal({
   ) => (
     <Select<Option>
       inputId={id}
+      autoFocus={id === 'compare-older-bundle'}
       options={opts}
       value={opts.find((p) => p.value === value) ?? null}
+      formatOptionLabel={(option, { context }) => (context === 'value' ? option.name ?? option.label : option.label)}
+      aria-describedby={opts.find((p) => p.value === value)?.path ? `${id}-path` : undefined}
       placeholder={placeholder}
       menuPortalTarget={document.body}
       menuPosition="fixed"
@@ -147,7 +154,6 @@ export function WorkflowBundleCompareModal({
     <ModalDialog
       testId="workflow-bundle-compare-modal"
       label="Compare bundles"
-      width="large"
       onClose={() => {
         if (!menuOpen.current) onClose();
       }}
@@ -167,7 +173,7 @@ export function WorkflowBundleCompareModal({
           </div>
           <div className="project-settings-modal-content workflow-bundle-merge-content">
             <div className="bundle-comparison-pickers">
-              <div className="project-settings-field">
+              <div className="project-settings-field bundle-comparison-older">
                 <label htmlFor="compare-older-bundle">Older bundle</label>
                 {select(
                   'compare-older-bundle',
@@ -176,10 +182,16 @@ export function WorkflowBundleCompareModal({
                   setOlderId,
                 )}
               </div>
-              <Button onClick={swap} isDisabled={!olderId || !newerId || loading}>
-                Swap
+              <Button
+                className="workflow-project-bundle-action button-size-l bundle-comparison-swap"
+                aria-label="Swap"
+                title="Swap Older and Newer bundles"
+                onClick={swap}
+                isDisabled={!olderId || !newerId || loading}
+              >
+                <SwapIcon aria-hidden="true" focusable="false" />
               </Button>
-              <div className="project-settings-field">
+              <div className="project-settings-field bundle-comparison-newer">
                 <label htmlFor="compare-newer-bundle">Newer bundle</label>
                 {select(
                   'compare-newer-bundle',
@@ -188,10 +200,17 @@ export function WorkflowBundleCompareModal({
                   setNewerId,
                 )}
               </div>
+              {olderBundle ? (
+                <p id="compare-older-bundle-path" className="project-settings-muted bundle-comparison-older-path">
+                  {olderBundle.path}
+                </p>
+              ) : null}
+              {newerBundle ? (
+                <p id="compare-newer-bundle-path" className="project-settings-muted bundle-comparison-newer-path">
+                  {newerBundle.path}
+                </p>
+              ) : null}
             </div>
-            <p className="project-settings-help">
-              Edit and save the Newer projects normally. Older uses saved versions; unsaved Older edits are excluded.
-            </p>
             {loading ? <p role="status">Loading project matches…</p> : null}
             {error ? (
               <div className="workflow-project-bundle-error" role="alert">
@@ -296,10 +315,12 @@ export function WorkflowBundleCompareModal({
             ) : null}
           </div>
           <div className="workflow-project-bundle-footer">
-            <Button onClick={onClose}>Cancel</Button>
+            <Button className="workflow-project-bundle-action button-size-l" onClick={onClose}>
+              Cancel
+            </Button>
             <Button
               appearance="primary"
-              className="button-size-l"
+              className="workflow-project-bundle-action workflow-project-bundle-primary button-size-l"
               isDisabled={!editorReady || !matchesSelection || !manifest || loading || !!validation}
               onClick={() => {
                 if (editorReady && matchesSelection && manifest && !validation) onApply({ manifest, pairs });

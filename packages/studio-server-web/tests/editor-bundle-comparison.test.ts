@@ -35,7 +35,10 @@ function deferred() {
   return { promise, resolve };
 }
 function fixture(t: TestContext) {
-  const messages: { requestId?: string; state?: { error?: string; cancelled?: true } }[] = [];
+  const messages: {
+    requestId?: string;
+    state?: { error?: string; cancelled?: true; exitedOwner?: BundleComparisonOwner };
+  }[] = [];
   for (const [key, value] of Object.entries({
     window: {
       location: { origin: 'http://fixture', href: 'http://fixture/editor' },
@@ -206,6 +209,18 @@ const stopCommand = (generation: number): BundleComparisonCommand => ({
   requestId: `stop-${generation}`,
   action: 'stop',
   owner: { sessionId: 'session', generation },
+});
+void test('state reports explicit Exit separately from an owner released by tab closure', async (t) => {
+  const f = fixture(t);
+  await f.run(f.command());
+  f.state.owner = null;
+  f.state.projectId = null;
+  f.state.referenceId = null;
+  f.emit();
+  assert.equal(f.messages.at(-1)?.state?.exitedOwner, undefined);
+  f.state.exitedOwner = { sessionId: 'session', generation: 1 };
+  f.emit();
+  assert.deepEqual(f.messages.at(-1)?.state?.exitedOwner, { sessionId: 'session', generation: 1 });
 });
 void test('stale Exit cannot clear a newer pair or a standalone comparison on the same project', async (t) => {
   const f = fixture(t);

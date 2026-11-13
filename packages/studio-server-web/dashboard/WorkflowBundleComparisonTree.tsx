@@ -64,33 +64,34 @@ export function WorkflowBundleComparisonTree({
           {projects.map((p) => {
             const pair = pairs.find((pair) => pair[memberKey] === p.projectId)!;
             const pairKey = bundleComparisonPairKey(pair);
+            const status =
+              pending === pairKey
+                ? 'Loading…'
+                : errors[pairKey]
+                  ? 'Unavailable'
+                  : pair.olderId && pair.newerId
+                    ? null
+                    : role === 'Older'
+                      ? 'Only in older'
+                      : 'Only in newer';
             return (
               <button
                 type="button"
                 key={p.projectId}
-                className={`comparison-project-row${selected === pairKey ? ' selected' : ''}`}
+                className={`project-row comparison-project-row${selected === pairKey ? ' active' : ''}`}
+                data-comparison-role={role.toLowerCase()}
                 aria-label={`Compare ${role} project ${p.name}${catalog.projects.filter((member) => member.name === p.name).length > 1 ? ` (${displayBundleMergePath(p.relativePath)})` : ''}`}
                 aria-current={selected === pairKey ? 'true' : undefined}
                 onClick={() => onSelect(pair)}
                 title={errors[pairKey] || displayBundleMergePath(p.relativePath)}
               >
-                <span>
+                <span className="comparison-project-name">
                   {p.name}
                   {dirtyProjects.has(p.projectId) ? (
                     <small> · {role === 'Newer' ? 'Unsaved' : 'Unsaved edits excluded'}</small>
                   ) : null}
                 </span>
-                <small>
-                  {pending === pairKey
-                    ? 'Loading…'
-                    : errors[pairKey]
-                      ? 'Unavailable'
-                      : pair.olderId && pair.newerId
-                        ? 'Paired'
-                        : role === 'Older'
-                          ? 'Only in older'
-                          : 'Only in newer'}
-                </small>
+                {status ? <small className="comparison-project-status">{status}</small> : null}
               </button>
             );
           })}

@@ -82,7 +82,6 @@ export const WorkflowLibraryModals: FC<{
           bundles={controller.bundleFolders}
           editorReady={controller.editorReady}
           newerBundleId={comparison.modal.newerBundleId}
-          initial={comparison.modal.initial}
           onClose={comparison.closeModal}
           onApply={comparison.apply}
         />

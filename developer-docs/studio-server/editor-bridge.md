@@ -125,7 +125,9 @@ nullable Older/Newer descriptors, complete one-to-one pair array (up to 512),
 side labels, and a bounded Older catalog. Project contents never cross this wire.
 `bundle-comparison-state` replies/reporting contain the actual active project ID,
 owner or null, optional located error, an optional `cancelled: true` when native
-navigation supersedes a request, and request ID for acknowledgements.
+navigation supersedes a request, and request ID for acknowledgements. An optional
+`exitedOwner` records an explicit editor Exit. Normal tab cleanup only releases
+the reference owner; it must not end the Server's reviewed bundle session.
 Runtime readers validate membership/uniqueness, labels, bounds and selected pair.
 An unknown acknowledgement triggers one state read, never an automatic open replay.
 
@@ -135,7 +137,7 @@ attaching or updating its bundle binding. The public `RivetWorkspaceHost` compar
 API validates the actual current project and exact owner. It exposes comparison,
 graph and activation state/subscriptions and an owner-checked reference-definition
 update; the wrapper never writes App comparison atoms or implements another save
-pipeline. Native selections cancel pending reads and end the pending Server UI;
+pipeline. Native selections cancel pending reads while retaining the reviewed bundles;
 ordinary project-open/preview/compare commands cancel the pending read before
 joining the activation queue. Command-owned activation does not recursively
 restart itself. Superseded work settles its acknowledgement. Applying an empty
@@ -144,9 +146,13 @@ then records the actual selected project as its navigation baseline.
 The Server tracks the actual acknowledged project ID for both real and virtual
 views. A read error preserves a displayed selection only when its exact owner and
 project still match. An unattached error retains its location for explicit retry,
-but subsequent tab navigation exits instead of trapping the filtered tree or
-automatically reopening the failed pair. Entering the matching modal aborts any
-uncommitted toolbar catalog read before opening its isolated draft.
+and subsequent tab changes do not replay it or discard the reviewed bundle tree.
+Only an explicit Exit ends that session; a generation-checked `exitedOwner`
+distinguishes the editor's Exit button from owner loss during tab closure.
+The sidebar has no Swap, rematch or refresh handlers: roles/matches and fresh
+saved Older versions are chosen through a new setup after Exit. Iframe replacement
+invalidates pending acknowledgements and detaches selection without replaying it
+or removing the two-bundle view.
 Starting a new native comparison also supersedes bundle work during project
 activation, not just reference reads. Activation may clear an old reference as
 part of closing its virtual tab; a newly installed reference instead cancels the

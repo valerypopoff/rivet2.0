@@ -1,22 +1,39 @@
-[data-testid='workflow-bundle-compare-modal'] {
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100dvh - 40px);
-}
-[data-testid='workflow-bundle-compare-modal--body'] {
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-  padding: 0;
-}
 .bundle-comparison-pickers {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-areas: 'older swap newer' 'older-path . newer-path';
+  align-items: flex-end;
+  gap: 6px 12px;
 }
 .bundle-comparison-pickers .project-settings-field {
-  flex: 1;
   min-width: 0;
+}
+.bundle-comparison-older {
+  grid-area: older;
+}
+.bundle-comparison-newer {
+  grid-area: newer;
+}
+.bundle-comparison-older-path {
+  grid-area: older-path;
+}
+.bundle-comparison-newer-path {
+  grid-area: newer-path;
+}
+.bundle-comparison-pickers > p {
+  min-width: 0;
+  align-self: start;
+  overflow-wrap: anywhere;
+}
+.bundle-comparison-pickers .bundle-comparison-swap {
+  grid-area: swap;
+  width: var(--workflow-button-height-l);
+  padding: 0;
+  justify-self: center;
+}
+.bundle-comparison-swap svg {
+  width: 20px;
+  height: 20px;
 }
 .bundle-comparison-sr-only {
   position: absolute;
@@ -37,33 +54,23 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.bundle-comparison-tree .comparison-project-row {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  width: 100%;
-  border: 0;
-  color: inherit;
-  background: transparent;
-  padding: 7px 10px;
-  cursor: pointer;
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-.bundle-comparison-tree .comparison-project-row:hover {
-  background: var(--grey-medium);
-}
-.bundle-comparison-tree .comparison-project-row.selected {
-  background: var(--grey-medium);
-  outline: 1px solid var(--primary);
-  outline-offset: -1px;
+.workflow-library-panel .comparison-project-row[data-comparison-role='older'].active {
+  background: color-mix(in srgb, var(--workflow-library-row-highlight) 50%, transparent);
 }
 .bundle-comparison-tree .comparison-project-row small {
-  margin-left: auto;
   color: var(--grey-light);
+  margin: 0;
 }
-.bundle-comparison-tree .comparison-project-row span {
+.bundle-comparison-tree .comparison-project-name {
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.bundle-comparison-tree .comparison-project-status {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .bundle-comparison-tree .comparison-folder {
   padding-left: 14px;
@@ -78,7 +85,22 @@
 }
 @media (max-width: 600px) {
   .bundle-comparison-pickers {
+    display: flex;
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
+  }
+  .bundle-comparison-older-path {
+    order: 1;
+  }
+  .bundle-comparison-pickers .bundle-comparison-swap {
+    order: 2;
+    align-self: center;
+  }
+  .bundle-comparison-newer {
+    order: 3;
+  }
+  .bundle-comparison-newer-path {
+    order: 4;
   }
 }

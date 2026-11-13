@@ -63,6 +63,8 @@ export function resolveProjectCompareSideLabels(
 }
 
 export const projectCompareReferenceState = atom<ProjectCompareReference | undefined>(undefined);
+/** Explicit editor Exit, distinct from releasing a comparison when its tab closes. */
+export const projectCompareExitOwnerState = atom<ProjectCompareReference['owner']>(undefined);
 
 export const activeProjectComparisonState = atom<ActiveProjectComparison | undefined>((get) => {
   const project = get(projectState);

@@ -222,19 +222,21 @@ A Newer-only project compares against an empty Older project and stays editable.
 An Older-only project opens for read-only inspection. Removed graphs also remain
 read-only; inspecting them does not restore them to Newer.
 
-Use **Match projects** to change the correspondence, **Refresh older version** to
-capture fresh saved Older versions, or **Swap** to edit the other side. Refresh
-does not reload Newer or discard its edits. Swap leaves unsaved edits in their
-original project tabs and uses saved versions for the newly Older side. Changes
-to bundle membership or locations require reviewing the matches again. If a
-project is unavailable, its row reports the problem; other pairs remain usable.
+The comparison sidebar has only **Exit comparison**. To change the matches,
+swap roles or capture newer saved Older versions, exit and start a new comparison.
+Swap is available in the setup modal. Unsaved edits stay in their original
+project tabs. If bundle membership or locations change, start a new comparison
+to review the matches again. An unavailable project reports the problem in its
+row; other pairs remain usable.
 
 Switching between open Newer member tabs follows their comparisons. Go to
 subgraph and **Page Up**/**Page Down** retain normal graph-history behavior.
-Opening an unrelated project, using **Exit comparison** in the Server tree, or
-using **Exit** in the editor restores the normal tree and keeps real project
-tabs and edits. Reloading the editor ends comparison; it is not saved as project
-data. Comparing bundles does not merge, publish or run them.
+Closing any or all project tabs or opening an unrelated project keeps the two
+bundles in the tree. Click a project there to reopen its comparison. Only
+**Exit comparison**, in the Server tree or editor, restores the normal tree;
+real tabs and edits stay intact. Reloading just the editor keeps the bundle tree
+but does not reopen a pair automatically. Reloading the whole page ends this
+temporary mode. Comparing bundles does not merge, publish or run them.
 
 ### Studio Server project tabs
 
