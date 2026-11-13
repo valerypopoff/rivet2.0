@@ -17,6 +17,7 @@ import {
   createEvaluationEventCollector,
   EvaluationGraphExecutionError,
   type EvaluationRecordingReference,
+  type EvaluationRecordingArtifact,
   type PortableJson,
 } from '@valerypopoff/rivet2-evaluations';
 
@@ -25,7 +26,8 @@ import type { RivetStudioEvaluationStore } from './store.js';
 import type { HostedEvaluationGraphRunner } from './hosted-coordinator.js';
 
 type HostedEvaluationExecutionDependencies = {
-  evaluationStore: Pick<RivetStudioEvaluationStore, 'putRecording'>;
+  evaluationStore: Pick<RivetStudioEvaluationStore, 'putRecording'> &
+    Partial<Pick<RivetStudioEvaluationStore, 'getRecording'>>;
   llmProfileHealthStore: RivetStudioLLMProfileHealthStore | undefined;
   createSubgraphProjectLoader?: HostedRuntimeDependencies['createSubgraphProjectLoader'];
   createProjectReferenceLoader(): Promise<NonNullable<Parameters<typeof createProcessor>[1]['projectReferenceLoader']>>;
@@ -65,19 +67,45 @@ export function createHostedEvaluationGraphRunner(
     let recorder: ExecutionRecorder | undefined;
     const reference = createTemporaryReference();
     let persistedReference: EvaluationRecordingReference | undefined;
+    let preparedRecording: EvaluationRecordingArtifact | undefined;
     let processor: ReturnType<typeof createProcessor> | undefined;
     let session: ExecutionSession | undefined;
 
     const persistRecording = async (): Promise<EvaluationRecordingReference | undefined> => {
       if (!recorder || recorder.events.length === 0) return undefined;
-      await dependencies.evaluationStore.putRecording({
+      preparedRecording ??= {
         projectId: project.metadata.id,
         runId: metadata.evaluationRunId,
         trialId: `${metadata.caseId}:${metadata.trialIndex}:${metadata.phase}`,
         reference,
         serialized: recorder.serialize(),
         createdAt: new Date().toISOString(),
-      });
+      };
+      // Freeze the bytes and identity before a write. A lost acknowledgement
+      // may already have committed; only this exact artifact can be retried.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await dependencies.evaluationStore.putRecording(preparedRecording);
+          break;
+        } catch (error) {
+          const saved = await dependencies.evaluationStore.getRecording?.({
+            projectId: preparedRecording.projectId,
+            recordingId: reference.id,
+          });
+          if (saved) {
+            if (
+              saved.runId !== preparedRecording.runId ||
+              saved.trialId !== preparedRecording.trialId ||
+              saved.serialized !== preparedRecording.serialized ||
+              saved.createdAt !== preparedRecording.createdAt
+            ) {
+              throw new Error('Evaluation recording content differs from its accepted capture.');
+            }
+            break;
+          }
+          if (attempt === 1 || !dependencies.evaluationStore.getRecording) throw error;
+        }
+      }
       persistedReference = reference;
       return reference;
     };
@@ -109,6 +137,7 @@ export function createHostedEvaluationGraphRunner(
       session = new ExecutionSession(processor, { recording: true });
       recorder = session.recorder!;
       const outcome = await session.run();
+      recorder = outcome.recorder ?? undefined;
       if (outcome.failure) throw outcome.failure.error;
       const outputs = outcome.outputs!;
       captured.metrics.durationMs = Date.now() - startedAt;
@@ -118,7 +147,9 @@ export function createHostedEvaluationGraphRunner(
           return [key, value.value];
         }),
       );
-      await persistRecording();
+      await persistRecording().catch(() => {
+        console.warn('[hosted-evaluations] Graph completed, but its recording could not be saved.');
+      });
       return {
         outputs: portableOutputs,
         metrics: captured.metrics,
@@ -127,8 +158,8 @@ export function createHostedEvaluationGraphRunner(
       };
     } catch (error) {
       captured.metrics.durationMs = Math.max(captured.metrics.durationMs, Date.now() - startedAt);
-      await persistRecording().catch((recordingError) => {
-        console.warn('[hosted-evaluations] Failed to persist graph recording:', recordingError);
+      await persistRecording().catch(() => {
+        console.warn('[hosted-evaluations] Failed graph recording could not be saved.');
       });
       if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
       throw new EvaluationGraphExecutionError(error instanceof Error ? error.message : String(error), {

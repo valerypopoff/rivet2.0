@@ -164,7 +164,7 @@ for (const kind of ['child', 'nested child', 'legacy child', 'root', 'prompt chi
     await page.route('**/api/projects/load', (route) =>
       route.fulfill({ json: { contents: serializeProject(neighbor), datasetsContents: null, revisionId: null } }),
     );
-    await page.route('**/api/workflows/recordings/workflows', (route) =>
+    await page.route(/\/api\/workflows\/recordings\/workflows(?:\?.*)?$/, (route) =>
       route.fulfill({ json: { workflows: [], totals: { totalRuns: 2, failedRuns: 0, suspiciousRuns: 0 } } }),
     );
     const root: WorkflowRecordingRunSummary = {

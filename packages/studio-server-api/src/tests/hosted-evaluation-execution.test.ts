@@ -13,6 +13,56 @@ import {
 } from '../../../evaluations/test/fixtures/accountingGraph.js';
 
 import { createHostedEvaluationGraphRunner } from '../evaluation-runs/hosted-execution.js';
+import { ExecutionSession } from '../routes/workflows/execution-session.js';
+
+test('evaluations do not persist a capture withheld by the execution session', async (t) => {
+  const originalRun = ExecutionSession.prototype.run;
+  t.mock.method(
+    ExecutionSession.prototype,
+    'run',
+    async function (this: ExecutionSession, ...args: Parameters<typeof originalRun>) {
+      const result = await originalRun.apply(this, args);
+      return {
+        ...result,
+        recorder: null,
+        status: 'failed' as const,
+        failure: { error: new Error('Execution did not settle') },
+      };
+    },
+  );
+  let writes = 0;
+  const runner = createHostedEvaluationGraphRunner({
+    createProjectReferenceLoader: async () => new NodeProjectReferenceLoader(),
+    evaluationStore: {
+      putRecording: async () => {
+        writes++;
+      },
+    },
+    llmProfileHealthStore: undefined,
+  });
+  const graphId = 'main' as GraphId;
+  const project: Project = {
+    metadata: { id: 'withheld-evaluation' as ProjectId, title: 'Withheld', description: '', mainGraphId: graphId },
+    graphs: { [graphId]: { metadata: { id: graphId, name: 'Main' }, nodes: [], connections: [] } },
+    plugins: [],
+  };
+  await assert.rejects(
+    runner({
+      project,
+      graphId,
+      inputs: {},
+      contextValues: {},
+      projectPath: '/workflows/Withheld.rivet-project',
+      metadata: { caseId: 'case', evaluationRunId: 'run', phase: 'target', suiteId: 'suite', trialIndex: 0 },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof EvaluationGraphExecutionError);
+      assert.equal(error.recording, undefined);
+      return true;
+    },
+  );
+  assert.equal(writes, 0);
+});
 
 test('hosted evaluation execution captures full provider evidence and persists it on success and failure', async (t) => {
   let failRequest = false;
@@ -122,8 +172,29 @@ test('hosted evaluation execution captures full provider evidence and persists i
   );
   assert.equal(recordings.length, 2);
   assert.equal(getEventListeners(abortController.signal, 'abort').length, 0);
+  failRequest = false;
+  for (const committed of [true, false]) {
+    let saved: EvaluationRecordingArtifact | undefined;
+    let writes = 0;
+    const uncertainRunner = createHostedEvaluationGraphRunner({
+      createProjectReferenceLoader: async () => new NodeProjectReferenceLoader(),
+      evaluationStore: {
+        putRecording: async (artifact) => {
+          writes++;
+          if (committed) saved = artifact;
+          throw Object.assign(new Error('Storage acknowledgement lost'), { code: 'ECONNRESET' });
+        },
+        getRecording: async () => saved,
+      },
+      llmProfileHealthStore: undefined,
+    });
+    const result = await uncertainRunner(execution);
+    assert.equal(result.outputs.response, 'evaluation response');
+    assert.equal(Boolean(result.recording), committed);
+    assert.equal(writes, committed ? 1 : 2);
+  }
   abortController.abort();
   await assert.rejects(() => runner(execution), { name: 'AbortError' });
-  assert.equal(requestCount, 4);
+  assert.equal(requestCount, 8);
   assert.equal(recordings.length, 2);
 });

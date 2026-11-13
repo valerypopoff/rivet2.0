@@ -10,7 +10,7 @@ generate recordings, see the [recording API documentation](../api-reference/reco
 
 ### Finding recordings in Rivet Server
 
-Open **Run recordings** and leave the workflow selector on **Any** to browse all workflows, or choose an individual workflow. **Any** is always the first option and the default for a newly opened recordings session. The workflow details card appears only when an individual workflow is selected. **Bad only**, pagination and **Filter by input** work in either mode. Input filters search captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
+Open **Run recordings** and leave the **Project** picker on **Any** to browse all projects, or choose an individual project. **Any** is always the first option and the default for a newly opened recordings session. The project details card appears only when an individual project is selected. The picker counts runs, including pending or unavailable recordings when durable evidence is enabled. **Bad only**, pagination and **Filter by input** work in either mode. Input filters search captured request input with a JSON path such as `$.requestId`. Matching runs appear progressively, newest first. **Stop search** keeps the results already found; changing the filter starts a new search.
 
 Click the refresh icon beside **Run recordings** to reload the workflow list and
 recordings as if you closed and reopened the modal. It resets to **Any**, **All**,
@@ -23,6 +23,30 @@ disabled while a recording is opening or being deleted.
 Enable **Record local graph executions** in Rivet settings to retain live hosted editor runs in **Run recordings**. Both Browser execution and Studio Server's internal Node executor can capture the parent run and called-project Subgraph runs, including successful runs with no LLM nodes. Server recording policy and retention still apply. Desktop or external Remote Debugger execution does not upload through this hosted-editor feature, and replaying an old recording does not create a new one.
 
 A parent may succeed even if a child fails when the Subgraph's error output handles that failure. Each recording retains its own outcome. An interrupted connection or failed upload may leave a run unavailable; do not assume a completed graph guarantees a retained recording.
+
+### Pending or unavailable recordings
+
+When the server has durable recording evidence enabled, runs with a saved
+evidence entry appear in history even if their replay could not be saved.
+Production runs save this entry in the background so recording storage does not
+hold up execution. A server crash before that first save can still leave no entry.
+Execution status and replay
+availability are separate: a successful run can show **Recording unavailable**.
+**Accepted** means recording admission was saved but graph execution has not yet
+been confirmed.
+**Outcome unknown** means the server could not confirm how execution ended.
+It does not mean the run failed, and Rivet does not rerun it automatically.
+
+Pending and unavailable entries can be deleted, but cannot be opened as replays.
+The server can finish saving an uploaded replay after restarting. Events lost
+before upload cannot be reconstructed. A parent can also report that some
+called-project recordings could not be confirmed.
+
+Input filters skip attempts whose replay payload is unavailable and show how
+many could not be searched. Missing payload is never treated as a missing input
+field. Statistics exclude incomplete execution telemetry with a warning; known
+outcomes and costs remain included once, even if their replay is unavailable.
+Existing recordings remain readable without a backfill.
 
 ### Estimated cost statistics
 
@@ -64,9 +88,9 @@ Selecting the caller workflow also includes related called-project Subgraph reco
 
 **Any** lists each retained recording once. Older recordings without a related run key, or children whose root recording has been deleted, can only be found under **Any** or their called project.
 
-Counts in the workflow dropdown say **in this project** because they count that
-project's own recordings; the selected table can contain additional related child
-recordings. Deleting a parent does not delete its child recordings. Without that
+Counts in the Project picker say **in this project** because they count that
+project's own runs; the selected table can contain additional related child
+runs. Deleting a parent does not delete its child recordings. Without that
 parent's run key anchor, find those children through **Any** or their called project.
 
 Run duration text is rounded to two decimal places; recorded timings keep their original precision. Opening a replay temporarily hides the modal but keeps its workflow, filter, page and expanded families for when you return. Explicitly closing it resets the session to **Any**.

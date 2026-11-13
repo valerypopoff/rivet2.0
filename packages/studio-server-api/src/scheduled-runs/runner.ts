@@ -1,4 +1,3 @@
-import { performance } from 'node:perf_hooks';
 import {
   loadProjectAndAttachedDataFromString,
   type ExecutionRecorder,
@@ -21,6 +20,12 @@ import {
 import type { ClaimedRun, ScheduledRunStore } from './store.js';
 import { awaitPreparation } from './cancellation.js';
 import { reportRecordingFailure, type RecordingDiagnosticContext } from '../routes/workflows/recording-diagnostics.js';
+import {
+  executionRunEvidenceInput,
+  beginRunEvidence,
+  unavailableRunEvidence,
+} from '../routes/workflows/run-evidence.js';
+import type { RunEvidenceHandle } from '@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js';
 
 export async function runScheduledGraph(
   job: ClaimedRun,
@@ -69,9 +74,12 @@ export async function runScheduledGraph(
   );
   let recorder: ExecutionRecorder | null = null;
   let createdAt: string | undefined;
+  let evidenceHandle: RunEvidenceHandle | undefined;
+  let evidenceCompletion: Promise<void> | undefined;
+  let executionDurationMs = 0;
   const controller = new AbortController();
-  const started = performance.now();
   let status: ScheduledOccurrence['status'] = 'succeeded';
+  let graphRecordingStatus: 'succeeded' | 'failed' | 'suspicious' = 'failed';
   let reason: string | undefined;
   let invoked = false;
   try {
@@ -80,6 +88,16 @@ export async function runScheduledGraph(
     const session = new ExecutionSession(processor, {
       recording,
       recorderOptions: getWorkflowExecutionRecorderOptions(),
+      beginEvidence: beginRunEvidence,
+      evidence: {
+        ...executionRunEvidenceInput(
+          { project: resolved.project, projectVirtualPath: resolved.sourceProjectPath },
+          { surface: 'scheduled', graphId, correlationId: occurrence.id },
+          draft.name,
+          draft.version,
+        ),
+        sourceRunId: occurrence.id,
+      },
     });
     recorder = session.recorder;
     // Interactive nodes have no browser owner in this execution surface.
@@ -90,8 +108,13 @@ export async function runScheduledGraph(
     if (!(await store.accept(occurrence.id, owner, { revisionKey: resolved.revisionKey, graphId })))
       return { status: 'cancelled' };
     signal.throwIfAborted();
-    invoked = true;
     const outcome = await session.run();
+    invoked = outcome.invoked;
+    recorder = outcome.recorder;
+    graphRecordingStatus = outcome.status;
+    evidenceHandle = outcome.evidenceHandle;
+    evidenceCompletion = outcome.evidenceCompletion;
+    executionDurationMs = outcome.durationMs;
     createdAt = outcome.createdAt;
     if (outcome.failure) throw outcome.failure.error;
     if (controller.signal.aborted) throw new Error('Interactive input is not supported for scheduled runs.');
@@ -112,14 +135,20 @@ export async function runScheduledGraph(
   let recordingStatus: ScheduledOccurrence['recordingStatus'] = draft.record ? 'unavailable' : 'off';
   if (recorder && invoked) {
     const diagnostic: RecordingDiagnosticContext = {
-      projectId: draft.projectId, graphId, correlationId: occurrence.id,
-      surface: 'scheduled', runKind: draft.version, phase: 'serialization',
+      projectId: draft.projectId,
+      graphId,
+      correlationId: occurrence.id,
+      surface: 'scheduled',
+      runKind: draft.version,
+      phase: 'serialization',
     };
     try {
+      await evidenceCompletion;
       const [project, attached] = loadProjectAndAttachedDataFromString(resolved.projectContents);
       const recordingSerialized = recorder.serialize();
       diagnostic.phase = 'persistence';
       recordingId = await persistWorkflowExecutionRecordingWithBackend({
+        evidenceHandle,
         createdAt: createdAt ?? getWorkflowRecordingCreatedAt(recorder.events),
         sourceProject: project,
         sourceProjectPath: resolved.sourceProjectPath,
@@ -131,8 +160,8 @@ export async function runScheduledGraph(
         endpointName: `Scheduled: ${occurrence.scheduleId}`,
         runKind: draft.version,
         recordingSerialized,
-        status: status === 'succeeded' ? 'succeeded' : 'failed',
-        durationMs: performance.now() - started,
+        status: graphRecordingStatus,
+        durationMs: executionDurationMs,
         errorMessage: reason,
         executionIdentity: {
           surface: 'scheduled',
@@ -147,6 +176,10 @@ export async function runScheduledGraph(
       });
       if (recordingId) recordingStatus = 'saved';
     } catch (error) {
+      await unavailableRunEvidence(
+        evidenceHandle,
+        diagnostic.phase === 'serialization' ? 'serialization_failed' : 'persistence_failed',
+      );
       reportRecordingFailure(error, diagnostic);
       /* Recording failure must never cause graph retry. */
     }

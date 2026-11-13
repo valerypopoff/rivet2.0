@@ -51,6 +51,9 @@ import type { ResolvedSubgraphProject, SubgraphProjectTarget } from '@valerypopo
 import { ManagedWorkflowExecutionService } from './execution-service.js';
 import { createManagedWorkflowPublicationService } from './publication.js';
 import { createManagedWorkflowRecordingService } from './recordings.js';
+import { ManagedRecordingEvidence } from './recording-evidence.js';
+import { flushEvidenceWork } from '../recording-evidence-work.js';
+import { missingRecordingCount } from './recording-history.js';
 import { createManagedWorkflowRevisionService } from './revisions.js';
 import { readManagedWorkflowMigrationSnapshot } from './migration-snapshot.js';
 import type { WorkflowDataBackend } from '../data-backend.js';
@@ -73,6 +76,10 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   readonly #revisions: ReturnType<typeof createManagedWorkflowRevisionService>;
   readonly #publication: ReturnType<typeof createManagedWorkflowPublicationService>;
   readonly #recordings: ReturnType<typeof createManagedWorkflowRecordingService>;
+  readonly #evidence: ManagedRecordingEvidence;
+  get evidence() {
+    return this.#evidence;
+  }
   #operations?: ManagedWorkflowOperations;
   readonly #createOperations?: ManagedWorkflowOperationsFactory;
   #retiring = false;
@@ -102,8 +109,10 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     this.#publication = createManagedWorkflowPublicationService({
       context: this.#context,
     });
+    this.#evidence = new ManagedRecordingEvidence(this.#context);
     this.#recordings = createManagedWorkflowRecordingService({
       context: this.#context,
+      evidence: this.#evidence,
     });
     this.#createOperations = options?.createOperations;
   }
@@ -155,7 +164,9 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
   async dispose(): Promise<void> {
     return (this.#disposing ??= (async () => {
       await this.drain();
+      await flushEvidenceWork();
       this.#phase = 'closed';
+      await this.#evidence.dispose();
       await this.#context.dispose();
     })());
   }
@@ -543,11 +554,15 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
     return this.#recordings.cleanupWorkflowRecordingStorage();
   }
 
-  async listWorkflowRecordingWorkflows(): Promise<WorkflowRecordingWorkflowListResponse> {
-    return this.#recordings.listWorkflowRecordingWorkflows();
+  async listWorkflowRecordingWorkflows(includeEvidence = false): Promise<WorkflowRecordingWorkflowListResponse> {
+    return this.#recordings.listWorkflowRecordingWorkflows(includeEvidence);
   }
 
   async listWorkflowRecordingRunsPage(query: WorkflowRecordingPageQuery): Promise<WorkflowRecordingRunsPageResponse> {
+    if (query.includeEvidence && this.evidence && !query.inputFilter) {
+      await this.initialize();
+      return this.#recordings.listHistory(query);
+    }
     const {
       workflowId,
       page,
@@ -560,7 +575,7 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
       includeSubgraphRuns = false,
       runScope = inputFilter ? 'roots' : 'all',
     } = query;
-    return this.#recordings.listWorkflowRecordingRunsPage(
+    const result = await this.#recordings.listWorkflowRecordingRunsPage(
       workflowId,
       page,
       pageSize,
@@ -572,6 +587,9 @@ export class ManagedWorkflowBackend implements WorkflowDataBackend {
       includeSubgraphRuns,
       runScope,
     );
+    if (query.includeEvidence && this.evidence && query.inputFilter && !query.inputAfter && !query.inputCursor)
+      result.unsearchableRuns = await missingRecordingCount(this.#context, { ...query, runScope });
+    return result;
   }
 
   async listWorkflowRunStatisticsCatalog(

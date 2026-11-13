@@ -310,6 +310,14 @@ async function importSourceRecordings(
           })
         : await listWorkflowRecordingRunsPage(root, sourceWorkflow.workflowId, page, pageSize, 'all');
       for (const run of runsPage.runs) {
+        if (
+          run.status === 'accepted' ||
+          run.status === 'running' ||
+          run.status === 'unknown' ||
+          (run.evidence && run.evidence.availability !== 'available')
+        ) {
+          throw new Error('Only playable recordings can be migrated.');
+        }
         const readArtifact = (artifact: 'recording' | 'replay-project' | 'replay-dataset') =>
           native
             ? native.workflows.readWorkflowRecordingArtifact(run.id, artifact)

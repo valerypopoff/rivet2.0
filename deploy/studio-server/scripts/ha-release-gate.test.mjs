@@ -23,7 +23,8 @@ import { assertProbedSchemaTransition, probeSchemaLockContention, readSchemaRepo
 test('reviewed schema expands include nullable reference summaries without approving future migrations', () => {
   assert.doesNotThrow(() => assertProbedSchemaTransition(17, 18));
   assert.doesNotThrow(() => assertProbedSchemaTransition(18, 19));
-  assert.throws(() => assertProbedSchemaTransition(19, 20), /no reviewed mixed-writer probe/);
+  assert.doesNotThrow(() => assertProbedSchemaTransition(19, 20));
+  assert.throws(() => assertProbedSchemaTransition(20, 21), /no reviewed mixed-writer probe/);
 });
 import { ProviderHaReleaseGate, withProviderReadRetry } from './kubernetes-ha-provider-gate.mjs';
 import { createHaRecoveryFaultTransport, verifyHaReleaseRecovery } from './lib/ha-release-recovery-probes.mjs';

@@ -99,6 +99,24 @@ test('recording presentation preserves saved outcomes and infers legacy root evi
     assert.equal(saved.detail, 'Saved detail');
     assert.equal(saved.endpoint, 'Original endpoint');
   }
-  assert.equal(formatRecordingDuration(59_999), '1m 0.00s');
-  assert.equal(formatRecordingDuration(NaN), 'Unavailable');
+});
+
+test('recording durations round across units and reject unavailable runtime values', () => {
+  for (const [duration, expected] of [
+    [2.8421670000243466, '2.84 ms'],
+    [0, '0.00 ms'],
+    [12345.678, '12.35 s'],
+    [59999, '1m 0.00s'],
+    [59995, '1m 0.00s'],
+    [95432.1, '1m 35.43s'],
+    [119999, '2m 0.00s'],
+    [null, 'Unavailable'],
+    [undefined, 'Unavailable'],
+    [-1, 'Unavailable'],
+    [Number.NaN, 'Unavailable'],
+    [Number.POSITIVE_INFINITY, 'Unavailable'],
+  ] as const) {
+    // Legacy/unvalidated JSON can omit the otherwise numeric duration.
+    assert.equal(formatRecordingDuration(duration as number), expected, `duration: ${duration}`);
+  }
 });

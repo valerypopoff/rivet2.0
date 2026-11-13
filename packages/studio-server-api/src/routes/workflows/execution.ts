@@ -67,6 +67,7 @@ import { getWorkflowExecutionRecorderOptions, isWorkflowRecordingEnabled } from 
 import type { WorkflowRecordingExecutionIdentity } from '../../../../studio-server-shared/workflow-recording-types.js';
 import { createHostedProcessor } from './hosted-processor.js';
 import { ExecutionSession } from './execution-session.js';
+import { executionRunEvidenceInput, beginRunEvidence } from './run-evidence.js';
 import {
   type WorkflowExecutionContext,
   type WorkflowExecutionProject,
@@ -666,6 +667,7 @@ async function runRecordedWebAppAction(
     abortSignal?: AbortSignal;
     enableRemoteDebugger?: boolean;
     webAppSlug: string;
+    runKind: 'published' | 'latest';
   },
 ): Promise<WebAppActionExecutionSnapshot> {
   const componentId = getWebAppActionComponentId(req.body);
@@ -719,6 +721,8 @@ async function runRecordedWebAppAction(
   const session = new ExecutionSession(processor, {
     recording: isWorkflowRecordingEnabled(),
     recorderOptions: getWorkflowExecutionRecorderOptions(),
+    evidence: executionRunEvidenceInput(executionProject, executionIdentity, options.webAppSlug, options.runKind),
+    beginEvidence: beginRunEvidence,
   });
   let result: RivetWebAppActionResult | undefined;
   const snapshot = await session.run((outputs) => {
@@ -730,9 +734,10 @@ async function runRecordedWebAppAction(
   });
   return {
     ...snapshot,
-    ...(snapshot.failure
-      ? { status: 'failed' as const, errorMessage: getWorkflowErrorMessage(snapshot.failure.error) }
-      : {}),
+    // Response mapping can fail after the graph succeeded. Keep the graph's
+    // status consistent with its evidence while returning the action error.
+    errorMessage:
+      snapshot.errorMessage ?? (snapshot.failure ? getWorkflowErrorMessage(snapshot.failure.error) : undefined),
     result,
     executionError: snapshot.failure?.error,
     executionIdentity,
@@ -949,6 +954,8 @@ async function executeWorkflowEndpoint(
   const session = new ExecutionSession(processor, {
     recording: isWorkflowRecordingEnabled(),
     recorderOptions: getWorkflowExecutionRecorderOptions(),
+    evidence: executionRunEvidenceInput(executionProject, executionIdentity, options.endpointName, options.runKind),
+    beginEvidence: beginRunEvidence,
   });
   const executionStartedAt = performance.now();
   const snapshot = await session.run((outputs) => {
@@ -1184,6 +1191,7 @@ async function handleWebAppActionRequest(req: Request, res: Response, routeKind:
         abortSignal: activeExecution.signal,
         enableRemoteDebugger: routeKind === 'latest',
         webAppSlug: resolved.slug,
+        runKind: routeKind,
       });
     } finally {
       activeExecution.release();

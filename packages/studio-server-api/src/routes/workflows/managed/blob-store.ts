@@ -30,7 +30,12 @@ export interface ManagedWorkflowBlobStore {
   checkHealth?(context?: RuntimeHealthCheckContext): Promise<void>;
   dispose?(): void;
   putText(key: string, contents: string, contentType?: string): Promise<void>;
-  putArtifact?(descriptor: ManagedArtifactDescriptor, bytes: Uint8Array, contentType?: string): Promise<void>;
+  putArtifact?(
+    descriptor: ManagedArtifactDescriptor,
+    bytes: Uint8Array,
+    contentType?: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
   getText(key: string, options?: { signal?: AbortSignal }): Promise<string>;
   /**
    * Returns bytes which remain stable for bounded worker-side decoding.
@@ -96,7 +101,10 @@ type ManagedWorkflowObjectStorageConfig = Pick<
 >;
 
 class StoredObjectHttpHandler extends NodeHttpHandler {
-  constructor(options: ConstructorParameters<typeof NodeHttpHandler>[0], private readonly googleSecret?: string) {
+  constructor(
+    options: ConstructorParameters<typeof NodeHttpHandler>[0],
+    private readonly googleSecret?: string,
+  ) {
     super(options);
   }
   override handle(
@@ -120,9 +128,13 @@ export function createManagedWorkflowS3ClientConfig(config: ManagedWorkflowObjec
   const clientConfig: S3ClientConfig = {
     region: config.objectStorageRegion,
     forcePathStyle: config.objectStorageForcePathStyle,
-    requestHandler: new StoredObjectHttpHandler(createManagedObjectStorageHttpHandlerOptions(),
-      config.objectStorageEndpoint && /(^|\.)storage\.googleapis\.com$/.test(new URL(config.objectStorageEndpoint).hostname)
-        ? config.objectStorageSecretAccessKey : undefined),
+    requestHandler: new StoredObjectHttpHandler(
+      createManagedObjectStorageHttpHandlerOptions(),
+      config.objectStorageEndpoint &&
+      /(^|\.)storage\.googleapis\.com$/.test(new URL(config.objectStorageEndpoint).hostname)
+        ? config.objectStorageSecretAccessKey
+        : undefined,
+    ),
     credentials: {
       accessKeyId: config.objectStorageAccessKeyId,
       secretAccessKey: config.objectStorageSecretAccessKey,
@@ -228,6 +240,7 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
     descriptor: ManagedArtifactDescriptor,
     bytes: Uint8Array,
     contentType = 'text/plain; charset=utf-8',
+    options?: { signal?: AbortSignal },
   ): Promise<void> {
     verifyManagedArtifactBytes(bytes, descriptor);
     try {
@@ -241,7 +254,11 @@ export class S3ManagedWorkflowBlobStore implements ManagedWorkflowBlobStore {
             ...(descriptor.encoding === 'gzip' ? { ContentEncoding: 'gzip' } : {}),
             IfNoneMatch: '*',
           }),
-          { abortSignal: AbortSignal.timeout(300_000) },
+          {
+            abortSignal: options?.signal
+              ? AbortSignal.any([options.signal, AbortSignal.timeout(300_000)])
+              : AbortSignal.timeout(300_000),
+          },
         ),
       );
     } catch (error) {

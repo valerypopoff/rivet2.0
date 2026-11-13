@@ -197,7 +197,7 @@ try {
       blocker.release();
     }
     const forward = await migrateManagedWorkflowSchema(rollingPool, { migrationPolicy: 'rolling' });
-    assert.deepEqual(forward.appliedVersions, [19]);
+    assert.deepEqual(forward.appliedVersions, [19, 20]);
     await verifyManagedWorkflowSchema(rollingPool);
     assert.deepEqual(
       (
@@ -216,21 +216,19 @@ try {
       ).rows,
       [{ project_blob_key: 'preserved/project', reference_summary: null }],
     );
-    await verifySchemaImagePair(docker, containerId, process.env, { from: 18, to: 19 });
+    await verifySchemaImagePair(docker, containerId, process.env, { from: 19, to: 20 });
     const schema = `rivet_schema_probe_${randomUUID().replaceAll('-', '')}`;
     await rollingPool.query(`CREATE SCHEMA ${schema}`);
     try {
       await probeSchemaLockContention(
         rollingPool,
         schema,
-        MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === 19),
+        MANAGED_WORKFLOW_SCHEMA_MIGRATIONS.find((m) => m.version === 20),
       );
     } finally {
       await rollingPool.query(`DROP SCHEMA ${schema} CASCADE`);
     }
-    console.log(
-      'Rolling schema: real 18 -> 19, lock-timeout rollback/no retry, queued-reader recovery and preserved rows passed.',
-    );
+    console.log('Rolling schema: real 18 -> 20, bounded trigger-install contention and preserved rows passed.');
   } finally {
     await rollingPool.end();
   }

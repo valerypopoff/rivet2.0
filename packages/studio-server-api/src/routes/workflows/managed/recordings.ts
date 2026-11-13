@@ -52,8 +52,12 @@ import {
 } from '../recording-input-filter.js';
 import { getManagedRecordingInputCacheKey, workflowRecordingInputCache } from '../recording-input-cache.js';
 import { buildWorkflowRunStatistics, buildWorkflowRunStatisticsCatalog } from '../recording-statistics.js';
+import type { ManagedRecordingEvidence } from './recording-evidence.js';
+import { listRecordingHistory } from './recording-history.js';
+import type { WorkflowRecordingPageQuery } from '../data-backend.js';
 import {
   recordingStatisticsCatalogSql,
+  recordingStatisticsIncompleteSql,
   recordingStatisticsRowsSql,
   statisticsSqlRow,
   type RecordingStatisticsSqlRow,
@@ -77,6 +81,7 @@ function getManagedLLMProfileHealthHeldRecordingIds(rows: readonly ManagedHealth
 }
 type ManagedWorkflowRecordingServiceDependencies = {
   context: ManagedWorkflowContext;
+  evidence?: ManagedRecordingEvidence;
   getRecordingConfig?: () => WorkflowRecordingConfig;
 };
 
@@ -285,6 +290,7 @@ async function filterManagedRecordingRowsByInput(
 }
 
 export function createManagedWorkflowRecordingService(options: ManagedWorkflowRecordingServiceDependencies) {
+  const evidence = options.evidence;
   const deps = {
     pool: options.context.pool,
     initialize: options.context.initialize,
@@ -465,9 +471,14 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
   };
 
   let maintenanceTaskRegistered = false;
+  let recoveryReady = false;
   const ensureMaintenanceTaskRegistered = (): void => {
     if (maintenanceTaskRegistered) return;
     deps.maintenance.registerTask('workflow-recording-retention', cleanupWorkflowRecordingStorage);
+    if (options.evidence)
+      deps.maintenance.registerTask('workflow-recording-recovery', async () => {
+        if (recoveryReady) await options.evidence!.recover();
+      });
     maintenanceTaskRegistered = true;
   };
 
@@ -478,6 +489,10 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       // Preserve the former startup reconciliation, then use the durable timer
       // so retention also runs when a managed installation is completely idle.
       await deps.maintenance.runNow();
+      recoveryReady = true;
+    },
+    listHistory(query: WorkflowRecordingPageQuery) {
+      return listRecordingHistory(options.context, query, toRunSummary);
     },
 
     async importWorkflowRecording(options: ImportManagedWorkflowRecordingOptions): Promise<void> {
@@ -544,26 +559,49 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       );
     },
 
-    async listWorkflowRecordingWorkflows(): Promise<WorkflowRecordingWorkflowListResponse> {
+    async listWorkflowRecordingWorkflows(includeEvidence = false): Promise<WorkflowRecordingWorkflowListResponse> {
       await deps.initialize();
-      const rows = await deps.queryRows<WorkflowRecordingListRow>(
+      const withEvidence = includeEvidence && !!evidence;
+      const catalog = await deps.queryOne<{
+        projects: WorkflowRecordingListRow[];
+        total_runs: number;
+        failed_runs: number;
+        suspicious_runs: number;
+      }>(
         deps.pool,
         `
-          SELECT ${deps.workflowColumnsQualified},
-                 r.total_runs, r.failed_runs, r.suspicious_runs, r.latest_run_at
-          FROM workflows w
-          LEFT JOIN (
+          WITH run_counts AS (
             SELECT workflow_id,
                    COUNT(*)::int AS total_runs,
                    COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_runs,
                    COUNT(*) FILTER (WHERE status = 'suspicious')::int AS suspicious_runs,
                    MAX(created_at) AS latest_run_at
-            FROM workflow_recordings
+            FROM (
+              SELECT recording_id, workflow_id, status, created_at FROM workflow_recordings
+              ${
+                withEvidence
+                  ? `UNION ALL
+                SELECT e.run_id, e.workflow_id, e.state, e.created_at FROM workflow_run_evidence e
+                WHERE e.availability NOT IN ('available', 'deleted')
+                  AND NOT EXISTS (SELECT 1 FROM workflow_recordings r WHERE r.recording_id = e.run_id)`
+                  : ''
+              }
+            ) attempts
             GROUP BY workflow_id
-          ) r ON r.workflow_id = w.workflow_id
-          ORDER BY w.relative_path ASC
+          ), project_rows AS (
+            SELECT ${deps.workflowColumnsQualified},
+                   r.total_runs, r.failed_runs, r.suspicious_runs, r.latest_run_at
+            FROM workflows w LEFT JOIN run_counts r ON r.workflow_id = w.workflow_id
+          )
+          SELECT COALESCE((SELECT jsonb_agg(p ORDER BY p.relative_path) FROM project_rows p), '[]'::jsonb) AS projects,
+                 COALESCE(SUM(total_runs), 0)::int AS total_runs,
+                 COALESCE(SUM(failed_runs), 0)::int AS failed_runs,
+                 COALESCE(SUM(suspicious_runs), 0)::int AS suspicious_runs
+          FROM run_counts
         `,
       );
+      if (!catalog) throw new Error('Recording catalog query returned no result.');
+      const rows = catalog.projects;
 
       const workflows = rows
         .filter(
@@ -596,7 +634,18 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           return left.project.name.localeCompare(right.project.name);
         });
 
-      return { workflows };
+      return {
+        workflows,
+        ...(withEvidence
+          ? {
+              totals: {
+                totalRuns: catalog.total_runs,
+                failedRuns: catalog.failed_runs,
+                suspiciousRuns: catalog.suspicious_runs,
+              },
+            }
+          : {}),
+      };
     },
 
     async listWorkflowRecordingRunsPage(
@@ -813,16 +862,22 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       surface: WorkflowRunStatisticsSurface,
     ): Promise<WorkflowRunStatisticsCatalogResponse> {
       await deps.initialize();
-      const query = recordingStatisticsCatalogSql('postgres', surface);
+      const query = recordingStatisticsCatalogSql('postgres', surface, !!evidence);
       const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, query.sql, query.values);
       return buildWorkflowRunStatisticsCatalog(rows.map(statisticsSqlRow), surface);
     },
 
     async getWorkflowRunStatistics(query: WorkflowRunStatisticsQuery): Promise<WorkflowRunStatisticsResponse> {
       await deps.initialize();
-      const statement = recordingStatisticsRowsSql('postgres', query);
+      const statement = recordingStatisticsRowsSql('postgres', query, !!evidence);
       const rows = await deps.queryRows<RecordingStatisticsSqlRow>(deps.pool, statement.sql, statement.values);
-      return buildWorkflowRunStatistics(rows.map(statisticsSqlRow), query, { includeCost: true });
+      const result = buildWorkflowRunStatistics(rows.map(statisticsSqlRow), query, { includeCost: true });
+      if (evidence) {
+        const incomplete = recordingStatisticsIncompleteSql(query);
+        result.incompleteRuns =
+          (await deps.queryOne<{ count: number }>(deps.pool, incomplete.sql, incomplete.values))?.count ?? 0;
+      }
+      return result;
     },
 
     async getWorkflowRecordingSummary(recordingId: string): Promise<WorkflowRecordingRunSummary> {
@@ -866,6 +921,7 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
     },
 
     async deleteWorkflowRecording(recordingId: string): Promise<void> {
+      if (await evidence?.deletePending(recordingId)) return;
       let deletedRecordingBlobKey: string | undefined;
       await deps.withTransaction(async (client) => {
         const row = await deps.queryOne<RecordingRow>(
@@ -901,6 +957,16 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
       options: PersistWorkflowExecutionRecordingOptions,
     ): Promise<string | undefined> {
       await deps.initialize();
+
+      if (options.evidenceHandle) {
+        if (!evidence) throw new Error('Durable recording evidence is unavailable.');
+        const id = await evidence.persist(options, options.evidenceHandle);
+        await notifyRecordingPersisted(options.onPersisted, id, {
+          projectId: options.sourceProject.metadata.id,
+          recordingId: id,
+        });
+        return id;
+      }
 
       const workflowId = options.sourceProject.metadata.id;
       if (!workflowId) {

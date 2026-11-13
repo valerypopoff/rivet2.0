@@ -544,6 +544,9 @@ export function useLocalExecutor() {
         isPlayback: recordingToReplay != null,
       });
       const localRecordingPersistence = await prepareEditorRecordingPersistence({
+        project: tempProject,
+        graphId: graphToRun,
+        source: 'browser',
         eligible: shouldRecordExecution,
         projectPath: loadedProject.path,
         provider: localExecutionRecordingPersistence,

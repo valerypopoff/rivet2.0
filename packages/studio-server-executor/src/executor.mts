@@ -7,6 +7,7 @@ import { CatalogNativeApi } from '../../studio-server-shared/catalogNativeApi.js
 import { type SubgraphProjectRun } from '@valerypopoff/rivet2-node';
 
 import { startAppExecutor } from '../../app-executor/bin/executorHost.mjs';
+import { HostedExecutorRecordingEvidence } from './recordingEvidence.mjs';
 import { createHttpRivetLLMProfileHealthStore } from '../../studio-server-shared/llmProfileHealthHttpStore.js';
 import { createHostedClientAuthorizer } from './clientAuthorization.mjs';
 import { resolveHostedExecutorApiUrls } from './internalApiUrls.mjs';
@@ -90,34 +91,46 @@ const subgraphProjectLoader = createHostedSubgraphProjectLoader({
   baseUrl: executionEnvironmentServiceUrl,
   headers: createProxyAuthenticationHeaders,
 });
+const recordingEvidence = new HostedExecutorRecordingEvidence(
+  executionEnvironmentServiceUrl,
+  createProxyAuthenticationHeaders,
+);
 
 async function persistSubgraphRun(run: SubgraphProjectRun): Promise<void> {
-  if (!run.resolved.projectContents) throw new Error('Subgraph replay has no saved project snapshot.');
-  const response = await fetch(
-    new URL('/api/workflows/local-editor-recordings/subgraph-run', executionEnvironmentServiceUrl),
-    {
-      method: 'POST',
-      signal: AbortSignal.timeout(60_000),
-      headers: {
-        ...createProxyAuthenticationHeaders(),
-        'content-type': 'application/json',
-        [WORKFLOW_RECORDING_CREATED_AT_HEADER]: run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events),
+  try {
+    if (!run.resolved.projectContents) throw new Error('Subgraph replay has no saved project snapshot.');
+    const response = await fetch(
+      new URL('/api/workflows/local-editor-recordings/subgraph-run', executionEnvironmentServiceUrl),
+      {
+        method: 'POST',
+        signal: AbortSignal.timeout(60_000),
+        headers: {
+          ...createProxyAuthenticationHeaders(),
+          'content-type': 'application/json',
+          [WORKFLOW_RECORDING_CREATED_AT_HEADER]: run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events),
+        },
+        body: JSON.stringify({
+          projectId: run.target.projectId,
+          projectContents: run.resolved.projectContents,
+          datasetsContents: run.resolved.datasetsContents,
+          recordingSerialized: run.recorder.serialize(),
+          graphId: run.graphId,
+          revisionKey: run.resolved.revisionKey,
+          correlationId: run.correlationId,
+          ...(recordingEvidence.handle(run.correlationId)
+            ? { rootEvidenceHandle: recordingEvidence.handle(run.correlationId), captureId: run.recorder.recordingId }
+            : {}),
+          status: run.status,
+          durationMs: run.durationMs,
+          errorMessage: run.errorMessage,
+        }),
       },
-      body: JSON.stringify({
-        projectId: run.target.projectId,
-        projectContents: run.resolved.projectContents,
-        datasetsContents: run.resolved.datasetsContents,
-        recordingSerialized: run.recorder.serialize(),
-        graphId: run.graphId,
-        revisionKey: run.resolved.revisionKey,
-        correlationId: run.correlationId,
-        status: run.status,
-        durationMs: run.durationMs,
-        errorMessage: run.errorMessage,
-      }),
-    },
-  );
-  if (!response.ok) throw new Error(`Could not persist Subgraph replay (${response.status}).`);
+    );
+    if (!response.ok) throw new Error(`Could not persist Subgraph replay (${response.status}).`);
+  } catch (error) {
+    await recordingEvidence.childFailed(run.correlationId);
+    throw error;
+  }
 }
 
 void startAppExecutor({
@@ -125,14 +138,19 @@ void startAppExecutor({
     url: new URL('/ui-auth/check', executionEnvironmentServiceUrl),
     getProxyToken: () => (createProxyAuthenticationHeaders() as Record<string, string>)['x-rivet-proxy-auth'] ?? '',
   }),
-  createProcessorOptions: async ({ llmProfileHealthExecutionCorrelationId, recordSubgraphProjectRuns }) => ({
-    ...localCatalogOptions,
-    executionEnvironment: await readExecutionEnvironment(),
-    llmProfileHealthStore: healthStore,
-    subgraphProjectLoader,
-    onSubgraphProjectRun: recordSubgraphProjectRuns ? persistSubgraphRun : undefined,
-    ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
-  }),
+  onRunSettled: (input) => recordingEvidence.settled(input),
+  createProcessorOptions: async (context) => {
+    await recordingEvidence.prepare(context);
+    const { llmProfileHealthExecutionCorrelationId, recordSubgraphProjectRuns } = context;
+    return {
+      ...localCatalogOptions,
+      executionEnvironment: await readExecutionEnvironment(),
+      llmProfileHealthStore: healthStore,
+      subgraphProjectLoader,
+      onSubgraphProjectRun: recordSubgraphProjectRuns ? persistSubgraphRun : undefined,
+      ...(llmProfileHealthExecutionCorrelationId == null ? {} : { llmProfileHealthExecutionCorrelationId }),
+    };
+  },
 }).catch((error) => {
   console.error('[rivet-executor] Failed to start:', error);
   process.exitCode = 1;

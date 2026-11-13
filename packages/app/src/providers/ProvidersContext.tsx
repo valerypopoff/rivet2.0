@@ -184,9 +184,23 @@ export type LLMProfileHealthAdminProvider = {
  */
 export type LocalExecutionRecordingPersistenceProvider = {
   getCapability(): Promise<boolean>;
+  begin?(input: {
+    projectId: ProjectId;
+    projectPath: string;
+    graphId: string;
+    correlationId: string;
+    source: 'browser' | 'node';
+  }): Promise<{ handle: { id: string; token: string }; correlationId: string } | undefined>;
+  complete?(
+    correlationId: string,
+    status: 'succeeded' | 'failed' | 'suspicious',
+    durationMs: number,
+    handle?: { id: string; token: string },
+  ): Promise<void>;
   /** Marks health evidence unavailable when a terminal replay cannot be captured. */
-  markUnavailable(correlationId: string): Promise<void>;
+  markUnavailable(correlationId: string, handle?: { id: string; token: string }): Promise<void>;
   persist(input: {
+    evidenceHandle?: { id: string; token: string };
     /** Logical run creation time, captured before asynchronous persistence. */
     createdAt?: string;
     projectId: ProjectId;

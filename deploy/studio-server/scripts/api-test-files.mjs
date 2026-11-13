@@ -123,6 +123,7 @@ export const defaultApiTestFiles = [
   'src/tests/proxy-image-contract.test.ts',
   'src/tests/published-capacity-load.test.ts',
   'src/tests/published-execution-admission.test.ts',
+  'src/tests/recording-durability.test.ts',
   'src/tests/recording-input-cache.test.ts',
   'src/tests/recording-input-filter.test.ts',
   'src/tests/recording-input-query-plan.test.ts',

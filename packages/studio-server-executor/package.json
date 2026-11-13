@@ -13,7 +13,7 @@
     "build": "node build/bundle-executor.cjs",
     "dev": "node build/watch-executor.cjs",
     "test": "yarn test:source && yarn test:runtime",
-    "test:source": "tsx --test src/internalApiUrls.test.mts",
+    "test:source": "tsx --test src/internalApiUrls.test.mts src/recordingEvidence.test.mts",
     "test:runtime": "tsx --test src/subgraphProjectLoader.test.mts"
   },
   "devDependencies": {

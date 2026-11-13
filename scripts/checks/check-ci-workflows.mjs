@@ -705,6 +705,7 @@ for (const [lane, names] of [
     [
       'Verify compiled migrations on PostgreSQL',
       'Verify async endpoint completion with managed storage',
+      'Verify recording crash recovery and immutable handoffs',
       'Verify VM-to-managed copy, retry, and exact readback',
     ],
   ],

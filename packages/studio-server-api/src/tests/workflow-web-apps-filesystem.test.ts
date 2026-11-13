@@ -41,6 +41,34 @@ const {
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
 
+test('an HTTP action response-binding failure preserves the successful graph recording', async () => {
+  const created = await workflowMutations.createWorkflowProjectItem('', 'MissingOutput');
+  const project = createWebAppProject(rivetNode, workflowFs.createBlankProjectFile('MissingOutput'), 'Missing Output');
+  const component = project.uiGraphs![WEB_APP_TEST_UI_GRAPH_ID]!.components[0]!;
+  if (component.type !== 'button' || component.action?.type !== 'runGraph') throw new Error('Invalid test button');
+  component.action.outputKey = 'not-returned';
+  await fs.writeFile(created.absolutePath, serializeWebAppProject(rivetNode, project));
+  await publishWebApp(created.relativePath, 'missing-output');
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl }) => {
+    const revisionKey = extractWebAppRevisionKey(await (await fetch(`${webAppsBaseUrl}/missing-output`)).text());
+    const response = await fetch(`${webAppsBaseUrl}/missing-output/actions/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ componentId: WEB_APP_TEST_ACTION_COMPONENT_ID, revisionKey, state: { prompt: 'value' } }),
+    });
+    assert.equal(response.status, 500);
+    const catalog = await waitForRecordingWorkflows(apiBaseUrl, (rows) => rows.some((row) => row.totalRuns === 1));
+    const item = catalog.workflows.find((row) => row.totalRuns === 1)!;
+    const page = await readJson<{ runs: Array<{ status: string }> }>(
+      await fetch(`${apiBaseUrl}/recordings/workflows/${item.workflowId}/runs?status=all`),
+    );
+    assert.deepEqual(
+      page.runs.map((run) => run.status),
+      ['succeeded'],
+    );
+  });
+});
+
 test('exhausted profiles retain failed web-app recordings over HTTP and WebSocket', async (t) => {
   const nativeFetch = globalThis.fetch;
   let providerCalls = 0;

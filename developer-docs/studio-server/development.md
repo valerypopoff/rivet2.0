@@ -450,6 +450,65 @@ production throughput or latency.
 Run `yarn test:style` separately from runtime/browser suites: its asset checks
 rebuild Core outputs, which runtime fixtures import from `dist`.
 
+## Recordings architecture and extension points
+
+Recording capture, replay availability and execution outcome have separate owners.
+New shared evidence types use the declared Studio Server shared workspace package
+through type-only imports. Runtime imports keep the API's compiled sibling layout:
+the exact reviewed boundary-ledger entries cover path conversion, HTTP errors,
+health-evidence notification and metrics. Do not replace those runtime paths with
+source-only package paths or add a forwarding module solely to hide a dependency.
+
+An unavailable replay does not make a successful execution fail, and recovering a
+recording must never execute the graph again. Keep production bookkeeping in the
+background; the accepted crash window and durable editor protocol are documented
+in [Recording durability](./recording-durability.md).
+
+| Responsibility | Owner | Extension rule |
+| --- | --- | --- |
+| Capture graph events | Core `ExecutionRecorder`, API `ExecutionSession`, and the endpoint/editor/web-app/schedule adapters | Reuse the session recorder. Keep storage I/O out of Core and avoid serializing replay payloads on the production response path. |
+| Admit and drain recording work | `recordings-store.ts`, `recording-evidence-work.ts` and `storage-composition.ts` | Use the existing bounded queues and storage lifecycle. Drain accepted work before closing evidence heartbeats or stores. |
+| Persist and repair managed recordings | `managed/recordings.ts`, `managed/recording-evidence.ts` and the existing maintenance owner | Keep one stable recording identity. Publish artifacts and evidence together; retry persistence, never execution. |
+| Browse projects and run history | `managed/recordings.ts` for the catalog; `managed/recording-history.ts` for history pagination | Count playable recordings and unrepresented attempts once. Include projects with only pending/unavailable runs. Read metadata rather than replay blobs. |
+| Search captured inputs | `recording-input-filter.ts` with its source, extractor worker and cache | Preserve bounded reads, cancellation and progressive results. Missing replay data is unsearchable, not evidence that an input field is absent. |
+| Aggregate outcomes and costs | `recording-statistics.ts` and `recording-statistics-sql.ts` | Keep execution outcome and telemetry completeness independent of replay availability; exclude duplicate evidence. |
+| Present and operate history | `useRunRecordingsModalState.ts`, `useRunRecordingsController.ts`, `recording-run-hierarchy.ts` and the table/selector components | Keep session lifetime, request effects, pure family grouping and presentation separate. Invalidate stale requests when the view changes. |
+
+The project picker and its global totals use one managed catalog query. Filtering
+projects before merging evidence would hide an unpublished project's first run;
+counting again in a second overlay would add work and allow inconsistent snapshots.
+Counts are labelled as runs because some entries have no playable recording yet.
+
+Extend the owning seam and its behavioral tests instead of adding a parallel
+recording writer or another interpretation of status. Large query/controller files
+are worth watching, but splitting them by line count alone creates more boundaries
+without reducing responsibility. Extract a helper when it owns a distinct rule or
+removes duplicated behavior.
+
+`recording-durability-managed.integration.ts` covers real PostgreSQL/MinIO recovery
+and the catalog transitions from pending to unavailable to playable to deleted.
+`run-recordings-modal.spec.ts` covers the corresponding browser controls. Keep
+mocked UI checks and actual storage checks separate: neither substitutes for the
+other or for production activation of the default-off durability feature.
+
+Keep recording tests at the layer that owns the behavior. Duration-format edge
+cases belong in App's `recordingPresentation.test.ts`; one browser case verifies
+that history renders the saved duration. Mocked history tests answer continuation
+requests immediately unless a case explicitly holds a response to test a race.
+Use response gates and observed cancellation for those races, not a sleep long
+enough to hope a request remains in flight. Catalog arrival, pending/completed
+session reuse and stale-result rejection each have their own behavioral checks;
+do not repeat browser startup just to collect timing samples.
+When replacing a held search, explicitly stop it before applying another filter:
+Apply is intentionally disabled during an active search. Register the cancellation
+observer before the Stop action so the test cannot miss the event.
+
+Real PostgreSQL/MinIO crash, uncertain-write, deletion and blocked-storage checks
+remain in the normal managed lane. Extra repeated latency samples use
+`recording-durability:measure` explicitly; correctness CI does not depend on noisy
+stopwatch comparisons. Legacy replay and filesystem storage remain supported, so
+their distinct compatibility tests must stay even when the managed path passes.
+
 ## Serving-path regression checks
 
 Catalog serving uses `worker: true`; direct adapters remain useful for stopped
@@ -605,6 +664,9 @@ Self-contained editor fixtures must also mock configuration and Evaluation-libra
 bootstrap using `mockHostedEditorBootstrap`; a mocked workflow tree alone can leave
 the project row disabled before the test reaches its owning behavior. The graph-port
 rename fixture uses that helper and does not depend on an ambient API session.
+Match recording catalog mocks by pathname with optional query parameters. The
+browser requests `includeEvidence=true`; an exact URL glob without that query
+silently bypasses delayed/error responses and invalidates those regression tests.
 
 ## Shared dropdown styling
 
@@ -1039,8 +1101,9 @@ converting a formatted string back to a number. Invalid, missing, negative or
 non-finite timings display `Unavailable` rather than crashing the modal or
 presenting a misleading zero.
 This is presentation-only: stored `durationMs`, replay timings and statistics
-retain their original precision. The recordings-modal observer covers fractional
-milliseconds, seconds and minute-boundary rounding.
+retain their original precision. App's `recordingPresentation.test.ts` covers
+fractional milliseconds, seconds, minute-boundary rounding and missing/invalid
+values. One recordings-modal case verifies the rendered saved duration.
 
 ## Called-project recordings in the caller browse scope
 
@@ -1800,13 +1863,18 @@ commit and promoted by immutable OCI digest. The Helm chart's `version` and
 `appVersion` are separate chart metadata and must not be changed merely to
 bump the private workspace manifests.
 
-The current reference-index runtime advances managed storage to schema 19.
-Keep the chart's ordinary `workflowSchema.compatibility` defaults at 19/19 to match
+Reference indexing introduced schema 19; durable recording evidence advances the
+current runtime to schema 20. Keep the chart's ordinary
+`workflowSchema.compatibility` defaults at 20/20 to match
 that build, independently of package versioning. The promoted release launcher
 still derives exact migration and allowed reader windows from the immutable
 manifest; predecessor compatibility remains a separate contract, not permission
 to leave new-build chart defaults at16. The Kubernetes contract tests exercise
 both an ordinary exact-version migration and a lower serving-only rollback floor.
+
+[Recording durability](recording-durability.md) documents the opt-in acceptance,
+recovery and mixed-version activation rules. An additive schema alone does not
+make an old garbage-collection owner safe for pending handoffs.
 
 ## Main commands
 

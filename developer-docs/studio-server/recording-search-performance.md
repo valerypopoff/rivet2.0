@@ -268,6 +268,11 @@ at 5.19 seconds. These include Playwright interaction and modal animation time.
 They demonstrate removal of the blocking dependency, not faster database queries
 or a verified sub-half-second/production latency guarantee.
 
+These opening timings are historical measurements. The normal browser suite now
+tests the same ordering with explicitly held catalog/browse responses, and tests
+pending and completed search reuse together. It does not repeat the five-second
+measurement waits on every run.
+
 Three follow-up runs measured retained controls at a median of 71 ms and retained
 results at 86 ms, with no new requests. A separate 100-recording loopback benchmark
 using the compiled extraction worker measured the first cold result at 384 ms

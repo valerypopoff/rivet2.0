@@ -77,7 +77,7 @@ function getStatisticsResponse(request: StatisticsRequest, costMode: CostMode = 
   };
 }
 
-async function installRunStatisticsRoutes(page: Page, costMode: CostMode = 'none') {
+async function installRunStatisticsRoutes(page: Page, costMode: CostMode = 'none', incompleteRuns=0) {
   const catalogRequests: URL[] = [];
   const statisticsRequests: StatisticsRequest[] = [];
   let releaseWebAppCatalog = () => {};
@@ -135,7 +135,7 @@ async function installRunStatisticsRoutes(page: Page, costMode: CostMode = 'none
       const body = request.postDataJSON() as StatisticsRequest;
       statisticsRequests.push(body);
       if (body.target.workflowId === 'workflow-b') await archiveStatisticsReady;
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(getStatisticsResponse(body, costMode)) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({...getStatisticsResponse(body, costMode), incompleteRuns}) });
       return;
     }
 
@@ -221,6 +221,17 @@ test.describe('Run statistics modal', () => {
       }
     });
   }
+
+  test('explains incomplete execution telemetry separately from known cost totals',async({page})=>{
+    await installRunStatisticsRoutes(page,'partial',2);
+    await page.goto('/',{waitUntil:'domcontentloaded'});
+    await waitForDashboardReady(page);
+    await page.getByRole('button',{name:'Run statistics',exact:true}).click();
+    const modal=page.getByTestId('run-statistics-modal');
+    await expect(modal.getByRole('status').filter({hasText:'2 run attempts have incomplete execution telemetry and are excluded from these totals.'})).toBeVisible();
+    await expect(modal.getByRole('region',{name:'Cost statistics'})).toContainText('Known subtotal');
+    await expect(modal.locator('.run-statistics-period-label')).toHaveText(/^3 runs, .+ to .+$/);
+  });
 
   test('shows only enabled outcome cards and centers shared filters beside the switchers', async ({ page }) => {
     const { catalogRequests, releaseArchiveStatistics, releaseWebAppCatalog, statisticsRequests } = await installRunStatisticsRoutes(page, 'available');

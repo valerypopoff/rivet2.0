@@ -6,10 +6,11 @@ import { MANAGED_WORKFLOW_SCHEMA_SQL } from './schema.js';
 import { MANAGED_BUNDLE_SCHEMA_SQL } from './bundle-schema.js';
 import { MANAGED_FOLDER_PARENT_MIGRATION_SQL } from './folder-parent-schema.js';
 import { MANAGED_NAMESPACE_SCHEMA_SQL } from './namespace-schema.js';
+import { RECORDING_EVIDENCE_SCHEMA_SQL } from './recording-evidence-schema.js';
 import { SCHEDULE_SCHEMA_SQL } from '../../../scheduled-runs/schema.js';
 
 export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS_TABLE = 'managed_workflow_schema_migrations';
-export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 19;
+export const CURRENT_MANAGED_WORKFLOW_SCHEMA_VERSION = 20;
 // Minimum predecessor schema whose reader can safely serve data produced by
 // this release. Deployment consumes this explicit rollback floor; additive DDL
 // alone does not establish compatibility when stored representations change.
@@ -28,7 +29,8 @@ const MANAGED_EVALUATION_PROJECTION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS eval
 `;
 
 const MANAGED_RECORDING_COST_SQL = 'ALTER TABLE workflow_recordings ADD COLUMN IF NOT EXISTS cost_json TEXT NULL;\n';
-const MANAGED_REFERENCE_SUMMARY_SQL = 'ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS reference_summary JSONB NULL;\n';
+const MANAGED_REFERENCE_SUMMARY_SQL =
+  'ALTER TABLE workflow_revisions ADD COLUMN IF NOT EXISTS reference_summary JSONB NULL;\n';
 
 const MANAGED_APP_SETTINGS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -458,6 +460,13 @@ export const MANAGED_WORKFLOW_SCHEMA_MIGRATIONS: readonly ManagedWorkflowSchemaM
     sql: MANAGED_REFERENCE_SUMMARY_SQL,
     checksum: '3b7161d5e91aadf904bcc260e000bfee059a731be1428596837a3d70599493fe',
   },
+  {
+    version: 20,
+    rollingSafe: true,
+    name: 'durable-workflow-run-evidence',
+    sql: RECORDING_EVIDENCE_SCHEMA_SQL,
+    checksum: '0ba938f3ef2218f9d810315fdb36a127694214736f0725beb9599f5b347f60e7',
+  },
 ];
 
 function assertMigrationDefinitions(): void {
@@ -504,6 +513,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
   'workflow_endpoints',
   'workflow_web_apps',
   'workflow_recordings',
+  'workflow_run_evidence',
   'web_app_action_runs',
   'web_app_action_run_events',
   'web_app_action_cancel_commands',
@@ -519,6 +529,26 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_TABLES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMNS = [
+  ['workflow_run_evidence', 'run_id', 'text', 'NO'],
+  ['workflow_run_evidence', 'workflow_id', 'text', 'NO'],
+  ['workflow_run_evidence', 'token', 'text', 'NO'],
+  ['workflow_run_evidence', 'created_at', 'timestamptz', 'NO'],
+  ['workflow_run_evidence', 'updated_at', 'timestamptz', 'NO'],
+  ['workflow_run_evidence', 'lease_until', 'timestamptz', 'NO'],
+  ['workflow_run_evidence', 'upload_until', 'timestamptz', 'NO'],
+  ['workflow_run_evidence', 'state', 'text', 'NO'],
+  ['workflow_run_evidence', 'availability', 'text', 'NO'],
+  ['workflow_run_evidence', 'reason', 'text', 'YES'],
+  ['workflow_run_evidence', 'input_json', 'jsonb', 'NO'],
+  ['workflow_run_evidence', 'outcome_json', 'jsonb', 'YES'],
+  ['workflow_run_evidence', 'child_coverage', 'text', 'NO'],
+  ['workflow_run_evidence', 'manifest_json', 'jsonb', 'YES'],
+  ['workflow_run_evidence', 'fingerprint', 'text', 'YES'],
+  ['workflow_run_evidence', 'handoff_ready', 'bool', 'NO'],
+  ['workflow_run_evidence', 'notified', 'bool', 'NO'],
+  ['workflow_run_evidence', 'pending_bytes', 'int8', 'NO'],
+  ['workflow_run_evidence', 'attempts', 'int4', 'NO'],
+  ['workflow_run_evidence', 'next_attempt_at', 'timestamptz', 'NO'],
   ['workflow_folders', 'namespace_id', 'uuid', 'NO'],
   ['workflow_namespace_receipts', 'operation_id', 'uuid', 'NO'],
   ['workflow_namespace_receipts', 'request_hash', 'text', 'NO'],
@@ -823,6 +853,21 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_COLUMN_DEFAULTS = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
+  [
+    'workflow_run_evidence',
+    'workflow_run_evidence_history_idx',
+    ['workflow_id', 'created_at', 'run_id'],
+    null,
+    [0, 3, 3],
+  ],
+  ['workflow_run_evidence', 'workflow_run_evidence_global_history_idx', ['created_at', 'run_id'], null, [3, 3]],
+  [
+    'workflow_run_evidence',
+    'workflow_run_evidence_notification_idx',
+    ['next_attempt_at', 'run_id'],
+    "availability = 'available'::text AND NOT notified",
+    [0, 0],
+  ],
   ['workflow_namespace_receipts', 'workflow_namespace_receipts_expires_at_idx', ['expires_at'], null, [0]],
   ['rivet_schedules', 'rivet_schedules_due_idx', ['enabled', 'next_at'], null, [0, 0]],
   ['rivet_schedule_runs', 'rivet_schedule_runs_active_idx', ['status', 'lease_until'], null, [0, 0]],
@@ -972,6 +1017,7 @@ export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_INDEXES = [
 ] as const;
 
 export const MANAGED_WORKFLOW_SCHEMA_REQUIRED_CONSTRAINTS = [
+  ['workflow_run_evidence', 'p', 'PRIMARY KEY (run_id)'],
   ['workflow_folders', 'u', 'UNIQUE (namespace_id)'],
   ['workflow_namespace_receipts', 'p', 'PRIMARY KEY (operation_id)'],
   ['managed_maintenance_leases', 'p', 'PRIMARY KEY (lease_name)'],

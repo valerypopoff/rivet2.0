@@ -754,10 +754,12 @@ export async function readManagedHostedRelativeProject(relativeFrom: string, pro
   );
 }
 
-export async function listWorkflowRecordingWorkflowsWithBackend(): Promise<WorkflowRecordingWorkflowListResponse> {
+export async function listWorkflowRecordingWorkflowsWithBackend(
+  includeEvidence = false,
+): Promise<WorkflowRecordingWorkflowListResponse> {
   return delegateWithWorkflowsRoot(
     'recordings',
-    async (backend) => backend.listWorkflowRecordingWorkflows(),
+    async (backend) => backend.listWorkflowRecordingWorkflows(includeEvidence),
     async (root) => listWorkflowRecordingWorkflows(root),
   );
 }
@@ -781,6 +783,7 @@ export async function listWorkflowRecordingRunsPageWithBackend(
     'recordings',
     async (backend) =>
       backend.listWorkflowRecordingRunsPage({
+        includeEvidence: query.includeEvidence,
         workflowId,
         page,
         pageSize,
@@ -1375,6 +1378,7 @@ export function createExecutionSubgraphProjectLoader() {
 }
 
 export async function persistWorkflowExecutionRecordingWithBackend(options: {
+  evidenceHandle?: import('@valerypopoff/rivet-studio-server-shared/workflow-run-evidence.js').RunEvidenceHandle;
   createdAt?: string;
   sourceProject: Project;
   sourceProjectPath: string;

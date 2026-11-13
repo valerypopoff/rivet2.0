@@ -300,6 +300,10 @@ const publishedVersionCommentSchema = z.object({
 });
 
 const recordingsRunsQuerySchema = z.object({
+  includeEvidence: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
   page: z.coerce.number().int().min(1).optional().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).optional().default(20),
   status: z.enum(['all', 'failed']).optional().default('all'),
@@ -492,9 +496,9 @@ workflowsRouter.get(
 workflowsRouter.get(
   ['/recordings', '/recordings/workflows'],
   timing,
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const startedAt = performance.now();
-    const catalog = await listWorkflowRecordingWorkflowsWithBackend();
+    const catalog = await listWorkflowRecordingWorkflowsWithBackend(req.query.includeEvidence === 'true');
     res.setHeader('Server-Timing', `recording_catalog;dur=${(performance.now() - startedAt).toFixed(2)}`);
     prepareWorkflowRecordingInputExtractor();
     res.json(catalog);
@@ -555,6 +559,7 @@ workflowsRouter.get(
 
     try {
       const runsPage = await listWorkflowRecordingRunsPageWithBackend({
+        includeEvidence: parsedQuery.includeEvidence,
         workflowId: String(req.params.workflowId ?? ''),
         page: parsedQuery.page,
         pageSize: parsedQuery.pageSize,
@@ -593,6 +598,7 @@ workflowsRouter.get(
     res.json(
       await listWorkflowRecordingRunsPageWithBackend({
         workflowId: recordingId,
+        includeEvidence: req.query.includeEvidence === 'true',
         page,
         pageSize,
         runScope:

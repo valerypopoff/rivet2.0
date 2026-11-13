@@ -7,6 +7,8 @@ import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 type AsyncWorkflowOptions = {
+  recordingDurability?: boolean;
+  holdRecordingWork?: boolean;
   endpointName?: string;
   projectName?: string;
   graceSeconds?: number;
@@ -60,6 +62,8 @@ async function startOwnedProcess(
     RIVET_ENABLE_DEVELOPMENT_AUTH: 'false',
     RIVET_API_PROFILE: 'combined',
     RIVET_RECORDINGS_ENABLED: 'true',
+    RIVET_RECORDING_DURABILITY_ENABLED: options.recordingDurability ? 'true' : 'false',
+    ...(options.holdRecordingWork ? { RIVET_ASYNC_TEST_HOLD_RECORDING_WORK: 'true' } : {}),
     RIVET_SHUTDOWN_GRACE_SECONDS: String(options.graceSeconds ?? 2),
     RIVET_PUBLISHED_EXECUTION_ADMISSION_MODE: 'enforce',
     RIVET_PUBLISHED_EXECUTION_MAX_ACTIVE_RUNS: '4',

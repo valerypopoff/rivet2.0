@@ -20,6 +20,19 @@
   min-height: 0;
 }
 
+.run-recordings-run.evidence-only .run-recordings-run-open-button:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.run-recordings-warning {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warning-color, #d6a544);
+  border-radius: 6px;
+  color: var(--warning-color, #d6a544);
+}
+
 .run-recordings-header-row {
   position: relative;
   padding: 16px 56px 0 18px;

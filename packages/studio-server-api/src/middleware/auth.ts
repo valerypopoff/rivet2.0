@@ -28,6 +28,14 @@ export const requireOperatorAuth: RequestHandler = (req, res, next) => {
         (req.path === '/workflows/execution-environment' ||
           /^\/workflows\/subgraph-projects\/[^/]+\/(?:execution|access)$/.test(req.path))) ||
         (req.method === 'POST' && req.path === '/workflows/local-editor-recordings/subgraph-run') ||
+        (req.method === 'POST' &&
+          [
+            '/workflows/local-editor-recordings/runs/executor-owner',
+            '/workflows/local-editor-recordings/runs/heartbeat',
+            '/workflows/local-editor-recordings/runs/outcome',
+            '/workflows/local-editor-recordings/runs/read',
+            '/workflows/local-editor-recordings/runs/child-incomplete',
+          ].includes(req.path)) ||
         (req.method === 'POST' && req.path === '/workflows/local-catalog-io') ||
         req.path === '/workflows/llm-profile-health' ||
         req.path.startsWith('/workflows/llm-profile-health/'))

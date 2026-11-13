@@ -418,7 +418,7 @@ all recovery/no-replay assertions remain unchanged. A cancelled test still
 fails the release gate; retain its log and require the fresh candidate's complete
 image workflow to pass before provider activation.
 
-The current schema version (19) differs from its rollback floor (17). Helm defaults
+The current schema version (20) differs from its rollback floor (17). Helm defaults
 and migration commands must use the current version. Forward rollback uses the
 previous image's own schema version as its lower reader bound, not that image's
 rollback floor; only the upper bound expands to the already-migrated successor.
@@ -427,8 +427,10 @@ Historical upgrade fixtures still begin
 at their original schema and assert all pending migrations rather than assuming
 that the repair under test is forever the last migration. Keep the chart, compiled
 PostgreSQL gate and release-manifest tests together when changing this contract.
-The existing managed lane now exercises the real 18 → 19 rolling-policy
-lock timeout, rollback and queued-reader recovery. Schema-changing HA image
+The existing managed lane now exercises the real 18 → 20 rolling-policy
+expansion, including bounded trigger-install contention, rollback and reader
+availability. It also runs the local recording-durability crash fixture.
+Schema-changing HA image
 qualification runs both image-owned recording and revision repositories and binds their
 receipts into the certificate; an old-image startup verifier alone is insufficient.
 Unchanged-schema candidates avoid those extra image workers. See the

@@ -29,13 +29,33 @@ export type RecordingStatisticsSqlRow = {
 };
 
 /** A compact, common projection; artifact references and payloads never cross this boundary. */
-function source(dialect: Dialect): string {
+function evidenceSource(): string {
+  return `SELECT e.run_id AS recording_id,e.workflow_id,e.input_json->>'sourceProjectName' AS source_project_name,
+    e.created_at,e.input_json->>'runKind' AS run_kind,e.state AS status,
+    COALESCE((e.outcome_json->>'durationMs')::double precision,-1) AS duration_ms,
+    e.input_json->>'endpointName' AS endpoint_name_at_execution,
+    e.input_json->'executionIdentity'->>'surface' AS execution_surface,
+    e.input_json->'executionIdentity'->>'uiGraphId' AS ui_graph_id_at_execution,
+    e.input_json->'executionIdentity'->>'componentId' AS component_id_at_execution,
+    e.input_json->'executionIdentity'->>'uiGraphName' AS ui_graph_name_at_execution,
+    e.input_json->'executionIdentity'->>'componentType' AS component_type_at_execution,
+    e.input_json->'executionIdentity'->>'componentLabel' AS component_label_at_execution,
+    (e.outcome_json->'cost')::text AS cost_json,1 AS metadata_valid
+    FROM workflow_run_evidence e WHERE e.availability NOT IN ('available','deleted')
+    AND NOT EXISTS(SELECT 1 FROM workflow_recordings r WHERE r.recording_id=e.run_id)`;
+}
+function source(dialect: Dialect, includeEvidence = false): string {
   if (dialect === 'postgres')
     return `SELECT recording_id, workflow_id, source_project_name, created_at, run_kind,
       status, duration_ms, endpoint_name_at_execution, execution_surface,
       ui_graph_id_at_execution, component_id_at_execution, ui_graph_name_at_execution,
       component_type_at_execution, component_label_at_execution, cost_json, 1 AS metadata_valid
-      FROM workflow_recordings`;
+      FROM workflow_recordings${
+        includeEvidence
+          ? ` UNION ALL ${evidenceSource()}
+        AND e.state IN ('succeeded','failed','suspicious') AND e.outcome_json->>'durationMs' IS NOT NULL`
+          : ''
+      }`;
   const field = (name: string) => `json_extract(data, '$.${name}')`;
   return `SELECT recording_id, workflow_id,
     ${field('sourceProjectName')} AS source_project_name, ${field('createdAt')} AS created_at,
@@ -91,11 +111,15 @@ function bind(sql: string, dialect: Dialect): string {
   return dialect === 'sqlite' ? sql : sql.replace(/\?/g, () => `$${++index}`);
 }
 
-export function recordingStatisticsRowsSql(dialect: Dialect, query: WorkflowRunStatisticsQuery) {
+export function recordingStatisticsRowsSql(
+  dialect: Dialect,
+  query: WorkflowRunStatisticsQuery,
+  includeEvidence = false,
+) {
   const target = recordingStatisticsTargetSql(query.target);
   return {
     sql: bind(
-      `WITH source AS (${source(dialect)}) SELECT * FROM source
+      `WITH source AS (${source(dialect, includeEvidence)}) SELECT * FROM source
       WHERE run_kind <> 'editor' AND created_at >= ?${dialect === 'postgres' ? '::timestamptz' : ''}
         AND created_at < ?${dialect === 'postgres' ? '::timestamptz' : ''}
         AND ${target.clause} ${query.runKind === 'both' ? '' : 'AND run_kind = ?'}
@@ -111,8 +135,30 @@ export function recordingStatisticsRowsSql(dialect: Dialect, query: WorkflowRunS
   };
 }
 
+export function recordingStatisticsIncompleteSql(query: WorkflowRunStatisticsQuery) {
+  const target = recordingStatisticsTargetSql(query.target);
+  return {
+    sql: bind(
+      `WITH source AS (${evidenceSource()}) SELECT COUNT(*)::int AS count FROM source
+    WHERE run_kind<>'editor' AND (status IN ('accepted','running','unknown') OR duration_ms<0)
+      AND created_at>=?::timestamptz AND created_at<?::timestamptz AND ${target.clause}
+      ${query.runKind === 'both' ? '' : 'AND run_kind=?'}`,
+      'postgres',
+    ),
+    values: [
+      query.period.from,
+      query.period.to,
+      ...target.values,
+      ...(query.runKind === 'both' ? [] : [query.runKind]),
+    ],
+  };
+}
 /** One row per target, with exact counts and latest non-null labels, in either SQL engine. */
-export function recordingStatisticsCatalogSql(dialect: Dialect, surface: WorkflowRunStatisticsSurface) {
+export function recordingStatisticsCatalogSql(
+  dialect: Dialect,
+  surface: WorkflowRunStatisticsSurface,
+  includeEvidence = false,
+) {
   const stable =
     "execution_surface = 'web_app_action' AND COALESCE(ui_graph_id_at_execution, '') <> '' AND COALESCE(component_id_at_execution, '') <> ''";
   const legacy = `(execution_surface IS NULL AND endpoint_name_at_execution LIKE '/%') OR
@@ -122,7 +168,7 @@ export function recordingStatisticsCatalogSql(dialect: Dialect, surface: Workflo
   const labels = ['ui_graph_name_at_execution', 'component_type_at_execution', 'component_label_at_execution'];
   return {
     sql: bind(
-      `WITH source AS (${source(dialect)}), targets AS (
+      `WITH source AS (${source(dialect, includeEvidence)}), targets AS (
       SELECT *, CASE WHEN run_kind = 'editor' OR execution_surface IN ('editor_local', 'subgraph_project', 'scheduled') THEN NULL
         WHEN ${stable} OR ${legacy} THEN 'web_app' ELSE 'endpoint' END AS target_surface,
         CASE WHEN ${stable} THEN ui_graph_id_at_execution END AS target_ui,

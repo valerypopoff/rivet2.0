@@ -52,6 +52,13 @@ import { finalizeExecutionRecordingAfterSettlement } from './routes/workflows/ex
 import { PostgresRivetWebAppRunCoordinator } from './web-app-action-coordinator.js';
 import { createPostgresRivetWebAppRunStore } from './web-app-action-run-store.js';
 import type { WorkflowRecordingExecutionIdentity } from '../../studio-server-shared/workflow-recording-types.js';
+import {
+  beginRunEvidence,
+  completeRunEvidence,
+  executionRunEvidenceInput,
+  type ExecutionEvidenceOwner,
+} from './routes/workflows/run-evidence.js';
+import { deferEvidenceWork } from './routes/workflows/recording-evidence-work.js';
 
 type WebAppSocketRoute = {
   routeKind: WebAppRouteKind;
@@ -59,6 +66,7 @@ type WebAppSocketRoute = {
 };
 
 type RecorderEntry = {
+  evidence?: ExecutionEvidenceOwner;
   recorder: ExecutionRecorder | null;
   startedAt: number;
   executionIdentity: WorkflowRecordingExecutionIdentity;
@@ -617,13 +625,28 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
             entry.finalizing = true;
             entry.flush = finalizeExecutionRecordingAfterSettlement(entry.processor, (cost) => {
               recorders.delete(runId);
+              const durationMs = performance.now() - entry.startedAt;
+              const evidence = entry.evidence,
+                correlationId = entry.executionIdentity.correlationId;
+              const unfinished = entry.processor.isRunning;
+              const outcome = { state: unfinished ? ('unknown' as const) : status, durationMs, cost };
+              const evidenceCompletion = evidence
+                ? deferEvidenceWork(() => completeRunEvidence(evidence, outcome, correlationId))
+                : undefined;
               enqueueWebAppActionRecording(
                 resolved.executionProject,
-                entry.recorder,
-                performance.now() - entry.startedAt,
+                unfinished ? null : entry.recorder,
+                durationMs,
                 status,
                 errorMessage,
-                { endpointName, runKind: route.routeKind, executionIdentity: entry.executionIdentity, cost },
+                {
+                  endpointName,
+                  runKind: route.routeKind,
+                  executionIdentity: entry.executionIdentity,
+                  cost,
+                  evidenceHandle: evidence?.handle,
+                  evidenceCompletion,
+                },
               );
             });
           };
@@ -652,7 +675,26 @@ export async function initializeWebAppActionWebSockets(server: Server): Promise<
                 ? new ExecutionRecorder(getWorkflowExecutionRecorderOptions())
                 : null;
               recorder?.record(processor);
+              const executionIdentity = createWebAppActionRecordingIdentity(
+                resolved.executionProject,
+                actionContext.uiGraph,
+                actionContext.component,
+                route.slug,
+                correlationId,
+              );
+              const evidence = recorder
+                ? beginRunEvidence({
+                    ...executionRunEvidenceInput(
+                      resolved.executionProject,
+                      executionIdentity,
+                      endpointName,
+                      route.routeKind,
+                    ),
+                    sourceRunId: runId,
+                  })
+                : undefined;
               recorders.set(runId, {
+                evidence,
                 recorder,
                 startedAt: performance.now(),
                 processor,

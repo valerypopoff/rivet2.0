@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http';
-import type { GraphId, Project, RemoteRunRequestId } from '@valerypopoff/rivet2-core';
+import type { GraphId, Project, RemoteRunRequestId, GraphProcessor } from '@valerypopoff/rivet2-core';
 import type { NodeCreateProcessorOptions } from '@valerypopoff/rivet2-node';
 
 export type AppExecutorProcessorOptionsContext = Readonly<{
@@ -13,6 +13,13 @@ export type AppExecutorProcessorOptionsContext = Readonly<{
 }>;
 
 export type AppExecutorHostOptions = Readonly<{
+  /** Observes physical settlement; never owns transport terminal delivery or graph retry. */
+  onRunSettled?: (input: {
+    requestId: RemoteRunRequestId;
+    state: 'succeeded' | 'failed' | 'suspicious' | 'unknown';
+    durationMs: number;
+    cost?: ReturnType<GraphProcessor['getRunCostSnapshot']>;
+  }) => Promise<void> | void;
   /** Standalone desktop defaults on; hosts injecting authentication or processor facilities default off. */
   allowLocalProjectBundles?: boolean;
   /** Hosted transports can authenticate upgrades and periodically reauthorize sessions. */
