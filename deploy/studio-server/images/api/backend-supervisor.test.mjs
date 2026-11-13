@@ -15,6 +15,7 @@ import { childEnvironments, startBackendSupervisor, runBackendSupervisor } from 
 import { acquireLocalMetadataOwnerLease } from './local-metadata-owner-lease.mjs';
 import { devBackendSupervisorOptions } from '../../scripts/dev-backend-supervisor.mjs';
 import { requestBackendRetirement, retireBackend } from './retire-backend.mjs';
+import { unusedLoopbackPorts } from './fixtures/loopback-ports.mjs';
 
 // test-style: fixture-read: reads only writer PID/configuration records generated in owned temporary fixtures.
 
@@ -392,14 +393,6 @@ test(
   },
 );
 
-async function unusedPort() {
-  const server = createServer();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
-
 test(
   'replicated dotenv cannot reopen release admission or retarget schema-reader inventory',
   { skip: process.platform === 'win32' },
@@ -448,11 +441,7 @@ test(
 );
 
 async function ports() {
-  const apiPort = await unusedPort();
-  let executorPort = await unusedPort();
-  while (executorPort === apiPort) executorPort = await unusedPort();
-  let healthPort = await unusedPort();
-  while (healthPort === apiPort || healthPort === executorPort) healthPort = await unusedPort();
+  const [apiPort, executorPort, healthPort] = await unusedLoopbackPorts(3);
   return { apiPort, executorPort, healthPort };
 }
 
@@ -484,9 +473,14 @@ function environment({ apiPort, executorPort, healthPort }) {
 }
 
 test('execution-only overlap pods do not initialize developer housekeeping or require its disk identity', async () => {
-  const env = { ...environment(await ports()), RIVET_HA_API_ONLY: '1', RIVET_API_PROFILE: 'execution',
-    RIVET_HA_CONTROL_PLANE_MODE: 'singleton-overlap' };
-  const supervisor = await startBackendSupervisor({ env,
+  const env = {
+    ...environment(await ports()),
+    RIVET_HA_API_ONLY: '1',
+    RIVET_API_PROFILE: 'execution',
+    RIVET_HA_CONTROL_PLANE_MODE: 'singleton-overlap',
+  };
+  const supervisor = await startBackendSupervisor({
+    env,
     apiCommand: [process.execPath, '-e', 'setInterval(()=>{},1000)'],
     executorCommand: [process.execPath, '-e', 'process.exit(99)'],
     shutdownTimeoutMs: 1000,
@@ -631,10 +625,13 @@ test('UI restart is private, stops both children and reloads the journal with a 
 test('combined backend keeps the child environments and loopback configuration separate', async () => {
   const env = environment(await ports());
   const children = childEnvironments(env);
-  assert.throws(() => childEnvironments({ ...env, RIVET_RUNNER_SLOT_ID: 'runtime-2',
-    RIVET_EXECUTION_STARTUP_FENCE: 'runtime-2' }), /startup-fenced/);
-  assert.doesNotThrow(() => childEnvironments({ ...env, RIVET_RUNNER_SLOT_ID: 'runtime-1',
-    RIVET_EXECUTION_STARTUP_FENCE: 'runtime-2' }));
+  assert.throws(
+    () => childEnvironments({ ...env, RIVET_RUNNER_SLOT_ID: 'runtime-2', RIVET_EXECUTION_STARTUP_FENCE: 'runtime-2' }),
+    /startup-fenced/,
+  );
+  assert.doesNotThrow(() =>
+    childEnvironments({ ...env, RIVET_RUNNER_SLOT_ID: 'runtime-1', RIVET_EXECUTION_STARTUP_FENCE: 'runtime-2' }),
+  );
   assert.equal(children.api.RIVET_RUNTIME_PROCESS_ROLE, 'api');
   assert.equal(children.api.PORT, env.RIVET_BACKEND_API_PORT);
   assert.equal(children.executor.RIVET_RUNTIME_PROCESS_ROLE, 'executor');

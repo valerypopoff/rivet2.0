@@ -19,6 +19,28 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+## Supervisor fixture port allocation
+
+The [Linux housekeeping check](https://github.com/valerypopoff/rivet2.0/actions/runs/43429991232/job/131903541698)
+failed before starting its restore-consumer scenario: independently selected
+ephemeral ports collided, and the production supervisor correctly rejected them.
+Opening and closing each port in sequence does not guarantee distinct values;
+the kernel can reuse a just-released port within the same fixture.
+
+Supervisor fixtures now use the [shared port allocator](../../deploy/studio-server/images/api/fixtures/loopback-ports.mjs) to bind every
+member of a port group concurrently before releasing the group for child startup.
+Housekeeping fixtures group API, executor, health and housekeeping ports together;
+two-owner fixtures also select both owners' ports together. Backend tests use the
+same allocator instead of retrying duplicate selections. Allocation failure
+closes earlier listeners before propagating its original error.
+
+The regression observes real listeners during selection, so it fails
+deterministically if an earlier reservation is released too soon. A separate
+case injects a later bind failure and verifies cleanup. Run
+`node deploy/studio-server/scripts/verify-housekeeping-linux.mjs` and the adjacent
+`backend-supervisor.test.mjs` tests on Linux. Keep the production distinct-port
+validation, original process assertions and normal test concurrency unchanged.
+
 ## Comparison fixture compilation repair: November 12, 2026
 
 [Build 43291039140](https://github.com/valerypopoff/rivet2.0/actions/runs/43291039140/job/131439269832)

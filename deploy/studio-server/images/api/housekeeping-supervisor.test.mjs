@@ -4,27 +4,71 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createServer } from 'node:net';
+import { Server } from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHousekeepingSupervisor } from './housekeeping-supervisor.mjs';
 import { startBackendSupervisor } from './backend-supervisor.mjs';
 import { handoverHousekeeping } from '../../scripts/lib/housekeeping-handover.mjs';
+import { unusedLoopbackPorts } from './fixtures/loopback-ports.mjs';
 
 // test-style: fixture-read: Inspect only test-owned descriptors, saved bytes and synthetic process counters.
 
-async function unusedPort() {
-  const server = createServer();
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const port = server.address().port;
-  await new Promise((r) => server.close(r));
-  return port;
-}
+test('fixture port groups keep earlier selections bound until the complete group is allocated', async (t) => {
+  const listeners = [];
+  const listen = Server.prototype.listen;
+  t.mock.method(Server.prototype, 'listen', function (...args) {
+    assert.ok(
+      listeners.every((server) => server.listening),
+      'earlier ports must still be reserved',
+    );
+    listeners.push(this);
+    return Reflect.apply(listen, this, args);
+  });
+  t.after(async () => {
+    await Promise.all(
+      listeners.filter((server) => server.listening).map((server) => new Promise((r) => server.close(r))),
+    );
+  });
+  const ports = await unusedLoopbackPorts(4);
+  assert.equal(new Set(ports).size, 4);
+  assert.equal(listeners.length, 4);
+  assert.ok(
+    listeners.every((server) => !server.listening),
+    'all reservations must be released for child startup',
+  );
+});
+
+test('fixture port groups release earlier reservations if a later bind fails', async (t) => {
+  const listeners = [];
+  const listen = Server.prototype.listen;
+  const failure = new Error('fixture bind failure');
+  t.mock.method(Server.prototype, 'listen', function (...args) {
+    listeners.push(this);
+    if (listeners.length === 3) {
+      queueMicrotask(() => this.emit('error', failure));
+      return this;
+    }
+    return Reflect.apply(listen, this, args);
+  });
+  t.after(async () => {
+    await Promise.all(
+      listeners.filter((server) => server.listening).map((server) => new Promise((r) => server.close(r))),
+    );
+  });
+  await assert.rejects(unusedLoopbackPorts(4), (error) => error === failure);
+  assert.ok(
+    listeners.every((server) => !server.listening),
+    'a failed allocation must not retain listeners',
+  );
+});
+
 test('real worker handover retains one disk owner and preserves its working files', async (t) => {
   assert.equal(process.platform, 'linux', 'Mandatory Linux process test.');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-handover-'));
   const namespace = randomUUID();
-  const make = async () =>
+  const [firstPort, secondPort] = await unusedLoopbackPorts(2);
+  const make = (port) =>
     createHousekeepingSupervisor({
       env: {
         ...process.env,
@@ -32,15 +76,15 @@ test('real worker handover retains one disk owner and preserves its working file
         RIVET_POD_UID: randomUUID(),
         RIVET_POD_IP: '127.0.0.1',
         RIVET_NAMESPACE_UID: namespace,
-        RIVET_HOUSEKEEPING_PORT: String(await unusedPort()),
+        RIVET_HOUSEKEEPING_PORT: String(port),
       },
       incarnation: randomUUID(),
       token: randomUUID(),
       timeoutMs: 3000,
       command: [process.execPath, fileURLToPath(new URL('./fixtures/housekeeping-api.mjs', import.meta.url))],
     });
-  const first = await make(),
-    second = await make();
+  const first = make(firstPort),
+    second = make(secondPort);
   t.after(async () => {
     await first.stop();
     await second.stop();
@@ -77,10 +121,10 @@ test('real worker handover retains one disk owner and preserves its working file
 
 test('an unavailable replacement lock mount never stops the healthy real worker', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-target-unavailable-'));
-  const make = async (directory) => {
+  const [sourcePort, targetPort] = await unusedLoopbackPorts(2);
+  const make = (directory, port) => {
     const incarnation = randomUUID(),
-      uid = randomUUID(),
-      port = await unusedPort();
+      uid = randomUUID();
     const supervisor = createHousekeepingSupervisor({
       env: {
         ...process.env,
@@ -97,8 +141,8 @@ test('an unavailable replacement lock mount never stops the healthy real worker'
     });
     return { uid, incarnation, port, supervisor };
   };
-  const source = await make(root),
-    target = await make(path.join(root, 'unavailable-mount'));
+  const source = make(root, sourcePort),
+    target = make(path.join(root, 'unavailable-mount'), targetPort);
   t.after(async () => {
     await source.supervisor.stop();
     await target.supervisor.stop();
@@ -140,8 +184,8 @@ test('an unavailable replacement lock mount never stops the healthy real worker'
 for (const duringPublication of [false, true])
   test(`worker crash ${duringPublication ? 'during publication' : 'after readiness'} retains fencing until its real supervisor exits`, async (t) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-crash-owner-'));
-    const port = await unusedPort(),
-      incarnation = randomUUID();
+    const [port, followerPort] = await unusedLoopbackPorts(2);
+    const incarnation = randomUUID();
     const env = {
       ...process.env,
       RIVET_LEGACY_RESTORE_ROOT: root,
@@ -169,7 +213,7 @@ for (const duringPublication of [false, true])
       assert.equal(observed, state);
     };
     const follower = createHousekeepingSupervisor({
-      env: { ...env, RIVET_POD_UID: randomUUID(), RIVET_HOUSEKEEPING_PORT: String(await unusedPort()) },
+      env: { ...env, RIVET_POD_UID: randomUUID(), RIVET_HOUSEKEEPING_PORT: String(followerPort) },
       incarnation: randomUUID(),
       token: randomUUID(),
       timeoutMs: 3000,
@@ -196,9 +240,7 @@ for (const duringPublication of [false, true])
 
 test('restore recovery obtains exclusive housekeeping while the developer API is still fenced', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-fenced-developer-'));
-  const apiPort = await unusedPort(),
-    executorPort = await unusedPort(),
-    healthPort = await unusedPort();
+  const [apiPort, executorPort, healthPort, housekeepingPort] = await unusedLoopbackPorts(4);
   const env = {
     ...process.env,
     RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
@@ -208,7 +250,7 @@ test('restore recovery obtains exclusive housekeeping while the developer API is
     RIVET_POD_UID: randomUUID(),
     RIVET_POD_IP: '127.0.0.1',
     RIVET_NAMESPACE_UID: randomUUID(),
-    RIVET_HOUSEKEEPING_PORT: String(await unusedPort()),
+    RIVET_HOUSEKEEPING_PORT: String(housekeepingPort),
     RIVET_BACKEND_API_PORT: String(apiPort),
     RIVET_BACKEND_EXECUTOR_PORT: String(executorPort),
     RIVET_BACKEND_HEALTH_PORT: String(healthPort),
@@ -237,9 +279,7 @@ test('restore recovery obtains exclusive housekeeping while the developer API is
 
 test('an acknowledged restore consumer exit replaces only developer children, not housekeeping supervision', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-consumer-cycle-'));
-  const apiPort = await unusedPort(),
-    executorPort = await unusedPort(),
-    healthPort = await unusedPort();
+  const [apiPort, executorPort, healthPort, housekeepingPort] = await unusedLoopbackPorts(4);
   const env = {
     ...process.env,
     RIVET_DEPLOYMENT_TOPOLOGY: 'replicated',
@@ -249,7 +289,7 @@ test('an acknowledged restore consumer exit replaces only developer children, no
     RIVET_POD_UID: randomUUID(),
     RIVET_POD_IP: '127.0.0.1',
     RIVET_NAMESPACE_UID: randomUUID(),
-    RIVET_HOUSEKEEPING_PORT: String(await unusedPort()),
+    RIVET_HOUSEKEEPING_PORT: String(housekeepingPort),
     RIVET_BACKEND_API_PORT: String(apiPort),
     RIVET_BACKEND_EXECUTOR_PORT: String(executorPort),
     RIVET_BACKEND_HEALTH_PORT: String(healthPort),
