@@ -15,6 +15,7 @@ import { ImmutableLocalArtifactStore } from '../local-metadata/immutable-artifac
 import { verifySqliteWorkflowServing } from '../local-metadata/verify-serving-candidate.js';
 import type { WorkflowProjectItem } from '../../../studio-server-shared/workflow-types.js';
 import { withEnvOverride } from './helpers/workflow-api-harness.js';
+import { runRecordingsSettingsRepository } from '../routes/workflows/recordings-config.js';
 import { collectProjectBundle, type BundleSnapshot } from '../routes/workflows/project-bundle.js';
 import { getWorkflowProjectIndexDataFromContents } from '../routes/workflows/project-stats.js';
 import { withAsyncDeadline } from './helpers/workflow-async-process.js';
@@ -1036,6 +1037,29 @@ test('SQLite project browsing reads only the selected pair, and metadata discove
     assert.equal(reads, before);
     await assert.rejects(backend.readWorkflowPublishedVersionPreview(item.relativePath, 'missing'), /not found/);
     assert.equal(reads, before);
+  });
+});
+
+test('SQLite recording saves survive stale retention settings and failed post-save notifications', async (t) => {
+  await fixture(async (backend) => {
+    const item = await createExecutable(backend);
+    const [project, attached] = loadProjectAndAttachedDataFromString((await backend.loadHostedProject(item.absolutePath)).contents);
+    const stale = t.mock.method(runRecordingsSettingsRepository, 'readSync', () => { throw new Error('fixture stale retention'); });
+    t.mock.method(console, 'error', () => {});
+    try {
+      const id = await backend.persistWorkflowExecutionRecording({
+        sourceProject: project, sourceProjectPath: item.absolutePath, executedProject: project,
+        executedAttachedData: attached, executedDatasets: [], endpointName: 'fixture',
+        recordingSerialized: '{}', runKind: 'editor', status: 'failed', durationMs: 1,
+        onPersisted: async () => { throw new Error('notification failed'); },
+      });
+      assert.ok(id);
+      assert.equal((await backend.getWorkflowRecordingSummary(id)).status, 'failed');
+      assert.equal(await backend.readWorkflowRecordingArtifact(id, 'recording'), '{}');
+      await assert.rejects(backend.cleanupRecordings(), /fixture stale retention/);
+    } finally {
+      stale.mock.restore();
+    }
   });
 });
 

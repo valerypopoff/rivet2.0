@@ -13,6 +13,7 @@ import {
   type OutgoingMessageMap,
   decodeDebuggerTransportSentinels,
   normalizeClassifierProject,
+  ExecutorRecoveryError,
 } from '@valerypopoff/rivet2-core';
 import { match } from 'ts-pattern';
 import Emittery from 'emittery';
@@ -110,7 +111,9 @@ export function startDebuggerServer(
     new WebSocketServer({
       port,
       host,
-      ...(options.sessions ? { handleProtocols: () => 'rivet-session-v1' } : {}),
+      ...(options.sessions
+        ? { handleProtocols: (_protocols, request) => options.sessions!.selectProtocol(request) }
+        : {}),
       ...(authorize || options.isAcceptingConnections
         ? {
             verifyClient: (info: { req: IncomingMessage }, done: (allowed: boolean, code?: number) => void) => {
@@ -168,6 +171,20 @@ export function startDebuggerServer(
   ) {
     const clients = options.getClientsForProcessor?.(processor, [...server.clients]) ?? [...server.clients];
     const resolvedRequestId = requestId ?? processorAttachments.getRequestId(processor);
+    if (options.sessions && !options.transformBroadcast) {
+      const legacy = clients.filter((client) => options.sessions!.protocol(client) === 1);
+      for (const client of clients)
+        if (options.sessions.protocol(client) === 2) {
+          const delivered = options.sessions.sendMessage(client, { message, data, requestId: resolvedRequestId });
+          // A prompt that cannot be delivered must not leave an accepted processor waiting forever.
+          if (!delivered && message === 'userInput')
+            void processor.abort().catch((error) => emitDebuggerError(emitter, error));
+        }
+      if (!legacy.length) return;
+      const payload = stringifyDebuggerMessage({ message, data, requestId: resolvedRequestId }, emitter);
+      if (payload) for (const client of legacy) options.sessions.send(client, payload);
+      return;
+    }
     const serialized = stringifyDebuggerMessage({ message, data, requestId: resolvedRequestId }, emitter);
     const payload = serialized && (options.transformBroadcast?.(serialized, processor, message, data) ?? serialized);
 
@@ -212,8 +229,13 @@ export function startDebuggerServer(
           emitter,
         );
         if (payload) {
-          if (options.sessions) options.sessions.send(logicalClient, payload);
-          else sendDebuggerMessage(socket, payload, emitter, socketHeartbeats.get(socket));
+          if (options.sessions) {
+            try {
+              options.sessions.send(logicalClient, payload);
+            } catch (error) {
+              datasetProvider.rejectRequest(data.requestId, error);
+            }
+          } else sendDebuggerMessage(socket, payload, emitter, socketHeartbeats.get(socket));
         }
       };
     }
@@ -222,6 +244,21 @@ export function startDebuggerServer(
       try {
         if (options.sessions && !options.sessions.isCurrent(socket)) return;
         const stringData = data.toString();
+        if (options.sessions?.protocol(logicalClient) === 2 && stringData.startsWith('{')) {
+          const frame = JSON.parse(stringData);
+          if (frame.type === 'executor-receipt') {
+            options.sessions.acknowledge(logicalClient, frame.data?.id);
+            return;
+          }
+          if (frame.type === 'executor-reliable') {
+            const item = options.sessions.receive(logicalClient, frame.data);
+            if (item) {
+              if (item.message) await handleMessage(Buffer.from(JSON.stringify(item.message)));
+              options.sessions.receipt(logicalClient, item.id);
+            }
+            return;
+          }
+        }
         if (options.interceptMessage && (await options.interceptMessage(socket, stringData))) return;
 
         if (stringData.startsWith('set-static-data:')) {
@@ -325,6 +362,8 @@ export function startDebuggerServer(
             }
           });
       } catch (err) {
+        if (err instanceof ExecutorRecoveryError && options.sessions?.protocol(logicalClient) === 2)
+          socket.close(4410, err.reason);
         emitDebuggerError(emitter, err);
       }
     };

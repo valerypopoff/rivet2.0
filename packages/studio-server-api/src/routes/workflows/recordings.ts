@@ -52,7 +52,8 @@ import {
   type WorkflowRecordingRunRow,
 } from './recordings-db.js';
 import { createWorkflowRecordingStore } from './recordings-store.js';
-import { getWorkflowRecordingConfig, isWorkflowRecordingEnabled } from './recordings-config.js';
+import { notifyRecordingPersisted, type RecordingDiagnosticContext } from './recording-diagnostics.js';
+import { getWorkflowRecordingRuntimeConfig, isWorkflowRecordingEnabled } from './recordings-config.js';
 import {
   ensureWorkflowRecordingsRoot,
   getWorkflowRecordingBundlePath,
@@ -159,8 +160,20 @@ export async function prepareWorkflowRecordingsForVmMigration(): Promise<void> {
   await workflowRecordingStore.flush();
 }
 
-export function enqueueWorkflowExecutionRecordingPersistence(task: () => Promise<void>): boolean {
-  return workflowRecordingStore.enqueuePersistence(task);
+export function enqueueWorkflowExecutionRecordingPersistence(
+  task: () => Promise<void>,
+  context?: RecordingDiagnosticContext,
+): boolean {
+  return workflowRecordingStore.enqueuePersistence(task, context);
+}
+
+export function initializeWorkflowRecordingQueuePolicy(): Promise<void> {
+  return workflowRecordingStore.initializeQueuePolicy();
+}
+
+/** Called only after the serving storage owner has confirmed its drain/close. */
+export function disposeWorkflowRecordingQueuePolicy(): void {
+  workflowRecordingStore.disposeQueuePolicy();
 }
 
 export async function flushWorkflowExecutionRecordingPersistence(): Promise<void> {
@@ -740,9 +753,11 @@ export async function persistWorkflowExecutionRecording(
   }
 
   const recordingsRoot = getWorkflowRecordingsRoot(options.workflowsRoot);
-  await workflowRecordingStore.ensureStorage(recordingsRoot);
+  // Writes need an index, not a retention pass. Normal cleanup starts only
+  // after the saved callback has installed any diagnostic retention hold.
+  await workflowRecordingStore.ensureStorage(recordingsRoot, { skipCleanup: true });
 
-  const config = getWorkflowRecordingConfig();
+  const config = getWorkflowRecordingRuntimeConfig();
   const recordingId = `${Date.now()}-${randomUUID()}`;
   const bundlePath = getWorkflowRecordingBundlePath(recordingsRoot, workflowId, recordingId);
   const sourceProjectName = path.basename(options.sourceProjectPath, PROJECT_EXTENSION);
@@ -860,14 +875,20 @@ export async function persistWorkflowExecutionRecording(
         datasetUncompressedBytes: datasetArtifact?.uncompressedBytes ?? 0,
       },
     );
-
-    await options.onPersisted?.(recordingId);
-    workflowRecordingStore.scheduleCleanup();
-    return recordingId;
   } catch (error) {
     await fs.rm(bundlePath, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
+
+  // The replay is committed. Notification and maintenance must not roll it back.
+  await notifyRecordingPersisted(options.onPersisted, recordingId, {
+    projectId: workflowId,
+    graphId: options.executionIdentity?.graphId,
+    correlationId: options.executionIdentity?.correlationId,
+    runKind: options.runKind,
+  });
+  workflowRecordingStore.scheduleCleanup();
+  return recordingId;
 }
 
 export async function deleteWorkflowRecordingsBySourceProjectPath(root: string, projectPath: string): Promise<void> {

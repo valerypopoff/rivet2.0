@@ -10,7 +10,7 @@ import {
 import type { ManagedWorkflowDbClient } from './db.js';
 import type { ManagedObjectDeletionReason } from './maintenance.js';
 import { prepareManagedTextArtifact } from './artifact-descriptor.js';
-import { getWorkflowRecordingConfig } from '../recordings-config.js';
+import { getWorkflowRecordingRuntimeConfig } from '../recordings-config.js';
 import { RECORDING_COLUMNS } from './mappers.js';
 import { resolveManagedHostedProjectSaveTarget } from './save-target.js';
 import { normalizeRivetCorrelationId } from '../../../request-correlation.js';
@@ -189,7 +189,7 @@ export function createManagedWorkflowRevisionFactory(options: {
       let replayProjectBlobKey = createRecordingBlobKey(workflowId, recordingId, 'replay-project');
       let replayDatasetBlobKey =
         artifacts.replayDataset != null ? createRecordingBlobKey(workflowId, recordingId, 'replay-dataset') : null;
-      const policy = getWorkflowRecordingConfig();
+      const policy = getWorkflowRecordingRuntimeConfig();
       const prepare = (key: string, text: string) =>
         options.blobStore.putArtifact
           ? prepareManagedTextArtifact(key, text, policy.compression === 'gzip', policy.gzipLevel)

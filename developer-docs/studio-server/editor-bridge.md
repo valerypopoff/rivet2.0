@@ -7,6 +7,24 @@ The dashboard and the Rivet editor run in separate browsing contexts:
 
 They communicate through `window.postMessage`.
 
+The separate owner-routed Node executor connection negotiates session v2 when
+supported. Loss of diagnostic history marks details partial while the accepted
+result can still arrive; recovery never resubmits the graph. Permanent connection
+loss stops spinning node displays and shows **Outcome unknown** in Run Activity.
+An already returned preview response is preserved if its background tail becomes
+unobservable. Missing diagnostic values cannot be frozen or preloaded as complete
+outputs. This transport does not change the dashboard `postMessage` bridge or
+published web-app execution. See [executor recovery](editor-executor-recovery-plan.md).
+
+Hosted Node web-app previews use the same recording capability and editor toggle
+as ordinary editor runs. Each accepted request owns its recording and correlation
+identity, including overlapping preview actions. A returned chat answer does not
+finalize a recording before the root terminal event. Later failure is retained
+without withdrawing an already delivered answer; missing diagnostics remain
+unavailable rather than being saved as a complete replay. Browser-mode recording
+and published web-app recording retain their existing separate owners. See the
+[recording persistence plan](recording-persistence-fix-plan.md).
+
 ## Contract
 
 `EditorBridgeSession` is the dashboard's single delivery/acknowledgement owner;

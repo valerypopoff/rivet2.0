@@ -24,7 +24,11 @@ import type {
 import { readWorkflowRunCost } from '../../../studio-server-shared/workflow-recording-types.js';
 import type { LocalRecordingMetadata, LocalPublicationState } from './workflow-catalog.js';
 import { createCatalogWorker, type CatalogWorkerClient } from './catalog-worker-client.js';
-import { getWorkflowRecordingConfig } from '../routes/workflows/recordings-config.js';
+import {
+  getWorkflowRecordingConfig,
+  getWorkflowRecordingRuntimeConfig,
+} from '../routes/workflows/recordings-config.js';
+import { notifyRecordingPersisted } from '../routes/workflows/recording-diagnostics.js';
 import {
   buildWorkflowRunStatistics,
   buildWorkflowRunStatisticsCatalog,
@@ -1114,7 +1118,7 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
   async persistWorkflowExecutionRecording(
     options: PersistWorkflowExecutionRecordingOptions,
   ): Promise<string | undefined> {
-    const config = getWorkflowRecordingConfig();
+    const config = getWorkflowRecordingRuntimeConfig();
     if (!config.enabled || !options.sourceProject.metadata.id) return undefined;
     const onPersisted = options.onPersisted;
     const saved = structuredClone({ ...options, onPersisted: undefined });
@@ -1151,7 +1155,12 @@ export class SqliteWorkflowBackend implements WorkflowDataBackend {
         },
         { compression: config.compression, gzipLevel: config.gzipLevel },
       );
-      await onPersisted?.(id);
+      await notifyRecordingPersisted(onPersisted, id, {
+        projectId: saved.sourceProject.metadata.id,
+        graphId: saved.executionIdentity?.graphId,
+        correlationId: saved.executionIdentity?.correlationId,
+        runKind: saved.runKind,
+      });
     });
     return id;
   }

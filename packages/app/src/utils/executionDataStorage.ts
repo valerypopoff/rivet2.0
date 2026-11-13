@@ -39,6 +39,7 @@ export function storeNodeDataForHistory(
   scope: Omit<RefScope, 'channel'>,
 ): Partial<NodeRunDataWithRefs> {
   const storedData: Partial<NodeRunDataWithRefs> = {};
+  if (data.diagnosticsIncomplete !== undefined) storedData.diagnosticsIncomplete = data.diagnosticsIncomplete;
 
   if (data.startedAt !== undefined) {
     storedData.startedAt = data.startedAt;

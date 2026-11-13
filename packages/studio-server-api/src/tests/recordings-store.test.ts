@@ -3,15 +3,23 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createWorkflowRecordingStore } from '../routes/workflows/recordings-store.js';
-import { RUN_RECORDINGS_SETTINGS_RELATIVE_PATH } from '../routes/workflows/recordings-config.js';
+import { createWorkflowRecordingStore as createStore } from '../routes/workflows/recordings-store.js';
+import {
+  RUN_RECORDINGS_SETTINGS_RELATIVE_PATH,
+  readWorkflowRecordingLimitSettings,
+} from '../routes/workflows/recordings-config.js';
 import { withScopedEnv } from './helpers/runtime-library-harness.js';
+import { reportRecordingFailure } from '../routes/workflows/recording-diagnostics.js';
 
 const recordingEnvKeys = [
   'RIVET_RECORDINGS_ENABLED',
   'RIVET_RECORDINGS_MAX_PENDING_WRITES',
   'RIVET_APP_DATA_ROOT',
 ] as const;
+
+function createWorkflowRecordingStore(options: Parameters<typeof createStore>[0]) {
+  return createStore({ ...options, maxPendingWrites: readWorkflowRecordingLimitSettings().maxPendingWrites });
+}
 
 function waitForImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -68,11 +76,11 @@ test('recordings store reuses storage initialization for the same root and reset
 
   assert.deepEqual(initializedRoots, [
     'rebuild:/tmp/workflows-a',
-    'cleanup',
     'schema:2',
+    'cleanup',
     'rebuild:/tmp/workflows-b',
-    'cleanup',
     'schema:2',
+    'cleanup',
   ]);
 });
 
@@ -338,5 +346,241 @@ test('recordings store startup does not fail permanently when cleanup logs a non
   await store.ensureStorage('/tmp/workflows-a');
   await store.ensureStorage('/tmp/workflows-a');
 
-  assert.deepEqual(initializedRoots, ['rebuild:/tmp/workflows-a', 'cleanup:1', 'schema:2']);
+  assert.deepEqual(initializedRoots, ['rebuild:/tmp/workflows-a', 'schema:2', 'cleanup:1']);
+});
+
+const storageCallbacks = {
+  async rebuildIndex() {},
+  async cleanupStorage() {},
+  async setSchemaVersion() {},
+  async resetDatabaseForTests() {},
+};
+
+test('queue policy seeds unchanged settings, follows newer notifications and ignores disposed generations', async () => {
+  const store = createStore(storageCallbacks);
+  assert.throws(() => store.enqueuePersistence(async () => {}), /not initialized/);
+  type Snapshot = { path: string; value: { maxPendingWrites: number } };
+  const listeners: Array<(snapshot: Snapshot) => void> = [];
+  let resolve!: (snapshot: Snapshot) => void;
+  let unsubscribed = 0;
+  let currentPath = '/first/settings.json';
+  const source = {
+    descriptor: { getPath: () => currentPath },
+    read: () =>
+      new Promise<Snapshot>((done) => {
+        resolve = done;
+      }),
+    subscribe: (listener: (snapshot: Snapshot) => void) => {
+      listeners.push(listener);
+      return () => {
+        unsubscribed++;
+      };
+    },
+  };
+  const first = store.initializeQueuePolicy(source);
+  listeners[0]!({ path: currentPath, value: { maxPendingWrites: 2 } });
+  resolve({ path: currentPath, value: { maxPendingWrites: 9 } });
+  await first;
+  assert.equal(store.getPersistenceMetrics().maxPendingWrites, 2, 'a late initial read cannot undo a newer update');
+  listeners[0]!({ path: '/other/settings.json', value: { maxPendingWrites: 50 } });
+  assert.equal(store.getPersistenceMetrics().maxPendingWrites, 2);
+  listeners[0]!({ path: currentPath, value: { maxPendingWrites: 1 } });
+  assert.equal(store.getPersistenceMetrics().maxPendingWrites, 1);
+  store.disposeQueuePolicy();
+  currentPath = '/second/settings.json';
+  const second = store.initializeQueuePolicy(source);
+  resolve({ path: currentPath, value: { maxPendingWrites: 0 } });
+  await second;
+  listeners[0]!({ path: '/first/settings.json', value: { maxPendingWrites: 10 } });
+  assert.equal(
+    store.getPersistenceMetrics().maxPendingWrites,
+    0,
+    'an unchanged initial read still seeds the new owner',
+  );
+  store.disposeQueuePolicy();
+  assert.equal(unsubscribed, 2);
+});
+
+test('failed or disposed policy initialization cannot reopen admission or replace a newer owner', async () => {
+  const store = createStore(storageCallbacks);
+  const path = '/settings.json';
+  let resolve!: (value: { path: string; value: { maxPendingWrites: number } }) => void;
+  let fail = true;
+  const source = {
+    descriptor: { getPath: () => path },
+    read: async () => {
+      if (fail) throw new Error('read failed');
+      return { path, value: { maxPendingWrites: 4 } };
+    },
+    subscribe: () => () => {},
+  };
+  await assert.rejects(store.initializeQueuePolicy(source), /read failed/);
+  assert.throws(() => store.enqueuePersistence(async () => {}), /not initialized/);
+  const pendingSource = {
+    ...source,
+    read: () =>
+      new Promise<{ path: string; value: { maxPendingWrites: number } }>((done) => {
+        resolve = done;
+      }),
+  };
+  const pending = store.initializeQueuePolicy(pendingSource);
+  store.disposeQueuePolicy();
+  fail = false;
+  await store.initializeQueuePolicy(source);
+  resolve({ path, value: { maxPendingWrites: 100 } });
+  await assert.rejects(pending, /disposed/);
+  assert.equal(store.getPersistenceMetrics().maxPendingWrites, 4);
+  store.disposeQueuePolicy();
+});
+
+test('a temporary retention failure cannot discard the first recording or invalidate its index', async (t) => {
+  let rebuilds = 0;
+  let fail = true;
+  let saved = 0;
+  const reports: unknown[] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => {
+    reports.push(args);
+    throw new Error('logging failed');
+  });
+  const store = createStore({
+    ...storageCallbacks,
+    maxPendingWrites: 2,
+    async rebuildIndex() {
+      rebuilds++;
+    },
+    async cleanupStorage() {
+      if (fail) throw new Error('cleanup policy unavailable');
+    },
+  });
+  await store.ensureStorage('/recordings');
+  assert.equal(
+    store.enqueuePersistence(async () => {
+      saved++;
+    }),
+    true,
+  );
+  await store.flush();
+  assert.equal(saved, 1);
+  assert.equal(reports.length, 1);
+  store.scheduleCleanup();
+  await store.flush();
+  assert.equal(reports.length, 2);
+  fail = false;
+  await store.ensureStorage('/recordings');
+  store.scheduleCleanup();
+  await store.flush();
+  assert.equal(rebuilds, 1);
+});
+
+test('concurrent first writers wait for initial cleanup before publishing retention holds', async () => {
+  let finish!: () => void;
+  const cleanup = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const store = createStore({ ...storageCallbacks, maxPendingWrites: 1, cleanupStorage: () => cleanup });
+  let ready = 0;
+  const first = store.ensureStorage('/ordered-recordings').then(() => {
+    ready++;
+  });
+  const second = store.ensureStorage('/ordered-recordings').then(() => {
+    ready++;
+  });
+  await waitForImmediate();
+  assert.equal(ready, 0);
+  finish();
+  await Promise.all([first, second]);
+  assert.equal(ready, 2);
+});
+
+test('recording diagnostics retain bounded identifiers without arbitrary error or context contents', (t) => {
+  const reports: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => {
+    reports.push(args);
+  });
+  reportRecordingFailure(new Error('sensitive prompt and API key'), {
+    projectId: 'p'.repeat(300),
+    correlationId: 'correlation\nforged',
+    phase: 'persistence',
+    ...{ unexpected: 'secret' },
+  });
+  const text = JSON.stringify(reports);
+  assert.doesNotMatch(text, /sensitive|API key|secret|unexpected|\\n/);
+  assert.equal((reports[0]![1] as { projectId: string }).projectId.length, 160);
+  assert.match(text, /correlationforged/);
+});
+
+for (const field of ['name', 'message'] as const) {
+  test(`recording diagnostics cannot throw when an error ${field} accessor fails`, () => {
+    const error = new Error('notification failed');
+    Object.defineProperty(error, field, {
+      get() {
+        throw new Error('error inspection failed');
+      },
+    });
+    assert.doesNotThrow(() => reportRecordingFailure(error, { phase: 'notification' }));
+  });
+}
+
+test('recording diagnostics cannot throw when the logger fails', (t) => {
+  t.mock.method(console, 'error', () => {
+    throw new Error('logging failed');
+  });
+  assert.doesNotThrow(() => reportRecordingFailure(new Error('notification failed')));
+});
+
+test('failed error reporting cannot interrupt the next accepted recording', async (t) => {
+  const store = createStore({ ...storageCallbacks, maxPendingWrites: 2 });
+  t.mock.method(console, 'error', () => {
+    throw new Error('logging failed');
+  });
+  let saved = 0;
+  assert.equal(
+    store.enqueuePersistence(async () => {
+      throw new Error('write failed');
+    }),
+    true,
+  );
+  assert.equal(
+    store.enqueuePersistence(async () => {
+      saved++;
+    }),
+    true,
+  );
+  await store.flush();
+  assert.equal(saved, 1);
+  assert.equal(store.getPersistenceMetrics().pendingWrites, 0);
+});
+
+test('a full recording queue returns rejection even when warning output fails', async (t) => {
+  const store = createStore({ ...storageCallbacks, maxPendingWrites: 1 });
+  t.mock.method(console, 'warn', () => {
+    throw new Error('logging failed');
+  });
+  t.mock.method(console, 'error', () => {
+    throw new Error('logging failed');
+  });
+  let saved = 0;
+  assert.equal(
+    store.enqueuePersistence(async () => {
+      saved++;
+    }),
+    true,
+  );
+  assert.equal(
+    store.enqueuePersistence(async () => {
+      saved++;
+    }),
+    true,
+  );
+  try {
+    assert.equal(
+      store.enqueuePersistence(async () => {
+        saved++;
+      }),
+      false,
+    );
+  } finally {
+    await store.flush();
+  }
+  assert.equal(saved, 2);
 });

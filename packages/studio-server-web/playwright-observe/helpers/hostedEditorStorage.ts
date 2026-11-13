@@ -22,6 +22,7 @@ export type SeedHostedEditorProjectOptions = {
   loaded?: boolean;
   metadata?: Record<string, unknown>;
   nodePrefabs?: Record<string, { id: string; sourceNode: unknown }>;
+  uiGraphs?: Record<string, unknown>;
   projectId: string;
   projectPath: string;
   title: string;
@@ -81,6 +82,7 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
           },
           ...(seed.nodePrefabs ? { nodePrefabs: seed.nodePrefabs } : {}),
           plugins: [],
+          ...(seed.uiGraphs ? { uiGraphs: seed.uiGraphs } : {}),
         },
         projectsState: {
           openedProjects: {
@@ -91,12 +93,17 @@ export async function seedHostedEditorProject(page: Page, options: SeedHostedEdi
               fsPath: seed.projectPath,
               openedGraph: seed.graphId,
             },
-            ...Object.fromEntries((seed.extraOpenedProjects ?? []).map((opened) => [opened.projectId, {
-              projectId: opened.projectId,
-              title: opened.title,
-              fsPath: opened.projectPath,
-              openedGraph: opened.graphId,
-            }])),
+            ...Object.fromEntries(
+              (seed.extraOpenedProjects ?? []).map((opened) => [
+                opened.projectId,
+                {
+                  projectId: opened.projectId,
+                  title: opened.title,
+                  fsPath: opened.projectPath,
+                  openedGraph: opened.graphId,
+                },
+              ]),
+            ),
           },
           openedProjectsSortedIds: [
             seed.projectId,

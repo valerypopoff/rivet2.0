@@ -11,6 +11,8 @@ import {
 
 export class DebuggerDatasetProvider implements DatasetProvider {
   listeners: Record<string, (payload: any) => void> = {};
+  #reject = new Map<string, (reason: unknown) => void>();
+  #timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   onrequest: ((type: string, data: any) => void) | undefined;
 
@@ -20,7 +22,8 @@ export class DebuggerDatasetProvider implements DatasetProvider {
     if (type === 'datasets:response') {
       const listener = this.listeners[requestId];
       if (listener) {
-        listener(payload);
+        if (typeof data.error === 'string') this.rejectRequest(requestId, new Error(data.error));
+        else listener(payload);
       }
     }
   }
@@ -28,16 +31,45 @@ export class DebuggerDatasetProvider implements DatasetProvider {
   makeRequestAndWaitForResponse<T>(type: `datasets:${string}`, data: any): Promise<T> {
     const requestId = newId();
 
-    const waitingPromise = new Promise<T>((resolve) => {
-      this.listeners[requestId] = (response: any) => {
+    const waitingPromise = new Promise<T>((resolve, reject) => {
+      const clean = () => {
+        clearTimeout(this.#timers.get(requestId));
+        this.#timers.delete(requestId);
+        this.#reject.delete(requestId);
         delete this.listeners[requestId];
+      };
+      this.#reject.set(requestId, (error) => {
+        clean();
+        reject(error);
+      });
+      this.listeners[requestId] = (response: any) => {
+        clean();
         resolve(response);
       };
+      const timer = setTimeout(
+        () =>
+          this.rejectRequest(requestId, new Error('Executor dataset response expired. The operation was not retried.')),
+        120_000,
+      );
+      timer.unref?.();
+      this.#timers.set(requestId, timer);
     });
 
-    this.onrequest?.(type, { requestId, payload: data });
+    try {
+      if (!this.onrequest) throw new Error('Executor dataset bridge is unavailable');
+      this.onrequest(type, { requestId, payload: data });
+    } catch (error) {
+      this.rejectRequest(requestId, error);
+    }
 
     return waitingPromise;
+  }
+
+  rejectRequest(requestId: string, error: unknown) {
+    this.#reject.get(requestId)?.(error);
+  }
+  dispose() {
+    for (const id of [...this.#reject.keys()]) this.rejectRequest(id, new Error('Executor dataset session closed.'));
   }
 
   getDatasetMetadata(id: DatasetId): Promise<DatasetMetadata | undefined> {

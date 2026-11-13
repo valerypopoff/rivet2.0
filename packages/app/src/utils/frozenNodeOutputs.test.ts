@@ -29,6 +29,21 @@ function createDataRefStore(initialValues?: Record<string, DataValue>): DataRefR
 const graphId = 'graph-1' as GraphId;
 const nodeId = 'node-1' as NodeId;
 
+test('freezing cannot silently omit incomplete invocations from the selected outputs', () => {
+  const processData = [
+    {
+      graphId,
+      processId: 'first',
+      data: { status: { type: 'ok' }, outputData: { output: { type: 'string', storage: 'inline', value: 'old' } } },
+    },
+    { graphId, processId: 'second', data: { status: { type: 'ok' }, diagnosticsIncomplete: true, outputData: {} } },
+  ] as ProcessDataForNode[];
+  assert.throws(
+    () => captureFrozenNodeOutputs({ dataRefs: createDataRefStore(), graphId, nodeId, processData, selection: {} }),
+    /no successful output/,
+  );
+});
+
 test('captureFrozenNodeOutputs restores ref-backed output values and clones captured outputs', () => {
   const processData = [
     {

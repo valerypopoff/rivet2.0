@@ -12,7 +12,8 @@ const weightedSpecs = [
   ['hosted-modal-focus.spec.ts', 117],
   ['hosted-editor-search-shortcuts.spec.ts', 22],
   ['hosted-dashboard-contracts.spec.ts', 27],
-  ['hosted-executor-origin.spec.ts', 50],
+  // 21-case local suite: preview recording, incomplete-history and receipt recovery.
+  ['hosted-executor-origin.spec.ts', 170],
   // Full local suite, including admission races and error-recovery regressions.
   ['project-bundle.spec.ts', 130],
   ['project-bundle-upload.spec.ts', 13],

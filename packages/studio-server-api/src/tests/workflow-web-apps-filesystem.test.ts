@@ -11,6 +11,7 @@ import { writeWorkflowEndpointAuthSettings } from '../workflow-endpoint-auth-set
 import { writeTrustedClientSettings } from '../trusted-client-settings.js';
 import { readJson, waitForRecordingWorkflows, withEnvOverride } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
+import { createExhaustedProfileGraph, EXHAUSTION_PROVIDER_ORIGIN } from './helpers/llm-exhaustion-fixture.js';
 import {
   closeWebSocket,
   connectWebSocket,
@@ -39,6 +40,55 @@ const {
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+test('exhausted profiles retain failed web-app recordings over HTTP and WebSocket', async (t) => {
+  const nativeFetch = globalThis.fetch;
+  let providerCalls = 0;
+  t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    if (String(input).startsWith(EXHAUSTION_PROVIDER_ORIGIN)) {
+      providerCalls++;
+      return Response.json({ error: { message: 'Synthetic unavailable provider' } }, { status: 503 });
+    }
+    return nativeFetch(input, init);
+  });
+  const created = await workflowMutations.createWorkflowProjectItem('', 'FailedChat');
+  const project = createWebAppProject(rivetNode, workflowFs.createBlankProjectFile('FailedChat'), 'Failed Chat');
+  project.graphs[project.metadata.mainGraphId!] = createExhaustedProfileGraph(project.metadata.mainGraphId!);
+  const component = project.uiGraphs![WEB_APP_TEST_UI_GRAPH_ID]!.components[0]!;
+  if (component.type !== 'button' || component.action?.type !== 'runGraph') throw new Error('Invalid test button');
+  component.action.inputs = {};
+  await fs.writeFile(created.absolutePath, serializeWebAppProject(rivetNode, project));
+  await publishWebApp(created.relativePath, 'failed-chat');
+  await withWorkflowExecutionServer(async ({ apiBaseUrl, webAppsBaseUrl, latestWebAppsBaseUrl }) => {
+    let publishedRevision = '';
+    for (const base of [webAppsBaseUrl, latestWebAppsBaseUrl]) {
+      const revisionKey = extractWebAppRevisionKey(await (await fetch(`${base}/failed-chat`)).text());
+      if (base === webAppsBaseUrl) publishedRevision = revisionKey;
+      const response = await fetch(`${base}/failed-chat/actions/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ componentId: WEB_APP_TEST_ACTION_COMPONENT_ID, revisionKey, state: {} }),
+      });
+      assert.equal(response.status, 500);
+    }
+    const socket = await connectWebSocket(toWebAppSocketUrl(webAppsBaseUrl, 'failed-chat'), { headers: { origin: webAppsBaseUrl } });
+    try {
+      const ready = waitForWebSocketMessages(socket, ['server.ready'], { parser: parseWebAppSocketMessage });
+      socket.send(JSON.stringify({ type: 'client.hello', protocolVersion: 1 }));
+      await ready;
+      const terminal = waitForWebSocketMessages(socket, ['action.accepted', 'action.failed'], { parser: parseWebAppSocketMessage });
+      socket.send(JSON.stringify({ type: 'action.start', componentId: WEB_APP_TEST_ACTION_COMPONENT_ID, requestId: 'failed-chat', revisionKey: publishedRevision, state: {} }));
+      const messages = await terminal;
+      assert.equal(providerCalls, 6, JSON.stringify(messages));
+    } finally {
+      closeWebSocket(socket);
+    }
+    const catalog = await waitForRecordingWorkflows(apiBaseUrl, rows => rows.some(row => row.totalRuns === 3));
+    const item = catalog.workflows.find(row => row.totalRuns === 3)!;
+    const page = await readJson<{ runs: Array<{ id: string; status: string }> }>(await fetch(`${apiBaseUrl}/recordings/workflows/${item.workflowId}/runs?status=all`));
+    assert.equal(providerCalls, 6);
+    assert.deepEqual(page.runs.map(run => run.status), ['failed', 'failed', 'failed']);
+  });
+});
 
 async function publicationPreconditions(baseUrl: string, relativePath: string) {
   const snapshot = await readJson<{

@@ -162,6 +162,7 @@ async function startApiServer(
     delete process.env.RIVET_ENABLE_LATEST_REMOTE_DEBUGGER;
   }
 
+  await workflowStorageBackend.initializeWorkflowStorage();
   const app = createApiApp(profile);
   const server = http.createServer(app);
 

@@ -43,12 +43,13 @@ export function parseExecutorSessionIncomingMessage(options: {
   /** Session control/cursor admission happens before decoding large event payloads. */
   acceptEnvelope?: (envelope: unknown) => boolean;
   managedLatest?: boolean;
+  envelope?: unknown;
 }): ExecutorSessionIncomingTransportMessage | undefined {
   const { rawMessage, socketUrl, target } = options;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawMessage);
+    parsed = options.envelope ?? JSON.parse(rawMessage);
   } catch (error) {
     handleError(error, 'Failed to parse executor message', {
       metadata: {

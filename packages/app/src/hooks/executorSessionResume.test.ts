@@ -371,7 +371,7 @@ test('only positively idle retired owners discover a new executor, without repla
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(discoveries, 1);
   const fresh = FakeWebSocket.instances.at(-1)!;
-  assert.equal(fresh.url, 'wss://rivet.example/ws/executor/owner/new-owner'); assert.deepEqual(fresh.protocols, ['rivet-session-v1']);
+  assert.equal(fresh.url, 'wss://rivet.example/ws/executor/owner/new-owner'); assert.deepEqual(fresh.protocols, ['rivet-session-v2', 'rivet-session-v1']);
   assert.deepEqual(fresh.sent, []); fresh.open();
   fresh.emitMessage({ message: 'executor-session', data: { protocol: 1, capability: 'j'.repeat(43) } });
   fresh.emitMessage({ message: 'executor-session-ready', data: { protocol: 1 } });

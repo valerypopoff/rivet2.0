@@ -1675,6 +1675,7 @@ function describeRootStatus(status: RunActivityStatus, backgroundWorkPending?: b
     completed: 'Completed',
     failed: 'Failed',
     aborted: 'Aborted',
+    unavailable: 'Outcome unknown',
   };
   return labels[status];
 }

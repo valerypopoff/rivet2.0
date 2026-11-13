@@ -12,7 +12,7 @@ import { ScheduledRunStore } from '../scheduled-runs/store.js';
 import { projectBundleFixture } from './helpers/project-bundle-fixture.js';
 import { getActiveScheduledRunCount } from '../scheduled-runs/activity.js';
 import { withAsyncDeadline } from './helpers/workflow-async-process.js';
-import { ExecutionRecorder } from '@valerypopoff/rivet2-node';
+import { ExecutionRecorder, NodeDatasetProvider } from '@valerypopoff/rivet2-node';
 
 test('scheduled root uses real cross-project execution and root/child recording wiring', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rivet-scheduled-execution-'));
@@ -23,6 +23,7 @@ test('scheduled root uses real cross-project execution and root/child recording 
     'RIVET_WORKFLOW_RECORDINGS_ROOT',
     'RIVET_RUNTIME_LIBRARIES_ROOT',
     'RIVET_RECORDINGS_ENABLED',
+    'RIVET_RECORDINGS_DATASET_MODE',
     'RIVET_STORAGE_MODE',
     'RIVET_LOCAL_METADATA_CONTROL_ROOT',
     'RIVET_KEY',
@@ -37,6 +38,7 @@ test('scheduled root uses real cross-project execution and root/child recording 
   process.env.RIVET_RUNTIME_LIBRARIES_ROOT = path.join(root, 'libraries');
   process.env.RIVET_STORAGE_MODE = 'filesystem';
   process.env.RIVET_RECORDINGS_ENABLED = 'true';
+  process.env.RIVET_RECORDINGS_DATASET_MODE = 'none';
   for (const dir of ['workflows', 'app-data', 'recordings', 'libraries']) await fs.mkdir(path.join(root, dir));
   const fixture = projectBundleFixture();
   await fs.writeFile(path.join(root, 'workflows', 'root.rivet-project'), fixture.root.projectContents);
@@ -62,7 +64,12 @@ test('scheduled root uses real cross-project execution and root/child recording 
     });
     await store.runNow(schedule.id, schedule.revision);
     const job = (await store.tick('worker'))!;
+    const datasetExport = t.mock.method(NodeDatasetProvider.prototype, 'exportDatasetsForProject', async () => {
+      throw new Error('Excluded dataset export is unavailable');
+    });
     const result = await runScheduledGraph(job, store, 'worker', new AbortController().signal);
+    datasetExport.mock.restore();
+    assert.equal(datasetExport.mock.callCount(), 0, 'disabled dataset capture must not read the dataset provider');
     assert.equal(result.status, 'succeeded');
     assert.equal(result.recordingStatus, 'saved');
     assert.ok(result.recordingId);

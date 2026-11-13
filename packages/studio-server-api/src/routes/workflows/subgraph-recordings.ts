@@ -7,22 +7,32 @@ import { enqueueWorkflowExecutionRecordingPersistence } from './recordings.js';
 import { isWorkflowRecordingEnabled } from './recordings-config.js';
 import { persistWorkflowExecutionRecordingWithBackend } from './storage-backend.js';
 import { getWorkflowRecordingCreatedAt } from '../../../../studio-server-shared/workflow-recording-time.js';
+import { reportRecordingFailure, type RecordingDiagnosticContext } from './recording-diagnostics.js';
 
 /** A called project owns its own replay, independently of the caller's run. */
 export function enqueueSubgraphProjectRecording(run: SubgraphProjectRun): void {
   if (!isWorkflowRecordingEnabled()) return;
+  const diagnostic: RecordingDiagnosticContext = {
+    projectId: run.target.projectId,
+    graphId: run.graphId,
+    correlationId: run.correlationId,
+    surface: 'subgraph_project',
+    runKind: run.target.version,
+    phase: 'serialization',
+  };
   const { projectContents, datasetsContents, sourceProjectPath } = run.resolved;
   if (!projectContents || !sourceProjectPath) {
-    console.error('Subgraph recording is missing its immutable execution snapshot or source path.');
+    reportRecordingFailure(new Error('Missing immutable Subgraph snapshot'), diagnostic);
     return;
   }
-  const recordingSerialized = run.recorder.serialize();
   const createdAt = run.createdAt ?? getWorkflowRecordingCreatedAt(run.recorder.events);
-  const accepted = enqueueWorkflowExecutionRecordingPersistence(async () => {
+  enqueueWorkflowExecutionRecordingPersistence(async () => {
+    const recordingSerialized = run.recorder.serialize();
     const [executedProject, executedAttachedData] = loadProjectAndAttachedDataFromString(projectContents);
     if (executedProject.metadata.id !== run.target.projectId) {
       throw new Error('Subgraph recording project identity changed.');
     }
+    diagnostic.phase = 'persistence';
     await persistWorkflowExecutionRecordingWithBackend({
       createdAt,
       sourceProject: executedProject,
@@ -44,6 +54,5 @@ export function enqueueSubgraphProjectRecording(run: SubgraphProjectRun): void {
         correlationId: run.correlationId,
       },
     });
-  });
-  if (!accepted) console.error('Subgraph project recording queue is full.');
+  }, diagnostic);
 }

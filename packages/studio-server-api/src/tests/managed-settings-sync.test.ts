@@ -14,6 +14,16 @@ import {
   getAppSettingsBackendKind,
   VersionedSettingsRepository,
 } from '../app-settings/settings-repository.js';
+import {
+  getWorkflowExecutionRecorderOptions,
+  isWorkflowRecordingEnabled,
+  readRunRecordingsSettings,
+  readWorkflowRecordingLimitSettings,
+  shouldSnapshotWorkflowRecordingDatasets,
+} from '../routes/workflows/recordings-config.js';
+import { createManagedWorkflowRevisionFactory } from '../routes/workflows/managed/revision-factory.js';
+import type { ManagedWorkflowBlobStore } from '../routes/workflows/managed/blob-store.js';
+import { createWorkflowRecordingStore } from '../routes/workflows/recordings-store.js';
 
 test('concurrent settings disposal waits for the same pending pool close', async (t) => {
   let finish!: () => void;
@@ -211,5 +221,89 @@ test('revision polling failures disable cached settings and recover at the same 
     releasePoll?.();
     repository.dispose();
     await configureAppSettingsBackendForTests(null);
+  }
+});
+
+test('recording runtime policy and artifact preparation survive settings expiry without weakening live policy', async (t) => {
+  const previousEnv = process.env;
+  process.env = { ...previousEnv, RIVET_RECORDINGS_ENABLED: 'true', RIVET_RECORDINGS_DATASET_MODE: 'none' };
+  const key = 'run recordings';
+  const secret = 'recording-settings-fixture';
+  const encrypted = encryptManagedSettingsValue(
+    { key, schemaVersion: 1 },
+    { version: 1, maxPendingWrites: 3, retentionDays: 14, maxRunsPerEndpoint: 100 },
+    deriveManagedSettingsEncryptionKey(secret),
+  );
+  const row = {
+    setting_key: key,
+    revision: '1',
+    schema_version: 1,
+    source_hash: null,
+    ciphertext: encrypted.ciphertext,
+    iv: encrypted.iv,
+    auth_tag: encrypted.authTag,
+    key_id: encrypted.keyId,
+  };
+  let clock = 0;
+  t.mock.method(performance, 'now', () => clock);
+  t.mock.method(Pool.prototype, 'query', (async (sql: string) => ({
+    rows: sql.includes('ORDER BY setting_key') ? [{ setting_key: key, revision: '1' }] : [row],
+  })) as unknown as Pool['query']);
+  t.mock.method(Client.prototype, 'connect', async function (this: Client) {
+    return this;
+  } as Client['connect']);
+  t.mock.method(Client.prototype, 'query', (async () => ({ rows: [] })) as unknown as Client['query']);
+  t.mock.method(Client.prototype, 'end', (async () => {}) as Client['end']);
+  const backend = new PostgresAppSettingsBackend({
+    poolConfig: { host: 'recording-settings.invalid' },
+    encryptionSecret: secret,
+    logger: { error() {}, warn() {}, log() {} },
+  });
+  const written: string[] = [];
+  const queue = createWorkflowRecordingStore({
+    async rebuildIndex() {},
+    async cleanupStorage() {},
+    async setSchemaVersion() {},
+    async resetDatabaseForTests() {},
+  });
+  const factory = createManagedWorkflowRevisionFactory({
+    blobStore: {
+      putText: async (name: string) => {
+        written.push(name);
+      },
+    } as unknown as ManagedWorkflowBlobStore,
+    queueObjectDeletions: async () => 0,
+  });
+  try {
+    await configureAppSettingsBackendForTests(backend);
+    await readRunRecordingsSettings();
+    await queue.initializeQueuePolicy();
+    assert.equal(readWorkflowRecordingLimitSettings().maxPendingWrites, 3);
+    clock = 16_000;
+    assert.throws(() => backend.assertSynchronized(), /stale/);
+    assert.throws(() => readWorkflowRecordingLimitSettings(), /stale/);
+    assert.equal(isWorkflowRecordingEnabled(), true);
+    assert.equal(shouldSnapshotWorkflowRecordingDatasets(), false);
+    assert.deepEqual(getWorkflowExecutionRecorderOptions(), { includePartialOutputs: false, includeTrace: false });
+    assert.equal(queue.getPersistenceMetrics().maxPendingWrites, 3);
+    assert.equal(
+      queue.enqueuePersistence(async () => {
+        await factory.uploadRecordingBlobs(
+          'project',
+          'recording',
+          { recording: '{}', replayProject: 'project', replayDataset: null },
+          'fixture',
+        );
+      }),
+      true,
+    );
+    await queue.flush();
+    assert.equal(written.length, 2);
+    assert.throws(() => backend.assertSynchronized(), /stale/, 'saving a replay must not freshen authorization policy');
+  } finally {
+    queue.disposeQueuePolicy();
+    clock = 0;
+    await configureAppSettingsBackendForTests(null);
+    process.env = previousEnv;
   }
 });

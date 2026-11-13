@@ -189,6 +189,7 @@ export type DatasetRequestMap = {
   'datasets:clear-data': { id: DatasetId };
   'datasets:delete': { id: DatasetId };
   'datasets:knn': { datasetId: DatasetId; k: number; vector: number[] };
+  'datasets:export-for-project': { projectId: ProjectId };
 };
 
 export type IncomingMessage = ProcessEventMessage | GraphUploadAllowedMessage | DatasetRequestMessage;

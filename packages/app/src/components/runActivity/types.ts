@@ -2,7 +2,14 @@ import type { ReactNode } from 'react';
 import type { GraphId, GraphRunId, NodeId, PortId, ProcessId, RootRunId } from '@valerypopoff/rivet2-core';
 import type { RunActivityColumnWidths } from '../../features/runActivity/runActivityColumnWidths.js';
 
-export type RunActivityStatus = 'idle' | 'running' | 'outputs-ready' | 'completed' | 'failed' | 'aborted';
+export type RunActivityStatus =
+  | 'idle'
+  | 'running'
+  | 'outputs-ready'
+  | 'completed'
+  | 'failed'
+  | 'aborted'
+  | 'unavailable';
 
 export type RunActivityItemStatus = 'waiting' | 'running' | 'success' | 'error' | 'interrupted' | 'not-ran' | 'unknown';
 

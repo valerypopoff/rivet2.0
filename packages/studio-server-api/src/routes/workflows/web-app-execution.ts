@@ -36,6 +36,7 @@ import {
   type WebAppAccessPolicy,
 } from './storage-backend.js';
 import { isWorkflowRecordingEnabled, shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
+import { reportRecordingFailure, type RecordingDiagnosticContext } from './recording-diagnostics.js';
 import type {
   WorkflowRecordingExecutionIdentity,
   WorkflowRunCost,
@@ -230,7 +231,7 @@ function reportLLMProfileHealthRecordingOutcome(
     getLLMProfileHealthStore()
       .then((store) => store.recordRecordingOutcome({ correlationId, availability, recordingId }))
       .catch((error) => {
-        console.error('[llm-profile-health] Failed to resolve recording evidence:', error);
+        reportRecordingFailure(error, { correlationId, phase: 'notification' });
       }),
   );
 }
@@ -457,14 +458,24 @@ export function enqueueExecutionRecording(
   }
 
   const createdAt = recording.createdAt ?? getWorkflowRecordingCreatedAt(recorder.events);
+  const diagnostic: RecordingDiagnosticContext = {
+    projectId: project.metadata.id,
+    graphId: options.executionIdentity?.graphId,
+    correlationId: options.executionIdentity?.correlationId,
+    surface: options.executionIdentity?.surface,
+    runKind: options.runKind,
+    phase: 'serialization',
+  };
   const accepted = enqueueWorkflowExecutionRecordingPersistence(async () => {
     try {
       const executedDatasets = shouldSnapshotWorkflowRecordingDatasets()
         ? await datasetProvider.exportDatasetsForProject(project.metadata.id).catch((error) => {
-            console.error('Failed to export workflow datasets for recording:', error);
+            reportRecordingFailure(error, diagnostic);
             return [];
           })
         : [];
+      const recordingSerialized = recorder.serialize();
+      diagnostic.phase = 'persistence';
       const recordingId = await persistWorkflowExecutionRecordingWithBackend({
         createdAt,
         sourceProject: project,
@@ -473,7 +484,7 @@ export function enqueueExecutionRecording(
         executedAttachedData: attachedData,
         executedDatasets,
         endpointName: options.endpointName,
-        recordingSerialized: recorder.serialize(),
+        recordingSerialized,
         runKind: options.runKind,
         status: recording.status,
         durationMs: recording.durationMs,
@@ -491,7 +502,7 @@ export function enqueueExecutionRecording(
       await reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'persistence-failed');
       throw error;
     }
-  });
+  }, diagnostic);
   if (!accepted) {
     void reportLLMProfileHealthRecordingOutcome(options.executionIdentity, 'queue-dropped');
   }

@@ -1,6 +1,10 @@
 import type { ProcessEventMessageMap, ProjectId } from '@valerypopoff/rivet2-core';
 import type { DataRefStore } from '../providers/ProvidersContext.js';
-import { applyProcessEventToProjectExecutionSnapshot } from './projectExecutionSnapshotEvents.js';
+import {
+  applyProcessEventToProjectExecutionSnapshot,
+  loseProjectExecutionObservation,
+  markProjectExecutionDetailsIncomplete,
+} from './projectExecutionSnapshotEvents.js';
 import { type createStore } from 'jotai';
 import { projectState, projectsState } from '../state/savedGraphs.js';
 import { projectBindingRegistryState } from '../state/projectBindings.js';
@@ -93,6 +97,7 @@ export function routeProjectExecutionDisplay<K extends keyof ProcessEventMessage
   mapSnapshot?: (snapshot: ProjectExecutionSnapshot) => ProjectExecutionSnapshot;
   onInactive?: () => void;
   shouldApply?: (snapshot: ProjectExecutionSnapshot) => boolean;
+  diagnosticsIncomplete?: boolean;
 }): void {
   if (options.store.get(projectState).metadata.id === options.projectId) {
     options.interactive?.();
@@ -109,6 +114,9 @@ export function routeProjectExecutionDisplay<K extends keyof ProcessEventMessage
     options.projectId,
     (snapshot) => {
       if (options.shouldApply && !options.shouldApply(snapshot)) return snapshot;
+      if (options.diagnosticsIncomplete) snapshot = markProjectExecutionDetailsIncomplete(snapshot);
+      if (options.message === 'error' && (options.data as { code?: string }).code === 'executor-result-unavailable')
+        return loseProjectExecutionObservation(snapshot, options.data as { executionStatus?: string; error?: string });
       const result = applyProcessEventToProjectExecutionSnapshot({ ...options, snapshot });
       return options.mapSnapshot?.(result.snapshot) ?? result.snapshot;
     },
@@ -122,10 +130,8 @@ export function routeExecutorDisconnectDisplay(options: {
   refStore: DataRefStore;
   errorMessage: string;
 }): void {
-  routeProjectExecutionDisplay({
-    ...options,
-    message: 'error',
-    data: { error: new Error(options.errorMessage) },
-    shouldApply: (snapshot) => snapshot.graphRunning,
-  });
+  if (options.store.get(projectState).metadata.id === options.projectId) return;
+  updateOpenProjectExecutionSnapshot(options.store, options.projectId, (snapshot) =>
+    snapshot.graphRunning ? loseProjectExecutionObservation(snapshot) : snapshot,
+  );
 }

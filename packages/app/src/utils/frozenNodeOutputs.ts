@@ -55,11 +55,12 @@ export function getSuccessfulFrozenOutputCandidates(options: {
     selectedGraphRun: options.selection.selectedGraphRun,
   });
 
-  return (filteredProcessData ?? []).filter(
-    (process) =>
-      process.data.status?.type === 'ok' &&
-      (process.graphId == null || process.graphId === options.graphId) &&
-      hasStoredPortMapValues(process.data.outputData),
+  const graphProcesses = (filteredProcessData ?? []).filter(
+    (process) => process.graphId == null || process.graphId === options.graphId,
+  );
+  if (graphProcesses.some((process) => process.data.diagnosticsIncomplete)) return [];
+  return graphProcesses.filter(
+    (process) => process.data.status?.type === 'ok' && hasStoredPortMapValues(process.data.outputData),
   );
 }
 

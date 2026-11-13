@@ -37,6 +37,7 @@ function applySnapshot<K extends keyof ProcessEventMessageMap>(options: {
     snapshot: NonNullable<ProjectExecutionSnapshots[ProjectId]>,
   ) => NonNullable<ProjectExecutionSnapshots[ProjectId]>;
   shouldApply?: (snapshot: NonNullable<ProjectExecutionSnapshots[ProjectId]>) => boolean;
+  diagnosticsIncomplete?: boolean;
 }) {
   const store = createStore();
   store.set(projectsState, {
@@ -75,6 +76,35 @@ function createDataRefStore(): DataRefStore {
     },
   };
 }
+
+test('inactive completion keeps missing diagnostic history partial', () => {
+  const projectId = 'inactive' as ProjectId;
+  const execution = {
+    projectId,
+    graphId: 'graph' as GraphId,
+    graphRunId: 'graph-run' as GraphRunId,
+    rootRunId: 'root' as RootRunId,
+  };
+  const refStore = createDataRefStore();
+  const started = applySnapshot({
+    snapshots: {},
+    projectId,
+    refStore,
+    message: 'nodeStart',
+    data: { execution, node: TextNodeImpl.create(), processId: 'process' as ProcessId, inputs: {} },
+  });
+  const finished = applySnapshot({
+    snapshots: started,
+    projectId,
+    refStore,
+    diagnosticsIncomplete: true,
+    message: 'done',
+    data: { execution, results: {} },
+  });
+  const root = finished[projectId]!.runActivityJournal.rootsById.root!;
+  assert.equal(root.status, 'completed');
+  assert.equal(root.isPartial, true);
+});
 
 test('evaluation activity retains its source across selection and rejects replacement, reopen and workspace retirement', () => {
   const store = createStore();

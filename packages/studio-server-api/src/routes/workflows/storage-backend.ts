@@ -70,6 +70,8 @@ import {
   persistWorkflowExecutionRecording,
   readWorkflowRecordingArtifact,
   getWorkflowRecordingSummary,
+  initializeWorkflowRecordingQueuePolicy,
+  disposeWorkflowRecordingQueuePolicy,
 } from './recordings.js';
 import { shouldSnapshotWorkflowRecordingDatasets } from './recordings-config.js';
 import {
@@ -533,6 +535,7 @@ export async function checkWorkflowStorageHealth(context?: RuntimeHealthCheckCon
 }
 
 export async function initializeWorkflowStorage(): Promise<void> {
+  await initializeWorkflowRecordingQueuePolicy();
   await getWorkflowStorageServices().initialize();
 }
 
@@ -842,6 +845,7 @@ export async function getWorkflowRunStatisticsWithBackend(
 
 export async function disposeWorkflowStorage(): Promise<void> {
   await disposeWorkflowStorageServices();
+  disposeWorkflowRecordingQueuePolicy();
 }
 
 export async function drainWorkflowStorageAcceptedWork(): Promise<void> {

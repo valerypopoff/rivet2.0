@@ -83,6 +83,8 @@ export type ProjectExecutionSnapshot = {
 };
 
 export type NodeRunDataBase = {
+  /** The transport omitted values; these previews cannot seed execution or frozen outputs. */
+  diagnosticsIncomplete?: boolean;
   /** Privacy-bounded physical model/tool events correlated to this invocation. */
   agentTraceEvents?: AgentTraceEvent[];
   /** Historical node lifecycle bounds while a recording is replayed. */

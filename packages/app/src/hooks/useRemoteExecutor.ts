@@ -25,6 +25,10 @@ import {
   serializeProject,
 } from '@valerypopoff/rivet2-core';
 import { useCurrentExecution } from './useCurrentExecution';
+import {
+  loseProjectExecutionObservation,
+  markProjectExecutionDetailsIncomplete,
+} from './projectExecutionSnapshotEvents.js';
 import { graphState } from '../state/graph';
 import { recordExecutionsState, settingsState, showNodeRunDurationsState } from '../state/settings';
 import { useExecutorSessionRegistry, useExecutorSessionRuntime } from '../providers/ExecutorSessionContext.js';
@@ -253,7 +257,11 @@ export function useRemoteExecutor() {
     if (!capture) return;
     localRecordingCapturesByRequestIdRef.current.delete(requestId);
 
-    if (!capture.isTerminal || capture.recorder.events.length === 0) {
+    if (
+      !capture.isTerminal ||
+      capture.recorder.events.length === 0 ||
+      executorSession.hasIncompleteDiagnostics?.(requestId)
+    ) {
       await capture.provider.markUnavailable(capture.correlationId).catch((error) => {
         logRuntimeDebug('Remote editor run could not capture a terminal recording.', {
           error,
@@ -300,16 +308,22 @@ export function useRemoteExecutor() {
         return;
       }
 
-      if (store.get(graphRunningState)) {
-        currentExecution.onRunActivityEvent('error', {
-          error: new Error('Remote executor disconnected before the graph run reached a terminal event.'),
-        });
-      }
-      currentExecution.onStop();
+      snapshotWriter.mutate(loseProjectExecutionObservation);
     },
   });
 
   const eventDispatcher = createProcessEventDispatcher(currentExecution);
+  useEffect(
+    () =>
+      executorSession.subscribeDiagnostics?.((requests) => {
+        if (
+          store.get(projectState).metadata.id === project.metadata.id &&
+          requests.includes(executorSession.getActiveGraphRunRequestId() ?? '')
+        )
+          snapshotWriter.mutate(markProjectExecutionDetailsIncomplete);
+      }),
+    [executorSession, project.metadata.id, store, snapshotWriter],
+  );
 
   // Evaluations expose one active suite in the editor. Stop a remote
   // evaluation when the user changes project instead of allowing its later
@@ -359,6 +373,10 @@ export function useRemoteExecutor() {
     if (externalDebuggerTarget && routing.projectId != null && routing.projectId !== project.metadata.id) return;
     const dispatchDecision = routing.decision;
     const shouldDispatchExecutionEvent = sourceDisplayAllowed && dispatchDecision.shouldDispatch;
+    if (routing.diagnosticsIncomplete && shouldDispatchExecutionEvent) {
+      snapshotWriter.mutate(markProjectExecutionDetailsIncomplete);
+      if (requestId) responseTraceByRequestIdRef.current.delete(requestId);
+    }
     if (
       externalDebuggerTarget &&
       shouldDispatchExecutionEvent &&
@@ -450,6 +468,7 @@ export function useRemoteExecutor() {
         captureRemoteResponseTraceRootExecution(responseTraceByRequestIdRef.current, requestId, data);
         if (shouldDispatchExecutionEvent) {
           eventDispatcher.start(data);
+          if (routing.diagnosticsIncomplete) snapshotWriter.mutate(markProjectExecutionDetailsIncomplete);
         }
         break;
       case 'done':
@@ -592,7 +611,11 @@ export function useRemoteExecutor() {
           executorSession.setActiveGraphRunRequestId(null);
         }
         if (shouldDispatchExecutionEvent) {
-          eventDispatcher.error(data);
+          if ((data as { code?: string }).code === 'executor-result-unavailable')
+            snapshotWriter.mutate((snapshot) =>
+              loseProjectExecutionObservation(snapshot, data as { executionStatus?: string; error?: string }),
+            );
+          else eventDispatcher.error(data);
         }
         break;
       case 'nodeExcluded':
@@ -736,8 +759,7 @@ export function useRemoteExecutor() {
       }
 
       const remoteLocalRecordingPersistence = await prepareEditorRecordingPersistence({
-        eligible:
-          recordExecutions && sessionState.target?.type === 'internal-hosted' && options.webAppStorage === undefined,
+        eligible: recordExecutions && sessionState.target?.type === 'internal-hosted',
         projectPath: loadedProject.path,
         provider: localExecutionRecordingPersistence,
       });
