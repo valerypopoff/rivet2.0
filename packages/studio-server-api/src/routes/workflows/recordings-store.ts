@@ -14,7 +14,7 @@ type QueuePolicySource = {
 
 export type WorkflowRecordingPersistenceMetrics = Readonly<{
   activeWrites: number;
-  maxPendingWrites: number;
+  maxPendingWrites: number | null;
   pendingWrites: number;
 }>;
 
@@ -164,7 +164,9 @@ export function createWorkflowRecordingStore(options: {
   const getPersistenceMetrics = (): WorkflowRecordingPersistenceMetrics => {
     return Object.freeze({
       activeWrites: persistenceQueuePromise ? 1 : 0,
-      maxPendingWrites: getQueueLimit(),
+      // Offline maintenance and scrapes can observe work before serving starts.
+      // Absence of policy must not hide accepted work or open admission.
+      maxPendingWrites: maxPendingWrites ?? null,
       pendingWrites: persistenceQueue.length,
     });
   };

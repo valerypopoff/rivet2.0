@@ -99,8 +99,8 @@ test. See the local validation summary below for final commands/results.
   import can test stale compiled transport code.
 - Hosted web unit/production suites pass (253 + 39 cases).
 - The complete headless `hosted-executor-origin.spec.ts` passes: 21 cases in
-  about 2.7 minutes, including preview recording/recovery, storage replay, owner discovery and
-  switching to Browser. Its CI duration hint is updated; test discovery remains
+  about 2.7 minutes, including preview recording/recovery, storage replay, owner
+  discovery and switching to Browser. Its CI duration hint is updated; test discovery remains
   unchanged. Do not edit/rebuild shared source during this browser run: hot
   reload invalidates its connection-count assertions. One earlier run was
   discarded for that reason, then the whole suite passed against fixed source.
@@ -109,6 +109,12 @@ test. See the local validation summary below for final commands/results.
 - Core, Node, native Windows app-executor, App and CLI package builds pass. Core's
   build also verifies the published ESM/CommonJS export surfaces. The App build
   is checked separately from the browser tests to avoid hot reload during them.
+
+Passive browser test observers decode `executor-reliable` chunks with the shared
+`ExecutorReliableInbox` before asserting logical process events. They never send
+receipts: the real editor retains that responsibility. The hosted Subgraph auth
+journey covers both single-host plain events and replicated session v2 without
+weakening its execution, output or authorization assertions.
 
 The remaining acceptance is release-only: publish matching application/executor
 packages, qualify them through the existing staging path, then verify the

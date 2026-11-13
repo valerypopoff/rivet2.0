@@ -5,6 +5,7 @@ import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/host
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
 import { collectProjectBundle } from '../../studio-server-api/src/routes/workflows/project-bundle';
 import { zipSync, strToU8 } from 'fflate';
+import { ExecutorReliableInbox } from '@valerypopoff/rivet2-core';
 
 test.use({ actionTimeout: 20_000 });
 
@@ -163,7 +164,18 @@ for (const topology of ['single-host', 'replicated'] as const) {
       }> = [];
       page.on('websocket', (socket) => {
         if (socket.url() !== runtime.executorWsUrl) return;
-        socket.on('framereceived', ({ payload }) => executorEvents.push(JSON.parse(payload.toString())));
+        // Observe the same logical messages in legacy and chunked transports.
+        // Only the real editor sends receipts; this observer never changes delivery.
+        const inbox = new ExecutorReliableInbox();
+        socket.on('close', () => inbox.clear());
+        socket.on('framereceived', ({ payload }) => {
+          const frame = JSON.parse(payload.toString());
+          if (frame.message !== 'executor-reliable') executorEvents.push(frame);
+          else {
+            const item = inbox.receive(frame.data);
+            if (item?.text !== undefined) executorEvents.push(JSON.parse(item.text));
+          }
+        });
       });
       const freshEvents = (since: number) =>
         executorEvents.slice(since).filter((event) => event.data?.execution?.projectId === caller.projectMetadataId);

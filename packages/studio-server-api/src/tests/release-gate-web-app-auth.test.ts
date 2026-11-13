@@ -63,6 +63,7 @@ for (const retainedOAuth of [false, true]) {
           slug: 'release-gate-web-app',
         },
       ]);
+      await suite.workflowStorageBackend.initializeWorkflowStorage();
       const app = express();
       // Model the owned edge's verified development client, not a trusted-client
       // bypass. Spoofed forwarding is covered separately by trusted-clients.test.

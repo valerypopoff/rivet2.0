@@ -529,6 +529,10 @@ settings subscription updates that limit. Temporary synchronization failures
 retain the last validated queue bound without weakening authorization or
 destructive retention checks. Queue policy is detached only after storage drain
 and close, and is reset between storage generations.
+Queue activity is observable before initialization and after policy disposal:
+counts remain available to scrapes, offline migration and drain checks. The
+capacity is `null` without policy, so metrics omit its gauge rather than claim
+an unlimited or stale limit. This never permits admission before initialization.
 Scheduled recordings check the same dataset-capture policy before exporting
 datasets. Excluded datasets are never loaded just to be discarded by the writer,
 so an unavailable exporter cannot prevent a dataset-free replay from being saved.

@@ -356,6 +356,32 @@ const storageCallbacks = {
   async resetDatabaseForTests() {},
 };
 
+test('queue observations remain readable without a serving policy while admission stays closed', async () => {
+  const store = createStore(storageCallbacks);
+  assert.deepEqual(store.getPersistenceMetrics(), { activeWrites: 0, pendingWrites: 0, maxPendingWrites: null });
+  assert.throws(() => store.enqueuePersistence(async () => {}), /not initialized/);
+  const path = '/observation/settings.json';
+  await store.initializeQueuePolicy({
+    descriptor: { getPath: () => path },
+    read: async () => ({ path, value: { maxPendingWrites: 2 } }),
+    subscribe: () => () => {},
+  });
+  let saved = 0;
+  assert.equal(
+    store.enqueuePersistence(async () => {
+      saved++;
+    }),
+    true,
+  );
+  assert.equal(store.getPersistenceMetrics().maxPendingWrites, 2);
+  store.disposeQueuePolicy();
+  assert.deepEqual(store.getPersistenceMetrics(), { activeWrites: 0, pendingWrites: 1, maxPendingWrites: null });
+  assert.throws(() => store.enqueuePersistence(async () => {}), /not initialized/);
+  await store.flush();
+  assert.equal(saved, 1);
+  assert.equal(store.getPersistenceMetrics().pendingWrites, 0);
+});
+
 test('queue policy seeds unchanged settings, follows newer notifications and ignores disposed generations', async () => {
   const store = createStore(storageCallbacks);
   assert.throws(() => store.enqueuePersistence(async () => {}), /not initialized/);

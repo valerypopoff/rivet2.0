@@ -27,6 +27,10 @@ production deployment remain separate release steps through the normal pipeline.
   shared runtime policy before exporting. It also reproduced logging failures
   escaping cleanup and queue-overflow handling; these reports are now best
   effort without changing retention or admission decisions.
+- CI exposed an offline-consumer gap: queue observations also serve migration
+  commands and scrapes before serving initialization. Counts now remain readable
+  without policy, while capacity is explicitly absent and admission still rejects.
+  Serving fixtures initialize the same storage owner as the real server.
 - Hosted Node previews now capture recordings. Tests cover exhausted profiles,
   early answers followed by failure, overlapping requests and incomplete history.
 
@@ -48,6 +52,11 @@ Validation completed locally:
   scheduled dataset exclusion, along with API type checking, scoped lint,
   test-style and documentation-link checks. These reviews changed no browser
   behavior; the prior browser checks remain applicable.
+- CI regression acceptance passed 32 queue/metrics/auth tests, the compiled local
+  upgrade copy/restart/serve scenario, the complete local managed migration and
+  supervised restore fixture, and all four real PostgreSQL/MinIO hosted Subgraph
+  browser journeys. Queue observations no longer require write-policy startup;
+  serving-route fixtures still do.
 - A synthetic local serializer check measured about 38 ms for 1 MiB and 297 ms
   for 8 MiB; compression took about 4/18 ms and local writes under 1 ms. These
   single-machine samples do not establish the cause or duration of production
