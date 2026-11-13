@@ -19,6 +19,42 @@ to distinguish real failures from expected negative-test errors, downstream
 refusals and unstarted jobs. This is a local preparation aid, not another CI gate
 or cloud-test requirement.
 
+## Browser shard budget and hosted variability
+
+[Verify Studio Server 43434671248, editor shard 3](https://github.com/valerypopoff/rivet2.0/actions/runs/43434671248/job/131919256700)
+hit the 12-minute test-step limit after 93 of 95 cases passed. There was no
+assertion failure; the remaining two cases did not finish before cancellation.
+The deployment-contract lane, including the repaired Linux supervisor fixture,
+passed. This was a separate scheduling failure.
+
+The earlier [editor shard 2](https://github.com/valerypopoff/rivet2.0/actions/runs/43429991232/job/131903541756)
+passed in 11m17s, leaving too little margin for hosted-runner variation. Refreshing
+weights from only the latest run would not account for that variation. Use the
+higher total case time per file from both runs, rounded up to five seconds;
+parallel files contribute their total case work, not their shorter wall time.
+The earlier completed run also supplies the two cases interrupted in the later
+run. These measurements are scheduling estimates, not runtime guarantees.
+
+The same 38 specs now run in four independent jobs, each retaining two browser
+workers, instead of three jobs. Conservative work estimates are 985-990 seconds
+per shard. The shard contract checks exact-once coverage, balanced weights and a
+75% work budget against the existing 12-minute/two-worker step limit (1,080
+seconds). This leaves room for setup, serial tails and runner variation; increasing
+the suite requires reviewing that headroom rather than merely keeping equal sums.
+The browser image, isolation, assertions, retry policy and timeouts stay unchanged.
+
+Validate `ci-performance.test.mjs` and the workflow guard, list all four selections
+to confirm the unchanged test inventory, and run the affected real browser shard.
+After pushing, confirm every hosted shard's final result and elapsed time before
+calling the repair complete. Keep this budget guidance in the local checklist.
+
+Local verification passed all 17 CI-performance tests, workflow/style/import and
+documentation checks, and the unchanged 362-case inventory across all four
+selections. The two targeted headless groups passed 115 and 108 cases in 4.9 and
+4.2 minutes respectively against a fresh web build. This includes the heaviest
+recordings group and the previously interrupted viewport cases; it does not
+predict hosted-runner timing or replace the next complete CI results.
+
 ## Supervisor fixture port allocation
 
 The [Linux housekeeping check](https://github.com/valerypopoff/rivet2.0/actions/runs/43429991232/job/131903541698)
@@ -74,7 +110,7 @@ of parallel execution. They remain scheduling hints, not wall-clock acceptance
 thresholds.
 
 Keep every case, assertion and the existing 12-minute step limit. Validate the
-complete affected shard with `RIVET_EDITOR_TEST_SHARD=1/3 yarn studio-server:ui:ci`
+complete affected shard with `RIVET_EDITOR_TEST_SHARD=1/4 yarn studio-server:ui:ci`
 and confirm the recordings results use both workers with overlapping intervals.
 Use the JSON reporter for worker/start/duration evidence when checking locally.
 Do not infer a hosted runtime guarantee from a faster local browser.
@@ -487,27 +523,26 @@ promotion. It does not replace Yarn/Cargo audits or introduce a cloud rehearsal.
   required by the Build aggregator. Set `RIVET_CORE_TEST_SHARD=1/2` or `2/2`, then
   run `yarn workspace @valerypopoff/rivet2-core run test:shard` to reproduce one.
   Local `yarn test:core` still runs the full suite.
-- Browser CI uses three required matrix shards, each running two independent
-  spec files at once. `scripts/ci/editor-test-shards.mjs` assigns all 38
+- Browser CI uses four required matrix shards, each with two browser workers.
+  `scripts/ci/editor-test-shards.mjs` assigns all 38
   selected specs exactly once using measured file weights (plus explicit estimates
   for new specs). The cost-statistics specs are included explicitly: the fast modal
   contract and the real mixed-model bundle/HTTP/WebSocket/cancellation fixture.
   The complete Run recordings modal suite is also registered, including immediate
   opening, independent catalog/results, retained sessions, deletion and replay.
-  Its 640-second work estimate comes from the complete hosted recordings run;
-  refine materially stale weights from complete hosted timings.
-  Bundle comparison is included explicitly. Its 200-second starting weight and
-  the expanded export suite's 130-second weight come from complete local runs;
-  refine those estimates from hosted timings as well. Adding a selected spec
+  Bundle comparison and the expanded export suite are included explicitly.
+  Refresh materially stale work estimates from complete hosted timings, retaining
+  slower observations rather than replacing them with a single faster run. Adding a selected spec
   also updates the inventory count and membership assertions in
-  `ci-performance.test.mjs`; run its `balanced editor shards` case before pushing.
+  `ci-performance.test.mjs`; run its `balanced editor shards` and `editor shard work`
+  cases before pushing.
   Their inclusion is asserted by the shard regression. These weights balance work,
   not predict hosted wall time. Independently isolated recordings cases can use
   both workers; other files preserve serial scenarios. Test-owned contexts,
   mocks, temporary paths, assertions and retry policy are unchanged. Each shard
   has separate reports and failure artifacts. Executor-retirement verification
   runs exactly once, on shard 1.
-  Set `RIVET_EDITOR_TEST_SHARD=1/3`, `2/3` or `3/3` before
+  Set `RIVET_EDITOR_TEST_SHARD=1/4`, `2/4`, `3/4` or `4/4` before
   `yarn studio-server:ui:ci` to reproduce a lane. Omit it to run the complete
   selection; unknown shard values fail instead of silently dropping coverage.
   Locally, finish build-mutating checks (including `yarn test:style`) before
@@ -560,7 +595,7 @@ The same 59 tests passed on develop in 4.7 minutes; main shards 1 and 3 complete
 their tests in 6.3 and 5.1 minutes. A cancelled shard is not a successful release,
 and image promotion correctly remained blocked.
 
-The three editor shards now connect to Chromium in the official Playwright
+The editor shards connect to Chromium in the official Playwright
 1.62.1 Noble image, pinned by OCI digest in `studio-server-verify.yml`. It supplies
 browsers and Linux libraries without `apt` or browser downloads in each job.
 Node tests still run on the GitHub host: the hosted-Subgraph regressions start
@@ -568,7 +603,7 @@ real Docker PostgreSQL/MinIO fixtures and must retain host loopback access.
 Moving the entire job into a browser container would break that contract.
 This is a disposable CI environment, not a production image. `setup-yarn` still
 selects Node 24. Verified exact-commit compiled artifacts, executor-retirement coverage, the
-three-shard selection, two workers, assertions and retry policy are unchanged.
+shard selection, two workers, assertions and retry policy are unchanged.
 The browser-only container uses `--init --ipc=host`, a read-only checkout mount
 and `playwright run-server`, with its port published only on host `127.0.0.1:3100`.
 The test runner uses the matching `PW_TEST_CONNECT_WS_ENDPOINT` and exposes only
@@ -618,9 +653,10 @@ Hosted per-shard timings still require the next CI run.
 
 ## October 24 follow-up and evidence limits
 
-The recent browser step alone took 15.9 minutes for 165 tests; adding more
-workers inside one runner would compete for its CPU. The bounded three-shard
-split targets that critical path while preserving the entire selected suite.
+The browser step then took 15.9 minutes for 165 tests; adding more workers inside
+one runner would compete for its CPU. The initial three-shard split targeted
+that critical path while preserving the entire selected suite; the current
+four-shard budget is described above.
 The managed lane also combined independent DB/restore and deployment-command
 work; these now run separately. Hosted improvements must be measured on the
 next complete runs, including queue and checkout overhead. More runners can
