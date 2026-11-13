@@ -361,9 +361,11 @@ available ARM capacity. Read the job's check annotations before choosing recover
 a missing log alone cannot distinguish cancellation from a failed build.
 
 Recover the unstarted job once at the same commit and preserve successful
-artifacts. Finish its publication before the next requested push: `publish-pages`
-checks the live branch head before publishing assets and Pages, so advancing
-`develop` during recovery makes the recovered release stale. An allocation failure
+artifacts. Read the job's `check_run_url` annotations when logs are unavailable;
+the workflow's overall failure label alone does not identify a code defect.
+Finish publication before advancing that release's branch: `publish-pages`
+checks the live branch head before publishing assets and Pages (`develop` for
+Developer Desktop Release, `main` for Stable Desktop Release). An allocation failure
 does not justify changing platform labels, bypassing signing or replaying completed
 builds. A second allocation failure remains a provider-capacity blocker.
 

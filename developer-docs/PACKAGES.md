@@ -2,6 +2,27 @@
 
 > Detailed package-by-package reference for the current monorepo.
 
+## Version update: 2026-11-13 — executor recovery and failed recordings
+
+All package baselines are the last version-changing commit, `dca880e38`. Review
+through `b5688d08c` covers the executor-session recovery, failed-run recording,
+bundle-comparison refinements and accompanying CI fixes.
+
+| Packages                        | Version             | Changes since the last bump                                                                                                                                                                                                           |
+| ------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App                             | `2.36.0` → `2.36.1` | Repairs preview executor resume, bounded recovery, terminal node state and comparison navigation/inspection behavior.                                                                                                                 |
+| Core, Node, CLI, Evaluations    | `2.29.0` → `2.30.0` | Core exports the additive reliable executor-session protocol; Node supports its negotiated delivery, receipts and recovery. CLI and Evaluations follow the public-family lockstep policy.                                             |
+| App Executor                    | `2.21.0` → `2.22.0` | Bundles the updated Core/Node runtime; its retirement fixture was also corrected.                                                                                                                                                     |
+| All five Studio Server packages | `1.38.0` → `1.38.1` | Preserves exhausted-chain and other failed-run recordings, separates queue observations from admission, and fixes comparison controls/session persistence. API/Web/Shared change locally; Bootstrap/Executor follow product lockstep. |
+| Docs                            | `2.28.0` → `2.28.1` | Corrects the existing comparison instructions for setup-only matching/swapping and explicit exit behavior.                                                                                                                            |
+
+The public API additions warrant a minor release; fixes to existing app/server
+behavior and instructions use patch releases. Desktop Tauri/Cargo metadata and
+the CLI Docker default remain synchronized. These version changes do not change
+dependencies, database schemas or Helm chart versions. See the
+[release preparation](BUILD-AND-CI.md#prepared-release-versions-2026-11-13)
+for validation.
+
 ## Version update: 2026-11-12 — editable bundle comparison
 
 The actual version baselines are `54c429551` for App, the public runtime family
@@ -579,7 +600,7 @@ Shared runtime foundation for the entire repo.
 
 ### Package metadata
 
-- Version: `2.28.0`
+- Version: `2.30.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -619,7 +640,7 @@ Node runtime wrapper around core.
 
 ### Package metadata
 
-- Version: `2.28.0`
+- Version: `2.30.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -1091,7 +1112,7 @@ Desktop IDE frontend plus Tauri app packaging layer.
 
 ### Package metadata
 
-- Version: `2.35.0`
+- Version: `2.36.1`
 - Private: yes
 
 ### Runtime shape
@@ -1156,7 +1177,7 @@ Node sidecar process used by the desktop app for Node-capable execution.
 
 ### Package metadata
 
-- Version: `2.20.0`
+- Version: `2.22.0`
 - Bin: `./bin/executor-bundle.cjs`
 
 ### Main behavior
@@ -1261,7 +1282,7 @@ Operational CLI for running or serving Rivet graphs.
 
 ### Package metadata
 
-- Version: `2.28.0`
+- Version: `2.30.0`
 - Source entry: `src/cli.ts`
 - Published bin mapping: `rivet -> bin/cli.js`
 - Types: `dist/types/cli.d.ts`
@@ -1385,7 +1406,7 @@ Portable, executor-agnostic evaluation engine shared by the app, CLI, and host i
 
 ### Package metadata
 
-- Version: `2.28.0`
+- Version: `2.30.0`
 - Main: `dist/cjs/bundle.cjs`
 - Module: `dist/esm/index.js`
 - Types: `dist/types/index.d.ts`
@@ -1417,7 +1438,7 @@ a crawler, credentials, or a server-side search API.
 
 ### Package metadata
 
-- Version: `2.27.0`
+- Version: `2.28.1`
 - Private: yes
 
 ### Script surface
