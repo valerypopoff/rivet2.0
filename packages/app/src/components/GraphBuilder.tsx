@@ -285,7 +285,7 @@ export const GraphBuilder: FC<{ runGraph: EditorGraphRun }> = ({ runGraph }) => 
               </div>
             </div>
             <Button spacing="compact" onClick={() => void stopProjectCompare()}>
-              Exit
+              {activeComparison.owner ? 'Exit comparison' : 'Exit'}
             </Button>
           </div>
         )}

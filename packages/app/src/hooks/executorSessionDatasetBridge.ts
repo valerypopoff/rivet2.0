@@ -47,9 +47,10 @@ export async function processExecutorDatasetRequest(options: {
 }): Promise<void> {
   const { data, datasetProvider, message, socket, target } = options;
   const { payload, requestId } = data as DatasetRequestPayload<any>;
-  const sendResponse = (response: unknown) => options.sendResponse
-    ? options.sendResponse(requestId, response)
-    : sendExecutorDatasetResponse(socket, requestId, response, target);
+  const sendResponse = (response: unknown) =>
+    options.sendResponse
+      ? options.sendResponse(requestId, response)
+      : sendExecutorDatasetResponse(socket, requestId, response, target);
 
   switch (message) {
     case 'datasets:get-metadata':
@@ -75,6 +76,8 @@ export async function processExecutorDatasetRequest(options: {
       return sendResponse(undefined);
     case 'datasets:knn':
       return sendResponse(await datasetProvider.knnDatasetRows(payload.datasetId, payload.k, payload.vector));
+    case 'datasets:export-for-project':
+      return sendResponse(await datasetProvider.exportDatasetsForProject(payload.projectId));
     default:
       handleError(new Error(`Unknown datasets message type: ${String(message)}`), 'Failed to handle datasets message', {
         metadata: {
@@ -84,6 +87,7 @@ export async function processExecutorDatasetRequest(options: {
         },
         toastError: false,
       });
+      throw new Error('Unsupported executor dataset request');
   }
 }
 

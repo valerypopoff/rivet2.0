@@ -277,6 +277,17 @@ void test('metrics config accepts only an explicit boolean switch', () => {
   );
 });
 
+void test('recording queue counts remain visible when its policy is absent without retaining a stale limit', () => {
+  const metrics = new StudioMetrics({ enabled: true, profile: 'execution' });
+  metrics.setWorkflowRecordingPersistence({ activeWrites: 0, pendingWrites: 0, maxPendingWrites: 3 });
+  assert.match(metrics.render(), /rivet_workflow_recording_persistence_queue_limit\{profile="execution"\} 3/);
+  metrics.setWorkflowRecordingPersistence({ activeWrites: 1, pendingWrites: 2, maxPendingWrites: null });
+  const rendered = metrics.render();
+  assert.match(rendered, /rivet_workflow_recording_persistence_queue_depth\{profile="execution"\} 2/);
+  assert.match(rendered, /rivet_workflow_recording_persistence_active_writes\{profile="execution"\} 1/);
+  assert.doesNotMatch(rendered, /rivet_workflow_recording_persistence_queue_limit/);
+});
+
 void test('enabled metrics endpoint is pull-only and does not instrument its own scrape', async () => {
   const metrics = new StudioMetrics({ enabled: true, profile: 'execution' });
   const server = await startMetricsServer(metrics);

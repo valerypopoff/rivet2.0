@@ -527,7 +527,51 @@ export function stopProjectExecutionSnapshot(snapshot: ProjectExecutionSnapshot)
     runningGraphs: [],
     userInputQuestions: {},
     completedRootRunIds: [],
+    lastRunDataByNode: interruptRunningProcesses(snapshot.lastRunDataByNode),
   };
+}
+
+/** Missing display history does not change the outcome or cancel accepted execution. */
+export function markProjectExecutionDetailsIncomplete(snapshot: ProjectExecutionSnapshot): ProjectExecutionSnapshot {
+  if (!snapshot.runActivityJournal.activeRootRunIds.some((id) => !snapshot.runActivityJournal.rootsById[id]?.isPartial))
+    return snapshot;
+  return produce(snapshot, (draft) => {
+    draft.lastRunDataByNode = interruptRunningProcesses(snapshot.lastRunDataByNode);
+    for (const id of draft.runActivityJournal.activeRootRunIds) {
+      const root = draft.runActivityJournal.rootsById[id];
+      if (root) root.isPartial = true;
+    }
+  });
+}
+
+/** Local observation ended; server outcome is not known. */
+export function loseProjectExecutionObservation(
+  snapshot: ProjectExecutionSnapshot,
+  outcome?: { executionStatus?: string; error?: string },
+): ProjectExecutionSnapshot {
+  return produce(stopProjectExecutionSnapshot(snapshot), (draft) => {
+    for (const id of draft.runActivityJournal.activeRootRunIds) {
+      const root = draft.runActivityJournal.rootsById[id];
+      if (!root) continue;
+      const responseWasReturned = root.status === 'outputs-ready';
+      root.status = outcome?.executionStatus === 'completed' ? 'completed' : 'unavailable';
+      root.isPartial = true;
+      root.paused = false;
+      root.finishedAt = Date.now();
+      root.terminalErrorSummary =
+        outcome?.error ??
+        (responseWasReturned
+          ? 'The response was returned. The executor connection was lost before background work settled; it was not resubmitted.'
+          : 'Executor connection lost. The server outcome is unknown; the run was not resubmitted.');
+      for (const graph of Object.values(root.graphRunsById)) if (graph.status === 'running') graph.status = 'unknown';
+      for (const invocation of Object.values(root.nodeInvocationsByKey))
+        if (invocation.status === 'running' || invocation.status === 'waiting') {
+          invocation.status = 'unknown';
+          invocation.terminalEventMissing = true;
+        }
+    }
+    draft.runActivityJournal.activeRootRunIds = [];
+  });
 }
 
 function applyAbort(snapshot: ProjectExecutionSnapshot, keepRunningNodes = false): ProjectExecutionSnapshot {

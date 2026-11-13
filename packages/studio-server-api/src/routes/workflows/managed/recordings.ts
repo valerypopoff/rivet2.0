@@ -31,6 +31,7 @@ import {
   type StoredLLMProfileHealthEntry,
 } from '../../../llm-profile-health/state.js';
 import { getWorkflowRecordingConfig, type WorkflowRecordingConfig } from '../recordings-config.js';
+import { notifyRecordingPersisted } from '../recording-diagnostics.js';
 import { parseManagedWorkflowProjectVirtualPath } from '../virtual-paths.js';
 import { parseManagedArtifactDescriptor } from './artifact-descriptor.js';
 import type { ManagedWorkflowBlobStore } from './blob-store.js';
@@ -964,7 +965,12 @@ export function createManagedWorkflowRecordingService(options: ManagedWorkflowRe
           cleanupContext: 'recording persistence failure',
         },
       );
-      await options.onPersisted?.(recordingId);
+      await notifyRecordingPersisted(options.onPersisted, recordingId, {
+        projectId: workflowId,
+        graphId: options.executionIdentity?.graphId,
+        correlationId: options.executionIdentity?.correlationId,
+        runKind: options.runKind,
+      });
       // Do not force a global cleanup scan onto a published endpoint request.
       // The control-plane maintenance owner enforces retention independently.
       return recordingId;

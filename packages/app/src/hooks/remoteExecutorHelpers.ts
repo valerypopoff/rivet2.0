@@ -57,6 +57,8 @@ export function getDependentDataForNodeForPreload(
       }
 
       const latestExecutionWithOutput = findLatestExecutionWithOutput(dependencyNodeData);
+      if (latestExecutionWithOutput?.data.diagnosticsIncomplete)
+        throw new Error(`Node ${dependencyNode} output is incomplete and cannot be preloaded.`);
 
       const outputData = latestExecutionWithOutput?.data.outputData;
       if (!hasStoredPortMapValues(outputData)) {
@@ -410,6 +412,7 @@ export function getUnavailablePreloadNodeIds(
     }
 
     const latestExecutionWithOutput = findLatestExecutionWithOutput(previousRunData[nodeId]);
+    if (latestExecutionWithOutput?.data.diagnosticsIncomplete) return true;
     const outputData = latestExecutionWithOutput?.data.outputData;
 
     return !hasStoredPortMapValues(outputData) || hasUnavailableStoredRefs(outputData, dataRefs);
@@ -422,7 +425,7 @@ function findLatestExecutionWithOutput(executions: ProcessDataForNode[] | undefi
   }
 
   for (let index = executions.length - 1; index >= 0; index--) {
-    if (hasStoredPortMapValues(executions[index]?.data.outputData)) {
+    if (executions[index]?.data.diagnosticsIncomplete || hasStoredPortMapValues(executions[index]?.data.outputData)) {
       return executions[index];
     }
   }

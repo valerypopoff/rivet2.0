@@ -11,7 +11,10 @@ import {
   parseLatestDebuggerPath,
   type LatestDebuggerScope,
   type LatestDebuggerLifecycleMessage,
+  ExecutorRecoveryError,
+  type ExecutorRecoveryReason,
 } from '@valerypopoff/rivet2-core';
+import { ExecutorSessionV2 } from './executorSessionV2.js';
 import type { LatestDebuggerRuns } from './latestDebuggerRuns.js';
 import type { AppDatasetProvider } from '../providers/ProvidersContext.js';
 import { handleError } from '../utils/errorHandling.js';
@@ -25,7 +28,7 @@ import {
 } from './remoteExecutorRunRequest.js';
 import { summarizeRemoteDebuggerRoutingState, type RemoteDebuggerRoutingSummary } from './remoteDebuggerDiagnostics.js';
 import { runExecutorSessionCallback, notifyExecutorSessionCallbacks } from './executorSessionCallbackIsolation.js';
-import { handleExecutorDatasetRequest } from './executorSessionDatasetBridge.js';
+import { handleExecutorDatasetRequest, processExecutorDatasetRequest } from './executorSessionDatasetBridge.js';
 import {
   createExecutorSessionPendingExecutions,
   type PendingGraphExecution,
@@ -83,6 +86,7 @@ export type ExecutorSessionState = {
 type MaybePromise<T> = T | Promise<T>;
 
 export type RemoteEventAdmission = {
+  diagnosticsIncomplete?: boolean;
   managedLatest?: {
     scope: LatestDebuggerScope;
     selected: boolean;
@@ -140,6 +144,8 @@ type StateChangeCallback = () => MaybePromise<void>;
 export type { PendingGraphExecution } from './executorSessionPendingExecutions.js';
 
 export type ExecutorSessionRuntime = {
+  hasIncompleteDiagnostics?(requestId: string): boolean;
+  subscribeDiagnostics?(handler: (requestIds: string[]) => void): () => void;
   getLatestDebuggerState(): ReturnType<LatestDebuggerRuns['state']> | undefined;
   selectLatestDebuggerRun(key: string): void;
   sendLatestPrompt(target: LatestDebuggerScope, promptId: string, answers: unknown): boolean;
@@ -202,6 +208,18 @@ export function createExecutorSessionRuntime(options: {
   let retryDelay = 0;
   let resumeCapability: string | undefined;
   let resumeSequence = 0;
+  let resumeProtocol: 1 | 2 | undefined;
+  const diagnosticCallbacks = new Set<(requestIds: string[]) => void>();
+  const v2 = new ExecutorSessionV2({
+    socket: () => currentSocket,
+    ready: () => currentStatus === 'ready',
+    fail: (reason) => failResume(reason),
+    partial: (requestIds) => {
+      for (const handler of diagnosticCallbacks)
+        runExecutorSessionCallback(() => handler(requestIds), 'Executor diagnostic subscriber failed', {});
+      notifySessionStateChanged();
+    },
+  });
 
   const latest = new ManagedLatestSession({
     eligible: (id) => options.acceptsLatestProject?.(id) ?? id === options.projectId,
@@ -284,10 +302,9 @@ export function createExecutorSessionRuntime(options: {
     if (resumeTimeout) clearTimeout(resumeTimeout);
     resumeTimeout = undefined;
   }
-  function failResume() {
-    pendingGraphExecutions.rejectAllPendingGraphExecutions(
-      new Error('Executor session could not be resumed. Run outcome is unknown; it was not resubmitted.'),
-    );
+  function failResume(reason: ExecutorRecoveryReason = 'recovery-deadline') {
+    logRuntimeDebug('Executor session recovery failed.', { reason, sequence: resumeSequence });
+    pendingGraphExecutions.rejectAllPendingGraphExecutions(new ExecutorRecoveryError(reason));
     disconnect({ reason: 'unexpected-disconnect' });
   }
 
@@ -433,7 +450,7 @@ export function createExecutorSessionRuntime(options: {
         nextTarget.url,
         resumableTarget
           ? [
-              'rivet-session-v1',
+              ...(resumeProtocol ? [`rivet-session-v${resumeProtocol}`] : ['rivet-session-v2', 'rivet-session-v1']),
               ...(resumeCapability ? [`rivet-cap.${resumeCapability}`, `rivet-seq.${resumeSequence}`] : []),
             ]
           : undefined,
@@ -496,10 +513,15 @@ export function createExecutorSessionRuntime(options: {
 
       const closedTarget = socketTarget;
       currentSocket = null;
+      v2.suspend();
       latest.suspend();
       idleHandoff = undefined;
       if (resumeCapability && event?.code === 4409) {
-        failResume();
+        failResume('observer-replaced');
+        return;
+      }
+      if (resumeCapability && event?.code === 4410) {
+        failResume('invalid-transfer');
         return;
       }
       const canResume = resumeCapability != null || latest.observation;
@@ -508,6 +530,7 @@ export function createExecutorSessionRuntime(options: {
       }
       if (!canResume) currentRemoteUploadAllowed = false;
       logRuntimeDebug('Executor websocket closed.', {
+        closeCode: event.code,
         target: getExecutorSessionTargetLabel(closedTarget),
       });
 
@@ -587,279 +610,336 @@ export function createExecutorSessionRuntime(options: {
         return;
       }
 
-      const incoming = parseExecutorSessionIncomingMessage({
-        rawMessage: event.data,
-        socketUrl: socket.url,
-        target: socketTarget,
-        managedLatest: latest.runs !== undefined,
-        acceptEnvelope: (value) => {
-          const envelope = (typeof value === 'object' && value != null ? value : {}) as {
-            message?: string;
-            data?: {
-              capability?: string;
-              protocol?: number;
-              channel?: unknown;
-              channelIsolation?: boolean;
-              runScopedControls?: boolean;
-              commandId?: string;
-              status?: string;
-              reason?: string;
+      let receipt: number | undefined;
+      try {
+        if (v2.active && !sessionAcknowledged && JSON.parse(String(event.data))?.message !== 'executor-session')
+          throw new ExecutorRecoveryError('identity-mismatch');
+        const frame = v2.receive(String(event.data));
+        if (!frame) return;
+        receipt = frame.receipt;
+        if (frame.raw === undefined) return;
+        const incoming = parseExecutorSessionIncomingMessage({
+          rawMessage: frame.raw,
+          envelope: frame.envelope,
+          socketUrl: socket.url,
+          target: socketTarget,
+          managedLatest: latest.runs !== undefined,
+          acceptEnvelope: (value) => {
+            const envelope = (typeof value === 'object' && value != null ? value : {}) as {
+              message?: string;
+              data?: {
+                capability?: string;
+                protocol?: number;
+                channel?: unknown;
+                channelIsolation?: boolean;
+                runScopedControls?: boolean;
+                commandId?: string;
+                status?: string;
+                reason?: string;
+              };
+              rivetSequence?: number;
+              rivetEventId?: string;
             };
-            rivetSequence?: number;
-            rivetEventId?: string;
-          };
-          const managedAdmission = latest.acceptEnvelope(envelope, value, {
-            external: socketTarget.type === 'external-debugger',
-            named: isNamedLatestTarget(socketTarget),
-            fail: failResume,
-            onReady() {
-              currentRemoteUploadAllowed = false;
+            const managedAdmission = latest.acceptEnvelope(envelope, value, {
+              external: socketTarget.type === 'external-debugger',
+              named: isNamedLatestTarget(socketTarget),
+              fail: failResume,
+              onReady() {
+                currentRemoteUploadAllowed = false;
+                clearResumeTimeout();
+                setConnectionStatus('ready');
+                notifySessionStateChanged();
+                notifySocketConnected();
+              },
+            });
+            if (managedAdmission !== undefined) return managedAdmission;
+            if (resumableTarget && envelope.message === 'executor-session') {
+              if (
+                (envelope.data?.protocol !== 1 && envelope.data?.protocol !== 2) ||
+                (resumeProtocol != null && envelope.data.protocol !== resumeProtocol) ||
+                typeof envelope.data.capability !== 'string' ||
+                !/^[A-Za-z0-9_-]{43}$/.test(envelope.data.capability) ||
+                (resumeCapability && envelope.data.capability !== resumeCapability)
+              ) {
+                failResume('identity-mismatch');
+                return false;
+              }
+              resumeCapability = envelope.data.capability;
+              resumeProtocol = envelope.data.protocol;
+              v2.active = resumeProtocol === 2;
+              sessionAcknowledged = true;
+              return false;
+            }
+            if (resumableTarget && !sessionAcknowledged) {
+              failResume('identity-mismatch');
+              return false;
+            }
+            if (resumableTarget && envelope.message === 'executor-session-ready') {
+              if (envelope.data?.protocol !== resumeProtocol) {
+                failResume('protocol-mismatch');
+                return false;
+              }
               clearResumeTimeout();
               setConnectionStatus('ready');
+              flushDatasetResponses();
+              v2.flush();
               notifySessionStateChanged();
               notifySocketConnected();
-            },
-          });
-          if (managedAdmission !== undefined) return managedAdmission;
-          if (resumableTarget && envelope.message === 'executor-session') {
-            if (
-              envelope.data?.protocol !== 1 ||
-              typeof envelope.data.capability !== 'string' ||
-              !/^[A-Za-z0-9_-]{43}$/.test(envelope.data.capability) ||
-              (resumeCapability && envelope.data.capability !== resumeCapability)
-            ) {
-              failResume();
               return false;
             }
-            resumeCapability = envelope.data.capability;
-            sessionAcknowledged = true;
-            return false;
-          }
-          if (resumableTarget && !sessionAcknowledged) {
-            failResume();
-            return false;
-          }
-          if (resumableTarget && envelope.message === 'executor-session-ready') {
-            if (envelope.data?.protocol !== 1) {
-              failResume();
-              return false;
-            }
-            clearResumeTimeout();
-            setConnectionStatus('ready');
-            flushDatasetResponses();
-            notifySessionStateChanged();
-            notifySocketConnected();
-            return false;
-          }
-          if (resumeCapability && envelope.rivetSequence != null) {
-            if (!Number.isSafeInteger(envelope.rivetSequence) || envelope.rivetSequence <= resumeSequence) return false;
-            if (envelope.rivetSequence !== resumeSequence + 1) {
-              failResume();
-              return false;
-            }
-            resumeSequence = envelope.rivetSequence;
-          }
-          if (resumableTarget && envelope.message === 'executor-owner-retiring' && envelope.data?.protocol === 1) {
-            // Only an idle, positively settled session can choose a new owner.
-            // Accepted or uncertain runs always remain pinned to the old one.
-            if (
-              !activeGraphRunRequestId &&
-              !pendingGraphExecutions.hasPendingExecutions() &&
-              options.resolveInternalHostedExecutorUrl &&
-              !idleHandoff
-            ) {
-              const generation = currentSocketGeneration;
-              const handoff = Symbol('executor-owner-handoff');
-              idleHandoff = handoff;
-              setConnectionStatus('reconnecting');
-              void (async () => {
-                const deadline = Date.now() + 60_000;
-                const canHandoff = () =>
-                  idleHandoff === handoff &&
-                  Date.now() < deadline &&
-                  generation === currentSocketGeneration &&
-                  currentSocket === socket &&
-                  currentTarget?.type === 'internal-hosted' &&
-                  !activeGraphRunRequestId &&
-                  !pendingGraphExecutions.hasPendingExecutions();
-                while (canHandoff()) {
-                  const url = await options.resolveInternalHostedExecutorUrl!().catch(() => undefined);
-                  // Discovery does not own the session. A disconnect, explicit
-                  // replacement or newly accepted run can win while it awaits.
-                  if (!canHandoff()) return;
-                  if (url && url !== socketTarget.url) {
-                    const old = new URL(socketTarget.url),
-                      next = new URL(url);
-                    if (old.origin !== next.origin || !next.pathname.startsWith('/ws/executor/owner/'))
-                      throw new Error('Fresh executor owner is invalid.');
-                    const target: ExecutorSessionTarget = { type: 'internal-hosted', url };
-                    replaceCurrentSession(target);
-                    await connectToTarget(target);
-                    return;
-                  }
-                  await new Promise((resolve) => setTimeout(resolve, 500));
-                }
-                throw new Error('Fresh executor owner is unavailable.');
-              })()
-                .catch(() => {
-                  // No run was replayed. Keep the old owner/cursor for explicit recovery.
-                  if (idleHandoff === handoff && generation === currentSocketGeneration)
-                    setConnectionStatus('reconnecting');
-                })
-                .finally(() => {
-                  if (idleHandoff === handoff) idleHandoff = undefined;
-                });
-            }
-            return false;
-          }
-          return true;
-        },
-      });
-      if (!incoming) {
-        return;
-      }
-      // Managed latest is observation/control only, not an executor for this
-      // browser's datasets. Keep the generic/ordinary Node bridge unchanged.
-      if (
-        (latest.observation || isNamedLatestTarget(socketTarget)) &&
-        incoming.kind !== 'process-event' &&
-        incoming.kind !== 'managed-event'
-      )
-        return;
-
-      if (incoming.kind === 'managed-event') {
-        const frame = incoming.incoming;
-        latest.receive(frame.message, frame.data, frame.rivetScope, String(event.data), frame.history, frame.eventId);
-        return;
-      }
-
-      if (incoming.kind === 'upload-allowed') {
-        currentRemoteUploadAllowed = true;
-        notifySessionStateChanged();
-        return;
-      }
-
-      if (incoming.kind === 'dataset-request') {
-        const capability = resumableTarget ? resumeCapability : undefined;
-        handleExecutorDatasetRequest({
-          data: incoming.data,
-          datasetProvider: currentDatasetProvider,
-          message: incoming.message,
-          socket,
-          target: socketTarget,
-          ...(capability
-            ? {
-                sendResponse: (requestId: string, payload: unknown) =>
-                  retainDatasetResponse(capability, requestId, payload),
+            if (v2.active && envelope.message === 'executor-diagnostics-gap') {
+              const gap = (value as { data: { after: number; through: number } }).data;
+              if (gap.through < resumeSequence) return false;
+              if (gap.after > resumeSequence) {
+                failResume('sequence-gap');
+                return false;
               }
-            : {}),
+              resumeSequence = gap.through;
+              return false;
+            }
+            if (resumeCapability && envelope.rivetSequence != null) {
+              if (!Number.isSafeInteger(envelope.rivetSequence) || envelope.rivetSequence <= resumeSequence)
+                return false;
+              if (envelope.rivetSequence !== resumeSequence + 1) {
+                failResume('sequence-gap');
+                return false;
+              }
+              resumeSequence = envelope.rivetSequence;
+            }
+            if (
+              resumableTarget &&
+              envelope.message === 'executor-owner-retiring' &&
+              envelope.data?.protocol === resumeProtocol
+            ) {
+              // Only an idle, positively settled session can choose a new owner.
+              // Accepted or uncertain runs always remain pinned to the old one.
+              if (
+                !activeGraphRunRequestId &&
+                !pendingGraphExecutions.hasPendingExecutions() &&
+                options.resolveInternalHostedExecutorUrl &&
+                !idleHandoff
+              ) {
+                const generation = currentSocketGeneration;
+                const handoff = Symbol('executor-owner-handoff');
+                idleHandoff = handoff;
+                setConnectionStatus('reconnecting');
+                void (async () => {
+                  const deadline = Date.now() + 60_000;
+                  const canHandoff = () =>
+                    idleHandoff === handoff &&
+                    Date.now() < deadline &&
+                    generation === currentSocketGeneration &&
+                    currentSocket === socket &&
+                    currentTarget?.type === 'internal-hosted' &&
+                    !activeGraphRunRequestId &&
+                    !pendingGraphExecutions.hasPendingExecutions();
+                  while (canHandoff()) {
+                    const url = await options.resolveInternalHostedExecutorUrl!().catch(() => undefined);
+                    // Discovery does not own the session. A disconnect, explicit
+                    // replacement or newly accepted run can win while it awaits.
+                    if (!canHandoff()) return;
+                    if (url && url !== socketTarget.url) {
+                      const old = new URL(socketTarget.url),
+                        next = new URL(url);
+                      if (old.origin !== next.origin || !next.pathname.startsWith('/ws/executor/owner/'))
+                        throw new Error('Fresh executor owner is invalid.');
+                      const target: ExecutorSessionTarget = { type: 'internal-hosted', url };
+                      replaceCurrentSession(target);
+                      await connectToTarget(target);
+                      return;
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+                  }
+                  throw new Error('Fresh executor owner is unavailable.');
+                })()
+                  .catch(() => {
+                    // No run was replayed. Keep the old owner/cursor for explicit recovery.
+                    if (idleHandoff === handoff && generation === currentSocketGeneration)
+                      setConnectionStatus('reconnecting');
+                  })
+                  .finally(() => {
+                    if (idleHandoff === handoff) idleHandoff = undefined;
+                  });
+              }
+              return false;
+            }
+            return true;
+          },
         });
-        return;
-      }
-
-      if (incoming.kind === 'process-event') {
-        const processEvent = incoming.incoming;
-        const metadata = (
-          processEvent.data as {
-            execution?: {
-              rootRunId?: RootRunId;
-              projectId?: ProjectId;
-              parentGraphRunId?: string;
-            };
-          } | null
-        )?.execution;
-        const rootId =
-          metadata?.rootRunId ??
-          (['done', 'error', 'abort'].includes(processEvent.message)
-            ? eventRouting.completedRootRunDecisions[0]?.rootRunId
-            : undefined) ??
-          (eventRouting.lastRunAccepted !== false && eventRouting.acceptedRootRunIds.size === 1
-            ? eventRouting.acceptedRootRunIds.values().next().value
-            : undefined);
-        const rootProjectId =
-          (processEvent.message === 'start'
-            ? (processEvent.data as ProcessEventMessageMap['start']).project?.metadata?.id
-            : rootId && eventRouting.rootProjects.get(rootId)?.projectId) ||
-          (metadata && !metadata.parentGraphRunId ? metadata.projectId : undefined) ||
-          options.projectId;
-        const before =
-          socketTarget.type === 'external-debugger' ? summarizeRemoteDebuggerRoutingState(eventRouting) : undefined;
-        const decision = getRemoteExecutionEventDispatchDecision({
-          activeRequestId: activeGraphRunRequestId,
-          currentProjectId: options.projectId,
-          acceptsProject: socketTarget.type === 'external-debugger' ? options.acceptsProject : undefined,
-          getProjectLifetime: options.getProjectLifetime,
-          data: processEvent.data,
-          message: processEvent.message,
-          requestId: processEvent.requestId,
-          unscopedRoutingState: eventRouting,
-        });
-        const rootProject = rootId == null ? undefined : eventRouting.rootProjects.get(rootId);
-        const currentProjectLifetime = rootProjectId == null ? undefined : options.getProjectLifetime?.(rootProjectId);
-        const internalBindingMatches =
-          !isInternalExecutorTarget(socketTarget) ||
-          !activeRunDisplayBinding ||
-          (processEvent.requestId != null && processEvent.requestId !== activeRunDisplayBinding.requestId) ||
-          activeRunDisplayBinding.lifetime === currentProjectLifetime;
-        const admission: RemoteEventAdmission = {
-          projectId: rootProjectId,
-          sourceDisplayAllowed:
-            !options.getProjectLifetime ||
-            (currentProjectLifetime != null &&
-              (rootProject == null || rootProject.lifetime === currentProjectLifetime) &&
-              internalBindingMatches),
-          decision,
-          before,
-          after: before ? summarizeRemoteDebuggerRoutingState(eventRouting) : undefined,
-        };
-        // Request settlement is not display admission. An explicitly identified
-        // accepted request still returns its result after its tab was replaced.
-        // Never infer a modifying request's owner from an unscoped legacy frame.
+        if (!incoming) {
+          return;
+        }
+        // Managed latest is observation/control only, not an executor for this
+        // browser's datasets. Keep the generic/ordinary Node bridge unchanged.
         if (
-          admission.sourceDisplayAllowed === false &&
-          isInternalExecutorTarget(socketTarget) &&
-          processEvent.requestId
-        ) {
-          if (processEvent.message === 'graphOutputsReady')
-            pendingGraphExecutions.resolvePendingGraphExecution(
-              processEvent.requestId,
-              (processEvent.data as ProcessEventMessageMap['graphOutputsReady']).outputs as GraphOutputs,
-            );
-          else if (processEvent.message === 'done')
-            pendingGraphExecutions.resolvePendingGraphExecution(
-              processEvent.requestId,
-              (processEvent.data as ProcessEventMessageMap['done']).results as GraphOutputs,
-            );
-          else if (processEvent.message === 'error')
-            pendingGraphExecutions.rejectPendingGraphExecution(
-              processEvent.requestId,
-              (processEvent.data as ProcessEventMessageMap['error']).error,
-            );
+          (latest.observation || isNamedLatestTarget(socketTarget)) &&
+          incoming.kind !== 'process-event' &&
+          incoming.kind !== 'managed-event'
+        )
+          return;
+
+        if (incoming.kind === 'managed-event') {
+          const frame = incoming.incoming;
+          latest.receive(frame.message, frame.data, frame.rivetScope, String(event.data), frame.history, frame.eventId);
+          return;
+        }
+
+        if (incoming.kind === 'upload-allowed') {
+          currentRemoteUploadAllowed = true;
+          notifySessionStateChanged();
+          return;
+        }
+
+        if (incoming.kind === 'dataset-request') {
+          const capability = resumableTarget ? resumeCapability : undefined;
+          if (v2.active && capability) {
+            const provider = currentDatasetProvider;
+            v2.dataset(incoming.data.requestId, async (reply) => {
+              if (!provider) throw new Error('Executor dataset provider is unavailable');
+              await processExecutorDatasetRequest({
+                data: incoming.data,
+                datasetProvider: provider,
+                message: incoming.message,
+                socket,
+                target: socketTarget,
+                sendResponse: (_id, payload) => {
+                  if (resumeCapability === capability) reply(payload);
+                },
+              });
+            });
+            return;
+          }
+          handleExecutorDatasetRequest({
+            data: incoming.data,
+            datasetProvider: currentDatasetProvider,
+            message: incoming.message,
+            socket,
+            target: socketTarget,
+            ...(capability
+              ? {
+                  sendResponse: (requestId: string, payload: unknown) =>
+                    retainDatasetResponse(capability, requestId, payload),
+                }
+              : {}),
+          });
+          return;
+        }
+
+        if (incoming.kind === 'process-event') {
+          const processEvent = incoming.incoming;
+          if (frame.envelope?.diagnosticsIncomplete && processEvent.data && typeof processEvent.data === 'object')
+            (processEvent.data as { diagnosticsIncomplete?: boolean }).diagnosticsIncomplete = true;
+          const metadata = (
+            processEvent.data as {
+              execution?: {
+                rootRunId?: RootRunId;
+                projectId?: ProjectId;
+                parentGraphRunId?: string;
+              };
+            } | null
+          )?.execution;
+          const rootId =
+            metadata?.rootRunId ??
+            (['done', 'error', 'abort'].includes(processEvent.message)
+              ? eventRouting.completedRootRunDecisions[0]?.rootRunId
+              : undefined) ??
+            (eventRouting.lastRunAccepted !== false && eventRouting.acceptedRootRunIds.size === 1
+              ? eventRouting.acceptedRootRunIds.values().next().value
+              : undefined);
+          const rootProjectId =
+            (processEvent.message === 'start'
+              ? (processEvent.data as ProcessEventMessageMap['start']).project?.metadata?.id
+              : rootId && eventRouting.rootProjects.get(rootId)?.projectId) ||
+            (metadata && !metadata.parentGraphRunId ? metadata.projectId : undefined) ||
+            options.projectId;
+          const before =
+            socketTarget.type === 'external-debugger' ? summarizeRemoteDebuggerRoutingState(eventRouting) : undefined;
+          const decision = getRemoteExecutionEventDispatchDecision({
+            activeRequestId: activeGraphRunRequestId,
+            currentProjectId: options.projectId,
+            acceptsProject: socketTarget.type === 'external-debugger' ? options.acceptsProject : undefined,
+            getProjectLifetime: options.getProjectLifetime,
+            data: processEvent.data,
+            message: processEvent.message,
+            requestId: processEvent.requestId,
+            unscopedRoutingState: eventRouting,
+          });
+          const rootProject = rootId == null ? undefined : eventRouting.rootProjects.get(rootId);
+          const currentProjectLifetime =
+            rootProjectId == null ? undefined : options.getProjectLifetime?.(rootProjectId);
+          const internalBindingMatches =
+            !isInternalExecutorTarget(socketTarget) ||
+            !activeRunDisplayBinding ||
+            (processEvent.requestId != null && processEvent.requestId !== activeRunDisplayBinding.requestId) ||
+            activeRunDisplayBinding.lifetime === currentProjectLifetime;
+          const admission: RemoteEventAdmission = {
+            diagnosticsIncomplete: processEvent.requestId != null && v2.incomplete.has(processEvent.requestId),
+            projectId: rootProjectId,
+            sourceDisplayAllowed:
+              !options.getProjectLifetime ||
+              (currentProjectLifetime != null &&
+                (rootProject == null || rootProject.lifetime === currentProjectLifetime) &&
+                internalBindingMatches),
+            decision,
+            before,
+            after: before ? summarizeRemoteDebuggerRoutingState(eventRouting) : undefined,
+          };
+          // Request settlement is not display admission. An explicitly identified
+          // accepted request still returns its result after its tab was replaced.
+          // Never infer a modifying request's owner from an unscoped legacy frame.
           if (
-            (processEvent.message === 'done' || processEvent.message === 'error') &&
-            activeGraphRunRequestId === processEvent.requestId
-          )
-            activeGraphRunRequestId = null;
+            admission.sourceDisplayAllowed === false &&
+            isInternalExecutorTarget(socketTarget) &&
+            processEvent.requestId
+          ) {
+            if (processEvent.message === 'graphOutputsReady')
+              pendingGraphExecutions.resolvePendingGraphExecution(
+                processEvent.requestId,
+                (processEvent.data as ProcessEventMessageMap['graphOutputsReady']).outputs as GraphOutputs,
+              );
+            else if (processEvent.message === 'done')
+              pendingGraphExecutions.resolvePendingGraphExecution(
+                processEvent.requestId,
+                (processEvent.data as ProcessEventMessageMap['done']).results as GraphOutputs,
+              );
+            else if (processEvent.message === 'error')
+              pendingGraphExecutions.rejectPendingGraphExecution(
+                processEvent.requestId,
+                (processEvent.data as ProcessEventMessageMap['error']).error,
+              );
+            if (
+              (processEvent.message === 'done' || processEvent.message === 'error') &&
+              activeGraphRunRequestId === processEvent.requestId
+            )
+              activeGraphRunRequestId = null;
+          }
+          for (const handler of [...debuggerMessageHandlers.keys()]) {
+            runExecutorSessionCallback(
+              () => handler(processEvent.message, processEvent.data, processEvent.requestId, admission),
+              'Executor process-message subscriber failed',
+              {
+                message: processEvent.message,
+                requestId: processEvent.requestId,
+                target: socketTarget.type,
+              },
+            );
+          }
+          // Capture only admitted events, after terminal handlers update their
+          // owners. A transport reconnect must neither end nor duplicate capture.
+          if (resumableTarget) recordingChannel?.dispatchEvent(new MessageEvent('message', { data: frame.raw }));
         }
-        for (const handler of [...debuggerMessageHandlers.keys()]) {
-          runExecutorSessionCallback(
-            () => handler(processEvent.message, processEvent.data, processEvent.requestId, admission),
-            'Executor process-message subscriber failed',
-            {
-              message: processEvent.message,
-              requestId: processEvent.requestId,
-              target: socketTarget.type,
-            },
-          );
-        }
-        // Capture only admitted events, after terminal handlers update their
-        // owners. A transport reconnect must neither end nor duplicate capture.
-        if (resumableTarget) recordingChannel?.dispatchEvent(new MessageEvent('message', { data: event.data }));
+      } catch (error) {
+        failResume(error instanceof ExecutorRecoveryError ? error.reason : 'invalid-transfer');
+      } finally {
+        if (receipt != null && currentSocket === socket && socketGeneration === currentSocketGeneration)
+          v2.acknowledge(receipt);
       }
     };
   }
 
   function replaceCurrentSession(nextTarget: ExecutorSessionTarget) {
+    v2.clear();
+    resumeProtocol = undefined;
     latest.reset();
     resetUnscopedRemoteExecutionRoutingState(eventRouting);
     connectionNotified = false;
@@ -910,6 +990,8 @@ export function createExecutorSessionRuntime(options: {
   }
 
   function disconnect(options: ExecutorSessionDisconnectOptions = {}) {
+    v2.clear();
+    resumeProtocol = undefined;
     latest.reset();
     resetUnscopedRemoteExecutionRoutingState(eventRouting);
     connectionNotified = false;
@@ -963,6 +1045,13 @@ export function createExecutorSessionRuntime(options: {
   }
 
   const runtime: ExecutorSessionRuntime = {
+    hasIncompleteDiagnostics: (requestId) => v2.incomplete.has(requestId),
+    subscribeDiagnostics(handler) {
+      diagnosticCallbacks.add(handler);
+      return () => {
+        diagnosticCallbacks.delete(handler);
+      };
+    },
     getLatestDebuggerState: () => latest.runs?.state(),
     selectLatestDebuggerRun: (key) => latest.select(key),
     sendLatestPrompt: (target, promptId, answers) => latest.sendControl('user-input', target, { promptId, answers }),

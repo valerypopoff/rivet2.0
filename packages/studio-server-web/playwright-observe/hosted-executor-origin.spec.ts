@@ -1,7 +1,209 @@
 import { expect, test } from '@playwright/test';
 import { mockHostedEditorBootstrap } from './helpers/hostedEditorObserve';
 import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
-import { ExecutionRecorder } from '@valerypopoff/rivet2-core';
+import { ExecutionRecorder, ExecutorReliableOutbox } from '@valerypopoff/rivet2-core';
+
+for (const { loseReceipt, gap, failed } of [
+  { loseReceipt: false, gap: true, failed: false },
+  { loseReceipt: true, gap: true, failed: false },
+  { loseReceipt: false, gap: false, failed: false },
+  { loseReceipt: false, gap: false, failed: true },
+])
+  test(`preview chat ${gap ? 'recovers with missing history' : failed ? 'records a failed action' : 'records a complete action'}${loseReceipt ? ' and a receipt send fails' : ''}`, async ({
+    page,
+  }) => {
+    const graphId = 'preview-graph',
+      projectId = 'preview-project';
+    const nodes = [
+      ...['user', 'history'].map((id, index) => ({
+        id: `input-${id}`,
+        type: 'graphInput',
+        title: id,
+        data: { id, dataType: id === 'history' ? 'chat-message[]' : 'string' },
+        visualData: { x: 0, y: index * 100 },
+      })),
+      {
+        id: 'output',
+        type: 'graphOutput',
+        title: 'answer',
+        data: { id: 'answer', dataType: 'string' },
+        visualData: { x: 200, y: 0 },
+      },
+      { id: 'code', type: 'code', title: 'Code', data: { code: 'return {};' }, visualData: { x: 100, y: 0 } },
+    ];
+    await seedHostedEditorProject(page, {
+      graphId,
+      projectId,
+      projectPath: '/preview.rivet-project',
+      title: 'Preview',
+      loaded: true,
+      graph: { nodes },
+      uiGraphs: {
+        app: {
+          id: 'app',
+          name: 'Recovery chat',
+          components: [
+            {
+              id: 'chat',
+              type: 'chat',
+              title: 'Chat',
+              action: {
+                type: 'runGraph',
+                graphId,
+                userInputId: 'user',
+                historyInputId: 'history',
+                responseOutputId: 'answer',
+              },
+            },
+          ],
+        },
+      },
+    });
+    await page.addInitScript(() =>
+      localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: true })),
+    );
+    await mockHostedEditorBootstrap(page);
+    const recordings: Array<{ status: string; recordingSerialized: string }> = [];
+    const unavailable: string[] = [];
+    await page.route('**/api/workflows/local-editor-recordings**', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname.endsWith('/capability')) return route.fulfill({ json: { supported: true } });
+      if (url.pathname.endsWith('/outcome')) {
+        unavailable.push(route.request().postDataJSON().correlationId);
+        return route.fulfill({ status: 204 });
+      }
+      recordings.push(route.request().postDataJSON());
+      return route.fulfill({ status: 201, json: { availability: 'available', recordingId: 'preview-recording' } });
+    });
+    await page.route('**/api/config', (route) =>
+      route.fulfill({
+        json: { executorWsUrl: 'ws://127.0.0.1:8081/ws/executor/owner/recovery', remoteDebuggerDefaultWs: '' },
+      }),
+    );
+    const outbox = new ExecutorReliableOutbox();
+    let connections = 0,
+      runs = 0,
+      requestId = '',
+      project: any;
+    const graph = { metadata: { id: graphId, name: 'Main Graph' }, nodes, connections: [] };
+    const execution = { projectId, graphId, graphRunId: 'graph-run', rootRunId: 'root-run' };
+    await page.routeWebSocket('**/ws/executor/owner/**', (socket) => {
+      connections++;
+      const send = (message: string, data: unknown, identified = true) => {
+        outbox.add(JSON.stringify({ message, data, ...(identified ? { requestId } : {}) }));
+        for (let chunk = outbox.next(); chunk; chunk = outbox.next())
+          socket.send(JSON.stringify({ message: 'executor-reliable', data: chunk }));
+      };
+      socket.onMessage((raw) => {
+        if (typeof raw !== 'string' || !raw.startsWith('{')) return;
+        const message = JSON.parse(raw);
+        if (message.type === 'executor-receipt') {
+          outbox.acknowledge(message.data.id);
+          return;
+        }
+        if (message.type === 'set-dynamic-data') project = message.data.project;
+        if (message.type !== 'run') return;
+        runs++;
+        requestId = message.data.requestId;
+        send('start', { execution, project, startGraph: graph, inputs: message.data.inputs, contextValues: {} });
+        socket.send(
+          JSON.stringify({
+            message: 'nodeStart',
+            requestId,
+            rivetSequence: 1,
+            data: { execution, node: nodes[3], processId: 'code-process', inputs: {} },
+          }),
+        );
+        socket.close({ code: 1012, reason: 'fixture connection loss' });
+      });
+      socket.send(JSON.stringify({ message: 'executor-session', data: { protocol: 2, capability: 'v'.repeat(43) } }));
+      socket.send(
+        JSON.stringify({
+          message: 'executor-session-state',
+          data: {
+            requests: requestId ? [{ requestId, phase: 'running' }] : [],
+            incompleteRequests: gap && requestId ? [requestId] : [],
+          },
+        }),
+      );
+      if (connections > 1) {
+        if (gap)
+          socket.send(
+            JSON.stringify({
+              message: 'executor-diagnostics-gap',
+              data: { after: 1, through: 100, requestIds: [requestId] },
+            }),
+          );
+        outbox.replay();
+        for (let chunk = outbox.next(); chunk; chunk = outbox.next())
+          socket.send(JSON.stringify({ message: 'executor-reliable', data: chunk }));
+        if (connections === 2) {
+          socket.send(
+            JSON.stringify({
+              message: failed ? 'nodeError' : 'nodeFinish',
+              requestId,
+              rivetSequence: gap ? 101 : 2,
+              data: {
+                execution,
+                node: nodes[3],
+                processId: 'code-process',
+                outputs: {},
+                ...(failed ? { error: 'LLM Profile fallback chain exhausted.' } : {}),
+              },
+            }),
+          );
+          send('webAppStoragePatch', { storagePatch: { recovered: true } });
+          const outputs = { answer: { type: 'string', value: 'Recovered response.' } };
+          if (failed) send('error', { error: 'LLM Profile fallback chain exhausted.' });
+          else {
+            send('graphOutputsReady', { execution, graph, outputs });
+            send('done', { execution, results: outputs });
+          }
+        }
+      } else send('graph-upload-allowed', {}, false);
+      socket.send(JSON.stringify({ message: 'executor-session-ready', data: { protocol: 2 } }));
+    });
+    await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('.node-canvas').first()).toBeVisible();
+    if (loseReceipt)
+      await page.evaluate(() => {
+        // Patch the active routed WebSocket, after Playwright installs its test transport.
+        const send = WebSocket.prototype.send;
+        let failed = false;
+        WebSocket.prototype.send = function (data) {
+          if (!failed && typeof data === 'string' && data.startsWith('{')) {
+            const frame = JSON.parse(data);
+            if (frame.type === 'executor-receipt' && frame.data?.id === 4) {
+              failed = true;
+              throw new Error('Injected receipt transport failure');
+            }
+          }
+          return send.call(this, data);
+        };
+      });
+    await page.locator('[data-uigraphid="app"]').click();
+    const chat = page.locator('.ui-graph-builder-preview');
+    await chat.getByRole('textbox', { name: 'Message', exact: true }).fill('Hello');
+    await chat.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(chat).toContainText(failed ? 'fallback chain exhausted' : 'Recovered response.');
+    await expect(chat.getByRole('button', { name: 'Send message', exact: true })).toBeVisible();
+    expect(runs).toBe(1);
+    await expect.poll(() => connections).toBe(loseReceipt ? 3 : 2);
+    if (!failed) await expect(chat.getByText('Recovered response.', { exact: true })).toHaveCount(1);
+    await expect(chat).not.toContainText('could not be resumed');
+    if (gap) {
+      await expect.poll(() => unavailable.length).toBe(1);
+      expect(recordings).toHaveLength(0);
+    } else {
+      await expect.poll(() => recordings.length).toBe(1);
+      expect(recordings[0]!.status).toBe(failed ? 'failed' : 'succeeded');
+      if (failed)
+        expect(
+          JSON.stringify(ExecutionRecorder.deserializeFromString(recordings[0]!.recordingSerialized).events),
+        ).toContain('fallback chain exhausted');
+    }
+    expect(await page.pageErrors()).toEqual([]);
+  });
 
 for (const projectId of ['restored-project', 'constructor', '__proto__']) {
   test(`executor observers wait for saved workspace hydration before reading project tabs (${projectId})`, async ({
@@ -173,20 +375,34 @@ for (const preference of ['missing', 'custom', 'invalid'] as const) {
 
 test('new HA executor keeps Run disabled until the complete session handshake', async ({ page }) => {
   await seedHostedEditorProject(page, {
-    graphId: 'ha-handshake-graph', projectId: 'ha-handshake-project',
-    projectPath: '/workflows/HA handshake.rivet-project', title: 'HA handshake', loaded: true,
+    graphId: 'ha-handshake-graph',
+    projectId: 'ha-handshake-project',
+    projectPath: '/workflows/HA handshake.rivet-project',
+    title: 'HA handshake',
+    loaded: true,
   });
-  await page.addInitScript(() => localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: false })));
-  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }));
+  await page.addInitScript(() =>
+    localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: false })),
+  );
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }),
+  );
   await mockHostedEditorBootstrap(page);
-  await page.route('**/api/config', route => route.fulfill({ json: {
-    executorWsUrl: 'ws://rivet-internal/ws/executor/owner/handshake-owner',
-    executorWsUrlIsOverride: false, remoteDebuggerDefaultWs: '',
-  } }));
+  await page.route('**/api/config', (route) =>
+    route.fulfill({
+      json: {
+        executorWsUrl: 'ws://rivet-internal/ws/executor/owner/handshake-owner',
+        executorWsUrlIsOverride: false,
+        remoteDebuggerDefaultWs: '',
+      },
+    }),
+  );
   let acknowledgeIdentity: (() => void) | undefined;
   let acknowledgeReady!: () => void;
-  await page.routeWebSocket('**/ws/executor/owner/**', socket => {
-    acknowledgeIdentity = () => socket.send(JSON.stringify({ message: 'executor-session', data: { protocol: 1, capability: 'n'.repeat(43) } }));
+  await page.routeWebSocket('**/ws/executor/owner/**', (socket) => {
+    acknowledgeIdentity = () =>
+      socket.send(JSON.stringify({ message: 'executor-session', data: { protocol: 1, capability: 'n'.repeat(43) } }));
     acknowledgeReady = () => socket.send(JSON.stringify({ message: 'executor-session-ready', data: { protocol: 1 } }));
   });
   try {
@@ -196,7 +412,9 @@ test('new HA executor keeps Run disabled until the complete session handshake', 
     const run = page.locator('.run-button button').first();
     await expect(run).toBeDisabled();
     acknowledgeIdentity!();
-    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+    );
     await expect(run).toBeDisabled();
     acknowledgeReady();
     await expect(run).toBeEnabled();
@@ -207,31 +425,48 @@ test('new HA executor keeps Run disabled until the complete session handshake', 
 
 test('delayed HA owner discovery cannot reconnect Node after switching to Browser', async ({ page }) => {
   await seedHostedEditorProject(page, {
-    graphId: 'ha-handoff-graph', projectId: 'ha-handoff-project',
-    projectPath: '/workflows/HA handoff.rivet-project', title: 'HA handoff', loaded: true,
+    graphId: 'ha-handoff-graph',
+    projectId: 'ha-handoff-project',
+    projectPath: '/workflows/HA handoff.rivet-project',
+    title: 'HA handoff',
+    loaded: true,
   });
-  await page.addInitScript(() => localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: false })));
-  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }));
+  await page.addInitScript(() =>
+    localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: false })),
+  );
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }),
+  );
   await mockHostedEditorBootstrap(page);
   let holdDiscovery = false;
   let releaseDiscovery!: () => void;
-  const discovery = new Promise<void>(resolve => { releaseDiscovery = resolve; });
+  const discovery = new Promise<void>((resolve) => {
+    releaseDiscovery = resolve;
+  });
   let lookupPending = false;
-  await page.route('**/api/config', async route => {
+  await page.route('**/api/config', async (route) => {
     const delayed = holdDiscovery;
-    if (delayed) { lookupPending = true; await discovery; }
-    await route.fulfill({ json: {
-      executorWsUrl: `ws://rivet-internal/ws/executor/owner/${delayed ? 'new' : 'old'}-owner`,
-      executorWsUrlIsOverride: false, remoteDebuggerDefaultWs: '',
-    } });
+    if (delayed) {
+      lookupPending = true;
+      await discovery;
+    }
+    await route.fulfill({
+      json: {
+        executorWsUrl: `ws://rivet-internal/ws/executor/owner/${delayed ? 'new' : 'old'}-owner`,
+        executorWsUrlIsOverride: false,
+        remoteDebuggerDefaultWs: '',
+      },
+    });
   });
   const sockets: string[] = [];
   let retire!: () => void;
-  await page.routeWebSocket('**/ws/executor/owner/**', socket => {
+  await page.routeWebSocket('**/ws/executor/owner/**', (socket) => {
     sockets.push(socket.url());
     socket.send(JSON.stringify({ message: 'executor-session', data: { protocol: 1, capability: 'h'.repeat(43) } }));
     socket.send(JSON.stringify({ message: 'executor-session-ready', data: { protocol: 1 } }));
-    retire = () => socket.send(JSON.stringify({ message: 'executor-owner-retiring', data: { protocol: 1 }, rivetSequence: 1 }));
+    retire = () =>
+      socket.send(JSON.stringify({ message: 'executor-owner-retiring', data: { protocol: 1 }, rivetSequence: 1 }));
   });
   try {
     await page.goto('/?editor', { waitUntil: 'domcontentloaded' });
@@ -247,7 +482,9 @@ test('delayed HA owner discovery cannot reconnect Node after switching to Browse
     const response = page.waitForResponse('**/api/config');
     releaseDiscovery();
     await (await response).finished();
-    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+    );
     expect(sockets).toHaveLength(1);
     await expect(modes.getByRole('button', { name: 'Browser', exact: true })).toHaveAttribute('aria-pressed', 'true');
   } finally {
@@ -257,23 +494,43 @@ test('delayed HA owner discovery cannot reconnect Node after switching to Browse
   }
 });
 
-test('HA reconnect settles an IndexedDB dataset write and records once without resubmitting the run', async ({ page }) => {
+test('HA reconnect settles an IndexedDB dataset write and records once without resubmitting the run', async ({
+  page,
+}) => {
   const projectId = 'ha-recording-project';
   const graph = { metadata: { id: 'ha-recording-graph', name: 'Main Graph' }, nodes: [], connections: [] };
-  const project = { metadata: { id: projectId, title: 'HA recording' }, graphs: { [graph.metadata.id]: graph }, plugins: [], references: [] };
+  const project = {
+    metadata: { id: projectId, title: 'HA recording' },
+    graphs: { [graph.metadata.id]: graph },
+    plugins: [],
+    references: [],
+  };
   await seedHostedEditorProject(page, {
-    projectId, graphId: graph.metadata.id, title: 'HA recording', loaded: true,
+    projectId,
+    graphId: graph.metadata.id,
+    title: 'HA recording',
+    loaded: true,
     projectPath: '/workflows/ha-recording.rivet-project',
   });
-  await page.addInitScript(() => localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: true })));
+  await page.addInitScript(() =>
+    localStorage.setItem('recoil-persist', JSON.stringify({ defaultExecutor: 'nodejs', recordExecutions: true })),
+  );
   // This fixture owns its API responses; optional background requests must not
   // reach an unrelated server behind the preview's development proxy.
-  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }));
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'No ambient API allowed' } }),
+  );
   await mockHostedEditorBootstrap(page);
-  await page.route('**/api/config', route => route.fulfill({ json: {
-    executorWsUrl: 'ws://rivet-internal/ws/executor/owner/recording-owner', executorWsUrlIsOverride: false,
-    remoteDebuggerDefaultWs: '',
-  } }));
+  await page.route('**/api/config', (route) =>
+    route.fulfill({
+      json: {
+        executorWsUrl: 'ws://rivet-internal/ws/executor/owner/recording-owner',
+        executorWsUrlIsOverride: false,
+        remoteDebuggerDefaultWs: '',
+      },
+    }),
+  );
   const uploads: Array<{ recordingSerialized: string; status: string }> = [];
   await page.addInitScript(() => {
     const group = JSON.parse(localStorage.getItem('project') ?? '{}');
@@ -284,7 +541,7 @@ test('HA reconnect settles an IndexedDB dataset write and records once without r
   });
   let sentContext: Record<string, unknown> | undefined;
   const unavailable: unknown[] = [];
-  await page.route('**/api/workflows/local-editor-recordings**', async route => {
+  await page.route('**/api/workflows/local-editor-recordings**', async (route) => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { supported: true } });
     if (new URL(route.request().url()).pathname.endsWith('/outcome')) {
       unavailable.push(route.request().postDataJSON());
@@ -293,23 +550,46 @@ test('HA reconnect settles an IndexedDB dataset write and records once without r
     uploads.push(route.request().postDataJSON());
     return route.fulfill({ status: 201, json: { availability: 'available', recordingId: 'reconnected-recording' } });
   });
-  let connections = 0, runCommands = 0, datasetResponses = 0, requestId: string | undefined;
-  const start = () => ({ message: 'start', requestId, rivetSequence: 1,
-    data: { project, startGraph: graph, contextValues: {}, inputs: {} } });
-  const datasetRequest = { message: 'datasets:put-metadata', rivetSequence: 2,
-    data: { requestId: 'dataset-write', payload: { metadata: {
-      id: 'ha-resumed-dataset', projectId, name: 'Resumed dataset', description: '',
-    } } } };
-  await page.routeWebSocket('**/ws/executor/owner/**', socket => {
+  let connections = 0,
+    runCommands = 0,
+    datasetResponses = 0,
+    requestId: string | undefined;
+  const start = () => ({
+    message: 'start',
+    requestId,
+    rivetSequence: 1,
+    data: { project, startGraph: graph, contextValues: {}, inputs: {} },
+  });
+  const datasetRequest = {
+    message: 'datasets:put-metadata',
+    rivetSequence: 2,
+    data: {
+      requestId: 'dataset-write',
+      payload: {
+        metadata: {
+          id: 'ha-resumed-dataset',
+          projectId,
+          name: 'Resumed dataset',
+          description: '',
+        },
+      },
+    },
+  };
+  await page.routeWebSocket('**/ws/executor/owner/**', (socket) => {
     connections++;
-    socket.send(JSON.stringify({ message: 'executor-session', data: { protocol: 1, capability: 'r'.repeat(43), resumed: connections > 1 } }));
+    socket.send(
+      JSON.stringify({
+        message: 'executor-session',
+        data: { protocol: 1, capability: 'r'.repeat(43), resumed: connections > 1 },
+      }),
+    );
     if (connections > 1) {
       socket.send(JSON.stringify(start()));
       socket.send(JSON.stringify(datasetRequest));
     }
     socket.send(JSON.stringify({ message: 'executor-session-ready', data: { protocol: 1, resumed: connections > 1 } }));
     if (connections > 1) {
-      socket.onMessage(message => {
+      socket.onMessage((message) => {
         if (typeof message !== 'string' || !message.startsWith('{')) return;
         const payload = JSON.parse(message);
         if (payload.type !== 'datasets:response' || payload.data.requestId !== 'dataset-write') return;
@@ -318,7 +598,7 @@ test('HA reconnect settles an IndexedDB dataset write and records once without r
       });
       return;
     }
-    socket.onMessage(message => {
+    socket.onMessage((message) => {
       if (typeof message !== 'string' || !message.startsWith('{')) return;
       const payload = JSON.parse(message);
       if (payload.type !== 'run') return;
@@ -343,7 +623,7 @@ test('HA reconnect settles an IndexedDB dataset write and records once without r
   expect(unavailable).toEqual([]);
   expect(uploads[0]!.status).toBe('succeeded');
   const recorder = ExecutionRecorder.deserializeFromString(uploads[0]!.recordingSerialized);
-  expect(recorder.events.map(event => event.type)).toEqual(['start', 'done']);
+  expect(recorder.events.map((event) => event.type)).toEqual(['start', 'done']);
   await page.goto('about:blank');
 });
 
@@ -446,10 +726,16 @@ for (const scenario of cases) {
       sockets.push(socket.url());
       if (socket.url().includes('/ws/executor/owner/')) {
         originalOwner ??= socket;
-        socket.onMessage(message => {
-          if (typeof message === 'string' && message.startsWith('{') && JSON.parse(message).type === 'run') runCommands++;
+        socket.onMessage((message) => {
+          if (typeof message === 'string' && message.startsWith('{') && JSON.parse(message).type === 'run')
+            runCommands++;
         });
-        socket.send(JSON.stringify({ message: 'executor-session', data: { protocol: 1, capability: (sockets.length === 1 ? 'a' : 'b').repeat(43) } }));
+        socket.send(
+          JSON.stringify({
+            message: 'executor-session',
+            data: { protocol: 1, capability: (sockets.length === 1 ? 'a' : 'b').repeat(43) },
+          }),
+        );
         socket.send(JSON.stringify({ message: 'executor-session-ready', data: { protocol: 1 } }));
       }
     });
@@ -460,10 +746,12 @@ for (const scenario of cases) {
       expect([...new Set(sockets)]).toEqual([scenario.expectedUrl]);
       if (originalOwner) {
         selectedExecutorUrl = scenario.executorWsUrl.replace('/rivet-backend-1/', '/rivet-backend-2/');
-        originalOwner.send(JSON.stringify({ message: 'executor-owner-retiring', data: { protocol: 1 }, rivetSequence: 1 }));
-        await expect.poll(() => [...new Set(sockets)]).toEqual([
-          scenario.expectedUrl, scenario.expectedUrl.replace('/rivet-backend-1/', '/rivet-backend-2/'),
-        ]);
+        originalOwner.send(
+          JSON.stringify({ message: 'executor-owner-retiring', data: { protocol: 1 }, rivetSequence: 1 }),
+        );
+        await expect
+          .poll(() => [...new Set(sockets)])
+          .toEqual([scenario.expectedUrl, scenario.expectedUrl.replace('/rivet-backend-1/', '/rivet-backend-2/')]);
         expect(runCommands).toBe(0);
       }
     } finally {

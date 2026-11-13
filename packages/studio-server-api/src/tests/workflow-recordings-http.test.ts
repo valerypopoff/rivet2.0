@@ -15,6 +15,7 @@ import {
   withEnvOverride,
 } from './helpers/workflow-api-harness.js';
 import { createFilesystemWorkflowSuiteHarness } from './helpers/workflow-filesystem-suite-harness.js';
+import { createExhaustedProfileGraph, EXHAUSTION_PROVIDER_ORIGIN } from './helpers/llm-exhaustion-fixture.js';
 
 const {
   workflowsRoot,
@@ -28,10 +29,89 @@ const {
   resetAndEnsureWorkflowsRoot,
   cleanupWorkflowSuite,
 } = await createFilesystemWorkflowSuiteHarness();
-const { writeRunRecordingsSettings } = await import('../routes/workflows/recordings-config.js');
+const { writeRunRecordingsSettings, runRecordingsSettingsRepository } = await import('../routes/workflows/recordings-config.js');
 
 test.beforeEach(resetAndEnsureWorkflowsRoot);
 test.after(cleanupWorkflowSuite);
+
+for (const caught of [false, true]) {
+  test(`exhausted LLM profiles retain published/latest recordings with the actual root outcome (caught=${caught})`, async (t) => {
+    const nativeFetch = globalThis.fetch;
+    let providerCalls = 0;
+    t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      if (String(input).startsWith(EXHAUSTION_PROVIDER_ORIGIN)) {
+        providerCalls++;
+        return Response.json({ error: { message: 'Synthetic unavailable provider' } }, { status: 503 });
+      }
+      return nativeFetch(input, init);
+    });
+    const created = await workflowMutations.createWorkflowProjectItem('', 'Exhausted');
+    const project = await rivetNode.loadProjectFromFile(created.absolutePath);
+    project.graphs[project.metadata.mainGraphId!] = createExhaustedProfileGraph(project.metadata.mainGraphId!, caught);
+    await fs.writeFile(created.absolutePath, rivetNode.serializeProject(project) as string);
+    await workflowMutations.publishWorkflowProjectItem(created.relativePath, { endpointName: 'exhausted' });
+    await withWorkflowExecutionServer(async ({ publishedBaseUrl, latestBaseUrl }) => {
+      if (!caught) {
+        // Expire live policy at the exact synchronous serialization boundary
+        // from the production failure. Neither subsequent write nor next run
+        // may consult retention settings to choose its artifact encoding.
+        let expired = false;
+        const readPolicy = runRecordingsSettingsRepository.readSync.bind(runRecordingsSettingsRepository);
+        const serialize = rivetNode.ExecutionRecorder.prototype.serialize;
+        t.mock.method(runRecordingsSettingsRepository, 'readSync', () => {
+          if (expired) throw new Error('Managed app settings synchronization is unavailable or stale.');
+          return readPolicy();
+        });
+        t.mock.method(rivetNode.ExecutionRecorder.prototype, 'serialize', function (this: InstanceType<typeof rivetNode.ExecutionRecorder>) {
+          const recording = serialize.call(this);
+          expired = true;
+          return recording;
+        });
+      }
+      for (const base of [publishedBaseUrl, latestBaseUrl]) {
+        const response = await fetch(`${base}/exhausted`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        assert.equal(response.status, caught ? 200 : 500);
+      }
+      const page = await waitForWorkflowRecordingRunCount(workflowRecordings.listWorkflowRecordingRunsPage, workflowsRoot, project.metadata.id, 2);
+      assert.equal(providerCalls, 4, 'each of the two executions tries both profiles once');
+      assert.deepEqual(page.runs.map(run => run.status), [caught ? 'succeeded' : 'failed', caught ? 'succeeded' : 'failed']);
+      for (const run of page.runs) {
+        const recording = rivetNode.ExecutionRecorder.deserializeFromString(
+          await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, run.id, 'recording'),
+        );
+        assert.match(JSON.stringify(recording.events), /fallback chain exhausted/);
+      }
+    });
+  });
+}
+
+test('stale retention and a post-save notification failure cannot erase an indexed failed recording', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const created = await workflowMutations.createWorkflowProjectItem('', 'NotificationFailure');
+  const project = await rivetNode.loadProjectFromFile(created.absolutePath);
+  t.mock.method(runRecordingsSettingsRepository, 'readSync', () => { throw new Error('fixture stale retention'); });
+  const id = await workflowRecordings.persistWorkflowExecutionRecording({
+    workflowsRoot, sourceProject: project, sourceProjectPath: created.absolutePath, executedProject: project,
+    executedAttachedData: {}, executedDatasets: [], endpointName: 'fixture',
+    recordingSerialized: new rivetNode.ExecutionRecorder().serialize(), runKind: 'published', status: 'failed', durationMs: 1,
+    onPersisted: async () => {
+      const error = new Error('notification failed');
+      Object.defineProperty(error, 'name', {
+        get() {
+          throw new Error('error inspection failed');
+        },
+      });
+      throw error;
+    },
+  });
+  assert.ok(id);
+  const page = await workflowRecordings.listWorkflowRecordingRunsPage(workflowsRoot, project.metadata.id, 1, 20, 'all');
+  assert.equal(page.totalRuns, 1);
+  assert.equal(page.runs[0]?.id, id);
+  assert.ok(await workflowRecordings.readWorkflowRecordingArtifact(workflowsRoot, id, 'recording'));
+});
 
 test('recordings catalog reports server timing and keeps the compatibility alias', async () => {
   await withWorkflowExecutionServer(async ({ apiBaseUrl }) => {

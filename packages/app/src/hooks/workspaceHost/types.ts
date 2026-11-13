@@ -36,6 +36,7 @@ export type RivetProjectCompareOptions = {
 };
 export type RivetProjectCompareState = {
   owner: { sessionId: string; generation: number } | null;
+  exitedOwner?: { sessionId: string; generation: number };
   projectId: ProjectId | null;
   referenceProjectId: ProjectId | null;
   referenceId: string | null;

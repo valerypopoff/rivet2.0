@@ -2,6 +2,7 @@ import { useStore } from 'jotai';
 import type { GraphId, Project, ProjectId } from '@valerypopoff/rivet2-core';
 import {
   comparisonReferenceGraphState,
+  projectCompareExitOwnerState,
   projectCompareReferenceState,
   viewingProjectComparisonNodeState,
 } from '../../state/projectComparison.js';
@@ -43,6 +44,7 @@ export function useWorkspaceHostCompare() {
       const projectId = store.get(projectState).metadata.id;
       if (!projectId || (options?.expectedProjectId && options.expectedProjectId !== projectId)) return false;
       leaveReferenceView();
+      store.set(projectCompareExitOwnerState, undefined);
       store.set(viewingProjectComparisonNodeState, undefined);
       store.set(projectCompareReferenceState, {
         referenceId: nanoid(),
@@ -71,6 +73,7 @@ export function useWorkspaceHostCompare() {
         (owner && (reference.owner?.sessionId !== owner.sessionId || reference.owner.generation !== owner.generation))
       )
         return false;
+      if (!owner && reference.owner) store.set(projectCompareExitOwnerState, reference.owner);
       leaveReferenceView();
       store.set(viewingProjectComparisonNodeState, undefined);
       store.set(projectCompareReferenceState, undefined);
@@ -82,6 +85,7 @@ export function useWorkspaceHostCompare() {
     const current = store.get(projectState).metadata.id;
     return {
       owner: reference?.owner ?? null,
+      exitedOwner: store.get(projectCompareExitOwnerState),
       projectId: store.get(projectsState).openedProjects[current] ? current : null,
       referenceProjectId: reference?.projectId ?? null,
       referenceId: reference?.referenceId ?? null,
@@ -92,6 +96,7 @@ export function useWorkspaceHostCompare() {
   const subscribeProjectCompare = useStableCallback((listener: () => void) => {
     const disposals = [
       store.sub(projectCompareReferenceState, listener),
+      store.sub(projectCompareExitOwnerState, listener),
       store.sub(projectState, listener),
       store.sub(projectsState, listener),
       store.sub(graphState, listener),

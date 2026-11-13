@@ -20,6 +20,7 @@ import {
   persistWorkflowExecutionRecordingWithBackend,
 } from './storage-backend.js';
 import { isWorkflowRecordingEnabled } from './recordings-config.js';
+import { reportRecordingFailure } from './recording-diagnostics.js';
 import { MAX_LOCAL_EDITOR_RECORDING_UPLOAD_BYTES } from './local-editor-recording-limits.js';
 import type { WorkflowFolderItem, WorkflowProjectItem } from '../../../../studio-server-shared/workflow-types.js';
 import { WORKFLOW_RECORDING_CREATED_AT_HEADER } from '../../../../studio-server-shared/workflow-recording-time.js';
@@ -235,7 +236,7 @@ async function reportOutcomeBestEffort(
   recordingId?: string,
 ): Promise<void> {
   await reportOutcome(correlationId, availability, recordingId).catch((error) => {
-    console.error('[llm-profile-health] Failed to resolve local replay evidence:', error);
+    reportRecordingFailure(error, { correlationId, recordingId, phase: 'notification' });
   });
 }
 
@@ -314,6 +315,14 @@ localEditorRecordingsRouter.post(
       await reportOutcomeBestEffort(body.executionIdentity.correlationId, 'available', recordingId);
       res.status(201).json({ availability: 'available', recordingId });
     } catch (error) {
+      reportRecordingFailure(error, {
+        projectId: body.projectId,
+        graphId: body.executionIdentity.graphId,
+        correlationId: body.executionIdentity.correlationId,
+        runKind: 'editor',
+        surface: 'editor_local',
+        phase: 'persistence',
+      });
       await reportOutcomeBestEffort(body.executionIdentity.correlationId, 'persistence-failed');
       throw error;
     }
@@ -370,6 +379,16 @@ localEditorRecordingsRouter.post(
         revisionKey: body.revisionKey,
         correlationId: body.correlationId,
       },
+    }).catch((error) => {
+      reportRecordingFailure(error, {
+        projectId: body.projectId,
+        graphId: body.graphId,
+        correlationId: body.correlationId,
+        runKind: 'editor',
+        surface: 'subgraph_project',
+        phase: 'persistence',
+      });
+      throw error;
     });
     res
       .status(recordingId ? 201 : 200)

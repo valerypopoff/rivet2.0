@@ -16,9 +16,11 @@ import { ExecutionSession } from '../routes/workflows/execution-session.js';
 import {
   getWorkflowExecutionRecorderOptions,
   isWorkflowRecordingEnabled,
+  shouldSnapshotWorkflowRecordingDatasets,
 } from '../routes/workflows/recordings-config.js';
 import type { ClaimedRun, ScheduledRunStore } from './store.js';
 import { awaitPreparation } from './cancellation.js';
+import { reportRecordingFailure, type RecordingDiagnosticContext } from '../routes/workflows/recording-diagnostics.js';
 
 export async function runScheduledGraph(
   job: ClaimedRun,
@@ -109,18 +111,26 @@ export async function runScheduledGraph(
   let recordingId: string | undefined;
   let recordingStatus: ScheduledOccurrence['recordingStatus'] = draft.record ? 'unavailable' : 'off';
   if (recorder && invoked) {
+    const diagnostic: RecordingDiagnosticContext = {
+      projectId: draft.projectId, graphId, correlationId: occurrence.id,
+      surface: 'scheduled', runKind: draft.version, phase: 'serialization',
+    };
     try {
       const [project, attached] = loadProjectAndAttachedDataFromString(resolved.projectContents);
+      const recordingSerialized = recorder.serialize();
+      diagnostic.phase = 'persistence';
       recordingId = await persistWorkflowExecutionRecordingWithBackend({
         createdAt: createdAt ?? getWorkflowRecordingCreatedAt(recorder.events),
         sourceProject: project,
         sourceProjectPath: resolved.sourceProjectPath,
         executedProject: project,
         executedAttachedData: attached,
-        executedDatasets: await resolved.datasetProvider.exportDatasetsForProject(project.metadata.id),
+        executedDatasets: shouldSnapshotWorkflowRecordingDatasets()
+          ? await resolved.datasetProvider.exportDatasetsForProject(project.metadata.id)
+          : [],
         endpointName: `Scheduled: ${occurrence.scheduleId}`,
         runKind: draft.version,
-        recordingSerialized: recorder.serialize(),
+        recordingSerialized,
         status: status === 'succeeded' ? 'succeeded' : 'failed',
         durationMs: performance.now() - started,
         errorMessage: reason,
@@ -136,7 +146,8 @@ export async function runScheduledGraph(
         },
       });
       if (recordingId) recordingStatus = 'saved';
-    } catch {
+    } catch (error) {
+      reportRecordingFailure(error, diagnostic);
       /* Recording failure must never cause graph retry. */
     }
   }

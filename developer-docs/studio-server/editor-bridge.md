@@ -7,6 +7,24 @@ The dashboard and the Rivet editor run in separate browsing contexts:
 
 They communicate through `window.postMessage`.
 
+The separate owner-routed Node executor connection negotiates session v2 when
+supported. Loss of diagnostic history marks details partial while the accepted
+result can still arrive; recovery never resubmits the graph. Permanent connection
+loss stops spinning node displays and shows **Outcome unknown** in Run Activity.
+An already returned preview response is preserved if its background tail becomes
+unobservable. Missing diagnostic values cannot be frozen or preloaded as complete
+outputs. This transport does not change the dashboard `postMessage` bridge or
+published web-app execution. See [executor recovery](editor-executor-recovery-plan.md).
+
+Hosted Node web-app previews use the same recording capability and editor toggle
+as ordinary editor runs. Each accepted request owns its recording and correlation
+identity, including overlapping preview actions. A returned chat answer does not
+finalize a recording before the root terminal event. Later failure is retained
+without withdrawing an already delivered answer; missing diagnostics remain
+unavailable rather than being saved as a complete replay. Browser-mode recording
+and published web-app recording retain their existing separate owners. See the
+[recording persistence plan](recording-persistence-fix-plan.md).
+
 ## Contract
 
 `EditorBridgeSession` is the dashboard's single delivery/acknowledgement owner;
@@ -125,7 +143,9 @@ nullable Older/Newer descriptors, complete one-to-one pair array (up to 512),
 side labels, and a bounded Older catalog. Project contents never cross this wire.
 `bundle-comparison-state` replies/reporting contain the actual active project ID,
 owner or null, optional located error, an optional `cancelled: true` when native
-navigation supersedes a request, and request ID for acknowledgements.
+navigation supersedes a request, and request ID for acknowledgements. An optional
+`exitedOwner` records an explicit editor Exit. Normal tab cleanup only releases
+the reference owner; it must not end the Server's reviewed bundle session.
 Runtime readers validate membership/uniqueness, labels, bounds and selected pair.
 An unknown acknowledgement triggers one state read, never an automatic open replay.
 
@@ -135,7 +155,7 @@ attaching or updating its bundle binding. The public `RivetWorkspaceHost` compar
 API validates the actual current project and exact owner. It exposes comparison,
 graph and activation state/subscriptions and an owner-checked reference-definition
 update; the wrapper never writes App comparison atoms or implements another save
-pipeline. Native selections cancel pending reads and end the pending Server UI;
+pipeline. Native selections cancel pending reads while retaining the reviewed bundles;
 ordinary project-open/preview/compare commands cancel the pending read before
 joining the activation queue. Command-owned activation does not recursively
 restart itself. Superseded work settles its acknowledgement. Applying an empty
@@ -144,9 +164,13 @@ then records the actual selected project as its navigation baseline.
 The Server tracks the actual acknowledged project ID for both real and virtual
 views. A read error preserves a displayed selection only when its exact owner and
 project still match. An unattached error retains its location for explicit retry,
-but subsequent tab navigation exits instead of trapping the filtered tree or
-automatically reopening the failed pair. Entering the matching modal aborts any
-uncommitted toolbar catalog read before opening its isolated draft.
+and subsequent tab changes do not replay it or discard the reviewed bundle tree.
+Only an explicit Exit ends that session; a generation-checked `exitedOwner`
+distinguishes the editor's Exit button from owner loss during tab closure.
+The sidebar has no Swap, rematch or refresh handlers: roles/matches and fresh
+saved Older versions are chosen through a new setup after Exit. Iframe replacement
+invalidates pending acknowledgements and detaches selection without replaying it
+or removing the two-bundle view.
 Starting a new native comparison also supersedes bundle work during project
 activation, not just reference reads. Activation may clear an old reference as
 part of closing its virtual tab; a newly installed reference instead cancels the

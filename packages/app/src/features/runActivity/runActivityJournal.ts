@@ -24,7 +24,7 @@ import {
 } from '@valerypopoff/rivet2-core';
 import { getRecordedNodeTiming, getReplayRecordedAt, type RecordedNodeTiming } from '../../utils/recordedNodeTiming.js';
 
-export type RunActivityRootStatus = 'running' | 'outputs-ready' | 'completed' | 'error' | 'aborted';
+export type RunActivityRootStatus = 'running' | 'outputs-ready' | 'completed' | 'error' | 'aborted' | 'unavailable';
 export type RunActivityGraphStatus = 'unknown' | 'running' | 'completed' | 'error' | 'aborted';
 export type RunActivityNodeStatus = 'unknown' | 'waiting' | 'running' | 'completed' | 'error' | 'aborted' | 'excluded';
 export type RunActivityResultOrigin = 'executed' | 'preloaded' | 'frozen' | 'editor-cache' | 'unknown';
@@ -1433,7 +1433,7 @@ function minDefined(current: number | undefined, candidate: number): number {
 }
 
 function isTerminalRootStatus(status: RunActivityRootStatus): boolean {
-  return status === 'completed' || status === 'error' || status === 'aborted';
+  return status === 'completed' || status === 'error' || status === 'aborted' || status === 'unavailable';
 }
 
 function isTerminalGraphStatus(status: RunActivityGraphStatus): boolean {

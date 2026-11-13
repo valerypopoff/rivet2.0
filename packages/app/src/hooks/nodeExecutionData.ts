@@ -15,6 +15,7 @@ import { getRecordedNodeTimingPatch } from '../utils/recordedNodeTiming.js';
 export const nodeExecutionData = {
   start(event: ProcessEvents['nodeStart'], includeDebugData = true): Partial<NodeRunData> {
     return {
+      diagnosticsIncomplete: isIncomplete(event),
       ...(includeDebugData ? getNodeRunDebugData(event.node) : {}),
       inputData: sanitizeInputsOrOutputs(event.inputs),
       ...getRecordedNodeTimingPatch(event, 'start'),
@@ -24,6 +25,7 @@ export const nodeExecutionData = {
   },
   finish(event: ProcessEvents['nodeFinish']): Partial<NodeRunData> {
     return {
+      diagnosticsIncomplete: isIncomplete(event),
       outputData: sanitizeInputsOrOutputs(event.outputs),
       status: { type: 'ok' },
       finishedAt: Date.now(),
@@ -35,6 +37,7 @@ export const nodeExecutionData = {
   },
   excluded(event: ProcessEvents['nodeExcluded'], includeDebugData = true): Partial<NodeRunData> {
     return {
+      diagnosticsIncomplete: isIncomplete(event),
       ...(includeDebugData ? getNodeRunDebugData(event.node) : {}),
       inputData: sanitizeInputsOrOutputs(event.inputs),
       outputData: sanitizeInputsOrOutputs(event.outputs),
@@ -46,6 +49,8 @@ export const nodeExecutionData = {
   },
   error(event: ProcessEvents['nodeError']): Partial<NodeRunData> {
     return {
+      diagnosticsIncomplete: isIncomplete(event),
+      ...(isIncomplete(event) ? { outputData: {}, splitOutputData: {} } : {}),
       status: { type: 'error', error: typeof event.error === 'string' ? event.error : event.error.toString() },
       finishedAt: Date.now(),
       durationMs: event.durationMs,
@@ -57,9 +62,16 @@ export const nodeExecutionData = {
   },
   partial(event: ProcessEvents['partialOutput']): Partial<NodeRunData> {
     const outputs = sanitizeInputsOrOutputs(event.outputs);
-    return event.node.isSplitRun ? { splitOutputData: { [event.index]: outputs } } : { outputData: outputs };
+    return {
+      diagnosticsIncomplete: isIncomplete(event),
+      ...(event.node.isSplitRun ? { splitOutputData: { [event.index]: outputs } } : { outputData: outputs }),
+    };
   },
 };
+
+function isIncomplete(event: object): boolean {
+  return (event as { diagnosticsIncomplete?: boolean }).diagnosticsIncomplete === true;
+}
 
 function getNodeRunDebugData(node: ProcessEvents['nodeStart']['node']) {
   if (node.type === 'code') {

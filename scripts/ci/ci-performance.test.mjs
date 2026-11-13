@@ -554,13 +554,23 @@ test('balanced editor shards cover every selected spec exactly once and reject i
   assert.ok(editorCiSpecs.includes('run-cost-statistics.spec.ts'));
   assert.equal(new Set(editorCiSpecs).size, editorCiSpecs.length);
   assert.deepEqual(selectEditorCiSpecs(), editorCiSpecs);
-  const selected = ['1/3', '2/3', '3/3'].flatMap(selectEditorCiSpecs);
+  const selected = ['1/4', '2/4', '3/4', '4/4'].flatMap(selectEditorCiSpecs);
   assert.equal(new Set(selected).size, selected.length);
   assert.deepEqual(selected.sort(), [...editorCiSpecs].sort());
   const weights = editorCiShards.map((shard) => shard.seconds);
   assert.ok(Math.max(...weights) <= Math.min(...weights) * 1.05);
-  for (const invalid of ['', '0/3', '4/3', '1/2', '1/4', '1/3extra', '1/3\n'])
+  for (const invalid of ['', '0/4', '5/4', '1/2', '1/3', '1/4extra', '1/4\n'])
     assert.throws(() => selectEditorCiSpecs(invalid), /RIVET_EDITOR_TEST_SHARD/);
+});
+
+test('editor shard work leaves headroom under the two-worker hosted step budget', () => {
+  assert.equal(editorCiShards.length, 4);
+  // At most 75% of the 12-minute, two-worker budget; setup, scheduling tails
+  // and hosted-runner variance also consume wall time. Weights are work hints.
+  const workBudgetSeconds = 12 * 60 * 2 * 0.75;
+  for (const shard of editorCiShards) {
+    assert.ok(shard.seconds <= workBudgetSeconds, `${shard.seconds}s of work exceeds the headroom budget`);
+  }
 });
 
 test('CI install CLI preserves inherited environment, flags, live diagnostics and bounded exit behavior', async () => {

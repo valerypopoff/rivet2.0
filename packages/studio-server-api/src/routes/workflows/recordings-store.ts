@@ -1,11 +1,20 @@
-import { getWorkflowRecordingConfig, isWorkflowRecordingEnabled } from './recordings-config.js';
+import { isWorkflowRecordingEnabled, runRecordingsSettingsRepository } from './recordings-config.js';
 import { recordStudioMetrics } from '../../metrics.js';
+import { runOutsideAppSettingsSnapshot } from '../../app-settings/settings-repository.js';
+import { reportRecordingFailure, type RecordingDiagnosticContext } from './recording-diagnostics.js';
 
 type WorkflowRecordingPersistenceTask = () => Promise<void>;
 
+type QueuePolicySnapshot = { path: string; value: { readonly maxPendingWrites: number } };
+type QueuePolicySource = {
+  descriptor: { getPath(): string };
+  read(): Promise<QueuePolicySnapshot>;
+  subscribe(listener: (snapshot: QueuePolicySnapshot) => void): () => void;
+};
+
 export type WorkflowRecordingPersistenceMetrics = Readonly<{
   activeWrites: number;
-  maxPendingWrites: number;
+  maxPendingWrites: number | null;
   pendingWrites: number;
 }>;
 
@@ -16,16 +25,86 @@ export function createWorkflowRecordingStore(options: {
   cleanupStorage(): Promise<void>;
   setSchemaVersion(version: string): Promise<void>;
   resetDatabaseForTests(): Promise<void>;
+  /** Explicit validated policy for standalone/offline users of the queue. */
+  maxPendingWrites?: number;
 }) {
   let storageReadyPromise: Promise<void> | null = null;
   let storageReadyRoot = '';
   let cleanupPromise: Promise<void> | null = null;
   let cleanupRequested = false;
-  let persistenceQueue: WorkflowRecordingPersistenceTask[] = [];
+  let persistenceQueue: Array<{ run: WorkflowRecordingPersistenceTask; context?: RecordingDiagnosticContext }> = [];
   let persistenceQueuePromise: Promise<void> | null = null;
   let persistenceQueueStartImmediate: ReturnType<typeof setImmediate> | null = null;
   let lastDroppedPersistenceLogAt = 0;
   let resettingWorkflowRecordingStorageForTests = false;
+  let maxPendingWrites = options.maxPendingWrites;
+  let policyBinding:
+    | {
+        source: QueuePolicySource;
+        path: string;
+        initialization?: Promise<void>;
+        unsubscribe(): void;
+      }
+    | undefined;
+
+  const validateLimit = (value: number): number => {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid recording queue limit.');
+    return value;
+  };
+  if (maxPendingWrites !== undefined) validateLimit(maxPendingWrites);
+  const getQueueLimit = (): number => {
+    if (maxPendingWrites === undefined) throw new Error('Recording persistence queue policy is not initialized.');
+    return maxPendingWrites;
+  };
+  const disposeQueuePolicy = (): void => {
+    const previous = policyBinding;
+    policyBinding = undefined;
+    maxPendingWrites = undefined;
+    previous?.unsubscribe();
+  };
+  const initializeQueuePolicy = (source: QueuePolicySource = runRecordingsSettingsRepository): Promise<void> => {
+    const sourcePath = source.descriptor.getPath();
+    if (policyBinding) {
+      if (policyBinding.source !== source || policyBinding.path !== sourcePath)
+        return Promise.reject(new Error('Dispose the previous recording queue policy before changing its owner.'));
+      return policyBinding.initialization!;
+    }
+    const binding = {
+      source,
+      path: sourcePath,
+      unsubscribe: () => {},
+      initialization: undefined as Promise<void> | undefined,
+    };
+    policyBinding = binding;
+    maxPendingWrites = undefined;
+    let latest: number | undefined;
+    let initialized = false;
+    try {
+      binding.unsubscribe = source.subscribe((snapshot) => {
+        if (policyBinding !== binding || snapshot.path !== binding.path) return;
+        latest = validateLimit(snapshot.value.maxPendingWrites);
+        if (initialized) maxPendingWrites = latest;
+      });
+    } catch (error) {
+      disposeQueuePolicy();
+      return Promise.reject(error);
+    }
+    binding.initialization = (async () => {
+      try {
+        const snapshot = await runOutsideAppSettingsSnapshot(() => source.read());
+        if (policyBinding !== binding) throw new Error('Recording queue policy initialization was disposed.');
+        if (snapshot.path !== binding.path)
+          throw new Error('Recording queue policy source changed during initialization.');
+        // A newer notification can arrive before this initial read resolves.
+        maxPendingWrites = latest ?? validateLimit(snapshot.value.maxPendingWrites);
+        initialized = true;
+      } catch (error) {
+        if (policyBinding === binding) disposeQueuePolicy();
+        throw error;
+      }
+    })();
+    return binding.initialization;
+  };
 
   const scheduleWorkflowRecordingCleanup = (): void => {
     if (resettingWorkflowRecordingStorageForTests) {
@@ -45,7 +124,7 @@ export function createWorkflowRecordingStore(options: {
       }
     })()
       .catch((error) => {
-        console.error('[workflow-recordings] Cleanup failed:', error);
+        reportRecordingFailure(error, { phase: 'cleanup' });
       })
       .finally(() => {
         const shouldRunAgain = cleanupRequested;
@@ -57,17 +136,25 @@ export function createWorkflowRecordingStore(options: {
       });
   };
 
-  const logDroppedWorkflowRecordingPersistence = (maxPendingWrites: number): void => {
+  const logDroppedWorkflowRecordingPersistence = (
+    maxPendingWrites: number,
+    context?: RecordingDiagnosticContext,
+  ): void => {
     const now = Date.now();
     if (now - lastDroppedPersistenceLogAt < PERSISTENCE_DROP_LOG_INTERVAL_MS) {
       return;
     }
 
     lastDroppedPersistenceLogAt = now;
-    console.warn(
-      `[workflow-recordings] Dropping recording persistence because the queue is full (${maxPendingWrites} pending writes). ` +
-        'Workflow execution continues normally.',
-    );
+    try {
+      console.warn(
+        `[workflow-recordings] Dropping recording persistence because the queue is full (${maxPendingWrites} pending writes). ` +
+          'Workflow execution continues normally.',
+      );
+    } catch {
+      // Overload reporting must not turn a rejected recording into a graph failure.
+    }
+    reportRecordingFailure(undefined, { ...context, phase: 'admission' });
   };
 
   const getPendingPersistenceWriteCount = (): number => {
@@ -75,10 +162,11 @@ export function createWorkflowRecordingStore(options: {
   };
 
   const getPersistenceMetrics = (): WorkflowRecordingPersistenceMetrics => {
-    const { maxPendingWrites } = getWorkflowRecordingConfig();
     return Object.freeze({
       activeWrites: persistenceQueuePromise ? 1 : 0,
-      maxPendingWrites,
+      // Offline maintenance and scrapes can observe work before serving starts.
+      // Absence of policy must not hide accepted work or open admission.
+      maxPendingWrites: maxPendingWrites ?? null,
       pendingWrites: persistenceQueue.length,
     });
   };
@@ -97,10 +185,10 @@ export function createWorkflowRecordingStore(options: {
         }
 
         try {
-          await task();
+          await task.run();
         } catch (error) {
           recordStudioMetrics((metrics) => metrics.recordWorkflowRecordingPersistenceFailure());
-          console.error('[workflow-recordings] Failed to persist queued recording:', error);
+          reportRecordingFailure(error, { phase: 'persistence', ...task.context });
         }
       }
     })().finally(() => {
@@ -145,20 +233,22 @@ export function createWorkflowRecordingStore(options: {
     scheduleCleanup: scheduleWorkflowRecordingCleanup,
     flush: flushWorkflowRecordingStore,
     getPersistenceMetrics,
+    initializeQueuePolicy,
+    disposeQueuePolicy,
 
-    enqueuePersistence(task: WorkflowRecordingPersistenceTask): boolean {
+    enqueuePersistence(task: WorkflowRecordingPersistenceTask, context?: RecordingDiagnosticContext): boolean {
       if (!isWorkflowRecordingEnabled() || resettingWorkflowRecordingStorageForTests) {
         return false;
       }
 
-      const { maxPendingWrites } = getWorkflowRecordingConfig();
-      if (maxPendingWrites > 0 && getPendingPersistenceWriteCount() >= maxPendingWrites) {
+      const limit = getQueueLimit();
+      if (limit > 0 && getPendingPersistenceWriteCount() >= limit) {
         recordStudioMetrics((metrics) => metrics.recordWorkflowRecordingPersistenceDrop());
-        logDroppedWorkflowRecordingPersistence(maxPendingWrites);
+        logDroppedWorkflowRecordingPersistence(limit, context);
         return false;
       }
 
-      persistenceQueue.push(task);
+      persistenceQueue.push({ run: task, context });
       scheduleWorkflowRecordingPersistenceQueue();
       return true;
     },
@@ -171,8 +261,16 @@ export function createWorkflowRecordingStore(options: {
       storageReadyRoot = root;
       storageReadyPromise = (async () => {
         await options.rebuildIndex(root);
-        if (!storageOptions?.skipCleanup) await options.cleanupStorage();
         await options.setSchemaVersion('2');
+        // Keep startup cleanup ordered before new writes so retention cannot
+        // race their post-save holds. Its failure does not invalidate the index.
+        if (!storageOptions?.skipCleanup) {
+          try {
+            await options.cleanupStorage();
+          } catch (error) {
+            reportRecordingFailure(error, { phase: 'cleanup' });
+          }
+        }
       })();
 
       try {
@@ -186,6 +284,7 @@ export function createWorkflowRecordingStore(options: {
 
     async resetForTests(): Promise<void> {
       resettingWorkflowRecordingStorageForTests = true;
+      disposeQueuePolicy();
 
       const pendingPersistence = persistenceQueuePromise;
       const pendingCleanup = cleanupPromise;

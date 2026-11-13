@@ -1,6 +1,9 @@
 import path from 'node:path';
 
-import type { RunRecordingsSettings, RunRecordingsSettingsDraft } from '../../../../studio-server-shared/app-settings-types.js';
+import type {
+  RunRecordingsSettings,
+  RunRecordingsSettingsDraft,
+} from '../../../../studio-server-shared/app-settings-types.js';
 import { VersionedSettingsRepository } from '../../app-settings/settings-repository.js';
 import { parseBoolean, parseEnum, parseIntWithMinimum } from '../../utils/env-parsing.js';
 import { getAppDataRoot } from '../../security.js';
@@ -25,18 +28,18 @@ export const DEFAULT_WORKFLOW_RECORDING_LIMIT_SETTINGS: WorkflowRecordingLimitSe
 
 const MAX_RECORDING_SETTING_VALUE = 1_000_000;
 
-export type WorkflowRecordingConfig = {
+/** Process configuration needed to capture and write an artifact, independent of live retention limits. */
+export type WorkflowRecordingRuntimeConfig = {
   enabled: boolean;
   compression: WorkflowRecordingCompression;
   gzipLevel: number;
-  maxPendingWrites: number;
   includePartialOutputs: boolean;
   includeTrace: boolean;
   datasetMode: WorkflowRecordingDatasetMode;
-  retentionDays: number;
-  maxRunsPerEndpoint: number;
   maxTotalBytes: number;
 };
+
+export type WorkflowRecordingConfig = WorkflowRecordingRuntimeConfig & WorkflowRecordingLimitSettings;
 
 function hasOwn(value: object, key: keyof RunRecordingsSettingsDraft): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -66,9 +69,7 @@ function normalizeNumber(value: unknown, fallback: number, fieldLabel: string): 
 }
 
 export function normalizeWorkflowRecordingLimitSettings(value: unknown): WorkflowRecordingLimitSettings {
-  const raw = value && typeof value === 'object'
-    ? value as RunRecordingsSettingsDraft
-    : {};
+  const raw = value && typeof value === 'object' ? (value as RunRecordingsSettingsDraft) : {};
 
   return {
     maxPendingWrites: normalizeNumber(
@@ -145,42 +146,51 @@ export async function readRunRecordingsSettings(): Promise<RunRecordingsSettings
   return (await runRecordingsSettingsRepository.read()).value;
 }
 
-export async function writeRunRecordingsSettings(draft: unknown, expectedRevision?: string): Promise<RunRecordingsSettings> {
-  return (await runRecordingsSettingsRepository.update((previous) => ({
-    ...normalizeRunRecordingsSettingsDraft({
-      ...previous,
-      ...(draft && typeof draft === 'object' ? draft : {}),
-    }),
-    updatedAt: new Date().toISOString(),
-    source: 'app-settings',
-  }), expectedRevision)).value;
+export async function writeRunRecordingsSettings(
+  draft: unknown,
+  expectedRevision?: string,
+): Promise<RunRecordingsSettings> {
+  return (
+    await runRecordingsSettingsRepository.update(
+      (previous) => ({
+        ...normalizeRunRecordingsSettingsDraft({
+          ...previous,
+          ...(draft && typeof draft === 'object' ? draft : {}),
+        }),
+        updatedAt: new Date().toISOString(),
+        source: 'app-settings',
+      }),
+      expectedRevision,
+    )
+  ).value;
 }
 
-export function getWorkflowRecordingConfig(): WorkflowRecordingConfig {
+export function getWorkflowRecordingRuntimeConfig(): WorkflowRecordingRuntimeConfig {
   const compression = parseEnum(process.env.RIVET_RECORDINGS_COMPRESS, ['gzip', 'identity'], 'gzip');
   const datasetMode = parseEnum(process.env.RIVET_RECORDINGS_DATASET_MODE, ['none', 'all'], 'none');
-  const limitSettings = readWorkflowRecordingLimitSettings();
 
   return {
     enabled: parseBoolean(process.env.RIVET_RECORDINGS_ENABLED, true),
     compression,
     gzipLevel: Math.min(9, parseIntWithMinimum(process.env.RIVET_RECORDINGS_GZIP_LEVEL, 4, 0)),
-    maxPendingWrites: limitSettings.maxPendingWrites,
     includePartialOutputs: parseBoolean(process.env.RIVET_RECORDINGS_INCLUDE_PARTIAL_OUTPUTS, false),
     includeTrace: parseBoolean(process.env.RIVET_RECORDINGS_INCLUDE_TRACE, false),
     datasetMode,
-    retentionDays: limitSettings.retentionDays,
-    maxRunsPerEndpoint: limitSettings.maxRunsPerEndpoint,
     maxTotalBytes: parseIntWithMinimum(process.env.RIVET_RECORDINGS_MAX_TOTAL_BYTES, 0, 0),
   };
 }
 
+/** Live limits remain authoritative for retention and explicit settings reads. */
+export function getWorkflowRecordingConfig(): WorkflowRecordingConfig {
+  return { ...getWorkflowRecordingRuntimeConfig(), ...readWorkflowRecordingLimitSettings() };
+}
+
 export function isWorkflowRecordingEnabled(): boolean {
-  return getWorkflowRecordingConfig().enabled;
+  return getWorkflowRecordingRuntimeConfig().enabled;
 }
 
 export function getWorkflowExecutionRecorderOptions() {
-  const config = getWorkflowRecordingConfig();
+  const config = getWorkflowRecordingRuntimeConfig();
   return {
     includePartialOutputs: config.includePartialOutputs,
     includeTrace: config.includeTrace,
@@ -188,5 +198,5 @@ export function getWorkflowExecutionRecorderOptions() {
 }
 
 export function shouldSnapshotWorkflowRecordingDatasets(): boolean {
-  return getWorkflowRecordingConfig().datasetMode === 'all';
+  return getWorkflowRecordingRuntimeConfig().datasetMode === 'all';
 }

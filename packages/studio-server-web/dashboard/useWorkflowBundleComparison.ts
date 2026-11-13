@@ -2,13 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   bundleComparisonPairKey,
   type BundleComparisonEditorState,
-  type BundleComparisonManifest,
   type BundleComparisonOwner,
   type BundleComparisonPair,
   type BundleComparisonSend,
 } from '../../studio-server-shared/workflow-bundle-comparison-types';
 import type { BundleComparisonSetup } from './WorkflowBundleCompareModal';
-import { readBundleComparison } from './bundleComparisonApi';
 
 export type BundleComparisonSession = BundleComparisonSetup & { id: string };
 export function useWorkflowBundleComparison(
@@ -20,7 +18,7 @@ export function useWorkflowBundleComparison(
   const sessionRef = useRef(session);
   const latestProject = useRef(editorState.projectId);
   latestProject.current = editorState.projectId;
-  const [modal, setModal] = useState<{ newerBundleId: string; initial?: BundleComparisonSetup } | null>(null);
+  const [modal, setModal] = useState<{ newerBundleId: string } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const selectedRef = useRef(selected);
   const [pending, setPending] = useState<string | null>(null);
@@ -29,22 +27,29 @@ export function useWorkflowBundleComparison(
   const owner = useRef<BundleComparisonOwner | null>(null);
   const [error, setError] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const refreshAbort = useRef<AbortController | null>(null);
   const alive = useRef(true);
   const opener = useRef<HTMLElement | null>(null);
   // Actual displayed project, or the navigation baseline when nothing is attached.
   const sessionProject = useRef<string | null>(null);
+  // A cancelled load or iframe reset waits for an explicit pair click before following tabs again.
+  const followTabs = useRef(false);
   const instance = useRef(editorInstanceId);
   const updateSession = useCallback((next: BundleComparisonSession | null) => {
     sessionRef.current = next;
     setSession(next);
   }, []);
+  const detach = useCallback((projectId: string | null) => {
+    owner.current = null;
+    sessionProject.current = projectId;
+    selectedRef.current = null;
+    setSelected(null);
+  }, []);
   const exit = useCallback(() => {
     const current = sessionRef.current;
     const pendingSession = pendingRef.current?.sessionId;
     const epoch = ++generation.current;
-    refreshAbort.current?.abort();
     pendingRef.current = null;
+    followTabs.current = false;
     owner.current = null;
     sessionProject.current = null;
     sessionRef.current = null;
@@ -66,12 +71,18 @@ export function useWorkflowBundleComparison(
   useEffect(() => {
     const previous = instance.current;
     instance.current = editorInstanceId;
-    if (previous && previous !== editorInstanceId) exit();
-  }, [editorInstanceId, exit]);
+    if (previous && previous !== editorInstanceId) {
+      generation.current++;
+      pendingRef.current = null;
+      setPending(null);
+      followTabs.current = false;
+      detach(latestProject.current);
+    }
+  }, [editorInstanceId, detach]);
   const open = useCallback(
     async (next: BundleComparisonSession, pair: BundleComparisonPair, preferredGraphId?: string) => {
-      refreshAbort.current?.abort();
       const epoch = ++generation.current;
+      if (!sessionRef.current) updateSession(next);
       const key = bundleComparisonPairKey(pair);
       const older = next.manifest.older.projects.find((p) => p.projectId === pair.olderId);
       if (pair.olderId && !older) {
@@ -103,7 +114,10 @@ export function useWorkflowBundleComparison(
       });
       if (!alive.current || generation.current !== epoch) return;
       if (result?.cancelled) {
-        exit();
+        pendingRef.current = null;
+        setPending(null);
+        followTabs.current = false;
+        detach(result.projectId);
         return;
       }
       pendingRef.current = null;
@@ -133,10 +147,10 @@ export function useWorkflowBundleComparison(
           setSelected(null);
           sessionProject.current = result ? result.projectId : latestProject.current;
         }
-        if (!sessionRef.current) updateSession(next);
         return;
       }
       owner.current = result.owner;
+      followTabs.current = true;
       sessionProject.current = result.projectId;
       // Availability errors belong to the reviewed versions and mapping.
       const sameReview = sessionRef.current?.manifest === next.manifest && sessionRef.current?.pairs === next.pairs;
@@ -150,7 +164,7 @@ export function useWorkflowBundleComparison(
         return copy;
       });
     },
-    [send, updateSession, exit],
+    [send, updateSession, detach],
   );
   const apply = (setup: BundleComparisonSetup) => {
     setModal(null);
@@ -161,7 +175,6 @@ export function useWorkflowBundleComparison(
     if (pair) void open(next, pair);
     else {
       const epoch = ++generation.current;
-      refreshAbort.current?.abort();
       updateSession(next);
       owner.current = null;
       sessionProject.current = editorState.projectId;
@@ -187,72 +200,41 @@ export function useWorkflowBundleComparison(
       }
     }
   };
-  const refresh = async (swap = false) => {
-    const current = sessionRef.current;
-    if (!current) return;
-    refreshAbort.current?.abort();
-    const abort = new AbortController();
-    refreshAbort.current = abort;
-    setError('');
-    try {
-      const manifest = await readBundleComparison<BundleComparisonManifest>(
-        'manifest',
-        {
-          olderId: swap ? current.manifest.newer.bundleId : current.manifest.older.bundleId,
-          newerId: swap ? current.manifest.older.bundleId : current.manifest.newer.bundleId,
-        },
-        abort.signal,
-      );
-      if (!alive.current || abort.signal.aborted || sessionRef.current !== current) return;
-      const pairs = swap ? current.pairs.map((p) => ({ olderId: p.newerId, newerId: p.olderId })) : current.pairs;
-      const before = pairs.flatMap((p) => (p.olderId ? [p.olderId] : [])),
-        after = pairs.flatMap((p) => (p.newerId ? [p.newerId] : []));
-      if (
-        before.length !== manifest.older.projects.length ||
-        after.length !== manifest.newer.projects.length ||
-        manifest.older.projects.some((p) => !before.includes(p.projectId)) ||
-        manifest.newer.projects.some((p) => !after.includes(p.projectId))
-      ) {
-        setModal({ newerBundleId: manifest.newer.bundleId, initial: { manifest, pairs } });
-        setError('Bundle membership changed. Review project matching.');
-        return;
-      }
-      const next = { ...current, manifest, pairs };
-      const selectedPair = current.pairs.find((p) => bundleComparisonPairKey(p) === selectedRef.current);
-      const pair = selectedPair
-        ? swap
-          ? { olderId: selectedPair.newerId, newerId: selectedPair.olderId }
-          : selectedPair
-        : pairs[0];
-      if (pair) void open(next, pair);
-      else updateSession(next);
-    } catch (failure) {
-      if (alive.current && !abort.signal.aborted)
-        setError(failure instanceof Error ? failure.message : 'Could not refresh Older versions.');
-    }
-  };
   useEffect(() => {
     const current = sessionRef.current;
     if (!current || pendingRef.current) return;
-    if (!current.pairs.length || !owner.current) {
-      if (editorState.projectId !== sessionProject.current) exit();
-      return;
-    }
-    if (editorState.owner?.sessionId !== current.id) {
+    if (
+      editorState.exitedOwner?.sessionId === current.id &&
+      (!owner.current || editorState.exitedOwner.generation >= owner.current.generation)
+    ) {
       exit();
       return;
     }
-    if (editorState.owner.generation < owner.current.generation) return;
+    if (
+      owner.current &&
+      editorState.owner?.sessionId === current.id &&
+      editorState.owner.generation < owner.current.generation
+    )
+      return;
+    if (editorState.owner?.sessionId !== current.id) {
+      owner.current = null;
+      selectedRef.current = null;
+      setSelected(null);
+    }
+    if (!followTabs.current) {
+      sessionProject.current = editorState.projectId;
+      return;
+    }
     if (sessionProject.current === editorState.projectId) return;
-    const target = current.pairs.find((p) => p.newerId === editorState.projectId);
+    const target = editorState.projectId && current.pairs.find((p) => p.newerId === editorState.projectId);
+    sessionProject.current = editorState.projectId;
     if (target) void open(current, target);
-    else exit();
-  }, [editorState, pending, open, exit]);
+    else detach(editorState.projectId);
+  }, [editorState, pending, open, exit, detach]);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
-      refreshAbort.current?.abort();
       generation.current++;
       const id = sessionRef.current?.id ?? pendingRef.current?.sessionId;
       if (id) void send({ action: 'stop', owner: { sessionId: id, generation: generation.current } });
@@ -263,14 +245,11 @@ export function useWorkflowBundleComparison(
       const current = sessionRef.current;
       if (!current) return false;
       const pair = current.pairs.find((p) => p.newerId === projectId || p.olderId === projectId);
-      if (!pair) {
-        exit();
-        return false;
-      }
+      if (!pair) return false;
       void open(current, pair, graphId);
       return true;
     },
-    [open, exit],
+    [open],
   );
   return {
     session,
@@ -283,7 +262,6 @@ export function useWorkflowBundleComparison(
     exit,
     apply,
     begin: (newerBundleId: string, element?: HTMLElement) => {
-      refreshAbort.current?.abort();
       opener.current = element ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       setModal({ newerBundleId });
     },
@@ -293,17 +271,9 @@ export function useWorkflowBundleComparison(
         if (opener.current?.isConnected) opener.current.focus();
       });
     },
-    edit: () => {
-      refreshAbort.current?.abort();
-      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      const current = sessionRef.current;
-      if (current) setModal({ newerBundleId: current.manifest.newer.bundleId, initial: current });
-    },
     select: (pair: BundleComparisonPair) => {
       const current = sessionRef.current;
       if (current) void open(current, pair);
     },
-    swap: () => void refresh(true),
-    refresh: () => void refresh(false),
   };
 }

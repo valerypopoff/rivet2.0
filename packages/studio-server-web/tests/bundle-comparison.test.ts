@@ -29,6 +29,23 @@ void test('cancellation reports remain explicit and validated independently from
     true,
   );
   assert.equal(isBundleComparisonEditorState({ owner: null, projectId: 'new', cancelled: 'yes' }), false);
+  assert.equal(
+    isBundleComparisonEditorState({
+      owner: null,
+      projectId: null,
+      exitedOwner: { sessionId: 'session', generation: 2 },
+    }),
+    true,
+  );
+  assert.equal(isBundleComparisonEditorState({ owner: null, projectId: null, exitedOwner: true }), false);
+  assert.equal(
+    isBundleComparisonEditorState({
+      owner: null,
+      projectId: null,
+      exitedOwner: { sessionId: 'session', generation: -1 },
+    }),
+    false,
+  );
 });
 void test('comparison suggestions are one-to-one; confirmed mapping accounts for both bundles', () => {
   const manifest: BundleComparisonManifest = {

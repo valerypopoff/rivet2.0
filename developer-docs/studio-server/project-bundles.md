@@ -33,41 +33,54 @@ The unpaired Newer list uses the same project-name and relative-path labels as
 the counterpart choices, without storage extensions. Narrow matching tables
 show their column labels above each stacked cell. The scrollable content keeps
 the footer actions reachable; Escape closes an open choice menu before the modal.
+The setup uses the standard Atlaskit dialog/body, shared dark surface and blurred
+backdrop, project-settings header/close control and bundle-dialog sizing/footer.
+Older receives initial focus; Cancel, the corner close control and backdrop click
+discard only the draft and restore focus to its opener. Shared button sizing and
+disabled styles keep Swap/Cancel consistent with the right-aligned primary action.
+The Older/Newer selectors display only bundle names when closed, with their paths
+underneath; open options retain paths for disambiguation and path-based search.
+The icon-only Swap button exchanges both names and paths and keeps an accessible
+label. On narrow screens each path stays with its selector above/below Swap.
 
 The Server tree shows both selected bundles, including subfolders and disconnected
 members. Either paired row opens the same real **Newer** project. Edit, undo, save,
 and resolve conflicts normally; an open dirty tab is activated without reloading
-it. **Older** stays pinned to Saved latest at setup. Refresh older version captures
-fresh saved pointers without reloading Newer. Swap keeps edits in their original
-real tabs and uses saved contents for the newly Older side. Unsaved Older edits
-are excluded. Changes to bundle membership/locations require reviewing matching.
+it. **Older** stays pinned to Saved latest at setup. The comparison sidebar offers
+only **Exit comparison**; Swap and project matching stay in the setup modal.
+To capture fresh saved versions, change roles or review changed membership/locations,
+exit and start a new comparison. Unsaved edits remain in their original real tabs
+and are excluded from the saved Older reference.
 Both sides highlight the active pair. Collapsed ancestors retain the ordinary
 library's selected-descendant cue without reopening folders the user has closed.
+Comparison rows reuse the ordinary project's row sizing and neutral selection
+background, without an accent outline. Older uses half the selection opacity to
+distinguish it from editable Newer. Long names truncate within one row. The
+expected Paired status is omitted; Loading, Unavailable and one-sided statuses
+remain visible. The toolbar keeps the role labels and Exit without extra help text.
 Pair availability errors stay with the current reviewed versions and mapping;
-a successfully applied Refresh, Swap or new review clears errors from the previous
-review. Switching pairs alone retains other pairs' errors until they are reopened.
+a new review clears errors from the previous review. Switching pairs alone retains
+other pairs' errors until they are reopened.
 
 Newer-only projects compare against an empty reference and remain editable.
 Older-only projects use a transient read-only inspection: no server file, save,
 run, or recoverable virtual tab is created. Removed graphs open a read-only ghost
 view; saving a real Newer project from that view cannot restore the deleted graph.
-Both Exit controls restore the ordinary library and retain real tabs/edits.
-Opening an unrelated tab exits; native Newer-member navigation follows its pair.
-Closing an inspection uses normal tab replacement; Exit does not override a
-newer tab selection. If closure cannot complete, the tab stays available with a
-located error and can be closed explicitly; it is not retried automatically.
-Native tab changes and ordinary Server project opens also cancel an initial
-comparison load and restore the library. Applying an empty review waits for any
-Older-only inspection to close and return to its real tab before settling the
-empty session. Closing inspections releases their reference view and temporary
+Only an explicit **Exit comparison**, in the sidebar or editor, restores the
+ordinary library. Closing any or all tabs, opening an unrelated tab, or losing an
+attached comparison keeps the two reviewed bundles available. A detached pair
+loses its selected highlight; click a row to reopen it. Native Newer-member
+navigation still follows its pair. Closing an inspection uses normal tab replacement;
+Exit does not override that selection. If closure cannot complete, its tab remains
+available with a located error for an explicit later close, without automatic retry.
+Native navigation cancels an in-flight pair read without discarding the review or
+replaying the failed/cancelled open. A read failure retains a previously displayed
+pair only when its exact owner and actual project ID still match, including
+Older-only inspections. Reloading just the iframe detaches the pair but retains the review;
+selection is not replayed automatically. A full dashboard reload still ends the
+transient session. Closing inspections releases their reference view and temporary
 context. Recovery filters only workspace metadata, preserving authored payloads
 and real project contexts even when their keys resemble inspection IDs.
-After a read failure with no attached comparison, switching or closing the active
-tab exits the filtered view without retrying. If the previous comparison is still
-displayed, its exact owner and actual project ID keep its selection intact,
-including Older-only inspections. Opening the matching modal cancels an in-flight
-toolbar Swap/Refresh so a late catalog reply cannot change the confirmed session
-under the modal draft.
 A later standalone comparison also wins over an in-flight bundle attachment;
 cancellation cleanup preserves any inspection document it has taken over.
 

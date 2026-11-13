@@ -1,5 +1,19 @@
 # Architecture
 
+## Hosted editor executor recovery
+
+New owner-routed editor sessions prefer `rivet-session-v2`, with v1 fallback for
+older servers. The existing `DebuggerSessions` capability and owner checks still
+authorize recovery. `DebuggerSessionDelivery` retains functional messages until
+receipt and paces both live traffic and replay. Diagnostic history is independently
+bounded and may be projected/evicted with an explicit partial-history marker.
+Actual outputs, storage changes and pending prompts/dataset operations are never
+replaced with display placeholders. Dataset operation IDs prevent replaying writes;
+only their completed replies may be retransmitted. An unrecoverable connection
+clears unfinished displays and reports an unknown outcome, not a fabricated
+cancellation. No schema, service or deployment-topology change is required.
+See [the recovery contract and limits](editor-executor-recovery-plan.md).
+
 ## Bundle comparison
 
 The managed bundle service supplies `POST /api/workflows/bundles/compare/manifest`
@@ -507,6 +521,38 @@ No cross-run processor, mutable dataset provider or compiled plan is shared.
 Failed recorder construction or attachment disposes a prepared processor before invocation.
 Post-terminal disposal failures are reported without exception contents and
 cannot replace the graph outcome or prevent recording persistence.
+
+Recording writes use environment-derived capture, dataset and compression
+settings independently of live queue/retention policy. Storage startup initializes
+the recording queue's validated capacity before producers start; the existing
+settings subscription updates that limit. Temporary synchronization failures
+retain the last validated queue bound without weakening authorization or
+destructive retention checks. Queue policy is detached only after storage drain
+and close, and is reset between storage generations.
+Queue activity is observable before initialization and after policy disposal:
+counts remain available to scrapes, offline migration and drain checks. The
+capacity is `null` without policy, so metrics omit its gauge rather than claim
+an unlimited or stale limit. This never permits admission before initialization.
+Scheduled recordings check the same dataset-capture policy before exporting
+datasets. Excluded datasets are never loaded just to be discarded by the writer,
+so an unavailable exporter cannot prevent a dataset-free replay from being saved.
+
+Legacy saves initialize the required index without requesting retention cleanup.
+Explicit startup cleanup remains ordered before writers; a failed cleanup does
+not invalidate the index. Regular cleanup follows the post-save callback so
+diagnostic retention holds can be installed first. Post-save notification failures
+cannot erase a committed replay, alter its outcome or trigger another insert.
+The filesystem writer ends its rollback scope once the index is committed.
+Diagnostic error inspection and logging are both best effort, so even an error
+with throwing accessors or a failed logger cannot interrupt the write queue.
+The same rule applies to cleanup and queue-overflow reports: failed reporting
+cannot invalidate storage initialization, interrupt drain or turn a rejected
+recording into a graph failure. Cleanup diagnostics identify the `cleanup` phase.
+Persistence diagnostics contain bounded project/graph/correlation identifiers
+and serialization, persistence or notification phases, never raw provider errors.
+See the [recording persistence repair plan](recording-persistence-fix-plan.md)
+for scope, regressions and deployment limits. The queue remains process-local;
+this change does not provide durable retries after a process or storage failure.
 
 These boundaries are maintainability refactors, not a measured production latency
 claim. They do not alter database schemas, artifact formats or API revision IDs.

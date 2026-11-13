@@ -15,11 +15,12 @@ import {
   type GraphId,
   type PortId,
   type ProcessEventMessage,
+  ExecutorReliableInbox,
 } from '@valerypopoff/rivet2-core';
 
 type IpcMessage = { type?: string; nonce?: string; state?: string };
 
-for (const resumable of [false, true])
+for (const resumable of [0, 1, 2])
   void test(
     `real editor executor retirement owns preparation and paused runs through terminal cleanup (resume=${resumable})`,
     { timeout: 30000 },
@@ -88,16 +89,26 @@ for (const resumable of [false, true])
         await rm(root, { recursive: true, force: true });
       });
       await ipcMessage(child, (message) => message.type === 'rivet-executor-ready', t.signal);
-      let socket = new WebSocket(`ws://127.0.0.1:${port}`, resumable ? ['rivet-session-v1'] : undefined);
+      let socket = new WebSocket(`ws://127.0.0.1:${port}`, resumable ? [`rivet-session-v${resumable}`] : undefined);
       t.after(() => socket.close());
       await new Promise<void>((resolve, reject) => {
         socket.addEventListener('open', () => resolve(), { once: true });
         socket.addEventListener('error', () => reject(new Error(logs)), { once: true });
       });
       const messages: ProcessEventMessage[] = [];
-      socket.addEventListener('message', (event) => {
-        messages.push(JSON.parse(String(event.data)));
-      });
+      const inbox = new ExecutorReliableInbox();
+      const receive = (event: MessageEvent) => {
+        const frame = JSON.parse(String(event.data));
+        if (frame.message !== 'executor-reliable') {
+          messages.push(frame);
+          return;
+        }
+        const item = inbox.receive(frame.data);
+        if (!item) return;
+        if (item.text) messages.push(JSON.parse(item.text));
+        socket.send(JSON.stringify({ type: 'executor-receipt', data: { id: item.id } }));
+      };
+      socket.addEventListener('message', receive);
       const send = (type: string, data: unknown) => socket.send(JSON.stringify({ type, data }));
       const input = UserInputNodeImpl.create(),
         output = GraphOutputNodeImpl.create();
@@ -149,12 +160,13 @@ for (const resumable of [false, true])
         const closed = new Promise((resolve) => socket.addEventListener('close', resolve, { once: true }));
         socket.close();
         await closed;
+        inbox.resetTransfer();
         socket = new WebSocket(`ws://127.0.0.1:${port}`, [
-          'rivet-session-v1',
+          `rivet-session-v${resumable}`,
           `rivet-cap.${capability}`,
           `rivet-seq.${sequence}`,
         ]);
-        socket.addEventListener('message', (event) => messages.push(JSON.parse(String(event.data))));
+        socket.addEventListener('message', receive);
         await new Promise<void>((resolve, reject) => {
           socket.addEventListener('open', () => resolve(), { once: true });
           socket.addEventListener('error', () => reject(new Error(logs)), { once: true });

@@ -459,6 +459,7 @@ export const ExecutorSessionProvider: FC<{ children: ReactNode; hostConfig?: Exe
         };
         routeProjectExecutionDisplay({
           store,
+          diagnosticsIncomplete: admission.diagnosticsIncomplete,
           data,
           message,
           projectId,

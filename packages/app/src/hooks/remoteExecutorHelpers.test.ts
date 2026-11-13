@@ -37,6 +37,23 @@ import { deleteGlobalDataRef, setGlobalDataRef } from '../utils/globals/globalDa
 const registry = createBuiltInRegistry();
 const graphId = 'graph-1' as GraphId;
 
+test('omitted current outputs cannot fall back to an older output when preloading', () => {
+  const previous = {
+    source: [
+      { processId: 'old', data: { outputData: { output: { type: 'string', storage: 'inline', value: 'stale' } } } },
+      { processId: 'current', data: { diagnosticsIncomplete: true, outputData: {} } },
+    ],
+  } as any;
+  assert.throws(() => getDependentDataForNodeForPreload(['source' as NodeId], previous), /incomplete/);
+  assert.equal(
+    canPreloadEditorRunFromPlan(
+      { nodesToRun: [], preserveNodeIds: [], preloadNodeIds: ['source' as NodeId], runToNodeIds: [] },
+      previous,
+    ),
+    false,
+  );
+});
+
 function makeTextNode(nodeId: string, text = 'value'): ChartNode {
   const node = registry.createDynamic('text');
   node.id = nodeId as NodeId;

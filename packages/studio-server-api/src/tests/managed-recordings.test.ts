@@ -34,7 +34,7 @@ test('recording creation time uses the first start lifecycle, including child an
   assert.equal(getWorkflowRecordingCreatedAt([], start), new Date(start).toISOString());
 });
 
-test('managed persistence supplies the captured start to the existing timestamp column, preserving legacy callers', async () => {
+test('managed persistence supplies the captured start to the existing timestamp column, preserving legacy callers', async (t) => {
   const writes: Array<Parameters<ManagedWorkflowContext['revisions']['insertRecordingRow']>[2]> = [];
   const context = {
     pool: {},
@@ -82,6 +82,12 @@ test('managed persistence supplies the captured start to the existing timestamp 
       ['now', undefined],
     ],
   );
+  t.mock.method(console, 'error', () => {});
+  const id = await service.persistWorkflowExecutionRecording({
+    ...input, status: 'failed', onPersisted: async () => { throw new Error('notification failed'); },
+  });
+  assert.ok(id);
+  assert.equal(writes.length, 5, 'a notification error cannot retry or discard the metadata insert');
 });
 
 function createRecordingRow(

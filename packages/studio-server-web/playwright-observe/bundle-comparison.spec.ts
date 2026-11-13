@@ -6,6 +6,7 @@ import type {
   BundleComparisonPairRequest,
 } from '../../studio-server-shared/workflow-bundle-comparison-types';
 import { mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
+import { expectStudioModalSizing } from './helpers/modalSizing';
 
 const olderId = '5c07c7c1-62b1-4140-911b-03c714e580b1';
 const newerId = '5c07c7c1-62b1-4140-911b-03c714e580b2';
@@ -72,12 +73,16 @@ function contents(id: string, text: string, removed = false) {
     references: [],
   } as unknown as Project) as string;
 }
-async function fixture(page: Page, bundleCompare = true) {
+async function fixture(page: Page, bundleCompare = true, paths?: { older: string; newer: string }) {
   const errors: string[] = [];
   pageErrors.set(page, errors);
   page.on('pageerror', (error) => errors.push(error.message));
   const older = catalog(olderId, 'Original', ['old-a', 'old-b', 'old-only']);
   const newer = catalog(newerId, 'Working', ['new-a', 'new-b', 'new-only']);
+  if (paths) {
+    older.relativePath = paths.older;
+    newer.relativePath = paths.newer;
+  }
   const manifest: BundleComparisonManifest = { older, newer, capturedAt: '2026-11-12T00:00:00Z' };
   const snapshots = new Map(
     [...older.projects, ...newer.projects].map((p) => [
@@ -90,7 +95,7 @@ async function fixture(page: Page, bundleCompare = true) {
     ]),
   );
   const pathFor = (c: BundleComparisonCatalog, id: string) =>
-    `/managed/workflows/${c.name}/${c.projects.find((p) => p.projectId === id)!.relativePath}`;
+    `/managed/workflows/${c.relativePath}/${c.projects.find((p) => p.projectId === id)!.relativePath}`;
   const saves: { path: string; contents: string }[] = [];
   const reads: BundleComparisonPairRequest[] = [];
   const loads: string[] = [];
@@ -111,8 +116,8 @@ async function fixture(page: Page, bundleCompare = true) {
               bundleId: c.bundleId,
               namespaceId: c.bundleId,
               name: c.name,
-              relativePath: c.name,
-              absolutePath: `/managed/workflows/${c.name}`,
+              relativePath: c.relativePath,
+              absolutePath: `/managed/workflows/${c.relativePath}`,
               updatedAt: '',
               folders: [],
               projects: c.projects.map((p) => ({
@@ -122,7 +127,7 @@ async function fixture(page: Page, bundleCompare = true) {
                 revisionId: p.revisionId,
                 name: p.name,
                 fileName: p.relativePath.split('/').at(-1),
-                relativePath: `${c.name}/${p.relativePath}`,
+                relativePath: `${c.relativePath}/${p.relativePath}`,
                 absolutePath: pathFor(c, p.projectId),
                 updatedAt: '',
                 bundleId: c.bundleId,
@@ -156,7 +161,7 @@ async function fixture(page: Page, bundleCompare = true) {
       }
       if (path === '/api/projects/load') {
         loads.push(body.path);
-        const c = [older, newer].find((c) => body.path.startsWith(`/managed/workflows/${c.name}/`));
+        const c = [older, newer].find((c) => body.path.startsWith(`/managed/workflows/${c.relativePath}/`));
         const p = c?.projects.find((p) => pathFor(c, p.projectId) === body.path);
         return p
           ? route.fulfill({
@@ -232,6 +237,137 @@ async function openRealNavigationTabs(page: Page) {
   return { editor, outsideTab };
 }
 
+test('bundle picker values show names, paths stay below and in menus, and the icon swaps both roles', async ({
+  page,
+}, testInfo) => {
+  const paths = { older: 'Projects/Original', newer: 'Trash/Work in progress/Working' };
+  const f = await fixture(page, true, paths);
+  await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Compare with another bundle…', exact: true }).click();
+  const modal = page.getByRole('dialog', { name: 'Compare bundles', exact: true });
+  const older = modal.locator('.bundle-comparison-older');
+  const newer = modal.locator('.bundle-comparison-newer');
+  await expect(newer.getByText('Working', { exact: true })).toBeVisible();
+  await expect(newer.getByText(`Working — ${paths.newer}`, { exact: true })).toHaveCount(0);
+  await expect(modal.locator('#compare-newer-bundle-path')).toHaveText(paths.newer);
+  await page.getByRole('combobox', { name: 'Older bundle', exact: true }).click();
+  await expect(page.getByText(`Original — ${paths.older}`, { exact: true })).toBeVisible();
+  await page.getByText(`Original — ${paths.older}`, { exact: true }).click();
+  await expect(older.getByText('Original', { exact: true })).toBeVisible();
+  await expect(older.getByText(`Original — ${paths.older}`, { exact: true })).toHaveCount(0);
+  await expect(modal.locator('#compare-older-bundle-path')).toHaveText(paths.older);
+  await page.getByRole('combobox', { name: 'Newer bundle', exact: true }).click();
+  await expect(page.getByText(`Working — ${paths.newer}`, { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(modal.getByText(/Edit and save the Newer projects normally/)).toHaveCount(0);
+  const swap = modal.getByRole('button', { name: 'Swap', exact: true });
+  await expect(swap.locator('svg')).toBeVisible();
+  await expect(swap).toHaveText('');
+  await swap.click();
+  await expect(older.getByText('Working', { exact: true })).toBeVisible();
+  await expect(newer.getByText('Original', { exact: true })).toBeVisible();
+  await expect(modal.locator('#compare-older-bundle-path')).toHaveText(paths.newer);
+  await expect(modal.locator('#compare-newer-bundle-path')).toHaveText(paths.older);
+  for (const width of [1600, 360]) {
+    await page.setViewportSize({ width, height: width === 360 ? 720 : 1000 });
+    await expectStudioModalSizing(modal);
+    const layout = await modal.evaluate((element) => {
+      const box = (selector: string) => {
+        const { top, bottom, left, right } = element.querySelector(selector)!.getBoundingClientRect();
+        return { top, bottom, left, right };
+      };
+      return {
+        older: box('.bundle-comparison-older'),
+        newer: box('.bundle-comparison-newer'),
+        olderPath: box('#compare-older-bundle-path'),
+        newerPath: box('#compare-newer-bundle-path'),
+        swap: box('.bundle-comparison-swap'),
+        scrollsHorizontally: element.scrollWidth > element.clientWidth,
+      };
+    });
+    expect(layout.olderPath.top).toBeGreaterThanOrEqual(layout.older.bottom);
+    expect(layout.newerPath.top).toBeGreaterThanOrEqual(layout.newer.bottom);
+    expect(Math.abs(layout.olderPath.left - layout.older.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.newerPath.left - layout.newer.left)).toBeLessThanOrEqual(1);
+    expect(layout.scrollsHorizontally).toBe(false);
+    if (width === 1600) expect(Math.abs(layout.swap.bottom - layout.older.bottom)).toBeLessThanOrEqual(1);
+    else {
+      expect(layout.swap.top).toBeGreaterThanOrEqual(layout.olderPath.bottom);
+      expect(layout.newer.top).toBeGreaterThanOrEqual(layout.swap.bottom);
+    }
+    await page.screenshot({ path: testInfo.outputPath(`bundle-picker-${width}.png`) });
+  }
+  expect(f.reads).toHaveLength(0);
+  expect(f.saves).toHaveLength(0);
+});
+
+test('comparison uses the shared backdrop, surface, spacing and dismissal controls', async ({ page }, testInfo) => {
+  const f = await fixture(page);
+  await page.getByRole('button', { name: /^(Expand|Collapse) Working bundle$/ }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Compare with another bundle…', exact: true }).click();
+  let modal = page.getByRole('dialog', { name: 'Compare bundles', exact: true });
+  await expect(modal.getByRole('combobox', { name: 'Older bundle', exact: true })).toBeFocused();
+  const submit = modal.getByRole('button', { name: 'Compare bundles', exact: true });
+  await expect(submit).toBeDisabled();
+  await expect(submit).toHaveCSS('opacity', '0.65');
+  await select(page, 'Older bundle', 'Original');
+  await expect(submit).toBeEnabled();
+  await expect(page.getByTestId('workflow-bundle-compare-modal--blanket')).toHaveCSS(
+    'background-color',
+    'rgba(0, 0, 0, 0.56)',
+  );
+  await expect(page.getByTestId('workflow-bundle-compare-modal--blanket')).toHaveCSS('backdrop-filter', 'blur(2px)');
+  await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
+  await expect(page.getByTestId('workflow-bundle-compare-modal--body')).toHaveCSS('padding', '0px');
+  for (const width of [1600, 740, 360]) {
+    await page.setViewportSize({ width, height: width === 360 ? 650 : 1000 });
+    await expectStudioModalSizing(modal);
+    await expect(submit).toBeInViewport();
+    const layout = await modal.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const close = element.querySelector('.project-settings-close-button')!.getBoundingClientRect();
+      const title = element.querySelector('.project-settings-modal-title')!.getBoundingClientRect();
+      const field = element.querySelector('label[for="compare-older-bundle"]')!.getBoundingClientRect();
+      const footer = element.querySelector('.workflow-project-bundle-footer')!;
+      const cancel = footer.querySelector('button')!.getBoundingClientRect();
+      const primary = footer.querySelector('button:last-child')!.getBoundingClientRect();
+      return {
+        closeRight: bounds.right - close.right,
+        closeTop: close.top - bounds.top,
+        titleInset: title.left - bounds.left,
+        fieldAlignment: title.left - field.left,
+        cancelAlignment: title.left - cancel.left,
+        primaryInset: bounds.right - primary.right,
+        cancelHeight: cancel.height,
+        primaryHeight: primary.height,
+      };
+    });
+    expect(Math.abs(layout.closeRight)).toBeLessThanOrEqual(2);
+    expect(Math.abs(layout.closeTop)).toBeLessThanOrEqual(2);
+    expect(layout.titleInset).toBeGreaterThanOrEqual(17);
+    expect(layout.titleInset).toBeLessThanOrEqual(20);
+    expect(Math.abs(layout.fieldAlignment)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.cancelAlignment)).toBeLessThanOrEqual(1);
+    expect(layout.primaryInset).toBeGreaterThanOrEqual(17);
+    expect(layout.primaryInset).toBeLessThanOrEqual(20);
+    expect(layout.cancelHeight).toBe(40);
+    expect(layout.primaryHeight).toBe(40);
+    if (width !== 740) await page.screenshot({ path: testInfo.outputPath(`compare-modal-${width}.png`) });
+  }
+  await modal.getByRole('button', { name: 'Close bundle comparison', exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  for (const dismiss of ['Cancel', 'backdrop']) {
+    modal = await begin(page);
+    if (dismiss === 'Cancel') await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+    else await page.mouse.click(4, 4);
+    await expect(modal).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Expand Working bundle', exact: true })).toBeFocused();
+  }
+  expect(f.reads).toHaveLength(0);
+  expect(f.loads).toHaveLength(0);
+});
+
 test('matches both bundles, saves only Newer, and inspects removed graphs without restoring them', async ({ page }) => {
   const f = await fixture(page);
   const modal = await begin(page);
@@ -289,6 +425,80 @@ test('matches both bundles, saves only Newer, and inspects removed graphs withou
   expect(f.loads.filter((path) => path.includes('/Original/'))).toEqual([]);
 });
 
+test('comparison rows reuse normal sizing and highlight color, mute Older, and omit the default status', async ({
+  page,
+}, testInfo) => {
+  const f = await fixture(page);
+  await page.getByRole('button', { name: 'Expand Working bundle', exact: true }).click();
+  await page.locator('.project-row', { hasText: 'Main project' }).dblclick();
+  const ordinary = page.locator('.project-row.active');
+  await expect(ordinary).toBeVisible();
+  const standard = await ordinary.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      height: element.getBoundingClientRect().height,
+      background: style.backgroundColor,
+      fontSize: style.fontSize,
+      lineHeight: style.lineHeight,
+      padding: style.padding,
+      borderRadius: style.borderRadius,
+    };
+  });
+  const longName = 'A long project name that should keep the ordinary single-row height';
+  f.older.projects[1]!.name = longName;
+  f.newer.projects[1]!.name = longName;
+  await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
+  const tree = page.getByLabel('Compared bundles', { exact: true });
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
+  await expect(tree.getByText('Paired', { exact: true })).toHaveCount(0);
+  await expect(tree.getByText('Only in older', { exact: true })).toBeVisible();
+  await expect(tree.getByText('Only in newer', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Older uses saved versions. Unsaved edits stay in their original tabs.', { exact: true }),
+  ).toHaveCount(0);
+  const older = tree.locator('.comparison-project-row.active[data-comparison-role="older"]');
+  const newer = tree.locator('.comparison-project-row.active[data-comparison-role="newer"]');
+  for (const width of [1600, 620]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const row of await tree.locator('.comparison-project-row').all()) {
+      await expect(row).toHaveCSS('font-size', standard.fontSize);
+      await expect(row).toHaveCSS('line-height', standard.lineHeight);
+      await expect(row).toHaveCSS('padding', standard.padding);
+      await expect(row).toHaveCSS('border-radius', standard.borderRadius);
+      expect((await row.boundingBox())!.height).toBeCloseTo(standard.height, 1);
+    }
+    await expect(newer).toHaveCSS('background-color', standard.background);
+    await expect(newer).toHaveCSS('outline-style', 'none');
+    await expect(older).toHaveCSS('outline-style', 'none');
+    const colors = await tree.evaluate((element) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d')!;
+      return ['older', 'newer'].map((side) => {
+        context.clearRect(0, 0, 1, 1);
+        context.fillStyle = getComputedStyle(
+          element.querySelector(`[data-comparison-role="${side}"].active`)!,
+        ).backgroundColor;
+        context.fillRect(0, 0, 1, 1);
+        return Array.from(context.getImageData(0, 0, 1, 1).data);
+      });
+    });
+    expect(colors[0]!.slice(0, 3)).toEqual(colors[1]!.slice(0, 3));
+    expect(colors[0]![3]).toBeGreaterThan(0);
+    expect(colors[0]![3]).toBeLessThan(colors[1]![3]!);
+    await page.screenshot({ path: testInfo.outputPath(`comparison-tree-${width}.png`) });
+  }
+  f.block();
+  try {
+    await tree.getByRole('button', { name: `Compare Newer project ${longName}`, exact: true }).click();
+    await expect(tree.getByText('Loading…', { exact: true })).toHaveCount(2);
+  } finally {
+    f.release();
+  }
+  await expect(tree.getByText('Loading…', { exact: true })).toHaveCount(0);
+  expect(f.saves).toHaveLength(0);
+});
+
 test('collapsed comparison folders indicate the selected project after native tab navigation', async ({ page }) => {
   const f = await fixture(page);
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
@@ -318,11 +528,14 @@ test('collapsed comparison folders indicate the selected project after native ta
   expect(f.saves).toHaveLength(0);
 });
 
-test('Refresh discards stale pair errors from the previously reviewed saved versions', async ({ page }) => {
+test('restarting comparison captures fresh saved versions and clears errors from the previous review', async ({
+  page,
+}) => {
   const f = await fixture(page);
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
   const tree = page.getByLabel('Compared bundles', { exact: true });
   const dependency = tree.getByRole('button', { name: 'Compare Newer project Dependency' });
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
   let failures = 0;
   await page.route('**/api/workflows/bundles/compare/pair', (route) => {
     const body = route.request().postDataJSON() as BundleComparisonPairRequest;
@@ -345,8 +558,9 @@ test('Refresh discards stale pair errors from the previously reviewed saved vers
   );
   await expect(dependency).toContainText('Unavailable');
   f.older.projects.find((p) => p.projectId === 'old-b')!.revisionId = 'fresh-old-b';
-  await page.getByRole('button', { name: 'Refresh older version', exact: true }).click();
-  await expect(dependency).toContainText('Paired');
+  await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+  await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
+  await expect(dependency.getByText('Paired', { exact: true })).toHaveCount(0);
   await expect(dependency).not.toContainText('Unavailable');
   await dependency.click();
   await expect(dependency).toHaveAttribute('aria-current', 'true');
@@ -418,10 +632,8 @@ test('cancel and delayed Exit never activate a late comparison', async ({ page }
   expect(f.loads).toHaveLength(0);
 });
 
-for (const navigation of ['native tab', 'library project'] as const) {
-  test(`a ${navigation} switch while starting comparison cancels it and restores the normal library`, async ({
-    page,
-  }) => {
+for (const navigation of ['native tab', 'host project'] as const) {
+  test(`a ${navigation} switch cancels a pending pair without ending bundle comparison`, async ({ page }) => {
     const f = await fixture(page);
     const { editor, outsideTab } = await openRealNavigationTabs(page);
     f.block();
@@ -429,21 +641,30 @@ for (const navigation of ['native tab', 'library project'] as const) {
       await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
       await expect.poll(() => f.reads.length).toBe(1);
       if (navigation === 'native tab') await outsideTab.locator('.project-name').click();
-      else await page.locator('.project-row', { hasText: 'Dependency' }).first().dblclick();
+      else
+        await page.locator('iframe.dashboard-editor-frame').evaluate(
+          (iframe: HTMLIFrameElement, path) => {
+            iframe.contentWindow!.postMessage({ type: 'open-project', path, replaceCurrent: false }, location.origin);
+          },
+          f.pathFor(f.older, 'old-b'),
+        );
       await expect(outsideTab).toHaveClass(/\bactive\b/);
-      await expect(page.getByRole('button', { name: 'Exit comparison', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Exit comparison', exact: true })).toBeVisible();
     } finally {
       f.release();
     }
-    await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Compared bundles', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Compared bundles', { exact: true }).getByText('Loading…')).toHaveCount(0);
     await expect(editor.locator('.project-compare-notice')).toHaveCount(0);
     expect(f.loads).toHaveLength(2);
     expect(f.saves).toHaveLength(0);
+    await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+    await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
   });
 }
 
 for (const navigation of ['switch tab', 'close tab'] as const) {
-  test(`a failed initial reference read does not trap the library after ${navigation}`, async ({ page }) => {
+  test(`a failed initial reference read keeps its review after ${navigation} until explicit Exit`, async ({ page }) => {
     const f = await fixture(page);
     const { editor, outsideTab } = await openRealNavigationTabs(page);
     let failures = 0;
@@ -461,11 +682,13 @@ for (const navigation of ['switch tab', 'close tab'] as const) {
       await active.locator('.close-project').click();
     }
     await expect(outsideTab).toHaveClass(/\bactive\b/);
-    await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Exit comparison', exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Compared bundles', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Exit comparison', exact: true })).toBeVisible();
     expect(failures).toBe(1);
     expect(f.loads).toHaveLength(2);
     expect(f.saves).toHaveLength(0);
+    await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+    await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
   });
 }
 
@@ -486,56 +709,76 @@ test('a failed pair read keeps the displayed Older-only inspection selected and 
   await expect(removed).toHaveAttribute('aria-current', 'true');
   const editor = page.frameLocator('iframe.dashboard-editor-frame');
   await expect(editor.locator('.node.compare-removed')).toHaveCount(1);
-  await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit', exact: true }).click();
+  await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit comparison', exact: true }).click();
   await expect(tree).toHaveCount(0);
   await expect(editor.locator('.projects-container .project', { hasText: 'Older only' })).toHaveCount(0);
   expect(failures).toBe(1);
   expect(f.saves).toHaveLength(0);
 });
 
-test('opening project matching cancels an in-flight toolbar Swap without changing the confirmed roles', async ({
+test('the sidebar only offers Exit and closing every real tab keeps the reviewed bundles available', async ({
   page,
 }) => {
   const f = await fixture(page);
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
   await expect(page.getByLabel('Compared bundles', { exact: true })).toBeVisible();
-  let requested = false;
-  let release: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route('**/api/workflows/bundles/compare/manifest', async (route) => {
-    if (route.request().postDataJSON().olderId !== newerId) return route.fallback();
-    requested = true;
-    await gate;
-    await route.fulfill({ json: { older: f.newer, newer: f.older, capturedAt: '2026-11-12T00:00:00Z' } });
-  });
-  const cancelled = page
-    .waitForEvent('requestfailed', {
-      predicate: (request) => request.url().endsWith('/compare/manifest') && request.postDataJSON().olderId === newerId,
-      timeout: 10_000,
-    })
-    .then(
-      () => true,
-      () => false,
-    );
-  try {
-    await page.getByRole('button', { name: 'Swap', exact: true }).click();
-    await expect.poll(() => requested).toBe(true);
-    await page.getByRole('button', { name: 'Match projects', exact: true }).click();
-    const modal = page.getByRole('dialog', { name: 'Compare bundles', exact: true });
-    await expect(modal.getByRole('table', { name: 'Match projects' })).toBeVisible();
-    release();
-    expect(await cancelled).toBe(true);
-    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
-  } finally {
-    release();
+  const toolbar = page.locator('.bundle-comparison-toolbar');
+  await expect(toolbar.getByRole('button')).toHaveCount(1);
+  await expect(toolbar.getByRole('button', { name: 'Exit comparison', exact: true })).toBeVisible();
+  for (const name of ['Swap', 'Match projects', 'Refresh older version']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
   }
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const tree = page.getByLabel('Compared bundles', { exact: true });
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
+  await tree.getByRole('button', { name: 'Compare Newer project Dependency' }).click();
+  await expect(editor.locator('.projects-container .project')).toHaveCount(2);
+  await editor.locator('.projects-container .project.active').hover();
+  await editor.locator('.projects-container .project.active .close-project').click();
+  await expect(editor.locator('.projects-container .project')).toHaveCount(1);
+  await expect(tree).toBeVisible();
+  await editor.locator('.projects-container .project.active').hover();
+  await editor.locator('.projects-container .project.active .close-project').click();
+  await expect(editor.locator('.projects-container .project')).toHaveCount(0);
+  await expect(tree).toBeVisible();
+  await expect(tree.locator(':scope > details')).toHaveCount(2);
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(0);
+  await tree.getByRole('button', { name: 'Compare Newer project Main project' }).click();
+  await expect(editor.locator('.node.compare-changed')).toHaveCount(1);
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
   await expect(page.locator('.bundle-comparison-title')).toHaveText(
     'Original (Older, saved) → Working (Newer, editable)',
   );
-  expect(f.loads).toHaveLength(1);
   expect(f.saves).toHaveLength(0);
+  await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+  await expect(tree).toHaveCount(0);
+});
+
+test('unrelated tabs and closing an inactive compared tab keep the bundle review until explicit Exit', async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  const { editor, outsideTab } = await openRealNavigationTabs(page);
+  await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
+  const tree = page.getByLabel('Compared bundles', { exact: true });
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
+  await outsideTab.locator('.project-name').click();
+  await expect(outsideTab).toHaveClass(/\bactive\b/);
+  await expect(tree).toBeVisible();
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(0);
+  await expect(editor.locator('.project-compare-notice')).toHaveCount(0);
+  const comparedTab = editor.locator('.projects-container .project', { hasText: /^Main$/ });
+  await comparedTab.hover();
+  await comparedTab.locator('.close-project').click();
+  await expect(comparedTab).toHaveCount(0);
+  await expect(outsideTab).toHaveClass(/\bactive\b/);
+  await expect(tree).toBeVisible();
+  await tree.getByRole('button', { name: 'Compare Newer project Main project' }).click();
+  await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
+  await expect(editor.locator('.node.compare-changed')).toHaveCount(1);
+  expect(f.saves).toHaveLength(0);
+  await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+  await expect(tree).toHaveCount(0);
 });
 
 test('manual correspondence survives modal Swap and cancelling its draft leaves the editor unchanged', async ({
@@ -566,7 +809,7 @@ test('manual correspondence survives modal Swap and cancelling its draft leaves 
   await expect(page.getByRole('button', { name: 'Expand Working bundle', exact: true })).toBeFocused();
 });
 
-test('Swap and Refresh preserve unsaved real tabs, use saved Older versions, and inner Exit restores the library', async ({
+test('modal Swap preserves unsaved real tabs, uses saved Older versions, and inner Exit restores the library', async ({
   page,
 }) => {
   const f = await fixture(page);
@@ -587,17 +830,18 @@ test('Swap and Refresh preserve unsaved real tabs, use saved Older versions, and
   await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
   await expect.poll(currentTransform).toBe(dirtyPosition);
   await expect(page.locator('.active-project-save-button')).toBeVisible();
-  await page.getByRole('button', { name: 'Refresh older version', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Refresh older version', exact: true })).toBeEnabled();
-  await expect.poll(currentTransform).toBe(dirtyPosition);
   expect(f.loads.filter((p) => p.includes('/Working/Main'))).toHaveLength(1);
-  await page.getByRole('button', { name: 'Swap', exact: true }).click();
+  await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+  const swapped = await begin(page);
+  await swapped.getByRole('button', { name: 'Swap', exact: true }).click();
+  await swapped.getByRole('button', { name: 'Compare bundles', exact: true }).click();
   await expect(page.locator('.bundle-comparison-title')).toHaveText(
     'Working (Older, saved) → Original (Newer, editable)',
   );
   await expect(editor.locator('.node[data-nodeid="text"] .node-body')).toContainText('Before');
   await expect(page.getByLabel('Compared bundles', { exact: true })).toContainText('Unsaved edits excluded');
-  await page.getByRole('button', { name: 'Swap', exact: true }).click();
+  await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+  await (await begin(page)).getByRole('button', { name: 'Compare bundles', exact: true }).click();
   await expect(page.locator('.bundle-comparison-title')).toHaveText(
     'Original (Older, saved) → Working (Newer, editable)',
   );
@@ -609,7 +853,7 @@ test('Swap and Refresh preserve unsaved real tabs, use saved Older versions, and
   await expect.poll(async () => (await title.boundingBox())?.x).not.toBe(before!.x);
   await page.keyboard.press('Control+y');
   await expect.poll(currentTransform).toBe(dirtyPosition);
-  await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit', exact: true }).click();
+  await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit comparison', exact: true }).click();
   await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^(Expand|Collapse) Working bundle$/ })).toBeVisible();
   await expect(page.locator('.active-project-save-button')).toBeVisible();
@@ -668,7 +912,7 @@ test('an Older-only tab stays non-runnable when its post-Exit cleanup message is
   await editor.locator('body').evaluate((body) => {
     body.dataset.dropComparisonCleanup = 'true';
   });
-  await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit', exact: true }).click();
+  await editor.locator('.project-compare-notice').getByRole('button', { name: 'Exit comparison', exact: true }).click();
   await expect(editor.locator('body')).toHaveAttribute('data-comparison-cleanup-blocked', 'true');
   await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
   const inspection = editor.locator('.projects-container .project', { hasText: 'Older only' });
@@ -808,7 +1052,7 @@ test('empty bundles show two empty roots without opening an arbitrary project', 
 });
 
 for (const hasRealTab of [true, false]) {
-  test(`an empty reviewed comparison settles an Older-only inspection ${hasRealTab ? 'with' : 'without'} a real return tab`, async ({
+  test(`closing an Older-only inspection keeps comparison ${hasRealTab ? 'with' : 'without'} a real return tab`, async ({
     page,
   }) => {
     const f = await fixture(page);
@@ -817,18 +1061,20 @@ for (const hasRealTab of [true, false]) {
     await setup.getByRole('button', { name: 'Compare bundles', exact: true }).click();
     const tree = page.getByLabel('Compared bundles', { exact: true });
     const editor = page.frameLocator('iframe.dashboard-editor-frame');
-    if (hasRealTab) await tree.getByRole('button', { name: 'Compare Older project Removed member' }).click();
+    if (hasRealTab) {
+      await expect(tree.locator('[aria-current="true"]')).toHaveCount(2);
+      await tree.getByRole('button', { name: 'Compare Older project Removed member' }).click();
+    }
     await expect(editor.locator('.node.compare-removed')).toHaveCount(1);
-    f.older.projects = [];
-    f.newer.projects = [];
-    await page.getByRole('button', { name: 'Match projects', exact: true }).click();
-    const modal = page.getByRole('dialog', { name: 'Compare bundles', exact: true });
-    await expect(modal).toContainText('No projects in the Older bundle.');
-    await modal.getByRole('button', { name: 'Compare bundles', exact: true }).click();
-    await expect(tree.getByText('No projects', { exact: true })).toHaveCount(2);
-    await expect(page.getByRole('button', { name: 'Refresh older version', exact: true })).toBeEnabled();
-    await expect(editor.locator('.project-compare-notice')).toHaveCount(0);
-    await expect(editor.locator('.projects-container .project', { hasText: 'Older only' })).toHaveCount(0);
+    const inspection = editor.locator('.projects-container .project', { hasText: 'Older only' });
+    await inspection.hover();
+    await inspection.locator('.close-project').click();
+    await expect(inspection).toHaveCount(0);
+    await expect(tree).toBeVisible();
+    await expect(tree.locator(':scope > details')).toHaveCount(2);
+    if (!hasRealTab) await expect(editor.locator('.projects-container .project')).toHaveCount(0);
+    await tree.getByRole('button', { name: 'Compare Older project Removed member' }).click();
+    await expect(editor.locator('.node.compare-removed')).toHaveCount(1);
     await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
     await expect(tree).toHaveCount(0);
     expect(f.loads).toHaveLength(hasRealTab ? 1 : 0);
@@ -845,27 +1091,32 @@ test('older APIs keep normal bundle actions and hide unsupported comparison', as
 });
 
 for (const phase of ['active', 'pending'] as const) {
-  test(`reloading only the editor ends a ${phase} comparison without replaying its selection`, async ({ page }) => {
+  test(`reloading only the editor keeps a ${phase} review without replaying its selection`, async ({ page }) => {
     const f = await fixture(page);
     const modal = await begin(page);
     if (phase === 'pending') f.block();
     await modal.getByRole('button', { name: 'Compare bundles', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Exit comparison', exact: true })).toBeVisible();
-    if (phase === 'active') await expect(page.getByLabel('Compared bundles', { exact: true })).toBeVisible();
+    if (phase === 'active')
+      await expect(page.getByLabel('Compared bundles', { exact: true }).locator('[aria-current="true"]')).toHaveCount(
+        2,
+      );
     else await expect.poll(() => f.reads.length).toBe(1);
     const beforeLoads = f.loads.length;
     try {
       await page
         .locator('iframe.dashboard-editor-frame')
         .evaluate((iframe: HTMLIFrameElement) => iframe.contentWindow!.location.reload());
-      await expect(page.getByRole('button', { name: 'Exit comparison', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Exit comparison', exact: true })).toBeVisible();
     } finally {
       f.release();
     }
-    await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Compared bundles', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Compared bundles', { exact: true }).locator('[aria-current="true"]')).toHaveCount(0);
     const editor = page.frameLocator('iframe.dashboard-editor-frame');
     await expect(editor.locator('.project-compare-notice')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /^(Expand|Collapse) Working bundle$/ })).toBeVisible();
     expect(f.loads.length).toBe(beforeLoads);
+    await page.getByRole('button', { name: 'Exit comparison', exact: true }).click();
+    await expect(page.getByLabel('Compared bundles', { exact: true })).toHaveCount(0);
   });
 }

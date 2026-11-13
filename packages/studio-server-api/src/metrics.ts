@@ -284,12 +284,13 @@ export class StudioMetrics {
   }
   setWorkflowRecordingPersistence(input: {
     activeWrites: number;
-    maxPendingWrites: number;
+    maxPendingWrites: number | null;
     pendingWrites: number;
   }): void {
     this.setGauge('rivet_workflow_recording_persistence_queue_depth', {}, input.pendingWrites);
     this.setGauge('rivet_workflow_recording_persistence_active_writes', {}, input.activeWrites);
-    this.setGauge('rivet_workflow_recording_persistence_queue_limit', {}, input.maxPendingWrites);
+    if (input.maxPendingWrites === null) this.#gauges.delete('rivet_workflow_recording_persistence_queue_limit');
+    else this.setGauge('rivet_workflow_recording_persistence_queue_limit', {}, input.maxPendingWrites);
   }
 
   recordWorkflowRecordingPersistenceDrop(): void {

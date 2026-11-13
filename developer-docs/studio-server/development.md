@@ -664,6 +664,13 @@ screens, including the editor iframe's narrower viewport. Popovers, menus and
 non-modal input-path suggestions are not affected. Height and content scrolling
 remain each dialog's responsibility. Do not add separate dashboard width props
 or page-specific width overrides; change the shared variables instead.
+`dashboard/WorkflowLibraryPanel.css` owns the shared dark dialog surface, zero
+body padding and dimmed/blurred Atlaskit backdrop. Register each new dialog and
+its `--body`/`--blanket` IDs there. Bundle dialogs, including Compare bundles,
+reuse the height/scroll shell in `WorkflowProjectBundleModal.css` and the standard
+header, corner close control and footer/button classes. Verify the actual dialog
+and backdrop on desktop and narrow viewports; using `ModalDialog` alone does not
+apply the Server theme to a newly introduced test ID.
 Only the immediate Atlaskit positioner (identified by its direct dialog child's
 `data-modal-stack` marker) uses the same dimensions and auto side margins;
 changing only the dialog leaves the library's smaller mobile/desktop wrapper

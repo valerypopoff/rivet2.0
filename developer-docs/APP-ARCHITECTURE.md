@@ -1527,7 +1527,7 @@ over a stale answer. Keep this fence inside the existing project session owner.
 Each attempt has a session-local token; transport loss and explicit replacement
 invalidate it, and an old completion cannot clear a newer attempt. Reusing an
 open socket must preserve replay/discovery state, not infer readiness from TCP.
-Resumable dataset completions use that same logical session's response path:
+Legacy v1 dataset completions use that same logical session's response path:
 retain only completed responses (up to 64 / 8 MiB while disconnected), flush
 after replay-ready, and discard on logical replacement or expiry. Never repeat
 the underlying dataset operation to recover a lost physical socket. Connected
@@ -1544,6 +1544,12 @@ hosted, desktop and external debugger connections retain readiness on open.
 Invalid or missing acknowledgements fail closed without adopting another run.
 Failed reconnects preserve the bounded backoff; only transport success or an
 explicit session replacement resets it.
+The [editor executor recovery contract](studio-server/editor-executor-recovery-plan.md)
+uses negotiated session v2 to separate reliable request outcomes from bounded
+diagnostic history. Live/replay delivery is paced; lost diagnostics mark the run
+partial while its result remains recoverable. Dataset replies are deduplicated,
+and permanent observation loss clears unfinished node displays without inventing
+a server cancellation. Existing v1 sessions keep their original protocol.
 Evaluation graph-input conversion is shared in `preparedEditorRun`, so Browser
 and Node apply the same target-port types and unknown-input validation.
 Authored capture is one detached project snapshot, not a clone of the entire
