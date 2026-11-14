@@ -1,8 +1,220 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { authenticateIfNeeded, mockHostedEditorBootstrap, waitForDashboardReady } from './helpers/hostedEditorObserve';
-import type { WorkflowFolderItem } from '../dashboard/types';
+import type { WorkflowFolderItem, WorkflowProjectItem } from '../dashboard/types';
 import { serializeProject, type ProjectId } from '@valerypopoff/rivet2-core';
 import { projectBundleFixture } from '../../studio-server-api/src/tests/helpers/project-bundle-fixture';
+import { seedHostedEditorProject } from './helpers/hostedEditorStorage';
+
+/** A real acknowledgement also fences every earlier queued editor command. */
+async function captureOpenedProjectIds(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const frame = document.querySelector<HTMLIFrameElement>('iframe.dashboard-editor-frame');
+    if (!frame?.contentWindow) throw new Error('Editor frame is unavailable');
+    return new Promise<string[]>((resolve, reject) => {
+      const requestId = crypto.randomUUID();
+      const listener = new AbortController();
+      const timer = setTimeout(() => {
+        listener.abort();
+        reject(new Error('Editor did not acknowledge the project capture'));
+      }, 10_000);
+      window.addEventListener(
+        'message',
+        (event) => {
+          if (
+            event.source !== frame.contentWindow ||
+            event.origin !== location.origin ||
+            event.data?.type !== 'workflow-project-reconciliation-captured' ||
+            event.data.requestId !== requestId
+          )
+            return;
+          clearTimeout(timer);
+          listener.abort();
+          if (!event.data.context.editCheckComplete) {
+            reject(new Error('Editor project capture is incomplete'));
+            return;
+          }
+          resolve(event.data.context.projects.map((project: { projectId: string }) => project.projectId));
+        },
+        { signal: listener.signal },
+      );
+      frame.contentWindow!.postMessage({ type: 'capture-workflow-project-reconciliation', requestId }, location.origin);
+    });
+  });
+}
+
+test('a delayed bundle deletion preserves an unsaved replacement project at the same path', async ({ page }) => {
+  const projectId = 'replacement-project';
+  const path = '/workflows/Feature/Replacement.rivet-project';
+  const deletedBundleId = '58019223-bd4e-49c3-a042-321215efaa35';
+  let deleted = false;
+  await seedHostedEditorProject(page, {
+    graphId: 'replacement-graph',
+    loaded: true,
+    projectId,
+    projectPath: path,
+    title: 'Replacement',
+    graph: {
+      nodes: [
+        {
+          id: 'replacement-text',
+          type: 'text',
+          title: 'Keep this node',
+          data: { text: 'replacement content' },
+          visualData: { x: 100, y: 100, width: 250 },
+        },
+      ],
+    },
+  });
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 503, json: { error: 'No ambient API in deletion fixture' } }),
+  );
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        folders: [
+          {
+            id: 'Feature',
+            name: 'Feature',
+            relativePath: 'Feature',
+            absolutePath: '/workflows/Feature',
+            updatedAt: '',
+            bundleId: deleted ? '85019223-bd4e-49c3-a042-321215efaa35' : deletedBundleId,
+            folders: [],
+            projects: [
+              {
+                id: deleted ? projectId : 'deleted-project',
+                projectMetadataId: deleted ? projectId : 'deleted-project',
+                name: 'Replacement',
+                fileName: 'Replacement.rivet-project',
+                relativePath: 'Feature/Replacement.rivet-project',
+                absolutePath: path,
+                updatedAt: '',
+                settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+              },
+            ],
+          },
+        ],
+        projects: [],
+        capabilities: { explicitBundles: true },
+      },
+    }),
+  );
+  await page.route(`**/api/workflows/bundles/${deletedBundleId}/delete`, (route) => {
+    deleted = true;
+    return route.fulfill({ json: { deleted: true, deletedProjects: [{ path, projectId: 'deleted-project' }] } });
+  });
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  const editor = page.frameLocator('iframe.dashboard-editor-frame');
+  const tab = editor.locator('.projects-container .project.active').filter({ hasText: 'Replacement' });
+  const node = editor.locator('.node[data-nodeid="replacement-text"] .node-title');
+  await expect(node).toBeVisible();
+  const box = (await node.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 + 40, { steps: 5 });
+  await page.mouse.up();
+  await expect(tab).toHaveClass(/has-unsaved-changes/);
+  const save = page.getByRole('button', { name: 'Save current project', exact: true });
+  await expect(save).toBeVisible();
+  await page.getByRole('button', { name: /^(Expand|Collapse) Feature bundle$/ }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
+  const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
+  await modal.getByRole('textbox', { name: 'Bundle name', exact: true }).fill('Feature');
+  await modal.getByRole('button', { name: 'Delete bundle', exact: true }).click();
+  await expect(modal).toHaveCount(0);
+
+  expect(await captureOpenedProjectIds(page)).toEqual([projectId]);
+  await expect(tab).toBeVisible();
+  await expect(tab).toHaveClass(/has-unsaved-changes/);
+  await expect(node).toBeVisible();
+  await expect(save).toBeVisible();
+});
+
+test('bundle deletion closes a member whose earlier open is still loading', async ({ page }) => {
+  const project = projectBundleFixture().child.project;
+  project.metadata.title = 'Loading member';
+  const bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
+  const path = '/workflows/Feature/Loading member.rivet-project';
+  let deleted = false;
+  let releaseLoad!: () => void;
+  let loadStarted = false;
+  const pendingLoad = new Promise<void>((resolve) => {
+    releaseLoad = resolve;
+  });
+  await page.route('**/api/workflows/tree', (route) =>
+    route.fulfill({
+      json: {
+        root: '/workflows',
+        capabilities: { explicitBundles: true },
+        projects: [],
+        folders: deleted
+          ? []
+          : [
+              {
+                id: 'Feature',
+                name: 'Feature',
+                relativePath: 'Feature',
+                absolutePath: '/workflows/Feature',
+                updatedAt: '',
+                bundleId,
+                folders: [],
+                projects: [
+                  {
+                    id: 'member',
+                    projectMetadataId: project.metadata.id,
+                    name: 'Loading member',
+                    fileName: 'Loading member.rivet-project',
+                    relativePath: 'Feature/Loading member.rivet-project',
+                    absolutePath: path,
+                    updatedAt: '',
+                    settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+                  },
+                ],
+              },
+            ],
+      },
+    }),
+  );
+  await page.route('**/api/projects/load', async (route) => {
+    loadStarted = true;
+    await pendingLoad;
+    await route.fulfill({ json: { contents: serializeProject(project), datasetsContents: null, revisionId: null } });
+  });
+  await page.route(`**/api/workflows/bundles/${bundleId}/delete`, (route) => {
+    deleted = true;
+    return route.fulfill({ json: { deleted: true, deletedProjects: [{ path, projectId: project.metadata.id }] } });
+  });
+  await mockHostedEditorBootstrap(page);
+  await page.goto('/');
+  await authenticateIfNeeded(page);
+  await waitForDashboardReady(page);
+  const folder = page.getByRole('button', { name: /^(Expand|Collapse) Feature bundle$/ });
+  try {
+    await folder.click();
+    await page.locator('.project-row').filter({ hasText: 'Loading member' }).dblclick();
+    await expect.poll(() => loadStarted).toBe(true);
+    await folder.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Delete bundle', exact: true }).click();
+    const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
+    await modal.getByRole('textbox', { name: 'Bundle name', exact: true }).fill('Feature');
+    await modal.getByRole('button', { name: 'Delete bundle', exact: true }).click();
+    await expect(modal).toHaveCount(0);
+  } finally {
+    releaseLoad();
+  }
+  expect(await captureOpenedProjectIds(page)).not.toContain(project.metadata.id);
+  await expect(
+    page
+      .frameLocator('iframe.dashboard-editor-frame')
+      .locator('.projects-container .project')
+      .filter({ hasText: 'Loading member' }),
+  ).toHaveCount(0);
+});
 
 for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure', 'managed unknown'] as const) {
   test(`non-empty bundle deletion requires a copyable exact name (${outcome})`, async ({ page }, testInfo) => {
@@ -57,14 +269,16 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure',
     const ready = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.addInitScript(() =>
-      document.addEventListener('copy', (event) => {
-        Object.assign(window, {
-          __bundleCopiedName: window.getSelection()?.toString(),
-          __bundleCopyPrevented: event.defaultPrevented,
-        });
-      }),
-    );
+    if (outcome === 'success') {
+      await page.addInitScript(() =>
+        document.addEventListener('copy', (event) => {
+          Object.assign(window, {
+            __bundleCopiedName: window.getSelection()?.toString(),
+            __bundleCopyPrevented: event.defaultPrevented,
+          });
+        }),
+      );
+    }
     await page.route('**/api/workflows/tree', (route) => {
       if (removed && outcome === 'refresh failure') {
         failedRefreshes++;
@@ -110,12 +324,11 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure',
     await page.goto('/');
     await authenticateIfNeeded(page);
     await waitForDashboardReady(page);
-    await page.getByRole('button', { name: 'Expand Ordinary', exact: true }).click({ button: 'right' });
-    await expect(page.getByRole('menuitem', { name: 'Delete folder', exact: true })).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    );
-    await page.keyboard.press('Escape');
+    if (outcome === 'success') {
+      await page.getByRole('button', { name: 'Expand Ordinary', exact: true }).click({ button: 'right' });
+      await expect(page.getByRole('menuitem', { name: 'Delete folder', exact: true })).toBeDisabled();
+      await page.keyboard.press('Escape');
+    }
     const row = page.getByRole('button', { name: 'Expand Feature bundle', exact: true });
     await row.click();
     await expect(page.locator('.project-row').filter({ hasText: 'Member' }).first()).toBeEnabled();
@@ -134,38 +347,41 @@ for (const outcome of ['success', 'blocked', 'lost response', 'refresh failure',
     const modal = page.getByRole('dialog', { name: 'Delete bundle', exact: true });
     const submit = modal.getByRole('button', { name: 'Delete bundle', exact: true });
     const input = modal.getByRole('textbox', { name: 'Bundle name', exact: true });
-    await expect(page.getByTestId('workflow-bundle-delete-modal--blanket')).toHaveCSS(
-      'background-color',
-      'rgba(0, 0, 0, 0.56)',
-    );
-    await expect(page.getByTestId('workflow-bundle-delete-modal--blanket')).toHaveCSS('backdrop-filter', 'blur(2px)');
-    await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
-    await expect(page.getByTestId('workflow-bundle-delete-modal--body')).toHaveCSS('padding', '0px');
-    await expect(modal.locator('label, .workflow-project-bundle-card')).toHaveCount(0);
-    await expect(input).toHaveCSS('height', '38px');
-    expect((await input.boundingBox())!.width).toBeGreaterThan((await modal.boundingBox())!.width - 40);
-    expect((await modal.boundingBox())!.height).toBeLessThanOrEqual(340);
-    if (outcome === 'success')
+    if (outcome === 'success') {
+      await expect(page.getByTestId('workflow-bundle-delete-modal--blanket')).toHaveCSS(
+        'background-color',
+        'rgba(0, 0, 0, 0.56)',
+      );
+      await expect(page.getByTestId('workflow-bundle-delete-modal--blanket')).toHaveCSS('backdrop-filter', 'blur(2px)');
+      await expect(modal).toHaveCSS('background-color', 'rgb(31, 31, 34)');
+      await expect(page.getByTestId('workflow-bundle-delete-modal--body')).toHaveCSS('padding', '0px');
+      await expect(modal.locator('label, .workflow-project-bundle-card')).toHaveCount(0);
+      await expect(input).toHaveCSS('height', '38px');
+      expect((await input.boundingBox())!.width).toBeGreaterThan((await modal.boundingBox())!.width - 40);
+      expect((await modal.boundingBox())!.height).toBeLessThanOrEqual(340);
       await page.screenshot({ path: testInfo.outputPath('bundle-delete-compact.png'), animations: 'disabled' });
-    await expect(page.getByRole('separator', { name: 'Resize folders pane' })).toHaveAttribute('aria-disabled', 'true');
-    await expect(submit).toBeDisabled();
-    await input.fill('feature');
-    await expect(submit).toBeDisabled();
-    await input.fill('Feature ');
-    await expect(submit).toBeDisabled();
-    const name = modal.getByTestId('bundle-delete-name');
-    await expect(name).toHaveCSS('user-select', 'text');
-    // Click within the name, not the surrounding confirmation sentence.
-    await name.dblclick({ position: { x: 12, y: (await name.boundingBox())!.height / 2 } });
-    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Feature');
-    await page.keyboard.press('Control+c');
-    await expect.poll(() => page.evaluate(() => (window as any).__bundleCopiedName)).toBe('Feature');
-    expect(await page.evaluate(() => (window as any).__bundleCopyPrevented)).toBe(false);
-    await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
-    expect(requests).toBe(0);
-    await expect(editorTab).toBeVisible();
-    await openDelete();
-    await expect(input).toHaveValue('');
+      await expect(page.getByRole('separator', { name: 'Resize folders pane' })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      );
+      await expect(submit).toBeDisabled();
+      await input.fill('feature');
+      await expect(submit).toBeDisabled();
+      await input.fill('Feature ');
+      await expect(submit).toBeDisabled();
+      const name = modal.getByTestId('bundle-delete-name');
+      await expect(name).toHaveCSS('user-select', 'text');
+      await name.dblclick({ position: { x: 12, y: (await name.boundingBox())!.height / 2 } });
+      expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Feature');
+      await page.keyboard.press('Control+c');
+      await expect.poll(() => page.evaluate(() => (window as any).__bundleCopiedName)).toBe('Feature');
+      expect(await page.evaluate(() => (window as any).__bundleCopyPrevented)).toBe(false);
+      await modal.getByRole('button', { name: 'Cancel', exact: true }).click();
+      expect(requests).toBe(0);
+      await expect(editorTab).toBeVisible();
+      await openDelete();
+      await expect(input).toHaveValue('');
+    }
     await input.fill('Feature');
     await expect(submit).toBeEnabled();
     await submit.click();
@@ -429,8 +645,20 @@ test('folder conversion and one-click duplication preserve the tree without a mo
           if (duplicateAttempts === 1)
             return route.fulfill({ status: 409, json: { error: 'The bundle changed. Try duplicating it again.' } });
           await copyReady;
-          const copy = folder('Feature copy', '85019223-bd4e-49c3-a042-321215efaa35');
-          folders.push(copy);
+          const copy = {
+            ...folder('Feature copy', '85019223-bd4e-49c3-a042-321215efaa35'),
+            namespaceId: 'd92b7e7d-84fc-43ee-af26-3ee63e0f0a86',
+          };
+          const parent = folder('Copies', null);
+          // A remote move after the acknowledgement must use the fresh tree's
+          // location and expand its ancestors, rather than the response path.
+          parent.folders.push({
+            ...copy,
+            id: 'Copies/Feature copy',
+            relativePath: 'Copies/Feature copy',
+            absolutePath: '/managed/workflows/Copies/Feature copy',
+          });
+          folders.push(parent);
           return route.fulfill({ status: 201, json: { folder: copy } });
         }
         if (path.endsWith('/kind')) {
@@ -471,6 +699,7 @@ test('folder conversion and one-click duplication preserve the tree without a mo
   expect(duplicateAttempts).toBe(2);
   await page.keyboard.press('Escape');
   releaseCopy();
+  await expect(page.getByRole('button', { name: 'Collapse Copies', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Collapse Feature copy bundle', exact: true })).toBeVisible();
   await expect(page.locator('.Toastify__toast--success')).toContainText('duplicated from saved versions');
   page.once('dialog', (dialog) => dialog.accept());
@@ -598,66 +827,164 @@ for (const enabled of [true, false]) {
   });
 }
 
-for (const pending of ['conversion', 'duplication'] as const) {
-  test(`bundle menus reflect the shared guard during ${pending}`, async ({ page }) => {
+for (const action of ['duplication', 'conversion'] as const) {
+  test(`bundle ${action} guards pending actions and preserves a newer project selection`, async ({ page }) => {
+    const sourceBundleId = action === 'duplication' ? '58019223-bd4e-49c3-a042-321215efaa35' : null;
+    const copyBundleId = '85019223-bd4e-49c3-a042-321215efaa35';
+    const createProject = (name: string, relativePath: string, bundleId: string | null) => {
+      const project = projectBundleFixture().child.project;
+      project.metadata.id = name as ProjectId;
+      project.metadata.title = name;
+      const item: WorkflowProjectItem = {
+        id: name,
+        projectMetadataId: project.metadata.id,
+        bundleId,
+        name,
+        fileName: `${name}.rivet-project`,
+        relativePath,
+        absolutePath: `/managed/workflows/${relativePath}`,
+        updatedAt: '',
+        settings: { status: 'unpublished', endpointName: '', lastPublishedAt: null, publishedWebApps: [] },
+      };
+      return { project, item };
+    };
+    const member = createProject('Member', 'Feature/Member.rivet-project', sourceBundleId);
+    const other = createProject('Other', 'Other.rivet-project', null);
+    const copied = createProject('Copied', 'Feature copy/Copied.rivet-project', copyBundleId);
     const source: WorkflowFolderItem = {
-      id: 'Source',
-      name: 'Source',
-      relativePath: 'Source',
-      absolutePath: '/workflows/Source',
+      id: 'Feature',
+      namespaceId: '103632af-089c-4a0e-aa80-ed96dd1d5dbb',
+      name: 'Feature',
+      relativePath: 'Feature',
+      absolutePath: '/managed/workflows/Feature',
       updatedAt: '',
-      bundleId: pending === 'duplication' ? '58019223-bd4e-49c3-a042-321215efaa35' : null,
+      bundleId: sourceBundleId,
       folders: [],
+      projects: [member.item],
+    };
+    const copy: WorkflowFolderItem = {
+      ...source,
+      id: 'Feature copy',
+      namespaceId: 'd92b7e7d-84fc-43ee-af26-3ee63e0f0a86',
+      name: 'Feature copy',
+      relativePath: 'Feature copy',
+      absolutePath: '/managed/workflows/Feature copy',
+      bundleId: copyBundleId,
+      projects: [copied.item],
+    };
+    const guardTarget: WorkflowFolderItem = {
+      ...copy,
+      id: 'Unchanged',
+      name: 'Unchanged',
+      relativePath: 'Unchanged',
+      namespaceId: '9cf35e45-d164-4774-b46b-4e6c60765f34',
+      bundleId: 'c75dcf4e-4335-4082-98f2-c0425cdf71d9',
+      absolutePath: '/managed/workflows/Unchanged',
       projects: [],
     };
-    const other: WorkflowFolderItem = {
-      ...source,
-      id: 'Other',
-      name: 'Other',
-      relativePath: 'Other',
-      bundleId: '85019223-bd4e-49c3-a042-321215efaa35',
-    };
-    let requests = 0;
+    const folders = [source, guardTarget];
+    let submissions = 0;
+    let receiptLookups = 0;
     let release!: () => void;
     const ready = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route('**/api/workflows/tree', (route) =>
-      route.fulfill({
-        json: { root: '/workflows', capabilities: { explicitBundles: true }, folders: [source, other], projects: [] },
-      }),
+    await page.route(
+      (url) => url.pathname.startsWith('/api/'),
+      async (route) => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname === '/api/workflows/tree')
+          return route.fulfill({
+            json: {
+              root: '/managed/workflows',
+              capabilities: { explicitBundles: true, namespaceMutations: true },
+              folders,
+              projects: [other.item],
+            },
+          });
+        if (pathname === '/api/projects/load') {
+          const requestedPath = route.request().postDataJSON().path;
+          const fixture = [member, other, copied].find(({ item }) => item.absolutePath === requestedPath);
+          expect(fixture, `project load for ${requestedPath}`).toBeDefined();
+          return route.fulfill({
+            json: { contents: serializeProject(fixture!.project), datasetsContents: null, revisionId: null },
+          });
+        }
+        if (
+          pathname ===
+          (action === 'duplication'
+            ? `/api/workflows/bundles/${sourceBundleId}/duplicate`
+            : '/api/workflows/bundles/kind')
+        ) {
+          submissions++;
+          expect(route.request().postDataJSON().mutation.expectedSource).toEqual({ id: source.namespaceId });
+          await ready;
+          if (action === 'conversion')
+            return route.fulfill({ status: 409, json: { error: 'The folder changed before conversion.' } });
+          folders.push(copy);
+          return route.abort('failed');
+        }
+        if (pathname === '/api/workflows/namespace/receipt') {
+          receiptLookups++;
+          return route.fulfill({ json: { state: 'committed', result: { folder: copy } } });
+        }
+        return route.fulfill({ status: 503, json: { error: 'No ambient API in pending bundle fixture' } });
+      },
     );
-    await page.route('**/api/workflows/bundles/**', async (route) => {
-      requests++;
-      await ready;
-      source.bundleId = '58019223-bd4e-49c3-a042-321215efaa35';
-      return route.fulfill({ status: pending === 'conversion' ? 200 : 201, json: { folder: source } });
-    });
     await mockHostedEditorBootstrap(page);
-    await page.goto('/');
-    await authenticateIfNeeded(page);
-    await waitForDashboardReady(page);
-    await page
-      .getByRole('button', { name: `Expand Source${source.bundleId ? ' bundle' : ''}`, exact: true })
-      .click({ button: 'right' });
-    if (pending === 'conversion') page.once('dialog', (dialog) => dialog.accept());
-    await page
-      .getByRole('menuitem', { name: pending === 'conversion' ? 'Convert to bundle' : 'Duplicate bundle', exact: true })
-      .click();
     try {
-      await expect.poll(() => requests).toBe(1);
-      await page.getByRole('button', { name: 'Expand Other bundle', exact: true }).click({ button: 'right' });
-      expect(await page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true }).isEnabled()).toBe(false);
-      expect(await page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true }).isEnabled()).toBe(
-        false,
-      );
-      expect(requests).toBe(1);
+      await page.goto('/');
+      await authenticateIfNeeded(page);
+      await waitForDashboardReady(page);
+      const folderSuffix = sourceBundleId ? ' bundle' : '';
+      await page.getByRole('button', { name: `Expand Feature${folderSuffix}`, exact: true }).click();
+      const memberRow = page.locator('.project-row').filter({ hasText: 'Member' });
+      const otherRow = page.locator('.project-row').filter({ hasText: 'Other' });
+      const editor = page.frameLocator('iframe.dashboard-editor-frame');
+      await memberRow.dblclick();
+      await expect(memberRow).toHaveClass(/\bactive\b/);
+      await expect(
+        editor.locator('.projects-container .project:not(.opening)').filter({ hasText: 'Member' }),
+      ).toBeVisible();
+      await page
+        .getByRole('button', { name: `Collapse Feature${folderSuffix}`, exact: true })
+        .click({ button: 'right' });
+      if (action === 'conversion') page.once('dialog', (dialog) => dialog.accept());
+      const actionName = action === 'duplication' ? 'Duplicate bundle' : 'Convert to bundle';
+      await page.getByRole('menuitem', { name: actionName, exact: true }).click();
+      await expect.poll(() => submissions).toBe(1);
+      await expect(page.locator('.bundle-action-status')).toBeVisible();
+      const guardRow = page.getByRole('button', { name: 'Expand Unchanged bundle', exact: true });
+      await guardRow.click({ button: 'right' });
+      await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeDisabled();
+      await expect(page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true })).toBeDisabled();
+      await expect(page.getByRole('menuitem', { name: 'Delete bundle', exact: true })).toBeDisabled();
+      expect(submissions).toBe(1);
+      await page.keyboard.press('Escape');
+      await otherRow.click();
+      await expect(otherRow).toHaveClass(/\bactive\b/);
+      await expect(
+        editor.locator('.projects-container .project:not(.opening)').filter({ hasText: 'Other' }),
+      ).toBeVisible();
+      release();
+      await expect(page.locator('.bundle-action-status')).toHaveCount(0);
+      if (action === 'duplication') {
+        await expect(page.getByRole('button', { name: 'Expand Feature copy bundle', exact: true })).toBeVisible();
+        await expect(page.locator('.project-row').filter({ hasText: 'Copied' })).toHaveCount(0);
+        await expect(page.locator('.Toastify__toast').filter({ hasText: 'Feature copy duplicated' })).toHaveCount(0);
+      } else {
+        await expect(page.getByRole('dialog', { name: 'Could not create bundle', exact: true })).toHaveCount(0);
+      }
+      await expect(otherRow).toHaveClass(/\bactive\b/);
+      await guardRow.click({ button: 'right' });
+      await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
+      await expect(page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true })).toBeEnabled();
+      await expect(page.getByRole('menuitem', { name: 'Delete bundle', exact: true })).toBeEnabled();
+      expect(submissions).toBe(1);
+      expect(receiptLookups).toBe(action === 'duplication' ? 1 : 0);
     } finally {
       release();
     }
-    await expect(page.getByRole('menuitem', { name: 'Duplicate bundle', exact: true })).toBeEnabled();
-    await expect(page.getByRole('menuitem', { name: 'Convert to ordinary folder', exact: true })).toBeEnabled();
-    await page.keyboard.press('Escape');
   });
 }
 

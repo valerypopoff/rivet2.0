@@ -373,16 +373,20 @@ export const DashboardPage: FC = () => {
 
   const handleDeleteProject = useCallback(
     (path: string, projectId?: string | null) => {
-      setOpenedProjectPath((prev) => (prev === path ? '' : prev));
-      setProjectUnsavedChangesByPath((prev) => {
-        if (!(path in prev)) {
-          return prev;
-        }
+      // A delayed deletion may name a path now used by another project. Let
+      // the editor's ID-based close publish the actual active-tab change.
+      if (!projectId) {
+        setOpenedProjectPath((prev) => (prev === path ? '' : prev));
+        setProjectUnsavedChangesByPath((prev) => {
+          if (!(path in prev)) {
+            return prev;
+          }
 
-        const next = { ...prev };
-        delete next[path];
-        return next;
-      });
+          const next = { ...prev };
+          delete next[path];
+          return next;
+        });
+      }
       postEditorCommand({ type: 'delete-workflow-project', path, projectId });
     },
     [postEditorCommand],

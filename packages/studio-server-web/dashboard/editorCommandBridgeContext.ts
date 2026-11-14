@@ -20,6 +20,7 @@ export type SerializedEditorCommand = Extract<
   {
     type:
       | 'open-project'
+      | 'delete-workflow-project'
       | 'open-recording'
       | 'open-published-version-preview'
       | 'refresh-open-project-from-disk'

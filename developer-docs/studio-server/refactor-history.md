@@ -4,6 +4,51 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-15 - Project-tree Bundle Action Ownership
+
+`useWorkflowBundleActions.ts` collects bundle modal state, conversion and
+duplication requests, merge initiation, and upload/deletion completion handling.
+The project-tree controller composes the hook and forwards its existing public
+members. Tree synchronization, comparison, drag/drop interpretation and the
+modal implementations retain their existing owners.
+
+Keep the synchronous conversion/duplication guard, action-lifetime checks and
+fresh-tree reconciliation together. Obsolete completions still reconcile
+accepted mutations while suppressing stale presentation. Download target and
+visibility remain independent so closing and reopening preserves the mounted
+export job. Merge close restores focus to a connected opener.
+Committed-folder expansion flattens the fresh tree once and uses its current
+location. The existing conversion/duplication scenario includes a copy moved
+under another parent before reconciliation, preserving coverage of stable
+identity and ancestor expansion.
+
+Controlled-response browser cases cover changing project selection during
+duplication success and conversion rejection. Existing bundle browser scenarios
+cover modal lifetime, focus, capability fallback, uncertain outcomes and tree
+synchronization. The [separation record](bundle-actions-separation-plan.md)
+contains verification results and the extraction's behavior contract.
+
+An adjacent review reproduced an older deletion race. The editor chose its
+target by path despite receiving the deleted project ID, so a delayed result
+could close and clear a replacement project. Deletion now uses that ID for tab,
+revision and local-state cleanup, with normalized-path compatibility for older
+callers. Dashboard selection follows the editor's actual close transition.
+Regression checks cover path reuse, a moved/deleted tab, an already-closed tab
+and legacy commands, plus receipt recovery after selecting another project.
+An additional browser reproduction found that deletion could finish before an
+earlier project load and leave the deleted member open. Deletion now shares the
+existing project-command queue, preserving receive order with opens, refreshes,
+path moves and reconciliation. Its regression holds the real editor's project
+load until the server deletion completes, then verifies the member tab closes.
+Command context reads project, tab and loaded-path state from the Jotai store
+instead of mirrored React refs. This makes the preceding queued command's
+updates visible immediately and removes three redundant refs and two props.
+Keep the two real-editor deletion regressions and their acknowledged project-ID
+checks. Pending menu guards share the navigation scenarios, common deletion
+presentation is checked once, and failed-reload assertions stay with the
+conflict-settlement test. This removes duplicate setups while keeping coverage
+of path reuse, command ordering, explicit confirmation and uncertain outcomes.
+
 ## 2026-11-15 - Evaluation HTTP Ownership
 
 The Evaluation API previously combined shared-library operations, hosted job

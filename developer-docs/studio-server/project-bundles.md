@@ -1,5 +1,25 @@
 # Project bundles
 
+`useWorkflowBundleActions.ts` owns the project-tree bundle action state,
+conversion and duplication requests, modal initiation and completion callbacks.
+`useWorkflowLibraryController.ts` supplies tree reconciliation, selection and
+menu state and preserves the panel's public interface. The existing modals own
+their operations, while comparison and drag/drop retain their dedicated hooks.
+After duplication or upload, expansion uses the committed folder's stable ID
+and current ancestors from the fresh tree, including a move that occurred before
+the refresh completed. An obsolete action still reconciles the mutation while
+suppressing its automatic expansion and notification.
+Deletion completion carries each deleted project's ID through editor cleanup.
+A delayed deletion preserves a different project at the old path, including
+its unsaved tab and local revision state.
+Editor deletion uses the existing project-command queue. An earlier in-flight
+open finishes before its deletion is applied, so a late load cannot reopen the
+deleted member. The same ordering covers ordinary project deletion.
+Queued commands read the current workspace store directly, so a load completed
+in the previous command is visible before React renders the next frame.
+The [bundle actions separation record](bundle-actions-separation-plan.md)
+documents the behavior contract and local verification.
+
 ## Explicit Studio Server containers
 
 PostgreSQL/S3 installations create authored bundles by converting ordinary folders.
