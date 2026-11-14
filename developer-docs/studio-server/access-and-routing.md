@@ -297,6 +297,15 @@ The wrapper API currently exposes these groups behind `/api`:
 - `/api/app-settings/web-app-auth`
   - guarded app-settings helper behind `Settings` -> `Web apps` auth mode, `Settings` -> `OAuth` provider/session settings, and `Settings` -> `Server UI access` admin settings
 
+`routes/app-settings.ts` also registers the local-upgrade and VM-migration HTTP
+modules on its existing router. Both require a signed-in operator independently
+of trusted-client bypass; non-GET requests, including HEAD, retain migration
+intent/origin checks. Setup and prepare have explicit setup guards before the
+remaining local prefix guard; the VM prefix guard remains ahead of all routes.
+They share the 16 KiB parser, except local preparation uses 1 MiB. Ordinary
+settings retain their separate 100 MiB parser and do not require migration intent.
+See the [HTTP separation record](app-settings-http-separation-plan.md).
+
 Current tree-response note:
 
 - `GET /api/workflows/tree` is the dashboard's main workflow-library metadata source

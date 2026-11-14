@@ -22,6 +22,14 @@ for the separate-control-identity restore fence and clone limitations.
 
 ## Ownership and supported deployment
 
+HTTP setup, preparation, actions and archive downloads are registered by
+`routes/local-upgrade-http.ts` on the existing App Settings router. The parent
+retains the shared 16 KiB and 1 MiB parsers; setup/prepare keep their explicit
+operator guard before the remaining local-upgrade prefix guard. Durable jobs,
+backup certification and restart coordination remain in
+`local-metadata/operator-service.ts`. The [HTTP separation record](app-settings-http-separation-plan.md)
+describes the preserved contracts and local verification.
+
 This is an explicit, non-destructive upgrade for the supervised single-host VM/Compose deployment. It does not select S3 or PostgreSQL, and a Storage-tab Save never starts it. Kubernetes uses managed storage instead. Upgrade availability is automatic for eligible, authenticated deployments; removing or setting the retired `RIVET_LOCAL_METADATA_UPGRADE_ENABLED` variable does not disable it. Availability never authorizes a copy or write resumption by itself.
 
 Remaining delivery and production qualification work is tracked in the [completion plan](./local-metadata-upgrade-completion-plan.md). Its acceptance gates distinguish repository readiness from a completed rehearsal on this VM's actual data.

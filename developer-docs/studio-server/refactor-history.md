@@ -4,6 +4,31 @@ This document records intentional architecture and cleanup changes that future m
 
 It is not a changelog. Keep entries focused on why a refactor happened, which ownership boundary changed, and which verification paths should be kept alive.
 
+## 2026-11-14 - App Settings Upgrade And Migration HTTP Ownership
+
+`local-upgrade-http.ts` owns sixteen local-upgrade handlers and their download
+guard; `vm-migration-http.ts` owns ten VM migration handlers and four schemas.
+The parent App Settings router keeps its three parser instances, early VM guard,
+ordinary settings and compatibility exports. Handler bodies, middleware order
+and the existing service singletons are preserved, with no added execution work.
+
+Profile tests retain authorization-before-parsing, exact body limits, storage
+error responses and route absence on execution/evaluation. Recordings,
+publication and storage-operator routes share one server fixture per profile;
+keep their distinct assertions without duplicating setup. The isolated backup
+and repair scenarios exercise pre-header errors, post-header failures and
+client-disconnected responses retaining accepted work until the callback settles.
+Completion observes the real accepted-work release, without an event-loop delay;
+stream consumers reject premature closure even when no `error` event is emitted.
+Direct status-read checks retain operator authorization without mutation intent.
+Full-app checks also establish that trusted-client access to ordinary settings
+cannot bypass either migration guard, including when ordinary UI authentication
+is disabled. Download tests reject timeout-driven closure as false evidence of
+correct callback cleanup.
+The migration browser fixture now supplies setup eligibility so tab visibility
+does not depend on an ambient server. See the
+[separation record](app-settings-http-separation-plan.md) for local results.
+
 ## 2026-11-14 - Publication And Version-history HTTP Ownership
 
 `publication-http.ts` owns the thirteen publication/history handlers and their

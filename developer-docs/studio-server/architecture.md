@@ -502,6 +502,15 @@ reviewed-state capture, transactions and execution remain in their existing
 services. The small private path schemas call the same shared normalizer.
 See the [publication HTTP separation record](publication-http-separation-plan.md).
 
+App Settings keeps ordinary settings, session projection, parser instances and
+compatibility exports in `routes/app-settings.ts`. Startup registration attaches
+the sixteen local-upgrade handlers from `routes/local-upgrade-http.ts` and ten
+VM-migration handlers from `routes/vm-migration-http.ts` to that same router.
+There is no nested router or new operation owner: the local and VM services keep
+their existing shared job state. Authentication order, bounded parsing and
+streamed download settlement remain unchanged. The
+[HTTP separation record](app-settings-http-separation-plan.md) documents checks.
+
 Workflow contracts live in `routes/workflows/data-backend.ts`, independently of
 the PostgreSQL implementation. Project IO, publication, execution sources and
 recording repositories are separate interfaces; `WorkflowDataBackend` composes

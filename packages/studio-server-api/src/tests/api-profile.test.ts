@@ -47,6 +47,15 @@ const relevantEnvKeys = [
   'RIVET_LEGACY_RESTORE_ROOT',
   'RIVET_LOCAL_METADATA_CONTROL_ROOT',
   'RIVET_LOCAL_METADATA_BOOT_REVISION',
+  'RIVET_LOCAL_METADATA_BOOT_GENERATION',
+  'RIVET_LOCAL_METADATA_UPGRADE_ENABLED',
+  'RIVET_LOCAL_METADATA_UI_ROOT',
+  'RIVET_LOCAL_METADATA_UI_PREPARE_AVAILABLE',
+  'RIVET_LOCAL_METADATA_UI_RESTART_AVAILABLE',
+  'RIVET_LOCAL_METADATA_SUPERVISOR_TOKEN',
+  'RIVET_BACKEND_HEALTH_PORT',
+  'RIVET_VM_MIGRATION_EDITOR_CONTROL',
+  'RIVET_WORKFLOW_STORAGE_BACKEND',
   'RIVET_LEGACY_RESTORE_ENABLED',
 ] as const;
 
@@ -188,7 +197,7 @@ function trustedProxyHeaders(): Record<string, string> {
 }
 
 for (const profile of ['control', 'combined', 'execution', 'evaluation'] as const) {
-  test(`${profile} preserves recording and publication HTTP access and validation`, async (t) => {
+  test(`${profile} preserves control-plane HTTP access and validation`, async (t) => {
     await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
       t.mock.method(console, 'error', () => {});
       const server = await startServer(profile);
@@ -269,6 +278,64 @@ for (const profile of ['control', 'combined', 'execution', 'evaluation'] as cons
           assert.equal(page.totalRuns, 0);
           assert.deepEqual(page.runs, []);
         }
+        const headers = {
+          ...operator,
+          'content-type': 'application/json',
+          'x-rivet-migration-intent': '1',
+        };
+        const base = `${server.baseUrl}/api/app-settings`;
+        const setup = await fetch(`${base}/local-upgrade/setup`, { headers });
+        assert.equal(setup.status, exposed ? 200 : 404);
+        if (exposed) {
+          assert.equal(setup.headers.get('cache-control'), 'no-store');
+          assert.equal((await setup.json()).controlRootConfigured, false);
+        } else assert.deepEqual(await setup.json(), { error: 'Not found' });
+
+        for (const route of ['/local-upgrade/prepare', '/local-upgrade/preparation', '/vm-migration/run']) {
+          const response = await fetch(base + route, { method: 'POST', headers, body: '{' });
+          assert.equal(response.status, exposed ? 400 : 404, route);
+          const result = await response.json();
+          if (exposed) assert.equal(typeof result.error, 'string');
+          else assert.deepEqual(result, { error: 'Not found' });
+        }
+        if (!exposed) return;
+
+        const { 'x-rivet-migration-intent': _intent, ...ordinaryHeaders } = headers;
+        for (const route of ['/local-upgrade', '/vm-migration']) {
+          const status = await fetch(base + route, { headers: ordinaryHeaders });
+          assert.equal(status.status, 200, `${route} status needs no mutation intent`);
+          assert.equal(status.headers.get('cache-control'), 'no-store');
+          assert.equal((await status.json()).available, false);
+          const unsigned = await fetch(base + route, { headers: trustedProxyHeaders() });
+          assert.equal(unsigned.status, 403, `${route} status requires an operator`);
+          await unsigned.arrayBuffer();
+          const response = await fetch(`${base}${route}/unknown`, { headers });
+          assert.equal(response.status, 404);
+          assert.deepEqual(await response.json(), { error: 'Not found' });
+        }
+        const unsupported = await fetch(`${base}/local-upgrade/setup`, { method: 'PUT', headers, body: '{' });
+        assert.equal(unsupported.status, 404);
+        assert.deepEqual(await unsupported.json(), { error: 'Not found' });
+        const head = await fetch(`${base}/local-upgrade/setup`, { method: 'HEAD', headers });
+        assert.equal(head.status, 200);
+        assert.equal(head.headers.get('cache-control'), 'no-store');
+        assert.equal(await head.text(), '');
+        const preflight = await fetch(`${base}/local-upgrade/prepare`, {
+          method: 'OPTIONS',
+          headers: { origin: server.baseUrl, 'access-control-request-method': 'POST' },
+        });
+        assert.equal(preflight.status, 204);
+
+        const settings = await fetch(`${base}/runtime-limits`, { headers: ordinaryHeaders });
+        assert.equal(settings.status, 200);
+        await settings.arrayBuffer();
+        const updated = await fetch(`${base}/runtime-limits`, {
+          method: 'PATCH',
+          headers: ordinaryHeaders,
+          body: JSON.stringify({ commandTimeoutSeconds: 73 }),
+        });
+        assert.equal(updated.status, 200);
+        assert.equal((await updated.json()).commandTimeoutSeconds, 73);
       } finally {
         await server.close();
         await resetWorkflowRecordingStorageForTests();
@@ -277,6 +344,119 @@ for (const profile of ['control', 'combined', 'execution', 'evaluation'] as cons
     });
   });
 }
+
+test('storage operator authorization precedes parsing and retains separate JSON limits', async (t) => {
+  await withApiEnv({ RIVET_SERVER_UI_AUTH_MODE: 'key' }, async () => {
+    t.mock.method(console, 'error', () => {});
+    const server = await startServer('control');
+    const base = `${server.baseUrl}/api/app-settings`;
+    const operator = { ...trustedProxyHeaders(), cookie: `rivet_ui_token=${getExpectedUiSessionToken()}` };
+    const authorized = { ...operator, 'x-rivet-migration-intent': '1' };
+    try {
+      for (const route of ['/local-upgrade/prepare', '/local-upgrade/preparation', '/vm-migration/run']) {
+        for (const headers of [
+          {},
+          trustedProxyHeaders(),
+          operator,
+          { ...authorized, 'sec-fetch-site': 'cross-site' },
+          { ...authorized, origin: 'not an origin' },
+          { ...authorized, origin: 'https://another-host.invalid' },
+        ]) {
+          const response = await fetch(base + route, {
+            method: 'POST',
+            headers: { ...headers, 'content-type': 'application/json' },
+            body: '{',
+          });
+          assert.equal(response.status, 403, route);
+          assert.equal(typeof (await response.json()).error, 'string');
+        }
+      }
+      const head = await fetch(`${base}/local-upgrade/setup`, { method: 'HEAD', headers: operator });
+      assert.equal(head.status, 403, 'HEAD retains the existing intent requirement');
+      assert.equal(await head.text(), '');
+
+      for (const [route, limit] of [
+        ['/local-upgrade/prepare', 16 * 1024],
+        ['/local-upgrade/preparation', 1024 * 1024],
+      ] as const) {
+        for (const extra of [0, 1]) {
+          const response = await fetch(base + route, {
+            method: 'POST',
+            headers: { ...authorized, 'content-type': 'application/json' },
+            body: 'null' + ' '.repeat(limit - 4 + extra),
+          });
+          assert.equal(response.status, extra ? 413 : 500, `${route}: ${limit + extra} bytes`);
+          const result = await response.json();
+          assert.equal(
+            result.error,
+            extra
+              ? "Request body exceeds this route's allowed size."
+              : 'Storage operation failed. Check source integrity and reload status before retrying.',
+          );
+          if (!extra) assert.equal(typeof result.code, 'string');
+        }
+      }
+      for (const [route, error] of [
+        [
+          '/vm-migration/test-database',
+          'Could not read and write destination PostgreSQL. Check its connection and DDL permissions.',
+        ],
+        [
+          '/vm-migration/test-object-storage',
+          'Could not read and write destination S3. Check its location and permissions.',
+        ],
+      ]) {
+        const response = await fetch(base + route, {
+          method: 'POST',
+          headers: { ...authorized, 'content-type': 'application/json' },
+          body: 'null',
+        });
+        assert.equal(response.status, 400);
+        assert.deepEqual(await response.json(), { error });
+      }
+
+      const trust = await fetch(`${base}/trusted-clients`, {
+        method: 'PATCH',
+        headers: { ...operator, 'content-type': 'application/json' },
+        body: JSON.stringify({ trustedClients: ['127.0.0.1'] }),
+      });
+      assert.equal(trust.status, 200);
+      await trust.arrayBuffer();
+      const trustedClient = {
+        ...trustedProxyHeaders(),
+        'x-rivet-client-ip': '127.0.0.1',
+        'x-rivet-migration-intent': '1',
+        'content-type': 'application/json',
+      };
+      for (const mode of ['key', 'none']) {
+        process.env.RIVET_SERVER_UI_AUTH_MODE = mode;
+        const ordinary = await fetch(`${base}/runtime-limits`, { headers: trustedClient });
+        assert.equal(ordinary.status, 200, `ordinary ${mode} access must reach the protected-route checks`);
+        await ordinary.arrayBuffer();
+        for (const [method, route] of [
+          ['GET', '/local-upgrade/setup'],
+          ['GET', '/local-upgrade'],
+          ['GET', '/vm-migration'],
+          ['GET', '/local-upgrade/unknown'],
+          ['GET', '/vm-migration/unknown'],
+          ['POST', '/local-upgrade/prepare'],
+          ['POST', '/local-upgrade/preparation'],
+          ['POST', '/vm-migration/run'],
+        ]) {
+          const response = await fetch(base + route, {
+            method,
+            headers: trustedClient,
+            ...(method === 'POST' ? { body: '{' } : {}),
+          });
+          assert.equal(response.status, 403, `${mode}: ${method} ${route}`);
+          assert.deepEqual(await response.json(), { error: 'Migration requires a signed-in operator session.' });
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+});
 
 test('graph reference review requires authentication and validates bounded JSON input', async () => {
   await withApiEnv({}, async () => {
